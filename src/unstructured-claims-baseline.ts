@@ -614,11 +614,12 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/cli/mutation-scan.test.ts": [
     "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
     "// Two test files so #252's single-placeholder threshold can't trip — this fixture is about the",
+    "// ...but the moduleRecord must be present and partial, so the ledger cannot read `ran` (#1309).",
     "// try/finally on the same file — a finally that can't run once the process is killed. A real",
     "// #1067: `false` always exits non-zero — a suite that cannot run at all. Every stubbed run then",
   ],
   "src/cli/mutation-scan.ts": [
-    "// SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a killed run",
+    "// writing, so a SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a",
     "// construction, not by a try/finally racing a signal — a signal handler can't run cleanup code",
     "// non-JSON target config that can't be safely patched, or a crash the proactive check missed,",
     "// ran (a non-JSON config can't be statically read here, same limitation as warnIfNotPerTest —",
@@ -626,6 +627,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// both (unusual, but not impossible) reports the ancestor-root gap first.",
     "// Best-effort: a killed process can't run this either, but that only leaks a scratch temp",
     "// config gets a patched COPY (never rewrites the target's own file); a non-JSON config can't be",
+    "// \"say so in the OUTPUT\" is this repo's standing rule for anything the deliverable's reader can't",
   ],
   "src/cli/pentest.test.ts": [
     "// on the runner can't perturb the discovered manifest.",
@@ -1379,6 +1381,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// the real match rule that keeps them apart (a shared \"M5 \" prefix can't distinguish them).",
     "// BY DESIGN (#267's non-grading ruling), so `counted` here can't mean \"non-Info count\" the way",
     "// classifyMigrationSql cannot read one — it parses CREATE TABLE SQL. #758 shipped the Prisma",
+    "// against packages/utils's own spec after install: `Cannot find module",
+    "// narrower blocker than the old \"can't install at all\" — the install now works, and the",
     "// as 0 on every target forever, making the drift check permanently unable to fail. Every match",
   ],
   "src/scan/fixture-drift-contracts.ts": [

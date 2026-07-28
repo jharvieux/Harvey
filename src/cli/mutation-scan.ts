@@ -42,13 +42,21 @@
 // and a suite that still passes yields an M8-01-* finding (src/stub-check.ts). O(exported
 // functions) suite runs, no Stryker install needed.
 //
-// #600: the mutation happens on a DISPOSABLE COPY of the target (node_modules symlinked in, not
-// copied), never on the live checkout — a target's own tree is never opened for writing, so a
-// SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a killed run
-// left AoP's reporting.ts stubbed in the operator's checkout). This is crash-safe by
+// #600: for --stub-check ONLY, the mutation happens on a DISPOSABLE COPY of the target (node_modules
+// symlinked in, not copied), never on the live checkout — a target's own tree is never opened for
+// writing, so a SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a
+// killed run left AoP's reporting.ts stubbed in the operator's checkout). This is crash-safe by
 // construction, not by a try/finally racing a signal — a signal handler can't run cleanup code
 // while the process is blocked inside a synchronous child-process wait, and nothing can run at
 // all after SIGKILL.
+//
+// #1285: a FULL mutation run (no --stub-check) is NOT covered by the #600 guarantee above — it
+// invokes Stryker with `cwd: targetDir`, and Stryker itself writes `stryker-tmp/` (mutant sandboxes)
+// and `reports/mutation/` (the JSON report) INSIDE the target tree. Source files are sandboxed, not
+// mutated in place, so this is scratch-and-output, not corruption — but it is still two untracked
+// directories a client's own checkout gains during a real engagement, and the CLI says so plainly at
+// run start (see the "writes into the target tree" stderr line below) rather than leaving it to be
+// discovered by `git status` afterward.
 //
 // --report points at the mutation.json Stryker already wrote (skips re-running Stryker — use
 // this to shape a report from a prior run). Without --report, this invokes `stryker run` and
@@ -71,6 +79,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, sta
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
+import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
@@ -103,6 +112,7 @@ import {
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  unverifiableScopeModuleRecord,
   vacuousTestFindings,
   verifyMutationScope,
   withTs7TsconfigBypass,
@@ -396,15 +406,20 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   if (presentDirs.length === 0) return { degradeReason: `no recognized source directory (${SCAFFOLD_SOURCE_DIRS.join(", ")}) under ${targetDir} to scope root-scoped mutate globs to` };
 
   const missingPkgs = ["@stryker-mutator/core", runner.plugin].filter((p) => !existsSync(join(rootSuite.root, "node_modules", ...p.split("/"))));
+  // #1284/#1268: the package manager the ROOT's own lockfile implies, not a hardcoded npm — see
+  // src/package-manager.ts's header for why npm was never a safe default for a pnpm/yarn tree.
+  const rootPm = detectPackageManager(rootSuite.root);
   if (missingPkgs.length && !install) {
-    return { degradeReason: `the workspace root has a ${runner.runner} suite but no Stryker install there (${missingPkgs.join(", ")} missing) — re-run with --install to provision them at the root via \`npm install --no-save\` and measure this app via a root-scoped run` };
+    const { bin, args } = installExtraCommand(rootPm, missingPkgs);
+    return { degradeReason: `the workspace root has a ${runner.runner} suite but no Stryker install there (${missingPkgs.join(", ")} missing) — re-run with --install to provision them at the root via \`${bin} ${args.join(" ")}\` and measure this app via a root-scoped run` };
   }
   if (missingPkgs.length) {
-    console.error(`#655: installing ${missingPkgs.join(" + ")} into the workspace root ${rootSuite.root} (npm install --no-save)...`);
+    const { bin, args } = installExtraCommand(rootPm, missingPkgs);
+    console.error(`#655/#1284: installing ${missingPkgs.join(" + ")} into the workspace root ${rootSuite.root} (${bin} ${args.join(" ")})...`);
     try {
-      execFileSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "-D", ...missingPkgs], { cwd: rootSuite.root, stdio: ["ignore", "inherit", "inherit"] });
+      withRestoredManifest(rootSuite.root, rootPm, () => execFileSync(bin, args, { cwd: rootSuite.root, stdio: ["ignore", "inherit", "inherit"] }));
     } catch (err) {
-      return { degradeReason: `could not install ${missingPkgs.join(" + ")} at the workspace root (npm install --no-save failed: ${(err as Error).message.slice(0, 200)})` };
+      return { degradeReason: `could not install ${missingPkgs.join(" + ")} at the workspace root (${bin} ${args.join(" ")} failed: ${(err as Error).message.slice(0, 200)})` };
     }
   }
 
@@ -830,15 +845,21 @@ if (!reportPath && !effectiveConfigPath) {
     degradeExit("target has no Stryker config and no recognized test runner (vitest/jest/mocha) to scaffold one for");
   }
   const missingPkgs = ["@stryker-mutator/core", runner.plugin].filter((p) => !existsSync(join(targetDir, "node_modules", ...p.split("/"))));
+  // #1284/#1268: the package manager the TARGET's own lockfile implies, not a hardcoded npm — a
+  // pnpm-workspace target's `npm install --no-save` here resolved only root packages (or, for a
+  // pnpm-catalog dependency, failed outright with EUNSUPPORTEDPROTOCOL).
+  const targetPm = detectPackageManager(targetDir);
   if (missingPkgs.length && !install) {
-    degradeExit(`the target has a ${runner.runner} suite but no Stryker install (${missingPkgs.join(", ")} missing) — re-run with --install to provision them into the target via \`npm install --no-save\` and score mutation with a scaffolded config`);
+    const { bin, args } = installExtraCommand(targetPm, missingPkgs);
+    degradeExit(`the target has a ${runner.runner} suite but no Stryker install (${missingPkgs.join(", ")} missing) — re-run with --install to provision them into the target via \`${bin} ${args.join(" ")}\` and score mutation with a scaffolded config`);
   }
   if (missingPkgs.length) {
-    console.error(`#513: installing ${missingPkgs.join(" + ")} into the target (npm install --no-save)...`);
+    const { bin, args } = installExtraCommand(targetPm, missingPkgs);
+    console.error(`#513/#1284: installing ${missingPkgs.join(" + ")} into the target (${bin} ${args.join(" ")})...`);
     try {
-      execFileSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "-D", ...missingPkgs], { cwd: targetDir, stdio: ["ignore", "inherit", "inherit"] });
+      withRestoredManifest(targetDir, targetPm, () => execFileSync(bin, args, { cwd: targetDir, stdio: ["ignore", "inherit", "inherit"] }));
     } catch (err) {
-      degradeExit(`could not install ${missingPkgs.join(" + ")} into the target (npm install --no-save failed: ${(err as Error).message.slice(0, 200)})`);
+      degradeExit(`could not install ${missingPkgs.join(" + ")} into the target (${bin} ${args.join(" ")} failed: ${(err as Error).message.slice(0, 200)})`);
     }
   }
   const cfg = scaffoldStrykerConfig(runner.runner, SCAFFOLD_SOURCE_DIRS.filter((d) => existsSync(join(targetDir, d))));
@@ -849,10 +870,20 @@ if (!reportPath && !effectiveConfigPath) {
   console.error(`#513: scaffolded minimal Stryker config for ${runner.runner} at ${effectiveConfigPath} (mutate: ${JSON.stringify(cfg.mutate ?? "stryker defaults")})`);
 }
 
+// #1285: whether THIS run actually invoked Stryker with cwd: targetDir (writing stryker-tmp/ +
+// reports/mutation/ into the target tree) — false when --report replayed a prior run's report
+// instead. Carried into the artifact so a client report reader sees this without grepping stderr.
+let strykerWroteIntoTargetTree = false;
+
 let resolvedReportPath: string;
 if (reportPath) {
   resolvedReportPath = resolve(reportPath);
 } else {
+  // #1285: said plainly, at run start, in the OUTPUT (not just discoverable later via `git status`)
+  // — a full mutation run is NOT the #600 disposable-copy path; Stryker runs with cwd: targetDir and
+  // writes stryker-tmp/ + reports/mutation/ into the target's own tree.
+  console.error(`M8: invoking Stryker directly against ${targetDir} (#1285) — this writes stryker-tmp/ (mutant sandboxes) and reports/mutation/ (the JSON report) into the target tree; source files are sandboxed, not mutated in place, but these two directories are left behind afterward.`);
+  strykerWroteIntoTargetTree = true;
   const run = runStryker(applyTs7BypassIfNeeded(effectiveConfigPath, targetDir));
   if (run.dryRunFailure) {
     emitAndExit(
@@ -869,13 +900,18 @@ if (reportPath) {
 }
 
 if (!existsSync(resolvedReportPath)) {
-  // A scaffolded run crashing without a report is a ladder degrade (#513) — the target never
-  // promised Stryker works there. A target-configured run doing the same is anomalous: fail hard.
-  if (scaffolded) {
-    degradeExit(`the scaffolded ${scaffolded.runner} Stryker run produced no report at ${resolvedReportPath} (see the Stryker output above)`);
-  }
-  console.error(`✗ mutation report not found at ${resolvedReportPath} — pass --report <path> if Stryker wrote it elsewhere`);
-  process.exit(1);
+  // #1284: a scaffolded run crashing without a report is a ladder degrade (#513) — the target never
+  // promised Stryker works there. A target-configured run doing the same USED to fail hard (bare
+  // exit 1, no artifact) on the theory that it was anomalous enough to warrant an immediate crash —
+  // but "anomalous" is exactly when a downstream ledger most needs a reason, not silence. Any dry-run
+  // failure whose phrasing DRY_RUN_FAILURE doesn't recognize (a future Stryker wording change, an
+  // exotic runner crash) fell through to here and exited 1 with NO artifact at all — the "absent
+  // status, not a wrong one" hazard #1284 exists to close. Both branches now degrade the same way.
+  degradeExit(
+    scaffolded
+      ? `the scaffolded ${scaffolded.runner} Stryker run produced no report at ${resolvedReportPath} (see the Stryker output above)`
+      : `mutation report not found at ${resolvedReportPath} — Stryker exited without producing one and no dry-run failure signature was recognized (see the Stryker output above; pass --report <path> if Stryker wrote it elsewhere)`,
+  );
 }
 
 const report = JSON.parse(readFileSync(resolvedReportPath, "utf8")) as StrykerReport;
@@ -958,12 +994,23 @@ const output = {
   reportRows: toReportRows(summary, lineCoverage.byModule),
   findings,
   scope,
+  // #1285: machine-readable so a client-facing reader of THIS artifact sees it, not only stderr —
+  // "say so in the OUTPUT" is this repo's standing rule for anything the deliverable's reader can't
+  // otherwise discover (e.g. by running `git status` in their own checkout after the fact).
+  ...(strykerWroteIntoTargetTree
+    ? { scratchWrittenIntoTargetTree: { stryker: true, note: `Stryker ran with its working directory set to ${targetDir} and wrote stryker-tmp/ + reports/mutation/ there — scratch and output, not source mutation, but left behind in the target's own tree (#1285). --stub-check's disposable-copy guarantee (#600) does not apply to this rung.` } }
+    : {}),
   // #819: always present (never a silent blank column) — "ran" alongside the module rows above
   // when the coverage pull succeeded, "partial" + reason when it could not.
   lineCoverage: lineCoverage.status === "ran" ? { status: "ran" as const } : { status: "partial" as const, reason: lineCoverage.reason },
   // #504: a scoped run carries the machine-readable partial verdict alongside its summary, so the
   // M8 probe records partial-with-scope instead of banking the subset score as `ran`.
-  ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : {}),
+  // #1309: `scope.scoped` is false on BOTH a verified full run (the only real `ran`) AND an
+  // UNVERIFIABLE one (`verified: false` — a non-JSON config or unsupported glob) — the branch #504's
+  // own tests skipped. Falling through to no moduleRecord on that second case let mutationVerdict
+  // read a full `ran` over a scope nobody confirmed. Only `verified && !scoped` — a proven
+  // full-scope run — earns no moduleRecord at all.
+  ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : !scope.verified ? { moduleRecord: unverifiableScopeModuleRecord(scope) } : {}),
   // #1076: the raw Stryker report, retained alongside the transformed summary — previously
   // discarded after JSON.parse (src/mutation-scan.ts's own header note: "No raw Stryker report is
   // retained anywhere in the repo... Retaining one would make these verifiable"). Every future
@@ -972,6 +1019,7 @@ const output = {
   rawReport: report,
 };
 if (scope.scoped) console.error(`⚠ M8 coverage: partial (scoped mutation run, #504) — this score is a subset measurement, not the module's result.`);
+else if (!scope.verified) console.error(`⚠ M8 coverage: partial (mutate scope unverifiable, #1309) — this score cannot be confirmed to cover the target's full configured mutate scope.`);
 const json = JSON.stringify(output, null, 2);
 if (outPath) {
   writeFileSync(outPath, json + "\n");

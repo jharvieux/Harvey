@@ -57,8 +57,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(`Alert paths, derived from ${facts.length} workflow file(s) in ${WORKFLOWS.replace(REPO_ROOT + "/", "")}:`);
   for (const f of alerting) {
     for (const s of f.alertSteps) {
-      const proof = registry.paths.find((p) => p.marker === s.marker)?.provenBy;
-      console.log(`  ${s.marker.padEnd(24)} ${f.workflow}\n${" ".repeat(28)}proved by ${proof?.run ?? "(nothing)"} → issue #${proof?.issue ?? "?"}`);
+      const entry = registry.paths.find((p) => p.marker === s.marker);
+      // An unproven path prints louder than a proven one, not quieter. The hatch is legitimate and
+      // it is still a path nobody has watched fire, which is the state this gate exists to name.
+      const line = entry?.pendingProof
+        ? `UNPROVEN — landed ${entry.pendingProof.since}, proof run outstanding, tracked by #${entry.pendingProof.tracking}`
+        : `proved by ${entry?.provenBy?.run ?? "(nothing)"} → issue #${entry?.provenBy?.issue ?? "?"}`;
+      console.log(`  ${s.marker.padEnd(24)} ${f.workflow}\n${" ".repeat(28)}${line}`);
     }
   }
   for (const u of registry.unconverted) console.log(`  ${u.marker.padEnd(24)} ${u.workflow} (inlined, not drilled — proved by issue #${u.provenBy.issue})`);
@@ -101,8 +106,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     };
     const stale = checkDisclosureTracking(registry, trackingState);
     violations.push(...stale);
-    if (stale.length === 0 && registry.scheduledWithoutAlertPath.length > 0) {
-      console.log(`✓ all ${registry.scheduledWithoutAlertPath.length} no-alert-path disclosure(s) still point at an OPEN tracking issue`);
+    // Counted over BOTH hatches this function now covers — the no-alarm disclosures and the
+    // unproven paths. Reporting only the first would understate what was checked, in the one line a
+    // reader takes as the summary of what was checked.
+    const hatches = registry.scheduledWithoutAlertPath.length + registry.paths.filter((p) => p.pendingProof).length;
+    if (stale.length === 0 && hatches > 0) {
+      console.log(`✓ all ${hatches} hatch(es) — ${registry.scheduledWithoutAlertPath.length} no-alert-path disclosure(s), ${hatches - registry.scheduledWithoutAlertPath.length} unproven path(s) — still point at an OPEN tracking issue`);
     }
   } else {
     console.log("\nℹ marker-label existence NOT checked (pass --labels with an authenticated gh). Structure alone cannot tell a path that has run from one that never has.");
@@ -113,5 +122,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const v of violations) console.error(`  ${v.workflow} — ${v.detail}`);
     process.exit(1);
   }
-  console.log(`\n✓ ${alerting.reduce((n, f) => n + f.alertSteps.length, 0)} alert path(s): every one dispatch-provable and carrying a recorded proof run`);
+  // The pass line states the exemption count in the same breath as the pass. A summary that says
+  // "every one carrying a recorded proof run" while one of them does not is the shape of sentence
+  // this gate was written to stop believing.
+  const pending = registry.paths.filter((p) => p.pendingProof);
+  const total = alerting.reduce((n, f) => n + f.alertSteps.length, 0);
+  console.log(
+    pending.length === 0
+      ? `\n✓ ${total} alert path(s): every one dispatch-provable and carrying a recorded proof run`
+      : `\n✓ ${total} alert path(s) dispatch-provable; ${total - pending.length} carry a recorded proof run and ${pending.length} do NOT: ` +
+          pending.map((p) => `${p.marker} (tracked by #${p.pendingProof?.tracking})`).join(", ") +
+          `\n  Take the drill and record it: gh workflow run "<workflow name>" -f alert_drill=true`,
+  );
 }

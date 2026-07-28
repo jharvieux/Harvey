@@ -139,6 +139,20 @@ describe("mutation-scan scaffold degradation ladder (#513, child process)", () =
     expect(parsed.moduleRecord?.note).toMatch(/@stryker-mutator\/core, @stryker-mutator\/vitest-runner/);
     expect(parsed.moduleRecord?.note).toMatch(/npm install --no-save/);
   });
+
+  // #1284/#1268: `npm install` at a pnpm-workspace target resolved only root packages (verified
+  // against real inbox-zero/rallly clones — see src/scan/external-corpus.ts's M8 baselines). The
+  // unlock command this ladder rung names must match the target's OWN lockfile-implied package
+  // manager, not always npm.
+  it("names `pnpm add -D` (not npm) as the unlock command for a target with a pnpm-lock.yaml", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
+    writeFileSync(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { note: string } };
+    expect(parsed.moduleRecord?.note).toMatch(/pnpm add -D @stryker-mutator\/core @stryker-mutator\/vitest-runner/);
+    expect(parsed.moduleRecord?.note).not.toMatch(/npm install/);
+  });
 });
 
 // #504 end-to-end through the CLI: a replayed Stryker report that covers less than the target
@@ -178,6 +192,30 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean }; moduleRecord?: unknown };
     expect(parsed.scope).toMatchObject({ scoped: false, verified: true });
     expect(parsed.moduleRecord).toBeUndefined();
+  });
+
+  // #1309: the branch #504's own tests skipped — an UNVERIFIABLE scope (no on-disk Stryker config,
+  // and the replayed report's own `config` carries no readable `mutate` array either) is neither a
+  // proven full run nor a proven subset. Before this fix `scope.scoped` was false here too, so NO
+  // moduleRecord was attached at all and the ledger read a full `ran` over a scope nobody verified.
+  it("an unverifiable mutate scope (no readable config anywhere) emits a partial moduleRecord too — never a silent full ran", async () => {
+    const repo = fixtureRepo({
+      "src/add.test.ts": REAL_SPEC,
+      "src/add.ts": "export const add = (a: number, b: number) => a + b;\n",
+    });
+    // No stryker.config.json on disk, and the replayed report carries no `config` field at all —
+    // verifyMutationScope has no mutate globs to read from anywhere.
+    const reportPath = join(repo, "unverifiable-mutation.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [killed] } } }));
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary: unknown; scope: { scoped: boolean; verified: boolean }; moduleRecord?: { status: string; note: string } };
+    expect(parsed.summary).toBeTruthy(); // a real summary is still computed and shown...
+    expect(parsed.scope).toMatchObject({ scoped: false, verified: false });
+    // ...but the moduleRecord must be present and partial, so the ledger cannot read `ran` (#1309).
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/#1309/);
+    expect(parsed.moduleRecord?.note).toMatch(/not statically readable/);
   });
 
   // #1076: report.config.mutate is the EFFECTIVE scope Stryker actually ran with, sitting in the
@@ -504,6 +542,103 @@ process.exit(0);
   });
 });
 
+// #1284: a dry-run failure must ALWAYS write a machine-readable partial artifact — before this fix,
+// a phrasing DRY_RUN_FAILURE didn't recognize (Stryker 9.6.1's real "Something went wrong in the
+// initial test run") fell through to "mutation report not found" and exited 1 with NO artifact at
+// all for a target-owned (non-scaffolded) Stryker config. Both halves of the fix are exercised
+// here: the regex now recognizes the real phrase, AND (belt-and-suspenders) the report-missing
+// branch degrades loudly instead of hard-failing even for phrasing this regex still doesn't know.
+describe("mutation-scan dry-run failure always writes an artifact (#1284, child process)", () => {
+  function writeFakeStrykerBinary(repo: string, stderrOutput: string): void {
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = `#!/usr/bin/env node\nprocess.stderr.write(${JSON.stringify(stderrOutput)});\nprocess.exit(1);\n`;
+    writeFileSync(join(binDir, "stryker"), script);
+    chmodSync(join(binDir, "stryker"), 0o755);
+  }
+
+  it("recognizes Stryker 9.6.1's real 'something went wrong' phrasing and writes the M8-03 finding + partial moduleRecord, exit 0", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    writeFakeStrykerBinary(repo, "12:03:44 (5678) ERROR StrykerJS One or more tests resulted in an error:\n\tsomething broke\n12:03:44 (5678) ERROR StrykerJS Something went wrong in the initial test run\n");
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0); // NOT the pre-#1284 bare exit 1 with no artifact
+    const parsed = JSON.parse(out) as { finding?: { id: string }; moduleRecord?: { status: string; note: string } };
+    expect(parsed.finding?.id).toBe("M8-03");
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/#503/);
+  });
+
+  it("a crash with NO recognized dry-run-failure signature still writes a partial moduleRecord instead of a bare exit 1", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    // A target-owned Stryker config (not scaffolded by Harvey) crashing with output this CLI's
+    // DRY_RUN_FAILURE regex does not recognize — the exact "unmatched dry-run failure" shape #1284
+    // reported. Before this fix: bare `process.exit(1)`, no --out file at all.
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    writeFakeStrykerBinary(repo, "FATAL: an unrecognized future Stryker crash message\n");
+    const outPath = join(repo, "m8-out.json");
+    const { status } = await new Promise<{ status: number }>((resolveP) => {
+      const child = spawn("node_modules/.bin/tsx", [CLI, repo, "--out", outPath], {
+        cwd: REPO_ROOT,
+        stdio: "ignore",
+        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      });
+      child.on("error", () => resolveP({ status: 1 }));
+      child.on("close", (code) => resolveP({ status: code ?? 1 }));
+    });
+    expect(status).toBe(0); // NOT the pre-#1284 bare exit 1
+    expect(existsSync(outPath)).toBe(true); // an artifact exists on this path — the acceptance test
+    const parsed = JSON.parse(readFileSync(outPath, "utf8")) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/mutation report not found/);
+  });
+});
+
+// #1285: a full mutation run invokes Stryker with cwd: targetDir, writing stryker-tmp/ +
+// reports/mutation/ into the TARGET tree — the #600 disposable-copy crash-safety guarantee is
+// --stub-check-only and does NOT cover this rung. The CLI now says so plainly (stderr at run start,
+// and a machine-readable field in the artifact) rather than leaving it to be discovered later.
+describe("mutation-scan discloses writing into the target tree for a full run (#1285, child process)", () => {
+  function writeFakeSucceedingStrykerBinary(repo: string): void {
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const outDir = path.join(process.cwd(), "reports", "mutation");
+fs.mkdirSync(outDir, { recursive: true });
+fs.writeFileSync(path.join(outDir, "mutation.json"), JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
+process.exit(0);
+`;
+    writeFileSync(join(binDir, "stryker"), script);
+    chmodSync(join(binDir, "stryker"), 0o755);
+  }
+
+  it("a full (non --report) run carries scratchWrittenIntoTargetTree naming stryker-tmp/ + reports/mutation/", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    writeFakeSucceedingStrykerBinary(repo);
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: unknown; scratchWrittenIntoTargetTree?: { stryker: boolean; note: string } };
+    expect(parsed.summary).toBeTruthy();
+    expect(parsed.scratchWrittenIntoTargetTree?.stryker).toBe(true);
+    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/stryker-tmp/);
+    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/reports\/mutation/);
+    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/#1285/);
+  });
+
+  it("a --report replay (Stryker never invoked) carries NO scratchWrittenIntoTargetTree field", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    const reportPath = join(repo, "mutation-report.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { scratchWrittenIntoTargetTree?: unknown };
+    expect(parsed.scratchWrittenIntoTargetTree).toBeUndefined();
+  });
+});
+
 // #819: line coverage is auto-pulled from the target's own coverage-capable runner (vitest/jest)
 // so the §3b coverage-vs-mutation-score gap no longer needs a hand-filled column. --report skips
 // invoking Stryker itself (irrelevant to this feature) so these fixtures need no stryker binary.
@@ -604,7 +739,12 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
   it("proactively patches the Stryker config for a detected TS7 target — the run completes instead of crashing", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFakeTypeScript7(repo);
-    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    // #1309: a `mutate` array is REQUIRED for this test's "no moduleRecord" assertion to be honest
+    // — without one, the scope is genuinely unverifiable (no glob to check the report's coverage
+    // against) and #1309's fix now correctly emits a partial moduleRecord for that, unrelated to
+    // this test's actual subject (the TS7 bypass). Naming exactly the one covered file keeps the
+    // scope verifiable AND fully covered, so this test still isolates the TS7 mechanism alone.
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/add.ts"] }));
     writeFakeStrykerBinary(repo, "succeed-if-bypassed");
 
     const { status, out } = await runCli(repo, []);

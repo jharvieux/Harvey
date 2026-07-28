@@ -92,12 +92,36 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   package's manifest this checkout does not read, and pnpm's own subcommands are passed through. All
   3 `pnpm <script>` references in the measured population are backticked, so the narrowing costs
   nothing there.
+
+  **Re-measured 2026-07-28 (#1349) over a population of 60 `met` lines** (up from the original 3
+  references across 2 PRs — the convention was days old when that number was recorded) — replaying
+  `parseBody` + the same backtick/script-lookup logic against the last 200 merged PRs
+  (`src/cli/measure-pnpm-evidence.ts`): 19 `met` lines mention `pnpm`, and **every one is already
+  backticked**. Zero unbackticked-but-real `pnpm <script>` references exist in the wider population
+  either — the narrowing still costs nothing, and the claim survives the larger sample.
+
+  <!--
+  REASON: the pnpm-backtick narrowing in citedScripts skips the truth check on any unbackticked pnpm reference, which would under-serve a real case if a genuine `pnpm <script>` citation ever went unbackticked in practice
+  KIND: empirical
+  PROVENANCE: MEASURED 2026-07-28 — the falsifier below, run as committed, found 0 unbackticked-but-real script references and exited 1, twice on a growing live population the same day (200 merged PRs / 60 `met` lines / 19 pnpm mentions, then 200 / 75 / 22 on re-run; up from the original 3-reference/2-PR sample). Exercised in all three directions: exit 0 against a seeded population carrying an unbackticked `pnpm verify` citation (blocker gone), exit 1 as committed (blocker holds), exit 127 when `gh` cannot answer or stdin is empty/garbled/an empty array (cannot run) — it does NOT exit 1 on a failed lookup, which `revalidateReasons` would read as "the blocker still holds"
+  FALSIFIER: gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body > /tmp/harvey-pnpm-evidence.json 2>/dev/null || exit 127; pnpm exec tsx src/cli/measure-pnpm-evidence.ts < /tmp/harvey-pnpm-evidence.json
+  TOUCHES: src/acceptance-conservation.ts, src/cli/measure-pnpm-evidence.ts
+  -->
+
 - **A closing reference whose form this gate cannot resolve gets a NOT ASSESSED row, and the run
   continues.** `Closes https://github.com/orgs/acme/projects/1/issues/5` has more than two path
   segments before `/issues/`; it used to THROW out of `closingRef`, killing the CLI with a Node
   stack trace at exit 1 (*"the gate failed"*) rather than its documented exit 2 (*"the gate could
   not run"*) — a crash where a disclosure belongs. It is now named in the output, and the Gate 1
   header says so rather than reporting *"no closing keyword"*, which would be false.
+
+  <!--
+  REASON: an unresolvable closing reference is disclosed as a NOT ASSESSED row rather than failing the gate — a product ruling about how the gate should degrade on a form it cannot parse, not a claim that no such form could ever be resolved (the cross-repo/URL form right below this WAS resolved once someone looked, #1320)
+  KIND: decisional
+  PROVENANCE: MEASURED 2026-07-27 (the ruling recorded in this document and in Gate 1's header text since the #1320 bounds audit fixed the crash-on-exit-1 shape)
+  OWNER: operator
+  DECISION: #1315 (Gate 1 design); #1320 (bounds audit — fixed the crash, kept the disclose-not-fail ruling)
+  -->
 - **The shape-only `NOT ASSESSED` row is a property of the LIBRARY, not of the CLI.**
   `checkAcceptance` called without an `EvidenceWorld` says evidence was checked for shape only,
   rather than looking like a verified run. `validate-acceptance.ts` builds that world
@@ -128,8 +152,26 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   does an unquoted test name. This is deliberate: a false ACCEPT lets an unmet criterion close an
   issue silently, which is the #1206 shape the gate exists for, while a false REJECT is loud, names
   every accepted shape in the error, and is fixed by adding backticks.
+
+  <!--
+  REASON: the gate errs toward refusing — good evidence phrased as plain prose is rejected rather than accepted on trust — trading author friction (fixed by adding backticks) for never letting an unmet criterion close silently
+  KIND: decisional
+  PROVENANCE: MEASURED 2026-07-27 (the ruling recorded in this document; the asymmetry — false ACCEPT is the #1206 shape the whole gate exists to prevent, false REJECT is merely loud — is the stated rationale)
+  OWNER: operator
+  DECISION: #1315 (Gate 1 design — conservation of acceptance criteria)
+  -->
+
 - Only bullets at the **shallowest indent** of the acceptance section are criteria. Deeper bullets
   read as elaboration — counted and reported in the output, never silently dropped.
+
+  <!--
+  REASON: only bullets at the shallowest indent of the acceptance section count as criteria; a deeper bullet is elaboration, not a separate bar to meet
+  KIND: decisional
+  PROVENANCE: MEASURED 2026-07-27 (the convention recorded in this document and enforced by checkAcceptance's section parser since Gate 1 shipped)
+  OWNER: operator
+  DECISION: #1329 (Gates 1+2: acceptance-criteria conservation and remainder liveness)
+  -->
+
 - The section runs from the acceptance heading to the next heading **at or above its own level**. A
   standalone bold line (`**Like this.**`) and a deeper `###` sub-heading do **not** end it. They used
   to: `## Acceptance / - one / **This one matters.** / - two / - three` parsed as **one** criterion
@@ -141,6 +183,14 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   not an argument's premise. `gh issue list --state all --limit 200` is the input.) The residual bound: a genuine sub-section under
   the acceptance heading now contributes its bullets as criteria, which fails LOUD rather than
   dropping them. When the acceptance heading is itself bold, the next bold line still ends it.
+
+  <!--
+  REASON: the acceptance section is bounded by "the next heading at or above its own level" (a standalone bold line or a deeper sub-heading does NOT end it) — a section-boundary convention choice about how an issue body is structured, not an empirical claim about how many real bodies it affects (measured as zero moved out of 156/200, then 159/200 a day later)
+  KIND: decisional
+  PROVENANCE: MEASURED 2026-07-27 (the #1320 bounds audit fixed the silent-drop bug this convention exists to close and re-measured its blast radius twice the same day)
+  OWNER: operator
+  DECISION: #1320 (bounds audit — fixed the standalone-bold/sub-heading silent-drop shape)
+  -->
 - **A green `cross-linked` row proves the remainder number is discoverable from the original — nothing
   more.** The condition is satisfied by **any** mention of that number anywhere in the original's body
   or comments, in any sentence. Demonstrated live on 2026-07-27: re-pointing #1316.3's `split` at
@@ -179,6 +229,14 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   `gh api repos/:owner/:repo/issues/1206/timeline` shows `closed 2026-07-27T12:00:24Z` on a PR whose
   body was headed *"## Does NOT close #1206"*. (It shows `reopened 2026-07-27T20:31:22Z` too, so a
   reader checking the issue today finds it OPEN — the close is in the timeline, not the state.)
+
+  <!--
+  REASON: the closing-keyword parser is deliberately negation-blind, matching GitHub's own merge-time behaviour ("does not close #19" still closes #19) rather than trying to out-parse GitHub's negation-blindness — a gate that read the negation would wave through the exact PR bodies (#1206, #743) the #1315 audit found
+  KIND: decisional
+  PROVENANCE: MEASURED 2026-07-27 (re-verified against #1206's real timeline: `closed` fired on a body headed "Does NOT close #1206")
+  OWNER: operator
+  DECISION: #1315 (Gate 1 design — conservation of acceptance criteria)
+  -->
 - ~~A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a
   named `NOT ASSESSED` row, not silence.~~ **FALSIFIED 2026-07-27** — near-circular, and the
   circularity was hiding a choice: the lookup was repo-scoped because it was written that way.
@@ -252,13 +310,28 @@ resolve is UNREADABLE, not absent`).
 `REASON:`/`KIND:`/`PROVENANCE:`/`FALSIFIER:` — rather than prose here, so
 `pnpm validate-reasons --revalidate` re-tests it on the daily cadence: the two Gate 4 bounds and the
 semgrep-only scope in `src/disclosure-venue.ts`, Gate 3's `ignoreExportsUsedInFile` blind spot in
-`src/test-only-exports.ts`, Gate 2's cross-linked condition beside `checkRemainder`, and #1341's
-question above. Every one was exercised in BOTH directions on 2026-07-27 — run as committed, then
-run again against a state where its blocker is gone — because a falsifier nobody has watched exit 0
-is indistinguishable from one that cannot. The bounds that remain prose here are DECISIONAL (a rule
-that errs toward refusing, an indent convention, negation-blindness): re-testing a product ruling by
-command is a category error and the reason gate refuses it. Folding those into decisional blocks
-with an `OWNER`/`DECISION` is the remainder, tracked as **#1349**.
+`src/test-only-exports.ts`, Gate 2's cross-linked condition beside `checkRemainder`, #1341's question
+above, and — since #1349 — the `pnpm`-backtick narrowing's cost re-measured over 60 `met` lines,
+inline above (`src/cli/measure-pnpm-evidence.ts`). Every one was exercised in BOTH directions — run
+as committed, then run again against a state where its blocker is gone — because a falsifier nobody
+has watched exit 0 is indistinguishable from one that cannot. **The remaining bounds are DECISIONAL**
+(the refuse-on-plain-prose asymmetry, the shallowest-indent convention, the section-boundary rule,
+the unresolvable-closing-reference disclosure, negation-blindness) — re-testing a product ruling by
+command is a category error and the reason gate refuses it, so each is instead a `KIND: decisional`
+block, inline above, naming its `OWNER` (operator) and the `DECISION` record.
+
+`pnpm exec tsx src/cli/validate-reasons.ts --census` reports **8** claim-shaped lines in this file
+outside a block (measured 2026-07-28; an earlier draft of this paragraph said none, which the tool
+contradicts). Each is named here, because a count nobody has triaged is the shape this census exists
+to end. `:57` and `:240` are struck-through text the #1320 audit FALSIFIED, kept visible beside its
+replacement rather than deleted. `:111` and `:201` are prose lead-ins of bounds whose registry blocks
+carry the real claim — `:111`'s is the block immediately below it, `:201`'s sits beside
+`checkRemainder` in `src/acceptance-conservation.ts`. `:43` is motivation in **The mechanism**,
+describing the defect class this gate exists for rather than a bound of it. `:317` sits in the
+paragraph directly above, on the falsifier-exercising rule. `:439` and `:443` state the
+`acceptance-close.yml` trigger bound, which is discharged by running that workflow once and recording
+the run — see **Wiring, and the bound** — so it carries a dispatch command rather than a
+`FALSIFIER:`.
 
 Exit codes are three-valued on purpose: `0` pass or green no-op, `1` gate failed, `2` gate could not
 run. A control that accepted any non-zero code would go green on exit 2 — the #1246 shape, where five
