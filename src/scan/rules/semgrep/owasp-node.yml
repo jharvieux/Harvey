@@ -48,6 +48,10 @@ rules:
       A body-parsing middleware has no `limit` option — the framework default applies and one
       request body can exhaust process memory. Set an explicit size limit (e.g.
       express.json({ limit: "100kb" })) sized to what the route legitimately needs.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reads this middleware call only — a presence check, not a certainty. A body-size limit
+      enforced by a reverse proxy, an ingress, or the hosting platform in front of the app is
+      invisible to a source scan; confirm none applies before treating the route as unbounded.
     patterns:
       - pattern-either:
           - pattern: express.json()

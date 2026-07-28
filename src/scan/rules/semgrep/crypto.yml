@@ -51,6 +51,11 @@ rules:
       jwt.decode() reads the token's claims WITHOUT verifying the signature. If the result feeds
       an authorization decision, anyone can forge a token with an arbitrary claim (no key
       needed). Use jwt.verify() (with an explicit algorithms allowlist) for anything security-relevant.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it flags EVERY jwt.decode() call. Telling a decode that feeds an authorization decision from
+      one that only reads a claim for display or refresh timing needs the caller's control flow,
+      which this rule does not follow — so an informational decode is expected to appear here and
+      is not, on its own, a defect.
     patterns:
       - pattern-either:
           - pattern: jwt.decode($T)
@@ -160,6 +165,10 @@ rules:
       per encryption. Reusing an IV with the same key breaks CBC/CTR/GCM's security guarantees
       (CBC leaks identical plaintext blocks; CTR/GCM can be fully broken). Generate it with
       crypto.randomBytes() for every call.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it matches an IV written as a literal at the call site. An IV built at runtime — read from
+      config, imported from a constants module, or derived from a key — is not assessed here, so an
+      IV that is not freshly random per call but never appears as a literal will not be reported.
     patterns:
       - pattern-either:
           - pattern: crypto.createCipheriv($ALGO, $KEY, Buffer.from($IV, ...))
@@ -209,6 +218,11 @@ rules:
       A request-controlled value is written directly to a `password` column with no hashing step
       (bcrypt/argon2) in between — passwords land in the DB in plaintext. Hash with bcrypt/argon2
       before persisting; never store or compare raw passwords.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it matches this write shape at the call site — a request value reaching a `password` column
+      with no hashing call in between. That is not a dataflow proof that hashing never happens: a
+      hash applied in a database trigger, an ORM hook, or a helper the value passed through earlier
+      is outside what this rule follows.
     patterns:
       - pattern-either:
           - pattern: '$C.insert({ ..., password: req.body.$K, ... })'
@@ -344,6 +358,11 @@ rules:
       token is valid forever and cannot be revoked by time. Pass { expiresIn: '<duration>' } (and
       verify with a matching maxAge), unless this token is intentionally long-lived with its own
       revocation path.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it assesses the two-argument form and the three-argument form whose options are written
+      inline. A jwt.sign() whose options are held in a VARIABLE is deliberately not flagged — this
+      rule does not read whether `expiresIn` lives inside it — so a missing expiry behind a
+      variable options object is not assessed anywhere in this report.
     patterns:
       - pattern-either:
           - pattern: jwt.sign($P, $S)
@@ -415,6 +434,11 @@ rules:
       An AEAD decipher returns decipher.update() directly without calling decipher.final() — .final()
       is what verifies the authentication tag, so a forged/tampered ciphertext is accepted. Always
       call .final() and let it throw on a bad tag.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it matches the shape where update() is returned directly. A .final() call reached on another
+      path — in a wrapper, a later branch, or a helper this function delegates to — is outside what
+      the rule follows, so confirm no .final() runs on another path before treating this as
+      unmitigated.
     patterns:
       - pattern: |
           $D = crypto.createDecipheriv($ALGO, ...);

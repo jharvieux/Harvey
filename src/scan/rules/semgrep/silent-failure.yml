@@ -42,6 +42,10 @@ rules:
       Supabase JS returns { error: null } whether the update matched one row or none, so a lost
       race is indistinguishable from success. Chain .select("id") and assert the returned array
       has the row count you expected before treating the write as done.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it matches the update chain itself. Whether the caller establishes the affected-row count
+      some other way — a follow-up read, a database trigger, an RPC that returns it — is not
+      assessed, so a write already verified elsewhere will appear here too.
     patterns:
       - pattern-either:
           - pattern: $DB.from($T).update($V).eq($C1, "...").eq($C2, $A2)

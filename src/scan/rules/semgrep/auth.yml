@@ -384,6 +384,10 @@ rules:
       variable, no field allowlist) — mass assignment. A caller can set any column the table
       exposes (role/is_admin/owner_id/price) by adding it to the JSON body. Destructure and pass
       an explicit list of allowed fields instead of the raw body object.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the raw body reaching the write at this call site. A field allowlist applied
+      elsewhere — in shared validation, a repository wrapper, or a database policy — is outside
+      what a static rule reads, so confirm none applies before treating this as unmitigated.
     patterns:
       - pattern-either:
           - pattern-inside: |
@@ -421,6 +425,9 @@ rules:
       The whole request body is passed directly as a repo write function's payload — mass
       assignment. A caller can set any column the write path exposes (role/is_admin/price) by
       adding it to the JSON body. Destructure and pass an explicit list of allowed fields instead.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it keys on the whole body reaching a write function by NAME. It does not read that function's
+      body, so an allowlist applied inside the named function is not assessed here.
     patterns:
       - pattern: $FN($ID, req.body)
       - metavariable-regex:
@@ -453,6 +460,10 @@ rules:
       (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can
       escalate their own privileges by adding the field to the request. Derive role/admin status
       from the verified session, never from the request.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the READ of a role field off the request. Code that reads the field only to reject
+      it is a benign shape this rule does not distinguish from a trusting one, so a defensive check
+      will appear here too.
     patterns:
       - pattern-either:
           - pattern: $REQ.body.$FLAG

@@ -73,6 +73,12 @@ jobs:
               src/disclosure-venue.test.ts) relevant=true ;;
               src/cli/validate-disclosure-venue.ts) relevant=true ;;
               .github/workflows/disclosure-venue.yml) relevant=true ;;
+              # Gate 4b (#1330) runs in this job too, so its inputs have to widen the filter or a
+              # change to a registered scan path reports green without the gate ever running.
+              src/conditional-scan.ts) relevant=true ;;
+              src/conditional-scan.test.ts) relevant=true ;;
+              src/cli/validate-conditional-scan.ts) relevant=true ;;
+              src/scan/supabase.ts) relevant=true ;;
             esac
           done <<< "$files"
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
@@ -99,5 +105,19 @@ jobs:
         run: |
           if pnpm exec tsx src/cli/validate-disclosure-venue.ts --seed-violation; then
             echo "::error::--seed-violation appended a rule with a NOTE:-declared bound and no scope sentence, plus one with a contentless scope sentence, and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
+            exit 1
+          fi
+
+      # Gate 4b (#1330): the omission that carries no bound comment at all, because the branch that
+      # skips the check simply does not call it. Same job, same negative-control posture.
+      - name: Conditional-scan gate (must PASS)
+        if: steps.filter.outputs.relevant == 'true'
+        run: pnpm exec tsx src/cli/validate-conditional-scan.ts --list
+
+      - name: Negative control — a seeded undeclared omission must FAIL the gate
+        if: steps.filter.outputs.relevant == 'true'
+        run: |
+          if pnpm exec tsx src/cli/validate-conditional-scan.ts --seed-omission; then
+            echo "::error::--seed-omission removed a check call from a registered scan path, creating an omission the registry does not declare and the deliverable would not mention, and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
             exit 1
           fi
