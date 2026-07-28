@@ -202,6 +202,20 @@ jobs:
         if: matrix.shard == 1
         run: pnpm exec tsx src/cli/validate-calibration.ts
 
+      # #1288: the same hole one gate over. `validate-source-recall` scores the app-layer
+      # request→sink SOURCE detectors — the free-tier recall number #868 publishes — and ran in no
+      # workflow either. It runs the same runMechanicalScan the calibration gate does, so it needs
+      # the binaries this job installs and belongs nowhere else. Shard 2, not 1: shard 1 already
+      # carries the calibration gate, and both are single scans (~16s measured locally 2026-07-28),
+      # so splitting them keeps either shard from becoming the long pole.
+      #
+      # Deliberately WITHOUT --real: that mode git-clones six pinned external repos and always exits
+      # 0 by design (it reports, it does not gate), so on a cadence it would spend network on a
+      # number nothing can fail. The planted-fixture gate below is the one with a pass/fail.
+      - name: Source-detector recall gate (real binaries, request→sink answer key)
+        if: matrix.shard == 2
+        run: pnpm exec tsx src/cli/validate-source-recall.ts
+
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
       # label. Still never fires on PR/push — those failures already gate the `verify` check on the
