@@ -55,9 +55,9 @@ import { m9PortEntries } from "./calibration/m9-ports.entries.js";
 import { m10Entries } from "./calibration/m10.entries.js";
 import { m4m5Entries } from "./calibration/m4-m5.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
-import type { CorpusEntry } from "./calibration/types.js";
+import type { CorpusEntry, LiveTier } from "./calibration/types.js";
 
-export type { CorpusEntry } from "./calibration/types.js";
+export type { CorpusEntry, LiveTier } from "./calibration/types.js";
 
 // Answer key, assembled from per-batch entry modules under ./calibration/. CONVENTION: each
 // corpus batch (#71/#72 fan-out) adds a `<batch>.entries.ts` file exporting a CorpusEntry[] and
@@ -232,27 +232,54 @@ export interface MatrixRow {
   // #1157: severity-correctness scoring. `expectedSeverity` echoes the entry's answer key;
   // `deliveredSeverities` is the distinct set the caught findings actually carried; `severityMismatch`
   // is true only for a CAUGHT positive whose expectedSeverity is set and NO relevant finding delivered
-  // it. A miss never sets it (the miss already fails); a negative/connected/none row never does.
+  // it. A miss never sets it (the miss already fails); a negative/live/none row never does.
   expectedSeverity?: CorpusEntry["expectedSeverity"];
   deliveredSeverities?: Severity[];
   severityMismatch: boolean;
+  // #1428: this row was NOT scored — its live venue was not available on this run. `pass: true` on
+  // such a row is bookkeeping, not evidence, and a consumer blind to the difference is how
+  // three gutted detectors produced a byte-identical GATE PASS. Anything that reports a pass rate
+  // must report this count beside it.
+  notScored: boolean;
 }
 
+// The two venues a corpus row can need a running stack for. See LiveTier in calibration/types.ts
+// for what each one can answer.
+export const LIVE_TIERS: readonly LiveTier[] = ["local", "connected", "hosted"];
+
+export function isLiveTier(tier: CorpusEntry["expectedTier"]): tier is LiveTier {
+  return tier === "local" || tier === "connected" || tier === "hosted";
+}
+
+const NO_LIVE_VENUE: ReadonlySet<LiveTier> = new Set();
+
+/** What a run must have to score a row of each live tier — printed in the NOT SCORED detail. */
+const LIVE_VENUE_NEEDS: Record<LiveTier, string> = {
+  local: "a Postgres connection to a `supabase start` stack",
+  connected: "the project's own REST/GraphQL surface",
+  hosted: "a hosted project and a Management API token",
+};
+
 // Scoring:
-//   positive (static): pass = caught at any tier. A "connected"-tier positive is N/A (never fails).
+//   positive (static): pass = caught at any tier.
 //   negative: pass = NO high-tier (free-count) finding is relevant. A review-tier hit is tolerated
-//             (it gets triaged out of the count) but recorded. A "connected"-tier negative is N/A.
-export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
+//             (it gets triaged out of the count) but recorded.
+//   live tier ("local"/"connected"): scored EXACTLY like the above when `scoredVenues` says this run
+//             has that venue — the whole point of #1428. Otherwise the row is NOT SCORED: still
+//             `pass: true` so an offline gate's arithmetic is unchanged, but flagged `notScored` so
+//             no caller can read it as a result.
+export function scoreEntry(entry: CorpusEntry, findings: Finding[], scoredVenues: ReadonlySet<LiveTier> = NO_LIVE_VENUE): MatrixRow {
   const relevant = relevantFindings(entry, findings);
   assertTiered(entry, relevant);
   const highFlagged = relevant.some((f) => f.precisionTier === "high");
   const reviewFlagged = relevant.some((f) => f.precisionTier === "review");
   const caughtTier = topTier(relevant);
   // A caught-and-clean severity default for every non-scored path; the positive branch overrides it.
-  const noSev = { expectedSeverity: entry.expectedSeverity, severityMismatch: false };
+  const noSev = { expectedSeverity: entry.expectedSeverity, severityMismatch: false, notScored: false };
 
-  if (entry.expectedTier === "connected") {
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: true, detail: "N/A — connected tier (live DB), not evaluated statically", ...noSev };
+  if (isLiveTier(entry.expectedTier) && !scoredVenues.has(entry.expectedTier)) {
+    const detail = `NOT SCORED — needs the "${entry.expectedTier}" live venue (${LIVE_VENUE_NEEDS[entry.expectedTier]}), which this run does not have. Scored by \`pnpm validate:connected\`, never by a static run.`;
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: true, detail, ...noSev, notScored: true };
   }
 
   // "none": no mechanical rule by design (a measured LLM-tier class). The intended gap holds only
@@ -281,7 +308,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
     const detail = pass
       ? `caught at ${caughtTier}${entry.expectedTier && entry.expectedTier !== caughtTier ? ` (expected ${entry.expectedTier})` : ""}${sevDetail}`
       : "NOT caught by any rule";
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch, notScored: false };
   }
 
   // negative. #1344: `!highFlagged` alone let a widened rule light up a planted negative at review
@@ -302,12 +329,14 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
 
 export interface CoverageMatrix {
   rows: MatrixRow[];
-  positivesTotal: number; // static positives that MUST be caught (excludes connected AND none tiers)
+  positivesTotal: number; // static positives that MUST be caught (excludes the live AND none tiers)
   positivesCaught: number;
   positivesCaughtHigh: number;
-  negativesTotal: number; // static negatives (excludes connected tier)
+  negativesTotal: number; // static negatives (excludes the live tiers)
   negativesCleared: number;
-  connectedNa: number;
+  // #1428: rows this run did not score because it had no live venue for them. Reported beside the
+  // pass rate, never folded into it — the count IS the disclosure.
+  liveNotScored: number;
   noRuleTotal: number; // positives with no mechanical rule by design ("none" tier)
   noRuleHeld: number; // ...of those, the intended gap still holds (nothing of the class fired)
   // #881: the same two counts in the OWASP-Benchmark vocabulary. Scored on the basis this gate
@@ -326,8 +355,8 @@ function moduleOf(entry: CorpusEntry): string {
 
 interface ModuleCensusRow {
   module: string;
-  positivesStatic: number; // static positives (excludes connected tier)
-  positivesConnected: number; // connected-tier positives (live-DB only, N/A statically)
+  positivesStatic: number; // static positives (excludes the live tiers)
+  positivesConnected: number; // live-tier positives (local/connected — scored by validate-connected)
   negatives: number;
 }
 
@@ -348,7 +377,7 @@ export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] 
     const m = moduleOf(e);
     const row = rows.get(m) ?? { module: m, positivesStatic: 0, positivesConnected: 0, negatives: 0 };
     if (e.kind === "negative") row.negatives++;
-    else if (e.expectedTier === "connected") row.positivesConnected++;
+    else if (isLiveTier(e.expectedTier)) row.positivesConnected++;
     else row.positivesStatic++;
     rows.set(m, row);
   }
@@ -623,10 +652,14 @@ export function mechanicalCorpus(corpus: CorpusEntry[] = CORPUS): CorpusEntry[] 
   return corpus.filter((e) => e.module === undefined);
 }
 
-export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
-  const rows = corpus.map((e) => scoreEntry(e, findings));
-  const staticPos = rows.filter((r) => r.kind === "positive" && r.expectedTier !== "connected" && r.expectedTier !== "none");
-  const staticNeg = rows.filter((r) => r.kind === "negative" && r.expectedTier !== "connected");
+// `scoredVenues` names the live venues THIS run has (empty for every static run). A live row in a
+// venue this run has is scored — and counted — exactly like a static one; a live row in a venue it
+// does not have is `notScored` and excluded from every denominator, so it can neither inflate a
+// recall number nor hide inside one.
+export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS, scoredVenues: ReadonlySet<LiveTier> = NO_LIVE_VENUE): CoverageMatrix {
+  const rows = corpus.map((e) => scoreEntry(e, findings, scoredVenues));
+  const staticPos = rows.filter((r) => r.kind === "positive" && !r.notScored && r.expectedTier !== "none");
+  const staticNeg = rows.filter((r) => r.kind === "negative" && !r.notScored);
   const noRule = rows.filter((r) => r.kind === "positive" && r.expectedTier === "none");
   const positivesCaught = staticPos.filter((r) => r.pass).length;
   const negativesCleared = staticNeg.filter((r) => r.pass).length;
@@ -638,7 +671,7 @@ export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] =
     positivesCaughtHigh: staticPos.filter((r) => r.highFlagged).length,
     negativesTotal: staticNeg.length,
     negativesCleared,
-    connectedNa: rows.filter((r) => r.expectedTier === "connected").length,
+    liveNotScored: rows.filter((r) => r.notScored).length,
     noRuleTotal: noRule.length,
     noRuleHeld,
     metrics: detectionMetrics({

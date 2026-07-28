@@ -4,17 +4,27 @@
 // (#140). `grep -rl 'EXPOSED-SCHEMA\|REALTIME\|GRAPHQL' src/scan/calibration/` returned nothing
 // until this file.
 //
-// WHAT THESE ROWS DO AND DO NOT LOCK — read this before trusting a green gate.
-// Every row here is `expectedTier: "connected"`, which scoreEntry() scores N/A and never fails
-// (src/scan/calibration.ts). So they do NOT assert that the detectors fire; what they lock is the
-// ANSWER KEY (class, fixture, expected id/severity, and the state a seeded stack must be in), the
-// per-module parity census, and the fixture pairing a live connected run scores against. The
-// wiring seam — that scanHosted actually calls checkExposedSchemas/checkGraphqlIntrospection and
+// WHAT THESE ROWS LOCK — corrected 2026-07-28 by #1428, which found the original claim below false.
+// As first shipped every row here was `expectedTier: "connected"`, and scoreEntry() returned
+// `pass: true` UNCONDITIONALLY for that tier while no consumer anywhere scored such a row against a
+// live run: a verifier gutted all three detector bodies (`return []` as the first statement) and
+// `validate-calibration` still exited 0 with byte-identical output. The rows locked the answer key
+// and nothing else.
+//
+// They are now scored, by src/cli/validate-connected.ts, against a live `supabase start` stack:
+//   - P-REALTIME-NO-AUTHZ is `expectedTier: "local"` — checkRealtimeAuthorization runs in local mode
+//     (supabase.ts's scanLocal), so a Postgres connection alone scores it.
+//   - P-API-SCHEMA-WIDE / P-GRAPHQL-INTROSPECTION stay `"connected"`: their input is PostgREST's
+//     schema allow-list, which is not in Postgres. The gate reads it from the running REST surface
+//     (a PGRST106 `Invalid schema` reply enumerates the exposed schemas in its `hint`) and feeds the
+//     real checkExposedSchemas/checkGraphqlIntrospection.
+// Gutting any of the three now exits the gate 1 — measured 2026-07-28, see the CLI's header.
+//
+// The wiring seam — that scanHosted actually calls checkExposedSchemas/checkGraphqlIntrospection and
 // that checkRealtimeAuthorization runs in BOTH modes — is separately locked by
 // src/scan/supabase.test.ts ("runs the connected-tier checks (realtime, exposed schema,
 // pg_graphql) on a hosted scan", plus the SB-SCOPE-00 pair added by #1330), and the check bodies by
-// supabase-config.test.ts. The one thing still unlocked is a scored LIVE run, which is blocked on
-// the calibration target's migration chain (see the note on P-REALTIME-NO-AUTHZ).
+// supabase-config.test.ts.
 //
 // THE FIXTURES ARE REAL AND WERE MEASURED, NOT INFERRED (2026-07-28, Supabase CLI 2.102.0, stock
 // `supabase start`). psql transcript in docs/runbooks/dry-run-calibration.md §11:
@@ -44,7 +54,7 @@
 import type { CorpusEntry } from "./types.js";
 
 export const b24ConnectedPostgrestRealtimeEntries: CorpusEntry[] = [
-  // --- POSITIVES (connected tier — N/A on a static run, never a free-count claim) ---
+  // --- POSITIVES (live tiers — no static run produces these; scored by `pnpm validate:connected`) ---
   {
     id: "P-API-SCHEMA-WIDE",
     kind: "positive",
@@ -53,7 +63,7 @@ export const b24ConnectedPostgrestRealtimeEntries: CorpusEntry[] = [
     match: ["schema exposure"],
     expectedTier: "connected",
     expectedSeverity: "Medium",
-    note: "#141. Two-part fixture: supabase/config.toml `[api] schemas = [\"public\", \"graphql_public\", \"internal_ops\"]` is the half PostgREST turns into its `db-schema` setting (the ONLY thing checkExposedSchemas reads — it is not queryable from Postgres, which is why local mode discloses SB-SCOPE-00 instead of answering), and migration 20260728000001 creates internal_ops.job_queue behind the name so the exposure is a real reachable surface rather than an empty allow-list entry. Expect SB-API-SCHEMA-internal_ops, review tier, Medium, location \"exposed schema: internal_ops\". Matched on \"schema exposure\" (from the taxonomy) rather than the schema name, which is the entry's own location and would be vacuous under #1355.",
+    note: "#141. Two-part fixture: supabase/config.toml `[api] schemas = [\"public\", \"graphql_public\", \"internal_ops\"]` is the half PostgREST turns into its `db-schema` setting (the ONLY thing checkExposedSchemas reads — it is not queryable from Postgres, which is why local mode discloses SB-SCOPE-00 instead of answering), and migration 20260728000001 creates internal_ops.job_queue behind the name so the exposure is a real reachable surface rather than an empty allow-list entry. Expect SB-API-SCHEMA-internal_ops, review tier, Medium, location \"exposed schema: internal_ops\". Matched on \"schema exposure\" (from the taxonomy) rather than the schema name, which is the entry's own location and would be vacuous under #1355. SCORED LIVE 2026-07-28 by `pnpm validate:connected`: the gate reads the allow-list off the running REST surface (PostgREST answers an unexposed schema with PGRST106 whose hint enumerates `public, graphql_public, internal_ops`) and feeds checkExposedSchemas; gutting that check exits the gate 1 naming this row.",
   },
   {
     id: "P-GRAPHQL-INTROSPECTION",
@@ -63,7 +73,7 @@ export const b24ConnectedPostgrestRealtimeEntries: CorpusEntry[] = [
     match: ["introspection"],
     expectedTier: "connected",
     expectedSeverity: "Medium",
-    note: "#142. Needs BOTH preconditions, and only one of them is a stock default: graphql_public is already in `[api] schemas`, but pg_graphql is NOT installed by a stock `supabase start` (MEASURED — pg_available_extensions shows default_version 1.5.11 with a null installed_version). Migration 20260728000001's `create extension if not exists pg_graphql` supplies the missing half. That same absence is why the 2026-07-10 ATC live run recorded this class as a clean NEGATIVE — it was the extension that was missing there too, not the schema, which is the discrimination hasPgGraphql() exists to make and is unit-tested for in supabase.test.ts. Expect SB-GRAPHQL-INTROSPECTION, review tier, Medium.",
+    note: "#142. Needs BOTH preconditions, and only one of them is a stock default: graphql_public is already in `[api] schemas`, but pg_graphql is NOT installed by a stock `supabase start` (MEASURED — pg_available_extensions shows default_version 1.5.11 with a null installed_version). Migration 20260728000001's `create extension if not exists pg_graphql` supplies the missing half. That same absence is why the 2026-07-10 ATC live run recorded this class as a clean NEGATIVE — it was the extension that was missing there too, not the schema, which is the discrimination hasPgGraphql() exists to make and is unit-tested for in supabase.test.ts. Expect SB-GRAPHQL-INTROSPECTION, review tier, Medium. SCORED LIVE 2026-07-28 by `pnpm validate:connected`, which reads pg_graphql from pg_extension over the live DB and the exposed-schema list off the REST surface; gutting checkGraphqlIntrospection exits the gate 1 naming this row.",
   },
   {
     id: "P-REALTIME-NO-AUTHZ",
@@ -71,9 +81,9 @@ export const b24ConnectedPostgrestRealtimeEntries: CorpusEntry[] = [
     cls: "Realtime channel/broadcast lacks authorization (realtime.messages RLS disabled)",
     location: "realtime.messages",
     match: ["channel lacks authorization"],
-    expectedTier: "connected",
+    expectedTier: "local",
     expectedSeverity: "High",
-    note: "#140, the id the issue itself named. Unlike the other two this check runs in BOTH hosted and local mode (supabase.ts:198/:303), so it is the one of the three a local stack can actually score. Plantable, which was not obvious: realtime.messages ships with RLS ENABLED and is owned by supabase_realtime_admin, but `postgres` is a member of that role, so migration 20260728000001's `alter table realtime.messages disable row level security` succeeds (MEASURED 2026-07-28 — ALTER TABLE, relrowsecurity flips to false). Expect SB-REALTIME-NO-AUTHZ, review tier, High. NOT YET SCORED LIVE against this target: `supabase start` on targets/calibration currently aborts at migration 20260719000002_plpgsql_injection_definer.sql (`type \"public.nocode_tickets\" does not exist`), so no migration from that point on — including this one — has ever been applied to a stack. Pre-existing, unrelated to this batch, filed as #1424; the psql work above was done on a bare stack for exactly that reason.",
+    note: "#140, the id the issue itself named. Unlike the other two this check runs in BOTH hosted and local mode (supabase.ts's scanHosted/scanLocal), so a Postgres connection alone scores it — which is why #1428 re-tiered it off `connected` to `local`, the cheapest genuine lock of the three. Plantable, which was not obvious: realtime.messages ships with RLS ENABLED and is owned by supabase_realtime_admin, but `postgres` is a member of that role, so migration 20260728000001's `alter table realtime.messages disable row level security` succeeds (MEASURED 2026-07-28 — ALTER TABLE, relrowsecurity flips to false). Expect SB-REALTIME-NO-AUTHZ, review tier, High. SCORED LIVE 2026-07-28 against this target, not inferred: `pnpm validate:connected` over a `supabase start` stack reports it caught at review/High, and `return []` as the first statement of checkRealtimeAuthorization exits the gate 1 naming this row.",
   },
 
   // --- NEGATIVE (boundary — scored statically, deliberately NOT tiered "connected") ---
