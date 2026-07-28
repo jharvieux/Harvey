@@ -373,7 +373,7 @@ export const MIN_NEGATIVES_PER_MODULE = 1;
 //        (src/audit-conservation.ts:59) since #1155.
 //   M6 — src/scan/external-corpus.ts carries an "M6-indicator" baseline on six external targets
 //        (#483), re-run by `pnpm corpus-drift`.
-// An exemption for a module that is NOT thin is itself a failure (parityStale) — a substitute gate
+// An exemption for a module that is NOT thin is itself a failure (the `stale` list) — a substitute gate
 // that has been overtaken by real fixtures must not keep standing in for them.
 interface ParityExemption {
   module: string;
