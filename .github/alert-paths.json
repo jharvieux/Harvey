@@ -8,52 +8,57 @@
     "refuses a path with no proof. Re-prove any of them with:",
     "    gh workflow run <workflow name> -f alert_drill=true",
     "which opens, comments on and then closes a self-cleaning `… — alert-path drill` issue under the",
-    "real job token."
+    "real job token.",
+    "#1348 (2026-07-28) unified the drill onto the production find-or-update branch (previously a",
+    "hand-written parallel branch sharing only the label-create step and the raw gh primitives — see",
+    "the action's own header). The five proof runs below were re-taken against that fix, on one",
+    "branch back to back, and a negative control (breaking find_or_update's `gh issue comment` call)",
+    "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted."
   ],
   "paths": [
     {
       "workflow": ".github/workflows/conservation.yml",
       "marker": "ci-conservation-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313133260",
-        "issue": 1337,
-        "at": "2026-07-27"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331405114",
+        "issue": 1390,
+        "at": "2026-07-28"
       }
     },
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "marker": "ci-corpus-drift-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313134292",
-        "issue": 1338,
-        "at": "2026-07-27"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331544561",
+        "issue": 1393,
+        "at": "2026-07-28"
       }
     },
     {
       "workflow": ".github/workflows/reasons-drift.yml",
       "marker": "ci-reasons-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313132177",
-        "issue": 1336,
-        "at": "2026-07-27"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331546673",
+        "issue": 1392,
+        "at": "2026-07-28"
       }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-heavy-cli-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313136499",
-        "issue": 1340,
-        "at": "2026-07-27"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331545597",
+        "issue": 1395,
+        "at": "2026-07-28"
       }
     },
     {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "ci-owasp-watch-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313135460",
-        "issue": 1339,
-        "at": "2026-07-27"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331547885",
+        "issue": 1394,
+        "at": "2026-07-28"
       }
     }
   ],

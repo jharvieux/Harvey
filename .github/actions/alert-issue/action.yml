@@ -20,8 +20,8 @@
 # calls it once; the drill calls it twice — create-when-absent, then comment-on-existing — against
 # its own drill-suffixed namespace, so a drill run can never be mistaken for, or overwrite, a live
 # alarm. Breaking `find_or_update`'s `gh issue comment "$existing"` line now breaks the drill AND
-# production identically, because it is the same line — proven 2026-07-27 by a negative control run
-# (see .github/alert-paths.json).
+# production identically, because it is the same line — proven live 2026-07-28, run 30331463282
+# (jharvieux/Harvey#1391), reverted immediately after (see .github/alert-paths.json).
 #
 # Registry of markers and their proof runs: .github/alert-paths.json.
 
