@@ -861,11 +861,18 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
     expect(row?.missing).toBe(`0/${MIN_NEGATIVES_PER_MODULE} negatives`);
   });
 
-  it("M2 and M6 stand on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
+  it("M2 stands on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
+    // M6 was the second exempt module until #1371/#1453. Its exemption's original ground — that a
+    // planted single-file fixture could not express a whole-repo shape count — was measured false
+    // twice independently (#1454 over one planted file, 3 of 3; #1453 over the full set, 33 of 33).
+    // #1454 could not delete the row, only re-express it as decisional, because the fixtures did not
+    // exist yet; it wrote the hand-off into the row instead. #1453 landed them, so the row went. The
+    // `stale` check is what would have fired had it stayed — proven positively in the last block
+    // below, not merely by this list coming back short.
     const { thin, exempt, stale } = parityVerdict(CORPUS);
     expect(thin).toEqual([]);
     expect(stale).toEqual([]);
-    expect(exempt.map((e) => e.module)).toEqual(["M2", "M6"]);
+    expect(exempt.map((e) => e.module)).toEqual(["M2"]);
     for (const e of exempt) expect(e.exemption.substituteGates.length).toBeGreaterThan(0);
     // A module that grows real fixtures must lose its exemption rather than keep hiding behind it.
     const withM2Fixtures: CorpusEntry[] = [

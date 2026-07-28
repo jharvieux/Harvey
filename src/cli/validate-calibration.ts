@@ -19,6 +19,7 @@ import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mec
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
+import { scoreM6IndicatorCorpus } from "../scan/m6-indicator-corpus.js";
 import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
@@ -138,7 +139,7 @@ const severityMismatches = severityAnnotated.filter((r) => r.severityMismatch);
 // module with ZERO entries renders as a row reading 0 and trips the minimum — before #1314 it
 // emitted no row at all, and M2/M6 (zero fixtures each) were the only two modules the gate
 // structurally could not flag while it printed "all modules meet it".
-console.log("\nPer-module corpus census (fixture counts only — this gate scores M1; other modules are gated by their own suites):");
+console.log("\nPer-module corpus census (fixture counts only — this gate scores M1's matrix and, since #1371, M6's indicator block; other modules are gated by their own suites):");
 const census = moduleCensus(CORPUS);
 const parity = parityVerdict(CORPUS);
 const parityThin = parity.thin;
@@ -146,7 +147,10 @@ const exemptModules = new Map(parity.exempt.map((e) => [e.module, e]));
 for (const c of census) {
   const connected = c.positivesConnected ? ` +${c.positivesConnected} connected` : "";
   const shortfall = parityThin.find((t) => t.module === c.module);
-  const where = c.module === "M1" ? "SCORED BY THIS GATE" : exemptModules.has(c.module) ? "NO CORPUS — substitute gate named below" : "own unit suite (src/scan/calibration/*.entries.ts)";
+  // #1371: M6 is scored by this gate too, in its own block below (its findings are not in
+  // runMechanicalScan's default output, so it is scored outside the matrix above). Saying "own
+  // unit suite" here would understate where its rows are actually held to account.
+  const where = c.module === "M1" ? "SCORED BY THIS GATE" : c.module === "M6" ? "SCORED BY THIS GATE — M6 indicator block below" : exemptModules.has(c.module) ? "NO CORPUS — substitute gate named below" : "own unit suite (src/scan/calibration/*.entries.ts)";
   const flag = shortfall ? `  THIN (${shortfall.missing})` : "";
   console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}${flag}`);
 }
@@ -207,6 +211,20 @@ const heuristic = measureHeuristicPrecision();
 for (const m of heuristic.modules) {
   console.log(`  ${m.module.padEnd(4)} ${formatMetrics(m.metrics)}`);
 }
+
+// #1371: M6's indicator corpus. Its findings are not in runMechanicalScan's default output at all
+// (`handrolledIndicators` is opt-in), so these rows can only be scored by running the detector over
+// its own committed fixtures — see src/scan/m6-indicator-corpus.ts. Reported HERE and folded into
+// gatePass so the census row above stands on a gate that can go red, not on a count: #1299 shipped
+// three well-formed rows that scored N/A by default, and gutting all three detectors left this gate
+// at exit 0 with byte-identical output (#1428).
+const m6 = scoreM6IndicatorCorpus();
+console.log(`\nM6 INDICATOR CORPUS (#1371) — live detectHandrolledFindings over the committed __fixtures__/handrolled dirs:`);
+console.log(
+  `  positives caught: ${m6.positivesCaught}/${m6.positivesTotal}   negatives cleared: ${m6.negativesCleared}/${m6.negativesTotal}   ` +
+    `indicator classes declared by handrolled.ts: ${m6.classesDeclared}, uncovered by a positive row: ${m6.uncovered.length}`,
+);
+for (const r of m6.rows.filter((r) => !r.pass || r.severityMismatch)) console.log(`  FAIL  ${r.id.padEnd(24)} ${r.detail}`);
 
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's
 // git-history scan needs a clonable repo ROOT, which targets/calibration (a subdirectory of
@@ -302,8 +320,9 @@ const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
 
-const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
+const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
 if (!gatePass) {
+  if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
   if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);

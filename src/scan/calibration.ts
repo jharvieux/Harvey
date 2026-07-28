@@ -45,6 +45,7 @@ import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
 import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
+import { m6HandrolledEntries } from "./calibration/m6-handrolled.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
@@ -103,6 +104,7 @@ export const CORPUS: CorpusEntry[] = [
   ...m7Entries,
   ...m7InitplanStaticEntries,
   ...m3Entries,
+  ...m6HandrolledEntries,
 ];
 
 // `location` may be an absolute path rooted in the environment-dependent checkout (e.g. a tool
@@ -382,9 +384,17 @@ export const MIN_NEGATIVES_PER_MODULE = 1;
 //
 // The M6 row is why. Its stated ground, written the same day by the executor of #1314, held that
 // M6's indicators are whole-repo shape counts a planted single-file fixture could not express
-// (quoted verbatim in that row's provenance below) — impossibility's vocabulary on an untested claim. MEASURED 2026-07-28 by running
+// — impossibility's vocabulary on an untested claim. MEASURED 2026-07-28 by running
 // detectHandrolledFindings over ONE planted file carrying three hand-rolled shapes: 3 of 3 fire, at
-// their own line numbers (#1371/#1453 measure the full 33 of 33). The claim was false when written.
+// their own line numbers. The claim was false when written.
+//
+// THAT ROW IS GONE, and its deletion is the point rather than a tidy-up. #1454 re-expressed it as
+// decisional — OWNER operator, DECISION #1371 — and wrote the hand-off into the row itself: "when
+// its entries land, M6 stops being thin and this row must be deleted". #1453 landed them (33 of 33
+// indicator classes scored, src/scan/calibration/m6-handrolled.entries.ts, run by
+// src/scan/m6-indicator-corpus.ts), so M6 now stands on its own fixtures and the `stale` check
+// below is what would have fired had the row stayed. M6's two substitute gates still exist and
+// still run; they are simply no longer what the module stands on.
 //
 // So an exemption now carries the registry's own fields and is validated by the registry's own
 // function (validateRecordedReason), which buys three things at once: an ASSUMED provenance can no
@@ -465,31 +475,6 @@ const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
       provenance:
         "MEASURED 2026-07-28 — `grep -c '\"taxonomy\": \"M2' dry-run/findings.json` (the committed offline scan of targets/calibration) is 0; the substitute gate fires in BOTH directions: `tsx src/cli/pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested bogus-id` exits 1 naming the real gap `app:root`, and `--tested app:root` exits 0; CALIBRATION_PLANTS carries the M2 row (src/audit-conservation.ts). The falsifier below was exercised in all three directions the same day: 1 as committed (blocker holds), 0 against a copy of the artifact carrying an M2 taxonomy (blocker gone), 127 when the artifact is absent — a bare `grep` exits 2 there, which would read as \"still blocked\"",
       falsifier: `test -f dry-run/findings.json || exit 127; grep -q '"taxonomy": "M2' dry-run/findings.json`,
-    },
-  },
-  {
-    module: "M6",
-    substituteGates: [
-      {
-        what: "the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts",
-        invokes: "src/cli/corpus-drift.ts",
-        cadence: { kind: "workflow", file: ".github/workflows/corpus-drift.yml", job: "corpus-drift", when: "daily schedule + on changes to the corpus CLI" },
-      },
-      {
-        what: "the per-indicator fixtures under src/detectors/__fixtures__/handrolled, gated by src/detectors/handrolled.test.ts",
-        invokes: "test",
-        cadence: { kind: "verify" },
-      },
-    ],
-    reason: {
-      claim:
-        "M6's mechanical indicators are not mirrored into CorpusEntry rows, so M6 sits below the parity minimum — a product question about whether a deterministic AST pass belongs in the shared precision matrix, NOT a limit on what a planted fixture can express",
-      kind: "decisional",
-      provenance:
-        "MEASURED 2026-07-28 — detectHandrolledFindings over ONE planted single file carrying three hand-rolled shapes returns 3 findings at their own line numbers (JSON deep-equal, random-string id, query-string parsing), so the previously recorded ground for this exemption (\"whole-repo shape counts, which a planted single-file fixture cannot express\") is FALSE. What is open is a ruling, not a capability",
-      owner: "operator",
-      decision:
-        "#1371 — the #265 ruling that kept M6 out of src/scan/calibration.ts was about not folding an LLM-judge AGREEMENT RATE into a precision claim; src/detectors/handrolled.ts is a deterministic AST pass with no model in it, so that rationale does not reach it. The operator's answer is being implemented in #1453; when its entries land, M6 stops being thin and this row must be deleted — the `stale` check below fails loud if it is not.",
     },
   },
 ];
