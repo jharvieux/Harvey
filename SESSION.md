@@ -883,7 +883,7 @@ Operator-approved `/issue-sweep`, 4-in-flight, Fable on the two judgment-heavy P
 - **#459** M10 JSONB nested-PII report-template presentation · **#460** M10 calibration fixture parity (plant entries in migration SQL) · **#465** M9 client-owner detector widening design · **#470** corpus-drift CI job crashes on `stryker binary not found` (the Layer-2 drift gate is blind since ~2026-07-16 — non-required check, real fail-loud gap) · **#472** `pnpm run-audit` package.json alias (product ruling) · **#474** `diverged-clones.ts` NUL bytes make git treat it as binary.
 
 ### Still open, not swept (need operator / live / design)
-- Disclosure sends #168/#214–#219 (operator action) · live M2 #159/#161 (deployed app + local stack) · #283 (needs a real engagement target) · design-heavy M6/M7 #267/#387/#406/#413 (blocked on supervised briefs + rulings) · #4/#10–#13/#2 (business/GTM/epic) · #301 (deferred by design) · product rulings #248/#252/#255/#322/#397/#433 and #402 (corpus re-measure) — all deferred at this sweep's plan gate.
+- Disclosure sends #168/#214–#219 (operator action) · live M2 #159/#161 (deployed app + local stack) · #283 (needs a real engagement target) · design-heavy M6/M7 #267/#387/#406/#413 (blocked on operator rulings (NOT on briefs/ — that folk constraint was false; operator ruled briefs/ not sensitive 2026-07-24)) · #4/#10–#13/#2 (business/GTM/epic) · #301 (deferred by design) · product rulings #248/#252/#255/#322/#397/#433 and #402 (corpus re-measure) — all deferred at this sweep's plan gate.
 
 ## 2026-07-17 — detector census, hotspot→LLM, orchestrator artifact path, dynamic-validation harness (9 PRs merged)
 
