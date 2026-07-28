@@ -28,11 +28,12 @@ import { deliverFix, createClient } from "../fix/transport.js";
 import { MAX_ATTEMPTS_PER_TIER, initialTier, planningTriggers, runEscalation } from "../fix/escalation.js";
 import { emitFixPrompt, ingestFixDiff } from "../fix/interactive.js";
 import { intake, type EngagementManifest } from "../fix/pipeline.js";
+import { attachAll, type AttachInput } from "../fix/attach.js";
 import { producePlan } from "../fix/produce-plan.js";
 import { screenFinding, type EscalationTier } from "../fix/plan.js";
 
 const args = process.argv.slice(2);
-const VALUE_FLAGS = new Set(["--target", "--finding", "--apply-diff", "--out", "--base"]);
+const VALUE_FLAGS = new Set(["--target", "--finding", "--apply-diff", "--out", "--base", "--findings-out"]);
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i] as string;
@@ -55,11 +56,16 @@ const interactive = has("--interactive");
 const live = has("--live");
 const outDir = resolve(flag("--out") ?? "fix-out");
 const baseBranch = flag("--base") ?? "main";
+// #825: where to write the findings document with the VERIFIED diff attached as `suggestedFix`, so
+// it reaches the ticket body. --paid is the engagement tier signal, default FALSE for the same
+// fail-closed reason findings-to-tickets defaults it false: an unasserted tier attaches nothing.
+const findingsOut = flag("--findings-out");
+const paid = has("--paid");
 
 const USAGE =
   "usage:\n" +
   "  emit:   pnpm exec tsx src/cli/fix-interactive.ts <findings.json> <manifest.json> --target <checkout> --finding <id> --interactive [--out <dir>]\n" +
-  "  ingest: pnpm exec tsx src/cli/fix-interactive.ts <findings.json> <manifest.json> --target <checkout> --finding <id> --apply-diff <diff> [--apply-diff <next-attempt>]… [--base <branch>] [--live] [--out <dir>]";
+  "  ingest: pnpm exec tsx src/cli/fix-interactive.ts <findings.json> <manifest.json> --target <checkout> --finding <id> --apply-diff <diff> [--apply-diff <next-attempt>]… [--base <branch>] [--live] [--out <dir>] [--findings-out <file> --paid]";
 
 if (!findingsPath || !manifestPath || !targetArg || !findingId || (!interactive && applyDiffPaths.length === 0)) {
   console.error(USAGE);
@@ -203,7 +209,20 @@ for (const [i, a] of attempts.entries()) {
   if (!a.green) console.log(`    ✗ ${a.reason}`);
 }
 
+// #825 — the producer→deliverable seam. Runs on BOTH paths on purpose: the interesting half of the
+// proof is that a REJECTED diff writes a findings document with NO suggestedFix, so the ticket body
+// falls back to prose. A seam that only ever runs on success leaves its fail-closed half unproven.
+function writeFindingsWithDiff(green: boolean, diff: string, evidence: (typeof attempts)[number]["ingest"]["evidence"], rejectReason?: string): void {
+  if (!findingsOut) return;
+  const proposal: AttachInput = { finding, diff, green, evidence, ...(rejectReason ? { rejectReason } : {}) };
+  const ledger = attachAll(doc.findings, new Map([[finding.id, proposal]]), { paid });
+  writeFileSync(findingsOut, `${JSON.stringify({ ...doc, findings: ledger.findings }, null, 2)}\n`);
+  for (const row of ledger.attached) console.log(`  suggestedFix ATTACHED to ${row.findingId} → ${findingsOut}`);
+  for (const row of ledger.refused) console.log(`  suggestedFix REFUSED for ${row.findingId}: ${row.reason}`);
+}
+
 if (walk.outcome === "downgrade" || last === undefined || !last.green) {
+  if (last) writeFindingsWithDiff(false, readFileSync(resolve(last.diffPath), "utf8"), last.ingest.evidence, last.reason);
   console.error(`\n✗ REJECTED after ${attempts.length} attempt(s) — ${last?.reason ?? "no attempt ran"}`);
   if (walk.outcome === "downgrade") {
     console.error(`  escalation: ${ranOutOfDiffs ? "no further attempt was supplied" : walk.downgradeReason} ⇒ DOWNGRADE to recommend-only.`);
@@ -231,6 +250,8 @@ writeFileSync(
   join(outDir, `${finding.id}.fix-ingest.json`),
   `${JSON.stringify({ ...delivered, evidence: ingest.evidence, escalation: { screenedTier: plan.tier, startTier, triggers, tiersUsed, attempts: attempts.length } }, null, 2)}\n`,
 );
+
+writeFindingsWithDiff(true, readFileSync(resolve(last.diffPath), "utf8"), ingest.evidence);
 
 console.log(`\n✓ GREEN — detector cleared and the client's own checks pass. Transport outcome: ${delivered.outcome}`);
 console.log(`  tiers used: ${tiersUsed.join(" → ")} (attempt ${attempts.length} of ${applyDiffPaths.length} supplied)`);
