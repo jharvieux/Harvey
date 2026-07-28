@@ -43,6 +43,7 @@ import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
 import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
+import { m6HandrolledEntries } from "./calibration/m6-handrolled.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
@@ -101,6 +102,7 @@ export const CORPUS: CorpusEntry[] = [
   ...m7Entries,
   ...m7InitplanStaticEntries,
   ...m3Entries,
+  ...m6HandrolledEntries,
 ];
 
 // `location` may be an absolute path rooted in the environment-dependent checkout (e.g. a tool
@@ -368,15 +370,17 @@ export const MIN_POSITIVES_PER_MODULE = 2;
 export const MIN_NEGATIVES_PER_MODULE = 1;
 
 // A module may sit below the minimum only with a NAMED substitute gate — the "disclosed exemption"
-// half of #1314. Both entries below were verified 2026-07-28 before being written here, per the
+// half of #1314. The one entry below was verified 2026-07-28 before being written here, per the
 // rule that a disclosure is earned by an attempt:
 //   M2 — `pnpm exec tsx src/cli/pentest.ts --mode=coverage` reaches assertComplete
 //        (src/pentest/targets.ts:161), and CALIBRATION_PLANTS carries an M2 row
 //        (src/audit-conservation.ts:59) since #1155.
-//   M6 — src/scan/external-corpus.ts carries an "M6-indicator" baseline on six external targets
-//        (#483), re-run by `pnpm corpus-drift`.
 // An exemption for a module that is NOT thin is itself a failure (the `stale` list) — a substitute gate
-// that has been overtaken by real fixtures must not keep standing in for them.
+// that has been overtaken by real fixtures must not keep standing in for them. M6's exemption was
+// retired that way by #1371, whose ruling quotes its stated reason in full and records it MEASURED
+// FALSE: all 33 indicator classes fire on a planted single-file fixture, and
+// calibration/m6-handrolled.entries.ts now scores them (src/scan/m6-indicator-corpus.ts), so
+// leaving the row would have tripped the stale check #1314 built for exactly this transition.
 interface ParityExemption {
   module: string;
   reason: string;
@@ -384,7 +388,6 @@ interface ParityExemption {
 
 const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
   { module: "M2", reason: "no static corpus by construction — M2 is the dynamic tier, and its findings come from a live two-tenant stack, not a planted file. Covered instead by `pnpm exec tsx src/cli/pentest.ts --mode=coverage` (#352 assertComplete, which fails loud on any enumerated target `--tested` did not list) and by the M2 conservation plant (#1155)." },
-  { module: "M6", reason: "no static corpus — M6's indicators are whole-repo shape counts, which a planted single-file fixture cannot express. Covered instead by the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`." },
 ];
 
 interface ParityVerdict {
