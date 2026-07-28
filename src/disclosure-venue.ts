@@ -61,7 +61,24 @@
 //    TOUCHES: src/disclosure-venue.ts
 //
 // 3. SEMGREP ONLY. The TS/AST detectors and the conditional-scan (`scanLocal`) shape are #1317's
-//    4b, tracked separately as #1330.
+//    4b, tracked separately as #1330. Re-tested 2026-07-27 (#1345) rather than inherited from the
+//    issue text: the candidate population is 37 comment lines across 27 files (the #1330 grep,
+//    re-run, unchanged), and the named live instance is still live — `src/scan/supabase.ts`'s
+//    `scanLocal` returns its finding list with no not-assessed row for the exposed-schema /
+//    pg_graphql class its own comment says local mode cannot read, so a locally-scanned client sees
+//    the same silence as one whose schema exposure was checked and found clean.
+//
+//    REASON: bounds written in TS/AST detector comments, and conditional scan paths that omit a check another path runs, are outside what this gate reads — it parses `src/scan/rules/semgrep/*.yml` only, so its green verdict is a statement about the semgrep rule set and not about the detector set
+//    KIND: empirical
+//    PROVENANCE: MEASURED 2026-07-27 — #1330's population grep re-run over src/scan + src/detectors reports 37 comment lines across 27 files that this gate never reads, and src/scan/supabase.ts:252-253's local-mode omission still emits no disclosure row.
+//    FALSIFIER: grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors | grep -qv '\.test\.ts$' && exit 1 || exit 0
+//    TOUCHES: src/scan src/detectors
+//
+//    What that command settles and what it does not: it fires when no bound is DECLARED in a
+//    comment this gate cannot read, which is the half #1330 can measure. A conditional omission
+//    carrying no comment at all — the `scanLocal` shape with the note deleted — is invisible to it
+//    too, and is why #1330's first acceptance bullet asks for a check over the SHAPE rather than
+//    over the vocabulary.
 //
 // A lower bound on the defect, not a census of it.
 

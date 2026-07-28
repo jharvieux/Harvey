@@ -72,6 +72,20 @@ interface ClosingRef {
 /** `undefined` means the issue DOES NOT EXIST. A fetch that merely failed must never reach here. */
 export type IssueLookup = (issue: number, repo?: string) => IssueRecord | undefined;
 
+/**
+ * The only `gh` failure a lookup may turn into `undefined`, and therefore into `✗ … does not exist`.
+ *
+ * A REPOSITORY that fails to resolve is ambiguous: a private repo this token cannot read fails with
+ * the same message as one that was never created. Treating that as "does not exist" states as fact
+ * something the lookup cannot know — the exact conflation the invariant above forbids — so it is
+ * excluded here and the caller stops instead (exit 2, the gate could not RUN). The cross-repo lookup
+ * that widened this to `repository` had a live population of 0 of the last 60 merged PRs, which is
+ * how a wrong sentinel survives unnoticed.
+ */
+export function issueDoesNotExist(stderr: string): boolean {
+  return /could not resolve to an? (?:issue|pull request)\b/i.test(stderr);
+}
+
 interface DispositionLine {
   issue: number;
   index: number;
@@ -95,6 +109,8 @@ interface RemainderRef {
 
 interface ParsedBody {
   closes: ClosingRef[];
+  /** Closing references whose form resolves to no readable issue — disclosed, never dropped. */
+  unresolvedCloses: string[];
   dispositions: DispositionLine[];
   noCriteria: NoCriteriaLine[];
   remainders: RemainderRef[];
@@ -189,15 +205,23 @@ export function parseAcceptanceCriteria(body: string): ParsedCriteria {
  * `#7`, `owner/repo#7` and `https://github.com/owner/repo/issues/7` are the three forms GitHub's own
  * closing parser accepts, so all three have to resolve here or the gate is silent on a real close.
  * A cross-repo form naming THIS repo is normalised to a bare one — same issue, so it must not be
- * fetched down a second path and reported twice.
+ * fetched down a second path and reported twice. **Normalisation needs `repo`**: with none supplied
+ * there is nothing to compare an owner against, so a body citing both `#7` and `owner/repo#7` is
+ * fetched and reported twice. The CLI resolves the current repo when `--repo` is not passed; a
+ * library caller that omits it gets the un-normalised behaviour.
+ *
+ * `undefined` means the reference resolves to no readable issue. `Closes
+ * https://github.com/orgs/acme/projects/1/issues/5` has more than two path segments before
+ * `/issues/`, matches neither branch, and used to THROW — killing the CLI with a Node stack trace at
+ * exit 1 ("the gate failed") instead of its documented exit 2, and replacing a disclosed row with a
+ * crash. It is disclosed as NOT ASSESSED instead: GitHub's own closing parser does not act on that
+ * shape either, so nothing closes, but the gate says what it could not read rather than going quiet.
  */
-function closingRef(ref: string, repo?: string): ClosingRef {
+function closingRef(ref: string, repo?: string): ClosingRef | undefined {
   const bare = /^#(\d+)$/.exec(ref);
   if (bare) return { number: Number(bare[1]), ref };
   const scoped = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(ref) ?? /^https?:\/\/[^/]+\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)/.exec(ref);
-  // A URL shape neither branch reads is a real closing reference the gate would otherwise drop, so
-  // it stops the run rather than becoming a silently unchecked close.
-  if (!scoped) throw new Error(`closing reference \`${ref}\` parses as neither \`#N\`, \`owner/repo#N\` nor an issue URL — it would close an issue this gate never read`);
+  if (!scoped) return undefined;
   const owner = scoped[1]!;
   const number = Number(scoped[2]);
   return owner.toLowerCase() === repo?.toLowerCase() ? { number, ref } : { repo: owner, number, ref };
@@ -205,7 +229,13 @@ function closingRef(ref: string, repo?: string): ClosingRef {
 
 export function parseBody(prBody: string, repo?: string): ParsedBody {
   const closes: ClosingRef[] = [];
-  for (const m of prBody.matchAll(CLOSING)) closes.push(closingRef(m.groups!.ref!, repo));
+  const unresolvedCloses: string[] = [];
+  for (const m of prBody.matchAll(CLOSING)) {
+    const ref = m.groups!.ref!;
+    const parsed = closingRef(ref, repo);
+    if (parsed) closes.push(parsed);
+    else if (!unresolvedCloses.includes(ref)) unresolvedCloses.push(ref);
+  }
 
   const dispositions: DispositionLine[] = [];
   const noCriteria: NoCriteriaLine[] = [];
@@ -248,7 +278,7 @@ export function parseBody(prBody: string, repo?: string): ParsedBody {
   }
 
   const byRef = new Map(closes.map((c) => [`${c.repo ?? ""}#${c.number}`, c]));
-  return { closes: [...byRef.values()], dispositions, noCriteria, remainders, parseErrors };
+  return { closes: [...byRef.values()], unresolvedCloses, dispositions, noCriteria, remainders, parseErrors };
 }
 
 /**
@@ -256,11 +286,17 @@ export function parseBody(prBody: string, repo?: string): ParsedBody {
  *
  * Three of the five evidence shapes name something whose existence is a lookup, not a judgement,
  * and the gate shipped checking none of them (#1320 bounds audit, 2026-07-27). Measured over the
- * `met` lines of the last 60 merged PRs: 16/16 cited repo-relative paths exist, 3/3 `pnpm <script>`
- * references name a real `package.json` script, and 6/9 quoted spans are a real test title — while
- * the doc's own counterexample `"it all looks great"` matches none. So an invented path, an
- * invented script and a quoted sentence are all mechanically separable from the real thing, and
- * "it cannot tell a real command from an invented one" was true only of the unchecked ones.
+ * `met` lines of the last 60 merged PRs (11 lines across 2 PRs — every other merged body predates
+ * the convention) by replaying this module's own parser and filters: **11** cited repo-relative
+ * paths, all of which exist (17 raw `FILE_PATH` matches before the "contains a `/` and its first
+ * segment is a top-level entry" filter — quote the filtered number, since the raw one counts foreign
+ * trees and bare filenames the gate deliberately leaves alone); **3/3** `pnpm <script>` references
+ * name a real `package.json` script; **8/9** quoted spans name a real test, 6 quoting the title
+ * exactly and 2 quoting a real title truncated at its em-dash, which is why a prefix counts (see
+ * `namesATest`). The ninth is the bare word `"cross-linked"` — correctly not a test name, as is the
+ * doc's own counterexample `"it all looks great"`. So an invented path, an invented script and a
+ * quoted sentence are all mechanically separable from the real thing, and "it cannot tell a real
+ * command from an invented one" was true only of the unchecked ones.
  *
  * Supplied by the caller so the module stays pure and the hermetic self-test stays hermetic. When
  * it is absent the gate falls back to the shape-only floor and SAYS SO, rather than reporting a
@@ -278,11 +314,65 @@ export interface EvidenceWorld {
 }
 
 const FILE_PATH = /[\w./-]+\.(?:ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh|py|toml)(?::\d+)?/g;
-const PNPM_SCRIPT = /\bpnpm\s+(?:run\s+)?([\w:-]+)/g;
+const BACKTICKED = /`([^`]+)`/g;
 const QUOTED_SPAN = /"([^"]{8,})"/g;
 
-/** `pnpm exec <binary>` runs a binary, not a script, so its argument is not a `scripts` key. */
-const PNPM_PASSTHROUGH = new Set(["exec", "dlx", "install", "add", "remove", "why", "list", "up", "test", "run"]);
+/** pnpm's own subcommands: their argument is a binary, a package or a directory, never a `scripts` key. */
+const PNPM_PASSTHROUGH = new Set([
+  "exec", "dlx", "install", "i", "add", "remove", "rm", "uninstall", "un", "update", "up", "why",
+  "list", "ls", "link", "unlink", "audit", "outdated", "init", "create", "store", "config", "patch",
+  "dedupe", "rebuild", "prune", "fetch",
+]);
+
+// `-r`/`--filter <pkg>`/`-C <dir>` run the script out of ANOTHER package's manifest, which this
+// checkout's root `scripts` set cannot answer, so the reference is left unchecked rather than
+// reported as invented — `pnpm --filter site build` is a correct workspace command.
+const SELECTS_ANOTHER_PACKAGE = new Set(["-r", "--recursive", "-F", "--filter", "--filter-prod", "-C", "--dir"]);
+
+/**
+ * The `scripts` keys a `met` line names — read ONLY inside a backticked span, and never from a token
+ * that is a flag.
+ *
+ * The old shape was `/\bpnpm\s+(?:run\s+)?([\w:-]+)/g`, which read the token after `pnpm` as a script
+ * name whatever it was. It therefore told the author of `` `pnpm --filter site build` `` that
+ * `pnpm --filter` "is not a script in package.json", and read the prose *"ran pnpm and it worked"*
+ * as an invented `pnpm and`. A false REJECT that denies a TRUE statement is the one failure this
+ * check must not produce: the whole claim of the truth pass is that an invention is separable from
+ * the real thing, and it stopped being separable the moment a correct command failed it.
+ *
+ * Requiring the backticks is what kills the prose case, and it costs nothing on the population it
+ * was measured against: all 3 `pnpm <script>` references in the last 60 merged PRs' `met` lines are
+ * backticked (measured 2026-07-27). An unbackticked `pnpm verify` is no longer truth-checked —
+ * disclosed in docs/design/acceptance-conservation.md.
+ */
+function citedScripts(text: string): string[] {
+  const names: string[] = [];
+  for (const span of text.matchAll(BACKTICKED)) {
+    const tokens = span[1]!.trim().split(/\s+/);
+    for (let t = 0; t < tokens.length; t++) {
+      if (tokens[t] !== "pnpm") continue;
+      let i = t + 1;
+      while (i < tokens.length && tokens[i]!.startsWith("-") && !SELECTS_ANOTHER_PACKAGE.has(tokens[i]!)) i++;
+      if (SELECTS_ANOTHER_PACKAGE.has(tokens[i] ?? "")) continue;
+      const name = tokens[i] === "run" ? tokens[i + 1] : tokens[i];
+      if (name !== undefined && /^[\w:-]+$/.test(name) && !PNPM_PASSTHROUGH.has(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * A quoted span names a test when the suite holds that title, OR when a title STARTS with it at a
+ * word boundary. The prefix half is not a loosening for its own sake: 2 of the 9 quoted spans
+ * measured over the last 60 merged PRs are correct citations of real titles truncated at the title's
+ * em-dash (`"NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails"`, whose title continues
+ * `— the #715 → #161 shape`). Exact set membership scored both as misses, and a check that refuses a
+ * correct citation of a real test is the same false-REJECT defect as the `pnpm` one above.
+ */
+function namesATest(span: string, world: EvidenceWorld): boolean {
+  if (world.testNames.has(span)) return true;
+  return [...world.testNames].some((t) => t.startsWith(span) && /\s/.test(t.charAt(span.length)));
+}
 
 // A bare "done" is an unmapped bullet wearing a disposition (#1315). These are the shapes that
 // carry something a reader can go and check; without an EvidenceWorld the list is a floor, not a
@@ -324,9 +414,8 @@ export function evidenceProblems(detail: string, world?: EvidenceWorld): string[
     for (const p of citedRepoPaths(text, world)) {
       if (!world.pathExists(p)) problems.push(`\`met\` cites \`${p}\`, which does not exist in this checkout — evidence that points at nothing is an assertion with a file extension`);
     }
-    for (const m of text.matchAll(PNPM_SCRIPT)) {
-      const name = m[1]!;
-      if (!PNPM_PASSTHROUGH.has(name) && !world.scripts.has(name)) {
+    for (const name of citedScripts(text)) {
+      if (!world.scripts.has(name)) {
         problems.push(`\`met\` cites \`pnpm ${name}\`, which is not a script in package.json — name the command that was actually run`);
       }
     }
@@ -339,7 +428,7 @@ export function evidenceProblems(detail: string, world?: EvidenceWorld): string[
   // to carry one of the other shapes, which every real `met` line measured already did.
   const held = EVIDENCE_SHAPES.filter((s) => {
     if (s.name !== "a quoted test name" || !world) return s.re.test(text);
-    return [...text.matchAll(QUOTED_SPAN)].some((m) => world.testNames.has(m[1]!));
+    return [...text.matchAll(QUOTED_SPAN)].some((m) => namesATest(m[1]!, world));
   });
   if (held.length === 0) {
     return [`\`met\` evidence names none of: ${EVIDENCE_SHAPES.map((s) => s.name).join(", ")}${world ? " (a quoted span counts only when the suite contains that test title)" : ""}. An assertion is not evidence`];
@@ -385,6 +474,8 @@ interface RemainderVerdict {
 
 interface AcceptanceReport {
   closes: ClosingRef[];
+  /** Closing references this gate could not resolve to an issue. Reported, and not counted as a close. */
+  unresolvedCloses: string[];
   /** False when no EvidenceWorld was supplied — the run checked shape only, and says so. */
   evidenceVerified: boolean;
   issues: IssueVerdict[];
@@ -423,6 +514,12 @@ function checkRemainder(ref: RemainderRef, lookup: IssueLookup, closes: ClosingR
     // ANY mention of the remainder number anywhere in the original's body or comments satisfies
     // this — the check is that the number is DISCOVERABLE from the issue, not that the sentence
     // around it describes the deferral. Disclosed in docs/design/acceptance-conservation.md.
+    //
+    // REASON: the cross-linked condition accepts any mention of the remainder number in the original, including a historical aside describing no deferral, and the obvious tightening (require a deferral word near the mention) is measured right on only 3 of 5 real pairs — it wrongly refuses #1317 -> #1342, whose cross-link reads "Gate 4a residual filed as #1342"
+    // KIND: empirical
+    // PROVENANCE: MEASURED 2026-07-27 — the deferral-vocabulary rule scored against five real pairs (#1316 -> #1260, #1317 -> #1330, #1307 -> #1328, #1317 -> #1342, #1315 -> #1341); it correctly refuses the recorded false accept and correctly passes two, and wrongly refuses one, which is the same vocabulary defect #1342 records against Gate 4's own BOUND_MARKERS.
+    // FALSIFIER: pnpm exec vitest run src/acceptance-conservation.test.ts -t "a historical aside satisfies cross-linked" > /tmp/harvey-xlink.log 2>&1; grep -q "1 passed" /tmp/harvey-xlink.log && exit 1 || { grep -q "1 failed" /tmp/harvey-xlink.log && exit 0 || exit 127; }
+    // TOUCHES: src/acceptance-conservation.ts
     const linked = originals.filter((o) => {
       const orig = lookup(o.number, o.repo);
       return orig !== undefined && new RegExp(`#${ref.remainder}\\b`).test([orig.body, ...orig.comments].join("\n"));
@@ -494,11 +591,13 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
 
 export function checkAcceptance(prBody: string, lookup: IssueLookup, repo?: string, world?: EvidenceWorld): AcceptanceReport {
   const parsed = parseBody(prBody, repo);
-  const noop = parsed.closes.length === 0 && parsed.remainders.length === 0;
+  // An unresolvable closing reference keeps the run OUT of the green no-op: a body carrying one is
+  // not a body carrying nothing, and the no-op's early return would swallow its disclosure row.
+  const noop = parsed.closes.length === 0 && parsed.remainders.length === 0 && parsed.unresolvedCloses.length === 0;
   const issues = parsed.closes.map((c) => checkIssue(c, parsed, lookup, world));
   const remainders = parsed.remainders.map((r) => checkRemainder(r, lookup, parsed.closes));
   const ok = parsed.parseErrors.length === 0 && issues.every((i) => i.ok) && remainders.every((r) => r.ok);
-  return { closes: parsed.closes, evidenceVerified: world !== undefined, issues, remainders, parseErrors: parsed.parseErrors, noop, ok };
+  return { closes: parsed.closes, unresolvedCloses: parsed.unresolvedCloses, evidenceVerified: world !== undefined, issues, remainders, parseErrors: parsed.parseErrors, noop, ok };
 }
 
 export function formatAcceptance(report: AcceptanceReport): string {
@@ -513,10 +612,15 @@ export function formatAcceptance(report: AcceptanceReport): string {
   const gate2Noop = numberlessSplits > 0
     ? `○ Gate 2 (remainder liveness, #1316): NO-OP — ${numberlessSplits} \`split\` disposition(s) name no issue number, so there is no remainder whose liveness could be checked. Gate 1 fails them.`
     : "○ Gate 2 (remainder liveness, #1316): NO-OP — no `remainder:` line and no `split` disposition, so nothing is deferred to another issue.";
+  // "no closing keyword" would be FALSE when one was found and could not be read. A green with the
+  // wrong reason attached is the unexplained green wearing a sentence.
+  const gate1Head = gate1Refs.length > 0
+    ? `● Gate 1 (acceptance criteria, #1315): ${gate1Refs.length} closing reference(s) — ${gate1Refs.join(", ")}.`
+    : report.unresolvedCloses.length > 0
+      ? `● Gate 1 (acceptance criteria, #1315): ${report.unresolvedCloses.length} closing reference(s), none of which resolve to an issue this gate can read — see the NOT ASSESSED row(s) below.`
+      : "○ Gate 1 (acceptance criteria, #1315): NO-OP — this PR body carries no closing keyword, so no issue closes on merge and there are no criteria to conserve.";
   const out: string[] = [
-    gate1Refs.length === 0
-      ? "○ Gate 1 (acceptance criteria, #1315): NO-OP — this PR body carries no closing keyword, so no issue closes on merge and there are no criteria to conserve."
-      : `● Gate 1 (acceptance criteria, #1315): ${gate1Refs.length} closing reference(s) — ${gate1Refs.join(", ")}.`,
+    gate1Head,
     report.remainders.length === 0
       ? gate2Noop
       : `● Gate 2 (remainder liveness, #1316): ${report.remainders.length} remainder reference(s) — ${report.remainders.map((r) => `#${r.remainder}`).join(", ")}.`,
@@ -530,6 +634,10 @@ export function formatAcceptance(report: AcceptanceReport): string {
   // identical to a verified one — an unstated limitation reads as a clean bill of health.
   if (!report.evidenceVerified) {
     out.push("ℹ NOT ASSESSED  no checkout supplied, so `met` evidence was checked for SHAPE only — a cited path, `pnpm` script or test title was not confirmed to exist.");
+  }
+
+  for (const ref of report.unresolvedCloses) {
+    out.push(`ℹ NOT ASSESSED  closing reference \`${ref}\` resolves to neither \`#N\`, \`owner/repo#N\` nor \`https://<host>/<owner>/<repo>/issues/N\`, so this gate could not read the issue it names and its acceptance criteria were NOT checked. GitHub's own closing parser does not act on this shape either, so nothing closes on merge — but that is a claim about GitHub, not a check this gate ran.`);
   }
 
   for (const issue of report.issues) {

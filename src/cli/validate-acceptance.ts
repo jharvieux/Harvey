@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkAcceptance,
   formatAcceptance,
+  issueDoesNotExist,
   SELFTEST_LOOKUP,
   SELFTEST_WORLD,
   seedBareEvidence,
@@ -75,6 +76,12 @@ if (args.includes("--selftest")) {
  * The checkout, so `met` evidence can be checked for TRUTH and not only for shape (#1320 bounds
  * audit). Built here rather than in the pure module, and only for a real run — the hermetic
  * self-test above must not depend on the working tree.
+ *
+ * This is UNCONDITIONAL, so THIS CLI never takes the shape-only branch: `src/` and `package.json`
+ * are the files it is running out of, and their absence throws here rather than degrading to a
+ * disclosure. The `NOT ASSESSED  no checkout supplied` row is a property of the LIBRARY API —
+ * `checkAcceptance` called without an `EvidenceWorld` — and the design doc says so rather than
+ * describing a CLI branch that cannot be reached.
  */
 function evidenceWorld(): EvidenceWorld {
   const testNames = new Set<string>();
@@ -105,6 +112,19 @@ const gh = (ghArgs: string[]): { status: number; stdout: string; stderr: string 
 const repoFlag = flag("--repo");
 const repoArgs = repoFlag ? ["--repo", repoFlag] : [];
 
+/**
+ * The repo whose name normalises `owner/repo#N` back to `#N`. Without it a body citing both `#1345`
+ * and `jharvieux/Harvey#1345` fetches the same issue twice and reports it twice, so it is resolved
+ * from the checkout rather than left to whether the caller happened to pass `--repo`. Resolution
+ * failing is not fatal: the run is then exactly as un-normalised as it was before, which is a
+ * duplicate row, not a wrong verdict.
+ */
+function currentRepo(): string | undefined {
+  if (repoFlag) return repoFlag;
+  const r = spawnSync("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { encoding: "utf8" });
+  return r.status === 0 ? (r.stdout ?? "").trim() || undefined : undefined;
+}
+
 // `undefined` must mean "does not exist" and nothing else — a fetch that merely failed has to stop
 // the run, never quietly become a nonexistent issue that fails the gate for the wrong reason.
 const cache = new Map<string, IssueRecord | undefined>();
@@ -117,11 +137,11 @@ function lookup(issue: number, repo?: string): IssueRecord | undefined {
   const where = repo ? ["--repo", repo] : repoArgs;
   const r = gh(["issue", "view", String(issue), ...where, "--json", "number,state,body,comments"]);
   if (r.status !== 0) {
-    if (/could not resolve to an? (?:issue|pull request|repository)/i.test(r.stderr)) {
+    if (issueDoesNotExist(r.stderr)) {
       cache.set(key, undefined);
       return undefined;
     }
-    die(`\`gh issue view ${issue}${repo ? ` --repo ${repo}` : ""}\` failed (exit ${r.status}): ${r.stderr.trim()}`);
+    die(`\`gh issue view ${issue}${repo ? ` --repo ${repo}` : ""}\` failed (exit ${r.status}): ${r.stderr.trim()}\n  A repository that does not RESOLVE is not a repository that does not EXIST — a private repo this token cannot read fails identically — so this stops the run rather than reporting the reference as nonexistent.`);
   }
   const raw = JSON.parse(r.stdout) as { number: number; state: string; body: string; comments: { body: string }[] };
   const record: IssueRecord = {
@@ -176,6 +196,6 @@ console.log(`Acceptance conservation (#1315/#1316) — ${source}\n`);
 for (const s of seeded) console.log(`⚠ SEEDED VIOLATION: ${s}`);
 if (seeded.length > 0) console.log("  The gate MUST exit 1 below. Exit 0 means it cannot fail; exit 2 means it could not run.\n");
 
-const report = checkAcceptance(body, lookup, repoFlag, evidenceWorld());
+const report = checkAcceptance(body, lookup, currentRepo(), evidenceWorld());
 console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatAcceptance(report));
 process.exit(report.ok ? 0 : 1);
