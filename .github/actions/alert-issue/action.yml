@@ -107,7 +107,11 @@ runs:
           local namespace="$1" title="$2" body="$3" existing url
           existing=$(find_open "$namespace") || return $?
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body" || return $?
+            # `gh issue comment` prints the new comment's URL to stdout on success — which, inside
+            # `result=$(find_or_update ...)`, would land in the SAME captured stream as the `printf`
+            # below and break the caller's parse (a live drill run caught this, #1348: pass 2 reported
+            # a comment URL where a "commented" status was expected). Discarded on purpose.
+            gh issue comment "$existing" --body "$body" > /dev/null || return $?
             printf 'commented\t%s\t\n' "$existing"
           else
             url=$(gh issue create --title "$title" --label "$MARKER" --body "$body") || return $?
