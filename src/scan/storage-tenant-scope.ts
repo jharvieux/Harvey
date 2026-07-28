@@ -22,7 +22,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import { loc, parse, type SourceInput } from "../detectors/common.js";
+import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -82,6 +82,55 @@ function resolvePathExpr(objectPath: ts.Expression, call: ts.CallExpression): ts
   return (fn && localBinding(fn, objectPath.text)) ?? objectPath;
 }
 
+// #1198/#1344: the path came OUT OF A ROW the caller already had to be entitled to fetch.
+// `const { data: job } = await supabase.from("export_jobs").select("*").eq("id", id).single();
+// storage.from("exports").download(job.storage_path)` is the SAFEST real-world spelling of this
+// download, and the name test above scored it identically to the unguarded one — `job.storage_path`
+// contains none of the tenant/session words, because a DB-derived path never does. Two detectors
+// then disagreed about one route: harvey-path-traversal was deliberately taught to stay silent on
+// exactly this shape (#1220), while this one reported High.
+//
+// Same reasoning #1220 encoded as its `$Q.eq(...)` sanitizer, expressed for an AST detector: the
+// entitlement lives in the QUERY that produced the row, not in the path string. Scoped to the
+// enclosing function, and to a binding whose initializer is a real `.from(...).select(...)` chain —
+// a bare property access on an unresolved name still reports.
+function rootIdentifier(expr: ts.Expression): string | undefined {
+  let cur: ts.Expression = expr;
+  while (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) cur = cur.expression;
+  return ts.isIdentifier(cur) ? cur.text : undefined;
+}
+
+function isDbReadChain(expr: ts.Expression): boolean {
+  const call = ts.isAwaitExpression(expr) ? expr.expression : expr;
+  if (!ts.isCallExpression(call)) return false;
+  const names = callChainNames(call);
+  return names.includes("from") && (names.includes("select") || names.includes("single"));
+}
+
+// Does `name` bind, in this function, to the result of a DB read? Handles both the plain
+// `const row = await …` form and the destructured `const { data: row } = await …` Supabase idiom,
+// which is the one that actually appears and which localBinding above cannot see.
+function bindsToDbRead(fn: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(node) && node.initializer && isDbReadChain(node.initializer)) {
+      if (ts.isIdentifier(node.name) && node.name.text === name) found = true;
+      else if (ts.isObjectBindingPattern(node.name) && node.name.elements.some((el) => ts.isIdentifier(el.name) && el.name.text === name)) found = true;
+      if (found) return;
+    }
+    if (!isFunctionLike(node) || node === fn) ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(fn, visit);
+  return found;
+}
+
+function pathIsDbDerived(objectPath: ts.Expression, call: ts.CallExpression): boolean {
+  const root = rootIdentifier(objectPath);
+  const fn = root === undefined ? undefined : enclosingFunction(call);
+  return fn !== undefined && root !== undefined && bindsToDbRead(fn, root);
+}
+
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   const findings: Finding[] = [];
   const visit = (n: ts.Node) => {
@@ -89,7 +138,12 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
       const method = n.expression.name.text;
       if (isStorageFromChain(n.expression.expression)) {
         const objectPath = n.arguments[0];
-        if (objectPath && !ts.isStringLiteralLike(objectPath) && !TENANT_OR_SESSION_HINT.test(resolvePathExpr(objectPath, n).getText(sf))) {
+        if (
+          objectPath &&
+          !ts.isStringLiteralLike(objectPath) &&
+          !TENANT_OR_SESSION_HINT.test(resolvePathExpr(objectPath, n).getText(sf)) &&
+          !pathIsDbDerived(objectPath, n)
+        ) {
           findings.push(
             mechanicalFinding({
               id: `STORAGE-path-no-tenant-${method}-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${n.getStart(sf)}`,

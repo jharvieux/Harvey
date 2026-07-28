@@ -11079,6 +11079,78 @@
   },
   {
     "id": "SEM-355",
+    "title": "src.scan.rules.semgrep.harvey-lib-command-injection: An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.",
+    "severity": "Critical",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-lib-command-injection",
+    "location": "src/lib/job-runner.ts:25",
+    "status": "Open",
+    "evidence": "An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.\n",
+    "impact": "An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-356",
+    "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-lib-path-traversal",
+    "location": "src/lib/job-runner.ts:29",
+    "status": "Open",
+    "evidence": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "impact": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-357",
+    "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-lib-path-traversal",
+    "location": "src/lib/job-runner.ts:33",
+    "status": "Open",
+    "evidence": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "impact": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-358",
     "title": "src.scan.rules.semgrep.harvey-dangerously-allow-browser: An LLM client is constructed with dangerouslyAllowBrowser: true — this runs in the browser and exposes the API key to every visitor (the key is inlined into the bundle). Call the LLM from a server-side route/function and keep the key server-only; never ship it to the client.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11102,7 +11174,7 @@
     ]
   },
   {
-    "id": "SEM-356",
+    "id": "SEM-359",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11126,7 +11198,7 @@
     ]
   },
   {
-    "id": "SEM-357",
+    "id": "SEM-360",
     "title": "src.scan.rules.semgrep.harvey-vite-service-role-in-client: A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to a server-side function and keep only the anon/publishable key in the client. SCOPE OF THIS CHECK: it fires on a VITE_-prefixed variable whose NAME reads as a service-role key. A privileged key inlined under a name this rule does not recognise is not assessed.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11150,7 +11222,7 @@
     ]
   },
   {
-    "id": "SEM-358",
+    "id": "SEM-361",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11174,7 +11246,7 @@
     ]
   },
   {
-    "id": "SEM-359",
+    "id": "SEM-362",
     "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
     "severity": "High",
     "confidence": "Review",
@@ -11198,7 +11270,7 @@
     ]
   },
   {
-    "id": "SEM-360",
+    "id": "SEM-363",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
     "severity": "High",
     "confidence": "Review",
@@ -11222,90 +11294,13 @@
     ]
   },
   {
-    "id": "SEM-361",
-    "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
-    "severity": "High",
-    "confidence": "Review",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-html-template-literal",
-    "location": "src/owasp-node/hpp-param-normalized.ts:12",
-    "status": "Open",
-    "evidence": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
-    "impact": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 4,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "cwe": [
-      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-362",
-    "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Next.js/web footgun",
-    "taxonomy": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
-    "location": "src/owasp-node/hpp-param-normalized.ts:12",
-    "status": "Open",
-    "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
-    "value": 3,
-    "ease": 4,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "cwe": [
-      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
-    ],
-    "owasp": [
-      "A07:2017 - Cross-Site Scripting (XSS)",
-      "A03:2021 - Injection",
-      "A05:2025 - Injection"
-    ],
-    "references": [
-      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
-    ]
-  },
-  {
-    "id": "SEM-363",
-    "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
-    "severity": "High",
-    "confidence": "Review",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-client-trusted-role",
-    "location": "src/owasp-node/hpp-param-normalized.ts:18",
-    "status": "Open",
-    "evidence": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
-    "impact": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 4,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "cwe": [
-      "CWE-602: Client-Side Enforcement of Server-Side Security"
-    ],
-    "owasp": [
-      "A04:2021 - Insecure Design"
-    ]
-  },
-  {
     "id": "SEM-364",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-html-template-literal",
-    "location": "src/owasp-node/hpp-param-normalized.ts:20",
+    "location": "src/owasp-node/hpp-param-normalized.ts:12",
     "status": "Open",
     "evidence": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
     "impact": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
@@ -11329,7 +11324,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
-    "location": "src/owasp-node/hpp-param-normalized.ts:20",
+    "location": "src/owasp-node/hpp-param-normalized.ts:12",
     "status": "Open",
     "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
@@ -11358,7 +11353,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-client-trusted-role",
-    "location": "src/owasp-node/hpp-param-pollution.ts:10",
+    "location": "src/owasp-node/hpp-param-normalized.ts:18",
     "status": "Open",
     "evidence": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
     "impact": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
@@ -11377,6 +11372,83 @@
   },
   {
     "id": "SEM-367",
+    "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-html-template-literal",
+    "location": "src/owasp-node/hpp-param-normalized.ts:20",
+    "status": "Open",
+    "evidence": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
+    "impact": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-368",
+    "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
+    "location": "src/owasp-node/hpp-param-normalized.ts:20",
+    "status": "Open",
+    "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A07:2017 - Cross-Site Scripting (XSS)",
+      "A03:2021 - Injection",
+      "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
+    ]
+  },
+  {
+    "id": "SEM-369",
+    "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-client-trusted-role",
+    "location": "src/owasp-node/hpp-param-pollution.ts:10",
+    "status": "Open",
+    "evidence": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
+    "impact": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
+    "id": "SEM-370",
     "title": "src.scan.rules.semgrep.harvey-hpp-query-cast: HTTP parameter pollution: req.query.<param> is cast `as string`, then tested with .includes()/.indexOf(). Express turns a repeated query parameter into a string[], so a value like ?role=user&role=admin makes the cast a lie and silently changes the check from substring containment to array membership. Normalize first (Array.isArray(v) ? v[0] : v, or a schema parse) before testing.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11400,7 +11472,7 @@
     ]
   },
   {
-    "id": "SEM-368",
+    "id": "SEM-371",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
@@ -11424,7 +11496,7 @@
     ]
   },
   {
-    "id": "SEM-369",
+    "id": "SEM-372",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11453,7 +11525,7 @@
     ]
   },
   {
-    "id": "SEM-370",
+    "id": "SEM-373",
     "title": "src.scan.rules.semgrep.harvey-body-parser-no-limit: A body-parsing middleware has no `limit` option — the framework default applies and one request body can exhaust process memory. Set an explicit size limit (e.g. express.json({ limit: \"100kb\" })) sized to what the route legitimately needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11474,7 +11546,7 @@
     ]
   },
   {
-    "id": "SEM-371",
+    "id": "SEM-374",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11495,7 +11567,7 @@
     ]
   },
   {
-    "id": "SEM-372",
+    "id": "SEM-375",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11516,7 +11588,7 @@
     ]
   },
   {
-    "id": "SEM-373",
+    "id": "SEM-376",
     "title": "src.scan.rules.semgrep.harvey-sensitive-response-cached: This handler reads an identity/session signal and marks its response publicly cacheable (Cache-Control: public / a positive max-age or s-maxage). A shared proxy or CDN can serve one user's response to the next requester. Use private, no-store (or no-cache) for any response that varies by identity. SCOPE OF THIS CHECK: the identity read and the Cache-Control write must be in the SAME handler. A route that caches publicly while its identity read happens indirectly — via a helper, middleware or layout — is not assessed.",
     "severity": "High",
     "confidence": "Review",
@@ -11537,7 +11609,7 @@
     ]
   },
   {
-    "id": "SEM-374",
+    "id": "SEM-377",
     "title": "src.scan.rules.semgrep.harvey-vm-unsafe-sandbox: vm.runInNewContext/runInThisContext evaluates a dynamically-built script. Node's own documentation is explicit that the vm module is NOT a security sandbox — treat any value reaching it as capable of reaching the host realm. Do not use vm to run untrusted or dynamically-assembled code.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11558,7 +11630,7 @@
     ]
   },
   {
-    "id": "SEM-375",
+    "id": "SEM-378",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).",
     "severity": "High",
     "confidence": "Review",
@@ -11582,7 +11654,31 @@
     ]
   },
   {
-    "id": "SEM-376",
+    "id": "SEM-379",
+    "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection",
+    "location": "src/owasp-react/prop-spread-literal-respread.tsx:16",
+    "status": "Open",
+    "evidence": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "impact": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-380",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11606,7 +11702,7 @@
     ]
   },
   {
-    "id": "SEM-377",
+    "id": "SEM-381",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11630,7 +11726,7 @@
     ]
   },
   {
-    "id": "SEM-378",
+    "id": "SEM-382",
     "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11654,7 +11750,7 @@
     ]
   },
   {
-    "id": "SEM-379",
+    "id": "SEM-383",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11678,7 +11774,7 @@
     ]
   },
   {
-    "id": "SEM-380",
+    "id": "SEM-384",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -11706,7 +11802,7 @@
     ]
   },
   {
-    "id": "SEM-381",
+    "id": "SEM-385",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -11735,7 +11831,7 @@
     ]
   },
   {
-    "id": "SEM-382",
+    "id": "SEM-386",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
