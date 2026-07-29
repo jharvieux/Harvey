@@ -29,7 +29,8 @@
 // in SB-DRIFT-00 rather than left silent: a policy whose NAME is unchanged but whose USING clause
 // was edited in the dashboard is NOT detected by this pass.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { readNamesSafe } from "../fs-walk.js";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
@@ -100,8 +101,13 @@ export function expectedRlsEnabled(migrations: MigrationFile[]): Set<string> {
 }
 
 function readMigrationFiles(dir: string): MigrationFile[] {
-  if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
-  return readdirSync(dir)
+  // #1451: raw statSync/readdirSync throw on a committed DANGLING SYMLINK, and this walk runs
+  // inside a connected-tier scan — a throw there discards a completed pass. readNamesSafe skips
+  // unreadable ENTRIES; it does NOT tolerate an unreadable DIRECTORY (it calls readdirSync on `dir`
+  // itself and propagates ENOENT), so the existsSync guard stays. MEASURED: dropping it fails
+  // `loadMigrations > returns nothing for a path that does not exist` with ENOENT on scandir.
+  if (!existsSync(dir)) return [];
+  return readNamesSafe(dir)
     .filter((f) => f.toLowerCase().endsWith(".sql"))
     .sort()
     .map((f) => ({ file: f, sql: readFileSync(join(dir, f), "utf8") }));
