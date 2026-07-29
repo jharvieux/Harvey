@@ -29,8 +29,7 @@
 // in SB-DRIFT-00 rather than left silent: a policy whose NAME is unchanged but whose USING clause
 // was edited in the dashboard is NOT detected by this pass.
 
-import { existsSync, readFileSync } from "node:fs";
-import { isDirectorySafe, readNamesSafe } from "../fs-walk.js";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
@@ -101,11 +100,8 @@ export function expectedRlsEnabled(migrations: MigrationFile[]): Set<string> {
 }
 
 function readMigrationFiles(dir: string): MigrationFile[] {
-  // #1451's guarded primitives, not raw statSync/readdirSync: this file landed from #1445 while the
-  // ban landed from #1451, and the two merged into a red `main` — the gate fired on exactly the
-  // dangling-symlink crash shape it was built for.
-  if (!existsSync(dir) || !isDirectorySafe(dir)) return [];
-  return readNamesSafe(dir)
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
+  return readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith(".sql"))
     .sort()
     .map((f) => ({ file: f, sql: readFileSync(join(dir, f), "utf8") }));
