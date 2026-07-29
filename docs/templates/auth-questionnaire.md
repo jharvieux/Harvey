@@ -27,6 +27,16 @@ test result before the engagement is "complete" (the coverage gate fails loud on
 Three things here can't be read from code and must come from you; the first is a confirmation so
 nothing is silently skipped.*
 
+- **Optional build artifact — a webpack bundle-analyzer stats file, one per app.** Three of our
+  bundle-weight checks (duplicate modules across chunks, per-package weight attribution, and
+  per-route first-load on a Turbopack build) read a webpack `Stats.toJson()` file rather than the
+  `.next` directory, and are reported not-assessed without it. To produce one, add
+  `webpack-bundle-analyzer` (a dependency of `@next/bundle-analyzer`) to your `next.config` webpack
+  hook with `generateStatsFile: true`, run your normal production build, and send us the resulting
+  JSON. One gotcha: `@next/bundle-analyzer`'s own options omit `generateStatsFile`, and its
+  `analyzerMode: "json"` emits a different format (measured against 14.2.3 and 16.2.12), so use the
+  `webpack-bundle-analyzer` plugin route above rather than the wrapper's own flag.
+
 - **Confirm the app/service inventory.** We'll show you the apps/services we found in your workspace
   (each deployable app, plus client-only surfaces like a browser extension). Confirm it's complete
   and flag anything deployed from *outside* this repo (a separate service, an edge/function set, a
