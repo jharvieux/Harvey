@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
-import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
+import { assertRegistryComplete, formatFailures, formatIdCollisions, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
 import { discoverSchemaFiles } from "./dynamic-validate.js";
-import type { Finding, ReportMeta } from "./findings.js";
+import { type Finding, type ReportMeta, validateFindings } from "./findings.js";
+import { conservationLedger } from "./conservation-ledger.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
@@ -1600,5 +1601,66 @@ describe("formatFailures", () => {
     const out = formatFailures([{ module: "M4", error: "jscpd binary missing" }]);
     expect(out).toMatch(/M4 \(Duplication\): jscpd binary missing/);
     expect(out).toMatch(/not a tier/);
+  });
+});
+
+// #1470 — the general guard behind the two id families a real proposit scan tripped over. MEASURED
+// 2026-07-28 on JakeLeoDev/proposit @ 82838cef with main @ e7e3d1e: ten modules ran, 589 findings
+// were produced, the conservation ledger printed LEDGER PASS, and `--findings-out`/`--sarif-out`
+// wrote NOTHING because `assembleEngagementDocument`'s output failed report-schema validation on
+// two duplicate ids. Both roots are fixed at their detectors; this is the net under the next one.
+describe("duplicate finding ids are disambiguated, never dropped and never fatal (#1470)", () => {
+  const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+  const at = (id: string, location: string): Finding => ({ id, location } as unknown as Finding);
+
+  it("gives two DIFFERENT findings that share an id two different ids", () => {
+    const runners = swapIn("M1", () => ({
+      status: "ran",
+      detail: "quick-scan",
+      findings: [at("SB-DEFINER-AUTHZ-public.f()", "a.sql:1"), at("SB-DEFINER-AUTHZ-public.f()", "b.sql:9")],
+    }));
+    const { findings, idCollisions } = runAudit(runners, ctx());
+    expect(findings.map((f) => f.id)).toEqual(["SB-DEFINER-AUTHZ-public.f()", "SB-DEFINER-AUTHZ-public.f()#2"]);
+    // Both rows still name their own migration — a disambiguated id must not cost the evidence.
+    expect(findings.map((f) => f.location)).toEqual(["a.sql:1", "b.sql:9"]);
+    expect(idCollisions).toEqual([
+      { id: "SB-DEFINER-AUTHZ-public.f()", count: 2, renamedTo: ["SB-DEFINER-AUTHZ-public.f()#2"], modules: ["M1"] },
+    ]);
+  });
+
+  it("the assembled deliverable now VALIDATES where it used to be refused outright", () => {
+    const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "y.ts")] }));
+    const { recorded, findings } = runAudit(runners, ctx());
+    const doc = assembleEngagementDocument(recorded, { connected: false, dynamic: false, llm: false }, findings, m5137Meta);
+    expect(validateFindings(doc).errors.filter((e) => e.includes("duplicate id"))).toEqual([]);
+  });
+
+  it("keeps the conservation arithmetic exact — the rename reaches findingsByModule too", () => {
+    const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "y.ts")] }));
+    const { recorded, findings, findingsByModule } = runAudit(runners, ctx());
+    const doc = assembleEngagementDocument(recorded, { connected: false, dynamic: false, llm: false }, findings, m5137Meta);
+    const ledger = conservationLedger(findings, doc.findings, findingsByModule);
+    expect(ledger.ok).toBe(true);
+    expect(ledger.unaccounted).toBe(0);
+    // The attribution map must carry the SAME ids the deliverable does, or the #1064 plant-and-assert
+    // gate would be comparing a renamed row against an un-renamed one.
+    expect(findingsByModule.M4?.map((f) => f.id)).toEqual(["M4-97", "M4-97#2"]);
+  });
+
+  it("leaves a BYTE-IDENTICAL repeat alone — that is the shared-CLI double capture dedupe collapses", () => {
+    const runners = swapIn("M4", () => ({ status: "ran", detail: "quality-scan", findings: [at("M4-97", "x.ts"), at("M4-97", "x.ts")] }));
+    const { findings, idCollisions } = runAudit(runners, ctx());
+    expect(findings.map((f) => f.id)).toEqual(["M4-97", "M4-97"]);
+    expect(idCollisions).toEqual([]);
+  });
+
+  it("says nothing on a clean run — a warning that always fires is not a warning", () => {
+    expect(runAudit(allRan(), ctx()).idCollisions).toEqual([]);
+  });
+
+  it("names the detector rather than absorbing the collision", () => {
+    const out = formatIdCollisions([{ id: "M4-97", count: 2, renamedTo: ["M4-97#2"], modules: ["M4"] }]);
+    expect(out).toMatch(/M4-97 — 2 distinct findings \(produced by M4\); renamed: M4-97#2/);
+    expect(out).toMatch(/fix it at the detector/);
   });
 });

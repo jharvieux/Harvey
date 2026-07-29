@@ -12377,7 +12377,7 @@
     "precisionTier": "review"
   },
   {
-    "id": "SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)",
+    "id": "SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)@20260710000001_b15_storage_secdef_semantic.sql",
     "title": "SECURITY DEFINER public.promote_to_admin — caller-authorization review",
     "severity": "High",
     "confidence": "Review",
@@ -12397,7 +12397,7 @@
     "notOkWhen": "Any exposed caller can trigger the privileged write without the function verifying who they are."
   },
   {
-    "id": "SB-DEFINER-AUTHZ-public.issue_refund(order_id, amount)",
+    "id": "SB-DEFINER-AUTHZ-public.issue_refund(order_id, amount)@20260710000002_dynamic_probes.sql",
     "title": "SECURITY DEFINER public.issue_refund — caller-authorization review",
     "severity": "High",
     "confidence": "Review",

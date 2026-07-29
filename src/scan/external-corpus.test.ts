@@ -689,3 +689,89 @@ describe("m10FindingsFromSchema (#279)", () => {
     expect(findings[0]!.severity).not.toBe("Info");
   });
 });
+
+// #1473 — the "don't stay quiet" promise, split from the one CHANNEL it used to be scored on.
+//
+// launch-mvp is the target that separated them. MEASURED 2026-07-28 against
+// ShenSeanChen/launch-mvp-stripe-nextjs-supabase @ 513a8f0 via
+// `buildQuickScanReport(await runMechanicalScan({ dir }))`: grade F (51/100), 0 indicators, graded
+// set 4 High + 1 Low — three of the Highs being #774's unauthenticated service-role account-deletion
+// route, which is Confirmed and category "Broken access control", so it is graded and never reaches
+// the review-tier indicator channel. Under the old field ALL THREE possible values produced a false
+// statement about that repo, which is why it sits outside this gate today.
+//
+// These prove the SCORER, not the repos — whether the real trees land on the right side of it is
+// `pnpm corpus-drift`'s job. The planted target below is a REPORT shaped exactly like launch-mvp's
+// measurement, so a regression that re-conflates the channels fails here.
+describe("free-tier loudness invariant is channel-agnostic and can fail (#1473)", () => {
+  const gradedHigh: Finding = { ...finding("M1 — Object-level authorization", "High"), category: "Broken access control", precisionTier: "high" };
+  const loudLike = (over: Partial<FreeTierExpectation> = {}): FreeTierExpectation => ({ slug: "planted", mustNotScoreF: false, why: "planted for the #1473 scorer proof", ...over });
+
+  // launch-mvp's shape: loud in the graded set, silent in the indicator channel.
+  const gradedOnly = buildQuickScanReport([gradedHigh, gradedHigh, gradedHigh]);
+  // multi-tenant-starter's shape: the reverse.
+  const indicatorOnly = buildQuickScanReport([rlsIndicator("High")]);
+
+  it("the planted target reproduces launch-mvp's measurement: loud graded, zero indicators", () => {
+    expect(gradedOnly.findings.filter((f) => f.severity === "High")).toHaveLength(3);
+    expect(gradedOnly.indicators).toHaveLength(0);
+    // Not asserting the letter: the point is that the graded channel carries real Highs while the
+    // indicator channel is empty — the split the old single field could not express.
+    expect(gradedOnly.grade).not.toBe("A");
+  });
+
+  it("PASSES on the graded channel where mustRaiseLoudIndicator could only produce a false statement", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "graded" }), gradedOnly).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("graded channel LOUD");
+    expect(row.detail).toContain("indicator channel quiet");
+    // The sentence the old field would have printed about this exact report.
+    expect(row.detail).not.toContain("STAYED QUIET");
+  });
+
+  it("FAILS — planted: a known-vulnerable target whose asserted channel carries nothing", () => {
+    // The proof the invariant can be false. The same target, asserted on the channel that is silent.
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "indicator" }), gradedOnly).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("STAYED QUIET");
+    expect(row.detail).toContain('the "indicator" channel carried nothing');
+  });
+
+  it("FAILS when the free tier goes silent on BOTH channels — the promise itself broken", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), buildQuickScanReport([])).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("graded channel quiet");
+    expect(row.detail).toContain("indicator channel quiet");
+  });
+
+  it('"either" accepts whichever channel actually carried it, and names it', () => {
+    for (const report of [gradedOnly, indicatorOnly]) {
+      expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), report).find((r) => r.check.startsWith("must be loud"))!.pass).toBe(true);
+    }
+    expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), indicatorOnly).find((r) => r.check.startsWith("must be loud"))!.detail).toContain("indicator channel LOUD");
+  });
+
+  it("does not accept an informational-only report as loud — that IS staying quiet", () => {
+    // #213: the informational section is seen-and-reported-but-not-graded BY DESIGN. If it counted,
+    // any target with a placeholder credential in its docs would satisfy the promise (carbon's shape).
+    const informationalOnly = buildQuickScanReport([{ ...finding("M1 — Doc-context credential", "Low"), taxonomy: DOC_CONTEXT_CREDENTIAL_TAXONOMY, category: "Secret exposure", precisionTier: "high" }]);
+    expect(informationalOnly.findings).toHaveLength(0);
+    expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), informationalOnly).find((r) => r.check.startsWith("must be loud"))!.pass).toBe(false);
+  });
+
+  it("stops calling a target's posture NOT ASSESSED once mustBeLoud asserts it (#934's row, corrected)", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "graded" }), gradedOnly).find((r) => r.check === "indicator posture")!;
+    expect(row.pass).toBe(true);
+    expect(row.detail).not.toContain("NOT ASSESSED");
+    expect(row.detail).toContain('asserted on the "graded" channel');
+    // carbon's genuinely-unasserted posture keeps the original wording.
+    expect(scoreFreeTierExpectation(expectation("carbon"), gradedOnly).find((r) => r.check === "indicator posture")!.detail).toContain("NOT ASSESSED");
+  });
+
+  it("leaves every existing corpus row scored exactly as before — the new field is opt-in", () => {
+    for (const e of FREE_TIER_EXPECTATIONS) {
+      expect(e.mustBeLoud, `${e.slug} predates #1473 and must not have gained an unmeasured assertion`).toBeUndefined();
+      expect(scoreFreeTierExpectation(e, gradedOnly).some((r) => r.check.startsWith("must be loud")), e.slug).toBe(false);
+    }
+  });
+});
