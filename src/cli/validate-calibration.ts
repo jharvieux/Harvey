@@ -92,7 +92,7 @@ if (process.argv.includes("--json")) {
   process.exit(0);
 }
 
-const mark = (r: MatrixRow): string => (r.pass ? (r.expectedTier === "connected" ? "N/A " : r.expectedTier === "none" ? "GAP " : "PASS") : "FAIL");
+const mark = (r: MatrixRow): string => (r.pass ? (r.notScored ? "SKIP" : r.expectedTier === "none" ? "GAP " : "PASS") : "FAIL");
 const line = (r: MatrixRow): string =>
   `  ${mark(r)}  ${r.id.padEnd(22)} ${(r.caughtTier ?? "-").padEnd(7)} ${r.detail}`;
 
@@ -145,7 +145,7 @@ const parity = parityVerdict(CORPUS);
 const parityThin = parity.thin;
 const exemptModules = new Map(parity.exempt.map((e) => [e.module, e]));
 for (const c of census) {
-  const connected = c.positivesConnected ? ` +${c.positivesConnected} connected` : "";
+  const connected = c.positivesConnected ? ` +${c.positivesConnected} live` : "";
   const shortfall = parityThin.find((t) => t.module === c.module);
   // #1371: M6 is scored by this gate too, in its own block below (its findings are not in
   // runMechanicalScan's default output, so it is scored outside the matrix above). Saying "own
@@ -181,9 +181,20 @@ console.log(
 
 console.log(
   `\nM1 mechanical corpus — positives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
-    `(${matrix.positivesCaughtHigh} at high/free-count; ${matrix.connectedNa} connected-tier N/A). ` +
+    `(${matrix.positivesCaughtHigh} at high/free-count). ` +
     `This is M1 recall, NOT suite recall — see the census above.`,
 );
+// #1428: these rows used to print "N/A — connected tier" and pass unconditionally, scored by nothing
+// anywhere — three gutted detectors produced a byte-identical GATE PASS. They are still not scored
+// HERE — a static run produces no live finding — but the line now names the gate that does score
+// them, so "N/A" can no longer be read as "checked and clean".
+const liveRows = matrix.rows.filter((r) => r.notScored);
+if (liveRows.length > 0) {
+  console.log(
+    `Live-tier rows NOT SCORED by this static gate: ${liveRows.length} (${liveRows.map((r) => `${r.id} [${r.expectedTier}]`).join(", ")}).\n` +
+      `  They are excluded from every count above — not passed. \`pnpm validate:connected\` scores them against a running stack (#1428).`,
+  );
+}
 console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
 
 // #881: the same two counts in the metric set a prospect's security lead already reads (the OWASP

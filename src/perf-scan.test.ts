@@ -155,7 +155,12 @@ describe("M7 calibration corpus — modeled advisor pull (#72 §M7)", () => {
     for (const e of m7Entries.filter((e) => e.kind === "positive")) {
       const row = buildCoverageMatrix(findings, [e]).rows[0];
       expect(row?.caughtTier, `${e.id}: ${row?.detail}`).toBe("high");
-      expect(row?.expectedTier).toBe("connected"); // N/A in this static test; a live pull scores it for real
+      // #1428 re-tiered these three from "connected" to "local": the Splinter perf lints come off a
+      // Postgres connection to a `supabase start` stack, not off the hosted platform API. This test
+      // scores a MODELED advisor report, so the row is not scored here — `pnpm validate:connected`
+      // scores it against a real stack, where all three were measured PASS on 2026-07-28.
+      expect(row?.expectedTier).toBe("local");
+      expect(row?.notScored, "a modelled run declares no live venue, so the row must read NOT SCORED").toBe(true);
     }
   });
 
