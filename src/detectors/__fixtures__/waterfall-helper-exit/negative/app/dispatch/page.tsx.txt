@@ -1,0 +1,21 @@
+// #1461 — carbon's shape, reduced, and scored inside #1438/#1441's model rather than around it.
+// The intervening statement reads the first result AND stops the function, but the `throw` lives
+// inside `requireUnlocked`, which #1292's syntactic test does not reach. The second query is a WRITE,
+// so #1441's rule applies: hoisting it above an aborting guard would flip a locked dispatch the
+// sequential code never reaches. Nothing must fire.
+//
+// The write is load-bearing, not decoration. #1438 deliberately relaxed the suppression for an
+// aborting guard over two READS (the request dies either way, so the extra read is harmless), so a
+// read/read version of this file would legitimately still fire and would test nothing about whether
+// the exit inside the helper was seen at all.
+import { supabase } from "../../lib/db";
+import { requireUnlocked } from "../../lib/locked-guard";
+
+export default async function DispatchPage() {
+  const { data: dispatch } = await supabase.from("dispatches").select("id, status").single();
+  await requireUnlocked({ isLocked: dispatch?.status === "locked", redirectTo: "/dispatches" });
+
+  const { data: events } = await supabase.from("events").update({ seen: true }).select("id, kind");
+
+  return <p>{events?.length} events</p>;
+}
