@@ -47,3 +47,28 @@ describe("oversized committed assets", () => {
     expect(scanAssetWeight(root, { imageThresholdBytes: 1024 * 1024 * 10, mediaThresholdBytes: 1024 * 1024 * 10 })).toHaveLength(0);
   });
 });
+
+// #1480: an asset nothing references is never served, so the page-weight/LCP claim is false for
+// it. MEASURED 2026-07-28 on proposit's public/Image.png (717 KB, referenced only from README.md).
+describe("unreferenced assets are repo bloat, not page weight (#1480)", () => {
+  it("splits referenced from unreferenced and gives each its own claim", () => {
+    const sources = [{ text: 'import hero from "/img/hero.png";' }, { text: "const promo = '/promo.mp4';" }];
+    const findings = scanAssetWeight(root, undefined, sources);
+    const live = findings.find((f) => f.taxonomy === "M7 — Oversized committed images");
+    const dead = findings.find((f) => f.taxonomy === "M7 — Unreferenced committed images");
+    expect(live?.evidence).toContain("hero.png");
+    expect(live?.evidence).not.toContain("team.jpg");
+    expect(dead?.evidence).toContain("team.jpg");
+    expect(dead?.impact).toContain("Repo bloat only");
+    expect(dead?.impact).not.toContain("LCP");
+    // The media file IS referenced, so it keeps the page-weight framing.
+    expect(findings.find((f) => f.taxonomy === "M7 — Oversized committed media")?.evidence).toContain("promo.mp4");
+    expect(findings.some((f) => f.taxonomy === "M7 — Unreferenced committed media")).toBe(false);
+  });
+
+  it("with no source set supplied, every asset keeps the page-weight framing rather than being guessed dead", () => {
+    const findings = scanAssetWeight(root);
+    expect(findings.some((f) => f.taxonomy.startsWith("M7 — Unreferenced"))).toBe(false);
+    expect(findings.find((f) => f.taxonomy === "M7 — Oversized committed images")?.evidence).toContain("team.jpg");
+  });
+});

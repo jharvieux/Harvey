@@ -46,6 +46,17 @@ function mb(bytes: number): string {
 
 const INSTANCE_CAP = 10;
 
+// #1480: an asset NO SOURCE FILE REFERENCES is never served, so the page-weight/LCP claim does
+// not hold for it — it is a dead committed file (M5's territory) that happens to be large. MEASURED
+// 2026-07-28: proposit's public/Image.png is 717 KB and is referenced only from README.md, which
+// is not a page. The two are split into separate rows with separate claims rather than the
+// unreferenced one being dropped: repo bloat is real, and a silent removal would trade a false
+// positive for a false negative on a finding a client can act on.
+function isReferenced(asset: FatAsset, sourceTexts: string[]): boolean {
+  const base = asset.path.split("/").pop() ?? asset.path;
+  return sourceTexts.some((t) => t.includes(base));
+}
+
 function groupFinding(id: string, kind: "image" | "media", assets: FatAsset[], threshold: number): Finding {
   const sorted = [...assets].sort((a, b) => b.bytes - a.bytes);
   const shown = sorted.slice(0, INSTANCE_CAP);
@@ -77,7 +88,32 @@ function groupFinding(id: string, kind: "image" | "media", assets: FatAsset[], t
   };
 }
 
-export function scanAssetWeight(dir: string, options?: AssetWeightOptions): Finding[] {
+function deadAssetFinding(id: string, kind: "image" | "media", assets: FatAsset[]): Finding {
+  const sorted = [...assets].sort((a, b) => b.bytes - a.bytes);
+  const shown = sorted.slice(0, INSTANCE_CAP);
+  const total = sorted.reduce((s, a) => s + a.bytes, 0);
+  return {
+    id,
+    status: "Open",
+    category: "Performance",
+    title: `${sorted.length} committed ${kind}${sorted.length === 1 ? "" : "s"} no source file references (${mb(total)})`,
+    severity: "Low",
+    confidence: "Review",
+    taxonomy: kind === "image" ? "M7 — Unreferenced committed images" : "M7 — Unreferenced committed media",
+    location: sorted[0]?.path ?? "",
+    evidence:
+      `Worst-first: ${shown.map((a) => `${a.path} (${mb(a.bytes)})`).join(", ")}` +
+      (sorted.length > shown.length ? ` … and ${sorted.length - shown.length} more` : "") +
+      ". No loaded source file names any of these filenames, so nothing serves them — the page-weight/LCP claim does not apply. The search covers the loaded source set (.ts/.tsx/.js/.css/.json and the manifests), not README/docs prose or a runtime-constructed path, so confirm before deleting.",
+    impact: "Repo bloat only: every clone and CI checkout carries these bytes, and no page load does. Not a page-weight finding.",
+    fix: "Delete them, or move the originals to object storage if they are kept deliberately (design sources, press kit).",
+    value: 2,
+    ease: 5,
+    safety: 4,
+  };
+}
+
+export function scanAssetWeight(dir: string, options?: AssetWeightOptions, sources?: readonly { text: string }[]): Finding[] {
   const opts: Required<AssetWeightOptions> = {
     imageThresholdBytes: options?.imageThresholdBytes ?? 500 * 1024,
     mediaThresholdBytes: options?.mediaThresholdBytes ?? 5 * 1024 * 1024,
@@ -85,8 +121,19 @@ export function scanAssetWeight(dir: string, options?: AssetWeightOptions): Find
   const out = { images: [] as FatAsset[], media: [] as FatAsset[] };
   walk(dir, dir, out, opts);
 
+  // With no source set supplied there is nothing to ask the reference question against, so every asset keeps the
+  // page-weight framing — the caller has not made it possible to say otherwise, and guessing
+  // "unreferenced" from an unread tree would be the worse error.
+  const texts = sources?.map((s) => s.text) ?? [];
+  const split = (assets: FatAsset[]) =>
+    texts.length === 0 ? { live: assets, dead: [] as FatAsset[] } : { live: assets.filter((a) => isReferenced(a, texts)), dead: assets.filter((a) => !isReferenced(a, texts)) };
+  const images = split(out.images);
+  const media = split(out.media);
+
   const findings: Finding[] = [];
-  if (out.images.length) findings.push(groupFinding("M7A-01", "image", out.images, opts.imageThresholdBytes));
-  if (out.media.length) findings.push(groupFinding("M7A-02", "media", out.media, opts.mediaThresholdBytes));
+  if (images.live.length) findings.push(groupFinding("M7A-01", "image", images.live, opts.imageThresholdBytes));
+  if (media.live.length) findings.push(groupFinding("M7A-02", "media", media.live, opts.mediaThresholdBytes));
+  if (images.dead.length) findings.push(deadAssetFinding("M7A-03", "image", images.dead));
+  if (media.dead.length) findings.push(deadAssetFinding("M7A-04", "media", media.dead));
   return findings;
 }

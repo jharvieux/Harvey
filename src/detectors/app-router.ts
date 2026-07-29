@@ -167,7 +167,7 @@ export interface PathAlias {
 // otherwise-unresolved specifiers are exactly that scaffolding default.
 export function collectPathAliases(files: SourceInput[]): PathAlias[] {
   const configs = files
-    .filter((f) => /(^|\/)(tsconfig|jsconfig)\.json$/.test(f.path))
+    .filter((f) => /(^|\/)(tsconfig|jsconfig)(\.[\w.-]+)?\.json$/.test(f.path))
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
   const aliases: PathAlias[] = [];
   for (const cfg of configs) {

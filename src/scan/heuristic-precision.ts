@@ -106,12 +106,16 @@ function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
   const relevant = matching.filter((f) => !control.includes(f));
   const fired = relevant.length;
   const controlSilent = entry.scopeControl !== undefined && control.length === 0;
-  const pass = entry.kind === "positive" ? fired > 0 : fired === 0 && !controlSilent;
+  // #1475: a positive that fires at the wrong severity is a mis-rating, not a catch.
+  const misrated = entry.expectedSeverity === undefined ? [] : relevant.filter((f) => f.severity !== entry.expectedSeverity);
+  const pass = entry.kind === "positive" ? fired > 0 && misrated.length === 0 : fired === 0 && !controlSilent;
   const detail =
     entry.kind === "positive"
-      ? pass
-        ? `caught (${fired} finding${fired === 1 ? "" : "s"})`
-        : "NOT caught — the planted class did not fire"
+      ? fired === 0
+        ? "NOT caught — the planted class did not fire"
+        : misrated.length > 0
+          ? `MIS-RATED — expected ${entry.expectedSeverity}, got ${[...new Set(misrated.map((f) => f.severity))].join(", ")}`
+          : `caught (${fired} finding${fired === 1 ? "" : "s"})`
       : controlSilent
         ? `SCOPE UNPROVEN — the scope control "${entry.scopeControl}" did not fire, so 0 false positives is indistinguishable from the scanner never reading this fixture`
         : pass

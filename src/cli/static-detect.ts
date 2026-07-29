@@ -113,7 +113,9 @@ try {
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...detectVitestIntentFindings(allSources), // M8 vitest-specific (#629) — runner-gated
-    ...scanAssetWeight(scanDir), // scoped copy = committed files only
+    // scoped copy = committed files only; `allSources` lets it separate an asset a page serves
+    // from one nothing references, which is repo bloat and not page weight (#1480).
+    ...scanAssetWeight(scanDir, undefined, allSources),
     ...buildDirs.flatMap((b) => (isVite ? parseViteBundleStats(b) : parseBundleStats(b))),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
     // #761 (part of #756): M7's Prisma-schema equivalent of the Supabase connected-tier

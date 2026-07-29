@@ -1,0 +1,1 @@
+export const db = { order: { findMany: async () => [] as { customerId: string }[] }, customer: { findUnique: async (_: unknown) => null }, teamMember: { deleteMany: async (_: unknown) => null }, user: { create: async (_: unknown) => null } };

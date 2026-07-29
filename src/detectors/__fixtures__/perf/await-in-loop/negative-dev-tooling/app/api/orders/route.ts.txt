@@ -1,0 +1,13 @@
+// SCOPE CONTROL — a genuine request-path N+1 that MUST still fire, so a zero on this
+// fixture is never the scanner having skipped it.
+import { db } from "../../../lib/db";
+
+export async function GET(request: Request) {
+  const orders = await db.order.findMany();
+  const enriched = [];
+  for (const order of orders) {
+    const customer = await db.customer.findUnique({ where: { id: order.customerId } });
+    enriched.push({ order, customer });
+  }
+  return Response.json(enriched);
+}

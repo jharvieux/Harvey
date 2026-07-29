@@ -1,0 +1,9 @@
+// CI deploy script.
+export async function deployAll(workspaces: { id: string }[]) {
+  for (const workspace of workspaces) {
+    await deployOne(workspace.id);
+  }
+}
+async function deployOne(id: string) {
+  return id;
+}

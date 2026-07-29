@@ -1,0 +1,15 @@
+"use client";
+import { useState } from "react";
+
+export function SettingsPanel() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
+  const [timezone, setTimezone] = useState("UTC");
+  const [notifications, setNotifications] = useState(true);
+  const [theme, setTheme] = useState("light");
+  const [saving, setSaving] = useState(false);
+  return <form>{name}{email}{phone}{company}{role}{timezone}{String(notifications)}{theme}{String(saving)}</form>;
+}

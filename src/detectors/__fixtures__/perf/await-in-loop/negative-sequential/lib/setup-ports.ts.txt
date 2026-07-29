@@ -1,0 +1,15 @@
+// A SEARCH loop: scans candidates and returns the first that works. There is no n-item
+// workload to parallelise — stopping early IS the algorithm.
+export async function reserveAvailablePort(defaultPort: number, reserved: Set<number>) {
+  for (let candidatePort = defaultPort; candidatePort <= 65535; candidatePort++) {
+    if (reserved.has(candidatePort)) continue;
+    const available = await isPortAvailable(candidatePort);
+    if (!available) continue;
+    reserved.add(candidatePort);
+    return { port: candidatePort };
+  }
+  throw new Error("no free port");
+}
+async function isPortAvailable(port: number) {
+  return port > 0;
+}
