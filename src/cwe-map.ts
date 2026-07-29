@@ -76,6 +76,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Client-supplied payment amount trusted by server": ["602", "A04"],
   // Missing authorization on a resource/route/channel.
   "Migration table without RLS (static)": ["862", "A01"],
+  // #1425 — same outcome as the line above (no authorization on the table), reached by a later
+  // migration turning row security off rather than by never turning it on. 862 like its sibling,
+  // NOT 269: no privileged role is involved, the policies simply stop being consulted.
+  "Migration disables RLS on a public table (static)": ["862", "A01"],
   // #1190: the two privileged-role bypasses of an otherwise-correct policy set. CWE-269 (Improper
   // Privilege Management) rather than 862 — the authorization check EXISTS and is right; the defect
   // is that the role it runs as is exempt from it.

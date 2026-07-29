@@ -1,0 +1,6 @@
+export function describeStatus(status: string | undefined) {
+  if (status === "locked") {
+    return "Locked";
+  }
+  return "Open";
+}

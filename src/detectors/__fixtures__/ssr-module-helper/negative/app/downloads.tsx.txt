@@ -1,0 +1,22 @@
+// #1460 — the FP shape MEASURED on two real pins: a module-level plain helper that touches the DOM,
+// living in a `.tsx` file only because its component neighbours do. #964 already suppresses the
+// identical helper in a `.ts` module, on the reasoning that a component requires JSX; that
+// reasoning is about the MODULE, and the helper is no more a render body here than there.
+// Its ONE in-file call site is inside a useEffect, which never runs on the server. Nothing must fire.
+import { useEffect } from "react";
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+}
+
+export function DownloadPanel({ blob, filename }: { blob: Blob; filename: string }) {
+  useEffect(() => {
+    triggerDownload(blob, filename);
+  }, [blob, filename]);
+
+  return <p>Downloading {filename}…</p>;
+}

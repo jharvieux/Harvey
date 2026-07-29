@@ -1,0 +1,13 @@
+// The true-positive control for #1460, and the reason the naive form of the fix is wrong. This is
+// the SAME module-level plain helper in the SAME kind of file — lowercase name, no JSX in its body —
+// but its call site is the component's RENDER BODY, so it really does execute during SSR and really
+// does throw "window is not defined". A rule that suppressed on the helper's own shape would lose
+// this row; only reading the CALL SITES can tell the two files apart.
+export function DownloadPanel({ filename }: { filename: string }) {
+  const origin = currentOrigin();
+  return <a href={`${origin}/files/${filename}`}>{filename}</a>;
+}
+
+function currentOrigin() {
+  return window.location.origin;
+}

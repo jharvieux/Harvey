@@ -2369,7 +2369,8 @@ over the committed `dry-run/findings.json` × `dry-run/pii-data-map.json`: **7 m
 escalations** — every table a planted finding named (`profiles`, `perf_orders`, `documents`,
 `internal_notes`, `tautology_articles`) scores Low, so the join correctly declined every time. The
 regulated tables were there (`pii_calibration_fixture` Critical/78, `legacy_accounts` High/7,
-`support_tickets` High/4) and no planted finding named any of them. Unit tests green, headline path
+`support_tickets` High/4 — High/5 since #1424 added its `requester_email` column, same band) and no
+planted finding named any of them. Unit tests green, headline path
 untested.
 
 `20260726000001_regulated_overbroad_policy.sql` closes it. `public.patient_billing` carries
@@ -2670,10 +2671,67 @@ proven, not assumed: a temporary `create policy tmp_probe_using_true on public.n
 using (true);` appended to it emitted `SB-RLS-POLICY-public.notes.tmp_probe_using_true` at line 65
 of that file, then was removed (MEASURED 2026-07-28).
 
-### B24 residual — not fixed here
+### B24 residual — CLOSED 2026-07-28 (#1424)
 
-`supabase start` on this target aborts at `20260719000002_plpgsql_injection_definer.sql`
-(`public.nocode_tickets` does not exist), so this migration — like every one after `20260719000002` —
-has never been applied to a stack, and the B24 positives have no scored **live** run yet. Tracked as
-**#1424**. The same probe also showed the static tier cannot see `disable row level security` at all:
-**#1425**.
+`supabase start` on this target used to abort at `20260719000002_plpgsql_injection_definer.sql`
+(`public.nocode_tickets` does not exist), so that migration — like every one after it — had never
+been applied to a stack. Fixed by pointing that migration's functions at `public.support_tickets`,
+a table this target really creates in `20260709000004_b8_connected_advisors.sql`. MEASURED
+2026-07-28: `supabase start -x vector,logflare` exits 0 and
+`supabase_migrations.schema_migrations` lists all 24 migrations. The eight that reached a live
+stack for the first time behave as their entries predict — notably `public.mt_invoices`
+`relrowsecurity=false`, `mt_app_worker` holding `BYPASSRLS`, the `internal_ops` /
+`analytics_private` schemas present, eight storage buckets created, and `realtime.messages`
+`relrowsecurity=false`, which confirms the B24 prediction above against a real stack rather than a
+bare one.
+
+The migration was NOT fixed by copying the `schema.sql` DDL into a migration, which is the obvious
+move: `checkMigrationRlsStatic` attributes a table to the FIRST source that creates it and reads
+migrations before the root `schema.sql`, so MEASURED 2026-07-28 that copy moved
+`SB-RLS-STATIC-nocode_tickets` from `schema.sql:9` onto the migration and failed
+`P-RLS-MISSING-ROOT-SCHEMA` ("NOT caught by any rule"). `nocode_tickets` stays exclusive to
+`schema.sql`.
+
+The same probe also showed the static tier could not see `disable row level security` at all
+(**#1425**) — closed by the plants below.
+
+## B25 (#1425) — protect, then UN-protect
+
+`checkMigrationRlsStatic` clears a table on an `enable row level security` found ANYWHERE in the
+file set. That aggregation is what makes it robust against a schema split across migrations, and it
+is exactly what made a later `disable row level security` invisible — `src/scan/supabase-static.ts`
+carried no disable pattern at all, so a table protected in one migration and un-protected in a later
+one scored **clean**. It now resolves row-security state in apply order and reports the table whose
+LAST statement is a disable.
+
+| id | Plant | Detector | Expected |
+|---|---|---|---|
+| `P-RLS-DISABLE-NOT-REVERTED` | `public.billing_exports` — created protected + tenant-scoped in `…0002`, `disable row level security` in `…0003`, never reverted | `checkMigrationRlsStatic` | `SB-RLS-DISABLED-STATIC-billing_exports`, high, Critical |
+| `P-RLS-DISABLE-SCOPE-CONTROL` | `public.export_audit` — created in `…0002`, gets row security nowhere | `checkMigrationRlsStatic` | `SB-RLS-STATIC-export_audit`, high, Critical |
+
+### B25 negative — benign lookalike (must NOT be flagged)
+
+| id | Plant | Why it must stay silent |
+|---|---|---|
+| `N-RLS-DISABLE-REVERTED` | `public.import_staging` — a byte-identical `disable row level security` in the SAME hotfix migration, re-enabled by `…0004` | The discriminator is the table's FINAL row-security state across the file set, never the presence of a disable statement. A rule matching the text would flag every backfill migration that correctly puts protection back. |
+
+### B25 scope control and readership
+
+Each of the three files goes RED if it is not read, which is why only one carries a separate
+control: `…0003` decides the positive, `…0004` decides the negative (skip it and `import_staging`
+resolves to disabled, failing `N-RLS-DISABLE-REVERTED` as a free-count false positive), and `…0002`
+— which decides neither, since `SB-RLS-DISABLED-STATIC` does not require having seen the
+`create table` — carries `export_audit`.
+
+### B25 live confirmation (MEASURED 2026-07-28, unblocked by #1424)
+
+The answer key here is the database, not our reading of the SQL. After `supabase db reset`:
+
+| table | `relrowsecurity` | policies | anon `GET /rest/v1/<table>` |
+|---|---|---|---|
+| `billing_exports` | `f` | 1 | returns the row — **the policy is inert** |
+| `import_staging` | `t` | 1 | `[]` |
+| `export_audit` | `f` | 0 | (control) |
+
+The positive is a true positive confirmed by exploitation with only the publishable key, and the
+negative is a true negative under the identical request.

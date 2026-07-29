@@ -34,6 +34,7 @@ import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } fro
 import { checkEdgeFunctionVerifyJwt, checkMigrationDefinerAnonGrant, checkMigrationDynamicSqlInjection, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
+import { moduleMatches } from "./external-corpus.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
 // Recorded-output helper: a minimal Finding mirroring what the scan modules emit, so these
@@ -687,6 +688,27 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
       // members RLS on via a bare alter (negative), private.internal_audit non-public schema (negative).
       "create table workspaces (id uuid primary key);\ncreate table members (id uuid primary key);\nalter table members enable row level security;\ncreate table private.internal_audit (id uuid primary key);\n",
   );
+  // #1425 — protect-then-unprotect, in its OWN dir so the "flags only audit_logs" test below keeps
+  // supaDir focused. Three files, mirroring targets/calibration: billing_exports and import_staging
+  // are created protected, a hotfix disables both, and only import_staging is reverted. export_audit
+  // is the scope control — it proves the setup file was read, which neither #1425 entry can do.
+  const rlsDisableDir = mkdtempSync(join(tmpdir(), "harvey-b13-rlsdisable-"));
+  afterAll(() => rmSync(rlsDisableDir, { recursive: true, force: true }));
+  mkdirSync(join(rlsDisableDir, "supabase", "migrations"), { recursive: true });
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000002_rls_disable_tables.sql"),
+    "create table public.billing_exports (id uuid primary key);\nalter table public.billing_exports enable row level security;\n" +
+      "create table public.import_staging (id uuid primary key);\nalter table public.import_staging enable row level security;\n" +
+      "create table public.export_audit (id uuid primary key);\n",
+  );
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000003_rls_disable_hotfix.sql"),
+    "alter table public.billing_exports disable row level security;\nalter table public.import_staging disable row level security;\n",
+  );
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000004_rls_disable_revert.sql"),
+    "alter table public.import_staging enable row level security;\n",
+  );
   // #602 — a migration with the plpgsql SQLi + DEFINER-anon-grant fixtures (and their safe siblings).
   writeFileSync(
     join(supaDir, "supabase", "migrations", "20260719000002_injection.sql"),
@@ -704,6 +726,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     ...parseSemgrepFindings({ results: semgrep }),
     ...checkMigrationRlsStatic(supaDir),
     ...checkMigrationRlsStatic(rootSchemaDir),
+    ...checkMigrationRlsStatic(rlsDisableDir), // #1425
     ...checkEdgeFunctionVerifyJwt(supaDir),
     ...checkOpenSignupConfig(supaDir),
     ...checkMigrationDynamicSqlInjection(supaDir), // #602 CX-12
@@ -719,11 +742,12 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     }
   });
 
-  it("promotes only the exact static/structural sinks to the free count (8 high, 12 review)", () => {
+  it("promotes only the exact static/structural sinks to the free count (10 high, 12 review)", () => {
     const m = buildCoverageMatrix(findings, b13SupaEntries);
     const positives = b13SupaEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
-    expect(m.positivesCaughtHigh).toBe(8);
+    // 8 before #1425; +2 for the protect-then-unprotect plant and its scope control.
+    expect(m.positivesCaughtHigh).toBe(10);
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(12);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
@@ -1189,6 +1213,10 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "waterfall-abort", dir: "waterfall-abort", neg: "negative" },
     { check: "action-gate-strength", dir: "action-gate-strength", neg: "negative" },
     { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
+    // #1462/#1460/#1461, same inverted scoring — the three residual FP families #1293/#1276 left open.
+    { check: "action-dynamic-gate", dir: "server-action-dynamic-gate", neg: "negative" },
+    { check: "ssr-module-helper", dir: "ssr-module-helper", neg: "negative" },
+    { check: "waterfall-helper-exit", dir: "waterfall-helper-exit", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
@@ -1211,6 +1239,26 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       const negRow = scoreEntry(negEntry!, negFindings);
       expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
       expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("#1459: M1-boundary covers every M1 taxonomy the boundary pass emits", () => {
+    // The #940 shape, made executable: a taxonomy landing without its corpus bucket being updated.
+    // The boundary pass's noun is per-framework ("Server Action" / "route action" / "server
+    // function") and a new adapter adds another, so this runs the REAL detector over every M9
+    // fixture in this block and fails if any `M1 —` row it produces escapes the M1-boundary rule —
+    // which would silently return that row to being scored by nothing, the exact defect #1459 fixed.
+    const emitted = new Set<string>();
+    for (const { check, dir, neg, framework } of CHECKS) {
+      for (const kind of ["positive", neg]) {
+        for (const f of detectAppRouterFindings(loadPrefixed(`${dir}/${kind}`, `m9-corpus/${check}/${kind}`), framework)) {
+          if (f.taxonomy.startsWith("M1 ")) emitted.add(f.taxonomy);
+        }
+      }
+    }
+    expect(emitted.size, "the M9 fixtures must exercise the boundary pass's M1 output at all").toBeGreaterThan(0);
+    for (const taxonomy of emitted) {
+      expect(moduleMatches(taxonomy, "M1-boundary"), `${taxonomy} escapes the M1-boundary corpus key`).toBe(true);
     }
   });
 
