@@ -120,4 +120,24 @@ describe("runScheduled — concurrency caps are enforced, not documented", () =>
   it("defaults to 4 slots / 2 client-checks", () => {
     expect(DEFAULT_CAPS).toEqual({ maxSlots: 4, maxClientChecks: 2 });
   });
+
+  // The NEGATIVE CONTROL for the two assertions above (#1272). `peak <= cap` is only evidence if it
+  // can fail, and a peak measurement that never rises would satisfy it while proving nothing. Same
+  // workload, same instrument, semaphore removed: the peak goes straight past the cap. So the two
+  // green assertions above are held by runScheduled, not by the workload happening to be serial.
+  it("the same workload WITHOUT runScheduled blows past the cap — so the cap assertions can fail", async () => {
+    let live = 0;
+    let peak = 0;
+    const comps = scheduleFixes(Array.from({ length: 12 }, (_, i) => node(`F${i}`, [`src/${i}.ts`])));
+    await Promise.all(
+      comps.map(async () => {
+        live++;
+        peak = Math.max(peak, live);
+        await new Promise((r) => setTimeout(r, 5));
+        live--;
+      }),
+    );
+    expect(peak).toBe(12);
+    expect(peak).toBeGreaterThan(DEFAULT_CAPS.maxSlots);
+  });
 });

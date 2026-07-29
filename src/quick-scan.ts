@@ -275,8 +275,14 @@ export function computeGrade(findings: Finding[]): { grade: Grade; score: number
     penalty += (penalties[0] ?? 0) + penalties.slice(1).reduce((sum, p) => sum + Math.min(p, REPEAT_PENALTY), 0);
   }
   const score = Math.max(0, 100 - penalty);
-  const grade: Grade = score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F";
-  return { grade, score };
+  return { grade: gradeOf(score), score };
+}
+
+// The single 0–100 → A–F curve. Exported because the #1305 health scorecard grades four more
+// dimensions on their own measures and must land them on THIS curve — two scales in one report
+// would make two rows labelled "B" mean different things.
+export function gradeOf(score: number): Grade {
+  return score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F";
 }
 
 // The grade never travels without its scope (#227) — "B" alone reads as a security verdict, which

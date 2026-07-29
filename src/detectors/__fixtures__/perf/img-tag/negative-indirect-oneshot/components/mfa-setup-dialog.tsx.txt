@@ -1,0 +1,17 @@
+"use client";
+// The MFA QR case the data:/blob: guard's OWN comment cites, and which it nevertheless fired
+// on: the src is a form read passed as a prop, so no literal data: URI is ever in view.
+import { useForm } from "react-hook-form";
+
+export function MfaSetupDialog() {
+  const form = useForm<{ qrCode: string }>();
+  return (
+    <div>
+      <QrImage src={form.getValues("qrCode")} />
+    </div>
+  );
+}
+
+function QrImage({ src }: { src: string }) {
+  return <img alt="QR Code" src={src} width={160} height={160} />;
+}

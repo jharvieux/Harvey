@@ -16,10 +16,11 @@
 
 import { execFileSync } from "node:child_process";
 import { arg, assertKnownFlags } from "./args.js";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { OsvScanResult } from "../scan/dependencies.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readNamesSafe, statSafe } from "../fs-walk.js";
 import {
   indexOsvByEntry,
   loadSecbenchCorpus,
@@ -54,7 +55,7 @@ if (!dir) {
   process.exit(2);
 }
 
-const fs = { readdirSync: (p: string) => readdirSync(p), readFileSync: (p: string) => readFileSync(p, "utf8"), existsSync };
+const fs = { listDir: readNamesSafe, readText: (p: string) => readFileSync(p, "utf8"), exists: existsSync };
 const entries = loadSecbenchCorpus(dir, fs);
 
 // Fail loud on a partial load: a class folder that didn't parse must be visible, never a quiet
@@ -120,9 +121,9 @@ const installableKeys = new Set<string>();
 for (const cls of SECBENCH_CLASSES) {
   const clsDir = `${lockTree}/${cls}`;
   if (!existsSync(clsDir)) continue;
-  for (const slug of readdirSync(clsDir)) {
+  for (const slug of readNamesSafe(clsDir)) {
     const lf = `${clsDir}/${slug}/package-lock.json`;
-    if (existsSync(lf) && statSync(lf).isFile()) installableKeys.add(`${cls}/${slug}`);
+    if (statSafe(lf)?.isFile() === true) installableKeys.add(`${cls}/${slug}`);
   }
 }
 

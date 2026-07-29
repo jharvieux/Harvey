@@ -28,13 +28,30 @@
 // registry's definition of STALE. A reason kept past the day its blocker dissolved is the decay this
 // repo names as its signature defect, so the row is gone rather than reworded.
 //
+// validate-connected has no cadence for a DIFFERENT reason, and it is not an empirical one: the gate
+// runs fine (measured 2026-07-28 against a live `supabase start` stack — 16 of 20 live rows scored,
+// all held, and each of its three B24 detectors gutted in turn exits it 1). What is missing is a CI
+// venue, and adding one means editing .github/workflows/, which CLAUDE.md lists as supervised. The
+// operator question, with the wording proposed, is recorded on #1491 — a supervised path stops the
+// EDIT, never the CRITERION (#1319).
+//
+// REASON: validate-connected has no CI cadence because standing a Supabase stack up in a workflow is a change to .github/workflows/, which is a supervised path, and no command re-tests whether the operator has approved it
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-07-28 — the gate itself runs and fails correctly against a live stack; the missing piece is only the venue. `grep -rl "supabase start" .github/workflows/` returns nothing today.
+// OWNER: operator (jharvieux)
+// DECISION: #1491 — carries the proposed workflow step verbatim for the operator to approve or decline
+// TOUCHES: src/cli/validate-connected.ts .github/workflows
+
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-28 — `pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir <empty>` exits 1 with every corpus target NOT SCORED; no M1.pass.json is committed anywhere in this repo. The staleness-alarm half is tracked by #1270.
 // FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
 
-import { readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readNamesSafe } from "./fs-walk.js";
 
 /** Where a gate runs, and the evidence that proves it still does. */
 export type Cadence =
@@ -95,6 +112,12 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     cadence: { kind: "workflow", file: ".github/workflows/secbench.yml", job: "secbench-recall", when: "monthly (1st, 05:00 UTC) + workflow_dispatch" },
   },
   {
+    id: "validate-connected",
+    script: "validate:connected",
+    measures: "live-tier corpus recall against a running Supabase stack (local / connected / hosted venues)",
+    cadence: { kind: "none", issue: 1491 },
+  },
+  {
     id: "validate-semantic",
     script: "validate:semantic",
     measures: "M1 semantic (paid LLM) recall against the recorded-pass answer key",
@@ -113,14 +136,16 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-conservation", why: "plant-and-assert — a planted finding per module, pass/fail, not a score" },
   { id: "validate-disclosure-venue", why: "structural — checks a rule's recorded bound reaches its own message" },
   { id: "validate-findings", why: "schema validation of a findings file" },
+  { id: "validate-fs-walk", why: "structural — bans raw statSync/readdirSync outside src/fs-walk.ts; a violation count, not a recall number" },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
+  { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];
 
 /** Discovered `validate-*` CLI ids, excluding test files. */
 export function discoverValidateClis(cliDir: string): string[] {
-  return readdirSync(cliDir)
+  return readNamesSafe(cliDir)
     .filter((f) => f.startsWith("validate-") && f.endsWith(".ts") && !f.endsWith(".test.ts"))
     .map((f) => f.slice(0, -".ts".length))
     .sort();
@@ -183,6 +208,25 @@ export function checkScoredGates(
   }
 
   return violations;
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// #1483 — lives here rather than in validate-scored-gates.ts, where it used to. That CLI runs its
+// gate and can `process.exit(1)` at module load, so importing it to reach this loader made one
+// gate able to abort another; src/scan/calibration.ts now needs the same venues.
+export function loadGateInputs(root = REPO_ROOT): GateInputs {
+  const workflowDir = join(root, ".github", "workflows");
+  const workflows: Record<string, string> = {};
+  for (const f of readNamesSafe(workflowDir).filter((f) => f.endsWith(".yml"))) {
+    workflows[`.github/workflows/${f}`] = readFileSync(join(workflowDir, f), "utf8");
+  }
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+  return {
+    discovered: discoverValidateClis(join(root, "src", "cli")),
+    scripts: pkg.scripts ?? {},
+    workflows,
+  };
 }
 
 export function describeCadence(cadence: Cadence): string {

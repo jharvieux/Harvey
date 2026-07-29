@@ -1,0 +1,9 @@
+// A plop scaffolding template — runs at `turbo gen`, never in a request.
+export async function resolveDeps(deps: string[]) {
+  const out: Record<string, string> = {};
+  for (const dep of deps) {
+    const version = await fetch(`https://registry.npmjs.org/-/package/${dep}/dist-tags`).then((r) => r.json());
+    out[dep] = version.latest;
+  }
+  return out;
+}

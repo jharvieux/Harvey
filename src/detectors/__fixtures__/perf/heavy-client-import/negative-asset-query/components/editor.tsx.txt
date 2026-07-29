@@ -1,0 +1,7 @@
+"use client";
+// SCOPE CONTROL — a real static heavy import that MUST still fire.
+import Editor from "@monaco-editor/react";
+
+export function CodeEditor() {
+  return <Editor height="400px" />;
+}

@@ -10,13 +10,16 @@
 // positive expected at "high" isn't caught at high. Review-tier recall gaps (documented
 // follow-ups, e.g. OSV needing a lockfile) are reported but do not fail the gate.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type MatrixRow } from "../scan/calibration.js";
+import { readEntriesSafe } from "../fs-walk.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
+import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
+import { scoreM6IndicatorCorpus } from "../scan/m6-indicator-corpus.js";
 import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
@@ -46,8 +49,8 @@ function scanManifestFixtures(targetDir: string): Finding[] {
   const fixturesDir = join(targetDir, "fixtures");
   if (!existsSync(fixturesDir)) return [];
   const findings: Finding[] = [];
-  for (const entry of readdirSync(fixturesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of readEntriesSafe(fixturesDir).entries) {
+    if (!entry.isDirectory) continue;
     const appDir = join(fixturesDir, entry.name);
     const manifestFile = join(appDir, "package.json");
     if (existsSync(manifestFile)) {
@@ -89,7 +92,7 @@ if (process.argv.includes("--json")) {
   process.exit(0);
 }
 
-const mark = (r: MatrixRow): string => (r.pass ? (r.expectedTier === "connected" ? "N/A " : r.expectedTier === "none" ? "GAP " : "PASS") : "FAIL");
+const mark = (r: MatrixRow): string => (r.pass ? (r.notScored ? "SKIP" : r.expectedTier === "none" ? "GAP " : "PASS") : "FAIL");
 const line = (r: MatrixRow): string =>
   `  ${mark(r)}  ${r.id.padEnd(22)} ${(r.caughtTier ?? "-").padEnd(7)} ${r.detail}`;
 
@@ -136,20 +139,38 @@ const severityMismatches = severityAnnotated.filter((r) => r.severityMismatch);
 // module with ZERO entries renders as a row reading 0 and trips the minimum — before #1314 it
 // emitted no row at all, and M2/M6 (zero fixtures each) were the only two modules the gate
 // structurally could not flag while it printed "all modules meet it".
-console.log("\nPer-module corpus census (fixture counts only — this gate scores M1; other modules are gated by their own suites):");
+console.log("\nPer-module corpus census (fixture counts only — this gate scores M1's matrix and, since #1371, M6's indicator block; other modules are gated by their own suites):");
 const census = moduleCensus(CORPUS);
 const parity = parityVerdict(CORPUS);
 const parityThin = parity.thin;
 const exemptModules = new Map(parity.exempt.map((e) => [e.module, e]));
 for (const c of census) {
-  const connected = c.positivesConnected ? ` +${c.positivesConnected} connected` : "";
+  const connected = c.positivesConnected ? ` +${c.positivesConnected} live` : "";
   const shortfall = parityThin.find((t) => t.module === c.module);
-  const where = c.module === "M1" ? "SCORED BY THIS GATE" : exemptModules.has(c.module) ? "NO CORPUS — substitute gate named below" : "own unit suite (src/scan/calibration/*.entries.ts)";
+  // #1371: M6 is scored by this gate too, in its own block below (its findings are not in
+  // runMechanicalScan's default output, so it is scored outside the matrix above). Saying "own
+  // unit suite" here would understate where its rows are actually held to account.
+  const where = c.module === "M1" ? "SCORED BY THIS GATE" : c.module === "M6" ? "SCORED BY THIS GATE — M6 indicator block below" : exemptModules.has(c.module) ? "NO CORPUS — substitute gate named below" : "own unit suite (src/scan/calibration/*.entries.ts)";
   const flag = shortfall ? `  THIN (${shortfall.missing})` : "";
   console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}${flag}`);
 }
 console.log(`  parity minimum: ${MIN_POSITIVES_PER_MODULE} positives + ${MIN_NEGATIVES_PER_MODULE} boundary negative per module, over all ${AUDIT_MODULES.length} modules (#427/#1314) — ${parityThin.length ? `THIN: ${parityThin.map((c) => `${c.module} (${c.missing})`).join(", ")}` : "every non-exempt module meets it"}`);
-for (const e of parity.exempt) console.log(`  EXEMPT ${e.module}: ${e.reason}`);
+// #1454: an exemption renders with its KIND and PROVENANCE, never as a bare sentence. All three
+// possible provenances used to print identically — a measured technical fact, an operator ruling,
+// and one executor's untested guess — and the operator read a product decision they had never made
+// off that line. A decisional row shows WHO rules and WHERE they were asked; an empirical row shows
+// the command that would falsify it, which `pnpm validate-reasons --revalidate` re-runs.
+for (const e of parity.exempt) {
+  const r = e.exemption.reason;
+  console.log(`  EXEMPT ${e.module} [${r.kind.toUpperCase()}] — ${r.claim}`);
+  console.log(`    PROVENANCE: ${r.provenance}`);
+  console.log(`    ${r.kind === "empirical" ? `FALSIFIER (exits 0 when this is no longer true): ${r.falsifier}` : `RULED BY: ${r.owner} — ${r.decision}`}`);
+  // #1483: the cadence prints beside the gate. "It exists" and "it runs" are different claims, and
+  // re-validating M2 for #1454 found them apart — `pentest.ts --mode=coverage` works and is invoked
+  // by nothing, so a reader must be able to see that without going to look.
+  for (const g of e.exemption.substituteGates) console.log(`    SUBSTITUTE GATE: ${g.what}\n      RUNS: ${describeCadence(g.cadence)}`);
+}
+const exemptionErrors = validateParityExemptions(undefined, (p) => existsSync(join(repoRoot, p)), loadGateInputs());
 if (parity.stale.length) console.log(`  STALE EXEMPTION: ${parity.stale.join(", ")} now meet(s) the minimum on real fixtures — delete the PARITY_EXEMPTIONS row so the corpus, not the substitute gate, is what the module stands on.`);
 // #881: fixture counts are not performance. Name the modules that actually have a scored
 // precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.
@@ -160,9 +181,20 @@ console.log(
 
 console.log(
   `\nM1 mechanical corpus — positives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
-    `(${matrix.positivesCaughtHigh} at high/free-count; ${matrix.connectedNa} connected-tier N/A). ` +
+    `(${matrix.positivesCaughtHigh} at high/free-count). ` +
     `This is M1 recall, NOT suite recall — see the census above.`,
 );
+// #1428: these rows used to print "N/A — connected tier" and pass unconditionally, scored by nothing
+// anywhere — three gutted detectors produced a byte-identical GATE PASS. They are still not scored
+// HERE — a static run produces no live finding — but the line now names the gate that does score
+// them, so "N/A" can no longer be read as "checked and clean".
+const liveRows = matrix.rows.filter((r) => r.notScored);
+if (liveRows.length > 0) {
+  console.log(
+    `Live-tier rows NOT SCORED by this static gate: ${liveRows.length} (${liveRows.map((r) => `${r.id} [${r.expectedTier}]`).join(", ")}).\n` +
+      `  They are excluded from every count above — not passed. \`pnpm validate:connected\` scores them against a running stack (#1428).`,
+  );
+}
 console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
 
 // #881: the same two counts in the metric set a prospect's security lead already reads (the OWASP
@@ -190,6 +222,20 @@ const heuristic = measureHeuristicPrecision();
 for (const m of heuristic.modules) {
   console.log(`  ${m.module.padEnd(4)} ${formatMetrics(m.metrics)}`);
 }
+
+// #1371: M6's indicator corpus. Its findings are not in runMechanicalScan's default output at all
+// (`handrolledIndicators` is opt-in), so these rows can only be scored by running the detector over
+// its own committed fixtures — see src/scan/m6-indicator-corpus.ts. Reported HERE and folded into
+// gatePass so the census row above stands on a gate that can go red, not on a count: #1299 shipped
+// three well-formed rows that scored N/A by default, and gutting all three detectors left this gate
+// at exit 0 with byte-identical output (#1428).
+const m6 = scoreM6IndicatorCorpus();
+console.log(`\nM6 INDICATOR CORPUS (#1371) — live detectHandrolledFindings over the committed __fixtures__/handrolled dirs:`);
+console.log(
+  `  positives caught: ${m6.positivesCaught}/${m6.positivesTotal}   negatives cleared: ${m6.negativesCleared}/${m6.negativesTotal}   ` +
+    `indicator classes declared by handrolled.ts: ${m6.classesDeclared}, uncovered by a positive row: ${m6.uncovered.length}`,
+);
+for (const r of m6.rows.filter((r) => !r.pass || r.severityMismatch)) console.log(`  FAIL  ${r.id.padEnd(24)} ${r.detail}`);
 
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's
 // git-history scan needs a clonable repo ROOT, which targets/calibration (a subdirectory of
@@ -285,8 +331,9 @@ const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
 
-const gatePass = unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
+const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
 if (!gatePass) {
+  if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
   if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
@@ -297,6 +344,7 @@ if (!gatePass) {
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427/#1314): ${parityThin.map((c) => `${c.module} has ${c.missing}`).join(", ")}. Add fixtures, or add a PARITY_EXEMPTIONS row naming the gate that covers the module instead.`);
   if (parity.stale.length) console.log(`GATE FAIL — stale parity exemption (#1314): ${parity.stale.join(", ")} now meet the minimum on real fixtures; the exemption is a claim that they cannot, and it is no longer true`);
+  for (const e of exemptionErrors) console.log(`GATE FAIL — malformed parity exemption (#1454) ${e.module}:\n${e.errors.map((x) => `      • ${x}`).join("\n")}`);
   if (!parityControl.ok) console.log(`GATE FAIL — the #1314 parity negative control did not fire: ${parityControl.detail} — a module's fixtures could be deleted without the gate noticing`);
   if (severityMismatches.length) console.log(`GATE FAIL — delivered severity != answer key (#1157): ${severityMismatches.map((r) => `${r.id} (expected ${r.expectedSeverity}, got ${r.deliveredSeverities?.join("/") || "none"})`).join(", ")}`);
   if (!reviewRatchetControl.ok) console.log(`GATE FAIL — the #1344 review-tier ratchet did not fire on its negative control: ${reviewRatchetControl.detail} — a widened rule could light up a planted negative unseen again`);

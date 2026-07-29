@@ -1,0 +1,8 @@
+import { supabase } from "./db";
+
+export async function auditLog(action: string, id: string) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  console.log("audit", action, id, user?.id);
+}

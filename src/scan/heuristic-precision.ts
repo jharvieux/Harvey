@@ -22,8 +22,9 @@
 // no mechanical binaries needed), cli/validate-precision.ts (standalone report), and
 // cli/validate-calibration.ts (summary block alongside the M1 matrix).
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
@@ -50,9 +51,8 @@ function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) walk(full);
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) walk(full);
       else if (entry.endsWith(".txt")) {
         files.push({ path: relative(root, full).replace(/\.txt$/, "").split(sep).join("/"), text: readFileSync(full, "utf8") });
       }
@@ -106,12 +106,16 @@ function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
   const relevant = matching.filter((f) => !control.includes(f));
   const fired = relevant.length;
   const controlSilent = entry.scopeControl !== undefined && control.length === 0;
-  const pass = entry.kind === "positive" ? fired > 0 : fired === 0 && !controlSilent;
+  // #1475: a positive that fires at the wrong severity is a mis-rating, not a catch.
+  const misrated = entry.expectedSeverity === undefined ? [] : relevant.filter((f) => f.severity !== entry.expectedSeverity);
+  const pass = entry.kind === "positive" ? fired > 0 && misrated.length === 0 : fired === 0 && !controlSilent;
   const detail =
     entry.kind === "positive"
-      ? pass
-        ? `caught (${fired} finding${fired === 1 ? "" : "s"})`
-        : "NOT caught — the planted class did not fire"
+      ? fired === 0
+        ? "NOT caught — the planted class did not fire"
+        : misrated.length > 0
+          ? `MIS-RATED — expected ${entry.expectedSeverity}, got ${[...new Set(misrated.map((f) => f.severity))].join(", ")}`
+          : `caught (${fired} finding${fired === 1 ? "" : "s"})`
       : controlSilent
         ? `SCOPE UNPROVEN — the scope control "${entry.scopeControl}" did not fire, so 0 false positives is indistinguishable from the scanner never reading this fixture`
         : pass

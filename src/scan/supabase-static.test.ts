@@ -680,10 +680,28 @@ grant execute on function public.promote_to_admin(uuid) to authenticated;`;
     const dir = writeMigrations({ "0001_secdef.sql": promoteToAdmin });
     const findings = checkMigrationDefinerAuthz(dir);
     expect(findings).toHaveLength(1);
-    expect(findings[0]!.id).toBe("SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)");
+    expect(findings[0]!.id).toBe("SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)@0001_secdef.sql");
     // Never free-count: the body-read can't see a wrapper's own gate, so this is triage-tier.
     expect(findings[0]!.precisionTier).toBe("review");
     expect(findings[0]!.location).toContain("0001_secdef.sql:2 (public.promote_to_admin(target_user_id))");
+  });
+
+  // #1470: the exact tree proposit ships — one function declared in an initial schema and redefined
+  // by a later `create or replace` migration. Both rows are real (each names a file:line a reviewer
+  // has to open), and under the old signature-only id they arrived as ONE id twice, which failed the
+  // report schema and cost a 589-finding engagement its whole deliverable.
+  it("distinguishes the same function redefined by a later migration (#1470)", () => {
+    const dir = writeMigrations({
+      "20260220000000_initial_schema.sql": promoteToAdmin,
+      "20260221060933_fix_promote.sql": promoteToAdmin,
+    });
+    const findings = checkMigrationDefinerAuthz(dir);
+    expect(findings).toHaveLength(2);
+    expect(findings.map((f) => f.id)).toEqual([
+      "SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)@20260220000000_initial_schema.sql",
+      "SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)@20260221060933_fix_promote.sql",
+    ]);
+    expect(new Set(findings.map((f) => f.id)).size).toBe(2);
   });
 
   // --- Near-miss negatives: the FP shapes this rule must stay silent on ---

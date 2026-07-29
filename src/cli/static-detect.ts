@@ -17,8 +17,9 @@
 // detectors (perf and boundary findings in test code aren't audit findings) but ARE loaded
 // for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
@@ -92,7 +93,7 @@ try {
     const candidates = [join(targetDir, isVite ? "dist" : ".next")];
     const appsDir = join(targetDir, "apps");
     if (existsSync(appsDir)) {
-      for (const app of readdirSync(appsDir)) candidates.push(join(appsDir, app, isVite ? "dist" : ".next"));
+      for (const app of readNamesSafe(appsDir)) candidates.push(join(appsDir, app, isVite ? "dist" : ".next"));
     }
     buildDirs.push(...candidates.filter((c) => existsSync(join(c, marker))));
   }
@@ -112,7 +113,9 @@ try {
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...detectVitestIntentFindings(allSources), // M8 vitest-specific (#629) — runner-gated
-    ...scanAssetWeight(scanDir), // scoped copy = committed files only
+    // scoped copy = committed files only; `allSources` lets it separate an asset a page serves
+    // from one nothing references, which is repo bloat and not page weight (#1480).
+    ...scanAssetWeight(scanDir, undefined, allSources),
     ...buildDirs.flatMap((b) => (isVite ? parseViteBundleStats(b) : parseBundleStats(b))),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
     // #761 (part of #756): M7's Prisma-schema equivalent of the Supabase connected-tier

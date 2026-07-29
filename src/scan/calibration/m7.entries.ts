@@ -36,7 +36,7 @@ export const m7Entries: CorpusEntry[] = [
     cls: "Unindexed foreign key",
     location: "perf_line_items",
     match: ["unindexed_foreign_keys"],
-    expectedTier: "connected",
+    expectedTier: "local",
     note: "perf_line_items.order_id references perf_orders(id) with no covering index. Splinter's unindexed_foreign_keys lint; LINT_PROFILES.unindexed_foreign_keys -> Perf. Live validation deferred (needs a Supabase branch).",
   },
   {
@@ -46,7 +46,7 @@ export const m7Entries: CorpusEntry[] = [
     cls: "RLS policy re-evaluates auth.* per row",
     location: "perf_orders",
     match: ["auth_rls_initplan"],
-    expectedTier: "connected",
+    expectedTier: "local",
     note: "perf_orders_select_own's USING clause calls bare auth.uid() (not wrapped in (select ...)). Splinter's auth_rls_initplan lint; LINT_PROFILES.auth_rls_initplan -> Perf. Live validation deferred.",
   },
   {
@@ -56,7 +56,7 @@ export const m7Entries: CorpusEntry[] = [
     cls: "Unused index",
     location: "perf_orders",
     match: ["idx_perf_orders_legacy_region"],
-    expectedTier: "connected",
+    expectedTier: "local",
     note: "idx_perf_orders_legacy_region backs no seeded/hot query. Splinter's unused_index lint (pg_stat_user_indexes idx_scan = 0); LINT_PROFILES.unused_index -> Low. Live validation deferred — requires exercising the sibling used-index query first so the usage-stats window is meaningful.",
   },
 

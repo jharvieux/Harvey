@@ -97,6 +97,15 @@ const SECURITY: Record<string, [string, string | null]> = {
   "PostgREST schema exposure wider than intended": ["668", "A01"],
   "Realtime publication broadcasts an unprotected table": ["668", "A01"],
   "Public bucket with no policies": ["668", "A01"],
+  // #1280 — prod-vs-migration drift. RLS switched off on the deployed table is the same exposure as
+  // the auto-exposed row above (every row reachable by anyone holding the anon key), so it carries the
+  // same CWE; what differs is only how it was found. The two POLICY rows are access-control
+  // configuration whose direction depends on the policy that drifted (a dropped permissive policy
+  // closes a table, a dropped restrictive one opens it), so they take the permission-assignment class
+  // rather than an exposure class that would assert a direction this pass did not establish.
+  "Prod-vs-migration drift — RLS disabled in production": ["668", "A01"],
+  "Prod-vs-migration drift — policy missing in production": ["732", "A01"],
+  "Prod-vs-migration drift — policy not in migrations": ["732", "A01"],
   // #1182 — the static twins of the row above: the same exposure read from committed migration SQL
   // instead of a live storage.buckets/pg_policies pull, so they carry the same CWE.
   "Public storage bucket declared in migration SQL (static)": ["668", "A01"],
@@ -208,6 +217,10 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   // correctness defect (expand-migrate-contract done out of order), not a weakness an attacker
   // reaches — forcing it into an availability CWE would overstate it.
   { match: (t) => t === "App code reads a column the migrations dropped", reason: "schema/app deployment-ordering correctness defect — the query breaks for everyone, not a weakness class an attacker exercises" },
+  // #1280 — the two structural halves of prod-vs-migration drift. Neither is a weakness in itself: an
+  // unmanaged table is a reproducibility/provenance defect (it vanishes on a rebuild from migrations),
+  // and an unapplied migration is the deployment-ordering defect above reached from the other side.
+  { match: (t) => t === "Prod-vs-migration drift — table not in migrations" || t === "Prod-vs-migration drift — migration not applied", reason: "schema-provenance drift — the deployed schema is not reproducible from the committed migrations; a version-control/deployment correctness defect, not a weakness class an attacker exercises" },
   { match: (t) => t.endsWith("— coverage not assessed") || t.endsWith("— reachability not assessed"), reason: "coverage/reachability disclosure — a not-assessed row, not a finding with a CWE" },
   // #1078: both are scope statements about the secret sweep, not detections. The first counts
   // matches deliberately not graded (public-by-design keys, sample/template paths); the second

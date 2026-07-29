@@ -1,0 +1,17 @@
+// The precision boundary for #1441, and the reason the relaxation is not "an error-only guard is
+// never a dependency": `isDbQueryChain` accepts `.from(x).update(...).select(...)`, so the second
+// statement of a "waterfall" pair is not always a read. Here it flips a receipt to Pending under a
+// guard that rejects voided receipts — parallelising would post a voided receipt. Taken from the
+// pinned carbon clone (apps/erp/app/routes/x+/receipt+/$receiptId.post.tsx:172). Nothing must fire.
+import { supabase } from "../../lib/db";
+
+export async function postReceipt(receiptId: string) {
+  const { data: current } = await supabase.from("receipt").select("status").eq("id", receiptId).single();
+
+  if (current?.status === "Voided") {
+    throw new Error("Voided receipt — refusing to post");
+  }
+
+  const applied = await supabase.from("receipt").update({ status: "Pending" }).eq("id", receiptId).neq("status", "Voided").select("id");
+  return applied;
+}

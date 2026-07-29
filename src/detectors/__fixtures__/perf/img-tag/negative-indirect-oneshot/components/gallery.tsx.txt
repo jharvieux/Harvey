@@ -1,0 +1,4 @@
+// SCOPE CONTROL — a plain static raster src that MUST still fire.
+export function Gallery() {
+  return <img src="/gallery/cover.jpg" alt="Cover" />;
+}

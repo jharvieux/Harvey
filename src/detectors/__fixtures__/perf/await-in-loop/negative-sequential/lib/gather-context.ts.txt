@@ -1,0 +1,11 @@
+// A CAP loop: the break guards the loop and runs BEFORE the awaited call, so parallelising
+// would fetch past the very ceiling this code exists to enforce.
+export async function gatherThreads(participantEmails: string[], maxThreads: number, provider: { getThreads(e: string): Promise<string[]> }) {
+  const allThreads: string[] = [];
+  for (const email of participantEmails) {
+    if (allThreads.length >= maxThreads) break;
+    const threads = await provider.getThreads(email);
+    allThreads.push(...threads);
+  }
+  return allThreads;
+}

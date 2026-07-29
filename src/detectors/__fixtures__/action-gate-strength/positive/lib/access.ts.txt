@@ -1,0 +1,9 @@
+import { supabase } from "./db";
+
+export async function canAccess(id: string) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { data: row } = await supabase.from("projects").select("owner_id").eq("id", id).single();
+  return row?.owner_id === user?.id;
+}

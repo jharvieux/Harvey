@@ -1,7 +1,7 @@
 // Scan CLI entry point.
 //   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]
 //     [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--out <file>]
-//   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>]
+//   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>]
 //     [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]
 //
 // --supabase against a hosted project needs SUPABASE_ACCESS_TOKEN (a Management API personal
@@ -11,6 +11,9 @@
 // (pass both, or neither — #1298) probe a self-hosted GoTrue instance's /health and /settings
 // endpoints for the two version-gated CVE checks (checkGotrueVersion); hosted Supabase
 // auto-patches GoTrue so this only matters for self-hosted deployments. See src/scan/supabase.ts.
+// --migrations <dir> points at the client repo's supabase/migrations (or the repo root above it) and
+// turns on the prod-vs-migration drift comparison (#1280). Without it the scan still reports the
+// topic, as an SB-DRIFT-00 not-assessed row — never as silence.
 //
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
@@ -30,6 +33,7 @@ const FLAGS = [
   "--gotrue-anon-key",
   "--gotrue-url",
   "--mechanical",
+  "--migrations",
   "--out",
   "--supabase",
   "--tenant-key",
@@ -79,18 +83,19 @@ async function main(): Promise<void> {
   if (supabaseTarget) {
     assertKnownFlags(FLAGS);
     const functionsDir = arg("--functions");
+    const migrationsDir = arg("--migrations");
     const gotrueProbe = gotrueProbeArg();
     const findings =
       supabaseTarget === "local"
-        ? await runSupabaseScan({ local: true, functionsDir, gotrueProbe })
-        : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, gotrueProbe });
+        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, gotrueProbe })
+        : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, migrationsDir, gotrueProbe });
     emit(findings);
     return;
   }
 
   console.error("usage: scan --mechanical --dir <path> [--bundle <path>] [--out <file>]");
   console.error(
-    "       scan --supabase <project-ref|local> [--functions <dir>] [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]",
+    "       scan --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]",
   );
   process.exit(2);
 }

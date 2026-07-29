@@ -1,0 +1,8 @@
+// Reached by a controller, reached by no client entry: the visitor-bundle claim does not apply.
+import { readFile } from "node:fs/promises";
+import { isEmpty } from "lodash";
+
+export async function buildReport() {
+  await readFile("/etc/hostname", "utf8");
+  return isEmpty({}) ? [] : [1];
+}

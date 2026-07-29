@@ -1,0 +1,13 @@
+'use client';
+
+interface UserRow {
+  id: string;
+  email: string;
+  password_hash: string;
+  tenant_id: string;
+  name: string;
+}
+
+export function UserCard({ user }: { user: UserRow }) {
+  return <div>{user.name}</div>;
+}

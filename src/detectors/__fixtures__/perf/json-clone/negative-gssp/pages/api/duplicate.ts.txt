@@ -1,0 +1,5 @@
+// SCOPE CONTROL — a real request-path deep clone that MUST still fire.
+export default async function handler(req: { body: unknown }, res: { json(v: unknown): void }) {
+  const copy = JSON.parse(JSON.stringify(req.body));
+  res.json(copy);
+}

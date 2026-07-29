@@ -21,8 +21,9 @@
 // from one that cannot fail — which is the exact defect this gate exists to catch.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
@@ -31,7 +32,7 @@ const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
 
 export function loadFacts(root = REPO_ROOT): ReturnType<typeof workflowFacts>[] {
   const dir = join(root, ".github", "workflows");
-  return readdirSync(dir)
+  return readNamesSafe(dir)
     .filter((f) => f.endsWith(".yml"))
     .sort()
     .map((f) => workflowFacts(`.github/workflows/${f}`, readFileSync(join(dir, f), "utf8")));

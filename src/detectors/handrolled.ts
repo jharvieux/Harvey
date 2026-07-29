@@ -92,6 +92,12 @@ function makeIndicator(
     category: "Maintainability",
     severity: "Info",
     confidence: "Review",
+    // #1371: every indicator was leaving here UNTIERED. An untiered finding mis-scores in BOTH
+    // directions at the corpus scorer (#327) — and reaching it now throws rather than scoring
+    // silently, which is what surfaced this. "review" is the accurate tier, not a placeholder:
+    // selectFreeFindings takes "high" only, so the free count and the grade are unchanged
+    // (quick-scan renders these off the taxonomy prefix, never off the tier).
+    precisionTier: "review",
     impact: INDICATOR_IMPACT,
     fix: INDICATOR_FIX,
     value: 2,
