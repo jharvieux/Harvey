@@ -296,15 +296,23 @@
         "infotype": "US_SSN",
         "category": "SENSITIVE_PII",
         "confidence": "high"
+      },
+      {
+        "column": "requester_email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
       }
     ],
     "infotypes": [
-      "US_SSN"
+      "US_SSN",
+      "EMAIL"
     ],
     "categories": [
-      "SENSITIVE_PII"
+      "SENSITIVE_PII",
+      "PII"
     ],
-    "severityScore": 4,
+    "severityScore": 5,
     "severity": "High",
     "phi": false,
     "pci": false,

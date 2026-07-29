@@ -1,0 +1,5 @@
+// Reshapes a string. Performs no session read, no membership check, no authorization of any kind —
+// resolving the dynamic import that binds it must not vouch for the caller.
+export function normaliseOrgId(orgId: string) {
+  return orgId.trim().toLowerCase();
+}

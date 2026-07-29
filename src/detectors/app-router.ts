@@ -160,12 +160,11 @@ function candidatePaths(base: string): string[] {
 export interface PathAlias {
   prefix: string;
   baseDir: string;
-  /**
-   * #1353: the directory whose tsconfig declared this alias ("" = repo root). An alias only applies
-   * to importers underneath it, so a member's own `@/*`→`apps/web/*` beats the root's `@/*`→`src/*`
-   * for files in that member — which is the whole point of reading more than one config.
-   */
-  scopeDir?: string;
+  // #1461: the directory of the tsconfig that declared this alias ("" = repo root). A MONOREPO
+  // declares the same prefix once per workspace — carbon maps `~/*` in apps/erp, apps/mes,
+  // apps/starter and apps/academy — so a specifier has to resolve against ITS OWN package's
+  // mapping, not against whichever config happened to be parsed first.
+  scope: string;
   /**
    * #1353: a workspace member's entry-module bases, tried when the specifier IS the package name
    * with no subpath. Present only on workspace-package aliases, which match EXACTLY (a tsconfig
@@ -180,19 +179,28 @@ export interface PathAlias {
 // `@/*`→root default rather than giving up — the vast majority of otherwise-unresolved specifiers
 // are exactly that scaffolding default.
 //
-// Two independent monorepo failures were fixed here on 2026-07-28 and they compose rather than
-// overlap — the filename this reads, and how many of them it reads.
-// - #1479 widened the filename: an Nx-style repo keeps its `paths` in `tsconfig.base.json` and
-//   ships no root `tsconfig.json`, so the whole cross-file import graph (M9's and #1344's
-//   reachability included) was silently disconnected on ghostfolio.
-// - #1353 replaced "the shallowest config with `paths` wins, then stop reading" with per-config
-//   scoping. The `break` meant exactly ONE config was ever read, so a member's own `@/*` mapping
-//   was invisible whenever any other config declared `paths` first — on rallly (which has no root
-//   tsconfig) a sibling PACKAGE's config won the depth tie, and on carbon it was `docs/`, which
-//   resolved four workspaces' `~/*` to nothing. Now every config's aliases are kept, tagged with
-//   the directory that declared them, and applied only to importers underneath it.
-// The `configs` sort is now only a deterministic tie-break between equal-depth scopes; the
-// alias-level sort below is what decides precedence.
+// Three independent monorepo failures were fixed here on 2026-07-28. They compose — one decides
+// WHICH FILENAMES are read, one HOW MANY of them, one what a NON-tsconfig specifier resolves to.
+// - #1479 widened the filename: an Nx repo keeps its `paths` map in `tsconfig.base.json` and ships
+//   no root `tsconfig.json`, so ghostfolio's whole cross-file import graph was disconnected.
+// - #1461 replaced "the shallowest config with `paths` wins, then stop reading" with per-config
+//   scoping, measured on carbon (below).
+// - #1353 added workspace PACKAGE specifiers, which no tsconfig declares at all: `@rallly/utils`
+//   -> packages/utils, through that package's own `main`/`exports` (wildcards included). Without
+//   it the graph stopped at the package boundary and #1344's reachability gate read a shared
+//   package as unreachable from the app's routes.
+//
+// #1461: this used to stop at the SHALLOWEST config that declared any `paths` and return only its
+// aliases. On a single-app repo that is the repo-root tsconfig and the rule is right; on a MONOREPO
+// it silently picked one workspace and made every other workspace's aliased import unresolvable.
+// MEASURED 2026-07-28 on crbnos/carbon's pin: the winner was `docs/tsconfig.json`, so `@/`→`docs`
+// and `collections/` were the ONLY two aliases in the whole run, and every `~/…` specifier in
+// apps/erp, apps/mes, apps/starter and apps/academy — the four workspaces that actually declare
+// `~/*` — resolved to nothing. Every cross-file pass built on resolveImport (#1263's gate
+// resolution, #1461's exit-inside-a-helper test, the import graph, service-role-literal) was
+// therefore blind across most of that target, and read as "callee not resolvable" rather than
+// failing loud. Now every config contributes, tagged with the directory that declared it, and
+// resolveAliasedImport prefers the alias whose declaring package CONTAINS the importing file.
 export function collectPathAliases(files: SourceInput[]): PathAlias[] {
   const configs = files
     .filter((f) => /(^|\/)(tsconfig|jsconfig)(\.[\w.-]+)?\.json$/.test(f.path))
@@ -207,15 +215,15 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
     for (const [key, targets] of Object.entries(opts.paths)) {
       const target = Array.isArray(targets) ? targets[0] : undefined;
       if (!key.endsWith("/*") || typeof target !== "string" || !target.endsWith("/*")) continue;
-      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scopeDir: cfgDir });
+      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scope: cfgDir });
     }
   }
-  // Deepest scope first, so the config nearest the importing file is consulted before the root's.
-  aliases.sort((a, b) => (b.scopeDir ?? "").split("/").length - (a.scopeDir ?? "").split("/").length);
-  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "" });
+  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "" });
+  // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
+  // tree, so it must not out-rank an enclosing package's own tsconfig alias.
   for (const pkg of workspacePackages(files)) {
-    aliases.push(...pkg.subpaths);
-    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, entryBases: pkg.entryBases });
+    for (const sub of pkg.subpaths) aliases.push({ ...sub, scope: "" });
+    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
   }
   return aliases;
 }
@@ -231,11 +239,17 @@ function resolveRelativeImport(fromPath: string, specifier: string, allPaths: Se
   return candidatePaths(stack.join("/")).find((c) => allPaths.has(c));
 }
 
+// #1461: an alias declared by the package that CONTAINS the importing file wins, deepest scope
+// first; an alias from some other workspace is only a last resort. Keeping that fallback is
+// deliberate — before this change one arbitrary package's aliases were applied repo-wide, so
+// dropping it outright would un-resolve specifiers that resolve today.
 function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  for (const { prefix, baseDir, scopeDir, entryBases } of aliases) {
-    if (scopeDir && !fromPath.startsWith(`${scopeDir}/`)) continue;
+  // 0 = declared by some other workspace; higher = a deeper enclosing package, which wins.
+  const rank = (a: PathAlias) => (a.scope === "" || fromPath.startsWith(`${a.scope}/`) ? a.scope.length + 1 : 0);
+  const ordered = [...aliases].sort((a, b) => rank(b) - rank(a));
+  for (const { prefix, baseDir, entryBases } of ordered) {
     if (entryBases) {
-      // A workspace package named exactly, with no subpath: resolve to its own entry module.
+      // #1353: a workspace package named EXACTLY, with no subpath — resolve to its own entry module.
       if (specifier !== prefix) continue;
       const hit = entryBases.flatMap(candidatePaths).find((c) => allPaths.has(c));
       if (hit) return hit;
@@ -443,6 +457,15 @@ export function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: 
     const edges: string[] = [];
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      // #1461: a TYPE-ONLY import is erased at compile time and bundles nothing, so it is not an
+      // edge any consumer of this graph should see. `import type { AppRouter } from "../routers"`
+      // in a 'use client' tRPC provider is the canonical shape, and counting it made rallly's whole
+      // server router tree "reachable from a Client Component" — 3 High `Missing server-only guard`
+      // rows on modules no client bundle can ever reach (MEASURED 2026-07-28, found because #1461's
+      // alias fix created the edge for the first time; before it, the specifier resolved to nothing
+      // and the wrong answer was invisible). `collectValueImports` already skipped these; the graph
+      // did not.
+      if (stmt.importClause?.isTypeOnly) continue;
       const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
       if (resolved) edges.push(resolved);
     }
@@ -457,7 +480,21 @@ function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: Ne
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
   const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
-  const reachedFromClient = importClosure(clientPaths, buildImportGraph(sources, allPaths, aliases));
+  // #1461: the walk must STOP at a server-exclusive boundary, for the same reason this loop below
+  // skips such files as candidates. `import "server-only"` is a build-time poison pill — nothing
+  // behind it can reach a client bundle — and a `"use server"` module compiles to an RPC endpoint,
+  // so a Client Component importing it ships a reference, never the module body. Traversing THROUGH
+  // them made every module a server action transitively touches "client-reachable": MEASURED on
+  // rallly 2026-07-28, two High rows whose whole chain ran `create-api-key-button.tsx ('use client')
+  // → actions.ts ('use server') → …`, which bundles nothing. Cutting the edges at the boundary
+  // rather than filtering the result keeps the reason legible where the traversal happens.
+  const opaque = (p: string): boolean => {
+    const sf = sources.get(p);
+    return sf !== undefined && !clientPaths.has(p) && (leadingDirective(sf) !== undefined || hasServerOnlyImport(sf));
+  };
+  const graph = buildImportGraph(sources, allPaths, aliases);
+  const clientGraph = new Map([...graph].map(([p, deps]) => [p, opaque(p) ? [] : deps]));
+  const reachedFromClient = importClosure(clientPaths, clientGraph);
 
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) !== undefined) continue; // 'use client' can't hold secrets like this meaningfully; 'use server' modules are already server-exclusive by the Next compiler
@@ -782,6 +819,63 @@ function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<stri
   return out;
 }
 
+// #1462: a gate is also reachable through a DYNAMIC import. TanStack/tanstack.com's `requireAdmin`
+// reaches its real check through `const { getAuthenticatedUser } = await import('./auth.server-
+// helpers')`; neither collectDeclaredFunctions nor collectValueImports (top-level
+// `ImportDeclaration`s only) can see a binding introduced that way, so the hop-2 lookup failed and
+// all 12 of that target's `missing authorization check` rows stood — every one a false positive
+// (MEASURED 2026-07-28 by `detect-static` over the pin; the 12 were read against source).
+//
+// STRING-LITERAL SPECIFIERS ONLY, and that is the correct shape rather than a shortcut: this pass
+// can only ever SUPPRESS, so a specifier it does not evaluate (`await import(spec)`, a computed
+// template, a package name outside the loaded source set) leaves the finding standing. Reading
+// "we could not see the module" as "there is a gate in it" is the failure mode #1263's
+// suppression-only constraint exists to prevent. Both unresolvable shapes are planted as positives
+// in the corpus fixture and must still fire.
+//
+// BOUND, STATED: bindings are collected per FILE, not per enclosing function — a dynamic import
+// inside one function makes its names resolvable from any function in the same module. It can only
+// suppress, and the shape that would need (two functions in one module binding the same local name,
+// one of them to something matching the gate pattern) appears nowhere in this corpus.
+function dynamicImportSpecifier(expr: ts.Expression): string | undefined {
+  const call = ts.isAwaitExpression(expr) ? expr.expression : expr;
+  if (!ts.isCallExpression(call) || call.expression.kind !== ts.SyntaxKind.ImportKeyword) return undefined;
+  const arg = call.arguments[0];
+  return arg && ts.isStringLiteral(arg) ? arg.text : undefined;
+}
+
+interface DynamicImports {
+  /** `const { x: y } = await import("./m")` — local name -> (module, exported name). */
+  named: Map<string, ImportedBinding>;
+  /** `const m = await import("./m")` — local namespace name -> module path. */
+  namespaces: Map<string, string>;
+}
+
+function collectDynamicImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): DynamicImports {
+  const named = new Map<string, ImportedBinding>();
+  const namespaces = new Map<string, string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const specifier = dynamicImportSpecifier(node.initializer);
+      const resolved = specifier === undefined ? undefined : resolveImport(path, specifier, allPaths, aliases);
+      if (resolved) {
+        if (ts.isIdentifier(node.name)) {
+          namespaces.set(node.name.text, resolved);
+        } else if (ts.isObjectBindingPattern(node.name)) {
+          for (const el of node.name.elements) {
+            if (el.dotDotDotToken || !ts.isIdentifier(el.name)) continue;
+            const exported = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+            named.set(el.name.text, { path: resolved, name: exported });
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { named, namespaces };
+}
+
 interface CallSite {
   /** the callee's own name: `ensureMember(x)` and `guards.ensureMember(x)` both yield "ensureMember" */
   name: string;
@@ -854,6 +948,7 @@ function resultIsConsumed(call: ts.CallExpression, action: ts.Node): boolean {
 class GateResolver {
   private readonly declared = new Map<string, Map<string, ts.Node>>();
   private readonly imports = new Map<string, Map<string, ImportedBinding>>();
+  private readonly dynamic = new Map<string, DynamicImports>();
 
   constructor(
     private readonly sources: Map<string, ts.SourceFile>,
@@ -874,14 +969,33 @@ class GateResolver {
     let hit = this.imports.get(path);
     if (!hit) {
       const sf = this.sources.get(path);
-      hit = sf ? collectValueImports(sf, path, new Set(this.sources.keys()), this.aliases) : new Map();
+      // A static `import { x } from …` wins over a dynamic binding of the same local name: the
+      // static one is the module-scope binding, the dynamic one is function-local.
+      hit = sf ? new Map([...this.dynamicIn(path).named, ...collectValueImports(sf, path, new Set(this.sources.keys()), this.aliases)]) : new Map();
       this.imports.set(path, hit);
+    }
+    return hit;
+  }
+
+  private dynamicIn(path: string): DynamicImports {
+    let hit = this.dynamic.get(path);
+    if (!hit) {
+      const sf = this.sources.get(path);
+      hit = sf ? collectDynamicImports(sf, path, new Set(this.sources.keys()), this.aliases) : { named: new Map(), namespaces: new Map() };
+      this.dynamic.set(path, hit);
     }
     return hit;
   }
 
   private resolve(path: string, site: CallSite): { path: string; node: ts.Node } | undefined {
     if (site.qualifier !== undefined) {
+      // #1462: a namespace bound by a dynamic import — `const m = await import("./auth")` — resolves
+      // against THAT module, exactly like the static namespace form below.
+      const dynamic = this.dynamicIn(path).namespaces.get(site.qualifier);
+      if (dynamic !== undefined) {
+        const viaDynamic = this.declaredIn(dynamic).get(site.name);
+        return viaDynamic ? { path: dynamic, node: viaDynamic } : undefined;
+      }
       // `guards.ensureMember(…)` — only a namespace import resolves; a method on a runtime object
       // (`supabase.auth.getUser()`) has no declaration in this tree and stays unresolvable.
       const ns = this.importsIn(path).get(site.qualifier);
@@ -897,7 +1011,14 @@ class GateResolver {
     return target ? { path: imported.path, node: target } : undefined;
   }
 
-  gateIn(pattern: RegExp, path: string, fn: ts.Node, depth = GATE_DEPTH, seen = new Set<string>()): string | undefined {
+  // The first callee, within GATE_DEPTH hops, whose own declaration satisfies `matches`.
+  private firstCallee(
+    path: string,
+    fn: ts.Node,
+    matches: (sf: ts.SourceFile, node: ts.Node, site: CallSite, caller: ts.Node) => boolean,
+    depth: number,
+    seen: Set<string>,
+  ): string | undefined {
     if (depth <= 0) return undefined;
     for (const site of calledSites(fn)) {
       const key = `${path}#${site.qualifier ?? ""}#${site.name}`;
@@ -906,13 +1027,32 @@ class GateResolver {
       const hit = this.resolve(path, site);
       if (!hit) continue;
       const sf = this.sources.get(hit.path);
-      // #1439: matching the pattern is not enough — the helper must be able to deny, or the caller
-      // must consume what it returns. A logger that reads the session, and a boolean nobody looks
-      // at, are not gates.
-      if (sf && pattern.test(stripLiteralsAndComments(sf, hit.node)) && (canDeny(hit.node) || resultIsConsumed(site.node, fn))) return site.name;
-      if (this.gateIn(pattern, hit.path, hit.node, depth - 1, seen)) return site.name;
+      if (sf && matches(sf, hit.node, site, fn)) return site.name;
+      if (this.firstCallee(hit.path, hit.node, matches, depth - 1, seen)) return site.name;
     }
     return undefined;
+  }
+
+  gateIn(pattern: RegExp, path: string, fn: ts.Node, depth = GATE_DEPTH, seen = new Set<string>()): string | undefined {
+    // #1439: matching the pattern is not enough — the helper must be able to deny, or the caller
+    // must consume what it returns. A logger that reads the session, and a boolean nobody looks
+    // at, are not gates.
+    return this.firstCallee(
+      path,
+      fn,
+      (sf, node, site, caller) => pattern.test(stripLiteralsAndComments(sf, node)) && (canDeny(node) || resultIsConsumed(site.node, caller)),
+      depth,
+      seen,
+    );
+  }
+
+  // #1461: the first resolvable callee that can stop its caller. `canDeny` (#1439) already means
+  // exactly that — a `throw`, or a redirect()/notFound()/forbidden() call — so it is reused here
+  // rather than re-implemented. Deliberately not "the callee contains a return": a return leaves
+  // only THAT helper and control carries straight on to the next query, so counting it would
+  // suppress every pair whose intervening statement calls any value-returning helper.
+  throwingCallee(path: string, stmt: ts.Node): string | undefined {
+    return this.firstCallee(path, stmt, (_sf, node) => canDeny(node), GATE_DEPTH, new Set<string>());
   }
 }
 
@@ -1303,6 +1443,13 @@ function guardEffect(stmt: ts.Statement): GuardEffect {
   return diverts ? "diverts" : aborts ? "aborts" : "none";
 }
 
+// #1461: #1292's exit test is SYNTACTIC — it reads a `return`/`throw`/`break` written in the
+// intervening statement itself, so an exit that happens INSIDE a called guard is invisible. On
+// carbon's pin, `await requireUnlocked({ isLocked: isMaintenanceDispatchLocked(dispatchForLock.data
+// ?.status), … })` reads the first result and does stop the function, but its `throw redirect(…)`
+// lives one hop out. Resolving the callee and re-testing (the #1263 move) classifies it the SAME
+// WAY the identical exit written inline would be classified — an abort, not a divert — so it flows
+// through #1438's relaxation and #1441's write rule unchanged rather than getting its own carve-out.
 // #1441: `isDbQueryChain` accepts `.from("receipt").update({…}).select("id")` — a WRITE. Hoisting
 // one of those above an aborting guard is exactly the bug the #1292 suppression exists to prevent
 // (MEASURED on the pinned carbon clone 2026-07-28: apps/erp/app/routes/x+/receipt+/$receiptId.post
@@ -1315,7 +1462,14 @@ function mutatingChain(decl: AwaitedDbDeclaration): boolean {
 /** Why a pair is not reported, or undefined when it is independent and fires. */
 type PairDependency = "dataflow" | "guard-diverts" | "guard-aborts-over-write";
 
-function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbDeclaration, next: AwaitedDbDeclaration): PairDependency | undefined {
+function dependsOnPriorQuery(
+  block: ts.Block,
+  sf: ts.SourceFile,
+  cur: AwaitedDbDeclaration,
+  next: AwaitedDbDeclaration,
+  path: string,
+  gates: GateResolver,
+): PairDependency | undefined {
   // The direct test keeps its original substring form so this change can only ever SUPPRESS a pair,
   // never make a previously-suppressed one fire; the names reached by propagation are matched as
   // whole identifiers, so a short intermediate binding cannot swallow the class.
@@ -1327,7 +1481,15 @@ function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbD
   for (let i = cur.index + 1; i < next.index; i++) {
     const stmt = block.statements[i];
     if (stmt === undefined || !reads(stmt.getText(sf))) continue;
-    const effect = guardEffect(stmt);
+    // #1461: an exit inside a resolvable callee counts as the same effect the inline form would
+    // have. `canDeny` (#1439) already means exactly "this helper can stop its caller" — a `throw`,
+    // or a redirect()/notFound() call — so it is reused rather than re-implemented. Deliberately
+    // NOT "the callee contains a return": a return leaves only THAT helper and control carries on
+    // to the next query. carbon's own sibling guards make the distinction concrete —
+    // `requireUnlocked` ends in `throw redirect(…)`, while `requireUnlockedBulk` RETURNS an error
+    // object and its callers write `if (lockedError) return lockedError;`, which guardEffect
+    // already sees inline.
+    const effect = guardEffect(stmt) === "none" && gates.throwingCallee(path, stmt) !== undefined ? "aborts" : guardEffect(stmt);
     if (effect === "diverts") return "guard-diverts"; // a guard on the first result — reordering changes behaviour
     // An aborting guard over a write stays a dependency, but the walk continues: a LATER statement
     // may divert, or launder the first result into a binding the second query reads, and either of
@@ -1350,11 +1512,13 @@ function detectDataFetchingWaterfalls(
   sources: Map<string, ts.SourceFile>,
   nextId: NextId,
   isClientContext: (sf: ts.SourceFile) => boolean = (sf) => leadingDirective(sf) === "use client",
+  aliases: PathAlias[] = [],
 ): Finding[] {
   const findings: Finding[] = [];
   let pairsExamined = 0;
   let excludedByDivertingGuard = 0;
   let excludedByAbortOverWrite = 0;
+  const gates = new GateResolver(sources, aliases);
   for (const [path, sf] of sources) {
     if (isClientContext(sf)) continue;
 
@@ -1372,7 +1536,7 @@ function detectDataFetchingWaterfalls(
           if (!cur || !next) continue;
           pairsExamined += 1;
           // depends on the prior result, directly or through an intermediate — legitimately sequential
-          const dependency = dependsOnPriorQuery(node.body, sf, cur, next);
+          const dependency = dependsOnPriorQuery(node.body, sf, cur, next, path, gates);
           if (dependency === "guard-diverts") excludedByDivertingGuard += 1;
           if (dependency === "guard-aborts-over-write") excludedByAbortOverWrite += 1;
           if (dependency !== undefined) continue;
@@ -1676,7 +1840,78 @@ function isClientOnlyRouteExport(fn: ts.Node): boolean {
   );
 }
 
-function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
+// #1460: #964 suppressed this check for functions in non-JSX `.ts`/`.js` modules, on the reasoning
+// that a component requires JSX and therefore lives elsewhere. That reasoning is about the MODULE — the
+// identical plain helper written in a `.tsx` file went on being reported as "read in a component's
+// render body", which it is not. MEASURED 2026-07-28 by `detect-static` over two pins: the rule
+// clears 6 of carbon's 26 residual rows in this class and 8 of tanstack.com's 12. #1460 itself put
+// carbon's family at 23 of 26; classifying every residual row by its enclosing function says
+// otherwise — most of the rest are component render bodies or the separate `isBrowser ? window.x`
+// house-guard family. The corrected split is recorded in carbon's external-corpus.ts note.
+//
+// The naive form of the fix — "a lowercase-named module-level function with no JSX in its body is
+// off the render path" — LOSES TRUE POSITIVES: a helper called from a component's render body
+// really does run during SSR. So the suppression is conditioned on the helper's CALL SITES, and it
+// is deliberately ASYMMETRIC in two ways, both of which keep recall:
+//   - NO in-file call site → stays flagged. The helper is exported and this pass reads in-file
+//     call sites only, so silence here would be a guess rather than a measurement.
+//   - ONE in-file call site on the render path → stays flagged. Every call site has to be off the
+//     path before the read is.
+// A call site inside a sibling module-level helper resolves recursively (that helper's own call
+// sites decide it); mutual recursion terminates by treating a re-entered helper as still on path.
+const CALL_SITES = new WeakMap<ts.SourceFile, Map<string, ts.CallExpression[]>>();
+
+function callSitesIn(sf: ts.SourceFile): Map<string, ts.CallExpression[]> {
+  let hit = CALL_SITES.get(sf);
+  if (hit) return hit;
+  hit = new Map();
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const list = hit.get(node.expression.text);
+      if (list) list.push(node);
+      else hit.set(node.expression.text, [node]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  CALL_SITES.set(sf, hit);
+  return hit;
+}
+
+// The name a caller would use for a module-level `function f(){}` / `const f = () => {}`.
+function moduleHelperName(fn: ts.Node): string | undefined {
+  if (ts.isFunctionDeclaration(fn)) return fn.name?.text;
+  const decl = fn.parent;
+  return (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name) ? decl.name.text : undefined;
+}
+
+function containsJsx(fn: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return found;
+}
+
+function isOffPathModuleHelper(fn: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node>): boolean {
+  if (seen.has(fn)) return false;
+  const name = moduleHelperName(fn);
+  if (name === undefined || !/^[_a-z]/.test(name)) return false; // a component is capitalised
+  if (containsJsx(fn)) return false; // it renders — a component whatever it is called
+  // A recursive self-call says nothing about who reaches the helper from outside.
+  const sites = (callSitesIn(sf).get(name) ?? []).filter((site) => !ts.findAncestor(site, (a) => a === fn));
+  if (sites.length === 0) return false;
+  const next = new Set(seen).add(fn);
+  return sites.every((site) => !isOnSsrRenderPath(site, sf, next));
+}
+
+function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node> = new Set()): boolean {
   if (/(^|\/)entry\.client\.[jt]sx?$/.test(sf.fileName)) return false;
   const fns: ts.Node[] = [];
   for (let cur = node.parent; cur; cur = cur.parent) {
@@ -1690,8 +1925,22 @@ function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
       return false;
     }
     if (!/\.[jt]sx$/.test(sf.fileName)) return false;
+    if (isOffPathModuleHelper(nearest, sf, seen)) return false;
   }
   return true;
+}
+
+// Where the read sits, for the finding's own evidence. #1460: a module-level helper that survives
+// the call-site test is NOT "a component's render body" — it is a helper something on the render
+// path calls — and saying so is the difference between evidence a reader can check and evidence
+// that asserts the wrong thing about the code (the #1293 correction, applied to this string).
+function ssrReadSite(node: ts.Node): string {
+  const nearest = ts.findAncestor(node.parent, isFunctionScope);
+  if (!nearest) return "at module top level";
+  const name = moduleHelperName(nearest);
+  return name !== undefined && /^[_a-z]/.test(name) && !containsJsx(nearest)
+    ? `in \`${name}\`, a module-level helper reached from the render path`
+    : "in a component's render body";
 }
 
 // True when a browser-global guard gates this node — an enclosing `if`, ternary, or `&&`/`||` whose
@@ -1751,7 +2000,7 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         // global may be absent, so it never throws a bare ReferenceError shape we flag (#964).
         const optionalChained = (node as ts.PropertyAccessExpression | ts.ElementAccessExpression).questionDotToken !== undefined;
         if (!optionalChained && isOnSsrRenderPath(node, sf) && !isSsrGuarded(node, sf)) {
-          const atModuleTop = !ts.findAncestor(node.parent, isFunctionScope);
+          const readSite = ssrReadSite(node);
           findings.push(
             makeFinding(nextId, {
               title: `\`${global}\` read on the SSR render path`,
@@ -1760,7 +2009,7 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
               category: "Performance",
               taxonomy: "M9 — SSR-only API misuse",
               location: loc(path, sf, node),
-              evidence: `\`${node.getText(sf)}\` is read ${atModuleTop ? "at module top level" : "in a component's render body"}, not inside a useEffect callback, an event handler, or a \`typeof ${global} !== "undefined"\` guard — so it executes during server-side rendering.`,
+              evidence: `\`${node.getText(sf)}\` is read ${readSite}, not inside a useEffect callback, an event handler, or a \`typeof ${global} !== "undefined"\` guard — so it executes during server-side rendering.`,
               impact: `Browser globals are undefined on the server: this throws "${global} is not defined" on first render, or hydration-mismatches when the server and client HTML disagree.`,
               fix: `Move the read into a \`useEffect\`/event handler (client-only), or guard it with \`typeof ${global} !== "undefined"\`; make the component a Client Component if it genuinely needs the browser.`,
               value: 3,
@@ -2624,7 +2873,7 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     : [
         ...(S.has("server-client-leak") ? adapter.detectServerClientLeak(sources, nextId, files) : []),
         ...(S.has("cache-config") ? detectUnsafeCacheConfig(sources, nextId) : []),
-        ...(S.has("data-waterfall") ? detectDataFetchingWaterfalls(sources, nextId, adapter.isClientContext) : []),
+        ...(S.has("data-waterfall") ? detectDataFetchingWaterfalls(sources, nextId, adapter.isClientContext, collectPathAliases(files)) : []),
       ];
 
   const out: Finding[] = [

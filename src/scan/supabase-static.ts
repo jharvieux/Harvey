@@ -1,11 +1,13 @@
 // Static Supabase-config checks read from COMMITTED files (B13, #71) — no live project needed, so
 // these run in the mechanical scan / free-count gate (unlike supabase-config.ts, which scores
 // live-fetched Advisor/Management-API inputs at connected tier). Two checks:
-//   - checkMigrationRlsStatic: `create table public.X` in supabase/migrations/*.sql with no
-//     matching `enable row level security` anywhere — the static path for P-RLS-DISABLED, which
-//     was connected-tier only. High precision: both signals are exact DDL, the enable-check is
-//     aggregated across the WHOLE migration set (a table enabled in a LATER migration, or a
-//     service-only deny-all table with RLS on + zero policies, is cleared), and views are ignored.
+//   - checkMigrationRlsStatic: `create table public.X` in supabase/migrations/*.sql that never
+//     reaches a row-security-ON state — the static path for P-RLS-DISABLED, which was
+//     connected-tier only. High precision: both signals are exact DDL, row security is resolved
+//     across the WHOLE migration set (a table enabled in a LATER migration, or a service-only
+//     deny-all table with RLS on + zero policies, is cleared), and views are ignored. Since #1425
+//     it also emits SB-RLS-DISABLED-STATIC for the opposite sequence — a table protected in one
+//     migration and UN-protected by a later `disable row level security`.
 //   - checkEdgeFunctionVerifyJwt: `[functions.X] verify_jwt = false` in supabase/config.toml — an
 //     Edge Function callable without a valid JWT. Review: a webhook that HMAC-verifies its own
 //     payload legitimately disables verify_jwt.
@@ -39,10 +41,50 @@ import { gateOnAuthMethod, type AuthMethods } from "./supabase-config.js";
 const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)/gi;
 const ENABLE_RLS = /alter\s+table\s+(?:only\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
 
+// #1425 — the same statement with either verb. Aggregating only `enable` made the check blind to a
+// table that is protected in one migration and un-protected by a later one: the migration set said
+// "enabled somewhere", the table shipped with row security OFF, and the scan reported clean. Both
+// verbs go through ONE pattern so the winner is decided by position, not by which loop ran last.
+const RLS_TOGGLE =
+  /alter\s+table\s+(?:only\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)\s+(enable|disable)\s+row\s+level\s+security/gi;
+
 interface CreatedTable {
   name: string;
   file: string; // path relative to the scanned dir
   line: number;
+}
+
+interface RlsToggle {
+  on: boolean;
+  file: string; // path relative to the scanned dir
+  line: number;
+}
+
+// The row-security state each public table is left in by the WHOLE file set, plus where the
+// deciding statement is. Sources arrive in apply order (migrations by filename, then a root
+// schema.sql), so the last toggle wins — which is what Postgres does when the statements actually
+// run. A table absent from the map has no `alter … row level security` at all.
+function resolveRlsState(sources: { file: string; raw: string }[]): Map<string, RlsToggle> {
+  const state = new Map<string, RlsToggle>();
+  for (const { file, raw } of sources) {
+    const sql = stripSqlComments(raw);
+    for (const m of sql.matchAll(RLS_TOGGLE)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      state.set(m[2]!.toLowerCase(), {
+        on: m[3]!.toLowerCase() === "enable",
+        file,
+        line: sql.slice(0, m.index).split("\n").length,
+      });
+    }
+  }
+  return state;
+}
+
+// Strip comments so commented-out DDL (e.g. an "intentionally NO enable RLS" note that quotes the
+// statement it's warning about) can't register as a real create/enable/disable. Keep the line count
+// stable by blanking rather than deleting, so reported line numbers stay accurate.
+function stripSqlComments(raw: string): string {
+  return raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
 }
 
 // #565 — a Supabase Table-Editor / no-code (Lovable/Bolt/v0) export commits its schema as a single
@@ -67,13 +109,9 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
   if (sources.length === 0) return [];
 
   const created = new Map<string, CreatedTable>();
-  const enabled = new Set<string>();
 
   for (const { file: rel, raw } of sources) {
-    // Strip comments so commented-out DDL (e.g. an "intentionally NO enable RLS" note that quotes
-    // the statement it's warning about) can't register as a real create/enable. Keep line count
-    // stable by blanking rather than deleting, so the create-site line number stays accurate.
-    const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
+    const sql = stripSqlComments(raw);
     for (const m of sql.matchAll(CREATE_TABLE)) {
       if ((m[1] ?? "public").toLowerCase() !== "public") continue;
       const name = m[2]!.toLowerCase();
@@ -82,15 +120,16 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
         created.set(name, { name, file: rel, line });
       }
     }
-    for (const m of sql.matchAll(ENABLE_RLS)) {
-      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
-      enabled.add(m[2]!.toLowerCase());
-    }
   }
 
-  return [...created.values()]
-    .filter((t) => !enabled.has(t.name))
-    .map((t) =>
+  const rls = resolveRlsState(sources);
+  const findings: Finding[] = [];
+
+  // Never enabled at all. Located at the CREATE site, because there is no other statement to point
+  // at. A table whose last toggle is a `disable` is deliberately NOT reported here — it gets the
+  // sharper finding below, which names the statement that turned protection off.
+  for (const t of [...created.values()].filter((t) => !rls.has(t.name))) {
+    findings.push(
       mechanicalFinding({
         id: `SB-RLS-STATIC-${t.name}`,
         title: `public.${t.name} is created but never gets RLS enabled in any migration`,
@@ -104,6 +143,32 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
         precisionTier: "high",
       }),
     );
+  }
+
+  // #1425 — protected, then UN-protected. A hotfix or a data-backfill migration turns row security
+  // off and is never reverted; the table ships exposed while every earlier `enable` is still in the
+  // file set. Free-count (high) like its sibling: unlike policy semantics this needs no reasoning
+  // about intent — the last row-security statement for the table is, as committed, a disable.
+  // Reported for any public table, whether or not this file set also contains its `create table`:
+  // a repo that disables RLS on a table created elsewhere has exactly the same exposure.
+  for (const [name, at] of [...rls.entries()].filter(([, t]) => !t.on).sort()) {
+    findings.push(
+      mechanicalFinding({
+        id: `SB-RLS-DISABLED-STATIC-${name}`,
+        title: `public.${name} has row level security turned back OFF by a later migration`,
+        severity: "Critical",
+        category: "Supabase config",
+        taxonomy: "Migration disables RLS on a public table (static)",
+        location: `${at.file}:${at.line}`,
+        evidence: `"alter table public.${name} disable row level security" in ${at.file} is the LAST row-security statement for this table across the migration set, so the table ships with RLS off no matter how many earlier migrations enabled it.`,
+        impact: "A public-schema table with RLS off is auto-exposed via PostgREST — every row is readable/writable by anyone holding the anon key. Any policies still defined on the table are inert: Postgres does not consult them while row security is disabled, so the schema reads as protected and behaves as public.",
+        fix: `Remove the disable statement, or follow it with "alter table public.${name} enable row level security;" in the same migration if it was only needed for a backfill.`,
+        precisionTier: "high",
+      }),
+    );
+  }
+
+  return findings;
 }
 
 // Roles granted BYPASSRLS, and tables whose row security is enabled but not FORCEd. Both are ways a
@@ -142,12 +207,18 @@ export function checkMigrationRlsBypass(dir: string): Finding[] {
   const policied = new Set<string>();
   const enabledAt = new Map<string, { file: string; line: number }>();
 
+  // #1425 — a table whose LAST toggle is a disable has row security off, so "enabled but never
+  // FORCEd" is the wrong thing to say about it; checkMigrationRlsStatic already reports it as
+  // exposed outright. Drop it from this check's population rather than describing it twice.
+  const disabled = new Set([...resolveRlsState(sources).entries()].filter(([, t]) => !t.on).map(([n]) => n));
+
   for (const { file: rel, raw } of sources) {
-    const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
+    const sql = stripSqlComments(raw);
 
     for (const m of sql.matchAll(ENABLE_RLS)) {
       if ((m[1] ?? "public").toLowerCase() !== "public") continue;
       const name = m[2]!.toLowerCase();
+      if (disabled.has(name)) continue;
       enabled.add(name);
       if (!enabledAt.has(name)) enabledAt.set(name, { file: rel, line: sql.slice(0, m.index).split("\n").length });
     }
@@ -276,7 +347,7 @@ export function checkMigrationStorageBuckets(dir: string): Finding[] {
 
   const findings: Finding[] = [];
   for (const { file: rel, raw } of sources) {
-    const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
+    const sql = stripSqlComments(raw);
     for (const m of sql.matchAll(STORAGE_BUCKET_INSERT)) {
       const cols = columnDefs(m[1]!).map((c) => c.trim().toLowerCase());
       const publicIdx = cols.indexOf("public");

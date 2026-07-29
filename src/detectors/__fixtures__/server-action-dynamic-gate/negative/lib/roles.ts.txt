@@ -1,0 +1,9 @@
+// The real target's shape, kept verbatim in structure: the server-only helpers are pulled in with
+// `await import()` so they never reach the client bundle. `requireAdmin` itself matches no name on
+// AUTH_PATTERN — the check lives one hop further in.
+export async function requireAdmin() {
+  const { getAuthenticatedUser } = await import("./auth-helpers");
+  const user = await getAuthenticatedUser();
+  if (!user.isAdmin) throw new Error("admin capability required");
+  return { currentUser: user };
+}
