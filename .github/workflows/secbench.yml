@@ -86,24 +86,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: Install the two scanner binaries this gate shells out to
-        run: |
-          set -euo pipefail
-          # semgrep: validate-secbench runs the request-sourced pass live over the exploit dirs.
-          # Without it the CLI throws — it does not degrade to "found nothing", which is the right
-          # behaviour for a recall gate and the reason this step is not optional.
-          pipx install semgrep
-          # MEASURED on run 30375680731: without this the curl below dies with `curl: (23) Failure
-          # writing output to destination` — pipx no longer leaves ~/.local/bin behind on
-          # ubuntu-latest, and corpus-drift.yml's copy of these lines has been relying on it doing so.
-          mkdir -p "$HOME/.local/bin"
-          # Pinned to the v2 line every recorded measurement used (2.3.8). v1 and v2 differ on the
-          # CLI surface and the asset carries no version in its name, so an unpinned URL would drift
-          # the toolchain under the score without anyone choosing to (corpus-drift.yml's note).
-          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
-            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
-          chmod +x "$HOME/.local/bin/osv-scanner"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install mechanical-tier scanner binaries
+        uses: ./.github/actions/mechanical-binaries
 
       # The commit-SHA tarball rather than `git clone` + `checkout`: same pin, one request, no
       # history. SECBENCH_PIN/SECBENCH_REPO are read out of the source so the workflow cannot drift

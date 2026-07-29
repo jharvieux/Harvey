@@ -87,33 +87,71 @@ jobs:
       # which on a must-raise-an-indicator target would look like the free tier staying quiet. So
       # they are installed explicitly rather than left to chance.
       - name: Install mechanical-tier scanner binaries
-        run: |
-          set -euo pipefail
-          # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED
-          # 2026-07-28, where the osv-scanner `curl -o` into it failed with `curl: (23)`
-          # (write error) on a fresh runner. Create it before anything writes there.
-          mkdir -p "$HOME/.local/bin"
-          pipx install semgrep
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-            | sh -s -- -b "$HOME/.local/bin"
-          # Pinned to the v2 line the local green run used (2.3.8) — v1 and v2 differ on the CLI
-          # surface, and the asset carries no version in its name, so an unpinned URL would drift
-          # the toolchain under the baselines without anyone choosing to.
-          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
-            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
-          chmod +x "$HOME/.local/bin/osv-scanner"
-          # gitleaks runs alongside TruffleHog in the secret pass (src/scan/secrets.ts) and, unlike
-          # the others, throws ENOENT rather than degrading — so the job dies without it.
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-            | tar -xz -C "$HOME/.local/bin" gitleaks
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/mechanical-binaries
 
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
       # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
       # targets instead of 4. It is what pushes this job past its old ~2m: six real installs.
+      # #1498: on a PULL REQUEST, score only the targets whose baselines the diff actually touches.
+      #
+      # MEASURED 2026-07-28: this job ran 37 times on pull requests that day against ONE scheduled
+      # run, ~23 minutes each — roughly 14 hours of runner time for a signal that is ADVISORY (this
+      # is not a required context) and therefore usually lands after the merge decision. Six separate
+      # batches edited src/scan/external-corpus.ts, and every one re-cloned and re-installed all 13
+      # pinned repos to re-score the one or two baselines it had changed.
+      #
+      # The full sweep is NOT weakened: it still runs on the daily schedule and on workflow_dispatch,
+      # which is where it belongs — it detects OUR scanner moving against frozen pins, and a day is
+      # the right resolution for that. What changes is only which targets a PR re-scores.
+      #
+      # FAIL-OPEN BY DESIGN, in the safe direction: if the harness itself changed, if the diff cannot
+      # be read, or if no slug can be attributed, this scores EVERYTHING. A narrowing that guesses
+      # wrong must cost time, never coverage.
+      - name: Which targets does this diff touch?
+        id: targets
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Not a PR — scoring every target."; exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
+          if [ -z "$files" ]; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Empty diff — scoring every target."; exit 0
+          fi
+          # Anything that can change scoring for EVERY target -> full sweep.
+          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml)$'; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Harness changed — scoring every target."; exit 0
+          fi
+          if ! echo "$files" | grep -q '^src/scan/external-corpus\.ts$'; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Trigger fired without a manifest edit — scoring every target."; exit 0
+          fi
+          # Attribute changed lines to slugs: every target block opens with `slug: "<name>"`, so the
+          # nearest preceding slug above a changed line is that line's target.
+          slugs=$(git diff -U0 '${{ github.event.pull_request.base.sha }}' HEAD -- src/scan/external-corpus.ts \
+            | grep -E '^@@' | sed -E 's/.*\+([0-9]+).*/\1/' \
+            | while read -r ln; do
+                head -n "$ln" src/scan/external-corpus.ts | grep -oE 'slug: "[a-z0-9-]+"' | tail -1 | sed -E 's/slug: "(.*)"/\1/'
+              done | sort -u | grep -v '^$' || true)
+          if [ -z "$slugs" ]; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "No slug attributable — scoring every target."; exit 0
+          fi
+          echo "scope=some" >> "$GITHUB_OUTPUT"
+          echo "slugs=$(echo "$slugs" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          echo "Scoring only: $(echo "$slugs" | tr '\n' ' ')"
+
       - name: Score the corpus against its baselines
-        run: pnpm corpus-drift --install --json corpus-drift.json
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
+            pnpm corpus-drift --install --json corpus-drift.json
+          else
+            for t in ${{ steps.targets.outputs.slugs }}; do
+              echo "::group::$t"
+              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json"
+              echo "::endgroup::"
+            done
+          fi
 
       # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
       # table showing exactly what moved.
@@ -122,7 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: corpus-drift-scorecard
-          path: corpus-drift.json
+          path: corpus-drift*.json
           if-no-files-found: warn
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138). On a scheduled failure,
