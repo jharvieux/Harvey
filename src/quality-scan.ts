@@ -4,6 +4,36 @@
 
 import type { Finding } from "./findings.js";
 
+// #1470 — M4 and M5 finding ids are POSITIONAL (`M4-01`, `M4-02`, …), and the same two modules also
+// mint FIXED sentinel ids in the very same namespace: M4-97 (the diverged-clone scope disclosure),
+// M4-98 (the whole-repo volume cap), M4-99 (jscpd did not complete), M5-98 (knip's reduced no-deps
+// tier), M5-99 (knip ran but looks uncertain). The sentinels were picked high on the assumption
+// that no real target reaches them. MEASURED 2026-07-28 on JakeLeoDev/proposit @ 82838cef: jscpd
+// found 142 significant clone clusters, so the 97th was minted `M4-97`, the assembled deliverable
+// failed report-schema validation on the duplicate id, and a 589-finding ten-module engagement
+// exported NOTHING while every ledger printed PASS.
+//
+// The sentinels are referenced BY ID from probes (audit-runners.ts reads for M4-99/M5-00), from the
+// external-corpus baselines and from client reports, so they keep their names and the positional
+// counter yields instead: `positionalId` skips every reserved number, and the numbering stays
+// strictly increasing and stable. The gap it leaves in the sequence is the point — an id is a
+// handle, not a census.
+//
+// `M4-00`/`M5-00` are NOT reserved: positional numbering starts at 1, so they are unreachable.
+export const RESERVED_POSITIONAL_IDS = ["M4-97", "M4-98", "M4-99", "M5-98", "M5-99"] as const;
+
+const reservedOrdinals = (prefix: string): number[] =>
+  RESERVED_POSITIONAL_IDS.filter((id) => id.startsWith(`${prefix}-`))
+    .map((id) => Number(id.slice(prefix.length + 1)))
+    .sort((a, b) => a - b);
+
+/** The `nth` (1-based) positional id for `prefix`, skipping every reserved sentinel number. */
+function positionalId(prefix: "M4" | "M5", nth: number): string {
+  let n = nth;
+  for (const reserved of reservedOrdinals(prefix)) if (reserved <= n) n += 1;
+  return `${prefix}-${String(n).padStart(2, "0")}`;
+}
+
 interface JscpdFileRef {
   name: string;
   start: number;
@@ -330,7 +360,7 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
       : `${dup.lines} duplicated lines (${dup.tokens} tokens) — a fix in one copy is a fix missed in the other.`;
 
     return {
-      id: `M4-${String(i + 1).padStart(2, "0")}`,
+      id: positionalId("M4", i + 1),
       title: selfFile
         ? securityPath
           ? `Duplicated code within one security-relevant file: ${dup.firstFile.name}`
@@ -648,7 +678,7 @@ export function knipToFindings(
       ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
       : unreferenced;
     findings.push({
-      id: `M5-${String(n).padStart(2, "0")}`,
+      id: positionalId("M5", n),
       title: securityPath ? `Unused security-relevant file: ${file}` : `Unused file: ${file}`,
       severity: securityPath ? "Medium" : "Low",
       confidence: inferred ? "Review" : "Confirmed",
@@ -689,7 +719,7 @@ export function knipToFindings(
       n += 1;
       const partialImpact = `${names.length} unused export${names.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: securityPath ? `Unused exports in security-relevant file: ${issue.file}` : `Unused exports in ${issue.file}`,
         severity: securityPath ? "Medium" : "Low",
         confidence: "Confirmed",
@@ -720,7 +750,7 @@ export function knipToFindings(
       const names = issue.types.map((t) => t.name);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Exported-but-unreferenced type(s) in ${issue.file}`,
         severity: "Low",
         confidence: "Review",
@@ -757,7 +787,7 @@ export function knipToFindings(
       const unresolved = unresolvedDepScopes.has(issue.file);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unused ${label} declared in ${issue.file}`,
         severity: "Low",
         confidence: unresolved ? "Review" : "Confirmed",
@@ -790,7 +820,7 @@ export function knipToFindings(
       const names = issue.unlisted.map((u) => u.name);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unlisted import(s) in ${issue.file}`,
         severity: "Medium",
         confidence: "Confirmed",
@@ -813,7 +843,7 @@ export function knipToFindings(
       const names = issue.unresolved.map((u) => u.name);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unresolved import(s) in ${issue.file}`,
         severity: "Medium",
         confidence: "Confirmed",
@@ -837,7 +867,7 @@ export function knipToFindings(
       const groups = issue.duplicates.map((g) => g.map((s) => s.name).join(" / "));
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Duplicate export(s) in ${issue.file}`,
         severity: "Low",
         confidence: "Confirmed",
@@ -860,7 +890,7 @@ export function knipToFindings(
       const parts = Object.entries(issue.enumMembers).map(([parent, members]) => `${parent}.${members.map((m) => m.name).join("/")}`);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unused enum member(s) in ${issue.file}`,
         severity: "Low",
         confidence: "Confirmed",
@@ -889,7 +919,7 @@ export function knipToFindings(
       const names = entries.map((d) => d.name);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unused ${names.length === 1 ? kind : plural} declared in ${issue.file}`,
         severity: "Low",
         confidence: "Confirmed",
@@ -912,7 +942,7 @@ export function knipToFindings(
       const names = issue.binaries.map((b) => b.name);
       n += 1;
       findings.push({
-        id: `M5-${String(n).padStart(2, "0")}`,
+        id: positionalId("M5", n),
         title: `Unused binary/binaries declared in ${issue.file}`,
         severity: "Low",
         confidence: "Confirmed",

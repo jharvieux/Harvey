@@ -37,6 +37,11 @@ on:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
   workflow_dispatch:
   pull_request:
+  # #1498: merge queue. Without this the required `regenerate dry-run findings + diff committed
+  # artifact` context never reports on a queue entry and the queue deadlocks. The relevance filter
+  # below sets relevant=true on any non-`pull_request` event, so a queue entry regenerates and
+  # diffs for real instead of short-circuiting.
+  merge_group:
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
 # newer run is the interesting one. Safe on a required check: a cancellation here is only ever

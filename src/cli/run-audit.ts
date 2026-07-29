@@ -92,7 +92,7 @@ import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
-import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
+import { formatFailures, formatIdCollisions, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { probeExec } from "../probe-exec.js";
@@ -102,6 +102,7 @@ import { enrichFindingsCwe } from "../cwe-map.js";
 import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
+import { statSafe } from "../fs-walk.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
 // Deliberately blank (not invented): the coverage ledger and findings are derived; client, health,
@@ -111,6 +112,13 @@ const placeholderMeta = (target: string): ReportMeta => ({
   confidential: true, overallHealth: 0, tenantIsolation: "", authModel: "", headline: "",
   scope: target, methodology: "", outOfScope: "",
 });
+
+// #1470: the banner every refusal-to-export path ends on. A run that assembled N findings and wrote
+// none is the whole "accounted for is not delivered" class in one line, and until this existed the
+// LAST thing such a run printed was `LEDGER PASS` — a true statement about assembly, read by anyone
+// scrolling as a statement about the deliverable.
+const deliveredNothing = (assembled: number, why: string): string =>
+  `\nDELIVERED NOTHING — ${assembled} finding(s) were produced by the probes and assembled into the deliverable, and 0 were written to any export. ${why}. Any ledger PASS printed above concerns the produce → assemble seam only; nothing reached the client.`;
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -232,7 +240,12 @@ if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 ad
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions } = runAudit(AUDIT_RUNNERS, ctx);
+// #1470: a duplicate finding id used to stop BOTH exports at schema validation, after the coverage
+// ledger and the conservation ledger had both printed PASS — so a 589-finding engagement produced
+// no deliverable and every status read green. The ids are disambiguated now; the collision is still
+// a detector defect, so it is said out loud rather than absorbed.
+if (idCollisions.length) console.error(`\n${formatIdCollisions(idCollisions)}`);
 // #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
 // artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
 enrichFindingsCwe(findings);
@@ -274,6 +287,7 @@ if (findingsOut || sarifOut) {
   console.log(`\n${formatLedger(ledger)}`);
   if (!ledger.ok) {
     console.error("\nRefusing to export: findings were produced and dropped between the probes and the deliverable.");
+    console.error(deliveredNothing(findings.length, "the conservation ledger did not balance (above)"));
     process.exit(1);
   }
 
@@ -296,6 +310,7 @@ if (findingsOut || sarifOut) {
     console.log(`\n${formatBaselineLedger(bLedger)}`);
     if (!bLedger.ok) {
       console.error("\nRefusing to export: the baseline diff dropped or invented a finding between assembly and the deliverable.");
+      console.error(deliveredNothing(findings.length, "the baseline ledger did not balance (above)"));
       process.exit(1);
     }
     console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} persistent, ${doc.baseline?.counts.new} new`);
@@ -308,6 +323,11 @@ if (findingsOut || sarifOut) {
   if (!ok) {
     console.error("\nAssembled findings document is invalid — refusing to export it:");
     for (const e of errors) console.error(`  ✗ ${e}`);
+    // #1470: the conservation ledger printed LEDGER PASS a few lines above, and it was TRUE of the
+    // seam it measures (probes → assembled document). It says nothing about the seam that reaches
+    // the client, and on proposit the two disagreed: 589 produced, 589 assembled, 0 written. Say so
+    // here, so the last word on a run that delivered nothing is never a PASS.
+    console.error(deliveredNothing(findings.length, "the assembled document failed report-schema validation (above)"));
     process.exit(1);
   }
   // The §3b test-quality table (#1045) rides on the findings document only — the SARIF schema has
@@ -351,6 +371,25 @@ if (sbomOut) {
   writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
   console.log(`\nCycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
   if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
+}
+
+// #1470: the delivery gate. Everything above proves what was PRODUCED and ASSEMBLED; this is the
+// only check that reads the client's side of the seam. Every export the operator asked for must
+// exist on disk with content — a run that was asked for a deliverable and produced no file may not
+// reach COVERAGE PASS, whatever the ledgers said. Independent of the writes above on purpose: it
+// asks the filesystem, so a future branch that skips a writeFileSync (as the schema-validation
+// branch silently did for --sarif-out) fails here instead of exiting green.
+const requestedExports = [
+  ...(findingsOut ? [{ flag: "--findings-out", path: findingsOut }] : []),
+  ...(sarifOut ? [{ flag: "--sarif-out", path: sarifOut }] : []),
+  ...(sbomOut ? [{ flag: "--sbom-out", path: sbomOut }] : []),
+  ...(outPath ? [{ flag: "--out", path: outPath }] : []),
+];
+const undelivered = requestedExports.filter((e) => (statSafe(e.path)?.size ?? 0) === 0);
+if (undelivered.length) {
+  console.error(`\nDELIVERY FAIL — ${undelivered.length} of ${requestedExports.length} requested export(s) were never written: ${undelivered.map((e) => `${e.flag} ${e.path}`).join(", ")}.`);
+  console.error(deliveredNothing(findings.length, "a requested export produced no file, and the run reached the end without saying so"));
+  process.exit(1);
 }
 
 // #284: the never-run ledger is the complement of this log, so a module that genuinely ran here
