@@ -367,6 +367,80 @@ export const m9CheckEntries: CorpusEntry[] = [
     note: "waterfall-guard/negative: `if (!team) return …` between the two awaits. No value flows, but parallelising runs the second query on a request the sequential code never reaches — the #1292 false positive.",
   },
 
+  // #1438 — #1292's escape rule counted ANY `break`/`continue` node, so one belonging to an
+  // intervening `switch` or inner loop — which leaves neither the function nor the path to the
+  // second query — suppressed a genuinely parallelisable pair. Scored the same way round as the
+  // #1292 pair above: the POSITIVE is the shape that must fire again, the NEGATIVE the escape that
+  // must still suppress, so a fix that switches the rule off rather than narrowing it goes red.
+  {
+    id: "M9C-WATERFALL-ESCAPE-POS",
+    kind: "positive",
+    cls: "sequential queries with an intervening switch/inner-loop `break` that leaves neither the function nor the path to the second query",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-escape/positive: two functions — a `switch` whose case `break` belongs to the switch, and a `for` whose `break` belongs to that loop. Both intervening statements read the first result; neither skips the second query, so both pairs are real waterfalls. A `match` key is satisfied by ONE finding, so this entry alone would stay green with half the fix reverted: the per-shape lock is app-router.test.ts asserting this fixture yields exactly 2 findings, one per function.",
+  },
+  {
+    id: "M9C-WATERFALL-ESCAPE-NEG",
+    kind: "negative",
+    cls: "sequential queries with a `return` inside an intervening switch case",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-escape/negative: `case \"archived\": return null` inside the same switch shape. #1438 narrowed the rule for break/continue, it did not switch escapes off — a `return` still leaves the function, so this pair stays a dependency.",
+  },
+
+  // #1441 — the #1292 suppression is one rule covering two different control-flow facts. A guard
+  // that DIVERTS (return/break) skips the second query; a guard that only ABORTS (throw, including
+  // `throw redirect(…)`) ends the request, and nothing downstream sees the second query's result.
+  // The abort case is a recall loss when both statements are reads — and a real bug when either
+  // writes, which is why the negative here is a WRITE under an aborting guard.
+  {
+    id: "M9C-WATERFALL-ABORT-POS",
+    kind: "positive",
+    cls: "sequential READS separated by an error-only guard that ends the request",
+    module: "M9",
+    location: "m9-corpus/waterfall-abort/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-abort/positive: `if (!price) throw` between an independent prices read and a subscriptions read — the pinned mvp-boilerplate shape whose suppression took that target's only counted M9 finding away. Hoisting the second read above the throw costs one wasted round-trip on the failure path and changes no behaviour.",
+  },
+  {
+    id: "M9C-WATERFALL-ABORT-NEG",
+    kind: "negative",
+    cls: "an error-only guard where the second statement WRITES (`.from(x).update(…).select(…)`)",
+    module: "M9",
+    location: "m9-corpus/waterfall-abort/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-abort/negative: a `throw` guard rejecting voided receipts, followed by an `.update({status:'Pending'}).select('id')` that satisfies isDbQueryChain but is a WRITE. Parallelising would post a voided receipt — the reason the abort relaxation is gated on both statements being reads. From the pinned carbon clone.",
+  },
+
+  // #1439 — #1263's callee resolution accepted any resolved helper whose BODY matched the auth
+  // pattern. Matching the pattern says the helper looks at the session; it does not say the helper
+  // can stop the mutation. Same inversion again: the positives are helpers that enforce nothing and
+  // must still fire, the negative the real gate reached through the import idiom #1263 missed.
+  {
+    id: "M9C-GATE-STRENGTH-POS",
+    kind: "positive",
+    cls: "Server Action vouched for by a logger that reads the session, and by a boolean gate whose result is discarded",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength/positive",
+    match: ["Server Action missing authorization"],
+    expectedTier: "review",
+    note: "action-gate-strength/positive: `auditLog(...)` calls getCurrentUser() for a log line and cannot deny; `const allowed = await canAccess(id)` is never read. Neither is a gate — both actions must still be flagged.",
+  },
+  {
+    id: "M9C-GATE-STRENGTH-NEG",
+    kind: "negative",
+    cls: "Server Action gated through a NAMESPACE import (`import * as guards; await guards.ensureMember(id)`)",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength/negative",
+    match: ["Server Action missing authorization"],
+    note: "action-gate-strength/negative: the same real `ensureMember` gate as server-action-helper-gate, imported as a namespace — the idiom #1263's collectValueImports did not model, so its own false positive survived for it. Nothing must fire.",
+  },
+
   // #1262 — the brief's third unbounded-route shape, which #857 left undetected AND undisclosed.
   {
     id: "M9C-RETRY-POS",
@@ -489,5 +563,29 @@ export const m9CheckEntries: CorpusEntry[] = [
     location: "m9-corpus/tanstack-client-only/negative",
     match: ["SSR-only API misuse"],
     note: "tanstack-client-only/negative: TanStack Start's own markers for 'never runs on the server' — 6 of tanstack.com's 18 residual rows in this class (MEASURED 2026-07-28: 18 -> 12).",
+  },
+
+  // #1440 — #1262 shipped the retry check accepting only a LITERAL-true while-condition, so the
+  // canonical `while (!done) { try { await fetch(url) } catch {} }` was never assessed, and was not
+  // among the sub-shapes its own scope row names as unassessed. A while/do header now resolves
+  // exactly as a `for` header does.
+  {
+    id: "M9C-RETRY-WHILE-POS",
+    kind: "positive",
+    cls: "route handler retrying inside `while (<non-literal>)` with a swallowing catch",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry-while/positive",
+    match: ["Uncapped retry/fan-out"],
+    expectedTier: "review",
+    note: "uncapped-retry-while/positive: `while (!done)` around a caught `fetch` whose catch never sets `done`. The header carries no resolvable bound, so the loop is reported as uncapped.",
+  },
+  {
+    id: "M9C-RETRY-WHILE-NEG",
+    kind: "negative",
+    cls: "the same while-loop retry with an attempt counter compared against a numeric constant",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry-while/negative",
+    match: ["Uncapped retry/fan-out"],
+    note: "uncapped-retry-while/negative: `while (attempts < MAX_ATTEMPTS)` — a numeric const this pass resolves, so the header carries a bound. The precision boundary for the widened while rule, nothing fires.",
   },
 ];

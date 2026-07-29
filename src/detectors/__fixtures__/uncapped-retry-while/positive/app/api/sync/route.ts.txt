@@ -1,0 +1,21 @@
+// #1440 — the canonical uncapped retry. `retryLoopIsUncapped` used to accept only a literal-`true`
+// while-condition, so this shape was never assessed AND was not named in the scope row that exists
+// to name unassessed classes. The catch swallows, `done` is never set on the failure path, and the
+// handler holds its slot until the platform timeout.
+export async function POST(request: Request) {
+  const { url } = await request.json();
+
+  let done = false;
+  let body: unknown = null;
+  while (!done) {
+    try {
+      const res = await fetch(url);
+      body = await res.json();
+      done = true;
+    } catch {
+      // swallow and retry
+    }
+  }
+
+  return Response.json(body);
+}

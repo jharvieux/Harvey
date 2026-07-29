@@ -1139,6 +1139,13 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "leak-narrowed-select", dir: "leak-narrowed-select", neg: "negative" },
     // #1276, the family a real TanStack Start target produced and no authored fixture contained.
     { check: "tanstack-client-only", dir: "tanstack-client-only", neg: "negative", framework: "tanstack-start" },
+    // #1438/#1441/#1439/#1440 — the four residuals of the PR that landed the three above. Scored
+    // the same way round: each POSITIVE is a shape the fix must keep (or start) firing on, each
+    // NEGATIVE the neighbouring shape it must not reach.
+    { check: "waterfall-escape", dir: "waterfall-escape", neg: "negative" },
+    { check: "waterfall-abort", dir: "waterfall-abort", neg: "negative" },
+    { check: "action-gate-strength", dir: "action-gate-strength", neg: "negative" },
+    { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
