@@ -9,17 +9,21 @@
 //   • ingest a fix that breaks the client's own test suite → REJECTED, exit 1 (#1272's live defect)
 //   • ingest three ordered attempts → the §5 ladder really walks cheap → standard (#922)
 //   • ingest two failing attempts → DOWNGRADE, and tiersUsed names only tiers that were attempted
+//   • ingest a genuine fix with --findings-out --paid → the diff is ATTACHED and renders in the
+//     ticket body under the prose Fix (#825), and each red direction attaches NOTHING
 //
 // Every child process is spawned ASYNCHRONOUSLY: the file must not hold a vitest worker's event loop,
 // which is the #1120/#1133 failure mode that put seven other CLI files in the heavy job.
 
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { capturePatch, disposeCorpus, materialize, readCalibration, type MaterializedCorpus } from "../fix/materialize-calibration.js";
+import { findingToTicket } from "../trackers/findings-to-tickets.js";
+import type { FindingsDocument } from "../findings.js";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -192,6 +196,99 @@ describe("fix-interactive CLI — the §5 escalation ladder actually walks (#922
       expect(r.out).toContain("no further attempt was supplied");
       expect(r.out).toContain("Tiers actually attempted: cheap.");
       expect(r.out).not.toContain("standard");
+    } finally {
+      disposeCorpus(c);
+    }
+  }, TIMEOUT_MS);
+});
+
+// #825 — the producer→deliverable seam, driven through the same real CLI. The library tests in
+// src/fix/attach.test.ts prove attachSuggestedFix and stop at that boundary, leaving --findings-out
+// and --paid parsing unproven — precisely the gap #1407 records. These assert on the FILE the CLI
+// wrote and on the ticket body rendered from it, so reverting the CLI wiring turns them red.
+describe("fix-interactive CLI — a verified diff reaches the ticket body (#825)", () => {
+  const ticketBodyOf = (path: string) => {
+    const doc = JSON.parse(readFileSync(path, "utf8")) as FindingsDocument;
+    const f = doc.findings.find((x) => x.id === "CAL-UNUSED-PARAM")!;
+    return { finding: f, body: findingToTicket(f, { paid: true }).body };
+  };
+
+  it("attaches the verified diff and embeds it under the prose Fix in the ticket body, exit 0", async () => {
+    const c = clientCorpus("ok");
+    try {
+      const cfg = engagement(c);
+      const out = join(cfg, "with-fix.json");
+      const good = diffFile(c, "good.diff", dropParam(readCalibration(M5_FILE)));
+      const r = await cli([...ingestArgs(c, cfg, [good]), "--findings-out", out, "--paid"]);
+
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("suggestedFix ATTACHED to CAL-UNUSED-PARAM");
+      const { finding, body } = ticketBodyOf(out);
+      expect(finding.suggestedFix?.verified).toBe(true);
+      expect(finding.suggestedFix?.diff).toContain("export async function GET() {");
+      // The criterion's actual words: a valid unified diff embedded in its ticket body, UNDER the prose.
+      expect(body).toContain("**Fix:** drop the unused parameter");
+      expect(body).toContain("```diff");
+      expect(body.indexOf("**Fix:**")).toBeLessThan(body.indexOf("```diff"));
+      // The verification line must describe what was actually checked, not assert a bare "verified".
+      expect(body).toContain("the detector that found it (M5 — Unused parameter) no longer fires");
+      expect(body).toContain("npm run test");
+    } finally {
+      disposeCorpus(c);
+    }
+  }, TIMEOUT_MS);
+
+  it("REFUSES to attach a diff that applies cleanly but leaves the detector firing — exit 1, prose only", async () => {
+    // A diff is a thing a client may `git apply`. This is the direction that matters: `git apply
+    // --check` PASSES this patch, so an attach gated on apply-clean alone would have filed it.
+    const c = clientCorpus("ok");
+    try {
+      const cfg = engagement(c);
+      const out = join(cfg, "no-fix.json");
+      const bad = diffFile(c, "noop.diff", cosmetic(readCalibration(M5_FILE)));
+      const r = await cli([...ingestArgs(c, cfg, [bad]), "--findings-out", out, "--paid"]);
+
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("suggestedFix REFUSED for CAL-UNUSED-PARAM");
+      expect(r.out).toContain("still fires");
+      expect(existsSync(out)).toBe(true); // written, so the refusal is auditable — not a missing file
+      const { finding, body } = ticketBodyOf(out);
+      expect(finding.suggestedFix).toBeUndefined();
+      expect(body).not.toContain("```diff");
+      expect(body).toContain("**Fix:** drop the unused parameter"); // the prose fix survives
+    } finally {
+      disposeCorpus(c);
+    }
+  }, TIMEOUT_MS);
+
+  it("REFUSES to attach a diff that breaks the client's own suite, even though the detector cleared", async () => {
+    const c = clientCorpus("contract");
+    try {
+      const cfg = engagement(c);
+      const out = join(cfg, "broke-client.json");
+      const good = diffFile(c, "good.diff", dropParam(readCalibration(M5_FILE)));
+      const r = await cli([...ingestArgs(c, cfg, [good]), "--findings-out", out, "--paid"]);
+
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("suggestedFix REFUSED");
+      expect(ticketBodyOf(out).finding.suggestedFix).toBeUndefined();
+    } finally {
+      disposeCorpus(c);
+    }
+  }, TIMEOUT_MS);
+
+  it("attaches nothing without --paid, even for a green diff — the free tier keeps prose only", async () => {
+    const c = clientCorpus("ok");
+    try {
+      const cfg = engagement(c);
+      const out = join(cfg, "free.json");
+      const good = diffFile(c, "good.diff", dropParam(readCalibration(M5_FILE)));
+      const r = await cli([...ingestArgs(c, cfg, [good]), "--findings-out", out]);
+
+      expect(r.code).toBe(0); // the fix itself is still green — only the ATTACH is withheld
+      expect(r.out).toContain("suggestedFix REFUSED");
+      expect(r.out).toContain("free-tier engagement");
+      expect(ticketBodyOf(out).finding.suggestedFix).toBeUndefined();
     } finally {
       disposeCorpus(c);
     }
