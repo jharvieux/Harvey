@@ -11,7 +11,9 @@
 // These two layers are complementary — Layer 1 proves the scorers fail on movement without
 // cloning anything, Layer 2 supplies the real movement.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseRecordedReasons, validateRecordedReason } from "../recorded-reasons.js";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
@@ -477,8 +479,8 @@ describe("revalidateNotRunReasons (#321)", () => {
       provenanceNote: "synthetic fixture for this test only",
       securityVerdict: "n/a",
       modules: {
-        M4: { reason: "jscpd could not complete on this scope (synthetic fixture)" },
-        M8: { reason: "not exercised by this fixture" },
+        M4: { reason: "jscpd could not complete on this scope (synthetic fixture)", falsifier: "false" },
+        M8: { reason: "not exercised by this fixture", falsifier: "false" },
       },
     };
     expect(isNotRun(notRunM4.modules.M4!)).toBe(true);
@@ -773,5 +775,60 @@ describe("free-tier loudness invariant is channel-agnostic and can fail (#1473)"
       expect(e.mustBeLoud, `${e.slug} predates #1473 and must not have gained an unmeasured assertion`).toBeUndefined();
       expect(scoreFreeTierExpectation(e, gradedOnly).some((r) => r.check.startsWith("must be loud")), e.slug).toBe(false);
     }
+  });
+});
+
+// #1436 — a not-run reason is a claim, and the two M8 reasons this issue names were dated MEASURED,
+// well-written, invisible to `pnpm validate-reasons --revalidate`, and described conditions (a suite
+// gaining container reuse, a repo gaining a unit suite) that resolve UPSTREAM with nothing here
+// noticing. `ModuleNotRun.falsifier` is what the type now demands; this block is what keeps the
+// registry BLOCK — the half `--revalidate` actually reads — attached to it. A comment can be deleted
+// while the object survives, and then the module is silently unwatched again.
+describe("#1436 — every recorded not-run carries a falsifier the reason registry can see", () => {
+  const source = readFileSync(new URL("./external-corpus.ts", import.meta.url), "utf8");
+  const blocks = parseRecordedReasons(source, "src/scan/external-corpus.ts");
+  const notRuns = EXTERNAL_CORPUS.flatMap((t) =>
+    Object.entries(t.modules)
+      .filter(([, m]) => m !== undefined && isNotRun(m))
+      .map(([module, m]) => ({ slug: t.slug, module, notRun: m as { reason: string; falsifier: string } })),
+  );
+
+  it("finds the not-runs this test exists to watch, so it cannot pass by scoring an empty set", () => {
+    expect(notRuns.length).toBeGreaterThanOrEqual(5);
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("multi-tenant-starter/M8");
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("saas-lite/M8");
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("carbon/M8");
+  });
+
+  it("every not-run's falsifier appears verbatim as a FALSIFIER: in a well-formed block in the same file", () => {
+    const falsifiersInBlocks = new Set(blocks.map((b) => b.fields.FALSIFIER).filter((f) => f !== undefined));
+    for (const { slug, module, notRun } of notRuns) {
+      expect(notRun.falsifier, `${slug}/${module} has an empty falsifier`).not.toBe("");
+      expect(falsifiersInBlocks, `${slug}/${module}'s falsifier is on the object but in no REASON block — --revalidate would never run it`).toContain(notRun.falsifier);
+    }
+    for (const b of blocks) expect(validateRecordedReason(b, () => true), `block at line ${b.line}`).toEqual([]);
+  });
+
+  // The contract is one-way and easy to get backwards: NON-ZERO means the blocker holds, 0 means it
+  // is GONE, 127 means the re-test could not run at all. #1426 found seven falsifiers where a bare
+  // `grep` (exit 2) or a broken pipe (exit 1) read as "still blocked" by accident. Every command here
+  // therefore ends in an explicit `exit 0` / `exit 1` and opens with a `command -v` / `test -f` guard
+  // that exits 127. Asserted structurally rather than by running them — three need the network.
+  it("every falsifier ends in explicit exits and guards its own prerequisites with 127", () => {
+    for (const { slug, module, notRun } of notRuns) {
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 127");
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 0");
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 1");
+    }
+  });
+
+  // The negative control: the tie between object and block must be able to FAIL. Delete the block a
+  // not-run's falsifier lives in and the check must notice — otherwise this whole describe is
+  // decorative, which is the shape #1436 exists to end.
+  it("FAILS when the block a not-run's falsifier lives in is deleted", () => {
+    const victim = notRuns.find((n) => n.slug === "saas-lite" && n.module === "M8")!;
+    const gutted = source.split("\n").filter((l) => !l.includes(`FALSIFIER: ${victim.notRun.falsifier.slice(0, 40)}`)).join("\n");
+    const stillThere = new Set(parseRecordedReasons(gutted, "x").map((b) => b.fields.FALSIFIER));
+    expect(stillThere.has(victim.notRun.falsifier), "removing the FALSIFIER: line must break the tie").toBe(false);
   });
 });
