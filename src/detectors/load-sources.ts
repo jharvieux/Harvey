@@ -2,8 +2,9 @@
 // returns SourceInput[] for the detector modules. Extracted from src/cli/static-detect.ts
 // when the M6 free-tier indicator pass (#267) made runMechanicalScan a second consumer.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "./common.js";
 
 // #1065: plain .js/.cjs (and .mts/.cts) were absent here until 2026-07-25, so every
@@ -44,7 +45,13 @@ export const isGeneratedSource = (name: string, text: string): boolean => {
 // tsconfig/jsconfig are loaded so the M9 App Router pass can resolve `paths` aliases
 // (`@/…` imports) — without the file that defines what `@/` maps to, aliased imports are
 // invisible to the server→client-leak and server-only-guard cross-file resolution (#380).
-export const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig\.json|jsconfig\.json)$/;
+// #1479: the VARIANT names (`tsconfig.base.json`, `tsconfig.app.json`) are matched too. An Nx
+// monorepo puts its whole `paths` map in tsconfig.base.json and ships no plain tsconfig.json at
+// the root, so ghostfolio's `@ghostfolio/*` aliases resolved to nothing and collectPathAliases
+// fell back to its bare `@/` default — leaving every cross-file import graph on such a repo
+// (M9's leak/guard resolution, #1344's request-reachability gate, and #1479's) disconnected,
+// silently, with no row saying so. MEASURED 2026-07-28 on ghostfolio (pinned 7bd6ca6d).
+export const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig(\.[\w.-]+)?\.json|jsconfig(\.[\w.-]+)?\.json)$/;
 export const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|\.turbo|\.vercel|\.svelte-kit|\.nuxt|\.output)$/;
 
 // Test/story/fixture files — excluded from the product-code detectors (perf, boundary, and
@@ -55,10 +62,8 @@ export const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mock
 export function loadSources(root: string): SourceInput[] {
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const stat = statSync(full);
-      if (stat.isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
       } else if (SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry)) {
         const path = relative(root, full).split(sep).join("/");

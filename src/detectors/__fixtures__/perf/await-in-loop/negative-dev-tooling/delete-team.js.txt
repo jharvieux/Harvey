@@ -1,0 +1,11 @@
+// An interactive admin CLI: `npm run delete-team`. Never on a request path.
+const readline = require("readline");
+const { PrismaClient } = require("@prisma/client");
+const prisma = new PrismaClient();
+
+async function removeMembers(teamMembers) {
+  for (const member of teamMembers) {
+    await prisma.teamMember.deleteMany({ where: { userId: member.id } });
+  }
+}
+module.exports = { removeMembers, readline };

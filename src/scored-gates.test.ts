@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOT_SCORED, SCORED_GATES, checkScoredGates, discoverValidateClis, type GateInputs, type ScoredGate } from "./scored-gates.js";
-import { loadGateInputs } from "./cli/validate-scored-gates.js";
+import { NOT_SCORED, SCORED_GATES, checkScoredGates, discoverValidateClis, loadGateInputs, type GateInputs, type ScoredGate } from "./scored-gates.js";
 
 const REAL = loadGateInputs();
 

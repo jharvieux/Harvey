@@ -518,7 +518,7 @@ pass's quality bar either way.
 ## 6. Sources
 
 `docs/design/spec-72-crossmodule-corpus.md` §M6 (locked scope authority), `briefs/quality-extras.txt`
-(the M6 brief), `docs/m4-m6-quality.md` §0/§2 (M6's existing "not mechanically detectable" status
+(the M6 brief), `docs/m4-m6-quality.md` §0/§2 (M6's verdict-tier status and report-mapping guidance
 and report-mapping guidance), `briefs/anti-patterns.md` + `docs/runbooks/slop-detection.md`
 (the D-091 catalog this rubric cross-checks against), `src/scan/calibration.ts` +
 `src/scan/calibration/types.ts` (the `CorpusEntry`/`buildCoverageMatrix` machinery this eval

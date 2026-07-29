@@ -22,8 +22,9 @@
 // exact fact (`high`); shape 2 depends on a repository setting this scan cannot read, so it asks
 // rather than asserts (`review`).
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { CI_PIPELINE_CATEGORY } from "./semgrep.js";
@@ -40,7 +41,7 @@ const JOBS_KEY = /^jobs:/m;
 function workflowFiles(dir: string): string[] {
   const wf = join(dir, ".github", "workflows");
   if (!existsSync(wf)) return [];
-  return readdirSync(wf).filter((f) => WORKFLOW_FILE.test(f)).sort();
+  return readNamesSafe(wf).filter((f) => WORKFLOW_FILE.test(f)).sort();
 }
 
 export function checkWorkflowPermissions(dir: string): Finding[] {

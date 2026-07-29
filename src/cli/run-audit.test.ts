@@ -14,12 +14,19 @@
 // two-workspace fixture: it is the only shape in which the loss is observable.
 
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { FindingsDocument } from "../findings.js";
+import type { FindingsDocument, ReportMeta } from "../findings.js";
+
+// #1470: a valid meta to mutate one field of, for the refused-export negative control below.
+const m1470Meta: ReportMeta = {
+  client: "C", subtitle: "s", date: "2026-07-28", commit: "abc", auditor: "a", confidential: true,
+  overallHealth: 7, tenantIsolation: "HOLDS", authModel: "oauth", headline: "h", scope: "sc",
+  methodology: "m", outOfScope: "none",
+};
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "run-audit.ts");
@@ -92,5 +99,87 @@ describe("run-audit CLI export capture", () => {
     const m7 = (engagement.coverage ?? []).filter((r) => r.module === "M7");
     expect(m7).not.toHaveLength(0);
     expect(m7.some((r) => /detect-static \(code tier\)/.test(r.detail ?? ""))).toBe(true);
+  });
+});
+
+// #1470 — the run that produced 589 findings and exported nothing.
+//
+// MEASURED 2026-07-28 on JakeLeoDev/proposit @ 82838cef with main @ e7e3d1e: all ten modules ran,
+// `produced 589 = delivered_from_produced 589 + … + UNACCOUNTED 0`, `LEDGER PASS`, and then
+// `Assembled findings document is invalid — refusing to export it` on two duplicate ids. Exit 1,
+// no findings.json, no SARIF. Every ledger green, nothing delivered.
+//
+// Two properties are proven here, both through the real CLI because both were invisible from inside
+// the orchestrator: (1) the tree that used to export NOTHING now exports BOTH formats, and (2) on a
+// run whose export is refused, the last word is never a PASS — the DELIVERED NOTHING banner
+// contradicts the ledger explicitly, and the delivery gate leaves no file behind to be mistaken for
+// a deliverable.
+const runCapturing = (args: string[]): Promise<{ code: number; out: string }> =>
+  new Promise((res, rej) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (out += d.toString()));
+    child.on("error", rej);
+    child.on("close", (code) => res({ code: code ?? -1, out }));
+  });
+
+describe("run-audit never exits having delivered nothing (#1470)", () => {
+  let dupScratch: string;
+  let target: string;
+  let ok: { code: number; out: string };
+  let refused: { code: number; out: string };
+
+  // proposit's exact shape: one SECURITY DEFINER function declared in an initial schema and
+  // redefined by a later migration. Under the signature-only id both rows carried ONE id.
+  beforeAll(async () => {
+    dupScratch = mkdtempSync(join(tmpdir(), "harvey-1470-"));
+    target = join(dupScratch, "target");
+    mkdirSync(join(target, "supabase", "migrations"), { recursive: true });
+    writeFileSync(join(target, "package.json"), '{"name":"dup-definer","dependencies":{"next":"14.0.0","@supabase/supabase-js":"2.45.0"}}\n');
+    // Real application source, or the M1 probe reports NotAssessed ("0 application files measured",
+    // #1109) and drops its capture — the definer rows would never reach the deliverable at all.
+    mkdirSync(join(target, "app"), { recursive: true });
+    writeFileSync(join(target, "app", "page.tsx"), 'export default function Page() {\n  return <img src="/hero.png" alt="hero" />;\n}\n');
+    const secdef = `create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, role) values (new.id, 'member');
+  return new;
+end;
+$$;`;
+    writeFileSync(join(target, "supabase", "migrations", "0001_initial_schema.sql"), secdef);
+    writeFileSync(join(target, "supabase", "migrations", "0002_fix_handle_new_user.sql"), secdef);
+    ok = await runCapturing([target, "--findings-out", join(dupScratch, "eng.json"), "--sarif-out", join(dupScratch, "out.sarif")]);
+
+    // The negative control: an assembled document that genuinely fails the report schema, via
+    // a --meta the operator supplied with a non-string field. Without one, "the banner exists" is a
+    // claim about a branch nobody has watched execute.
+    writeFileSync(join(dupScratch, "bad-meta.json"), JSON.stringify({ ...m1470Meta, client: 42 }));
+    refused = await runCapturing([target, "--meta", join(dupScratch, "bad-meta.json"), "--findings-out", join(dupScratch, "never.json"), "--sarif-out", join(dupScratch, "never.sarif")]);
+  }, 300000);
+
+  afterAll(() => rmSync(dupScratch, { recursive: true, force: true }));
+
+  it("exports BOTH formats on the tree that used to export neither", () => {
+    expect(ok.code, ok.out).toBe(0);
+    const doc = JSON.parse(readFileSync(join(dupScratch, "eng.json"), "utf8")) as FindingsDocument;
+    const definer = doc.findings.filter((f) => f.id.startsWith("SB-DEFINER-AUTHZ-"));
+    expect(definer).toHaveLength(2); // both migrations reported — disambiguated, not de-duplicated
+    expect(new Set(doc.findings.map((f) => f.id)).size).toBe(doc.findings.length);
+    expect(JSON.parse(readFileSync(join(dupScratch, "out.sarif"), "utf8")).runs[0].results.length).toBe(doc.findings.length);
+  });
+
+  it("on a run that cannot export, the last word is DELIVERED NOTHING, not a ledger PASS", () => {
+    expect(refused.code).toBe(1);
+    expect(refused.out).toMatch(/DELIVERED NOTHING/);
+    expect(refused.out).toMatch(/nothing reached the client/);
+    // The banner has to come AFTER the ledger, or the reassuring line is still the one left on screen.
+    expect(refused.out.lastIndexOf("DELIVERED NOTHING")).toBeGreaterThan(refused.out.lastIndexOf("LEDGER PASS"));
+  });
+
+  it("writes no partial deliverable on that run — neither export exists", () => {
+    expect(existsSync(join(dupScratch, "never.json"))).toBe(false);
+    expect(existsSync(join(dupScratch, "never.sarif"))).toBe(false);
   });
 });

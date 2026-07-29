@@ -1,0 +1,23 @@
+// The precision boundary for #1440: the same while-loop retry, capped. The condition compares an
+// attempt counter against a numeric constant this pass resolves, so the loop header carries a bound
+// and nothing must fire.
+const MAX_ATTEMPTS = 5;
+
+export async function POST(request: Request) {
+  const { url } = await request.json();
+
+  let attempts = 0;
+  let body: unknown = null;
+  while (attempts < MAX_ATTEMPTS) {
+    attempts += 1;
+    try {
+      const res = await fetch(url);
+      body = await res.json();
+      break;
+    } catch {
+      // swallow and retry, capped
+    }
+  }
+
+  return Response.json(body);
+}

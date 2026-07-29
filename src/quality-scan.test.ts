@@ -1,16 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { readEntriesSafe } from "./fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { divergedCloneFindings, wholeRepoDivergedCloneFindings } from "./diverged-clones.js";
+import { divergedCloneFindings, divergedScopeFinding, wholeRepoDivergedCloneFindings } from "./diverged-clones.js";
 import {
   duplicationSummary,
   JSCPD_DISCLOSED_GLOBS,
   JSCPD_IGNORE_GLOBS,
   jscpdAnalysedNothingReason,
   jscpdIgnoreScopeFinding,
+  RESERVED_POSITIONAL_IDS,
   jscpdToFindings,
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
@@ -24,6 +26,7 @@ import {
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  type JscpdDuplicate,
   type JscpdGlobMatch,
   type JscpdReport,
   type KnipReport,
@@ -316,9 +319,9 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
   // touchesSecurityPath (path, #360) OR touchesTenantSupabasePath (content, #399).
   function widenedSecurityFiles(dir: string, rel = ""): { path: string; source: string }[] {
     const files: { path: string; source: string }[] = [];
-    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(join(dir, rel)).entries) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (entry.name !== "generated") files.push(...widenedSecurityFiles(dir, relPath));
       } else if (entry.name.endsWith(".ts")) {
         const source = readFileSync(join(dir, relPath), "utf8");
@@ -334,9 +337,9 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
   // whole-repo pass's wider admission).
   function wideRepoFiles(dir: string, rel = ""): { path: string; source: string }[] {
     const files: { path: string; source: string }[] = [];
-    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(join(dir, rel)).entries) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) files.push(...wideRepoFiles(dir, relPath));
+      if (entry.isDirectory) files.push(...wideRepoFiles(dir, relPath));
       else if (entry.name.endsWith(".ts")) files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
     }
     return files;
@@ -819,5 +822,63 @@ describe("mergeKnipReports (#505)", () => {
     const merged = mergeKnipReports([a, b]);
     expect(merged.files).toEqual(["apps/main/src/dead.ts"]);
     expect(merged.issues).toEqual(b.issues);
+  });
+});
+
+// #1470 — the sentinel/positional collision. M4-97/M4-98/M4-99 and M5-98/M5-99 are FIXED ids minted
+// by the same two modules whose ordinary findings are numbered positionally, so the sentinels were
+// only ever safe while no real target reached them. proposit reached them: MEASURED 2026-07-28 @
+// 82838cef, jscpd found 142 significant clone clusters, the 97th was minted `M4-97`, the assembled
+// deliverable failed schema validation on the duplicate and a 589-finding engagement exported
+// nothing. The guard has to be a VOLUME test, because that is the only thing that distinguishes the
+// broken code from the fixed code — every existing fixture in this file is far below 97.
+describe("positional M4/M5 ids never collide with the fixed sentinel ids (#1470)", () => {
+  // A clone cluster large enough to clear isSignificantClone, repeated so numbering runs past 99.
+  const clone = (n: number): JscpdDuplicate => ({
+    format: "typescript",
+    lines: 20,
+    tokens: 200,
+    fragment: `const x${n} = 1;\n`,
+    firstFile: { name: `a${n}.ts`, start: 1, end: 20 },
+    secondFile: { name: `b${n}.ts`, start: 1, end: 20 },
+  });
+  const bigReport: JscpdReport = {
+    statistics: { total: { percentage: 5, duplicatedLines: 4000, lines: 80000 } },
+    duplicates: Array.from({ length: 150 }, (_, i) => clone(i)),
+  };
+  const bigKnip: KnipReport = { files: Array.from({ length: 150 }, (_, i) => `dead/f${String(i).padStart(3, "0")}.ts`), issues: [] };
+
+  const SENTINELS = [
+    jscpdUnavailableFinding("timed out").id, // M4-99
+    divergedScopeFinding(3, 400).id, // M4-97
+    knipReducedTierFinding("root: no node_modules").id, // M5-98
+    knipEntryUncertainFinding("root: entry ratio").id, // M5-99
+  ];
+
+  it("RESERVED_POSITIONAL_IDS covers every numeric sentinel these modules actually emit", () => {
+    // Read off the real factories, not a hand-copied list: a sixth sentinel added next month is in
+    // scope the moment its factory is added here, and an id dropped from the reserve fails loud.
+    for (const id of SENTINELS) expect(RESERVED_POSITIONAL_IDS as readonly string[], id).toContain(id);
+  });
+
+  it("mints 150 M4 clone ids without ever landing on M4-97/98/99", () => {
+    const ids = jscpdToFindings(bigReport).map((f) => f.id);
+    expect(ids).toHaveLength(150);
+    expect(new Set(ids).size).toBe(150);
+    for (const reserved of ["M4-97", "M4-98", "M4-99"]) expect(ids).not.toContain(reserved);
+    // The skip is a yield, not a truncation: numbering continues past the reserved block.
+    expect(ids.slice(95, 98)).toEqual(["M4-96", "M4-100", "M4-101"]);
+  });
+
+  it("mints 150 M5 dead-file ids without ever landing on M5-98/99", () => {
+    const ids = knipToFindings(bigKnip).map((f) => f.id);
+    expect(ids).toHaveLength(150);
+    expect(new Set(ids).size).toBe(150);
+    for (const reserved of ["M5-98", "M5-99"]) expect(ids).not.toContain(reserved);
+    expect(ids.slice(96, 99)).toEqual(["M5-97", "M5-100", "M5-101"]);
+  });
+
+  it("leaves small reports numbered exactly as before — the fix is inert below the reserve", () => {
+    expect(jscpdToFindings(jscpdReport).map((f) => f.id).slice(0, 3)).toEqual(["M4-01", "M4-02", "M4-03"]);
   });
 });

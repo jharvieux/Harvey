@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { detectHandrolledFindings } from "../detectors/handrolled.js";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -134,11 +134,43 @@ describe("scoreEntry", () => {
     expect(scoreEntry(e, ownManifest).pass).toBe(false);
   });
 
-  it("reports a connected-tier entry as N/A, never a failure, even with no findings", () => {
-    const e = entry({ id: "P-RLS", kind: "positive", cls: "rls", location: "audit_logs", expectedTier: "connected", note: "" });
+  // #1428 — the defect this replaced. A live-tier row used to be `pass: true` UNCONDITIONALLY with no
+  // way for a caller to tell it apart from a scored pass, and no consumer anywhere scored one against
+  // a live run: gutting all three B24 detector bodies left `validate-calibration` exiting 0 with
+  // byte-identical output. These three cases are the offline half of the fix (the live half is
+  // src/cli/validate-connected.ts, which needs a live stack and so runs outside `pnpm verify`):
+  // NOT SCORED is flagged, a run that HAS the venue scores it for real, and — the negative control —
+  // that scoring can FAIL. A gate nobody has watched fail is indistinguishable from a dead one.
+  it("flags a live-tier entry NOT SCORED when the run has no such venue — a pass nobody can read as a result", () => {
+    const e = entry({ id: "P-RLS", kind: "positive", cls: "rls", location: "audit_logs", expectedTier: "local", note: "" });
     const row = scoreEntry(e, []);
     expect(row.pass).toBe(true);
-    expect(row.detail).toContain("connected");
+    expect(row.notScored).toBe(true);
+    expect(row.detail).toContain("NOT SCORED");
+  });
+
+  it("scores a live-tier entry for real when the run declares its venue (#1428)", () => {
+    const e = entry({ id: "P-RLS", kind: "positive", cls: "rls", location: "audit_logs", match: ["rls"], expectedTier: "local", note: "" });
+    const row = scoreEntry(e, [finding({ location: "public.audit_logs", title: "RLS disabled", precisionTier: "high" })], new Set(["local"]));
+    expect(row.notScored).toBe(false);
+    expect(row.pass).toBe(true);
+    expect(row.caughtTier).toBe("high");
+  });
+
+  it("FAILS a live-tier entry whose detector went silent, once its venue is declared (#1428)", () => {
+    const e = entry({ id: "P-RLS", kind: "positive", cls: "rls", location: "audit_logs", match: ["rls"], expectedTier: "local", note: "" });
+    const row = scoreEntry(e, [], new Set(["local"]));
+    expect(row.notScored).toBe(false);
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("NOT caught");
+    // ...and a run WITHOUT that venue must not turn the same silence into a pass anyone can quote.
+    expect(scoreEntry(e, []).notScored).toBe(true);
+  });
+
+  it("scores only the venues the run declares — a `connected` row stays NOT SCORED on a local-only run (#1428)", () => {
+    const e = entry({ id: "P-SCHEMA", kind: "positive", cls: "schema", location: "internal_ops", expectedTier: "connected", note: "" });
+    expect(scoreEntry(e, [], new Set(["local"])).notScored).toBe(true);
+    expect(scoreEntry(e, [], new Set(["local", "connected"])).notScored).toBe(false);
   });
 
   // #1157 — severity correctness. The gate must fail on a caught-but-MIS-RATED positive the way it
@@ -826,8 +858,8 @@ describe("moduleCensus (#341 — per-module legibility so a blended count can't 
       const entries = CORPUS.filter((e) => (e.module ?? "M1") === m);
       const row = byModule.get(m)!;
       expect(row.negatives).toBe(entries.filter((e) => e.kind === "negative").length);
-      expect(row.positivesConnected).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier === "connected").length);
-      expect(row.positivesStatic).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier !== "connected").length);
+      expect(row.positivesConnected).toBe(entries.filter((e) => e.kind === "positive" && isLiveTier(e.expectedTier)).length);
+      expect(row.positivesStatic).toBe(entries.filter((e) => e.kind === "positive" && !isLiveTier(e.expectedTier)).length);
     }
 
     // M1 rows first, then ascending module number.
@@ -861,12 +893,19 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
     expect(row?.missing).toBe(`0/${MIN_NEGATIVES_PER_MODULE} negatives`);
   });
 
-  it("M2 and M6 stand on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
+  it("M2 stands on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
+    // M6 was the second exempt module until #1371/#1453. Its exemption's original ground — that a
+    // planted single-file fixture could not express a whole-repo shape count — was measured false
+    // twice independently (#1454 over one planted file, 3 of 3; #1453 over the full set, 33 of 33).
+    // #1454 could not delete the row, only re-express it as decisional, because the fixtures did not
+    // exist yet; it wrote the hand-off into the row instead. #1453 landed them, so the row went. The
+    // `stale` check is what would have fired had it stayed — proven positively in the last block
+    // below, not merely by this list coming back short.
     const { thin, exempt, stale } = parityVerdict(CORPUS);
     expect(thin).toEqual([]);
     expect(stale).toEqual([]);
-    expect(exempt.map((e) => e.module)).toEqual(["M2", "M6"]);
-    for (const e of exempt) expect(e.reason).toMatch(/pnpm |#\d+/);
+    expect(exempt.map((e) => e.module)).toEqual(["M2"]);
+    for (const e of exempt) expect(e.exemption.substituteGates.length).toBeGreaterThan(0);
     // A module that grows real fixtures must lose its exemption rather than keep hiding behind it.
     const withM2Fixtures: CorpusEntry[] = [
       ...CORPUS,
@@ -875,28 +914,6 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
       entry({ id: "N-M2-A", kind: "negative", cls: "c", module: "M2", location: "c", note: "" }),
     ];
     expect(parityVerdict(withM2Fixtures).stale).toEqual(["M2"]);
-  });
-
-  // #1371: M6's exemption reason USED to say "M6's indicators are whole-repo shape counts, which a
-  // planted single-file fixture could never express". MEASURED 2026-07-28 by running
-  // detectHandrolledFindings over src/detectors/__fixtures__/handrolled: 33 of 33 planted
-  // single-file positives fire. The claim was false the day it was written, and a substitute-gate
-  // reason nobody re-tests is exactly how #1371's doc sentence survived eleven days. This locks the
-  // measurement to the prose: the exemption may stand, but not on that argument.
-  it("M6's exemption does not rest on the falsified 'a single-file fixture cannot express it' claim", () => {
-    const m6 = parityVerdict(CORPUS).exempt.find((e) => e.module === "M6");
-    expect(m6).toBeDefined();
-    expect(m6!.reason).not.toMatch(/single-file fixture cannot|cannot express/i);
-    // It must instead name where the indicators ARE gated, so the claim is checkable.
-    expect(m6!.reason).toContain("handrolled");
-    const fixtureDirs = readdirSync("src/detectors/__fixtures__/handrolled");
-    const fired = fixtureDirs.filter((d) => {
-      const dir = join("src/detectors/__fixtures__/handrolled", d, "positive");
-      if (!existsSync(dir)) return false;
-      const inputs = readdirSync(dir).map((f) => ({ path: `src/${f.replace(/\.txt$/, "")}`, text: readFileSync(join(dir, f), "utf8") }));
-      return detectHandrolledFindings(inputs).some((x) => x.taxonomy.startsWith("M6"));
-    });
-    expect(fired.length).toBeGreaterThanOrEqual(33);
   });
 });
 
@@ -980,15 +997,26 @@ describe("mechanicalCorpus (#398 — a module-tagged entry must never go silentl
 });
 
 describe("buildCoverageMatrix", () => {
-  it("excludes connected-tier AND no-rule-tier entries from the static positive total", () => {
+  it("excludes live-tier AND no-rule-tier entries from the static positive total", () => {
     const m = buildCoverageMatrix([], CORPUS);
-    const connected = CORPUS.filter((e) => e.expectedTier === "connected").length;
-    expect(m.connectedNa).toBe(connected);
-    // positivesTotal is the "must be caught" denominator: connected (live DB) and "none" (no
-    // mechanical rule by design) are both out of it — neither is a recall miss when uncaught.
-    expect(m.positivesTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected" && e.expectedTier !== "none").length);
+    expect(m.liveNotScored).toBe(CORPUS.filter((e) => isLiveTier(e.expectedTier)).length);
+    // positivesTotal is the "must be caught" denominator: a live-tier row this run could not score
+    // and a "none" row (no mechanical rule by design) are both out of it — neither is a recall miss.
+    expect(m.positivesTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && !isLiveTier(e.expectedTier) && e.expectedTier !== "none").length);
     expect(m.noRuleTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none").length);
-    expect(m.negativesTotal).toBe(CORPUS.filter((e) => e.kind === "negative" && e.expectedTier !== "connected").length);
+    expect(m.negativesTotal).toBe(CORPUS.filter((e) => e.kind === "negative" && !isLiveTier(e.expectedTier)).length);
+  });
+
+  // #1428 — the denominator must MOVE when the run has the venue. Without this, a live row could be
+  // "scored" and still sit outside every count, which is the old defect wearing a new field.
+  it("counts a live-tier row into the totals once its venue is declared (#1428)", () => {
+    const offline = buildCoverageMatrix([], CORPUS);
+    const withLocal = buildCoverageMatrix([], CORPUS, new Set(["local"]));
+    const localRows = CORPUS.filter((e) => e.expectedTier === "local");
+    expect(localRows.length).toBeGreaterThan(0);
+    expect(withLocal.liveNotScored).toBe(offline.liveNotScored - localRows.length);
+    expect(withLocal.positivesTotal).toBe(offline.positivesTotal + localRows.filter((e) => e.kind === "positive").length);
+    expect(withLocal.negativesTotal).toBe(offline.negativesTotal + localRows.filter((e) => e.kind === "negative").length);
   });
 
   it("with zero findings: no positive is caught and every negative is cleared", () => {
@@ -1003,7 +1031,7 @@ describe("buildCoverageMatrix", () => {
     // manifest-pinned entry gets the real dependency-finding shape, "<manifest> (<pkg>)". A
     // "none"-tier positive is EXCLUDED: fabricating a finding for it would (correctly) fail its
     // by-design gap — that inverse behavior gets its own test below.
-    const staticPositives = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected" && e.expectedTier !== "none");
+    const staticPositives = CORPUS.filter((e) => e.kind === "positive" && !isLiveTier(e.expectedTier) && e.expectedTier !== "none");
     const synth: Finding[] = staticPositives.map((e) =>
       finding({
         location: e.manifest ? `${e.manifest} (${e.location})` : `${e.location}:1`,
@@ -1025,8 +1053,8 @@ describe("buildCoverageMatrix", () => {
   it("no-rule-tier positive: intended gap holds while silent, flips the gate loud once a rule fires", () => {
     // The "none" tier encodes an accepted no-mechanical-rule gap (#425). With no relevant finding
     // it passes as an intended gap and is kept OUT of the recall denominator — never a miss.
-    const noRule = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none");
-    expect(noRule.length, "expected at least one no-rule-tier corpus entry to exercise this path").toBeGreaterThan(0);
+    const noRule = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none" && (e.gapKind ?? "by-design") === "by-design");
+    expect(noRule.length, "expected at least one by-design no-rule-tier corpus entry to exercise this path").toBeGreaterThan(0);
     const entry = noRule[0]!;
 
     const held = scoreEntry(entry, []);
@@ -1116,9 +1144,8 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };
@@ -1148,6 +1175,20 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "action-validation-helper", dir: "server-action-helper-validator", neg: "negative" },
     { check: "waterfall-guard", dir: "waterfall-guard", neg: "negative" },
     { check: "uncapped-retry", dir: "uncapped-retry", neg: "negative" },
+    // #1293, same inverted scoring: each negative is an FP shape MEASURED on carbon's pinned tree.
+    { check: "ssr-client-route", dir: "ssr-client-route", neg: "negative" },
+    { check: "ssr-shadowed-global", dir: "ssr-shadowed-global", neg: "negative" },
+    { check: "ssr-early-return", dir: "ssr-early-return", neg: "negative" },
+    { check: "leak-narrowed-select", dir: "leak-narrowed-select", neg: "negative" },
+    // #1276, the family a real TanStack Start target produced and no authored fixture contained.
+    { check: "tanstack-client-only", dir: "tanstack-client-only", neg: "negative", framework: "tanstack-start" },
+    // #1438/#1441/#1439/#1440 — the four residuals of the PR that landed the three above. Scored
+    // the same way round: each POSITIVE is a shape the fix must keep (or start) firing on, each
+    // NEGATIVE the neighbouring shape it must not reach.
+    { check: "waterfall-escape", dir: "waterfall-escape", neg: "negative" },
+    { check: "waterfall-abort", dir: "waterfall-abort", neg: "negative" },
+    { check: "action-gate-strength", dir: "action-gate-strength", neg: "negative" },
+    { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
@@ -1192,7 +1233,7 @@ describe("#1238 OWASP React RSC boundary (live detectAppRouterFindings over targ
   const CALIBRATION_REACT = fileURLToPath(new URL("../../targets/calibration/src/owasp-react/", import.meta.url));
 
   function loadReactFixtures(): SourceInput[] {
-    return readdirSync(CALIBRATION_REACT)
+    return readNamesSafe(CALIBRATION_REACT)
       .filter((e) => e.endsWith(".tsx"))
       .map((e) => ({ path: `src/owasp-react/${e}`, text: readFileSync(join(CALIBRATION_REACT, e), "utf8") }));
   }
@@ -1230,9 +1271,8 @@ describe("#917/#918 M9 port corpus (live detectAppRouterFindings over the Remix/
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };

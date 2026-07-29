@@ -9,20 +9,34 @@
 //      already aimed at what the pipeline will check.
 //   2. ingestFixDiff — take the operator's resulting diff and run it through the EXISTING rails
 //      unchanged: executeFixDiff (rails + apply-clean + verifySuggestedFix) plus the detector-after
-//      re-run, scored by computeGreen. The diff is UNTRUSTED, exactly as an LLM's was — a diff that does
-//      not make the detector stop firing is rejected (fail loud), never delivered. Only a green result
-//      reaches the transport (a DRAFT PR), which the caller drives via deliverFix.
+//      re-run AND the §2.1 client-verification half (#1272: the verify-harness discovers the client's
+//      own commands, baselines them at the pinned commit, and re-runs them against the fixed source),
+//      scored by computeGreen. The diff is UNTRUSTED, exactly as an LLM's was — a diff that does not
+//      make the detector stop firing, or that breaks the client's own suite, is rejected (fail loud),
+//      never delivered. Only a green result reaches the transport (a DRAFT PR), via deliverFix.
 //
 // Nothing here calls a model or reimplements a rail; it composes the pieces #885/#922/#923/#930 built.
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectorBefore, rerunDetector } from "./detector-rerun.js";
 import { executeFixDiff, type FixExecution } from "./execute.js";
 import { fileOfLocation } from "./produce-plan.js";
 import type { FixPlan } from "./plan.js";
-import { DEFAULT_DIFF_CAP, type DiffCap } from "./rails.js";
-import { computeGreen, type DetectorRun, type VerificationEvidence } from "./verify.js";
+import { DEFAULT_DIFF_CAP, parseDiffFacts, type DiffCap } from "./rails.js";
+import {
+  buildVerificationEvidence,
+  detectRunner,
+  discoverClientCommands,
+  extractCiRunSteps,
+  linkNodeModules,
+  runBaseline,
+  withBaselineWorktree,
+  type DiscoveredCommand,
+} from "./verify-harness.js";
+import { computeGreen, type CommandRun, type DetectorRun, type VerificationEvidence } from "./verify.js";
 
 interface FixPromptInput {
   finding: Finding;
@@ -94,6 +108,32 @@ interface IngestInput {
   baselineCommit: string;
   allowlist: string[];
   diffCap?: DiffCap;
+  // #1272: overrides the lockfile-derived runner for the §2.1 client checks, which used to be
+  // hardcoded `clientChecks: []`. Absent ⇒ detectRunner reads it off the target's own lockfile.
+  runner?: string;
+  attempts?: number; // which escalation attempt produced this diff — recorded in the evidence
+}
+
+// The monorepo rule (§2.1): each workspace the diff touches, plus the root. A file's workspace is
+// the nearest ancestor directory that has its own package.json.
+function affectedWorkspaces(targetDir: string, files: string[]): string[] {
+  const out = new Set<string>();
+  for (const f of files) {
+    for (let dir = dirname(f); dir !== "." && dir !== "/" && dir !== ""; dir = dirname(dir)) {
+      if (existsSync(join(targetDir, dir, "package.json"))) {
+        out.add(dir);
+        break;
+      }
+    }
+  }
+  return [...out].sort();
+}
+
+// A workflow `run:` step carrying a GitHub expression (`${{ secrets.X }}`, `${{ matrix.y }}`) has no
+// meaning outside Actions, so it is recorded skipped:"needs-ci" rather than run locally and failed
+// for a reason that is not the fix's fault (§2.2).
+function needsCi(c: DiscoveredCommand): boolean {
+  return c.source.startsWith("ci-workflow") && c.command.includes("${{");
 }
 
 interface IngestResult {
@@ -109,12 +149,44 @@ interface IngestResult {
 // deliverFix (the caller's transport step). The detector re-run rides inside executeFixDiff's single
 // worktree, so the same applied source both clears the apply gate and answers "does it still fire".
 export function ingestFixDiff(input: IngestInput): IngestResult {
+  const facts = parseDiffFacts(input.diff);
+  const commands = discoverClientCommands(
+    input.targetDir,
+    affectedWorkspaces(input.targetDir, [...facts.files, ...facts.createdFiles]),
+    input.runner ?? detectRunner(input.targetDir),
+    extractCiRunSteps(join(input.targetDir, ".github/workflows")),
+  );
+
+  // §2.1 step 3, computed LAZILY: a baseline run of the client's own suite is the most expensive
+  // thing in the pipeline, and a rails-blocked or non-applying diff never needs one. The hook below
+  // is only reached once the diff has cleared the apply gate.
+  let baselineRuns: Map<string, CommandRun> | undefined;
+  const baseline = () =>
+    (baselineRuns ??= withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(commands, root)));
+
   const execution = executeFixDiff(input.finding.id, input.diff, {
     targetDir: input.targetDir,
     baselineCommit: input.baselineCommit,
     allowlist: input.allowlist,
     diffCap: input.diffCap,
     detectorAfter: (worktree) => rerunDetector(input.finding, worktree),
+    evidence: (worktree, detectorAfter) => {
+      linkNodeModules(input.targetDir, worktree);
+      return buildVerificationEvidence(
+        {
+          findingId: input.finding.id,
+          baselineCommit: input.baselineCommit,
+          worktreeCommit: input.baselineCommit, // the fixed source lived in a disposable worktree cut here
+          detectorBefore: detectorBefore(input.finding),
+          detectorAfter,
+          commands,
+          baseline: baseline(),
+          needsCi,
+          attempts: input.attempts ?? 1,
+        },
+        worktree,
+      );
+    },
   });
 
   const detectorAfter: DetectorRun = execution.detectorAfter ?? {
@@ -124,17 +196,20 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
     notRun: `detector was not re-run — the diff did not clear the apply gate (outcome "${execution.outcome}": ${execution.abortReason ?? execution.verification ?? (execution.railViolations.join("; ") || "no verified worktree")})`,
   };
 
-  const evidence: VerificationEvidence = {
+  // The harness assembles the evidence inside the fixed worktree; when the diff never got there,
+  // the fallback record says so and carries an empty clientChecks, which is NOT green (#1272).
+  const evidence: VerificationEvidence = execution.evidence ?? {
     findingId: input.finding.id,
-    worktreeCommit: input.baselineCommit, // the fixed source lived in a disposable worktree cut here
+    worktreeCommit: input.baselineCommit,
     baselineCommit: input.baselineCommit,
     detectorBefore: detectorBefore(input.finding),
     detectorAfter,
-    clientChecks: [], // the client-verify half (§2.1) is the verify-harness's job; not gathered here
+    clientChecks: [],
     green: false,
-    attempts: 1,
+    attempts: input.attempts ?? 1,
   };
   const green = computeGreen(evidence);
+  const failedChecks = evidence.clientChecks.filter((c) => c.skipped === undefined && c.exitCode !== 0);
 
   const rejectReason = green
     ? undefined
@@ -142,7 +217,11 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
       ? `diff did not clear the rails/apply gate (${execution.outcome}): ${execution.abortReason ?? execution.verification ?? (execution.railViolations.join("; ") || "unknown")}`
       : detectorAfter.notRun !== undefined
         ? `detector ${input.finding.taxonomy} could not be re-run: ${detectorAfter.notRun}`
-        : `detector ${input.finding.taxonomy} still fires after the fix — the diff applies but does not resolve the finding`;
+        : detectorAfter.fired
+          ? `detector ${input.finding.taxonomy} still fires after the fix — the diff applies but does not resolve the finding`
+          : failedChecks.length > 0
+            ? `the detector is clean but the client's own checks FAIL after the fix: ${failedChecks.map((c) => `${c.command} (exit ${c.exitCode})`).join(", ")}`
+            : `no client verify command could be discovered under ${input.targetDir} — the §2.1 client half cannot be evidenced, so this fix is not verifiable green (add a verify/check/ci/test script, or a pull_request-triggered workflow, to the target)`;
 
   return { execution, evidence: { ...evidence, green }, green, rejected: !green, rejectReason };
 }

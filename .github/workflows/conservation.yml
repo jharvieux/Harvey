@@ -68,6 +68,9 @@ on:
         type: boolean
         default: false
   pull_request:
+  # #1498: merge queue. Without this the required `plant → deliverable, and the produced/delivered
+  # arithmetic` context never reports on a queue entry and the queue deadlocks.
+  merge_group:
 
 # A cancellation here is only ever caused by a NEWER run on the same `github.ref` — for a PR that
 # is `refs/pull/N/merge`, so the superseding run reports against the newer head commit, which is
@@ -115,6 +118,17 @@ jobs:
       - id: filter
         name: Does this change set touch the conservation pipeline or its fixtures?
         run: |
+          # #1498: a merge-queue entry is NOT a schedule. It runs the GATE (relevant) but must NOT
+          # run the seven captured-fixture drift checks. Those re-run PINNED EXTERNAL TOOLS and
+          # detect an upstream release moving a tool's output schema — so gating the queue on them
+          # would make merges fail for reasons that have nothing to do with the batch being merged,
+          # and would put an unrelated third party on the critical path to every merge. They stay
+          # on the daily schedule, which is the cadence that actually matches what they detect.
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             # BOTH flags. The scheduled run is the ONLY thing that executes the drift checks on a
             # regular cadence now, so forgetting `drift` here would silently retire all seven —
@@ -175,6 +189,10 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
+          # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED
+          # 2026-07-28, where the osv-scanner `curl -o` into it failed with `curl: (23)`
+          # (write error) on a fresh runner. Create it before anything writes there.
+          mkdir -p "$HOME/.local/bin"
           pipx install semgrep
           curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
             | sh -s -- -b "$HOME/.local/bin"

@@ -17,8 +17,9 @@
 //     table, because that inference is a fixed name list and a failed inference is otherwise
 //     indistinguishable from a clean result.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { classifyMigrationSql, type TableDataMapEntry } from "../../tools/pii-classify.mjs";
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
@@ -52,7 +53,7 @@ function readRlsSqlSources(dir: string): { file: string; raw: string }[] {
   const out: { file: string; raw: string }[] = [];
   const migrationsDir = join(dir, "supabase", "migrations");
   if (existsSync(migrationsDir)) {
-    for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+    for (const file of readNamesSafe(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
       out.push({ file: relative(dir, join(migrationsDir, file)), raw: readFileSync(join(migrationsDir, file), "utf8") });
     }
   }
@@ -566,7 +567,7 @@ function tableBody(sql: string, table: string): string | null {
 function readMigrations(dir: string): { file: string; sql: string }[] {
   const migrationsDir = join(dir, "supabase", "migrations");
   if (!existsSync(migrationsDir)) return [];
-  return readdirSync(migrationsDir)
+  return readNamesSafe(migrationsDir)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => ({ file: relative(dir, join(migrationsDir, f)), sql: readFileSync(join(migrationsDir, f), "utf8") }));
@@ -705,7 +706,16 @@ export function checkMigrationDefinerAuthz(dir: string): Finding[] {
       const signature = `${f.location}(${fn.argNames.join(", ")})`;
       const at = sql.toLowerCase().indexOf(`function ${f.location.toLowerCase()}`);
       const line = at >= 0 ? sql.slice(0, at).split("\n").length : 1;
-      findings.push({ ...f, id: `SB-DEFINER-AUTHZ-${signature}`, location: `${file}:${line} (${signature})` });
+      // #1470: the id carries the MIGRATION as well as the signature. It used to be the signature
+      // alone, which is not unique per finding — this loop runs once per migration file, and
+      // `create or replace function` is how a schema evolves, so any function redefined in a later
+      // migration produced two findings under one id. MEASURED 2026-07-28 on proposit @ 82838cef:
+      // `public.handle_new_user()` is declared in 20260220000000_initial_schema.sql and again in
+      // 20260221060933_fix_handle_new_user.sql, the assembled deliverable failed report-schema
+      // validation on the duplicate, and a 589-finding engagement exported nothing. Both rows are
+      // real (each names a file:line a reviewer must read), so the fix is a distinguishing id, not
+      // a collapse.
+      findings.push({ ...f, id: `SB-DEFINER-AUTHZ-${signature}@${basename(file)}`, location: `${file}:${line} (${signature})` });
     }
   }
   return findings;
@@ -1041,10 +1051,10 @@ const OAUTH_CALL = /\bsignInWithOAuth\b|\bsignInWithIdToken\b|\bsignInWithSSO\b/
 function scanSourceAuthSignals(dir: string): { email: boolean; phone: boolean; oauth: boolean } {
   const signals = { email: false, phone: false, oauth: false };
   const walk = (d: string): void => {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(d).entries) {
       if (AUTH_SKIP_DIRS.has(entry.name)) continue;
       const full = join(d, entry.name);
-      if (entry.isDirectory()) walk(full);
+      if (entry.isDirectory) walk(full);
       else if (AUTH_SOURCE_EXT.test(entry.name)) {
         const c = readFileSync(full, "utf8");
         if (!signals.email) signals.email = EMAIL_CALL.test(c);

@@ -1,0 +1,1 @@
+export const db = { team: { findMany: async () => [] as { id: string }[] }, sso: { exists: async (_id: string) => false } };

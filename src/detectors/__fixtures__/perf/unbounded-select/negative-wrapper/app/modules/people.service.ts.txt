@@ -1,0 +1,12 @@
+import { setGenericQueryFilters } from "../utils/query";
+
+// Reads as unbounded to a check that only looks at the chain it can see; it is paginated one
+// call away.
+export async function getTimecardEntries(client: any, companyId: string, args: { offset?: number; limit?: number; search: string | null }) {
+  let query = client.from("timeCardEntries").select("*", { count: "exact" }).eq("companyId", companyId);
+  if (args.search) {
+    query = query.or(`firstName.ilike.%${args.search}%`);
+  }
+  query = setGenericQueryFilters(query, args, [{ column: "clockIn", ascending: false }]);
+  return query;
+}

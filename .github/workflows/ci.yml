@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # #1498: merge queue. A queue entry is a `merge_group` event, and a required context that does
+  # not fire on it HANGS THE QUEUE FOREVER — the check never reports, so nothing merges. This
+  # trigger is what makes `verify` reportable on a queue entry. The `changes` router below already
+  # fails safe: any non-`pull_request` event sets code=true, so a queue entry runs the FULL verify
+  # rather than a filtered subset. That is deliberate — the queue tests the merged state, which is
+  # the one thing `strict: true` never did.
+  merge_group:
   # #1138: a daily run so heavy-cli (the seven heavy files + real binaries) is exercised on a
   # cadence, not only when a push/PR touches code. A regression from something no PR touches — a
   # transitive dep bump, a runner-image change, a scanner-binary drift — would otherwise never trip
@@ -158,6 +165,10 @@ jobs:
       - name: Install mechanical-tier scanner binaries
         run: |
           set -euo pipefail
+          # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED
+          # 2026-07-28, where the osv-scanner `curl -o` into it failed with `curl: (23)`
+          # (write error) on a fresh runner. Create it before anything writes there.
+          mkdir -p "$HOME/.local/bin"
           pipx install semgrep
           curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
             | sh -s -- -b "$HOME/.local/bin"

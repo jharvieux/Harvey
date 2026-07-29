@@ -1,0 +1,7 @@
+// The house-style paginator: it applies .range() to the query it was handed.
+export function setGenericQueryFilters(query: any, args: { offset?: number; limit?: number }, defaults: unknown[]) {
+  if (Number.isInteger(args.offset) && Number.isInteger(args.limit)) {
+    query = query.range(args.offset!, args.offset! + args.limit! - 1);
+  }
+  return query;
+}

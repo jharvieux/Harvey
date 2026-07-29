@@ -21,8 +21,9 @@
 // regulated" route into Enterprise is an operator judgement this tool does not make, and the report
 // says so rather than letting a small-LOC regulated app read as a settled Small quote.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { JSCPD_IGNORE_GLOBS } from "../quality-scan.js";
 
 export type SizeBand = "small" | "medium" | "large" | "enterprise";
@@ -76,10 +77,14 @@ export function measureCodebaseSize(root: string): CodebaseSize {
   // `excluded` propagates down: once a directory matched a generated/vendored glob, everything under
   // it is counted as excluded rather than re-tested (and rather than silently vanishing — the count
   // is what makes "generated and vendored code doesn't count" a visible fact, not a promise).
+  // The #944 dangling-symlink guard, verbatim from mutation-scan's walkRelPaths — a bare
+  // `statSync(full).isDirectory()` FOLLOWS the link and throws ENOENT on a dangling one. Committed
+  // dangling links are routine (liam's `frontend/apps/app/.env`, dub's EE `LICENSE.md`, cal-diy's
+  // `packages/prisma/.env` — all three crashed the 2026-07-28 breadth sweep here). This walker runs
+  // near the END of quick-scan, so the throw discarded a completed M1 pass: 118–235 s of semgrep,
+  // secrets and dependency work, and every finding it produced, on 3 of 15 wild repos.
   const walk = (dir: string, excluded: boolean): void => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const isDir = statSync(full).isDirectory();
+    for (const { name: entry, path: full, isDirectory: isDir } of readEntriesSafe(dir).entries) {
       if (isDir && BUILD_OUTPUT_DIRS.has(entry)) continue;
       const rel = relative(root, full).split(sep).join("/");
       const skip = excluded || EXCLUDED.some((re) => re.test(rel));

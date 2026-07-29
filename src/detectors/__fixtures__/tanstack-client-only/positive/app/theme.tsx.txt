@@ -1,0 +1,8 @@
+// The SAME reads, unwrapped — a plain module-level helper called from the component's render body.
+// Genuinely on the SSR path, so a fix that suppresses on the mere presence of the wrapper import
+// fails here.
+export function ThemeToggle() {
+  const stored = localStorage.getItem("theme");
+  const root = document.documentElement;
+  return <div className={root.className}>{stored}</div>;
+}

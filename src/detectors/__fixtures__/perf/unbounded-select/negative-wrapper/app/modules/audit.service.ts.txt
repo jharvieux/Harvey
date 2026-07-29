@@ -1,0 +1,4 @@
+// SCOPE CONTROL — the same select shape with NO wrapper. It MUST still fire.
+export async function getAuditTrail(client: any, companyId: string) {
+  return client.from("auditTrail").select("*").eq("companyId", companyId);
+}

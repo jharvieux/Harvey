@@ -19,6 +19,7 @@ import { dedupeFindings } from "./audit-report.js";
 import { validateFindings } from "./findings.js";
 import type { Finding, FindingsDocument } from "./findings.js";
 import { buildHtml } from "../report-template/render.mjs";
+import { detectAppRouterFindings } from "./detectors/app-router.js";
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
   id: "F-1", title: "A finding", severity: "High", confidence: "Confirmed",
@@ -130,5 +131,42 @@ describe("findings.json → rendered report delivers every finding (#1158)", () 
     const result = validateFindings(doc([ghost]));
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes("renders in no report section"))).toBe(true);
+  });
+});
+
+// #1441 criterion 4. The row is emitted by the real detector, carried through validateFindings, and
+// asserted in the HTML the PDF is printed from — not in the assembled JSON. #1433 found that every
+// `confidence: "N/A"` row was having its reason replaced by "Not applicable in context." at render,
+// so "the detector emits it" is not evidence the client ever sees it (#1435 tracks the general
+// gate; this pins the one row #1441 exists to deliver).
+describe("the M9 waterfall scope row reaches the RENDERED report, population intact (#1441)", () => {
+  // A real suppressed pair: an early return on the first result between two queries.
+  const SUPPRESSED_PAIR = `export default async function Page() {
+  const { data: team } = await supabase.from("teams").select("id").single();
+  if (!team) return null;
+  const { data: settings } = await supabase.from("settings").select("theme").single();
+  return null;
+}
+`;
+  const scopeRow = detectAppRouterFindings([{ path: "app/dashboard/page.tsx", text: SUPPRESSED_PAIR }]).find(
+    (f) => f.taxonomy === "M9 — Data-fetching waterfall — scope",
+  );
+
+  it("the detector really emits it (so the render assertion below is about a live row)", () => {
+    expect(scopeRow).toBeDefined();
+    expect(scopeRow?.title).toContain("1 of 1 adjacent query pair excluded by policy");
+  });
+
+  it("it is a valid finding — nothing rejects it before the renderer sees it", () => {
+    expect(validateFindings(doc([finding(), scopeRow!]))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("its population survives into the HTML, and is NOT replaced by 'Not applicable in context.'", () => {
+    const document = doc([finding(), scopeRow!]);
+    const html = buildHtml(document);
+    expect(reconcileRender(document, html)).toEqual([]);
+    expect(html).toContain("1 adjacent awaited-query pair was examined for parallelisability");
+    expect(html).toContain("EXCLUDED BY POLICY");
+    expect(html).not.toContain("Not applicable in context.");
   });
 });

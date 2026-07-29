@@ -39,9 +39,10 @@
 // a target are scope-invalid by construction.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
@@ -199,7 +200,7 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
 // Recursive (#299): a Prisma schemaPath (prisma/migrations/<name>/migration.sql) is one directory
 // deeper than a Supabase one (supabase/migrations/<timestamp>.sql flat) — see readSchemaSql's note.
 function readMigrationSql(dir: string): string {
-  return readdirSync(dir, { recursive: true, encoding: "utf8" })
+  return readRecursiveSafe(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(dir, f), "utf8"))

@@ -40,7 +40,8 @@ nothing is silently omitted.
 
 - Free scan ($0): source-only static findings across all ten modules. No credentials.
 - Connected audit (from $500, priced by codebase size): the full review with real
-  verdicts plus a read of the live database (RLS, Supabase advisors, prod drift, PII).
+  verdicts plus a read of the live database (RLS, Supabase advisors, drift between your
+  deployed schema and your committed migrations, PII).
 - Full audit (from $1,000, priced by codebase size): everything in Connected plus Harvey
   stands up a copy of the stack and attacks it live, and runs full mutation testing.
 

@@ -69,6 +69,29 @@ function runCli(target: string, extraArgs: string[], extraEnv: Record<string, st
 
 const REAL_SPEC = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\nit("throws on NaN", () => { expect(() => add(NaN, 1)).toThrow(); });\n`;
 
+const MINIMAL_REPORT_JSON = `JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } })`;
+
+// A stand-in `stryker` that behaves like the real one on the two options #1285 redirects: it reads
+// the config it was handed (argv[3]) and writes its report to that config's jsonReporter.fileName,
+// resolved against cwd. `overrideRelPath`, when given, writes NEXT to that path instead — the
+// "a Stryker version put its report somewhere else" case #820's glob fallback exists for.
+function writeFakeStrykerBinaryHonoringConfig(repo: string, overrideRelPath?: string): void {
+  const binDir = join(repo, "node_modules", ".bin");
+  mkdirSync(binDir, { recursive: true });
+  const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const declared = path.resolve(process.cwd(), cfg.jsonReporter.fileName);
+const outPath = ${overrideRelPath === undefined ? "declared" : `path.join(path.dirname(path.dirname(path.dirname(declared))), ${JSON.stringify(overrideRelPath)})`};
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+fs.writeFileSync(outPath, ${MINIMAL_REPORT_JSON});
+process.exit(0);
+`;
+  writeFileSync(join(binDir, "stryker"), script);
+  chmodSync(join(binDir, "stryker"), 0o755);
+}
+
 describe("mutation-scan --detect-only (#470/#252, child process, no stryker on PATH)", () => {
   it("exits 0 with an empty findings array when a meaningful suite is present — never invoking Stryker", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
@@ -506,35 +529,26 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
 // test says, standing in for a target-declared jsonReporter path and for a Stryker major version
 // that moved its own documented default.
 describe("mutation-scan report-path auto-discovery (#820, child process)", () => {
-  function writeFakeStrykerReporterBinary(repo: string, reportRelPath: string): void {
-    const binDir = join(repo, "node_modules", ".bin");
-    mkdirSync(binDir, { recursive: true });
-    const script = `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const outPath = path.join(process.cwd(), ${JSON.stringify(reportRelPath)});
-fs.mkdirSync(path.dirname(outPath), { recursive: true });
-fs.writeFileSync(outPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
-process.exit(0);
-`;
-    writeFileSync(join(binDir, "stryker"), script);
-    chmodSync(join(binDir, "stryker"), 0o755);
-  }
-
-  it("reads a custom jsonReporter.fileName off the target's own Stryker config, without --report", async () => {
+  it("reads the report back from the path in the config that ACTUALLY ran, not the target's declared one (#820 + #1285)", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    // The target declares an in-tree report path. #1285 overrides it off-tree, so this is exactly
+    // the case #820's "read the path back out of whichever config ran" mechanism has to carry.
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", jsonReporter: { fileName: "out/custom-mutation-report.json" } }));
-    writeFakeStrykerReporterBinary(repo, "out/custom-mutation-report.json");
+    writeFakeStrykerBinaryHonoringConfig(repo);
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
     expect(parsed.summary?.overall.totalMutants).toBe(1);
+    // The target's own declared path was never written — the override reached Stryker.
+    expect(existsSync(join(repo, "out", "custom-mutation-report.json"))).toBe(false);
   });
 
-  it("falls back to a glob search when the report isn't at the configured/default path (a Stryker version writing elsewhere)", async () => {
+  it("falls back to a glob search of the off-tree scratch dir when the report isn't at the configured path", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
-    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" })); // no jsonReporter — the wrapper's documented default applies
-    writeFakeStrykerReporterBinary(repo, "dist/mutation.json"); // NOT reports/mutation/mutation.json
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    // A Stryker version that writes its json report somewhere other than the configured fileName —
+    // still inside the scratch dir it was pointed at, which is where #1285 makes the glob look.
+    writeFakeStrykerBinaryHonoringConfig(repo, "elsewhere/mutation.json");
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
@@ -594,48 +608,92 @@ describe("mutation-scan dry-run failure always writes an artifact (#1284, child 
   });
 });
 
-// #1285: a full mutation run invokes Stryker with cwd: targetDir, writing stryker-tmp/ +
-// reports/mutation/ into the TARGET tree — the #600 disposable-copy crash-safety guarantee is
-// --stub-check-only and does NOT cover this rung. The CLI now says so plainly (stderr at run start,
-// and a machine-readable field in the artifact) rather than leaving it to be discovered later.
-describe("mutation-scan discloses writing into the target tree for a full run (#1285, child process)", () => {
-  function writeFakeSucceedingStrykerBinary(repo: string): void {
-    const binDir = join(repo, "node_modules", ".bin");
-    mkdirSync(binDir, { recursive: true });
-    const script = `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const outDir = path.join(process.cwd(), "reports", "mutation");
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(path.join(outDir, "mutation.json"), JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
-process.exit(0);
-`;
-    writeFileSync(join(binDir, "stryker"), script);
-    chmodSync(join(binDir, "stryker"), 0o755);
-  }
-
-  it("a full (non --report) run carries scratchWrittenIntoTargetTree naming stryker-tmp/ + reports/mutation/", async () => {
+// #1285: a full mutation run must leave the target checkout byte-identical, with no new untracked
+// paths — the #600 disposable-copy guarantee extended from --stub-check to the Stryker rung, by a
+// different mechanism (every Stryker write location redirected off-tree) and enforced by the same
+// invariant. The last test here is the negative control: a Stryker that DOES write into the tree
+// must fail the run loudly rather than be reported as a clean pass.
+describe("mutation-scan leaves the target tree pristine on a full run (#1285, child process)", () => {
+  it("a full (non --report) run writes nothing into the target and carries targetTreeUntouched", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
-    writeFakeSucceedingStrykerBinary(repo);
+    writeFakeStrykerBinaryHonoringConfig(repo);
     const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { summary?: unknown; scratchWrittenIntoTargetTree?: { stryker: boolean; note: string } };
+    const parsed = JSON.parse(out) as { summary?: unknown; targetTreeUntouched?: { pristine: boolean; scratchDir: string; note: string } };
     expect(parsed.summary).toBeTruthy();
-    expect(parsed.scratchWrittenIntoTargetTree?.stryker).toBe(true);
-    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/stryker-tmp/);
-    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/reports\/mutation/);
-    expect(parsed.scratchWrittenIntoTargetTree?.note).toMatch(/#1285/);
+    expect(parsed.targetTreeUntouched?.pristine).toBe(true);
+    expect(parsed.targetTreeUntouched?.note).toMatch(/#1285/);
+    // The two directories #1285 was filed about, asserted absent from the target rather than
+    // merely disclosed as present.
+    expect(existsSync(join(repo, "stryker-tmp"))).toBe(false);
+    expect(existsSync(join(repo, ".stryker-tmp"))).toBe(false);
+    expect(existsSync(join(repo, "reports"))).toBe(false);
+    // ...and the report the summary above was built from came from a scratch dir OUTSIDE the
+    // target, so this is a redirect, not a Stryker that did nothing. (The dir itself is gone by
+    // now: the CLI removes it on exit.)
+    expect(parsed.targetTreeUntouched!.scratchDir.startsWith(repo)).toBe(false);
   });
 
-  it("a --report replay (Stryker never invoked) carries NO scratchWrittenIntoTargetTree field", async () => {
+  it("a --report replay (Stryker never invoked) carries NO targetTreeUntouched field", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     const reportPath = join(repo, "mutation-report.json");
     writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
     const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
-    const parsed = JSON.parse(out) as { scratchWrittenIntoTargetTree?: unknown };
-    expect(parsed.scratchWrittenIntoTargetTree).toBeUndefined();
+    const parsed = JSON.parse(out) as { targetTreeUntouched?: unknown };
+    expect(parsed.targetTreeUntouched).toBeUndefined();
+  });
+
+  it("a target-owned NON-JSON Stryker config degrades naming #1285 instead of running Stryker into the client's tree", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.mjs"), `export default { testRunner: "vitest" };\n`);
+    // No stryker binary: reaching an invocation at all would ENOENT-crash, so exit 0 with the
+    // partial verdict proves the degrade fires BEFORE any invocation.
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/#1285/);
+    expect(parsed.moduleRecord?.note).toMatch(/not JSON/);
+  });
+
+  it("NEGATIVE CONTROL: a Stryker that writes into the target tree fails the run loudly", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    // Writes a valid report to the redirected path AND leaves a sandbox dir in cwd — i.e. a run
+    // that would otherwise have produced a perfectly good score.
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "stryker"),
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const outPath = path.resolve(process.cwd(), cfg.jsonReporter.fileName);
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+fs.writeFileSync(outPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
+fs.mkdirSync(path.join(process.cwd(), "stryker-tmp", "sandbox-abc123"), { recursive: true });
+process.exit(0);
+`,
+    );
+    chmodSync(join(binDir, "stryker"), 0o755);
+
+    const { status, stderr } = await new Promise<{ status: number; stderr: string }>((resolveP) => {
+      const child = spawn("node_modules/.bin/tsx", [CLI, repo, "--out", join(tmpdir(), "m8-negative-control.json")], {
+        cwd: REPO_ROOT,
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      });
+      let err = "";
+      child.stderr.on("data", (c: Buffer) => (err += c.toString()));
+      child.on("error", () => resolveP({ status: 1, stderr: err }));
+      child.on("close", (code) => resolveP({ status: code ?? 1, stderr: err }));
+    });
+    expect(status).not.toBe(0);
+    expect(stderr).toMatch(/#1285 invariant violated/);
+    expect(stderr).toMatch(/stryker-tmp/);
   });
 });
 
@@ -731,7 +789,7 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     const script =
       behavior === "always-crash-ts7"
         ? `#!/usr/bin/env node\n${crash}\n`
-        : `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst path = require("node:path");\nconst cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));\nif (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {\n  const outDir = path.join(process.cwd(), "reports", "mutation");\n  fs.mkdirSync(outDir, { recursive: true });\n  fs.writeFileSync(path.join(outDir, "mutation.json"), JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));\n  process.exit(0);\n} else {\n  ${crash}\n}\n`;
+        : `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst path = require("node:path");\nconst cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));\nif (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {\n  const outPath = path.resolve(process.cwd(), cfg.jsonReporter.fileName);\n  fs.mkdirSync(path.dirname(outPath), { recursive: true });\n  fs.writeFileSync(outPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));\n  process.exit(0);\n} else {\n  ${crash}\n}\n`;
     writeFileSync(binPath, script);
     chmodSync(binPath, 0o755);
   }

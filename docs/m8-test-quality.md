@@ -59,7 +59,10 @@ pnpm mutation-scan <client-repo-path> \
 - **`--incremental`** — writes/reads Stryker's incremental file so a **re-run** after a client
   fixes a batch of surviving mutants only re-tests what changed, not the whole repo again. Use it
   on every run (first run pays the full cost and seeds the incremental file; subsequent runs are
-  fast).
+  fast). The file lives at a stable target-keyed path **off-tree under the OS temp dir since
+  #1285**, not in the target's `reports/` — so an OS temp sweep discards incremental state that the
+  old in-target location would have survived. Cross-run reuse is unit-covered but has NOT been
+  exercised end-to-end (no pipeline passes the flag today).
 - **This is a one-time whole-repo batch job**, not a subset scan — per `briefs/audit-modules.md` M8,
   don't scope it down to "just the auth module." A partial scan can't produce a credible overall
   mutation score, and the surviving-mutant map is only a complete blind-spot map if it's whole-repo.
@@ -85,11 +88,14 @@ Also fires when a harness IS configured but has no meaningful suite (#252): zero
 a single placeholder/smoke spec (no test cases, no assertions, or only constant-literal
 assertions). One meaningful spec still counts as a suite.
 
-**Report path (auto-discovered, #820):** the wrapper reads the JSON reporter's output path from the
-Stryker config's `jsonReporter.fileName` (`resolveJsonReporterPath` in `src/mutation-scan.ts`),
-defaulting to `reports/mutation/mutation.json` and falling back to a `cwd` glob search when that
-exact path is absent — so it survives a config or Stryker-version difference that writes the report
-elsewhere, rather than resting on a fixed assumption. The default was **confirmed against a real
+**Report path (#820, redirected off-tree by #1285):** the wrapper **overrides** the Stryker config's
+`jsonReporter.fileName` with an absolute path outside the target and reads the report back from
+there (`resolveReportPath` / `resolveJsonReporterPath` in `src/mutation-scan.ts`), falling back to a
+glob of the **off-tree scratch dir — never of the target**. That is what lets M8 leave the client's
+checkout byte-identical (#1285), and it also removes a hazard the old `cwd` glob carried: a stale
+in-tree report from a previous run can no longer be picked up as this run's result. It still
+survives a config or Stryker-version difference that writes the report elsewhere, rather than
+resting on a fixed assumption. The default was **confirmed against a real
 run** (#262, 2026-07-15, `@stryker-mutator/core@9.6.1`, see "Targets/calibration structure" below).
 You can still pass `--report <path>` explicitly to override discovery (the wrapper skips invoking
 Stryker entirely when `--report` is given, so it also works to just shape a report from a run that

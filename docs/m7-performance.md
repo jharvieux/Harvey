@@ -125,7 +125,11 @@ entirely; files carrying an explicit `eslint-disable @next/next/no-img-element` 
 already adjudicated; `select("*", { head: true })` count-only queries aren't unbounded reads;
 chunked-batch loops (`i += BATCH_SIZE`) are the *fix* for N+1, not the bug; and await-in-loop
 rolls up to one finding per file, tiered `Likely` on the request path (`app/`/`pages/`) vs
-`Review` off it (workers/jobs — job runtime, not user-facing latency).
+`Review` off it (workers/jobs — job runtime, not user-facing latency). **#230's sixth suppression
+(#1306): a file off the request path that is a seed script, migration, build/tooling script or turbo
+generator is excluded entirely rather than tiered — a one-shot serial await there is correct code,
+and `Review` was not silence because `Perf` is a counted finding. Measured on the pinned corpus: 4
+removed on rallly, 4 on documenso, all `packages/*/scripts/*` or `prisma/seed*`.**
 
 **Precision guards from the 6-repo calibration triage (#230, ~10% precision on the raw output —
 ~154 raw → ~16 real):** `react-hooks/exhaustive-deps` (M7H) is downgraded to an Info-severity style

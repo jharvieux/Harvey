@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDirectorySafe } from "../fs-walk.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // #950: trufflehog/gitleaks absent from PATH must degrade to a disclosed coverage gap, not an
@@ -420,12 +421,7 @@ describe("isGitRepoRoot (#528)", () => {
     const variant = join(parent, "repodir");
     // Only manifests on a case-insensitive FS — on a case-sensitive FS `variant` doesn't exist
     // and the bug cannot occur, so there is nothing to assert.
-    let caseInsensitive = false;
-    try {
-      caseInsensitive = statSync(variant).isDirectory();
-    } catch {
-      caseInsensitive = false;
-    }
+    const caseInsensitive = isDirectorySafe(variant);
     if (!caseInsensitive) return;
     expect(isGitRepoRoot(variant)).toBe(true);
   });

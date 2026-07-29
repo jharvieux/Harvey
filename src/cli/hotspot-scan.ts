@@ -35,8 +35,9 @@
 // functions in src/hotspot-scan.ts.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
 import { writePassArtifact } from "../audit-pass-artifact.js";
@@ -77,7 +78,7 @@ function discoverVitalsCli(): string | undefined {
   const cacheVitalsDir = resolve(pluginsDir, "cache/vitals");
   if (existsSync(cacheVitalsDir)) {
     try {
-      const versions = readdirSync(cacheVitalsDir);
+      const versions = readNamesSafe(cacheVitalsDir);
       for (const version of versions) {
         const cacheScript = resolve(cacheVitalsDir, version, "vitals/scripts/vitals_cli.py");
         if (existsSync(cacheScript)) {

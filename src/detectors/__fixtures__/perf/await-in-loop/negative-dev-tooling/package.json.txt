@@ -1,0 +1,5 @@
+{
+  "name": "tooling-negative",
+  "scripts": { "delete-team": "node --env-file .env delete-team.js", "dev": "next dev" },
+  "prisma": { "seed": "ts-node ./prisma/seed.ts" }
+}
