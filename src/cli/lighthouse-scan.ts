@@ -22,8 +22,8 @@
 //   3. A system Chrome — chrome-launcher auto-detects one (skip via LIGHTHOUSE_SKIP_SYSTEM_CHROME=1,
 //      an operator/test seam to force step 4 on a machine that does have one).
 //   4. A PROVISIONED Chrome-for-Testing build (#556) — last resort, since it needs network:
-//      `npm install --prefix <cache> @puppeteer/browsers` (runtime, --no-save; never a package.json
-//      dependency) then `browsers install chrome@stable`, cached under
+//      `@puppeteer/browsers`' programmatic `install()`, from a LOCKFILE-PINNED devDependency
+//      (#1324 — it is no longer a runtime `npm install`, see provisionChrome below), cached under
 //      ~/.cache/harvey/chrome-for-testing so repeat runs skip the download. See
 //      docs/design/m7-chrome-provisioning.md.
 // A run that still measures nothing (NO_FCP on every reachable candidate) is surfaced as the
