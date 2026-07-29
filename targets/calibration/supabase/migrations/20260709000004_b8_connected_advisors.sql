@@ -60,6 +60,9 @@ create table public.support_tickets (
   tenant_id uuid not null references public.tenants (id) on delete cascade,
   subject text not null,
   customer_ssn text,
+  -- #1424: the column 20260719000002's SECURITY DEFINER readers filter on. Added here, where the
+  -- table is declared, rather than as a later ALTER, so M10's migration-SQL classifier sees it.
+  requester_email text,
   created_at timestamptz not null default now()
 );
 

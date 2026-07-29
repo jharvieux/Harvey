@@ -688,6 +688,27 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
       // members RLS on via a bare alter (negative), private.internal_audit non-public schema (negative).
       "create table workspaces (id uuid primary key);\ncreate table members (id uuid primary key);\nalter table members enable row level security;\ncreate table private.internal_audit (id uuid primary key);\n",
   );
+  // #1425 — protect-then-unprotect, in its OWN dir so the "flags only audit_logs" test below keeps
+  // supaDir focused. Three files, mirroring targets/calibration: billing_exports and import_staging
+  // are created protected, a hotfix disables both, and only import_staging is reverted. export_audit
+  // is the scope control — it proves the setup file was read, which neither #1425 entry can do.
+  const rlsDisableDir = mkdtempSync(join(tmpdir(), "harvey-b13-rlsdisable-"));
+  afterAll(() => rmSync(rlsDisableDir, { recursive: true, force: true }));
+  mkdirSync(join(rlsDisableDir, "supabase", "migrations"), { recursive: true });
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000002_rls_disable_tables.sql"),
+    "create table public.billing_exports (id uuid primary key);\nalter table public.billing_exports enable row level security;\n" +
+      "create table public.import_staging (id uuid primary key);\nalter table public.import_staging enable row level security;\n" +
+      "create table public.export_audit (id uuid primary key);\n",
+  );
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000003_rls_disable_hotfix.sql"),
+    "alter table public.billing_exports disable row level security;\nalter table public.import_staging disable row level security;\n",
+  );
+  writeFileSync(
+    join(rlsDisableDir, "supabase", "migrations", "20260728000004_rls_disable_revert.sql"),
+    "alter table public.import_staging enable row level security;\n",
+  );
   // #602 — a migration with the plpgsql SQLi + DEFINER-anon-grant fixtures (and their safe siblings).
   writeFileSync(
     join(supaDir, "supabase", "migrations", "20260719000002_injection.sql"),
@@ -705,6 +726,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     ...parseSemgrepFindings({ results: semgrep }),
     ...checkMigrationRlsStatic(supaDir),
     ...checkMigrationRlsStatic(rootSchemaDir),
+    ...checkMigrationRlsStatic(rlsDisableDir), // #1425
     ...checkEdgeFunctionVerifyJwt(supaDir),
     ...checkOpenSignupConfig(supaDir),
     ...checkMigrationDynamicSqlInjection(supaDir), // #602 CX-12
@@ -720,11 +742,12 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     }
   });
 
-  it("promotes only the exact static/structural sinks to the free count (8 high, 12 review)", () => {
+  it("promotes only the exact static/structural sinks to the free count (10 high, 12 review)", () => {
     const m = buildCoverageMatrix(findings, b13SupaEntries);
     const positives = b13SupaEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
-    expect(m.positivesCaughtHigh).toBe(8);
+    // 8 before #1425; +2 for the protect-then-unprotect plant and its scope control.
+    expect(m.positivesCaughtHigh).toBe(10);
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(12);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
