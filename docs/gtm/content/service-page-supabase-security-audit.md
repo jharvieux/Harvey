@@ -102,7 +102,8 @@ anchors, pending price discovery.)
   static findings, yours to keep.
 - **Connected audit — from $500.** The complete review: all ten modules over your source
   with semantic verdicts (triage + named fixes), plus a read-only pass over your live
-  database — live RLS verification, database advisors, drift, and data-classification
+  database — live RLS verification, database advisors, drift between your deployed schema
+  and your committed migrations, and data-classification
   against a read-only copy of your production database.
 - **Full audit — from $1,000.** Everything in Connected, plus Harvey stands up your stack
   and runs a live pen-test (and mutation testing) against it. The premium, "everything
