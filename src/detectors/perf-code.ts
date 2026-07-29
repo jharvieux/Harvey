@@ -280,6 +280,193 @@ function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: N
   return findings;
 }
 
+// --- Shared: which React is this? ---------------------------------------------
+
+// React 18 shipped AUTOMATIC BATCHING (2022): N setter calls in one handler, effect, timeout or
+// promise continuation collapse into ONE render. Any finding whose cost model is "each setter
+// costs a render" is asserting a mechanism React removed — see detectStateSprawl (#1475).
+// Returns undefined when no manifest declares react at all; callers must not read that as < 18.
+function reactMajorVersion(files: SourceInput[]): number | undefined {
+  let best: number | undefined;
+  for (const f of files) {
+    if (!/(^|\/)package\.json$/.test(f.path)) continue;
+    let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string> };
+    try {
+      pkg = JSON.parse(f.text) as typeof pkg;
+    } catch {
+      continue;
+    }
+    const range = pkg.dependencies?.react ?? pkg.devDependencies?.react ?? pkg.peerDependencies?.react;
+    // `^18.3.1`, `~19.0.0`, `>=18`, `18.x`. A tag (`latest`, `canary`, a workspace/catalog ref)
+    // yields no major and is left undefined rather than guessed at.
+    const m = range === undefined ? null : /(\d+)/.exec(range);
+    if (!m) continue;
+    const major = Number(m[1]);
+    if (best === undefined || major < best) best = major; // a monorepo's OLDEST react is the binding one
+  }
+  return best;
+}
+
+// --- Shared: what code is this, and who can reach it? -------------------------
+//
+// Three questions three separate classes kept answering by hand, each with its own path
+// blocklist, and each wrong in the field for the same reason (#1476/#1479, MEASURED 2026-07-28
+// over the pinned external corpus):
+//
+//   (a) is this file APPLICATION code at all, or a dev CLI / seeder / CI script / scaffolding
+//       template? — devToolingModules
+//   (b) can a REQUEST reach it? — requestReachableModules (#1344, below)
+//   (c) can a CLIENT BUNDLE reach it? — clientReachableModules
+//
+// Each returns `undefined` when the tree gives it nothing to answer with, and every caller
+// treats undefined as "could not evaluate" rather than as a negative answer — an UNAVAILABLE
+// signal reading as a clean one is the fail-quiet this module's own coverage rows exist to
+// prevent (#1344's rule, applied to two more questions).
+
+// Paths that are dev/ops tooling by location. Superset of #1203's NON_REQUEST_PATH (which is
+// still used on its own for the sync-I/O tier's narrower question). MEASURED 2026-07-28: the
+// `generators/templates` and `ci/` arms are saas-lite's plop scaffolding and carbon's SST deploy
+// script, both graded false as request-path perf by #1261's triage.
+const DEV_TOOLING_PATH =
+  /(^|\/)(scripts|bin|migrations?|seeds?|__tests__|__mocks__|e2e|cypress|codemods?|\.storybook)\/|(^|\/)(turbo\/)?generators\/|(^|\/)ci\/|(^|\/)seeds?\.[cm]?[jt]s$|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
+
+// A file path a package.json runs as a SCRIPT is dev/ops tooling, and no path pattern can say so:
+// boxyhq's `delete-team.js` sits at the repo root and is an interactive `readline` admin CLI wired
+// to `npm run delete-team`; its `prisma.seed` runs `ts-node ./prisma/seed.ts`. Both were graded
+// request-path N+1 (#1476). Production lifecycle scripts are excluded by name — `npm start` on a
+// custom `server.js` really is the request path — and any file a request entry point can reach is
+// removed by the caller regardless, so a script alias over live server code stays visible here.
+const PRODUCTION_SCRIPT = /^(start|serve|preview|prod|production)/;
+const SCRIPT_FILE_TOKEN = /(?:^|[\s'"=])(\.{0,2}\/?[\w.@/-]+\.[cm]?[jt]sx?)(?=$|[\s'"&|;])/g;
+
+function scriptReferencedFiles(files: SourceInput[]): Set<string> {
+  const out = new Set<string>();
+  for (const f of files) {
+    if (!/(^|\/)package\.json$/.test(f.path)) continue;
+    const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
+    let pkg: { scripts?: Record<string, string>; bin?: string | Record<string, string>; prisma?: { seed?: string } };
+    try {
+      pkg = JSON.parse(f.text) as typeof pkg;
+    } catch {
+      continue; // an unparseable manifest answers nothing; the path arm above still applies
+    }
+    const commands: string[] = [];
+    for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) if (!PRODUCTION_SCRIPT.test(name)) commands.push(cmd);
+    if (typeof pkg.bin === "string") commands.push(pkg.bin);
+    else for (const v of Object.values(pkg.bin ?? {})) commands.push(v);
+    if (pkg.prisma?.seed) commands.push(pkg.prisma.seed);
+    for (const cmd of commands) {
+      for (const m of cmd.matchAll(SCRIPT_FILE_TOKEN)) {
+        const rel = m[1]!.replace(/^\.\//, "");
+        if (rel.startsWith("../") || rel.includes("node_modules")) continue;
+        out.add(dir + rel);
+      }
+    }
+  }
+  return out;
+}
+
+// Modules that are dev/ops tooling: the path arm, plus every module in the import closure of a
+// package.json-script entry point. Always returns a set (the path arm needs no roots), so callers
+// have no undefined case here — the reachability questions below are the ones that can be
+// unanswerable.
+export function devToolingModules(files: SourceInput[], sources: Map<string, ts.SourceFile>): Set<string> {
+  const allPaths = new Set(sources.keys());
+  const tooling = new Set<string>([...allPaths].filter((p) => DEV_TOOLING_PATH.test(p)));
+  const scriptRoots = [...scriptReferencedFiles(files)].filter((p) => allPaths.has(p));
+  if (scriptRoots.length > 0) {
+    const graph = buildImportGraph(sources, allPaths, collectPathAliases(files));
+    for (const p of importClosure(scriptRoots, graph)) tooling.add(p);
+  }
+  return tooling;
+}
+
+// Entry points a CLIENT BUNDLE is built from: every `'use client'` module, the Next route files
+// whose subtree renders in the browser, and a Vite/RR7/Angular browser entry. A `pages/api/` file
+// is a server route, not a client entry, and `_document` never ships.
+//
+// This set is deliberately used only as POSITIVE evidence (see serverOnlyModules). Framework
+// routing is not an import edge — React Router 7 discovers routes through `routes.ts`, Angular
+// through decorators — so a module absent from this closure has NOT been shown to be server-side,
+// only to be unreachable by a static import walk. Reading absence as "server" deleted 14 real
+// carbon rows in an intermediate build of this change (monaco/three in packages/viewer, reachable
+// only through RR7's route config), which is the same shape as a guard that works only when the
+// value is a literal.
+const CLIENT_ENTRY_PATH = /(^|\/)app\/.*\/(page|layout|template|default|error|loading|not-found)\.[cm]?[jt]sx?$|(^|\/)entry\.client\.[cm]?[jt]sx?$/;
+const SERVER_ONLY_PAGE = /(^|\/)pages\/(api\/|_document\.)/;
+const NEXT_PAGES_PATH = /(^|\/)pages\/[^/]*\.[cm]?[jt]sx$/;
+// A bare `main.ts` is NOT a client entry by its name — ghostfolio's `apps/api/src/main.ts` is the
+// NestJS bootstrap and `apps/client/src/main.ts` is the Angular one, and admitting both on the
+// filename made the whole API tree read as client-reachable. The discriminator is the UI runtime
+// the module imports, and it is applied to EVERY module, not only a bootstrap: framework routing
+// hides component trees from a static walk (Angular `loadComponent: () => import(…)`, RR7's
+// `routes.ts`), so seeding the closure from every UI-framework module is what keeps a shared
+// helper the client also uses out of the server-only set. MEASURED 2026-07-28: with bootstraps
+// alone, ghostfolio's libs/common/calculation-helper.ts scored server-only while libs/ui's
+// treemap-chart.component.ts imports it — a wrong claim, in the direction that matters.
+//
+// The bias here is deliberate and one-way: a client entry set that is too WIDE shrinks the
+// server-only set and leaves findings with their original wording, while one that is too narrow
+// asserts "no visitor downloads this" about code a visitor downloads.
+const UI_FRAMEWORK_IMPORT = /^(react|react-dom(\/.*)?|preact|@angular\/(core|common|platform-browser.*)|vue|svelte|solid-js(\/.*)?)$/;
+
+function importsUiFramework(sf: ts.SourceFile): boolean {
+  return sf.statements.some(
+    (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && UI_FRAMEWORK_IMPORT.test(s.moduleSpecifier.text),
+  );
+}
+
+function clientReachableModules(files: SourceInput[], sources: Map<string, ts.SourceFile>, tooling: Set<string>): Set<string> | undefined {
+  const allPaths = new Set(sources.keys());
+  const entries = [...allPaths].filter((p) => {
+    if (SERVER_ONLY_PAGE.test(p) || tooling.has(p)) return false;
+    const sf = sources.get(p)!;
+    return CLIENT_ENTRY_PATH.test(p) || NEXT_PAGES_PATH.test(p) || leadingDirective(sf) === "use client" || importsUiFramework(sf);
+  });
+  if (entries.length === 0) return undefined;
+  const graph = buildImportGraph(sources, allPaths, collectPathAliases(files));
+  return importClosure(entries, graph);
+}
+
+// Modules with POSITIVE evidence on both sides: a request entry point reaches them (#1344's
+// existing walk, which is what makes them server code) and no client entry does. Absence of
+// client-reachability alone is not evidence — that is why both maps must exist and both must
+// answer. MEASURED 2026-07-28 on ghostfolio: 55 of its 59 whole-library rows are NestJS services
+// a controller imports and no browser entry does; an earlier absence-only version of this test
+// reported the same 55 while actually classifying them off an accidental `pages/` path match.
+// Runtimes that exist only on a server. A module importing one is server code no matter what the
+// import graph could or could not walk — which is the point: `resolveImport` does not follow a
+// WORKSPACE PACKAGE specifier (#1353), so in a monorepo the client closure is INCOMPLETE, and a
+// test that reads "absent from the client closure" as "server" is wrong exactly where monorepos
+// are. MEASURED 2026-07-28 on documenso: 9 modules under `packages/lib/universal/field-renderer/`
+// are imported by `apps/remix/app/components/**` through `@documenso/lib/...` and scored
+// server-only on closure evidence alone. Requiring the module to name a server runtime ITSELF is
+// evidence no missing graph edge can fake.
+const SERVER_RUNTIME_IMPORT = /^(node:|@nestjs\/|next\/server$|server-only$|express$|fastify$|koa$|@fastify\/|nodemailer$|ioredis$|bullmq$|bull$)/;
+
+function importsServerRuntime(sf: ts.SourceFile): boolean {
+  if (leadingDirective(sf) === "use server") return true;
+  return sf.statements.some(
+    (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && SERVER_RUNTIME_IMPORT.test(s.moduleSpecifier.text),
+  );
+}
+
+function serverOnlyModules(files: SourceInput[], sources: Map<string, ts.SourceFile>, tooling: Set<string>): Set<string> | undefined {
+  const requestReached = requestReachableModules(files, sources);
+  const clientReached = clientReachableModules(files, sources, tooling);
+  if (requestReached === undefined || clientReached === undefined) return undefined;
+  // Three independent conditions, and all three must hold: a request reaches it, no client entry
+  // does, and it names a server runtime of its own. The UI-framework exclusion is the fourth —
+  // REQUEST_ENTRY_PATH carries Next's `pages/api/` convention, and ghostfolio's Angular client
+  // happens to keep a page AT `apps/client/src/app/pages/api/`.
+  return new Set(
+    [...requestReached.keys()].filter((p) => {
+      const sf = sources.get(p)!;
+      return !clientReached.has(p) && importsServerRuntime(sf) && !importsUiFramework(sf);
+    }),
+  );
+}
+
 // --- A3. Raw <img> instead of next/image [PERF] — one per file ---------------
 
 // A `src` that's a data:/blob: URI (or `URL.createObjectURL(...)`) — a client-generated,
@@ -287,22 +474,121 @@ function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: N
 // `next/image` can't optimize anyway since there's no remote URL for it to fetch/resize
 // (#230 dogfood FP).
 const ONE_SHOT_IMG_SRC = /^(data|blob):/;
+// Client-runtime value reads. A src bound from one of these is not knowable before render — it is
+// the same one-shot image the guard above already exempts, reached through a binding instead of a
+// literal (#1477). `useState` covers proposit's authenticated-image.tsx (a runtime-signed Storage
+// URL held in state); the form reads cover saas-lite's MFA QR dialog, which is the case this
+// guard's OWN comment cites as its motivating example and which it nevertheless fired on.
+const RUNTIME_SRC_READ = /^(useState|getValues|watch|createObjectURL)$/;
 
-function isOneShotImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts.SourceFile): boolean {
+// The component-parameter arm's fan-out bound: a src threaded through one prop hop is resolved,
+// a chain of them is not. Two hops has never occurred in the corpus; the depth is here so the
+// walk terminates, not because a third hop is known to be absent.
+const SRC_RESOLVE_DEPTH = 2;
+
+function srcAttrExpression(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts.SourceFile): ts.Expression | undefined {
   for (const attr of el.attributes.properties) {
-    if (!ts.isJsxAttribute(attr) || attr.name.getText(sf) !== "src") continue;
-    const expr = jsxAttrExpression(attr);
-    if (!expr) continue;
-    if (ts.isStringLiteralLike(expr) && ONE_SHOT_IMG_SRC.test(expr.text)) return true;
-    if (ts.isTemplateExpression(expr) && ONE_SHOT_IMG_SRC.test(expr.head.text)) return true;
-    if (
-      ts.isCallExpression(expr) &&
-      ts.isPropertyAccessExpression(expr.expression) &&
-      expr.expression.name.text === "createObjectURL"
-    ) {
-      return true;
+    if (ts.isJsxAttribute(attr) && attr.name.getText(sf) === "src") return jsxAttrExpression(attr) ?? attr.initializer;
+  }
+  return undefined;
+}
+
+// The function-like that lexically encloses `node`, plus the name it is declared under — needed to
+// find the JSX call sites that supply a component's `src` prop.
+function enclosingComponent(node: ts.Node): { fn: ts.SignatureDeclaration; name: string } | undefined {
+  for (let cur: ts.Node | undefined = node; cur; cur = cur.parent) {
+    if (ts.isFunctionDeclaration(cur) && cur.name) return { fn: cur, name: cur.name.text };
+    if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && ts.isVariableDeclaration(cur.parent) && ts.isIdentifier(cur.parent.name)) {
+      return { fn: cur, name: cur.parent.name.text };
     }
   }
+  return undefined;
+}
+
+function bindsParameterNamed(fn: ts.SignatureDeclaration, name: string): boolean {
+  return fn.parameters.some((p) => {
+    if (ts.isIdentifier(p.name)) return p.name.text === name;
+    if (!ts.isObjectBindingPattern(p.name)) return false;
+    return p.name.elements.some((e) => ts.isIdentifier(e.name) && e.name.text === name);
+  });
+}
+
+// True when `expr` is (or resolves to) a client-runtime one-shot image source. #1477: the original
+// guard inspected only a string literal or a template head, so ONE level of indirection defeated
+// it — the same shape as an auth-gate resolver that accepts a discarded boolean. It now follows an
+// identifier to its local binding, and a component parameter to the `src` prop its call sites pass.
+function isOneShotSrcExpression(expr: ts.Expression, sf: ts.SourceFile, depth: number): boolean {
+  if (depth <= 0) return false;
+  if (ts.isParenthesizedExpression(expr)) return isOneShotSrcExpression(expr.expression, sf, depth);
+  if (ts.isJsxExpression(expr) && expr.expression) return isOneShotSrcExpression(expr.expression, sf, depth);
+  if (ts.isStringLiteralLike(expr)) return ONE_SHOT_IMG_SRC.test(expr.text);
+  if (ts.isTemplateExpression(expr)) return ONE_SHOT_IMG_SRC.test(expr.head.text);
+  if (ts.isCallExpression(expr)) {
+    const callee = expr.expression;
+    const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : "";
+    return RUNTIME_SRC_READ.test(name);
+  }
+  // A conditional/`??` src is one-shot only if BOTH arms are — otherwise a real static asset in
+  // one arm would be cleared by a runtime value in the other.
+  if (ts.isConditionalExpression(expr)) {
+    return isOneShotSrcExpression(expr.whenTrue, sf, depth) && isOneShotSrcExpression(expr.whenFalse, sf, depth);
+  }
+  if (!ts.isIdentifier(expr)) return false;
+  const name = expr.text;
+
+  let resolved = false;
+  const findBinding = (n: ts.Node) => {
+    if (resolved) return;
+    // `const [imageUrl, setImageUrl] = useState(...)` — the src is client state.
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      if (ts.isArrayBindingPattern(n.name) && n.name.elements.some((e) => ts.isBindingElement(e) && ts.isIdentifier(e.name) && e.name.text === name)) {
+        if (isOneShotSrcExpression(n.initializer, sf, depth - 1)) resolved = true;
+        return;
+      }
+      if (ts.isIdentifier(n.name) && n.name.text === name && isOneShotSrcExpression(n.initializer, sf, depth - 1)) {
+        resolved = true;
+        return;
+      }
+    }
+    ts.forEachChild(n, findBinding);
+  };
+  findBinding(sf);
+  if (resolved) return true;
+
+  // The parameter arm: `function QrImage({ src }) { return <img src={src} /> }` rendered as
+  // `<QrImage src={form.getValues('qrCode')} />`. The value lives at the call site, not here.
+  const owner = enclosingComponent(expr);
+  if (!owner || !bindsParameterNamed(owner.fn, name)) return false;
+  let viaCallSite = false;
+  forEachJsxElement(sf, (el) => {
+    if (viaCallSite || el.tagName.getText(sf) !== owner.name) return;
+    const passed = srcAttrExpression(el, sf);
+    if (passed && isOneShotSrcExpression(passed, sf, depth - 1)) viaCallSite = true;
+  });
+  return viaCallSite;
+}
+
+function isOneShotImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts.SourceFile): boolean {
+  const expr = srcAttrExpression(el, sf);
+  return expr !== undefined && isOneShotSrcExpression(expr, sf, SRC_RESOLVE_DEPTH);
+}
+
+// #1477: an SVG is passed through unoptimized by every image pipeline this class recommends —
+// `next/image` requires `dangerouslyAllowSVG` to touch one, and `vite-imagetools` emits nothing
+// for one. So the finding's stated cost ("served at original size/format", "unoptimized bytes")
+// does not hold for an SVG src, and the class is narrowed off them. MEASURED 2026-07-28: both of
+// subscription-payments' graded M7 rows — the target the corpus pins AS its false-positive floor
+// — were `<img src="/vercel.svg">` in a footer/logo cloud.
+const SVG_SRC = /\.svg(\?|#|$)/i;
+
+function isSvgImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts.SourceFile): boolean {
+  let expr = srcAttrExpression(el, sf);
+  while (expr && ts.isParenthesizedExpression(expr)) expr = expr.expression;
+  if (!expr) return false;
+  if (ts.isStringLiteralLike(expr)) return SVG_SRC.test(expr.text);
+  // `src={"/carbon-mark-light.svg"}` and `src={`${base}/logo.svg`}` — the extension is still static.
+  if (ts.isTemplateExpression(expr)) return SVG_SRC.test(expr.templateSpans.at(-1)?.literal.text ?? "");
+  if (ts.isNoSubstitutionTemplateLiteral(expr)) return SVG_SRC.test(expr.text);
   return false;
 }
 
@@ -312,11 +598,18 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     if (sf.text.includes("@next/next/no-img-element")) continue; // the codebase already adjudicated its <img>s via an explicit eslint-disable
     const hits: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
+    let svgSkipped = 0;
     forEachJsxElement(sf, (el) => {
-      if (el.tagName.getText(sf) === "img" && !isOneShotImgSrc(el, sf)) hits.push(el);
+      if (el.tagName.getText(sf) !== "img" || isOneShotImgSrc(el, sf)) return;
+      if (isSvgImgSrc(el, sf)) {
+        svgSkipped++;
+        return;
+      }
+      hits.push(el);
     });
     const first = hits[0];
     if (!first) continue;
+    const svgNote = svgSkipped === 0 ? "" : ` ${svgSkipped} further \`<img>\` in this file ${svgSkipped === 1 ? "has" : "have"} an \`.svg\` src and ${svgSkipped === 1 ? "is" : "are"} not counted — no image pipeline re-encodes an SVG, so the bytes/format claim cannot apply to ${svgSkipped === 1 ? "it" : "them"} (setting \`width\`/\`height\` on ${svgSkipped === 1 ? "it" : "them"} still avoids CLS).`;
     findings.push(
       makeFinding(nextId, {
         title: isVite
@@ -324,9 +617,12 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
           : `Raw <img> instead of next/image (${hits.length}× in ${path})`,
         severity: "Perf",
         confidence: "Likely",
-        taxonomy: "M7 — Raw <img> instead of next/image",
+        // #1480: the taxonomy string used to name next/image unconditionally, so a React
+        // Router / Vite client read "instead of next/image" in any grouping keyed on taxonomy
+        // even though #872's isVite branch had already produced the right title and fix.
+        taxonomy: isVite ? "M7 — Raw <img> without dimensions or lazy-loading" : "M7 — Raw <img> instead of next/image",
         location: loc(path, sf, first),
-        evidence: `\`${first.getText(sf).slice(0, 80)}\` — served at original size/format with no lazy-loading or srcset, and no reserved layout box.`,
+        evidence: `\`${first.getText(sf).slice(0, 80)}\` — served at original size/format with no lazy-loading or srcset, and no reserved layout box.${svgNote}`,
         impact: "Slower LCP (unoptimized bytes, no priority hints) and CLS from late-loading unsized images.",
         fix: isVite
           ? "Set explicit `width`/`height` (reserves the layout box, prevents CLS) and `loading=\"lazy\"` `decoding=\"async\"` on below-the-fold images; for build-time responsive/optimized formats use `vite-imagetools` (an `<img srcset>` per size)."
@@ -491,7 +787,24 @@ function detectSortInJsx(sources: Map<string, ts.SourceFile>, nextId: NextId): F
 
 const STATE_SPRAWL_THRESHOLD = 8;
 
-function detectStateSprawl(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// #1475 — the class's own evidence sentence was false on every target in the pinned corpus.
+// It read "every setter triggers a full re-render of this (evidently large) component", which
+// tells a client that N setters in one handler cost N renders. React >= 18's automatic batching
+// collapses them into one; MEASURED 2026-07-28, the corpus's React pins are 19.1.0 / 19.2.1 /
+// 19.2.3 / 18.3.1, and the class scored 0 of 7 in the field triage — the only M7 class at 0%.
+//
+// The observation that survives is a MAINTAINABILITY one: a component owning this many
+// independent slices is hard to reason about, and any one of them re-renders the whole thing.
+// So on React >= 18 (and where no react version is declared — the modern default, never assumed
+// older) the class emits that claim at Info, joining the Missing-hook-dependencies precedent
+// (#230 demoted a class rather than dropping it) — the signal still ships in the deliverable and
+// leaves the graded count. On React < 18 the original per-setter render cost is real, so the row
+// stays counted, with the batching boundary named rather than implied.
+const AUTOMATIC_BATCHING_MAJOR = 18;
+
+function detectStateSprawl(sources: Map<string, ts.SourceFile>, nextId: NextId, reactMajor: number | undefined): Finding[] {
+  const batched = reactMajor === undefined || reactMajor >= AUTOMATIC_BATCHING_MAJOR;
+  const versionSaid = reactMajor === undefined ? "no manifest in the scanned tree declares a react version, so the modern default is assumed" : `this project declares react ${reactMajor}`;
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
@@ -506,12 +819,16 @@ function detectStateSprawl(sources: Map<string, ts.SourceFile>, nextId: NextId):
         findings.push(
           makeFinding(nextId, {
             title: `Component ${name} holds ${count} useState hooks`,
-            severity: "Low",
+            severity: batched ? "Info" : "Low",
             confidence: "Review",
             taxonomy: "M7 — State sprawl",
             location: loc(path, sf, fn),
-            evidence: `${name} declares ${count} separate useState hooks — every setter triggers a full re-render of this (evidently large) component.`,
-            impact: "Frequent broad re-renders and interlocking state updates; a symptom the component owns too much.",
+            evidence: batched
+              ? `${name} declares ${count} separate useState hooks — ${count} independent slices for one component to own, and a change to any one of them re-renders the whole component. This is a MAINTAINABILITY reading, not a render-count one: ${versionSaid}, and React ${AUTOMATIC_BATCHING_MAJOR}+ automatic batching collapses simultaneous setter calls into a single render, so the number of hooks is not a number of renders.`
+              : `${name} declares ${count} separate useState hooks, and ${versionSaid} — below React ${AUTOMATIC_BATCHING_MAJOR}, setter calls outside a React event handler are NOT batched, so a handler touching several slices really does render once per setter.`,
+            impact: batched
+              ? "Interlocking state updates are hard to reason about and easy to leave inconsistent; a symptom the component owns too much. No render-count cost is claimed — automatic batching removed it."
+              : "Repeated full re-renders per interaction, plus interlocking state updates; a symptom the component owns too much.",
             fix: "Consolidate related state into `useReducer` (or extract child components that own their own slice).",
             value: 2,
             ease: 2,
@@ -609,23 +926,68 @@ function isBatchChunkLoop(stmt: ts.ForStatement): boolean {
   return !(ts.isNumericLiteral(inc.right) && inc.right.text === "1");
 }
 
+// #1480: two loop shapes where "parallelise this with Promise.all" is the wrong advice — the loop
+// is sequential ON PURPOSE, the same family as the chunked-batch exemption above where the shape
+// IS the fix, not the bug. MEASURED 2026-07-28 on inbox-zero:
+//
+//   (a) a CAP: `for (const email of participantEmails) { if (allThreads.length >= maxThreads)
+//       break; … await … }` (gather-context.ts:132) — the exit guards the loop and runs BEFORE the
+//       awaited call, so parallelising would fetch past the cap the code exists to enforce;
+//   (b) a SEARCH: `for (let p = start; p <= 65535; p++) { … if (!await isFree(p)) continue;
+//       return { port: p } }` (setup-ports.ts:112) — the loop stops at the first hit and returns
+//       IT, so there is no n-item workload to parallelise at all.
+//
+// The discriminator is deliberately narrow, because "the body contains a break or return" is not
+// it: boxyhq's pages/api/auth/sso/verify.ts:148 queries SSO existence per team and returns early
+// only in the exceptional multiple-matches branch, downstream of the await — a real request-path
+// N+1 that the broad form silently deleted (caught by before/after on the pinned corpus, 2026-07-28).
+// So a cap must PRECEDE the await, and a search's return must carry the loop's own binding.
+function isSequentialByDesign(body: ts.Node, perItemAwait: ts.AwaitExpression, loopVars: Set<string>): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if ((ts.isBreakStatement(n) || ts.isReturnStatement(n)) && n.pos < perItemAwait.pos) {
+      found = true; // (a) a cap/guard the loop checks before doing the work
+      return;
+    }
+    if (ts.isReturnStatement(n) && n.expression && referencesAny(n.expression, loopVars)) {
+      found = true; // (b) the loop returns the item it was searching for
+      return;
+    }
+    // A nested loop's break belongs to that loop; a nested function's return is its own.
+    if (
+      ts.isForOfStatement(n) ||
+      ts.isForInStatement(n) ||
+      ts.isForStatement(n) ||
+      ts.isWhileStatement(n) ||
+      ts.isDoStatement(n) ||
+      ts.isSwitchStatement(n) ||
+      ts.isFunctionDeclaration(n) ||
+      ts.isArrowFunction(n) ||
+      ts.isFunctionExpression(n)
+    ) {
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+  return found;
+}
+
 // User-facing request path (routes, pages, actions) vs background/batch (workers, jobs,
 // scripts, lib helpers only jobs call). Both are real costs, but only the former is
 // user-visible latency — the confidence tier and impact wording reflect that.
 const REQUEST_PATH = /(^|\/)(app|pages)\//;
 
-function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    const onRequestPath = REQUEST_PATH.test(path);
-    // #1306: #230's SIXTH precision suppression — "N+1 in seed/build scripts (prisma/seed.ts, turbo
-    // codegen). Exclude." — was the one of six PR #236 never implemented, and was still firing when
-    // re-measured 2026-07-27. A sequential await in a seed or codegen script is CORRECT code: it
-    // runs once, off any request, often deliberately serial so rows land in FK order. Dropping it to
-    // `Review` was not enough — `Perf` severity is a COUNTED finding, so the client still gets told
-    // their seed script has a performance defect. briefs/fp-rules.txt already scopes seed/dev-script
-    // code out of the audit entirely; this is the N+1 detector obeying it.
-    if (!onRequestPath && NON_REQUEST_PATH.test(path)) continue;
+    // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim. This
+    // is also where #230's SIXTH precision suppression finally lives — "N+1 in seed/build scripts
+    // (prisma/seed.ts, turbo codegen). Exclude." — dropped by PR #236 and still firing when
+    // re-measured 2026-07-27 (#1306). `Review` confidence was never silence: `Perf` severity is a
+    // COUNTED finding, so the client was still being told their seed script has a defect.
+    if (tooling.has(path)) continue;
     const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
@@ -641,7 +1003,7 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
           // The N+1 signature: a per-item await (references the loop binding) whose input
           // doesn't depend on state carried across iterations.
           const perItem = awaits.find((a) => referencesAny(a.expression, loopVars) && !referencesAny(a.expression, assigned));
-          if (perItem) hits.push(perItem);
+          if (perItem && !isSequentialByDesign(node.statement, perItem, loopVars)) hits.push(perItem); // #1480
         }
       }
       ts.forEachChild(node, visit);
@@ -649,6 +1011,7 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
     visit(sf);
     const first = hits[0];
     if (!first) continue;
+    const onRequestPath = REQUEST_PATH.test(path);
     findings.push(
       makeFinding(nextId, {
         title: `Per-item await inside a loop — serial N+1 round-trips (${hits.length} loop${hits.length === 1 ? "" : "s"} in ${path})`,
@@ -677,14 +1040,101 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
 // to the mutated rows, not the whole table. Both were raw hits mislabeled as unbounded scans.
 const CHAIN_BOUNDS = new Set(["limit", "range", "single", "maybeSingle", "csv", "in", "insert", "upsert"]);
 
-function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// #1478 — a house-style pagination wrapper. carbon paginates through
+// `setGenericQueryFilters(query, args, …)` (apps/erp/app/utils/query.ts:137, a `.range()` on the
+// query it was handed), so every caller reads as unbounded to a check that only looks at the
+// chain it can see. Same callee-resolution shape #964/#1263 already applied to M9's route-action
+// validation, applied to M7: collect the functions in the scanned tree that apply a bound to a
+// PARAMETER, then clear a query that is passed to one of them.
+const PARAM_BOUND_METHOD = /^(range|limit|single|maybeSingle)$/;
+
+function appliesBoundToParameter(fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): boolean {
+  const params = new Set<string>();
+  for (const p of fn.parameters) if (ts.isIdentifier(p.name)) params.add(p.name.text);
+  if (params.size === 0 || !fn.body) return false;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && PARAM_BOUND_METHOD.test(n.expression.name.text)) {
+      // The receiver may be the parameter itself or a re-assignment of it (`query = query.eq(…)`),
+      // so a bare identifier match on the chain root is what decides it.
+      let root: ts.Expression = n.expression.expression;
+      while (ts.isCallExpression(root) && ts.isPropertyAccessExpression(root.expression)) root = root.expression.expression;
+      if (ts.isIdentifier(root) && params.has(root.text)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn.body);
+  return found;
+}
+
+function paginatingHelperNames(sources: Map<string, ts.SourceFile>): Set<string> {
+  const names = new Set<string>();
+  for (const sf of sources.values()) {
+    const visit = (n: ts.Node) => {
+      if (ts.isFunctionDeclaration(n) && n.name && appliesBoundToParameter(n)) names.add(n.name.text);
+      if (
+        (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) &&
+        ts.isVariableDeclaration(n.parent) &&
+        ts.isIdentifier(n.parent.name) &&
+        appliesBoundToParameter(n)
+      ) {
+        names.add(n.parent.name.text);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return names;
+}
+
+// The name the unbounded chain is bound to, if any: `let query = client.from(…).select(…)`.
+function chainBindingName(chainRoot: ts.CallExpression): string | undefined {
+  const parent = chainRoot.parent;
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+  if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(parent.left)) return parent.left.text;
+  return undefined;
+}
+
+function enclosingBody(node: ts.Node): ts.Node {
+  for (let cur: ts.Node | undefined = node.parent; cur; cur = cur.parent) {
+    if (ts.isFunctionDeclaration(cur) || ts.isArrowFunction(cur) || ts.isFunctionExpression(cur) || ts.isMethodDeclaration(cur)) return cur;
+  }
+  return node.getSourceFile();
+}
+
+// True when the bound query is later handed to a helper that pages it.
+function boundedByHelper(chainRoot: ts.CallExpression, helpers: Set<string>): boolean {
+  const name = chainBindingName(chainRoot);
+  if (name === undefined || helpers.size === 0) return false;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && helpers.has(n.expression.text)) {
+      if (n.arguments.some((a) => ts.isIdentifier(a) && a.text === name)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(enclosingBody(chainRoot));
+  return found;
+}
+
+function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
+  const helpers = paginatingHelperNames(sources);
   for (const [path, sf] of sources) {
+    if (tooling.has(path)) continue; // #1476
     const visit = (node: ts.Node) => {
       // Only inspect the outermost call of a chain so one query flags once.
       if (ts.isCallExpression(node) && !(node.parent && ts.isPropertyAccessExpression(node.parent))) {
         const names = callChainNames(node);
-        if (names.includes("from") && names.includes("select") && !names.some((n) => CHAIN_BOUNDS.has(n)) && !hasPkEqFilter(node)) {
+        if (names.includes("from") && names.includes("select") && !names.some((n) => CHAIN_BOUNDS.has(n)) && !hasPkEqFilter(node) && !boundedByHelper(node, helpers)) {
           const selectArg = findSelectArg(node);
           if ((selectArg === undefined || selectArg === "*") && !isCountOnlySelect(node)) {
             findings.push(
@@ -909,26 +1359,47 @@ const WHOLE_LIB: Record<string, string> = {
 // them) but ship whole under a namespace import.
 const BARREL_NAMESPACE = new Set(["date-fns", "@mui/material", "@mui/icons-material", "lucide-react", "lodash-es", "ramda"]);
 
-function detectWholeLibraryImport(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// #1479: a Vite `?url`/`?raw`/`?inline` suffix yields the ASSET (a URL string, the file's text),
+// not the module — `import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url"` emits the
+// worker as a separate asset and pulls nothing into the importing chunk. `?worker` likewise
+// compiles to its own chunk. So a suffixed specifier is not an import of that library at all.
+const ASSET_QUERY_SUFFIX = /\?(url|raw|inline|worker|sharedworker|no-inline)\b/;
+
+function detectWholeLibraryImport(sources: Map<string, ts.SourceFile>, nextId: NextId, serverOnly: Set<string> | undefined): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
       const spec = stmt.moduleSpecifier.text;
+      if (ASSET_QUERY_SUFFIX.test(spec)) continue;
       const isNamespace = !!stmt.importClause?.namedBindings && ts.isNamespaceImport(stmt.importClause.namedBindings);
       const alternative = WHOLE_LIB[spec] ?? (BARREL_NAMESPACE.has(spec) && isNamespace ? `named imports (\`import { x } from "${spec}"\`) so the barrel can be tree-shaken/optimized` : undefined);
       if (!alternative) continue;
+      // #1479: the class's stated cost is BUNDLE weight ("dead code in the bundle … parse/execute
+      // cost on every visitor"), and it never tested that the module reaches a bundle. MEASURED
+      // 2026-07-28: 27 of ghostfolio's 59 rows are in `apps/api`, a NestJS server that ships no JS
+      // to a visitor at all. The claim is re-worded rather than suppressed — a server module still
+      // pays resident memory and cold-start parse for a library it uses one function from, which
+      // is a real if smaller cost, and suppressing would trade a false positive for a false
+      // negative on every server-side barrel import.
+      const isServerOnly = serverOnly?.has(path) === true;
       findings.push(
         makeFinding(nextId, {
-          title: `Whole-library import of ${spec}`,
-          severity: "Perf",
-          confidence: "Likely",
+          title: isServerOnly ? `Whole-library import of ${spec} (server-only module)` : `Whole-library import of ${spec}`,
+          severity: isServerOnly ? "Low" : "Perf",
+          confidence: isServerOnly ? "Review" : "Likely",
           taxonomy: "M7 — Whole-library import",
           location: loc(path, sf, stmt),
-          evidence: `\`${stmt.getText(sf).slice(0, 100)}\` — ${spec in WHOLE_LIB ? `${spec} is a CJS package, so any import form pulls the entire library into the bundle` : "a namespace import defeats tree-shaking of this barrel"}.`,
-          impact: "Tens to hundreds of KB of dead code in the bundle that imports it — worst when it lands in a client chunk (parse/execute cost on every visitor).",
+          evidence:
+            `\`${stmt.getText(sf).slice(0, 100)}\` — ${spec in WHOLE_LIB ? `${spec} is a CJS package, so any import form pulls the entire library into the bundle` : "a namespace import defeats tree-shaking of this barrel"}.` +
+            (isServerOnly
+              ? " A request entry point in this tree imports this module and no client entry point does, so it is server-side — the visitor-bundle cost stated by this class does NOT apply to it."
+              : " Whether this module reaches a client chunk was not established: framework routing is not an import edge, so a static walk cannot prove the negative."),
+          impact: isServerOnly
+            ? "Server-side only: resident memory and cold-start parse for a library one function is used from. No first-load JS cost — a visitor never downloads this module."
+            : "Tens to hundreds of KB of dead code in the bundle that imports it — worst when it lands in a client chunk (parse/execute cost on every visitor).",
           fix: `Switch to ${alternative}.`,
-          value: 3,
+          value: isServerOnly ? 2 : 3,
           ease: 4,
           safety: 5,
         }),
@@ -961,6 +1432,10 @@ const HEAVY_CLIENT_LIBS = new Set([
 ]);
 
 function heavyLibOf(spec: string): string | undefined {
+  // #1479: `?url`/`?raw`/`?worker` yields the asset, not the module — the library is never pulled
+  // into the importing chunk. MEASURED 2026-07-28 on carbon's apps/erp/app/entry.client.tsx:1,
+  // `import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url"`, graded false.
+  if (ASSET_QUERY_SUFFIX.test(spec)) return undefined;
   if (HEAVY_CLIENT_LIBS.has(spec)) return spec;
   for (const lib of HEAVY_CLIENT_LIBS) {
     if (spec.startsWith(`${lib}/`)) return lib;
@@ -968,12 +1443,22 @@ function heavyLibOf(spec: string): string | undefined {
   return undefined;
 }
 
-function detectHeavyClientImport(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
+function detectHeavyClientImport(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  isVite: boolean,
+  serverOnly: Set<string> | undefined,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     // A Vite SPA emits no `'use client'` directive — the whole bundle IS the client, so a static
     // heavy import in ANY module lands in first-load JS (#577). On Next, only Client Components do.
     if (!isVite && leadingDirective(sf) !== "use client") continue;
+    // #1479: "every module ships to the client" is true of a Vite SPA's app tree, not of every
+    // file in a Vite MONOREPO, which also holds server modules and deploy scripts. Only a module
+    // with positive server evidence on both sides is dropped — requiring positive CLIENT
+    // reachability instead deleted 14 real carbon rows, because RR7 routes are not import edges.
+    if (serverOnly?.has(path) === true) continue;
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
       const lib = heavyLibOf(stmt.moduleSpecifier.text);
@@ -1178,13 +1663,7 @@ const HANDLER_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)pages\/api\/)/;
 // #1203: files that are never on a request path regardless of what they export — build/tooling
 // scripts, config files, migrations/seeds, tests. Excluded from the broader (non-route-file)
 // tier below so cold-start/dev-time code doesn't get flagged as a request-path blocker.
-// #1306 widened it, and gave it a SECOND consumer (detectAwaitInLoop). Two gaps, both measured on
-// 2026-07-27 against real conventions: it only matched a DIRECTORY named `seeds/`, so the single
-// commonest seed file in the ecosystem — `prisma/seed.ts` — did not match, and turbo's codegen
-// lives under `turbo/generators/`. `prisma/` and `turbo/` hold no request-path code by convention,
-// and a `seed*.ts` / `*.seed.ts` filename is a seed script wherever it sits.
-const NON_REQUEST_PATH =
-  /(^|\/)(scripts|bin|migrations?|seeds?|prisma|turbo|__tests__|__mocks__)\/|(^|\/)seed[^/]*\.[cm]?[jt]sx?$|\.seed\.[cm]?[jt]sx?$|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
+const NON_REQUEST_PATH = /(^|\/)(scripts|bin|migrations?|seeds?|__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
 // #1344: the entry points a request actually enters through. HANDLER_PATH is the Next.js subset the
 // "Likely" tier keys on; a Remix/RR7/Nest/Express app has none of those files, so the reachability
 // roots below are deliberately wider — otherwise the whole generic tier goes silent on every
@@ -1286,6 +1765,27 @@ function detectSyncIoInHandler(files: SourceInput[], sources: Map<string, ts.Sou
 
 // --- E2. JSON deep-clone [LOW] ------------------------------------------------------
 
+// #1480: `JSON.parse(JSON.stringify(x))` inside the `props` object returned by
+// getServerSideProps/getStaticProps is the DOCUMENTED Next.js idiom for making non-JSON values
+// (Prisma `Date`s, Decimals) serializable across the server→client props boundary. It is a
+// required serialization step, not a copy — and `structuredClone`, this class's recommendation,
+// would not fix it, it would break it (a structured clone still carries Dates, which is exactly
+// what Next refuses). Sibling of #816's module-scope exemption. MEASURED 2026-07-28 on boxyhq's
+// pages/teams/switch.tsx:65.
+const PROPS_FUNCTION = /^get(ServerSide|Static)Props$/;
+
+function isNextPropsSerialization(node: ts.Node): boolean {
+  let inPropsObject = false;
+  for (let cur: ts.Node | undefined = node; cur; cur = cur.parent) {
+    if (ts.isPropertyAssignment(cur) && ts.isIdentifier(cur.name) && cur.name.text === "props") inPropsObject = true;
+    if (ts.isFunctionDeclaration(cur) && cur.name && PROPS_FUNCTION.test(cur.name.text)) return inPropsObject;
+    if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && ts.isVariableDeclaration(cur.parent) && ts.isIdentifier(cur.parent.name)) {
+      return inPropsObject && PROPS_FUNCTION.test(cur.parent.name.text);
+    }
+  }
+  return false;
+}
+
 function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -1305,7 +1805,8 @@ function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId
           ts.isCallExpression(arg) &&
           ts.isPropertyAccessExpression(arg.expression) &&
           arg.expression.name.text === "stringify" &&
-          arg.expression.expression.getText(sf) === "JSON"
+          arg.expression.expression.getText(sf) === "JSON" &&
+          !isNextPropsSerialization(n)
         ) {
           findings.push(
             makeFinding(nextId, {
@@ -1407,9 +1908,10 @@ function declaredWithin(scope: ts.Node, name: string): boolean {
   return found;
 }
 
-function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (tooling.has(path)) continue; // #1476
     const hits: ts.CallExpression[] = [];
 
     const inspectLoop = (itemNames: Set<string>, declScope: ts.Node, body: ts.Node) => {
@@ -1658,6 +2160,10 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
   );
   let n = 0;
   const nextId: NextId = () => `M7C-${String(++n).padStart(2, "0")}`;
+  // #1476/#1479: computed once and shared — three classes asked "is this application code a
+  // request/bundle can reach?" and each answered it with its own path blocklist.
+  const tooling = devToolingModules(files, sources);
+  const serverOnly = serverOnlyModules(files, sources, tooling);
 
   return [
     ...detectUnresolvableCompilerFlag(files, nextId),
@@ -1666,12 +2172,12 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
     ...detectRawImgElement(sources, nextId, isVite),
     ...detectIndexAsKey(sources, nextId, compilerOn),
     ...detectSortInJsx(sources, nextId),
-    ...detectStateSprawl(sources, nextId),
-    ...detectAwaitInLoop(sources, nextId),
-    ...detectUnboundedSelect(sources, nextId),
+    ...detectStateSprawl(sources, nextId, reactMajorVersion(files)),
+    ...detectAwaitInLoop(sources, nextId, tooling),
+    ...detectUnboundedSelect(sources, nextId, tooling),
     ...detectClientFetchEffect(sources, nextId, isVite),
-    ...detectWholeLibraryImport(sources, nextId),
-    ...detectHeavyClientImport(sources, nextId, isVite),
+    ...detectWholeLibraryImport(sources, nextId, serverOnly),
+    ...detectHeavyClientImport(sources, nextId, isVite, serverOnly),
     ...detectUnoptimizedBarrelImports(files, sources, nextId),
     ...detectManualFontLink(sources, nextId, isVite),
     ...detectImportMetaGlobEager(sources, nextId, isVite),
@@ -1679,6 +2185,6 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
     ...detectMiddlewareFetch(sources, nextId),
     ...detectSyncIoInHandler(files, sources, nextId),
     ...detectJsonDeepClone(sources, nextId),
-    ...detectNestedLoopJoin(sources, nextId),
+    ...detectNestedLoopJoin(sources, nextId, tooling),
   ];
 }

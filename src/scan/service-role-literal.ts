@@ -17,8 +17,9 @@
 // safe: most string literals reaching createClient's second argument in practice, e.g. a
 // hardcoded local anon key with unusual formatting, are simply not JWTs).
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { collectPathAliases, resolveImport, type PathAlias } from "../detectors/app-router.js";
@@ -158,10 +159,9 @@ export function detectServiceRoleLiteralFindings(files: SourceInput[]): Finding[
 }
 
 function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const entry of readdirSync(dir)) {
+  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
     if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, root, out);
+    if (isDirectory) walk(full, root, out);
     else if (SOURCE_EXT.test(entry) || /^(tsconfig|jsconfig)\.json$/.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
   }
 }

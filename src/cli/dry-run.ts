@@ -15,9 +15,10 @@
 // and M2/M7/M8 (quality-scan, perf-scan, mutation-scan — need a live DB and/or a running app).
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { readEntriesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
 import { classifyDefinerFunctions, definerFindings, type DefinerFunction } from "../definer-classifier.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
@@ -50,7 +51,7 @@ async function timePhase<T>(phase: string, module: string, fn: () => T | Promise
 function readMigrations(targetDir: string): string {
   const dir = join(targetDir, "supabase", "migrations");
   if (!existsSync(dir)) return "";
-  return readdirSync(dir, { recursive: true, encoding: "utf8" })
+  return readRecursiveSafe(dir)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(dir, f), "utf8"))
@@ -78,10 +79,10 @@ const BUILD_ARTIFACT_IGNORE = /(^|\/)(node_modules|\.next)\/|\.log$/;
 
 function findEnvFixtures(dir: string, base = dir): string[] {
   const found: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of readEntriesSafe(dir).entries) {
     if (entry.name === "node_modules" || entry.name === ".next" || entry.name === ".git") continue;
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...findEnvFixtures(full, base));
+    if (entry.isDirectory) found.push(...findEnvFixtures(full, base));
     else if (entry.name === ".env" || entry.name === ".env.local") found.push(relative(base, full));
   }
   return found;

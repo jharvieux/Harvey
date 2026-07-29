@@ -367,6 +367,80 @@ export const m9CheckEntries: CorpusEntry[] = [
     note: "waterfall-guard/negative: `if (!team) return …` between the two awaits. No value flows, but parallelising runs the second query on a request the sequential code never reaches — the #1292 false positive.",
   },
 
+  // #1438 — #1292's escape rule counted ANY `break`/`continue` node, so one belonging to an
+  // intervening `switch` or inner loop — which leaves neither the function nor the path to the
+  // second query — suppressed a genuinely parallelisable pair. Scored the same way round as the
+  // #1292 pair above: the POSITIVE is the shape that must fire again, the NEGATIVE the escape that
+  // must still suppress, so a fix that switches the rule off rather than narrowing it goes red.
+  {
+    id: "M9C-WATERFALL-ESCAPE-POS",
+    kind: "positive",
+    cls: "sequential queries with an intervening switch/inner-loop `break` that leaves neither the function nor the path to the second query",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-escape/positive: two functions — a `switch` whose case `break` belongs to the switch, and a `for` whose `break` belongs to that loop. Both intervening statements read the first result; neither skips the second query, so both pairs are real waterfalls. A `match` key is satisfied by ONE finding, so this entry alone would stay green with half the fix reverted: the per-shape lock is app-router.test.ts asserting this fixture yields exactly 2 findings, one per function.",
+  },
+  {
+    id: "M9C-WATERFALL-ESCAPE-NEG",
+    kind: "negative",
+    cls: "sequential queries with a `return` inside an intervening switch case",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-escape/negative: `case \"archived\": return null` inside the same switch shape. #1438 narrowed the rule for break/continue, it did not switch escapes off — a `return` still leaves the function, so this pair stays a dependency.",
+  },
+
+  // #1441 — the #1292 suppression is one rule covering two different control-flow facts. A guard
+  // that DIVERTS (return/break) skips the second query; a guard that only ABORTS (throw, including
+  // `throw redirect(…)`) ends the request, and nothing downstream sees the second query's result.
+  // The abort case is a recall loss when both statements are reads — and a real bug when either
+  // writes, which is why the negative here is a WRITE under an aborting guard.
+  {
+    id: "M9C-WATERFALL-ABORT-POS",
+    kind: "positive",
+    cls: "sequential READS separated by an error-only guard that ends the request",
+    module: "M9",
+    location: "m9-corpus/waterfall-abort/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-abort/positive: `if (!price) throw` between an independent prices read and a subscriptions read — the pinned mvp-boilerplate shape whose suppression took that target's only counted M9 finding away. Hoisting the second read above the throw costs one wasted round-trip on the failure path and changes no behaviour.",
+  },
+  {
+    id: "M9C-WATERFALL-ABORT-NEG",
+    kind: "negative",
+    cls: "an error-only guard where the second statement WRITES (`.from(x).update(…).select(…)`)",
+    module: "M9",
+    location: "m9-corpus/waterfall-abort/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-abort/negative: a `throw` guard rejecting voided receipts, followed by an `.update({status:'Pending'}).select('id')` that satisfies isDbQueryChain but is a WRITE. Parallelising would post a voided receipt — the reason the abort relaxation is gated on both statements being reads. From the pinned carbon clone.",
+  },
+
+  // #1439 — #1263's callee resolution accepted any resolved helper whose BODY matched the auth
+  // pattern. Matching the pattern says the helper looks at the session; it does not say the helper
+  // can stop the mutation. Same inversion again: the positives are helpers that enforce nothing and
+  // must still fire, the negative the real gate reached through the import idiom #1263 missed.
+  {
+    id: "M9C-GATE-STRENGTH-POS",
+    kind: "positive",
+    cls: "Server Action vouched for by a logger that reads the session, and by a boolean gate whose result is discarded",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength/positive",
+    match: ["Server Action missing authorization"],
+    expectedTier: "review",
+    note: "action-gate-strength/positive: `auditLog(...)` calls getCurrentUser() for a log line and cannot deny; `const allowed = await canAccess(id)` is never read. Neither is a gate — both actions must still be flagged.",
+  },
+  {
+    id: "M9C-GATE-STRENGTH-NEG",
+    kind: "negative",
+    cls: "Server Action gated through a NAMESPACE import (`import * as guards; await guards.ensureMember(id)`)",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength/negative",
+    match: ["Server Action missing authorization"],
+    note: "action-gate-strength/negative: the same real `ensureMember` gate as server-action-helper-gate, imported as a namespace — the idiom #1263's collectValueImports did not model, so its own false positive survived for it. Nothing must fire.",
+  },
+
   // #1262 — the brief's third unbounded-route shape, which #857 left undetected AND undisclosed.
   {
     id: "M9C-RETRY-POS",
@@ -386,5 +460,132 @@ export const m9CheckEntries: CorpusEntry[] = [
     location: "m9-corpus/uncapped-retry/negative",
     match: ["Uncapped retry/fan-out"],
     note: "uncapped-retry/negative: `i < MAX_ATTEMPTS` (a numeric const this pass resolves) and `ids.slice(0, MAX_FANOUT).map(…)` — the precision boundary, nothing fires.",
+  },
+
+  // #1293 — four FP shapes MEASURED on carbon's pinned tree, not imagined: 82 of that target's 108
+  // SSR-only rows and ALL THREE of its server→client-leak Highs. Scored the #1263 way round — the
+  // NEGATIVE carries the shape that used to false-fire, the POSITIVE the near-identical shape that
+  // must still fire — so a fix that over-suppresses fails here rather than going quiet.
+  {
+    id: "M9C-SSR-CLIENTROUTE-POS",
+    kind: "positive",
+    cls: "browser global read in a route module's default-export component",
+    module: "M9",
+    location: "m9-corpus/ssr-client-route/positive",
+    match: ["SSR-only API misuse"],
+    expectedTier: "review",
+    note: "ssr-client-route/positive: the same `window.clientCache` read, in the route's DEFAULT-EXPORT component instead of `clientAction` — genuinely on the SSR path, so file-level suppression would lose it.",
+  },
+  {
+    id: "M9C-SSR-CLIENTROUTE-NEG",
+    kind: "negative",
+    cls: "browser global read inside a client-only route export (clientLoader/clientAction)",
+    module: "M9",
+    location: "m9-corpus/ssr-client-route/negative",
+    match: ["SSR-only API misuse"],
+    note: "ssr-client-route/negative: `window.clientCache` inside `clientAction`, a route export React Router 7 / Remix run only in the browser — 59 of carbon's 108 rows in this class.",
+  },
+  {
+    id: "M9C-SSR-SHADOW-POS",
+    kind: "positive",
+    cls: "browser global read with no local binding of that name in the file",
+    module: "M9",
+    location: "m9-corpus/ssr-shadowed-global/positive",
+    match: ["SSR-only API misuse"],
+    expectedTier: "review",
+    note: "ssr-shadowed-global/positive: `document.title` in a render body with nothing named `document` bound in the file — the real DOM global.",
+  },
+  {
+    id: "M9C-SSR-SHADOW-NEG",
+    kind: "negative",
+    cls: "browser-global name bound by a destructured parameter, so the access is not the DOM",
+    module: "M9",
+    location: "m9-corpus/ssr-shadowed-global/negative",
+    match: ["SSR-only API misuse"],
+    note: "ssr-shadowed-global/negative: `({ bucket, document })` binds `document` to an app record. The shadowing rule existed but read only the identifier-shaped binding — 14 of carbon's 108 rows.",
+  },
+  {
+    id: "M9C-SSR-EARLYRET-POS",
+    kind: "positive",
+    cls: "browser global read in a render body with no guard above it",
+    module: "M9",
+    location: "m9-corpus/ssr-early-return/positive",
+    match: ["SSR-only API misuse"],
+    expectedTier: "review",
+    note: "ssr-early-return/positive: `window.location.origin` with no preceding guard — reached during SSR, must still fire.",
+  },
+  {
+    id: "M9C-SSR-EARLYRET-NEG",
+    kind: "negative",
+    cls: "browser global read after an early-return typeof guard in the same block",
+    module: "M9",
+    location: "m9-corpus/ssr-early-return/negative",
+    match: ["SSR-only API misuse"],
+    note: "ssr-early-return/negative: `if (typeof window === \"undefined\") return null;` as a preceding SIBLING, which the ancestor-only guard walk could not see.",
+  },
+  {
+    id: "M9C-LEAK-NARROWED-POS",
+    kind: "positive",
+    cls: "select('*') row handed whole to a Client Component",
+    module: "M9",
+    location: "m9-corpus/leak-narrowed-select/positive",
+    match: ["Server→client data leak"],
+    expectedTier: "review",
+    note: "leak-narrowed-select/positive: `select(\"*\")` really does ship every column — the boundary the narrowed negative is measured against.",
+  },
+  {
+    id: "M9C-LEAK-NARROWED-NEG",
+    kind: "negative",
+    cls: "row from a column-narrowed select handed to a Client Component",
+    module: "M9",
+    location: "m9-corpus/leak-narrowed-select/negative",
+    match: ["Server→client data leak"],
+    note: "leak-narrowed-select/negative: `select(\"id, name\")` already projected, so the finding's own 'every field on the row ships to the browser' is false — all three of carbon's leak Highs.",
+  },
+
+  // #1276 — the one FP family that came from RUNNING the TanStack adapter against a real target
+  // rather than from a fixture we authored. See the tanstack-com entry in external-corpus.ts.
+  {
+    id: "M9C-TANSTACK-CLIENTONLY-POS",
+    kind: "positive",
+    cls: "browser global read in a render body of a TanStack Start module, unwrapped",
+    module: "M9",
+    location: "m9-corpus/tanstack-client-only/positive",
+    match: ["SSR-only API misuse"],
+    expectedTier: "review",
+    note: "tanstack-client-only/positive: the same localStorage/document reads with no client-only wrapper — on the SSR path, so suppressing on the wrapper's mere presence in the file would fail here.",
+  },
+  {
+    id: "M9C-TANSTACK-CLIENTONLY-NEG",
+    kind: "negative",
+    cls: "browser global read inside createClientOnlyFn / createIsomorphicFn().client",
+    module: "M9",
+    location: "m9-corpus/tanstack-client-only/negative",
+    match: ["SSR-only API misuse"],
+    note: "tanstack-client-only/negative: TanStack Start's own markers for 'never runs on the server' — 6 of tanstack.com's 18 residual rows in this class (MEASURED 2026-07-28: 18 -> 12).",
+  },
+
+  // #1440 — #1262 shipped the retry check accepting only a LITERAL-true while-condition, so the
+  // canonical `while (!done) { try { await fetch(url) } catch {} }` was never assessed, and was not
+  // among the sub-shapes its own scope row names as unassessed. A while/do header now resolves
+  // exactly as a `for` header does.
+  {
+    id: "M9C-RETRY-WHILE-POS",
+    kind: "positive",
+    cls: "route handler retrying inside `while (<non-literal>)` with a swallowing catch",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry-while/positive",
+    match: ["Uncapped retry/fan-out"],
+    expectedTier: "review",
+    note: "uncapped-retry-while/positive: `while (!done)` around a caught `fetch` whose catch never sets `done`. The header carries no resolvable bound, so the loop is reported as uncapped.",
+  },
+  {
+    id: "M9C-RETRY-WHILE-NEG",
+    kind: "negative",
+    cls: "the same while-loop retry with an attempt counter compared against a numeric constant",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry-while/negative",
+    match: ["Uncapped retry/fan-out"],
+    note: "uncapped-retry-while/negative: `while (attempts < MAX_ATTEMPTS)` — a numeric const this pass resolves, so the header carries a bound. The precision boundary for the widened while rule, nothing fires.",
   },
 ];

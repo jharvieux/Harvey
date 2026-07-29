@@ -2,8 +2,9 @@
 // cleared benign negative, mirroring the app-router.test.ts fixture discipline (issue #61's
 // rule, enforced here through `pnpm verify` since these detectors run outside runMechanicalScan).
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { detectPerfCodeFindings, reactCompilerEnabled, type SourceInput } from "./perf-code.js";
@@ -16,9 +17,8 @@ function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         walk(full);
       } else if (entry.endsWith(".txt")) {
         const path = relative(root, full).replace(/\.txt$/, "").split(sep).join("/");
@@ -309,7 +309,11 @@ describe("Vite mode (#577)", () => {
   });
 
   it("branches raw-<img> and font remediation text on Vite", () => {
-    const img = byTaxonomyVite("img-tag/positive", "M7 — Raw <img> instead of next/image");
+    // #1480: the TAXONOMY branches too, not only the title and the fix. It used to name
+    // next/image unconditionally, so a React Router / Vite client read "instead of next/image"
+    // in any grouping keyed on taxonomy — a label defect on all 60 of carbon's rows.
+    expect(byTaxonomyVite("img-tag/positive", "M7 — Raw <img> instead of next/image")).toHaveLength(0);
+    const img = byTaxonomyVite("img-tag/positive", "M7 — Raw <img> without dimensions or lazy-loading");
     expect(img).toHaveLength(1);
     expect(img[0]?.title).toContain("without dimensions");
     expect(img[0]?.fix).toContain("vite-imagetools");
@@ -448,5 +452,61 @@ describe("finding shape", () => {
     const findings = detectPerfCodeFindings(loadFixtureDir("whole-lib-import/positive"));
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.every((f) => f.precisionTier === "review")).toBe(true);
+  });
+});
+
+// #1475–#1480 — the six false-positive families #1261's FIELD triage of the pinned external
+// corpus measured on 2026-07-28. The calibration rows in m7-code.entries.ts pin whether each
+// class FIRES and at what band; these pin the sentences a client reads, which no corpus row can.
+describe("field FP families (#1475–#1480)", () => {
+  const SPRAWL = "M7 — State sprawl";
+
+  it("#1475: the state-sprawl evidence no longer asserts a per-setter re-render on React >= 18", () => {
+    const modern = byTaxonomy("state-sprawl/positive", SPRAWL);
+    expect(modern).toHaveLength(1);
+    // The exact sentence #1475 was filed against. React 18 collapsed N setters in one handler
+    // into ONE render in 2022 — the finding named a mechanism that no longer exists.
+    expect(modern[0]?.evidence).not.toContain("every setter triggers a full re-render");
+    expect(modern[0]?.evidence).toContain("automatic batching");
+    expect(modern[0]?.impact).not.toContain("re-renders per");
+    expect(modern[0]?.severity).toBe("Info");
+  });
+
+  it("#1475: React < 18 keeps the counted render-cost claim, so the fix is not a blanket suppression", () => {
+    const legacy = byTaxonomy("state-sprawl/positive-react17", SPRAWL);
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]?.severity).toBe("Low");
+    expect(legacy[0]?.evidence).toContain("are NOT batched");
+  });
+
+  it("#1477: an SVG-only file emits nothing, and a mixed file counts only the raster hits and says so", () => {
+    const svgOnly = byTaxonomy("img-tag/negative-svg", "M7 — Raw <img> instead of next/image");
+    // components/hero.tsx is the scope control — one raster <img>, and the three SVGs in
+    // logo-cloud.tsx contribute no row of their own.
+    expect(svgOnly).toHaveLength(1);
+    expect(svgOnly[0]?.location).toContain("components/hero.tsx");
+  });
+
+  it("#1477: a src bound through a prop or through state is one-shot, not just a data: literal", () => {
+    const findings = byTaxonomy("img-tag/negative-indirect-oneshot", "M7 — Raw <img> instead of next/image");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.location).toContain("components/gallery.tsx");
+  });
+
+  it("#1479: a server-only module gets the server claim, and its bundle sentence is withdrawn", () => {
+    const server = byTaxonomy("whole-lib-import/positive-server-only", "M7 — Whole-library import");
+    expect(server).toHaveLength(1);
+    expect(server[0]?.impact).toContain("Server-side only");
+    expect(server[0]?.impact).not.toContain("client chunk");
+    expect(server[0]?.evidence).toContain("no client entry point does");
+  });
+
+  it("#1479: with no client entry to answer from, the claim is left unqualified rather than asserted", () => {
+    const unknown = byTaxonomy("whole-lib-import/positive", "M7 — Whole-library import");
+    expect(unknown.length).toBeGreaterThan(0);
+    // The unanswerable case must not read as the server-side one, and must not silently
+    // claim the client one either.
+    expect(unknown[0]?.severity).toBe("Perf");
+    expect(unknown[0]?.evidence).toContain("was not established");
   });
 });

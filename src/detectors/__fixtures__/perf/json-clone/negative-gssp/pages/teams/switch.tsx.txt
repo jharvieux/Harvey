@@ -1,0 +1,16 @@
+// The documented Next.js idiom for making Prisma Dates serializable across the props
+// boundary. `structuredClone` would not fix this — it would break it.
+export async function getServerSideProps({ req }: { req: unknown }) {
+  const teams = await getTeams(req);
+  return {
+    props: {
+      teams: JSON.parse(JSON.stringify(teams)),
+    },
+  };
+}
+async function getTeams(_req: unknown) {
+  return [] as unknown[];
+}
+export default function Switch() {
+  return <div />;
+}

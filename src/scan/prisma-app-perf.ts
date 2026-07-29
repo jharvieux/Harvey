@@ -16,10 +16,12 @@
 // @map("payment_method")) — reusing it here would silently mismatch any @map'd field.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
+import { devToolingModules } from "../detectors/perf-code.js";
+import { readEntriesSafe } from "../fs-walk.js";
 import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -109,6 +111,18 @@ function parseModelFilterInfo(schema: string): Map<string, ModelFilterInfo> {
 }
 
 const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
+
+// package.json manifests across the tree, as SourceInput[] — the dev-tooling gate's script arm
+// needs them and walkSourceFiles is deliberately source-only.
+function loadManifests(dir: string, root: string = dir, out: SourceInput[] = []): SourceInput[] {
+  for (const { name, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+    if (MANIFEST_SKIP_DIRS.has(name)) continue;
+    if (isDirectory) loadManifests(full, root, out);
+    else if (name === "package.json") out.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
+  }
+  return out;
+}
+const MANIFEST_SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 function readSchema(dir: string): string | undefined {
   const relPath = PRISMA_SCHEMA_PATHS.find((p) => existsSync(join(dir, p)));
@@ -311,11 +325,17 @@ export function detectPrismaAppPerfFindings(files: SourceInput[], schema: string
   const schemaModels = parseModelFilterInfo(schema);
   const filterHits = new Map<string, UnindexedFilterHit>();
   const findings: Finding[] = [];
-  for (const f of files) {
-    if (!SOURCE_EXT.test(f.path)) continue;
-    const sf = parse(f.path, f.text);
-    findings.push(...detectN1(f.path, sf));
-    collectUnindexedFilters(f.path, sf, schemaModels, filterHits);
+  const sources = new Map(files.filter((f) => SOURCE_EXT.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]));
+  // #1476: this detector reported boxyhq's `delete-team.js` — an interactive `readline` admin CLI
+  // wired to `npm run delete-team` — as an N+1, a SECOND false row on a file the generic
+  // await-in-loop class was already flagging. The corpus note that recorded this detector's
+  // arrival as "a precision fix" was measuring a duplicate false positive. Same gate as the
+  // generic tier, so a later widening of one keeps the other in step.
+  const tooling = devToolingModules(files, sources);
+  for (const [path, sf] of sources) {
+    if (tooling.has(path)) continue;
+    findings.push(...detectN1(path, sf));
+    collectUnindexedFilters(path, sf, schemaModels, filterHits);
   }
   for (const hit of filterHits.values()) findings.push(buildFilterFinding(hit));
   return findings;
@@ -327,5 +347,7 @@ export function detectPrismaAppPerfFindings(files: SourceInput[], schema: string
 export function scanPrismaAppPerf(dir: string): Finding[] {
   const schema = readSchema(dir);
   if (!schema) return [];
-  return detectPrismaAppPerfFindings(walkSourceFiles(dir), schema);
+  // The manifests come along because the dev-tooling gate reads `scripts`/`bin`/`prisma.seed` to
+  // recognise a file the project runs as a script (#1476); walkSourceFiles is source-only.
+  return detectPrismaAppPerfFindings([...walkSourceFiles(dir), ...loadManifests(dir)], schema);
 }

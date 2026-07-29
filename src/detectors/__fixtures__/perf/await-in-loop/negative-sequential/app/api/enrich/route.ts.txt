@@ -1,0 +1,17 @@
+// SCOPE CONTROL — a plain per-item N+1 with an early return that is DOWNSTREAM of the await
+// and only fires in an exceptional branch. This is boxyhq's sso/verify.ts shape, and it MUST
+// still fire: the broad "body contains a break or return" form deleted it.
+import { db } from "../../../lib/db";
+
+export async function GET() {
+  const teams = await db.team.findMany();
+  let teamId = "";
+  for (const team of teams) {
+    const exists = await db.sso.exists(team.id);
+    if (exists) {
+      if (teamId) return Response.json({ teamId: "", useSlug: true });
+      teamId = team.id;
+    }
+  }
+  return Response.json({ teamId, useSlug: false });
+}

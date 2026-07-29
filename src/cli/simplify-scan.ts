@@ -10,8 +10,9 @@
 // human-reviewed judgment (docs/design/m6-simplification-eval.md §5), and `pnpm verify` must stay
 // deterministic and offline. Feed the packet to a reviewer, then triage the writeup by hand.
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { buildPacket, renderPacket, scopePacketFiles } from "../simplify-scan.js";
 
@@ -22,10 +23,9 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "co
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(dir)) {
+  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
     if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
+    if (isDirectory) out.push(...sourceFiles(full));
     else if (/\.(ts|tsx|js|jsx|mjs)$/.test(entry) && !/\.(test|spec)\./.test(entry)) out.push(full);
   }
   return out;
@@ -35,10 +35,9 @@ function sourceFiles(dir: string): string[] {
 // only evidence for the rubric's "already in the dependency tree" class.
 function manifestFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(dir)) {
+  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
     if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...manifestFiles(full));
+    if (isDirectory) out.push(...manifestFiles(full));
     else if (entry === "package.json") out.push(full);
   }
   return out;

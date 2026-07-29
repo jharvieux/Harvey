@@ -11,7 +11,9 @@
 // These two layers are complementary — Layer 1 proves the scorers fail on movement without
 // cloning anything, Layer 2 supplies the real movement.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseRecordedReasons, validateRecordedReason } from "../recorded-reasons.js";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
@@ -77,9 +79,9 @@ describe("external corpus manifest", () => {
     // dropping to not-run is exactly what this asserts against.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
     expect(scored.sort()).toEqual([
-      "boxyhq", "carbon", "documenso", "ghostfolio", "inbox-zero", "multi-tenant-starter",
-      "mvp-boilerplate", "proposit", "rallly", "saas-lite", "subscription-payments",
-      "supabase-security-labs",
+      "boxyhq", "carbon", "documenso", "ghostfolio", "inbox-zero", "launch-mvp",
+      "multi-tenant-starter", "mvp-boilerplate", "proposit", "rallly", "saas-lite",
+      "subscription-payments", "supabase-security-labs", "tanstack-com",
     ]);
   });
 
@@ -144,16 +146,18 @@ describe("scoreExternalBaseline", () => {
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
     // #230 demoted exhaustive-deps to Info rather than deleting it. If a future change promotes
-    // it back to a graded severity, proposit's M7 jumps 42 -> 72 and this scorer must catch it.
+    // it back to a graded severity, proposit's M7 jumps 36 -> 71 and this scorer must catch it.
+    // #1475 gave the class a second Info member on the same principle: state sprawl still emits
+    // and still ships, but its render-count claim was false on React >= 18, so it is Info here too.
     const rows = scoreExternalBaseline(target("mvp-boilerplate"), [
       finding("M7 — Unbounded select"),
-      finding("M7 — State sprawl"),
+      finding("M7 — State sprawl", "Info"),
       finding("M7 — Client fetch in useEffect"),
       finding("M7 — Client fetch in useEffect"),
       finding("M7 — Nested-loop join"),
       finding("M7 — Missing hook dependencies", "Info"),
     ]);
-    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 5 });
+    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 4 });
   });
 
   it("keeps the #360 diverged-clone pass out of M4's jscpd baseline — shared 'M4 —' prefix, separate modules", () => {
@@ -477,8 +481,8 @@ describe("revalidateNotRunReasons (#321)", () => {
       provenanceNote: "synthetic fixture for this test only",
       securityVerdict: "n/a",
       modules: {
-        M4: { reason: "jscpd could not complete on this scope (synthetic fixture)" },
-        M8: { reason: "not exercised by this fixture" },
+        M4: { reason: "jscpd could not complete on this scope (synthetic fixture)", falsifier: "false" },
+        M8: { reason: "not exercised by this fixture", falsifier: "false" },
       },
     };
     expect(isNotRun(notRunM4.modules.M4!)).toBe(true);
@@ -687,5 +691,146 @@ describe("m10FindingsFromSchema (#279)", () => {
     const findings = m10FindingsFromSchema(ambiguous);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.severity).not.toBe("Info");
+  });
+});
+
+// #1473 — the "don't stay quiet" promise, split from the one CHANNEL it used to be scored on.
+//
+// launch-mvp is the target that separated them. MEASURED 2026-07-28 against
+// ShenSeanChen/launch-mvp-stripe-nextjs-supabase @ 513a8f0 via
+// `buildQuickScanReport(await runMechanicalScan({ dir }))`: grade F (51/100), 0 indicators, graded
+// set 4 High + 1 Low — three of the Highs being #774's unauthenticated service-role account-deletion
+// route, which is Confirmed and category "Broken access control", so it is graded and never reaches
+// the review-tier indicator channel. Under the old field ALL THREE possible values produced a false
+// statement about that repo, which is why it sits outside this gate today.
+//
+// These prove the SCORER, not the repos — whether the real trees land on the right side of it is
+// `pnpm corpus-drift`'s job. The planted target below is a REPORT shaped exactly like launch-mvp's
+// measurement, so a regression that re-conflates the channels fails here.
+describe("free-tier loudness invariant is channel-agnostic and can fail (#1473)", () => {
+  const gradedHigh: Finding = { ...finding("M1 — Object-level authorization", "High"), category: "Broken access control", precisionTier: "high" };
+  const loudLike = (over: Partial<FreeTierExpectation> = {}): FreeTierExpectation => ({ slug: "planted", mustNotScoreF: false, why: "planted for the #1473 scorer proof", ...over });
+
+  // launch-mvp's shape: loud in the graded set, silent in the indicator channel.
+  const gradedOnly = buildQuickScanReport([gradedHigh, gradedHigh, gradedHigh]);
+  // multi-tenant-starter's shape: the reverse.
+  const indicatorOnly = buildQuickScanReport([rlsIndicator("High")]);
+
+  it("the planted target reproduces launch-mvp's measurement: loud graded, zero indicators", () => {
+    expect(gradedOnly.findings.filter((f) => f.severity === "High")).toHaveLength(3);
+    expect(gradedOnly.indicators).toHaveLength(0);
+    // Not asserting the letter: the point is that the graded channel carries real Highs while the
+    // indicator channel is empty — the split the old single field could not express.
+    expect(gradedOnly.grade).not.toBe("A");
+  });
+
+  it("PASSES on the graded channel where mustRaiseLoudIndicator could only produce a false statement", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "graded" }), gradedOnly).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("graded channel LOUD");
+    expect(row.detail).toContain("indicator channel quiet");
+    // The sentence the old field would have printed about this exact report.
+    expect(row.detail).not.toContain("STAYED QUIET");
+  });
+
+  it("FAILS — planted: a known-vulnerable target whose asserted channel carries nothing", () => {
+    // The proof the invariant can be false. The same target, asserted on the channel that is silent.
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "indicator" }), gradedOnly).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("STAYED QUIET");
+    expect(row.detail).toContain('the "indicator" channel carried nothing');
+  });
+
+  it("FAILS when the free tier goes silent on BOTH channels — the promise itself broken", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), buildQuickScanReport([])).find((r) => r.check.startsWith("must be loud"))!;
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("graded channel quiet");
+    expect(row.detail).toContain("indicator channel quiet");
+  });
+
+  it('"either" accepts whichever channel actually carried it, and names it', () => {
+    for (const report of [gradedOnly, indicatorOnly]) {
+      expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), report).find((r) => r.check.startsWith("must be loud"))!.pass).toBe(true);
+    }
+    expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), indicatorOnly).find((r) => r.check.startsWith("must be loud"))!.detail).toContain("indicator channel LOUD");
+  });
+
+  it("does not accept an informational-only report as loud — that IS staying quiet", () => {
+    // #213: the informational section is seen-and-reported-but-not-graded BY DESIGN. If it counted,
+    // any target with a placeholder credential in its docs would satisfy the promise (carbon's shape).
+    const informationalOnly = buildQuickScanReport([{ ...finding("M1 — Doc-context credential", "Low"), taxonomy: DOC_CONTEXT_CREDENTIAL_TAXONOMY, category: "Secret exposure", precisionTier: "high" }]);
+    expect(informationalOnly.findings).toHaveLength(0);
+    expect(scoreFreeTierExpectation(loudLike({ mustBeLoud: "either" }), informationalOnly).find((r) => r.check.startsWith("must be loud"))!.pass).toBe(false);
+  });
+
+  it("stops calling a target's posture NOT ASSESSED once mustBeLoud asserts it (#934's row, corrected)", () => {
+    const row = scoreFreeTierExpectation(loudLike({ mustBeLoud: "graded" }), gradedOnly).find((r) => r.check === "indicator posture")!;
+    expect(row.pass).toBe(true);
+    expect(row.detail).not.toContain("NOT ASSESSED");
+    expect(row.detail).toContain('asserted on the "graded" channel');
+    // carbon's genuinely-unasserted posture keeps the original wording.
+    expect(scoreFreeTierExpectation(expectation("carbon"), gradedOnly).find((r) => r.check === "indicator posture")!.detail).toContain("NOT ASSESSED");
+  });
+
+  it("leaves every existing corpus row scored exactly as before — the new field is opt-in", () => {
+    for (const e of FREE_TIER_EXPECTATIONS) {
+      expect(e.mustBeLoud, `${e.slug} predates #1473 and must not have gained an unmeasured assertion`).toBeUndefined();
+      expect(scoreFreeTierExpectation(e, gradedOnly).some((r) => r.check.startsWith("must be loud")), e.slug).toBe(false);
+    }
+  });
+});
+
+// #1436 — a not-run reason is a claim, and the two M8 reasons this issue names were dated MEASURED,
+// well-written, invisible to `pnpm validate-reasons --revalidate`, and described conditions (a suite
+// gaining container reuse, a repo gaining a unit suite) that resolve UPSTREAM with nothing here
+// noticing. `ModuleNotRun.falsifier` is what the type now demands; this block is what keeps the
+// registry BLOCK — the half `--revalidate` actually reads — attached to it. A comment can be deleted
+// while the object survives, and then the module is silently unwatched again.
+describe("#1436 — every recorded not-run carries a falsifier the reason registry can see", () => {
+  const source = readFileSync(new URL("./external-corpus.ts", import.meta.url), "utf8");
+  const blocks = parseRecordedReasons(source, "src/scan/external-corpus.ts");
+  const notRuns = EXTERNAL_CORPUS.flatMap((t) =>
+    Object.entries(t.modules)
+      .filter(([, m]) => m !== undefined && isNotRun(m))
+      .map(([module, m]) => ({ slug: t.slug, module, notRun: m as { reason: string; falsifier: string } })),
+  );
+
+  it("finds the not-runs this test exists to watch, so it cannot pass by scoring an empty set", () => {
+    expect(notRuns.length).toBeGreaterThanOrEqual(5);
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("multi-tenant-starter/M8");
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("saas-lite/M8");
+    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("carbon/M8");
+  });
+
+  it("every not-run's falsifier appears verbatim as a FALSIFIER: in a well-formed block in the same file", () => {
+    const falsifiersInBlocks = new Set(blocks.map((b) => b.fields.FALSIFIER).filter((f) => f !== undefined));
+    for (const { slug, module, notRun } of notRuns) {
+      expect(notRun.falsifier, `${slug}/${module} has an empty falsifier`).not.toBe("");
+      expect(falsifiersInBlocks, `${slug}/${module}'s falsifier is on the object but in no REASON block — --revalidate would never run it`).toContain(notRun.falsifier);
+    }
+    for (const b of blocks) expect(validateRecordedReason(b, () => true), `block at line ${b.line}`).toEqual([]);
+  });
+
+  // The contract is one-way and easy to get backwards: NON-ZERO means the blocker holds, 0 means it
+  // is GONE, 127 means the re-test could not run at all. #1426 found seven falsifiers where a bare
+  // `grep` (exit 2) or a broken pipe (exit 1) read as "still blocked" by accident. Every command here
+  // therefore ends in an explicit `exit 0` / `exit 1` and opens with a `command -v` / `test -f` guard
+  // that exits 127. Asserted structurally rather than by running them — three need the network.
+  it("every falsifier ends in explicit exits and guards its own prerequisites with 127", () => {
+    for (const { slug, module, notRun } of notRuns) {
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 127");
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 0");
+      expect(notRun.falsifier, `${slug}/${module}`).toContain("exit 1");
+    }
+  });
+
+  // The negative control: the tie between object and block must be able to FAIL. Delete the block a
+  // not-run's falsifier lives in and the check must notice — otherwise this whole describe is
+  // decorative, which is the shape #1436 exists to end.
+  it("FAILS when the block a not-run's falsifier lives in is deleted", () => {
+    const victim = notRuns.find((n) => n.slug === "saas-lite" && n.module === "M8")!;
+    const gutted = source.split("\n").filter((l) => !l.includes(`FALSIFIER: ${victim.notRun.falsifier.slice(0, 40)}`)).join("\n");
+    const stillThere = new Set(parseRecordedReasons(gutted, "x").map((b) => b.fields.FALSIFIER));
+    expect(stillThere.has(victim.notRun.falsifier), "removing the FALSIFIER: line must break the tie").toBe(false);
   });
 });

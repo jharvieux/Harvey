@@ -11,7 +11,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
-import { computeGreen } from "./verify.js";
+// #1272: the detector half is now a named function. These assertions are ABOUT that half, and
+// computeGreen with an empty clientChecks would be asserting a green nothing earned.
+import { detectorHalfClean } from "./verify.js";
 import { detectorBefore, rerunDetector, resolvesToDetector } from "./detector-rerun.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -79,7 +81,7 @@ describe("rerunDetector — §2.3 against targets/calibration", () => {
     const after = rerunDetector(finding(), dir);
     expect(after.fired).toBe(false);
     expect(after.notRun).toBeUndefined();
-    expect(computeGreen({ detectorAfter: after, clientChecks: [] })).toBe(true);
+    expect(detectorHalfClean(after)).toBe(true);
   });
 
   it("scopes to the fixed file — an instance of the same class elsewhere does not keep it red", () => {
@@ -100,7 +102,7 @@ describe("rerunDetector — §2.3 against targets/calibration", () => {
     expect(run.notRun).toContain("no detector re-run resolver");
     expect(run.fired).toBe(false);
     // fail loud: an unrun detector is not clean, so a fix over it can never be green
-    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+    expect(detectorHalfClean(run)).toBe(false);
     expect(resolvesToDetector(registryRule)).toBe(false);
   });
 
@@ -165,7 +167,7 @@ describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012
     const after = rerunDetector(redirectFinding(), scratch(REDIRECT, fixed));
     expect(after.notRun).toBeUndefined(); // the rule really re-ran
     expect(after.fired).toBe(false);
-    expect(computeGreen({ detectorAfter: after, clientChecks: [] })).toBe(true);
+    expect(detectorHalfClean(after)).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
   it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", () => {
@@ -233,7 +235,7 @@ describe("rerunDetector — the semgrep resolver never manufactures a clean dete
     const dir = scratch("unrelated.js", "export default 1;\n");
     const run = rerunDetector(redirectFinding(), dir);
     expect(run.notRun).toContain("does not exist");
-    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+    expect(detectorHalfClean(run)).toBe(false);
   });
 
   it.skipIf(!SEMGREP_PRESENT)("source semgrep cannot parse is notRun — an unevaluated file is not a fixed file", () => {
@@ -243,12 +245,12 @@ describe("rerunDetector — the semgrep resolver never manufactures a clean dete
     const run = rerunDetector(redirectFinding(), dir);
     expect(run.notRun).toContain("could not be re-run");
     expect(run.fired).toBe(false);
-    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+    expect(detectorHalfClean(run)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
   it.skipIf(SEMGREP_PRESENT)("semgrep absent from PATH is notRun on this machine — resolvable ≠ runnable", () => {
     const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
     expect(run.notRun).toContain("semgrep not found on PATH");
-    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+    expect(detectorHalfClean(run)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 });

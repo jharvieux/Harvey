@@ -2,103 +2,104 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-28 — **sweep RESUMED, round 2 in flight.** Round 2 so far, MEASURED not recalled: **6 PRs merged** (#1421 #1423 #1406 #1403 #1429 #1427), **3 still open** (#1431 #1432 #1433), **8 issues closed** (6 on fully-met criteria, 2 split with a tracked remainder), **6 issues filed** (#1422 #1424 #1425 #1426 #1428 #1436), **6 operator rulings taken**. #1418/#1420 are round-1 wrap-up commits and are NOT counted here; #1430 is a self-closing alert-drill artifact, not a filed defect. The round-1 pause totals are in the block below and are NOT additive with these. Ledger `.git/issue-sweep-ledger.json` is retained — the sweep is running, not finished. Newest block first._
+_Last updated: 2026-07-28 — **round 2 WRAPPING UP at operator instruction; 3 executors mid-flight, 13 PRs open, ledger queue NOT drained.** 20 PRs merged this round (measured, not recalled), ~14 operator rulings taken, and a single defect class found eight times: a mechanism that looks authoritative and is checked by nothing. Resume from `.git/issue-sweep-ledger.json` + this block. Newest block first._
 
-## 2026-07-28 (resumed) — SWEEP ROUND 2 IN FLIGHT. Six operator rulings taken.
+## 2026-07-28 (resumed) — ROUND 2. Wrapping up; 3 executors mid-flight, queue NOT drained.
 
-The pause block below is still the authoritative history; these rulings supersede its "Awaiting the
-operator" and "Open operator decisions" rows.
+**Operator instruction at wrap:** *"Don't start any new work just wrap up what's in progress."* No new
+batches dispatched after that point. The ledger queue is deliberately NOT empty — resume from it.
 
-### The six rulings
+### In flight at wrap (let these finish, then merge)
 
-| decision | ruling |
+| agent work | issues | PR |
+|---|---|---|
+| M7 false-positive families | #1475–#1480 | pending |
+| M9/TanStack residuals | #1459 #1460 #1461 #1462 | pending |
+| Inert entries + reasons without falsifiers | #1428 #1436 | pending |
+
+### Merge queue — 14 open PRs, ALL behind branch protection (`strict: true`)
+
+Every branch must be current before merging, so merges serialise: update → CI → merge → everything
+else goes BEHIND. Merge **by risk, not FIFO**. `#1444` (the CLAUDE.md relay pass) is armed and was
+deliberately held until `#1453` landed.
+
+**Landed this round (20, MEASURED via `gh pr list --state merged` over the round-2 window):** #1403
+#1406 #1421 #1423 #1427 #1429 #1432 #1433 #1437 #1442 #1449 #1453 #1455 #1457 #1458 #1463 #1465
+#1466 #1481 #1482. (#1418/#1420 fall in the same window but are round-1 wrap commits — excluded.)
+**Still OPEN, do not read as landed:** #1431 #1443 #1444(armed) #1445 #1446 #1447 #1450 #1452 #1456
+#1468 #1472 #1474 #1486.
+
+### The eleven operator rulings taken
+
+PR #1403 re-measure-inside · PR #1406 verify-first · #1299 hosted read-only YES · executor cap **4
+code / 2 heavy** · #1288 SecBench monthly workflow AUTHORIZED · `validate-precision` stays inside
+`pnpm verify` (blocks merges) · CLAUDE.md relay grant · #1285 **M8 must never write into the client's
+checkout** · #899 breadth-sweep corpus APPROVED · #1070 reinstate the drift claim NARROWED · #1371
+**M6 gets corpus rows** · #1305 **M10 = Low→Critical risk band, not a letter** · #1305 **free tier
+ships all 5 dimensions, capped at 5 examples with duplicate counts** · site **deploy now, accept
+DRAFT pages**.
+
+### The through-line — eight instances, none of which showed up red
+
+Every serious finding today was **a mechanism that looked authoritative and was checked by nothing**:
+
+1. `validate-secbench` printed tables and **exited 0 whatever the score**.
+2. The fix pipeline's client-verification half was `[].every(...)` — **vacuously true**. It could
+   certify a fix that breaks the client's app.
+3. A parity exemption asserted a product decision **the operator never made**, on a ground measured
+   FALSE the day it was written (#1454 — operator-raised).
+4. A substitute gate was proven to **exist**, never to **run** (#1483).
+5. A detector's findings are scored by **no baseline** (#1459).
+6. M7's false-positive floor target scores **0% precision** — the control cannot fail in the
+   direction it exists for (#1485).
+7. Connected-tier calibration rows **can never fail** (#1428).
+8. **589 findings produced, `LEDGER PASS` printed, nothing written** (#1470).
+
+Every brief now requires a gate **watched failing**, both exit codes shown.
+
+### Measured results worth carrying
+
+- **M7 code-tier precision: 100% on our own corpus, 72.3% in the field.** #816's four guards moved
+  NOTHING in the field — controlled one-commit before/after reprints identical counts. The report now
+  says "roughly three-in-four, not a verified defect list".
+- **carbon's M9 baseline: 109 of 194 rows FALSE**, largest class 105 false of 108 — while its recorded
+  verification method reproduced the recorded shape EXACTLY. Hence: **a property check is not a
+  triage.**
+- **The M1 crash was shared infrastructure, not M1.** `walkSourceFiles` has 23 consumers; the
+  `resolveScanScope` non-git path kills all ten modules. A 22nd site and a **second shape no
+  `statSync` sweep can find** (6 sites) were missed by the issue. The primitive is now banned, and the
+  gate **caught a regression in an unrelated PR within hours** — and a latent one in code written the
+  same day it landed.
+- **Both breadth-sweep mysteries closed:** the 7-target M9 drop was #964's precision fix; hexclave's
+  M4 was BROKEN (jscpd empty file list), not over-firing — and **`M4-99` disclosed it correctly the
+  whole time. Nobody read the row.**
+- **Site restored.** Root cause was the Vercel Root Directory pointing at a **deleted** `intake-site`,
+  so every deploy ERRORED at build. Fixed server-side; `/pricing` `/the-audit` `/sample-report`
+  `/supabase-security-checker` 200 (were 404), `/intake` 307, `POST /api/scan` 400 (was 503).
+
+### Awaiting the operator
+
+| item | ask |
 |---|---|
-| **PR #1403** | Re-measure baselines INSIDE the PR (#1404 folded in) so the daily `corpus-drift` job never goes red. Not merge-and-accept-red. **Done and measured on `main`.** |
-| **PR #1406** | Verify first; do not merge on the executor's claim. **Done — verifier upheld all 8 criteria and found 4 defects, all fixed before merge.** |
-| **#1299** | Yes to one read-only Management API call against the hosted project. **Done.** |
-| **Executor cap** | **Workload-dependent: 4 concurrent for pure code work, 2 when the batch launches heavy external tooling** (Stryker, Docker, corpus installs). Supersedes the blanket "two is the practical cap", which mis-attributed workload saturation to executor count. |
-| **#1288 SecBench** | Authorize the new monthly scheduled workflow. Land with the alert path unproven (a real circularity), take the drill immediately after merge. **Done — drill run 30376371298.** |
-| **#1288 precision** | Keep `validate-precision` inside `pnpm verify`, so a corpus precision regression BLOCKS merges. No new required context; it rides inside `verify`. |
-| **#1285** | **M8 must never write into the client's checkout.** Extend #600's disposable-copy guarantee to full mutation runs; disclosure at run start is not the answer. In flight. |
+| **#778** | Disclosure wording. A Critical (`next` CVE-2025-29927) is missing from it; honest framing is "your floor is vulnerable and you ship no lockfile" (#1471). **All 20 recorded findings still fire** — none was an FP. |
+| **Resend key** | Create the account/key; set `RESEND_API_KEY` + `SCAN_NOTIFY_TO` on the `harvey` Vercel project, then redeploy. Requester confirmations stay dark until `harvey-qa.com` is verified. |
+| **"A property check is not a triage"** | New CLAUDE.md doctrine bullet — wording proposed, held for review. |
+| **#1069** | DRAFT liability wording to counsel. |
+| **#900 item 3/4** | The recurrence rule (applied provisionally), and the disclosure sign-off — **not granted**; nothing has left the repo. |
+| **#1483** | Wiring `pentest.ts --mode=coverage` into a venue (`.github/workflows/`, supervised). |
 
-### Merged this round
+### Process rules adopted mid-session
 
-**Merged (6):** `#1421` (rulings + `db_schema`) · `#1423` (#1288 scored-gate cadence) · `#1406`
-(reason registry) · `#1403` (M8 pnpm-aware install + re-measured baselines) · `#1429` (SecBench
-cadence) · `#1427` (#1299 calibration + runbook).
-**Open (3):** `#1431` (CI mkdir, 4 workflows) · `#1432` (SecBench alert proof) · `#1433` (M9 batch).
-
-**Closed:** `#1311` `#1349` `#1253` `#1284` `#1309` `#1404` (all criteria met) ·
-`#1268`→#1436 and `#1299`→#1428 (**split**, `Failed` label kept as the review trail).
-**Filed:** #1422 #1424 #1425 #1426 #1428 #1430(drill) #1436.
-
-### Results worth carrying forward
-
-- **The corpus deltas are real precision gains, proven by control.** carbon −2307, inbox-zero −13,
-  rallly −6, saas-lite −6, and **proposit 0 — it did not move.** proposit is on pnpm too but declares
-  no workspaces, so both managers resolve an identical tree: had the deltas been a knip change rather
-  than workspace resolution, proposit would have moved. carbon's npm install was failing outright, so
-  knip ran with no deps in 12 of 33 scopes; `Unused file` 2491→212 is 2288 of the 2307.
-  **`corpus-drift` measured green on `main` itself — run 30376374184, 125 checks.**
-- **A "gate" with no failing direction.** `validate-secbench` printed tables and exited 0 regardless
-  of the score. A cadence over that is a monthly green tick that means nothing. Now has
-  `--min-sca-recall`, floored well under the measured score so a breach means the SCA pathway BROKE.
-  Measured recall: **433/594 (72.9%) any-advisory, 403/594 (67.8%) exact-CVE**, reproduced cell-for-cell
-  across five runs, two machines, two OSes, two semgrep versions. Real cost **2m18s**, not the ~6 min
-  #1288 estimated.
-- **Four workflows could not write their scanner binaries.** pipx no longer leaves `~/.local/bin` on
-  `ubuntu-latest`. #1429's first run failed `curl: (23)`; its executor reported the same lines in
-  `corpus-drift.yml`. **Grepping instead of fixing the one that was named found FOUR** — and three
-  carry required contexts (`ci.yml`, `dry-run-drift.yml`, `conservation.yml`). One upstream image
-  change could have reddened every required check at once. They were green on luck.
-- **The sixth alert path is proven.** Drill run 30376371298 created the `ci-secbench-alert` label
-  (its absence had been the evidence the path never ran), opened and self-closed #1430, and logged
-  `find_or_update exercised twice`. `validate-alert-paths --labels`: 6 paths, 7 labels, **0 unproven**.
-- **An entry that cannot fail is not a lock (#1428).** #1299's new calibration rows are correct, but
-  a verifier gutted all three detector bodies and `validate-calibration` still exited 0 with
-  **byte-identical** output: `scoreEntry` returns `pass: true` unconditionally for
-  `expectedTier: "connected"` and no consumer scores those rows. Same shape found in #1268's M8
-  not-run reasons: `ModuleNotRun` carries only `reason: string`, no falsifier, so
-  `M8_DOCKER_PER_MUTANT` and `M8_E2E_ONLY_SUITE` can never be re-tested (#1436).
-- **Two real detector defects surfaced:** **#1425** — `disable row level security` matches no pattern
-  in `supabase-static.ts` and `checkMigrationRlsStatic` aggregates `enable` across files, so
-  protect-then-unprotect scores clean. **#1424** — `supabase start` on `targets/calibration` aborts;
-  8 migrations including the #1182 storage plants have never been applied to a live stack.
-
-### Corrections to the record, made rather than buried
-
-- **#1299's own claims were wrong twice.** *"That inline flag no longer exists"* — it did, at
-  `supabase.ts:92-94`, since PR #150, immediately above the lines quoted as having no caveat.
-  *"Nothing regression-locks them"* — true of the corpus, false of the detectors; the seam was
-  already locked by `supabase-config.test.ts`, `supabase.test.ts` and gate 4b.
-- **#1288 was one-fifth stale** — `validate-calibration` already ran on a cadence via #1301.
-  The executor verified before building and did not re-implement it.
-- **A false claim of mine:** PR #1431's body said `actionlint` was clean. I could not run it — not
-  installed locally, and the invocation swallowed the shell error. Body corrected to point at CI.
-
-### Operational notes
-
-- **A shared-checkout collision nearly contaminated a PR.** The #1288 executor left the primary
-  checkout on its own branch while the #1299 executor had 7 files staged there; one commit landed on
-  the wrong branch (local only — PR #1423 was never contaminated). **Dispatch executors into their own
-  worktrees**, and `git branch --show-current` before every commit. Caught by a `git status` at a wave
-  boundary, not by either agent.
-- Branch protection **requires up-to-date branches**, so every merge puts the next PR BEHIND. Update
-  and arm `--auto` sequentially; never `--admin`.
-- `actionlint` shows as `SKIPPED`, not failed, on PRs touching no workflow — do not read it as red.
-
-### Still open for the operator
-
-| item | what is being asked |
-|---|---|
-| **#1069** (`awaiting-decision`) | Route the report's DRAFT limitations/liability wording to counsel. The product's own output ships DRAFT wording. |
-| **#899 / #900** | Ungraded breadth sweep — corpus approval, and how ungraded results may be presented. |
-| **CLAUDE.md relays** | Four recorded, granted for a one-pass application at session end: the fifth falsifier tier `supabase-connected`; `validate:precision` in the verify chain; the cadence venues in the measure-don't-recall bullet; "all five alert paths" → six; and the entries-file count 41 → 42. |
-
-### Next sweep action
-
-In flight: **#1285** (heavy) and the M9 batch **#1263/#1292/#1262** (PR #1433). Then resume the ledger
-in plan order. Wave 10 (`#1377`/`#1378`/`#1328`, discovery) runs **LAST** per operator ruling.
+- **Dispatch BEFORE reporting.** Reporting is the middle of a turn, not the end — the queue drained
+  to zero twice and the operator caught it both times. Merge-queue watching is not work.
+- **A remainder split is bookkeeping, not a handoff** (operator ruling). File it, then KEEP WORKING
+  it. Stop only for an operator ruling, a supervised path, a blocking issue, or genuinely different
+  work.
+- **A conflicted PR gets NO CI runs.** GitHub cannot build a merge ref, so no `pull_request` runs are
+  created — that is a conflict, not a dropped webhook. (Refinement: runs are created at push time, so
+  a PR that goes dirty LATER keeps them.) Two executors misdiagnosed this; so did I, less carefully.
+- `pnpm <script>` fails in a worktree with a symlinked `node_modules`, and now in the primary checkout
+  too when the lockfile moves — run `./node_modules/.bin/*` directly rather than letting pnpm purge.
 
 ## 2026-07-28 — SWEEP PAUSED. Resume from `.git/issue-sweep-ledger.json` + this block.
 

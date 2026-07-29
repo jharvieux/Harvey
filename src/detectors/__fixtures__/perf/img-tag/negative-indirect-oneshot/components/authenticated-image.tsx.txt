@@ -1,0 +1,15 @@
+"use client";
+// A runtime-signed storage URL held in client state — nothing is knowable before render.
+import { useEffect, useState } from "react";
+
+export function AuthenticatedImage({ path, alt }: { path: string; alt: string }) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    void sign(path).then(setImageUrl);
+  }, [path]);
+  if (!imageUrl) return null;
+  return <img src={imageUrl} alt={alt} loading="lazy" />;
+}
+async function sign(path: string) {
+  return path;
+}

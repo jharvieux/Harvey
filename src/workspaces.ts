@@ -13,8 +13,9 @@
 // it is moved rather than reimplemented so M2 target discovery and the supply-chain scope can never
 // disagree about what a workspace member is.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { readEntriesSafe } from "./fs-walk.js";
 
 interface WorkspaceManifest {
   /** Path relative to the target root — "package.json" for the root manifest. */
@@ -163,8 +164,8 @@ const GLOB_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next"
 
 function childDirs(dir: string): string[] {
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !GLOB_SKIP_DIRS.has(e.name))
+    return readEntriesSafe(dir).entries
+      .filter((e) => e.isDirectory && !GLOB_SKIP_DIRS.has(e.name))
       .map((e) => join(dir, e.name));
   } catch {
     return [];

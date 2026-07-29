@@ -18,6 +18,7 @@
     "check:duplication": "jscpd --config .jscpd.json src tools",
     "validate:findings": "tsx src/cli/validate-findings.ts",
     "validate:calibration": "tsx src/cli/validate-calibration.ts",
+    "validate:connected": "tsx src/cli/validate-connected.ts",
     "validate:precision": "tsx src/cli/validate-precision.ts",
     "validate:source-recall": "tsx src/cli/validate-source-recall.ts",
     "validate:secbench": "tsx src/cli/validate-secbench.ts",

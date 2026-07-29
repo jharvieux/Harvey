@@ -28,7 +28,7 @@ export const INSERT_OWNER_COLUMN = /^(user|owner|member|customer|created_by|auth
 const SERVICE_CLIENT_NAME = /(admin|service)/i;
 
 // Every identifier a binding introduces: `user` → {user}; `{ data: { user } }` → {user}.
-function bindingNames(name: ts.BindingName, into: Set<string>): void {
+export function bindingNames(name: ts.BindingName, into: Set<string>): void {
   if (ts.isIdentifier(name)) {
     into.add(name.text);
   } else if (ts.isObjectBindingPattern(name)) {

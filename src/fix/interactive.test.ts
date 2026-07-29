@@ -3,6 +3,13 @@
 // unused-parameter class resolves through the in-process AST engine, so this runs without semgrep and
 // belongs in the light `pnpm verify` suite. It proves both outcomes the ruling cares about — a correct
 // diff clears computeGreen and reaches the DRAFT-PR transport; a wrong diff is rejected before any PR.
+//
+// #1272 adds the half that was hardcoded `clientChecks: []`. The corpora below carry a real
+// package.json whose `test` script is really executed by `npm run test` — in a baseline worktree cut at
+// the pinned commit AND in the fixed worktree — so the four states the contract distinguishes are each
+// proven against an actual exit code, not a stub: the client suite passes (green), the fix BREAKS the
+// client suite (rejected, and green before this wiring), the suite was already red at baseline
+// (skipped, green survives), and nothing was discoverable at all (rejected — never a vacuous pass).
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
@@ -25,6 +32,26 @@ const plan: FixPlan = {
   verifyCommands: [], testPlan: "", tier: "cheap", risks: [],
 };
 const dropParam = (src: string) => src.replace("export async function GET(request: Request) {", "export async function GET() {");
+
+// A client check that is REALLY spawned (`npm run test`, no dependencies needed). Two flavours:
+// `contract` asserts the unused parameter is still present, so the correct fix BREAKS it — the
+// "satisfies the scanner, breaks the app" case §2 exists to catch; `ok`/`red` are unconditional.
+const CLIENT_TESTS = {
+  ok: "console.log('client suite ok');\n",
+  red: "console.error('client suite was already failing');\nprocess.exit(1);\n",
+  contract:
+    `const src = require("node:fs").readFileSync(${JSON.stringify(M5_FILE)}, "utf8");\n` +
+    `if (!src.includes("request: Request")) { console.error("client contract broken by the fix"); process.exit(1); }\n` +
+    `console.log("client suite ok");\n`,
+};
+const clientRepo = (src: string, suite: keyof typeof CLIENT_TESTS) => ({
+  [M5_FILE]: src,
+  "package.json": `${JSON.stringify({ name: "client", private: true, scripts: { test: "node client-test.js" } }, null, 2)}\n`,
+  "client-test.js": CLIENT_TESTS[suite],
+});
+// The client's own runner. npm is used rather than pnpm because a materialized corpus has no lockfile
+// and pnpm's deps-status check would fail the command for a reason unrelated to any fix.
+const NPM = "npm";
 
 const created: MaterializedCorpus[] = [];
 afterEach(() => {
@@ -68,13 +95,18 @@ describe("interactive fix — prompt emit", () => {
 describe("interactive fix — diff ingest through the existing rails", () => {
   it("a CORRECT diff clears computeGreen and reaches the draft-PR transport", () => {
     const src = readCalibration(M5_FILE);
-    const c = corpus({ [M5_FILE]: src });
+    const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"] });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified");
     expect(ingest.evidence.detectorAfter.notRun).toBeUndefined(); // the detector really re-ran
     expect(ingest.evidence.detectorAfter.fired).toBe(false); // and it stopped firing
+    // The client half is EVIDENCE now, not an empty array: the discovered command really ran.
+    expect(ingest.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test"]);
+    expect(ingest.evidence.clientChecks[0]!.exitCode).toBe(0);
+    expect(ingest.evidence.clientChecks[0]!.skipped).toBeUndefined();
+    expect(ingest.evidence.clientChecks[0]!.outputTail).toContain("client suite ok");
     expect(ingest.green).toBe(true);
     expect(ingest.rejected).toBe(false);
 
@@ -93,12 +125,12 @@ describe("interactive fix — diff ingest through the existing rails", () => {
 
   it("a WRONG diff (applies clean but leaves the detector firing) is REJECTED, and the transport is never reached", () => {
     const src = readCalibration(M5_FILE);
-    const c = corpus({ [M5_FILE]: src });
+    const c = corpus(clientRepo(src, "ok"));
     const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
     expect(noop).not.toEqual(src);
     const diff = capturePatch(c, M5_FILE, noop);
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"] });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it DID apply
     expect(ingest.evidence.detectorAfter.fired).toBe(true); // but the bug is still there
     expect(ingest.green).toBe(false);
@@ -120,11 +152,74 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     const c = corpus({ [M5_FILE]: src, ".env": "SECRET=1\n" });
     const diff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"] });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("rails-blocked");
     expect(ingest.evidence.detectorAfter.notRun).toBeDefined(); // fail loud: unrun ≠ clean
     expect(ingest.green).toBe(false);
     expect(ingest.rejected).toBe(true);
     expect(ingest.rejectReason).toContain("rails/apply gate");
+  });
+});
+
+// #1272 — the client half of the §2 contract, each state proven against a real exit code. Before this
+// wiring every one of these ingests returned green: `clientChecks` was hardcoded `[]` and
+// `[].every(...)` is vacuously true, so "the detector stopped firing" was the whole decision.
+describe("interactive fix — the §2.1 client-check half (#1272)", () => {
+  it("REJECTS a fix that silences the detector but BREAKS the client's own suite", () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "contract"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    expect(ingest.execution.outcome).toBe("diff-verified"); // it applies
+    expect(ingest.evidence.detectorAfter.fired).toBe(false); // and the detector IS clean
+    const check = ingest.evidence.clientChecks[0]!;
+    expect(check.skipped).toBeUndefined(); // it ran on the baseline too, and passed there
+    expect(check.exitCode).toBe(1);
+    expect(check.outputTail).toContain("client contract broken by the fix");
+    expect(ingest.green).toBe(false); // …so it is NOT a verified fix
+    expect(ingest.rejectReason).toContain("the client's own checks FAIL");
+  });
+
+  it("does NOT go green when no client verify command can be discovered at all", () => {
+    // No package.json, no pull_request workflow: nothing to run. The old code called that green.
+    const src = readCalibration(M5_FILE);
+    const c = corpus({ [M5_FILE]: src });
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    expect(ingest.evidence.detectorAfter.fired).toBe(false);
+    expect(ingest.evidence.clientChecks).toEqual([]);
+    expect(ingest.green).toBe(false);
+    expect(ingest.rejectReason).toContain("no client verify command could be discovered");
+  });
+
+  it("a check already RED at the pinned baseline is skipped, named, and does not cost the fix its green", () => {
+    // §2.1 step 3: the baseline run exists so a pre-existing failure is never charged to the fix.
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "red"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const check = ingest.evidence.clientChecks[0]!;
+    expect(check.skipped).toBe("pre-existing-failure-on-baseline");
+    expect(check.outputTail).toContain("client suite was already failing"); // visible, not swallowed
+    expect(ingest.green).toBe(true);
+  });
+
+  it("discovers a pull_request-triggered workflow's run: steps alongside the package.json scripts", () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus({
+      ...clientRepo(src, "ok"),
+      ".github/workflows/ci.yml": "on:\n  pull_request:\njobs:\n  x:\n    steps:\n      - run: node client-test.js\n",
+      ".github/workflows/deploy.yml": "on:\n  push:\njobs:\n  y:\n    steps:\n      - run: node -e \"process.exit(1)\"\n",
+    });
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    // The PR-triggered step is in; the push-only workflow's failing step is NOT (it would have made
+    // this red for a reason no pull request would ever have surfaced).
+    expect(ingest.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test", "node client-test.js"]);
+    expect(ingest.green).toBe(true);
   });
 });

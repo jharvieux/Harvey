@@ -1,0 +1,17 @@
+// #1441 — an ERROR-ONLY guard between two READS. The guard ends the request; nothing downstream
+// observes the second query's result, so hoisting it into `Promise.all` costs one wasted read on
+// the failure path and changes no behaviour. Modelled on the pinned mvp-boilerplate clone
+// (monero/supabase/functions/xmr_webhook/index.ts:114), whose suppression was the entire reason
+// that target went 1/1 -> 0/1 counted.
+import { supabase } from "../../lib/db";
+
+export async function loadPricing(priceId: string, userId: string) {
+  const { data: price } = await supabase.from("prices").select("id, unit_amount").eq("id", priceId).single();
+
+  if (!price) {
+    throw new Error("No price found");
+  }
+
+  const { data: sub } = await supabase.from("subscriptions").select("id, status").eq("user_id", userId).maybeSingle();
+  return { price, sub };
+}

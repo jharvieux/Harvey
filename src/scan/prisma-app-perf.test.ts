@@ -170,3 +170,59 @@ describe("prisma-app-perf filter-column-without-index (#793)", () => {
     expect(filterFindings[0]?.impact).toContain("Every one of the 3 call sites");
   });
 });
+
+// #1476 — boxyhq's `delete-team.js` was reported here AND by the generic await-in-loop class: one
+// interactive `readline` admin CLI, wired to `npm run delete-team`, counted twice as a request-path
+// N+1. The corpus note recording this detector's arrival as "a precision fix" was measuring a
+// duplicate false positive. No path pattern can see that file; the package.json script does.
+describe("dev tooling is not a request path (#1476)", () => {
+  const N1 = "M7 — Prisma N+1 query pattern";
+  const cli = `
+    const readline = require("readline");
+    async function removeMembers(members) {
+      for (const member of members) {
+        await prisma.note.findMany({ where: { userId: member.id } });
+      }
+    }
+    module.exports = { removeMembers };
+  `;
+  const manifest = { path: "package.json", text: JSON.stringify({ scripts: { "delete-team": "node --env-file .env delete-team.js" } }) };
+
+  it("stays silent on a file the project runs as an npm script", () => {
+    const findings = detectPrismaAppPerfFindings([{ path: "delete-team.js", text: cli }, manifest], schema);
+    expect(findings.filter((f) => f.taxonomy === N1)).toHaveLength(0);
+  });
+
+  it("still fires on the SAME code when no script runs it — the gate is the manifest, not the shape", () => {
+    const findings = detectPrismaAppPerfFindings([{ path: "delete-team.js", text: cli }], schema);
+    expect(findings.filter((f) => f.taxonomy === N1)).toHaveLength(1);
+  });
+
+  it("stays silent on a seeder the manifest runs even when its filename says nothing", () => {
+    const seeder = `
+      export async function seed(rows) {
+        for (const row of rows) {
+          await prisma.user.findMany({ where: { email: row.email } });
+        }
+      }
+    `;
+    // Deliberately NOT called seed.ts: boxyhq's real file is prisma/seed.ts, which the path arm
+    // catches on its own, so testing that one would not exercise the manifest arm at all.
+    const seedManifest = { path: "package.json", text: JSON.stringify({ prisma: { seed: "ts-node ./prisma/bootstrap.ts" } }) };
+    expect(detectPrismaAppPerfFindings([{ path: "prisma/bootstrap.ts", text: seeder }, seedManifest], schema).filter((f) => f.taxonomy === N1)).toHaveLength(0);
+    // Without the manifest the same file is invisible to the gate and the row returns.
+    expect(detectPrismaAppPerfFindings([{ path: "prisma/bootstrap.ts", text: seeder }], schema).filter((f) => f.taxonomy === N1)).toHaveLength(1);
+  });
+
+  it("does NOT silence a production `start` script — an npm-run server really is the request path", () => {
+    const prodManifest = { path: "package.json", text: JSON.stringify({ scripts: { start: "node server.js" } }) };
+    const server = `
+      export async function handle(members) {
+        for (const member of members) {
+          await prisma.note.findMany({ where: { userId: member.id } });
+        }
+      }
+    `;
+    expect(detectPrismaAppPerfFindings([{ path: "server.js", text: server }, prodManifest], schema).filter((f) => f.taxonomy === N1)).toHaveLength(1);
+  });
+});

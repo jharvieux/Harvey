@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildImportGraph, collectPathAliases, detectAppRouterFindings, resolveImport, type SourceInput } from "./app-router.js";
@@ -16,9 +17,8 @@ function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         walk(full);
       } else if (entry.endsWith(".txt")) {
         const path = relative(root, full).replace(/\.txt$/, "").split(sep).join("/");
@@ -499,6 +499,155 @@ describe("data-fetching waterfalls (MED, best-effort)", () => {
   });
 });
 
+const WATERFALL_TAX = "M9 — Data-fetching waterfall";
+const WATERFALL_SCOPE = "M9 — Data-fetching waterfall — scope";
+
+// #1438 — #1292's escape rule counted ANY Break/Continue node. One belonging to a `switch` or an
+// inner loop inside the intervening statement leaves neither the function nor the path to the
+// second query, so it suppressed a genuinely parallelisable pair.
+describe("waterfall escape rule: which guards actually skip the second query (#1438)", () => {
+  const PAGE = "app/dashboard/page.tsx";
+  const pair = (between: string) =>
+    `export default async function Page() {\n  const { data: rows } = await supabase.from("rows").select("id, status");\n${between}\n  const { data: projects } = await supabase.from("projects").select("id");\n  return null;\n}\n`;
+
+  it("still flags the pair when an intervening switch's `break` belongs to that switch", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: pair(`  switch (rows?.[0]?.status) {\n    case "open":\n      log(rows);\n      break;\n  }`) }]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+
+  it("still flags the pair when an intervening inner loop's `break` belongs to that loop", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: pair(`  for (const r of rows ?? []) {\n    if (r.active) {\n      note(r);\n      break;\n    }\n  }`) }]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+
+  it("still flags the pair when a labelled `break` targets a label declared inside the statement", () => {
+    const findings = detectAppRouterFindings([
+      { path: PAGE, text: pair(`  outer: for (const r of rows ?? []) {\n    for (const c of r.children) {\n      if (c.id) break outer;\n    }\n  }`) },
+    ]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+
+  it("still suppresses on a `return` inside an intervening switch case — the rule was narrowed, not removed", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: pair(`  switch (rows?.[0]?.status) {\n    case "archived":\n      return null;\n  }`) }]);
+    expect(taxonomies(findings)).not.toContain(WATERFALL_TAX);
+  });
+
+  it("still suppresses on a plain early return", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: pair(`  if (!rows) return null;`) }]);
+    expect(taxonomies(findings)).not.toContain(WATERFALL_TAX);
+  });
+
+  // The corpus entry M9C-WATERFALL-ESCAPE-POS scores one fixture dir carrying BOTH shapes, and a
+  // `match` key is satisfied by any one finding — so on its own the entry would stay green with
+  // half the fix reverted. The count is what makes it discriminate: one finding per function, two
+  // functions, so either shape going silent drops it to 1.
+  it("the committed positive fixture yields ONE finding per shape, so neither can regress under the other", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-escape/positive"));
+    const hits = findings.filter((f) => f.taxonomy === WATERFALL_TAX);
+    expect(hits).toHaveLength(2);
+    expect(hits.map((f) => f.evidence).join(" ")).toContain("projects");
+    expect(hits.map((f) => f.evidence).join(" ")).toContain("invoices");
+  });
+
+  it("does not flag the pair on the strength of a break inside a nested function — that break is not even reachable from here", () => {
+    // A `break` inside a nested arrow is a syntax error unless it has its own loop; the point of the
+    // control is that walking into the arrow must not change the verdict either way.
+    const findings = detectAppRouterFindings([{ path: PAGE, text: pair(`  const first = (rows ?? []).find((r) => {\n    for (const c of r.children) { if (c.id) break; }\n    return true;\n  });`) }]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+});
+
+// #1441 — the #1292 suppression is one rule over two different control-flow facts, and one of the
+// two is a recall loss. Plus the disclosure the trade always owed the client.
+describe("waterfall: aborting guards, and the scope row that counts what is set aside (#1441)", () => {
+  const PAGE = "app/dashboard/page.tsx";
+  const READ_THEN_READ = `export default async function Page() {\n  const { data: price } = await supabase.from("prices").select("id").single();\n  if (!price) throw new Error("no price");\n  const { data: sub } = await supabase.from("subscriptions").select("id").eq("user_id", userId).maybeSingle();\n  return null;\n}\n`;
+
+  it("flags two READS separated by an error-only guard — the request ends, so nothing observes the second result", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: READ_THEN_READ }]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+
+  it("treats `throw redirect(...)` the same way — it aborts the request, it does not skip the query", () => {
+    const text = `export default async function Page() {\n  const existing = await client.from("depreciationRun").select("id").eq("companyId", companyId);\n  if (existing.data?.length) throw redirect(path.to.runs);\n  const settings = await client.from("companySettings").select("taxEnabled").single();\n  return null;\n}\n`;
+    expect(taxonomies(detectAppRouterFindings([{ path: PAGE, text }]))).toContain(WATERFALL_TAX);
+  });
+
+  it("does NOT flag when the second statement writes — `.from(x).update(...).select(...)` passes isDbQueryChain but is a write", () => {
+    const text = `export default async function Page() {\n  const { data: current } = await supabase.from("receipt").select("status").eq("id", id).single();\n  if (current?.status === "Voided") throw new Error("voided");\n  const applied = await supabase.from("receipt").update({ status: "Pending" }).eq("id", id).select("id");\n  return applied;\n}\n`;
+    expect(taxonomies(detectAppRouterFindings([{ path: PAGE, text }]))).not.toContain(WATERFALL_TAX);
+  });
+
+  it("keeps walking past an aborting guard, so a LATER diverting guard still suppresses", () => {
+    const text = `export default async function Page() {\n  const { data: invitation } = await supabase.from("invitations").select("id, status").single();\n  if (!invitation) throw new Error("not found");\n  if (invitation.status !== "pending") return null;\n  const { data: account } = await supabase.from("accounts").select("id").eq("id", accountId).single();\n  return null;\n}\n`;
+    expect(taxonomies(detectAppRouterFindings([{ path: PAGE, text }]))).not.toContain(WATERFALL_TAX);
+  });
+
+  it("keeps walking past an aborting guard, so taint laundered into a LATER binding still suppresses", () => {
+    const text = `export default async function Page() {\n  const { data: invitation } = await supabase.from("invitations").select("id, email").single();\n  if (!invitation) throw new Error("not found");\n  const email = invitation.email.trim();\n  const { data: account } = await supabase.from("accounts").select("id").eq("email", email).single();\n  return null;\n}\n`;
+    expect(taxonomies(detectAppRouterFindings([{ path: PAGE, text }]))).not.toContain(WATERFALL_TAX);
+  });
+
+  it("emits a counted scope row naming the excluded class WITH its population", () => {
+    const text = `export default async function Page() {\n  const { data: team } = await supabase.from("teams").select("id").single();\n  if (!team) return null;\n  const { data: settings } = await supabase.from("settings").select("theme").single();\n  return null;\n}\n`;
+    const findings = detectAppRouterFindings([{ path: PAGE, text }]);
+    const row = findings.find((f) => f.taxonomy === WATERFALL_SCOPE);
+    expect(row, "a suppressed pair must produce a scope row").toBeDefined();
+    expect(row?.confidence).toBe("N/A");
+    expect(row?.title).toContain("1 of 1 adjacent query pair excluded by policy");
+    expect(row?.evidence).toContain("1 pair is separated by a guard");
+    // The finding itself is gone; without this row the report reads as a clean M9 waterfall result.
+    expect(taxonomies(findings)).not.toContain(WATERFALL_TAX);
+  });
+
+  it("emits NO scope row when nothing was set aside — the family discloses limitations, not statuses", () => {
+    const text = `export default async function Page() {\n  const { data: teams } = await supabase.from("teams").select("id");\n  const { data: projects } = await supabase.from("projects").select("id");\n  return null;\n}\n`;
+    const findings = detectAppRouterFindings([{ path: PAGE, text }]);
+    expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+    expect(taxonomies(findings)).not.toContain(WATERFALL_SCOPE);
+  });
+});
+
+// #1439 — #1263 taught the gate check to resolve a callee and re-test the auth/validation pattern
+// against its body. Matching the pattern says the helper LOOKS at the session; it does not say the
+// helper can stop the mutation.
+describe("Server Action gate resolution: a resolved callee must be able to deny (#1439)", () => {
+  const AUTHZ = "M1 — Server Action missing authorization check";
+
+  it("does not accept a LOGGER as a gate, however much its body reads the session", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/positive"));
+    const hits = findings.filter((f) => f.taxonomy === AUTHZ);
+    expect(hits.map((f) => f.title).join(" ")).toContain("renameLogged");
+  });
+
+  it("does not accept a boolean gate whose result is discarded", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/positive"));
+    const hits = findings.filter((f) => f.taxonomy === AUTHZ);
+    expect(hits.map((f) => f.title).join(" ")).toContain("renameUnchecked");
+    expect(hits).toHaveLength(2);
+  });
+
+  it("accepts the same boolean gate once a branch consumes it", () => {
+    const action = `"use server";\nimport { canAccess } from "../lib/access";\nimport { supabase } from "../lib/db";\nexport async function rename(id: string, name: string) {\n  const allowed = await canAccess(id);\n  if (!allowed) return;\n  await supabase.from("projects").update({ name }).eq("id", id);\n}\n`;
+    const helper = `import { supabase } from "./db";\nexport async function canAccess(id: string) {\n  const { data: { user } } = await supabase.auth.getUser();\n  return user?.id === id;\n}\n`;
+    const findings = detectAppRouterFindings([
+      { path: "app/actions.ts", text: action },
+      { path: "lib/access.ts", text: helper },
+    ]);
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  it("resolves a NAMESPACE-imported gate, so `guards.ensureMember(id)` stops false-firing", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/negative"));
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  it("still resolves the named-import gate #1263 shipped — the namespace path is an addition, not a swap", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-action-helper-gate/negative"));
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+});
+
 describe("accidental dynamic rendering (MED, best-effort)", () => {
   it("flags a page that reads a searchParams field directly at the top level", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("dynamic-rendering/positive"));
@@ -763,6 +912,59 @@ describe("uncapped retry / fan-out (#1262)", () => {
     ]);
     expect(taxonomies(findings)).toContain(RETRY);
     expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  // #1440 — the canonical uncapped retry. `retryLoopIsUncapped` accepted only a literal-`true`
+  // while-condition, so this was never assessed AND was not named in the scope row that exists to
+  // name unassessed classes.
+  it("flags the canonical `while (!done)` retry whose catch swallows", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function POST(request: Request) {\n  const { url } = await request.json();\n  let done = false;\n  while (!done) {\n    try {\n      await fetch(url);\n      done = true;\n    } catch {}\n  }\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === RETRY);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("!done");
+  });
+
+  it("does not flag a while-retry whose counter is compared against a numeric const", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `const MAX = 5;\nexport async function GET() {\n  let n = 0;\n  while (n < MAX) {\n    n += 1;\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(RETRY);
+  });
+
+  it("reads `&&` as capped when EITHER side caps, and `||` only when both do", () => {
+    const capped = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  let n = 0, done = false;\n  while (!done && n < 3) {\n    n += 1;\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(capped)).not.toContain(RETRY);
+    const uncapped = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  let n = 0, done = false;\n  while (!done || n < 3) {\n    n += 1;\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(uncapped)).toContain(RETRY);
+  });
+
+  it("states the bound it actually read — the header, not the body", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  let done = false;\n  while (!done) {\n    try {\n      await fetch("https://u.example.com/x");\n      done = true;\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(findings.find((f) => f.taxonomy === RETRY)?.evidence).toContain("reads the loop HEADER only");
+  });
+
+  it("names the header-only bound in the scope row, with its count", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  let done = false;\n  while (!done) {\n    try {\n      await fetch("https://u.example.com/x");\n      done = true;\n    } catch {}\n  }\n}\n` },
+    ]);
+    const row = findings.find((f) => f.taxonomy === RETRY_SCOPE);
+    expect(row?.evidence).toContain("FOUR sub-shapes");
+    expect(row?.evidence).toContain("1 of the retry loops reported above has a non-literal header");
+  });
+
+  it("does not count a `while (true)` retry as a header-only bound — its header IS the whole story", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  while (true) {\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(findings.find((f) => f.taxonomy === RETRY_SCOPE)?.evidence).toContain("0 of the retry loops reported above have a non-literal header");
   });
 
   it("does not flag a retry capped by a numeric literal or a numeric const", () => {
@@ -1235,6 +1437,35 @@ describe("import resolution across a workspace (#1353)", () => {
     // Root tsconfig maps @/* -> shared/*; apps/web's own maps @/* -> apps/web/*. The root's is
     // shallower, so before #1353 it won and every `@/…` inside apps/web resolved to nothing.
     expect(resolveImport(from, "@/lib/session", allPaths, aliases)).toBe("apps/web/lib/session.ts");
+  });
+
+  // Three independent fixes landed in collectPathAliases on 2026-07-28 and this pins that they
+  // COMPOSE rather than one quietly undoing another: #1479's variant filename, #1353's per-config
+  // scoping, and #1353's workspace-package resolution, all exercised on one Nx-shaped tree that has
+  // NO plain root tsconfig.json — the ghostfolio shape that disconnected the whole graph.
+  it("reads tsconfig.base.json, scopes a nested config, and still resolves a workspace package", () => {
+    const nx = [
+      { path: "tsconfig.base.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@myorg/*": ["./libs/*"] } } }) },
+      { path: "apps/api/tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }) },
+      { path: "libs/shared/package.json", text: JSON.stringify({ name: "@myorg/shared", main: "./src/index.ts" }) },
+      { path: "libs/shared/src/index.ts", text: "export const x = 1;" },
+      // No package.json — reachable ONLY through tsconfig.base.json's paths map, so the assertion
+      // below isolates the variant-filename fix from the workspace resolver's work.
+      { path: "libs/util/index.ts", text: "export const u = 1;" },
+      { path: "apps/api/src/handler.ts", text: "export const h = 1;" },
+      { path: "apps/api/src/main.ts", text: "" },
+    ];
+    const paths = new Set(nx.map((f) => f.path));
+    const nxAliases = collectPathAliases(nx);
+    const importer = "apps/api/src/main.ts";
+    // #1479: the paths map lives only in tsconfig.base.json. libs/util carries no manifest, so a
+    // narrowed filename regex leaves it unresolvable.
+    expect(resolveImport(importer, "@myorg/util", paths, nxAliases)).toBe("libs/util/index.ts");
+    // #1353 workspace resolution, on the same tree.
+    expect(resolveImport(importer, "@myorg/shared", paths, nxAliases)).toBe("libs/shared/src/index.ts");
+    // #1353 scoping: apps/api's own `@/*` applies to apps/api files, and would resolve to nothing
+    // if the root's base config had won and stopped the loop.
+    expect(resolveImport(importer, "@/handler", paths, nxAliases)).toBe("apps/api/src/handler.ts");
   });
 
   it("puts the shared package in the route's import closure", () => {

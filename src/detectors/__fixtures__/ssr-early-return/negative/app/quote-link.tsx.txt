@@ -1,0 +1,10 @@
+// The guard is an EARLY RETURN — a preceding sibling statement, not an ancestor of the read. The
+// old ancestor-only walk missed it and the finding's evidence asserted no such guard existed
+// (#1293).
+export function QuoteLink({ externalLinkId }: { externalLinkId?: string }) {
+  if (!externalLinkId) return null;
+  if (typeof window === "undefined") return null;
+
+  const url = `${window.location.origin}/quote/${externalLinkId}`;
+  return <a href={url}>quote</a>;
+}

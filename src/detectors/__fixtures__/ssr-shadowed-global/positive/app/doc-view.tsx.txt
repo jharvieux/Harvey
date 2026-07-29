@@ -1,0 +1,5 @@
+// No local binding named `document` — this IS the DOM global, read in a render body during SSR.
+export function DocPreview({ bucket }: { bucket: string }) {
+  const title = document.title;
+  return <div>{bucket}: {title}</div>;
+}

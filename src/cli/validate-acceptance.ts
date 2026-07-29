@@ -32,8 +32,9 @@
 // into a REAL body (--pr / --body-file), mirroring validate-conservation.ts's --seed-* flags.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import {
   checkAcceptance,
@@ -102,16 +103,16 @@ function evidenceWorld(): EvidenceWorld {
   const testNames = new Set<string>();
   const TITLE = /^\s*(?:it|test|describe)(?:\.\w+)?\(\s*"([^"]{8,})"/gm;
   const walk = (dir: string): void => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
+    for (const e of readEntriesSafe(dir).entries) {
       const p = join(dir, e.name);
-      if (e.isDirectory()) walk(p);
+      if (e.isDirectory) walk(p);
       else if (e.name.endsWith(".test.ts")) for (const m of readFileSync(p, "utf8").matchAll(TITLE)) testNames.add(m[1]!);
     }
   };
   walk(join(REPO_ROOT, "src"));
   const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { scripts?: Record<string, string> };
   return {
-    topLevelEntries: new Set(readdirSync(REPO_ROOT).filter((n) => !n.startsWith("."))),
+    topLevelEntries: new Set(readNamesSafe(REPO_ROOT).filter((n) => !n.startsWith("."))),
     pathExists: (p) => existsSync(resolve(REPO_ROOT, p)),
     scripts: new Set(Object.keys(pkg.scripts ?? {})),
     testNames,

@@ -1,0 +1,11 @@
+// `clientAction` is a React Router 7 / Remix route export that runs ONLY in the browser — the
+// framework's own name for "never on the server". A browser global here is correct code, not an
+// SSR fault (#1293: 59 of carbon's 108 rows in this class were exactly this shape).
+export async function clientAction({ serverAction }) {
+  window.clientCache.setQueryData("items", null);
+  return await serverAction();
+}
+
+export default function ItemsRoute() {
+  return <div>items</div>;
+}

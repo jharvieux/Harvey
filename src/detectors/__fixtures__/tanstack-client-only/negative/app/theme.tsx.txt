@@ -1,0 +1,16 @@
+import { createClientOnlyFn, createIsomorphicFn } from "@tanstack/react-start";
+
+// TanStack Start's own client-only markers: `createClientOnlyFn` and the `.client()` arm of
+// `createIsomorphicFn` never execute on the server, so a browser global inside them is correct
+// code (#1276, MEASURED on TanStack/tanstack.com).
+const setStoredTheme = createClientOnlyFn((theme: string) => {
+  localStorage.setItem("theme", theme);
+});
+
+const getSystemTheme = createIsomorphicFn()
+  .server(() => "light")
+  .client(() => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+
+export function ThemeToggle() {
+  return <button onClick={() => setStoredTheme(getSystemTheme())}>toggle</button>;
+}

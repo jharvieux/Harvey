@@ -7,8 +7,9 @@
 // Prints the shareable text summary to stdout; --out/--summary-out also write the JSON/Markdown.
 // Fail loud: an unreadable or non-findings-document input aborts the run rather than being skipped.
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { aggregateCorpus, renderSummaryText } from "../corpus-aggregate.js";
 import { type FindingsDocument, validateFindings } from "../findings.js";
 
@@ -32,7 +33,7 @@ for (let i = 0; i < args.length; i++) {
   }
   paths.push(a);
 }
-if (dir) for (const f of readdirSync(dir)) if (f.endsWith(".json")) paths.push(join(dir, f));
+if (dir) for (const f of readNamesSafe(dir)) if (f.endsWith(".json")) paths.push(join(dir, f));
 
 if (paths.length === 0) {
   console.error("usage: pnpm exec tsx src/cli/corpus-aggregate.ts <findings.json...> [--dir <dir>] [--out summary.json] [--summary-out summary.md]");

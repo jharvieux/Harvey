@@ -7,14 +7,35 @@ import type { PrecisionTier, Severity } from "../../findings.js";
 
 type CorpusKind = "positive" | "negative";
 
-// "high"/"review" mirror PrecisionTier; "connected" marks entries only detectable against a live
-// database (Supabase Advisor) — out of scope for a static run, reported as N/A, never a failure.
+// "high"/"review" mirror PrecisionTier.
+//
+// "local", "connected" and "hosted" are the LIVE tiers — a row no static run can produce, because
+// the finding comes from a running stack rather than from source. They form a ladder of what the run
+// must have, and the distinction is load-bearing: it decides which rows a given run can score.
+//   local     — a Postgres connection to a `supabase start` stack. realtime.messages' row-security
+//               state, the Splinter lint set, installed extensions, storage buckets.
+//   connected — + the project's own REST/GraphQL surface, which holds config Postgres does not: the
+//               PostgREST schema allow-list and the pg_graphql reachability that depends on it.
+//               No credential (measured 2026-07-28 — see validate-connected.ts).
+//   hosted    — + the Management API and therefore a real hosted project and a PAT: the GoTrue auth
+//               config (HIBP, autoconfirm, OTP expiry, redirect allow-list), which is not in
+//               Postgres and not in config.toml.
+// All three are scored by src/cli/validate-connected.ts against a live run, which declares which
+// venues it has; a row whose venue this run does not have is reported NOT SCORED with the reason,
+// never a silent pass.
+//
+// #1428: until 2026-07-28 "connected" was scored `pass: true` UNCONDITIONALLY and no consumer
+// anywhere scored such a row against a live run — a verifier gutted all three detector bodies and
+// the gate still exited 0 with byte-identical output. A live tier is now a statement about WHERE a
+// row is scored, not a licence to skip scoring it.
+//
 // "none" marks a planted positive with NO mechanical rule BY DESIGN (a measured LLM-tier class —
 // e.g. WEBHOOK-REPLAY, #353/#425): a static run scores it an INTENDED GAP, never a recall miss,
 // and if ANY mechanical rule ever fires on its class the gate FAILS LOUD, so a by-design gap can't
 // silently graduate into a claimed catch. Excluded from the recall denominator; still a real
 // fixture for the parity census.
-type ExpectedTier = PrecisionTier | "connected" | "none";
+export type LiveTier = "local" | "connected" | "hosted";
+type ExpectedTier = PrecisionTier | LiveTier | "none";
 
 export interface CorpusEntry {
   id: string;
@@ -107,5 +128,12 @@ export interface HeuristicEntry {
   // scanned and correctly cleared — CLAUDE.md's rule (3), which until now had no way to be
   // enforced here, only followed by hand.
   scopeControl?: string;
+  // #1475 — POSITIVES ONLY. The Severity every matched finding must carry. Mirrors CorpusEntry's
+  // field of the same name and exists for the same reason: "it fired" is not "it was rated right",
+  // and a decision expressed as a severity band has no other way to be pinned here. The state
+  // sprawl pair is the first user — the class is Info on React >= 18 (the render-count cost
+  // automatic batching removed) and counted Low below it, and without this the two fixtures score
+  // identically while the decision silently regresses.
+  expectedSeverity?: Severity;
   note: string;
 }
