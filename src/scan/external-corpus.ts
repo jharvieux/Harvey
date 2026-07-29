@@ -474,6 +474,47 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (21 columns parsed, 1 PII-bearing table). tenant_invitations: Low (EMAIL) — the corpus's near-floor M10 reading, matching this target's otherwise-minimal M4/M7 surface." },
     },
   },
+  // #1372: the seventh target, and the one the manifest had been missing for a stated reason that
+  // was false. `docs/test-targets.md` recorded launch-mvp as "still unaudited … ships 0 migrations
+  // in-tree, so an M2 stand-up needs a hand-built schema". Both clauses were false the day they
+  // were written and re-measured false 2026-07-28: it has been disclosed twice (#168, #774), and it
+  // ships a 104-line root-level `initial_supabase_table_schema.sql` with 4 CREATE TABLEs that #770's
+  // discoverSchemaFiles resolves without help (measured: 2 schema files found over 7 probed
+  // locations). That unconventional layout is exactly why schemaPath is "." here rather than the
+  // conventional supabase/migrations — the schema is at the repo root and under supabase/scripts.
+  //
+  // What it buys the corpus that no existing target does: it is the only member with an
+  // UNAUTHENTICATED service-role IDOR at Critical (#774 — `app/api/user/delete/route.ts` takes a
+  // userId from the query string and soft-deletes that account through the service-role client, no
+  // auth call in the file), so it is the strongest `mustRaiseLoudIndicator: true` row in
+  // FREE_TIER_EXPECTATIONS below. MEASURED 2026-07-28 during the #1174 re-scan: the free tier now
+  // emits 3 High/Confirmed "tenant predicate populated from the request" rows on it, and the same
+  // scan on the 2026-07-26 scanner (d1da2e4) emitted ZERO — a real-code detection this manifest
+  // would otherwise have no baseline for.
+  {
+    slug: "launch-mvp",
+    repo: "ShenSeanChen/launch-mvp-stripe-nextjs-supabase",
+    commit: "513a8f0ca6e405725dcf98eab1fc5cd6468b5f10",
+    license: "MIT",
+    provenance: "unclear",
+    provenanceNote: "#1372: recorded honestly rather than forced into a tier. Solo maintainer (37 commits across two author spellings of the same person), a live hosted app, a YouTube series and a Discord — none of the org/CI signals `professional` names, and none of the AI fingerprints `ai-generated` names either: no Co-Authored-By trailers in 40 commits, no CLAUDE.md, and the only `.cursor` content is an `mcp.json.example`.",
+    securityVerdict: "2 Critical (unauthenticated account deletion and subscription cancellation through the service-role client), 4 High (unauth reactivate/sync; no server-side route protection — no middleware.ts at all), 3 Medium (debug endpoint leaks the Stripe key prefix; open redirect in the OAuth callback; Resend API key reused as the inbound auth secret with a non-constant-time compare). Every one re-verified in source at this pin on 2026-07-28 (#1174).",
+    disclosureIssue: 774,
+    // "." because this target's schema is NOT under supabase/migrations — see the note above.
+    schemaPath: ".",
+    modules: {
+      M4: { counted: 5, total: 10, note: "#1372: MEASURED 2026-07-28 by `pnpm corpus-drift --target launch-mvp --install` against this pin — 1.34% (135/10056 lines), 11 clone clusters. 5 counted: 2 self-file clones inside the React-email templates (CancellationConfirmationEmail, WelcomeEmail), 2 cross-file clones across the three `supabase/functions/send-*-email` Deno handlers, 1 across ForgotPasswordModal ↔ app/reset-password/page. The 5 Info: 2 sub-15-line import-header clones among the api/stripe + api/user/delete routes, the #365 M4-00 small-clone row, the #1080/#1095 M4-SELF-00 row, and the M4-97 diverged-coverage row (the diverged pass covered 2 of 65 eligible files here). Never transcribed — the number came from the tool." },
+      "M4-diverged": { counted: 0, total: 0, note: "#1372: MEASURED ZERO 2026-07-28 — 2 security-path files eligible, no diverged family. An FP floor on a small tree, and a useful one on THIS target specifically: its five unauthenticated service-role handlers are near-identical in shape, so a diverged-clone over-match would show up here first." },
+      "M5-knip": { counted: 29, total: 29, note: "#1372: MEASURED 2026-07-28 with the target's own `npm install` (package-lock.json → npm per #1268) — 15 unused files, 6 files with unused exports, 10 unused dependencies. The dominant vein is an entire PostHog analytics subsystem wired to nothing (PostHogContext, PostHogPageView, PostHogErrorBoundary, utils/posthog.ts, utils/analytics.ts) plus the three `supabase/functions/send-*-email` Deno handlers, which knip cannot see an entry point for because they are deployed by the Supabase CLI, not imported. That second group is a known shape, not dead code — worth watching as an FP guard if the count moves." },
+      "M5-slop": { counted: 6, total: 8, note: "#1372: MEASURED 2026-07-28 — 3 'Single-use helper', 1 'Orphan TODO' + 1 'Placeholder stub' (both app/verify-email/page.tsx:34, the same unfinished handler), 1 'Unused import'; 2 Info (1 decorative emoji, 1 narrating comment). A small, clean reading for a solo-maintained template." },
+      "M6-indicator": { counted: 1, total: 1, note: "#1372: MEASURED 2026-07-28 — 1 'hand-rolled ErrorBoundary' (components/PostHogErrorBoundary.tsx:13). All Info/non-grading (#267); counted === total by construction (see the manifest's M6-indicator note)." },
+      M7: { counted: 2, total: 5, note: "#1372: MEASURED 2026-07-28 — 2 counted: 'Await in loop (N+1)' at app/api/user/delete/route.ts:32 (a per-subscription `stripe.subscriptions.cancel` inside a loop) and 'Client fetch in useEffect' at app/dashboard/page.tsx:164. 3 Info 'Missing hook dependencies'. The N+1 sits inside the #774 Critical's own handler, which makes it a useful cross-module anchor: a change that silences M1 there should not silence M7 there." },
+      M8: { counted: 1, total: 1, note: "#1372: MEASURED 2026-07-28 — ZERO test files and no `scripts.test`, so mutation-scan emits #224's M8-00 zero-coverage finding (High), which IS the measurement. Not a mutation baseline and not a not-run: 1 counted, per #263's rule that a test-FILE count is not the finding." },
+      "M8-intent": { counted: 0, total: 0, note: "#1372: MEASURED ZERO 2026-07-28 — no test files anywhere in the tree, so the #372 test-intent pass has nothing to inspect. M8-00 above is the whole M8 story here." },
+      M9: { counted: 0, total: 1, note: "#1372: MEASURED 2026-07-28 at 0 counted / 1 total. The single row is #1262's `M9 — Uncapped retry/fan-out — scope` disclosure (Info, 8 route/edge handlers checked). A measured zero on the counted classes — this is an App Router app, so an App-Router-only class appearing here later is a new detection or an over-match, never scale." },
+      M10: { counted: 1, total: 1, note: "#1372: MEASURED 2026-07-28 via m10FindingsFromSchema over `schemaPath: \".\"` — the root-level initial_supabase_table_schema.sql plus supabase/scripts/**. 1 PII-bearing table. This row is the durable proof of #1372's second falsified clause: the target was recorded as shipping '0 migrations in-tree, so an M2 stand-up needs a hand-built schema', and the classifier reads its schema straight out of the tree with no hand-building at all." },
+    },
+  },
   {
     slug: "mvp-boilerplate",
     repo: "devtodollars/mvp-boilerplate",
