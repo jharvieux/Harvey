@@ -10,6 +10,8 @@ vi.mock("postgres", () => ({
   default: vi.fn(() => ({
     unsafe: vi.fn(async (query: string) => {
       if (query.includes("realtime")) return [{ rlsEnabled: true }];
+      if (query.includes("extensionOwned")) return [];
+      if (query.includes("policyname")) return [];
       if (query.includes("pg_tables")) return [{ schema: "public", name: "widgets", rlsEnabled: false }];
       if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
       if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
@@ -39,6 +41,8 @@ function mockFetch(responses: {
   cronSchemaExists?: boolean;
   cronJobs?: unknown;
   definerFunctions?: unknown;
+  driftTables?: unknown;
+  driftPolicies?: unknown;
 }): typeof fetch {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const u = url.toString();
@@ -48,6 +52,8 @@ function mockFetch(responses: {
     if (u.includes("/database/query")) {
       const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
       if (body.query.includes("realtime")) return new Response(JSON.stringify(responses.realtime ?? [{ rlsEnabled: true }]));
+      if (body.query.includes("extensionOwned")) return new Response(JSON.stringify(responses.driftTables ?? []));
+      if (body.query.includes("policyname")) return new Response(JSON.stringify(responses.driftPolicies ?? []));
       if (body.query.includes("pg_tables")) return new Response(JSON.stringify(responses.tables));
       if (body.query.includes("pg_extension")) return new Response(JSON.stringify(responses.extensions));
       if (body.query.includes("storage.buckets")) return new Response(JSON.stringify(responses.buckets));
