@@ -1,0 +1,7 @@
+import { redirect } from "next/navigation";
+
+export async function requireUnlocked({ isLocked, redirectTo }: { isLocked: boolean; redirectTo: string }) {
+  if (isLocked) {
+    throw redirect(redirectTo);
+  }
+}

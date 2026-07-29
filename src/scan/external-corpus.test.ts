@@ -21,6 +21,7 @@ import {
   isMutationBaseline,
   isNotRun,
   m10FindingsFromSchema,
+  moduleMatches,
   revalidateNotRunReasons,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
@@ -110,6 +111,21 @@ describe("external corpus manifest", () => {
     }
   });
 
+  it("#1459: M1-boundary is scored on every target — same detect-static pass, same no-install prereq", () => {
+    // The class this key exists for is High/Likely, so an unmeasured target is the worst case:
+    // a widening could light it up and nothing would move. A measured ZERO is the FP floor.
+    for (const t of EXTERNAL_CORPUS) {
+      expect(isNotRun(t.modules["M1-boundary"]), t.slug).toBe(false);
+    }
+  });
+
+  it("#1459: every M1-boundary baseline has counted === total — the class is High-only, never Info", () => {
+    for (const t of EXTERNAL_CORPUS) {
+      const m1 = t.modules["M1-boundary"];
+      if (!isNotRun(m1)) expect(m1.counted, t.slug).toBe(m1.total);
+    }
+  });
+
   it("#483: every M6-indicator baseline has counted === total — the findings are Info-only by design (#267), so the two can never diverge", () => {
     for (const t of EXTERNAL_CORPUS) {
       const m6 = t.modules["M6-indicator"]!;
@@ -142,6 +158,26 @@ describe("scoreExternalBaseline", () => {
   it("FAILS when a real detection stops firing", () => {
     const rows = scoreExternalBaseline(target("multi-tenant-starter"), []);
     expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: false, drift: -2 });
+  });
+
+  it("#1459: FAILS when the boundary pass's authorization half stops firing — the hole this key closes", () => {
+    // The negative control the issue asked for, as a unit: gutting the mutation collector removes
+    // every `M1 — … missing authorization check` row and leaves the M9 count untouched. Before this
+    // key, that produced NO failing row anywhere in the manifest.
+    const rows = scoreExternalBaseline(target("tanstack-com"), []);
+    expect(rows.find((r) => r.module === "M1-boundary")).toMatchObject({ pass: false, drift: -6 });
+    expect(rows.find((r) => r.module === "M1-boundary")!.detail).toContain("DRIFT -6");
+  });
+
+  it("#1459: keeps the SQL/RLS tier's `M1 — Multi-tenant security` out of the boundary key", () => {
+    // Two different tiers share the `M1 —` prefix; only the boundary pass's own output is measured
+    // here, and sweeping the migration tier in would silently merge two measurements (the #278 M5
+    // and #360 M4 lesson).
+    expect(moduleMatches("M1 — Multi-tenant security", "M1-boundary")).toBe(false);
+    expect(moduleMatches("M1 — route action missing authorization check", "M1-boundary")).toBe(true);
+    expect(moduleMatches("M1 — Client-supplied owner id trusted by authenticated action", "M1-boundary")).toBe(true);
+    const rows = scoreExternalBaseline(target("multi-tenant-starter"), [finding("M1 — Multi-tenant security")]);
+    expect(rows.find((r) => r.module === "M1-boundary")).toMatchObject({ pass: true, drift: 0 });
   });
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
@@ -483,6 +519,7 @@ describe("revalidateNotRunReasons (#321)", () => {
       modules: {
         M4: { reason: "jscpd could not complete on this scope (synthetic fixture)", falsifier: "false" },
         M8: { reason: "not exercised by this fixture", falsifier: "false" },
+        "M1-boundary": { reason: "not exercised by this fixture", falsifier: "false" },
       },
     };
     expect(isNotRun(notRunM4.modules.M4!)).toBe(true);

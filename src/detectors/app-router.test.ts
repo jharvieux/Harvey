@@ -1403,3 +1403,127 @@ describe("TanStack Start boundary adapter (#918)", () => {
     expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
   });
 });
+
+describe("gate reached through a dynamic import (#1462)", () => {
+  const AUTHZ = "M1 — Server Action missing authorization check";
+
+  it("resolves `const { x } = await import(…)` two hops out and clears the gated action", () => {
+    // The shape MEASURED on TanStack/tanstack.com: `requireAdmin` binds its real check with a
+    // dynamic import, so #1263's resolver saw a callee that matched nothing and stopped.
+    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/negative"));
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  it("leaves EVERY unresolvable or non-gate dynamic-import shape flagged", () => {
+    // The corpus positive passes on any one of these four, which is exactly why they are asserted
+    // individually here: widening resolution must not turn "awaits something it imported
+    // dynamically" into "is gated", and a specifier this pass does not evaluate must leave the
+    // finding standing rather than read as a gate.
+    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/positive"));
+    const flagged = findings.filter((f) => f.taxonomy === AUTHZ).map((f) => f.evidence);
+    expect(flagged).toHaveLength(4);
+    for (const action of ["renameA", "renameB", "renameC", "renameD"]) {
+      expect(flagged.some((e) => e.includes(`\`${action}\``)), `${action} must still be flagged`).toBe(true);
+    }
+  });
+});
+
+describe("browser global in a module-level helper (#1460)", () => {
+  const SSR = "M9 — SSR-only API misuse";
+
+  it("clears a helper whose only in-file call site is inside a useEffect", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-module-helper/negative"));
+    expect(taxonomies(findings)).not.toContain(SSR);
+  });
+
+  it("still flags the same helper when the component's render body calls it", () => {
+    // The recall half: the naive "a lowercase module-level function with no JSX is off the render
+    // path" rule reads this file and the negative identically — only the call sites separate them.
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-module-helper/positive"));
+    const ssr = findings.filter((f) => f.taxonomy === SSR);
+    expect(ssr).toHaveLength(1);
+    expect(ssr[0]?.evidence).toContain("currentOrigin");
+  });
+});
+
+describe("waterfall guard exiting inside a helper (#1461)", () => {
+  const WATERFALL = "M9 — Data-fetching waterfall";
+
+  it("clears the pair when the intervening statement's callee can deny, over a write", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-helper-exit/negative"));
+    expect(taxonomies(findings)).not.toContain(WATERFALL);
+  });
+
+  it("still flags the pair when the callee only returns — a return leaves the helper, not the caller", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-helper-exit/positive"));
+    expect(taxonomies(findings)).toContain(WATERFALL);
+  });
+});
+
+describe("import resolution across a monorepo's workspaces (#1461)", () => {
+  it("resolves an aliased import against the tsconfig of the workspace that declares it", () => {
+    // Before #1461 collectPathAliases stopped at the shallowest config with `paths` and applied
+    // only its aliases repo-wide, so on a monorepo every other workspace's `~/…` specifier
+    // resolved to nothing and every cross-file pass went quietly blind there (MEASURED on
+    // crbnos/carbon: `docs/tsconfig.json` won, and four workspaces' `~/*` never resolved).
+    const findings = detectAppRouterFindings([
+      { path: "docs/tsconfig.json", text: JSON.stringify({ compilerOptions: { paths: { "@/*": ["./*"] } } }) },
+      { path: "apps/erp/tsconfig.json", text: JSON.stringify({ compilerOptions: { paths: { "~/*": ["./app/*"] } } }) },
+      {
+        path: "apps/erp/app/actions.ts",
+        text: `"use server";\nimport { z } from "zod";\nimport { supabase } from "~/lib/db";\nimport { ensureMember } from "~/lib/gates";\nconst S = z.object({ id: z.string() });\nexport async function rename(input: unknown) {\n  const { id } = S.parse(input);\n  await ensureMember(id);\n  await supabase.from("orgs").update({ name: "x" }).eq("id", id);\n}\n`,
+      },
+      {
+        path: "apps/erp/app/lib/gates.ts",
+        text: `import { supabase } from "./db";\nexport async function ensureMember(id: string) {\n  const { data: { user } } = await supabase.auth.getUser();\n  if (!user) throw new Error("unauthenticated");\n  return user;\n}\n`,
+      },
+      { path: "apps/erp/app/lib/db.ts", text: `export const supabase = {} as any;\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M1 — Server Action missing authorization check");
+  });
+});
+
+describe("client-reachability of a server-exclusive module (#1461)", () => {
+  const GUARD = "M9 — Missing server-only guard";
+  const secretModule = { path: "lib/secrets.ts", text: `export const key = process.env.STRIPE_SECRET_KEY;\n` };
+
+  it("flags the module when an ordinary client-imported module reaches it", () => {
+    // The control: without a boundary in the chain the finding must still fire, so neither rule
+    // below can be satisfied by suppressing the whole class.
+    const findings = detectAppRouterFindings([
+      { path: "app/page.tsx", text: `"use client";\nimport { helper } from "../lib/helper";\nexport default function P() { return <p>{helper()}</p>; }\n` },
+      { path: "lib/helper.ts", text: `import { key } from "./secrets";\nexport function helper() { return key; }\n` },
+      secretModule,
+    ]);
+    expect(taxonomies(findings)).toContain(GUARD);
+  });
+
+  it("does not count a type-only import as an edge into the client bundle", () => {
+    // `import type { AppRouter } from …` in a 'use client' tRPC provider is erased at compile time.
+    // Counting it made rallly's whole server router tree read as client-reachable.
+    const findings = detectAppRouterFindings([
+      { path: "app/page.tsx", text: `"use client";\nimport type { Helper } from "../lib/helper";\nexport default function P(_: Helper) { return <p>hi</p>; }\n` },
+      { path: "lib/helper.ts", text: `import { key } from "./secrets";\nexport type Helper = string;\nexport function helper() { return key; }\n` },
+      secretModule,
+    ]);
+    expect(taxonomies(findings)).not.toContain(GUARD);
+  });
+
+  it("stops the walk at a 'use server' module — the client gets an RPC reference, not the body", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/page.tsx", text: `"use client";\nimport { save } from "../lib/actions";\nexport default function P() { return <button onClick={() => save()}>go</button>; }\n` },
+      { path: "lib/actions.ts", text: `"use server";\nimport { key } from "./secrets";\nexport async function save() { return key; }\n` },
+      secretModule,
+    ]);
+    expect(taxonomies(findings)).not.toContain(GUARD);
+  });
+
+  it("stops the walk at an `import \"server-only\"` poison pill", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/page.tsx", text: `"use client";\nimport { helper } from "../lib/helper";\nexport default function P() { return <p>{helper()}</p>; }\n` },
+      { path: "lib/helper.ts", text: `import "server-only";\nimport { key } from "./secrets";\nexport function helper() { return key; }\n` },
+      secretModule,
+    ]);
+    expect(taxonomies(findings)).not.toContain(GUARD);
+  });
+});

@@ -34,6 +34,7 @@ import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } fro
 import { checkEdgeFunctionVerifyJwt, checkMigrationDefinerAnonGrant, checkMigrationDynamicSqlInjection, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
+import { moduleMatches } from "./external-corpus.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
 // Recorded-output helper: a minimal Finding mirroring what the scan modules emit, so these
@@ -1189,6 +1190,10 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "waterfall-abort", dir: "waterfall-abort", neg: "negative" },
     { check: "action-gate-strength", dir: "action-gate-strength", neg: "negative" },
     { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
+    // #1462/#1460/#1461, same inverted scoring — the three residual FP families #1293/#1276 left open.
+    { check: "action-dynamic-gate", dir: "server-action-dynamic-gate", neg: "negative" },
+    { check: "ssr-module-helper", dir: "ssr-module-helper", neg: "negative" },
+    { check: "waterfall-helper-exit", dir: "waterfall-helper-exit", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
@@ -1211,6 +1216,26 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       const negRow = scoreEntry(negEntry!, negFindings);
       expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
       expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("#1459: M1-boundary covers every M1 taxonomy the boundary pass emits", () => {
+    // The #940 shape, made executable: a taxonomy landing without its corpus bucket being updated.
+    // The boundary pass's noun is per-framework ("Server Action" / "route action" / "server
+    // function") and a new adapter adds another, so this runs the REAL detector over every M9
+    // fixture in this block and fails if any `M1 —` row it produces escapes the M1-boundary rule —
+    // which would silently return that row to being scored by nothing, the exact defect #1459 fixed.
+    const emitted = new Set<string>();
+    for (const { check, dir, neg, framework } of CHECKS) {
+      for (const kind of ["positive", neg]) {
+        for (const f of detectAppRouterFindings(loadPrefixed(`${dir}/${kind}`, `m9-corpus/${check}/${kind}`), framework)) {
+          if (f.taxonomy.startsWith("M1 ")) emitted.add(f.taxonomy);
+        }
+      }
+    }
+    expect(emitted.size, "the M9 fixtures must exercise the boundary pass's M1 output at all").toBeGreaterThan(0);
+    for (const taxonomy of emitted) {
+      expect(moduleMatches(taxonomy, "M1-boundary"), `${taxonomy} escapes the M1-boundary corpus key`).toBe(true);
     }
   });
 

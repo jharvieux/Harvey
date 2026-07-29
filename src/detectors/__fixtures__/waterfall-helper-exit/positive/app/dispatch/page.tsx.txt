@@ -1,0 +1,17 @@
+// The true-positive control for #1461, and the precision boundary the fix has to respect. The
+// intervening statement reads the first result and calls a resolvable helper too — but that helper
+// only RETURNS a value. A `return` inside a helper returns from THAT helper; control carries
+// straight on to the second query, so the pair is still a genuine waterfall. Counting "the callee
+// contains a return" as an exit would suppress every pair whose intervening statement calls any
+// value-returning function, which is most of them. This must still fire.
+import { supabase } from "../../lib/db";
+import { describeStatus } from "../../lib/locked-guard";
+
+export default async function DispatchPage() {
+  const { data: dispatch } = await supabase.from("dispatches").select("id, status").single();
+  const label = describeStatus(dispatch?.status);
+
+  const { data: events } = await supabase.from("events").select("id, kind");
+
+  return <p>{label}: {events?.length} events</p>;
+}
