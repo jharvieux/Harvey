@@ -1,0 +1,69 @@
+# The mechanical-tier scanner binaries, installed once and CACHED (#1498).
+#
+# This block was duplicated verbatim in five workflows (ci.yml, conservation.yml, dry-run-drift.yml,
+# corpus-drift.yml, secbench.yml) and there was NO actions/cache anywhere in the repo. Every job that
+# needed them paid a pipx install plus three network fetches — 15-23s MEASURED, and four chances to
+# fail on someone else's infrastructure. A scanner binary that fails to download does not degrade
+# quietly here: gitleaks throws ENOENT rather than degrading (see src/scan/secrets.ts), and a run
+# missing osv-scanner emits a DEP-OSV-00 disclosure row that does not belong in a committed artifact.
+#
+# The cache key pins EVERY version, so a version bump is a cache miss by construction — there is no
+# way to bump a pinned tool and silently keep running the old one. That is the property worth having;
+# the seconds saved are secondary.
+name: Install mechanical-tier scanner binaries
+description: semgrep, trufflehog, osv-scanner and gitleaks, cached by pinned version.
+
+runs:
+  using: composite
+  steps:
+    # Versions live here so the cache key and the installer cannot disagree. osv-scanner's asset
+    # carries no version in its name, so an unpinned URL would drift the toolchain under the
+    # baselines without anyone choosing to.
+    - id: versions
+      shell: bash
+      run: |
+        echo "osv=2.3.8" >> "$GITHUB_OUTPUT"
+        echo "gitleaks=8.30.1" >> "$GITHUB_OUTPUT"
+        echo "trufflehog=head" >> "$GITHUB_OUTPUT"
+
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        # pipx shims in ~/.local/bin point INTO ~/.local/pipx/venvs — caching bin alone yields a
+        # dangling semgrep shim that resolves and then fails at exec. Both paths or neither.
+        path: |
+          ~/.local/bin
+          ~/.local/pipx
+        key: mech-bins-${{ runner.os }}-osv${{ steps.versions.outputs.osv }}-gl${{ steps.versions.outputs.gitleaks }}-th${{ steps.versions.outputs.trufflehog }}-semgrep-pipx-v1
+
+    - name: Install (cache miss only)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED 2026-07-28, where
+        # the osv-scanner `curl -o` into it failed with `curl: (23)` on a fresh runner.
+        mkdir -p "$HOME/.local/bin"
+        pipx install semgrep
+        curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+          | sh -s -- -b "$HOME/.local/bin"
+        curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
+          https://github.com/google/osv-scanner/releases/download/v${{ steps.versions.outputs.osv }}/osv-scanner_linux_amd64
+        chmod +x "$HOME/.local/bin/osv-scanner"
+        curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v${{ steps.versions.outputs.gitleaks }}/gitleaks_${{ steps.versions.outputs.gitleaks }}_linux_x64.tar.gz \
+          | tar -xz -C "$HOME/.local/bin" gitleaks
+
+    - name: Put them on PATH and PROVE they run
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.local/bin:$PATH"
+        # A restored cache that cannot execute is worse than no cache: every consumer would either
+        # throw ENOENT mid-scan or emit a not-assessed row. Fail HERE, where the cause is obvious.
+        for b in semgrep trufflehog osv-scanner gitleaks; do
+          command -v "$b" >/dev/null || { echo "::error::$b missing after install/restore"; exit 1; }
+          "$b" --version >/dev/null 2>&1 || "$b" version >/dev/null 2>&1 || {
+            echo "::error::$b present but not executable — cache is poisoned; bump the key suffix"; exit 1; }
+        done
+        echo "mechanical binaries OK: $(semgrep --version) | osv-scanner $(osv-scanner --version 2>&1 | head -1)"

@@ -163,21 +163,7 @@ jobs:
       # rather than failing when its binary is absent, so a missing one here would read as a passing
       # test instead of an unrun one.
       - name: Install mechanical-tier scanner binaries
-        run: |
-          set -euo pipefail
-          # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED
-          # 2026-07-28, where the osv-scanner `curl -o` into it failed with `curl: (23)`
-          # (write error) on a fresh runner. Create it before anything writes there.
-          mkdir -p "$HOME/.local/bin"
-          pipx install semgrep
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-            | sh -s -- -b "$HOME/.local/bin"
-          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
-            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
-          chmod +x "$HOME/.local/bin/osv-scanner"
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-            | tar -xz -C "$HOME/.local/bin" gitleaks
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: ./.github/actions/mechanical-binaries
 
       # Asserted separately so a broken install reads as a missing binary here rather than as a
       # skipped describe block three steps later — a skipIf is a silent pass by design.
