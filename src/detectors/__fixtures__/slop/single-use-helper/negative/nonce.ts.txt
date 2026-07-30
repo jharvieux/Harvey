@@ -1,0 +1,20 @@
+// #1532 scope control for `doesOwnIo`: a pure helper that calls into a platform API must STAY
+// spared — the widened purity test looks for I/O (`*Sync`, `spawn`/`exec`/`fork`, `process.exit`,
+// a hand-rolled `new Promise`), not for "calls something". This is documenso
+// apps/remix/server/security-headers.ts:57 read at source in the 2026-07-30 sample and graded a
+// genuine seam: `crypto.getRandomValues` fills a buffer, it opens nothing.
+function generateNonce(): string {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+
+  let binary = "";
+  for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]!);
+
+  return btoa(binary);
+}
+
+export async function applySecurityHeaders(res: { set: (k: string, v: string) => void }, next: () => Promise<void>): Promise<void> {
+  const nonce = generateNonce();
+  await next();
+  res.set("Content-Security-Policy", `script-src 'nonce-${nonce}'`);
+}
