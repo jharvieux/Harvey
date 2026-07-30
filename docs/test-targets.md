@@ -150,10 +150,14 @@ Six of these are now the pinned external regression corpus in `src/scan/external
 `Wallens11/supabase-multi-tenant-starter`, `devtodollars/mvp-boilerplate`,
 `makerkit/nextjs-saas-starter-kit-lite`. `Wallens11` was disclosed under #217 (1 Critical, 1 High).
 
-Still unaudited from that list: `ShenSeanChen/launch-mvp-stripe-nextjs-supabase` — but it ships **0
-migrations in-tree**, so an M2 stand-up needs a hand-built schema; Bucket A is the better dynamic-tier queue.
-`antoineross/Hikari` (MIT, Next 14 App Router + Stripe + Supabase, 2 migrations) is the strongest remaining
-untouched starter kit.
+Also from that list: `ShenSeanChen/launch-mvp-stripe-nextjs-supabase` — audited twice and disclosed under
+#168 and #774 (2 Critical, 4 High: unauthenticated service-role IDOR). It is now the seventh pinned target
+in `src/scan/external-corpus.ts` (#1372). The old note here claimed it "ships 0 migrations in-tree, so an
+M2 stand-up needs a hand-built schema"; that was false when written — it carries a 104-line root-level
+`initial_supabase_table_schema.sql` (4 CREATE TABLEs) plus five .sql files under `supabase/scripts/`, and
+#770's `discoverSchemaFiles` resolves them with no hand-building (measured 2026-07-28: 2 schema files over
+7 probed locations). `antoineross/Hikari` (MIT, Next 14 App Router + Stripe + Supabase, 2 migrations) is the
+strongest remaining untouched starter kit.
 
 ## Where NOT to look
 
