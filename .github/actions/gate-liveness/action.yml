@@ -1,0 +1,74 @@
+# Proof that a gate job REACHED ITS MEASURING PHASE — and a loud failure when it did not.
+#
+# WHY: on 2026-07-30 `corpus-drift` failed for days at SETUP (#1509's poisoned pipx cache killed it
+# before it scored a single baseline) and produced nothing a reader could tell apart from "ran and
+# found no drift". In that window PR #1447 merged on three green required checks while the gate that
+# measures its blast radius had never executed — 653 M5-slop findings silently suppressed and a live
+# regression on `main`. That is this repo's own central principle turned on its CI: an absent signal
+# read as a clean one (CLAUDE.md — "silent omission is worse than a wrong status").
+#
+# THE RULE, mirrored from the product rather than invented in parallel: src/audit-runner.ts's
+# `Examined` rejects `unitsExamined: 0` because "a probe that examined nothing did not run". A CI gate
+# is a probe over the repo. So a gate job must emit a MACHINE-READABLE RECEIPT naming how many units
+# it scored, after it scored them, and the job asserts that receipt before it is allowed to be green.
+#   • scored N > 0 units          -> MEASURED
+#   • short-circuited on purpose  -> DECLARED NO-OP, with the reason IN THE JOB SUMMARY
+#   • anything else               -> FAILED, naming the phase that never ran
+# The middle row matters as much as the last: a `paths:`-filtered required check deadlocks every PR
+# outside its filter (#1107), so those jobs run on every PR and short-circuit internally — and a green
+# short-circuit that looks like a green scoring run is the same defect one level down.
+#
+# COST: a file append and a file read. Milliseconds. Nothing here may make a gate slower.
+#
+# The producer side is either this action (`mode: record`, for shell-level phases) or
+# `recordMeasured` in src/ci-liveness.ts (for the gate CLIs, where the unit count is a real
+# measurement rather than a number the workflow asserts about itself).
+#
+# Registry of which jobs carry this and which are exempt: .github/gate-liveness.json, enforced by
+# src/ci-liveness.test.ts under `pnpm verify` — so a NEW gate workflow cannot quietly join without
+# one.
+name: Gate liveness
+description: Record that a gate phase measured N units, and assert a job reached its measuring phase.
+
+inputs:
+  mode:
+    description: "record | assert"
+    required: true
+  gate:
+    description: "record: gate id (or comma/space-separated ids sharing one status+scope). Lowercase [a-z0-9-]."
+    required: false
+    default: ""
+  units:
+    description: "record + status=measured: how many units this phase actually scored. 0 is rejected."
+    required: false
+    default: ""
+  status:
+    description: "record: measured (default) | declared-no-op"
+    required: false
+    default: "measured"
+  scope:
+    description: "record: what the units ARE (measured) or WHY nothing was measured (declared-no-op). Required — a record with no scope says nothing."
+    required: false
+    default: ""
+  expect:
+    description: "assert: comma/space-separated gate ids that MUST have a record on the receipt."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: gate-liveness (${{ inputs.mode }})
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        GATE: ${{ inputs.gate }}
+        UNITS: ${{ inputs.units }}
+        STATUS: ${{ inputs.status }}
+        SCOPE: ${{ inputs.scope }}
+        EXPECT: ${{ inputs.expect }}
+        JOB: ${{ github.workflow }} / ${{ github.job }}
+      # HARVEY_LIVENESS_RECEIPT is NOT set here on purpose: it is inherited from the caller's
+      # job-level `env:`, which is also what the gate CLIs read, so producer and asserter cannot
+      # disagree about the path. The script falls back to $RUNNER_TEMP when it is unset.
+      run: bash "${{ github.action_path }}/gate-liveness.sh"

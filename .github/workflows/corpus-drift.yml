@@ -35,6 +35,10 @@ on:
         description: "Prove the ci-corpus-drift-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509). SKIPS the scoring step, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "src/scan/external-corpus.ts"
@@ -63,6 +67,11 @@ jobs:
     # (largest: proposit's 1010 packages in 33s), and CI's cold npm cache is the slack this covers.
     # M8's mutation runs are what genuinely didn't fit here — those are corpus-m8.yml.
     timeout-minutes: 30
+    # The receipt both the gate CLI and .github/actions/gate-liveness read. A literal path, not
+    # ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block, and
+    # producer and asserter agreeing on ONE path is the whole point.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
       - uses: actions/checkout@v4
 
@@ -141,6 +150,7 @@ jobs:
           echo "Scoring only: $(echo "$slugs" | tr '\n' ' ')"
 
       - name: Score the corpus against its baselines
+        if: ${{ !inputs.liveness_drill }}
         run: |
           set -euo pipefail
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
@@ -162,6 +172,19 @@ jobs:
           name: corpus-drift-scorecard
           path: corpus-drift*.json
           if-no-files-found: warn
+
+      # #1509: this job failed at SETUP for days (the poisoned pipx cache) and reported nothing a
+      # reader could tell apart from "ran and found no drift", while PR #1447 merged on three green
+      # required checks. `pnpm corpus-drift` writes a receipt AFTER it scores; without that record
+      # this step fails naming the phase that never ran. `always()` so it still reports when an
+      # earlier step already failed — that is exactly the case it exists to explain. Excluded on the
+      # alert drill, which fails on purpose before anything is scored.
+      - name: Gate liveness — did this job actually score anything?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: corpus-drift
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138). On a scheduled failure,
       # find-or-update ONE tracking issue by the marker label. Still never fires on PR/push — those

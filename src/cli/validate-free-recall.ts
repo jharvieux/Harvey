@@ -20,6 +20,7 @@
 // scored. A LOW recall is the measurement, not a failure — see docs/design/free-tier-recall-measurement.md.
 
 import { execFileSync } from "node:child_process";
+import { recordMeasured } from "../ci-liveness.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -174,6 +175,12 @@ if (args.includes("--json")) {
       "(free-tier-recall-measurement.md §2). A low recall here is the measurement, not a failure.",
   );
 }
+
+// #1509's second-order defect: this job runs MONTHLY and clones five third-party repos, so a run
+// that dies in setup or in the fetch phase is invisible for 30 days. matrix.ok already refuses a
+// zero-target score; the receipt is what lets the workflow refuse to be green when the CLI never
+// reached this line at all.
+recordMeasured("free-recall", matrix.scoredTargets, "independent answer-keyed targets scored for FREE mechanical recall");
 
 if (!matrix.ok) {
   const fps = results.flatMap((r) => r.negativesFalsePositiveHigh.map((id) => `${r.slug}/${id}`));
