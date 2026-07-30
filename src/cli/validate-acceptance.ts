@@ -9,6 +9,16 @@
 // issue it would close is mapped to `met` (with evidence), `split` (to a live remainder) or
 // `relayed` (to a question recorded ON the issue). See src/acceptance-conservation.ts for why.
 //
+// --pr and --closed-issue evaluate THE SAME THING (#1562): the same venues — the body, every linked
+// PR body and every comment on the issue, read cumulatively, one disposition per criterion across
+// all of them — and, on --pr, the same close set, since `closingIssuesReferences` sees a
+// Development-sidebar link that no keyword regex can. So a green --pr predicts the close verdict.
+//
+// PRE-FLIGHT, before the PR exists: write the body to a file and run
+//   pnpm validate-acceptance --body-file <path> --repo <owner/repo>
+// It reads the issues and their comments over `gh` exactly as --pr does, and names in its output the
+// one thing it leaves unchecked without a PR number.
+//
 // Exit codes are three-valued ON PURPOSE, because the negative controls have to tell a gate that
 // FAILED from a gate that could not RUN:
 //   0  passed, or a green no-op (no closing keyword and no `remainder:` line)
@@ -50,6 +60,7 @@ import {
   seedDropDisposition,
   seedRemainder,
   selftestCases,
+  type ClosingRef,
   type EvidenceWorld,
   type IssueRecord,
 } from "../acceptance-conservation.js";
@@ -72,8 +83,8 @@ if (args.includes("--selftest") || args.includes("--selftest-close")) {
   const closing = args.includes("--selftest-close");
   console.log(`Acceptance gate self-test (${closing ? "close path, #1341" : "PR body, #1315/#1316"}) — a hermetic scenario, so a green run proves the gate PASSES and CAN FAIL.\n`);
   const scored = closing
-    ? closeSelftestCases().map((c) => ({ name: c.name, expect: c.expect, actual: checkClosedIssue(c.input, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok ? "pass" : "fail" }))
-    : selftestCases().map((c) => ({ name: c.name, expect: c.expect, actual: checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok ? "pass" : "fail" }));
+    ? closeSelftestCases().map((c) => ({ name: c.name, expect: c.expect, actual: checkClosedIssue(c.input, c.lookup, undefined, SELFTEST_WORLD).ok ? "pass" : "fail" }))
+    : selftestCases().map((c) => ({ name: c.name, expect: c.expect, actual: checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD, c.extras).ok ? "pass" : "fail" }));
   let broken = 0;
   for (const c of scored) {
     const good = c.actual === c.expect;
@@ -197,7 +208,7 @@ if (closedIssueFlag) {
   });
 
   const closeReport = checkClosedIssue(
-    { issue, linkedPrs, comments: (raw.comments ?? []).map((c) => c.body ?? ""), authorIsBot: raw.author?.is_bot === true },
+    { issue, linkedPrs, authorIsBot: raw.author?.is_bot === true },
     lookup,
     currentRepo(),
     evidenceWorld(),
@@ -233,16 +244,31 @@ const prFlag = flag("--pr");
 const bodyFile = flag("--body-file");
 if (!prFlag && !bodyFile) die("nothing to check — pass --pr <number>, --body-file <path>, --closed-issue <number>, --selftest or --selftest-close");
 
+const self = currentRepo();
+
 let body: string;
 let source: string;
+// `closingIssuesReferences` is the close set GITHUB will act on. It includes a Development-sidebar
+// link, which carries no keyword the body regex could find — without it a PR that closes an issue
+// on merge reads here as a PR that closes nothing, and the close gate then re-opens the issue.
+let linkedCloses: ClosingRef[] = [];
+let sidebarNote = "";
 if (bodyFile) {
   body = readFileSync(bodyFile, "utf8");
   source = bodyFile;
+  sidebarNote = "ℹ NOT ASSESSED  --body-file reads the text supplied and nothing else, so GitHub's own `closingIssuesReferences` (which a Development-sidebar link populates with no keyword in the body) was NOT consulted. Issue comments WERE read, so the one-disposition-per-criterion rule is checked in full. Re-run with `--pr <n>` once the PR exists for the sidebar half.";
 } else {
-  const r = gh(["pr", "view", prFlag!, ...repoArgs, "--json", "body"]);
+  const r = gh(["pr", "view", prFlag!, ...repoArgs, "--json", "body,closingIssuesReferences"]);
   if (r.status !== 0) die(`\`gh pr view ${prFlag}\` failed (exit ${r.status}): ${r.stderr.trim()}`);
-  body = (JSON.parse(r.stdout) as { body: string }).body ?? "";
+  const pr = JSON.parse(r.stdout) as { body: string; closingIssuesReferences?: { number: number; repository?: { name: string; owner: { login: string } } }[] };
+  body = pr.body ?? "";
   source = `PR #${prFlag}`;
+  linkedCloses = (pr.closingIssuesReferences ?? []).map((c) => {
+    const owner = c.repository ? `${c.repository.owner.login}/${c.repository.name}` : undefined;
+    return owner !== undefined && owner.toLowerCase() !== self?.toLowerCase()
+      ? { repo: owner, number: c.number, ref: `${owner}#${c.number}` }
+      : { number: c.number, ref: `#${c.number}` };
+  });
 }
 
 const seeded: string[] = [];
@@ -268,9 +294,10 @@ try {
 }
 
 console.log(`Acceptance conservation (#1315/#1316) — ${source}\n`);
+if (sidebarNote) console.log(`${sidebarNote}\n`);
 for (const s of seeded) console.log(`⚠ SEEDED VIOLATION: ${s}`);
 if (seeded.length > 0) console.log("  The gate MUST exit 1 below. Exit 0 means it cannot fail; exit 2 means it could not run.\n");
 
-const report = checkAcceptance(body, lookup, currentRepo(), evidenceWorld());
+const report = checkAcceptance(body, lookup, self, evidenceWorld(), { linkedCloses });
 console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatAcceptance(report));
 process.exit(report.ok ? 0 : 1);

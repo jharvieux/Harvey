@@ -10,9 +10,17 @@ acceptance bullet of #N to be mapped below. Delete this block if the PR closes n
 Bullets are numbered in the order they appear in the issue's `## Acceptance` section (or its
 checklist), starting at 1. A bare "done" is not evidence and fails the gate.
 
-Check it before you push:  pnpm validate-acceptance --body-file <a file holding this body>
+ONE VENUE PER CRITERION. The gate reads this body AND every comment on #<issue>, cumulatively, and
+a criterion may be dispositioned exactly once across all of them. So if you have already commented
+these lines on the issue, do not repeat them here (or neutralise the comment) — the same lines in
+two places is a double mapping, and it fails.
+
+Check it before you push:
+  pnpm validate-acceptance --body-file <a file holding this body> --repo <owner/repo>
+It reads the issues and their comments over `gh`, exactly as the PR check does.
 Closing keywords go on their own line at the bottom; GitHub's parser is negation-blind, so
-"does not close #N" closes #N.
+"does not close #N" closes #N. Linking the issue in the Development sidebar closes it too, with no
+keyword at all — the gate reads that link, so those criteria are checked as well.
 -->
 
 ## What changed

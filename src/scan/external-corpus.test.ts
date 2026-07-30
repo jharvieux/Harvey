@@ -17,6 +17,7 @@ import { parseRecordedReasons, validateRecordedReason } from "../recorded-reason
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
+  explainDrift,
   FREE_TIER_EXPECTATIONS,
   isMutationBaseline,
   isNotRun,
@@ -34,10 +35,10 @@ import { buildQuickScanReport } from "../quick-scan.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import type { Finding, Severity } from "../findings.js";
 
-function finding(taxonomy: string, severity: Severity = "Perf"): Finding {
+function finding(taxonomy: string, severity: Severity = "Perf", location = "app/page.tsx:1"): Finding {
   return {
     id: "X", title: "", severity, confidence: "Confirmed", category: "", taxonomy,
-    location: "app/page.tsx:1", status: "Open", evidence: "", impact: "", fix: "",
+    location, status: "Open", evidence: "", impact: "", fix: "",
     value: 3, ease: 3, safety: 3, mechanical: true,
   };
 }
@@ -262,6 +263,86 @@ describe("scoreExternalBaseline", () => {
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
     expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 10, actual: 1, pass: false });
     expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 14, actual: 2, pass: false });
+  });
+});
+
+// Issue #1564: `scoreExternalBaseline` sizes a drift; `explainDrift` names the rows that
+// moved. Reproduces the shape of both 2026-07-30 incidents this exists for — carbon's genuine M7
+// regression silenced by an unrelated change, and a mixed M5-slop movement — without either one
+// needing a real clone: the "prior run" here is just a second synthetic Finding[] standing in for a
+// previous --json output, which is exactly what --baseline-findings supplies in production.
+describe("explainDrift (#1564)", () => {
+  it("names the exact row REMOVED when a real finding is silenced — the carbon M7 shape", () => {
+    // A genuine `M7 — Nested-loop join` at MultiSelect.tsx:153 was present in the prior run and is
+    // gone from the current one: a regression, not a precision fix, and the row itself must say so.
+    const prior = [finding("M7 — Nested-loop join", "Medium", "packages/react/src/MultiSelect.tsx:153")];
+    const current: typeof prior = [];
+    const explanation = explainDrift("M7", current, prior);
+    expect(explanation.hasBaseline).toBe(true);
+    expect(explanation.removed).toEqual([{ location: "packages/react/src/MultiSelect.tsx:153", taxonomy: "M7 — Nested-loop join", severity: "Medium" }]);
+    expect(explanation.added).toEqual([]);
+  });
+
+  it("names the exact row ADDED on an increase, not just the count", () => {
+    const prior = [finding("M9 — Accidental dynamic rendering", "Medium", "app/a.tsx:1")];
+    const current = [
+      finding("M9 — Accidental dynamic rendering", "Medium", "app/a.tsx:1"),
+      finding("M9 — Accidental dynamic rendering", "Medium", "app/b.tsx:9"),
+    ];
+    const explanation = explainDrift("M9", current, prior);
+    expect(explanation.added).toEqual([{ location: "app/b.tsx:9", taxonomy: "M9 — Accidental dynamic rendering", severity: "Medium" }]);
+    expect(explanation.removed).toEqual([]);
+  });
+
+  it("splits a MIXED movement into its added and removed halves, not one blended count — the M5-slop shape", () => {
+    // -653 read as a mass regression; it was actually ~10% wrongly spared (removed, real) plus a
+    // majority genuine reclassification (added elsewhere) — a split only the row lists make visible,
+    // not the bare count.
+    const prior = [
+      finding("M5 — Else after return", "Low", "a.ts:1"),
+      finding("M5 — Else after return", "Low", "b.ts:2"),
+      finding("M5 — Single-call wrapper", "Low", "c.ts:3"),
+    ];
+    const current = [
+      finding("M5 — Else after return", "Low", "a.ts:1"), // unchanged, present both times
+      finding("M5 — Single-call wrapper", "Low", "d.ts:4"), // added: a new location
+      // b.ts:2 and c.ts:3 are gone: removed
+    ];
+    const explanation = explainDrift("M5-slop", current, prior);
+    expect(explanation.added).toEqual([{ location: "d.ts:4", taxonomy: "M5 — Single-call wrapper", severity: "Low" }]);
+    expect(explanation.removed).toEqual([
+      { location: "b.ts:2", taxonomy: "M5 — Else after return", severity: "Low" },
+      { location: "c.ts:3", taxonomy: "M5 — Single-call wrapper", severity: "Low" },
+    ]);
+  });
+
+  it("discloses the fallback, rather than a silent empty diff, when no prior snapshot is available", () => {
+    // The honest cheapest option (CLAUDE.md's disclosure discipline): with nothing to diff against
+    // (no --baseline-findings passed), explainDrift says so via hasBaseline: false and hands back
+    // the module's CURRENT findings — never an empty added/removed pair that would read as "nothing
+    // moved" when in fact nothing was checked.
+    const current = [finding("M7 — Nested-loop join", "Medium", "x.ts:9")];
+    const explanation = explainDrift("M7", current, undefined);
+    expect(explanation.hasBaseline).toBe(false);
+    expect(explanation.added).toEqual([]);
+    expect(explanation.removed).toEqual([]);
+    expect(explanation.current).toEqual([{ location: "x.ts:9", taxonomy: "M7 — Nested-loop join", severity: "Medium" }]);
+  });
+
+  it("respects Info exclusion the same way countedFor does, so an Info-only movement doesn't appear as a real row", () => {
+    const prior = [finding("M7 — Missing hook dependencies", "Info", "e.ts:1")];
+    const current: typeof prior = [];
+    const explanation = explainDrift("M7", current, prior);
+    // Info findings are excluded from what M7 counts (#230) — explainDrift must agree with
+    // scoreExternalBaseline's own filter or it would "explain" a drift that never scored as one.
+    expect(explanation.removed).toEqual([]);
+  });
+
+  it("counts M6-indicator's Info findings, same carve-out as countedFor (#483)", () => {
+    const prior = [finding("M6 — Indicator: email-shape regex", "Info", "f.ts:1")];
+    const current: typeof prior = [];
+    const explanation = explainDrift("M6-indicator", current, prior);
+    expect(explanation.removed).toEqual([{ location: "f.ts:1", taxonomy: "M6 — Indicator: email-shape regex", severity: "Info" }]);
   });
 });
 
