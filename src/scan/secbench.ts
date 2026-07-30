@@ -4,17 +4,22 @@
 // sink location). Unlike the six planted-bug corpus targets (external-corpus.ts) these are real
 // CVEs, so this is Harvey's first HELD-OUT, real-code recall measurement.
 //
-// WHAT THIS MEASURES, AND WHAT IT DOES NOT — the load-bearing finding (measured 2026-07-24):
+// WHAT THIS MEASURES, AND WHAT IT DOES NOT — the load-bearing finding (measured 2026-07-24,
+// RE-MEASURED 2026-07-30 — `pnpm exec tsx src/cli/validate-secbench.ts` against a fresh
+// cristianstaicu/SecBench.js checkout @ bc31562 with semgrep 1.164.0):
 // SecBench's vulnerability lives INSIDE the vulnerable library (the sink is e.g. `index.js:18:3`
 // in the dependency), and the exploit is a jest test that `require`s the library and calls it with
 // a hardcoded payload. It is NOT application code with an HTTP request source. Harvey's mechanical
 // tier has two source-security engines and one dependency engine:
 //   - semgrep `harvey-*` rules — TAINT rules whose sources are req.query/body/params/searchParams.
-//     Measured 2026-07-24: 0 hits across all 600 exploit test files (validate-secbench.ts runs this
-//     pass live). SecBench does not exercise Harvey's 92 source rules, because the vulnerable code
-//     is in node_modules (not scanned) and the exploit test carries no request source. The issue's
-//     hypothesis that it "exercises M1's injection/XSS/prototype-pollution/path-traversal/command-
-//     injection rules" is FALSIFIED by measurement — see docs/design/secbench-recall-measurement.md.
+//     RE-MEASURED 2026-07-30: 1 hit across all 600 exploit test files (validate-secbench.ts runs
+//     this pass live) — `harvey-redos-literal` (a non-taint rule added after the 2026-07-24
+//     baseline, #1200-#1203) fires on redos/react-native_0.63.0-rc.0. The other 599 draw nothing:
+//     SecBench does not exercise the bulk of Harvey's request-sourced rules, because the vulnerable
+//     code is in node_modules (not scanned) and the exploit test carries no request source. The
+//     issue's hypothesis that it "exercises M1's injection/XSS/prototype-pollution/path-traversal/
+//     command-injection rules" remains FALSIFIED by measurement for the taint rules — see
+//     docs/design/secbench-recall-measurement.md.
 //   - the dependency-CVE (SCA) engine — osv-scanner over the target's lockfile. This IS the pathway
 //     that scores SecBench: every entry pins a KNOWN-vulnerable version, so osv flags it. This gate
 //     therefore measures Harvey's SCA recall, reported as a distinct per-tier number so #868 never
@@ -228,7 +233,8 @@ export function recallPct(caught: number, denom: number): string {
 // #946: LIBRARY-INTERNAL SOURCE recall — the pathway the request-sourced semgrep pass (semgrepHits
 // above) cannot measure. SecBench's vulnerability lives inside the target package's own source (the
 // `sink` field points at e.g. lib/read-file.js in the dependency), which is in node_modules and NOT
-// in the scanned exploit dir — so the request rules score 0/600 by construction. The library-taint
+// in the scanned exploit dir — so the request-sourced TAINT rules score ~0/600 by construction (RE-
+// MEASURED 2026-07-30: 1/600, a non-taint rule; see the header comment above). The library-taint
 // rules (harvey-lib-*) treat a PARAMETER of a public library entry point as the taint source, so
 // scanning the INSTALLED target-package source scores this axis. Denominator is the entries whose
 // target-package source was present to scan (`scannedKeys`), mirroring the SCA installable/flagged

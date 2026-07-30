@@ -147,8 +147,9 @@ console.log(`  ${all.semgrepHits}/${entries.length} entries drew ANY source-secu
 if (all.semgrepHits === 0) {
   console.log(
     `  MEASURED ZERO. SecBench's sink is in library code (node_modules — not scanned) and its exploit\n` +
-      `  is a jest test with no HTTP request source, so Harvey's taint rules cannot fire. SecBench is a\n` +
-      `  KNOWN-VULNERABLE-DEPENDENCY corpus: Harvey scores it via its SCA tier, not its 92 source rules.`,
+      `  is a jest test with no HTTP request source, so Harvey's request-sourced TAINT rules do not fire\n` +
+      `  on this pathway (a non-taint rule could still match incidentally — none did this run). SecBench\n` +
+      `  is a KNOWN-VULNERABLE-DEPENDENCY corpus: Harvey scores it via its SCA tier, not its source rules.`,
   );
 }
 
@@ -209,7 +210,7 @@ if (libTree && existsSync(libTree)) {
 console.log(
   `\nFREE/MECHANICAL-TIER RECALL (for #868): the mechanical tier's SecBench recall is the SCA number\n` +
     `above — ${all.scaFlagged}/${all.installable} (${recallPct(all.scaFlagged, all.installable)}) of installable entries flagged as known-vulnerable. The request-sourced\n` +
-    `detector recall is a MEASURED 0/${entries.length}; the LIBRARY-INTERNAL source recall (#946) is reported above when\n` +
+    `detector recall is a MEASURED ${all.semgrepHits}/${entries.length}; the LIBRARY-INTERNAL source recall (#946) is reported above when\n` +
     `--library-source-tree is provided. These are separate tiers and must not be blended.`,
 );
 
