@@ -1,0 +1,3 @@
+Throwaway. Sole purpose: give corpus-drift a PR whose diff touches nothing it reads,
+so the DECLARED NO-OP short-circuit can be observed on a live job for the first time.
+This branch and its PR are closed immediately after the observation.
