@@ -47,7 +47,7 @@ on:
       - "src/cli/corpus-pins.ts"
       - "src/scan/corpus-clone.ts"
       - ".github/workflows/corpus-drift.yml"
-      - ".github/actions/corpus-clone-cache/action.yml"
+      - ".github/actions/corpus-clone-cache/**"
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
 # newer run is the interesting one.
@@ -108,7 +108,8 @@ jobs:
       # #1571: cache the pinned clones themselves (not the --install tree), keyed on the pin set
       # so editing a pin is a miss by construction. A restored cache is verified against every
       # pinned commit before `pnpm corpus-drift` ever reads it — see the action's own comments for
-      # why a poisoned hit fails loud rather than silently rescanning fewer targets.
+      # why a poisoned hit fails loud rather than silently rescanning fewer targets. The matching
+      # `mode: save` step is at the END of this job, after the clones exist.
       - name: Corpus clone cache
         id: corpus-cache
         uses: ./.github/actions/corpus-clone-cache
@@ -144,7 +145,7 @@ jobs:
             echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Empty diff — scoring every target."; exit 0
           fi
           # Anything that can change scoring for EVERY target -> full sweep.
-          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|src/cli/corpus-pins\.ts|src/scan/corpus-clone\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml|\.github/actions/corpus-clone-cache/action\.yml)$'; then
+          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|src/cli/corpus-pins\.ts|src/scan/corpus-clone\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml)$|^\.github/actions/corpus-clone-cache/'; then
             echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Harness changed — scoring every target."; exit 0
           fi
           if ! echo "$files" | grep -q '^src/scan/external-corpus\.ts$'; then
@@ -222,6 +223,24 @@ jobs:
               echo "::endgroup::"
             done
           fi
+
+      # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
+      # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8
+      # (4 targets) and this job's own #1498 narrowed PR path (only the touched slugs) therefore
+      # restore but never save, which is what stops a 4-of-14 tree from claiming the 14-target key
+      # and locking every later run out of it (a cache key is immutable once written).
+      #
+      # `always()` is safe HERE precisely because the guard reads the CLONE TREE rather than the job
+      # status: the common failure of this job is a real baseline drift, on which all fourteen
+      # clones are present and pristine and the cache is worth warming. A failure that left the set
+      # incomplete reports complete=false and writes nothing. The `outcome == 'success'` clause only
+      # keeps this from adding a second, confusing red step on a job that died before setup
+      # finished (no pnpm, so no pin file to check the tree against).
+      - name: Save the corpus clone cache
+        if: always() && steps.corpus-cache.outcome == 'success'
+        uses: ./.github/actions/corpus-clone-cache
+        with:
+          mode: save
 
       # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
       # table showing exactly what moved.

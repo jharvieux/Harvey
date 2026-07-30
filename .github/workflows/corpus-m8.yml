@@ -44,7 +44,7 @@ on:
       - "src/cli/corpus-pins.ts"
       - "src/scan/corpus-clone.ts"
       - ".github/workflows/corpus-m8.yml"
-      - ".github/actions/corpus-clone-cache/action.yml"
+      - ".github/actions/corpus-clone-cache/**"
 
 concurrency:
   group: corpus-m8-${{ github.ref }}
@@ -77,6 +77,12 @@ jobs:
       # #1571: same pin-keyed clone cache corpus-drift.yml uses — this job scores 4 of the same
       # pinned targets, so it rides corpus-drift's daily-warmed cache entry rather than re-cloning
       # cold every month.
+      #
+      # READ-ONLY on purpose: there is no `mode: save` step in this job, because the key hashes ALL
+      # fourteen pins and this job only ever clones four. It did save, once, and that is what
+      # poisoned the cache on 2026-07-30 — a 4-target tree took the 14-target key, corpus-drift's
+      # complete tree was then refused as a duplicate, and every later run restored the partial one.
+      # Warming this entry is corpus-drift.yml's job; this one consumes it.
       - name: Corpus clone cache
         id: corpus-cache
         uses: ./.github/actions/corpus-clone-cache
