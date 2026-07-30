@@ -3,11 +3,11 @@
 // filesystem sweep for every package.json outside node_modules, pulls in examples/ and standalone
 // fixture roots and reports their deliberately-pinned vulnerable dependencies as the application's
 // own. Every assertion below is about which manifests are IN, and which stay out.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectWorkspaceManifests } from "./workspaces.js";
+import { collectWorkspaceManifests, workspacePackages } from "./workspaces.js";
 
 describe("collectWorkspaceManifests", () => {
   let dir: string;
@@ -92,5 +92,58 @@ describe("collectWorkspaceManifests", () => {
     const scope = collectWorkspaceManifests(dir);
     expect(scope.manifests.map((m) => m.label)).toEqual(["package.json"]);
     expect(scope.unreadable).toEqual([join("apps", "broken", "package.json")]);
+  });
+});
+
+// #1353: the import graph answers "is this specifier a workspace member?" from an in-memory
+// SourceInput[] rather than the filesystem, because M7/M9 reachability never sees a repo root.
+// Two implementations of "what is a member" is exactly how the supply-chain scope and the import
+// graph would come to disagree, so this pins them to the same answer on a real tree.
+describe("workspacePackages (the import-graph view of the same members)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-wspkg-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const write = (rel: string, body: object): void => {
+    mkdirSync(join(dir, rel), { recursive: true });
+    writeFileSync(join(dir, rel, "package.json"), JSON.stringify(body));
+  };
+
+  it("names the same members collectWorkspaceManifests finds on the same tree", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "monorepo", workspaces: ["apps/*", "packages/*"] }));
+    write("apps/web", { name: "@acme/web" });
+    write("packages/utils", { name: "@acme/utils", main: "./src/index.ts" });
+
+    const fromDisk = collectWorkspaceManifests(dir);
+    const inMemory = workspacePackages(
+      fromDisk.manifests.map((m) => ({ path: m.label.split(sep).join("/"), text: readFileSync(join(dir, m.label), "utf8") })),
+    );
+    expect(inMemory.map((p) => p.name).sort()).toEqual(fromDisk.manifests.map((m) => m.name).sort());
+    expect(inMemory.find((p) => p.name === "@acme/utils")?.dir).toBe("packages/utils");
+  });
+
+  it("takes the entry from main/exports and always keeps the src/index convention as a fallback", () => {
+    const pkgs = workspacePackages([
+      { path: "packages/a/package.json", text: JSON.stringify({ name: "a", main: "./dist/index.js" }) },
+      { path: "packages/b/package.json", text: JSON.stringify({ name: "b", exports: { ".": { import: "./src/entry.ts" } } }) },
+      { path: "packages/c/package.json", text: JSON.stringify({ name: "c" }) },
+    ]);
+    // The declared entry is kept extension-free so an on-disk .ts wins over a built .js that a
+    // source-only view of the tree does not contain.
+    expect(pkgs[0]?.entryBases).toContain("packages/a/dist/index");
+    expect(pkgs[0]?.entryBases).toContain("packages/a/src/index");
+    expect(pkgs[1]?.entryBases[0]).toBe("packages/b/src/entry");
+    expect(pkgs[2]?.entryBases).toEqual(["packages/c/src/index", "packages/c/index", "packages/c/src/main"]);
+  });
+
+  it("skips an unparsable or unnamed manifest instead of inventing a member", () => {
+    expect(
+      workspacePackages([
+        { path: "packages/broken/package.json", text: "{ not json" },
+        { path: "packages/anon/package.json", text: JSON.stringify({ private: true }) },
+      ]),
+    ).toEqual([]);
   });
 });

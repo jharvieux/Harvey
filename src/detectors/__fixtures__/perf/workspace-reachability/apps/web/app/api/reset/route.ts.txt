@@ -1,0 +1,12 @@
+import { hashPassword } from "@acme/crypto";
+import { slugify } from "@acme/utils/src/slugify";
+import { currentTenant } from "@/lib/session";
+
+export async function POST(request: Request) {
+  const { password, name } = await request.json();
+  return Response.json({
+    tenant: currentTenant(),
+    slug: slugify(name),
+    hash: hashPassword(password, "static-salt"),
+  });
+}

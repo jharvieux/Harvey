@@ -1,0 +1,3 @@
+import { SelectedBadges } from "./MultiSelect";
+
+export const MultiSelect = SelectedBadges;
