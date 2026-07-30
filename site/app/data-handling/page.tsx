@@ -57,7 +57,8 @@ export default function DataHandling() {
                 </li>
                 <li>
                   <b>Connected audit — adds a read-only database connection.</b> To verify live state (RLS behavior,
-                  Supabase advisors, PII protection) we connect to your database <b>read-only</b>.
+                  Supabase advisors, drift between your deployed schema and your committed migrations, PII protection)
+                  we connect to your database <b>read-only</b>.
                   We run queries that read; we never write, alter schema, or change data. If you decline this access, the
                   database-dependent checks are recorded as &quot;not run — no access&quot; in your coverage ledger and
                   the rest of the audit still runs.

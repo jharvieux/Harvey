@@ -227,7 +227,8 @@ CREATE POLICY "users can read" ON documents
                 </li>
                 <li>
                   <b>Connected audit — from $500.</b> The full review with real verdicts, plus a read of your live
-                  database: live RLS, Supabase advisors, PII in production.
+                  database: live RLS, Supabase advisors, drift between your deployed schema and your committed
+                  migrations, PII in production.
                 </li>
                 <li>
                   <b>Full audit — from $1,000.</b> Everything in Connected, plus Harvey stands up a copy of your stack

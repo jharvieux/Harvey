@@ -4,6 +4,7 @@ import { useState } from "react";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 import { canProbeWrite, classifyWriteResponse, pgCodeOf } from "./write-probe";
+import { SUPPORT_EMAIL } from "../lib/constants";
 
 type Probe = { table: string; status: "warn" | "ok" | "info"; label: string; detail: string };
 type Result = {
@@ -126,11 +127,11 @@ export default function Checker() {
         setLeadStatus("ok");
       } else {
         const d = (await res.json().catch(() => ({}))) as { error?: string };
-        setLeadErr(d.error || "Something went wrong. Please try again or email us directly.");
+        setLeadErr(d.error || `Something went wrong. Please try again or email us at ${SUPPORT_EMAIL}.`);
         setLeadStatus("error");
       }
     } catch {
-      setLeadErr("Network error. Please try again or email us directly.");
+      setLeadErr(`Network error. Please try again or email us at ${SUPPORT_EMAIL}.`);
       setLeadStatus("error");
     }
   }

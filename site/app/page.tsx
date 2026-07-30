@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import SiteHeader from "./components/SiteHeader";
 import SiteFooter from "./components/SiteFooter";
+import { SUPPORT_EMAIL } from "./lib/constants";
 
 type Status = "crit" | "rev" | "pass";
 
@@ -63,11 +64,11 @@ export default function Home() {
         setStatus("ok");
       } else {
         const d = (await res.json().catch(() => ({}))) as { error?: string };
-        setErrMsg(d.error || "Something went wrong. Please try again or email us directly.");
+        setErrMsg(d.error || `Something went wrong. Please try again or email us at ${SUPPORT_EMAIL}.`);
         setStatus("error");
       }
     } catch {
-      setErrMsg("Network error. Please try again or email us directly.");
+      setErrMsg(`Network error. Please try again or email us at ${SUPPORT_EMAIL}.`);
       setStatus("error");
     }
   };
@@ -586,7 +587,7 @@ export default function Home() {
                     <td colSpan={4}>Reads your production database</td>
                   </tr>
                   <tr>
-                    <td className="cap">Live database + Supabase advisors</td>
+                    <td className="cap">Live database + Supabase advisors + migration drift</td>
                     <td className="dot"><span className="off">—</span></td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot feat"><span className="on">●</span></td>
@@ -658,7 +659,7 @@ export default function Home() {
               </div>
               <ul>
                 <li><Check />All ten modules, reviewed with real verdicts</li>
-                <li><Check />Live database: RLS, Supabase advisors</li>
+                <li><Check />Live database: RLS, Supabase advisors, prod-vs-migration drift</li>
                 <li><Check />PII protection verified in production</li>
                 <li><Check />Read-only access — nothing stood up</li>
               </ul>
