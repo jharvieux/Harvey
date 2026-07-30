@@ -85,6 +85,15 @@
         "tracking": 1543,
         "since": "2026-07-30"
       }
+    },
+    {
+      "workflow": ".github/workflows/free-recall.yml",
+      "marker": "ci-free-recall-alert",
+      "pendingProof": {
+        "why": "free-recall.yml is new in #1185 and a drill can only be dispatched against a workflow already on the default branch, so this path cannot be proven before it merges.",
+        "tracking": 1536,
+        "since": "2026-07-30"
+      }
     }
   ],
   "unconverted": [

@@ -58,7 +58,12 @@ export interface SemanticTarget {
 const nocodeRescue: SemanticTarget = {
   slug: "nocode-rescue",
   repo: "yagaMI-Reverse/nocode-rescue",
-  ref: "main",
+  // `master`, not `main` — corrected 2026-07-30 (#1185). MEASURED: `git clone --branch main
+  // https://github.com/yagaMI-Reverse/nocode-rescue.git` exits 128 ("Remote branch main not found
+  // in upstream origin") and origin/HEAD resolves to origin/master. `ref` is not decorative here:
+  // loadSemanticPass prints it as the clone command an operator is told to run, so the wrong value
+  // sent every reader at a command that exits 128.
+  ref: "master",
   scope: "before",
   source: "docs/design/nocode-rescue-recall-measurement.md",
   recordedOn: "2026-07-18",
@@ -91,8 +96,8 @@ const superRedHat: SemanticTarget = {
     { id: "F-06", kind: "positive", cls: "stored XSS via dangerouslySetInnerHTML", locations: ["app/notes/[id]/page.tsx"], match: ["xss", "dangerouslysetinnerhtml"], note: "" },
     { id: "F-07", kind: "positive", cls: "mass assignment / over-posting on note writes", locations: ["app/api/notes/route.ts", "app/api/notes/[id]/route.ts"], match: ["mass assignment", "mass-assignment", "over-post", "overposting", "whitelist"], note: "" },
     { id: "F-08", kind: "positive", cls: "Math.random token + MD5 hashing for API tokens", locations: ["lib/tokens.ts"], match: ["math.random", "md5", "weak hash", "randomness"], note: "" },
-    { id: "F-09", kind: "positive", cls: "insecure JWT — no expiry, unpinned alg, hardcoded fallback secret", locations: ["lib/jwt.ts"], match: ["jwt", "expiresin", "algorithm", "secret"], note: "Mechanical caught 1 of 3 facets; the semantic tier carried the other two (mechanized since, #595)." },
-    { id: "F-10", kind: "positive", cls: "wildcard CORS on the authenticated API", locations: ["lib/cors.ts"], match: ["cors"], note: "" },
+    { id: "F-09", kind: "positive", cls: "insecure JWT — no expiry, unpinned alg, hardcoded fallback secret", locations: ["lib/jwt.ts"], match: ["expiresin", "expiry", "algorithm", "secret"], note: "Mechanical caught 1 of 3 facets; the semantic tier carried the other two (mechanized since, #595). `jwt` dropped 2026-07-30 (#1185): it is a substring of its own location `lib/jwt.ts`, so it accepted any finding planted in that file whatever the mechanism." },
+    { id: "F-10", kind: "positive", cls: "wildcard CORS on the authenticated API", locations: ["lib/cors.ts"], match: ["wildcard", "access-control-allow-origin", "cross-origin"], note: "`cors` dropped 2026-07-30 (#1185) — a substring of its own location `lib/cors.ts`, which left the entry with no discriminating key at all. Replaced with the mechanism vocabulary." },
     { id: "F-11", kind: "positive", cls: "no CSRF protection / no rate limiting", locations: ["app/api/notes", "app/api/import/route.ts"], match: ["csrf", "rate limit", "rate-limit"], note: "Corrected 2026-07-25 (#1033): this said 'no static detector exists at all', which is false — harvey-csrf-missing and leftover-auth.ts's rate-limit checks both exist; neither REACHES this shape (Server-Action-scoped and auth-endpoint-scoped respectively, while F-11 is a plain App Router route handler). Semantic and the M2 CSRF probe are still the only tiers that reach it." },
     { id: "F-12", kind: "positive", cls: "vulnerable ejs dependency + SSTI render endpoint", locations: ["package.json", "app/api/render/route.ts"], match: ["ejs", "ssti", "template injection"], note: "" },
     {
@@ -151,7 +156,7 @@ const cipherx: SemanticTarget = {
     { id: "CX-07", kind: "positive", cls: "fake_secrets / fake_files readable by anon", locations: ["vulnerable_rls.sql"], match: ["fake_secrets", "fake_files", "anon"], note: "" },
     { id: "CX-08", kind: "positive", cls: "profiles policy exposes weak_password_hint to any authed user", locations: ["portal_rls.sql"], match: ["weak_password_hint", "profiles"], note: "Mechanical miss — `is_active = true` is not the literal `true` the permissive-policy pass matches." },
     { id: "CX-09", kind: "positive", cls: "employee_records (salary, ssn_last4) readable by any authed user", locations: ["portal_rls.sql", "portal_roles.sql"], match: ["employee_records", "ssn"], note: "" },
-    { id: "CX-10", kind: "positive", cls: "public read storage buckets", locations: ["storage_buckets.sql", "spec_buckets_and_rpc.sql"], match: ["bucket", "storage"], note: "" },
+    { id: "CX-10", kind: "positive", cls: "public read storage buckets", locations: ["storage_buckets.sql", "spec_buckets_and_rpc.sql"], match: ["public storage", "public bucket", "read policy open to anon"], note: "`bucket`/`storage` dropped 2026-07-30 (#1185) — both substrings of `storage_buckets.sql`, so the entry accepted anything in that file: MEASURED, a `plpgsql dynamic SQL injection` finding (CX-12's bug) was scoring CX-10 as caught." },
     { id: "CX-11", kind: "positive", cls: "SECURITY DEFINER RPCs granted to anon that dump/enumerate data", locations: ["vulnerable_rpc.sql", "spec_buckets_and_rpc.sql"], match: ["security definer", "grant execute", "anon"], note: "" },
     { id: "CX-12", kind: "positive", cls: "plpgsql SQL injection via dynamic EXECUTE concatenation", locations: ["spec_buckets_and_rpc.sql"], match: ["sql injection", "sqli", "execute"], note: "" },
     { id: "CX-13", kind: "positive", cls: "IDOR — any invoice returned by id with no company_id check", locations: ["src/app/api/invoices/[id]/route.ts"], match: ["idor", "ownership", "company_id", "object-level"], note: "" },
@@ -160,7 +165,7 @@ const cipherx: SemanticTarget = {
     { id: "CX-16", kind: "positive", cls: "SSRF webhook fetch reaching cloud metadata", locations: ["src/app/api/webhook/route.ts"], match: ["ssrf"], note: "" },
     { id: "CX-17", kind: "positive", cls: "reflected XSS into an HTML response + reflected CORS with credentials", locations: ["src/app/api/tickets/search/route.ts", "src/app/api/debug/route.ts"], match: ["xss", "cors", "reflected"], note: "" },
     { id: "CX-18", kind: "positive", cls: "verbose errors leaking connection string, stack, env, cwd", locations: ["src/app/api/debug/route.ts", "src/app/api/profile/route.ts", "src/app/api/invoices/[id]/route.ts"], match: ["stack", "verbose", "information disclosure", "connection string", "process.cwd"], note: "" },
-    { id: "CX-19", kind: "positive", cls: "password-reset token returned in the response + no rate limit", locations: ["src/app/api/password-reset/route.ts"], match: ["token", "reset", "rate limit"], note: "" },
+    { id: "CX-19", kind: "positive", cls: "password-reset token returned in the response + no rate limit", locations: ["src/app/api/password-reset/route.ts"], match: ["token", "rate limit", "rate-limit"], note: "`reset` dropped 2026-07-30 (#1185) — a substring of its own location `src/app/api/password-reset/route.ts`." },
     { id: "CX-20", kind: "positive", cls: "security headers unset + server-wide wildcard CORS", locations: [".htaccess", "next.config"], match: ["csp", "content-security-policy", "x-frame", "cors"], note: "" },
     {
       id: "CX-21",
