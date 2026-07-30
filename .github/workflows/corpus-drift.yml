@@ -167,8 +167,13 @@ jobs:
             case "$f" in
               src/scan/external-corpus.ts) relevant=true ;;
               .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true; manifest_only=false ;;
-              .claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
-              CLAUDE.md|README.md|SESSION.md) ;;
+              # .agents/* and AGENTS.md are the Codex-side mirrors of .claude/** and CLAUDE.md
+              # (tracked by #1578). Read by no part of the clone-and-score pipeline, exactly like the
+              # Claude-side originals two entries along. #1584: they were missing from this list, so a
+              # PR touching only them fell through to *) and paid a full 22m12s score (run
+              # 30584076405) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
+              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
+              AGENTS.md|CLAUDE.md|README.md|SESSION.md) ;;
               *) relevant=true; manifest_only=false ;;
             esac
           done <<< "$files"
