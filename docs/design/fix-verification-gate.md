@@ -70,10 +70,13 @@ tracker write-back.
   `unverifiable` with the specific reason, never a false clean. #1012's original comment recorded
   the registry-pack gap as a network fetch it deliberately declined; #1368 found that reason wider
   than what was tried — the fetch resolves in 1-2s and is a determinism preference, not a capability
-  limit — and re-measured its cost: MEASURED 2026-07-30 against the committed dry-run artifact, 54
-  of 390 rule-id-shaped findings (13.8%) are registry-pack rather than harvey-*, so this closes
-  resolvability for that share of a real deliverable's rule findings rather than parking them
-  `unverifiable` permanently. Findings from live tiers (M1 live, M2, M7 advisors, M10 live), M3/M4/M8
+  limit — and re-measured its cost: MEASURED 2026-07-30 against the committed dry-run artifact,
+  counted with the production predicate (`src/fix/detector-rerun.ts`'s `REGISTRY_RULE_SHAPE` plus
+  `harveyRuleOf`, not a bare "taxonomy contains a dot" check — an earlier pass with that looser
+  predicate over-counted at 54/390, 13.8%), **48 of 384 rule-id-shaped findings (12.5%)** are
+  registry-pack rather than harvey-*, so this closes resolvability for that share of a real
+  deliverable's rule findings rather than parking them `unverifiable` permanently. Findings from
+  live tiers (M1 live, M2, M7 advisors, M10 live), M3/M4/M8
   external tools, and LLM passes still report `unverifiable` with that reason — disclosed, their
   tickets stay open, and a full re-audit of that tier remains the verification path.
 - Packaging decision made (#1013), and the gate now enforces it (#1357): one re-audit/rescan is
