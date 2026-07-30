@@ -12,6 +12,7 @@ import {
   partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
   POSTMESSAGE_WILDCARD_TAXONOMY,
+  runRegistryPacksOnFile,
   runSemgrep,
   semgrepErrorFinding,
   semgrepScopeFinding,
@@ -313,6 +314,22 @@ describe("runSemgrep degrades on a missing binary (#950)", () => {
     const { result, failure } = runSemgrep("/some/target");
     expect(failure).toBe("semgrep not found on PATH");
     expect(result).toEqual({});
+  });
+});
+
+// #1368: the fix-verification gate's registry-pack replay (src/fix/detector-rerun.ts) must degrade
+// to a disclosed notRun the same way runSemgrep does — never a false clean because the network fetch
+// the registry packs need failed. Same ENOENT-mocked "binary absent" fake this file already uses for
+// runSemgrep, since the failure branch inside runRegistryPacksOnFile is the identical catch(execFileSync
+// throws) => { failure } path regardless of WHETHER the throw came from a missing binary or an
+// unreachable registry — this proves that shared path degrades, not the network specifically (the
+// live success path, which needs a real network fetch, is proven in src/fix/detector-rerun.test.ts).
+describe("runRegistryPacksOnFile degrades on failure, never a false clean (#1368)", () => {
+  it("returns a failure reason and an empty rule-id set instead of throwing when semgrep is unavailable", () => {
+    const { result, ruleIds, failure } = runRegistryPacksOnFile("/some/target/file.js", "/some/target");
+    expect(failure).toBe("semgrep not found on PATH");
+    expect(result).toEqual({});
+    expect(ruleIds.size).toBe(0);
   });
 });
 
