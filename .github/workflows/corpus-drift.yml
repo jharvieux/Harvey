@@ -81,9 +81,35 @@ permissions:
   contents: read
 
 jobs:
-  drift:
-    name: clone pinned commits + score baselines
+  # #1586: the scoring work, split across runners. This job is NOT the required context — a matrix
+  # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
+  # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
+  #
+  # SHARD COUNT VARIES BY EVENT, and the reason is the clone cache's key contract, not taste.
+  # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
+  # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
+  # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
+  # poisoned it beyond repair by re-running. No shard holds all 14, so a sharded run can never save.
+  #   * pull_request / merge_group -> 3 shards. Wall clock is what matters here, and this path
+  #     already restores-without-saving today under #1498's narrowing, so nothing is lost.
+  #   * schedule / workflow_dispatch -> ONE shard holding all 14, which still saves the cache and
+  #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
+  #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
+  #
+  # Three, from the per-target cost measured in #1586 (runs 30584076405 and 30588890377, in
+  # agreement): carbon is 564-587s of a ~1290s total and is indivisible, so the longest shard is
+  # carbon's own and a 4th shard buys nothing. The split itself lives in src/scan/corpus-shards.ts,
+  # which asserts it is exhaustive and disjoint — a target silently dropped from the partition would
+  # stop being scored while every shard still exited 0.
+  shard:
+    name: corpus shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    strategy:
+      # A drifted baseline in one shard must not cancel the others: the scorecard is most useful when
+      # it shows everything that moved, not the first thing.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3]' || '[1]') }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -300,12 +326,36 @@ jobs:
             echo "Run $run_id has no corpus-drift-scorecard artifact (expired, or that run errored before uploading) — proceeding without it."
           fi
 
+      # #1586: under the #1498 narrowing the changed slugs ARE the change, and there are usually one
+      # or two of them — far fewer than the shard count. Sharding those would leave most shards with
+      # nothing, so shard 1 scores them all and the rest declare a no-op. Declaring matters: a shard
+      # that simply exited 0 having scored nothing is indistinguishable from one that ran clean, and
+      # the gate-liveness assert below would fail it — correctly, which is why the no-op is recorded
+      # rather than the assert being weakened.
+      - name: Declare the no-op (narrowed run — shard 1 covers the touched slugs)
+        if: steps.filter.outputs.relevant == 'true' && steps.targets.outputs.scope != 'all' && matrix.shard != 1
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: corpus-drift
+          status: declared-no-op
+          scope: "#1498 narrowed this run to the manifest's touched slugs, which shard 1 scores in full. There are fewer touched slugs than shards, so this shard has no targets to score. Nothing was cloned and nothing was scored here; this shard is evidence about nothing, and shard 1 carries the verdict."
+
       - name: Score the corpus against its baselines
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
+          SHARD: ${{ matrix.shard }}
+          # Kept in step with the matrix above: 3 on a PR or queue entry, 1 elsewhere so the run
+          # holds every clone and the cache-save guard is satisfied.
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
         run: |
           set -euo pipefail
+          # A single-shard run writes the CANONICAL name: it is the one whose artifact #1564's
+          # prior-snapshot fetch consumes, and the aggregate job below reassembles the sharded case
+          # into that same name so the lineage is unbroken either way.
+          out="corpus-drift.json"
+          [ "$SHARD_COUNT" != "1" ] && out="corpus-drift-shard$SHARD.json"
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
             # An array, not a string: an empty baseline_flag expands to zero arguments
             # (still vanishing when no prior snapshot exists) and a populated one carries
@@ -314,7 +364,7 @@ jobs:
             # pass a single glued argument and break the flag.
             baseline_flag=()
             [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
-            pnpm corpus-drift --install --json corpus-drift.json "${baseline_flag[@]}"
+            pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}"
           else
             for t in ${{ steps.targets.outputs.slugs }}; do
               echo "::group::$t"
@@ -350,11 +400,15 @@ jobs:
       # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
       # table showing exactly what moved. Skipped on a declared no-op, where there is no scorecard
       # and `if-no-files-found: warn` would hang an annotation on an otherwise clean required check.
+      # #1586: artifact names must be unique within a run, so a sharded run uploads per-shard parts
+      # and the aggregate job below merges them back into `corpus-drift-scorecard`. A single-shard
+      # run (schedule/dispatch) writes that canonical name directly, so nothing about the
+      # prior-snapshot lineage changes on the path that feeds it.
       - name: Upload drift scorecard
         if: always() && steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: corpus-drift-scorecard
+          name: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
           path: corpus-drift*.json
           if-no-files-found: warn
 
@@ -389,3 +443,74 @@ jobs:
           token: ${{ github.token }}
           repo: ${{ github.repository }}
           body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."
+
+  # #1586: THE REQUIRED CONTEXT. Branch protection on `main` names this job, so it must keep this
+  # exact name and must report on every PR — a required context that stops reporting deadlocks every
+  # pull request (#1107), which is the failure mode this whole shape has to avoid. It carries no
+  # scoring of its own: it gates on the shard matrix and reassembles its parts.
+  #
+  # `if: always()` so it still reports when a shard failed — a required check that silently vanishes
+  # on failure is indistinguishable to branch protection from one that never ran.
+  drift:
+    name: clone pinned commits + score baselines
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # `needs.<matrix-job>.result` is the AGGREGATE over every leg: 'success' only when all of them
+      # succeeded. Anything else — a real baseline drift, a died-in-setup shard, a cancellation — is
+      # a red required check, exactly as the single job behaved before it was split.
+      - name: Every shard must have succeeded
+        run: |
+          set -euo pipefail
+          result='${{ needs.shard.result }}'
+          echo "shard matrix aggregate result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::corpus-drift: the shard matrix reported '$result'. A baseline drifted, or a shard errored before it could score. Open the individual 'corpus shard N' jobs for the per-module table, and see the corpus-drift-scorecard artifact."
+            exit 1
+          fi
+          echo "Every shard succeeded."
+
+      # Reassemble the per-shard parts into the ONE artifact name #1564's prior-snapshot fetch reads,
+      # so a PR run leaves the same lineage a single-shard run does. Only on the sharded path: a
+      # single-shard run already uploaded that name itself.
+      - name: Collect the shard scorecards
+        id: parts
+        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: corpus-drift-scorecard-part-*
+          merge-multiple: true
+          path: parts
+
+      # The shards are disjoint by construction (src/scan/corpus-shards.ts asserts the partition is
+      # exhaustive and non-overlapping), so `rows` concatenates and the `findings` maps merge with no
+      # key collisions. A short-circuited run uploads no parts at all, which is not a failure — there
+      # is simply nothing to merge, and the declared no-op is the record.
+      - name: Merge the shard scorecards into corpus-drift.json
+        id: merge
+        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          parts=(parts/corpus-drift-shard*.json)
+          if [ ${#parts[@]} -eq 0 ]; then
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            echo "No shard scorecards to merge — this run short-circuited or scored nothing. Nothing to reassemble."
+            exit 0
+          fi
+          echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
+          jq -s '{rows: (map(.rows) | add), findings: (map(.findings) | add)}' "${parts[@]}" > corpus-drift.json
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+          echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
+
+      - name: Upload the merged drift scorecard
+        if: steps.merge.outputs.merged == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-drift-scorecard
+          path: corpus-drift.json
+          if-no-files-found: warn
