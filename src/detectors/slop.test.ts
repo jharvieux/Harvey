@@ -54,7 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
-  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 1, severity: "Low", confidence: "Review" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
@@ -122,9 +122,22 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("single-use-helper exempts an exported single-caller but still catches a non-exported one, and stays silent on a two-site helper", () => {
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
-    expect(pos).toHaveLength(1);
-    expect(pos[0]?.title).toContain("computeDiscount");
+    expect(pos.map((f) => f.title)).toEqual([expect.stringContaining("computeDiscount"), expect.stringContaining("loadRate")]);
     expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toHaveLength(0);
+  });
+
+  // #370 criterion 3, the FP class briefs/quality-extras.txt names and #325 fixtures for M6.
+  // MEASURED 2026-07-28: before this, M5 and M6 diverged on it — M6-N-SEAM (reconcile.ts) is spared
+  // by M5 only because it happens to be exported; dropping that one keyword made M5 flag the very
+  // shape M6's rubric protects. The negative fixture now carries the non-exported seam, so the
+  // exemption is a fixture that can fail rather than a claim in a comment.
+  it("spares a pure single-use helper whose sole caller does the I/O — the seam class M6 spares too (#370/#325)", () => {
+    const negatives = byTaxonomy("single-use-helper/negative", "M5 — Single-use helper");
+    expect(negatives).toEqual([]);
+    // ...and the exemption is not a blanket async pass: a helper doing the I/O ITSELF is still slop.
+    const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
+    expect(pos.some((f) => f.title.includes("loadRate"))).toBe(true);
+    expect(pos.find((f) => f.title.includes("loadRate"))?.evidence).toContain("exempts a pure helper whose one caller does I/O");
   });
 });
 
