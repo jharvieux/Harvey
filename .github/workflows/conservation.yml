@@ -43,12 +43,13 @@
 #   `relevant` — the GATE (orchestrator + ledger + negative controls, ~245s). Change-based: it
 #                asks whether THIS diff could have altered a planted finding's route to the
 #                deliverable. Correct to gate on the change set.
-#   `drift`    — the seven CAPTURED-FIXTURE checks (~45s). TIME-based, not change-based: each
-#                re-runs a pinned external tool and asserts the FRESH output still satisfies the
-#                committed contract, so what they detect is an UPSTREAM release changing a tool's
-#                output schema (the #1063 invariant). Nothing in a diff that touches no fixture,
-#                no contract and no drift CLI can make them say anything about that PR — measured
-#                2026-07-27: 10 of the last 50 commits ran all seven with no possible relevance.
+#   `drift`    — the nine CAPTURED-FIXTURE checks (#1266 added semgrep + gitleaks to the prior
+#                seven). TIME-based, not change-based: each re-runs a pinned external tool and
+#                asserts the FRESH output still satisfies the committed contract, so what they
+#                detect is an UPSTREAM release changing a tool's output schema (the #1063
+#                invariant). Nothing in a diff that touches no fixture, no contract and no drift
+#                CLI can make them say anything about that PR — measured 2026-07-27 (pre-#1266,
+#                seven checks): 10 of the last 50 commits ran all of them with no possible relevance.
 #                They now run on the daily schedule (which is what upstream drift is a function of)
 #                and on PRs only when the fixtures or their machinery actually move.
 # This also takes #1206's UNRESOLVED flake off the merge path. Its one real failure was in a drift
@@ -119,7 +120,7 @@ jobs:
         name: Does this change set touch the conservation pipeline or its fixtures?
         run: |
           # #1498: a merge-queue entry is NOT a schedule. It runs the GATE (relevant) but must NOT
-          # run the seven captured-fixture drift checks. Those re-run PINNED EXTERNAL TOOLS and
+          # run the nine captured-fixture drift checks. Those re-run PINNED EXTERNAL TOOLS and
           # detect an upstream release moving a tool's output schema — so gating the queue on them
           # would make merges fail for reasons that have nothing to do with the batch being merged,
           # and would put an unrelated third party on the critical path to every merge. They stay
@@ -131,7 +132,7 @@ jobs:
           fi
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             # BOTH flags. The scheduled run is the ONLY thing that executes the drift checks on a
-            # regular cadence now, so forgetting `drift` here would silently retire all seven —
+            # regular cadence now, so forgetting `drift` here would silently retire all nine —
             # a guard that still exists, still passes, and can no longer fire.
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "drift=true" >> "$GITHUB_OUTPUT"
@@ -169,7 +170,7 @@ jobs:
             echo "No change to the conservation pipeline, its probes, its fixtures or this workflow — a planted finding's route to the deliverable cannot have changed from this PR. Nothing to assert. The daily scheduled run covers the tree regardless."
           fi
           if [ "$relevant" = "true" ] && [ "$drift" = "false" ]; then
-            echo "Running the gate but SKIPPING the 7 captured-fixture drift checks: they re-run pinned external tools and assert the FRESH output still satisfies the committed contract, so they detect an UPSTREAM release changing a tool's output schema. That is a function of time, not of this diff — no change to a fixture, a contract or the drift CLI can make them say anything about this PR. The daily scheduled run executes all of them."
+            echo "Running the gate but SKIPPING the 9 captured-fixture drift checks: they re-run pinned external tools and assert the FRESH output still satisfies the committed contract, so they detect an UPSTREAM release changing a tool's output schema. That is a function of time, not of this diff — no change to a fixture, a contract or the drift CLI can make them say anything about this PR. The daily scheduled run executes all of them."
           fi
 
       - uses: pnpm/action-setup@v4
@@ -227,10 +228,13 @@ jobs:
       # Captured-fixture schema-drift checks (#1130, mirroring the OSV step above): re-run each pinned
       # tool against a reproducible seed and assert the FRESH output still satisfies the contract the
       # committed fixture and its parser depend on (the #1063 invariant). jscpd/knip/lighthouse are
-      # node deps installed by pnpm; trufflehog is installed above; vitals is on PATH from the steps
-      # above; stryker installs the target's own dep tree via npx; lighthouse uses the runner's
-      # preinstalled Google Chrome via chrome-launcher. The two live-only fixtures (trufflehog
-      # VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
+      # node deps installed by pnpm; trufflehog/semgrep/gitleaks are installed by the mechanical-binaries
+      # action above; vitals is on PATH from the steps above; stryker installs the target's own dep
+      # tree via npx; lighthouse uses the runner's preinstalled Google Chrome via chrome-launcher.
+      # semgrep and gitleaks (#1266) closed the last gap in this family: FIXTURE-INVENTORY.md claimed
+      # "every CAPTURED fixture now has a drift check" while these two had none, because #1165
+      # recaptured them 24 minutes before #1170 landed this family. The two live-only fixtures
+      # (trufflehog VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
       - name: jscpd fixture schema drift check
         if: steps.filter.outputs.drift == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool jscpd
@@ -249,6 +253,12 @@ jobs:
       - name: lighthouse fixture schema drift check
         if: steps.filter.outputs.drift == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool lighthouse
+      - name: semgrep fixture schema drift check
+        if: steps.filter.outputs.drift == 'true'
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool semgrep
+      - name: gitleaks fixture schema drift check
+        if: steps.filter.outputs.drift == 'true'
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool gitleaks
 
       - name: Conservation gate (must PASS)
         if: steps.filter.outputs.relevant == 'true'

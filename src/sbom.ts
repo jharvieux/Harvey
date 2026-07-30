@@ -47,6 +47,13 @@ interface SbomComponent {
   // consumer verify the artifact they have is the one this BOM describes.
   license?: string;
   integrity?: string;
+  // #1351: npm's package-lock.json v2/v3 records this per RESOLVED package, transitive ones
+  // included — carried through so checkDependencyInstallScripts can flag the tree, not just this
+  // project's own manifests. pnpm-lock.yaml and yarn.lock do not carry an equivalent per-package
+  // flag Harvey can parse (MEASURED 2026-07-30: this repo's own pnpm-lock.yaml has zero
+  // `hasInstallScript`/`requiresBuild` occurrences despite esbuild, which ships a real postinstall,
+  // resolving twice), so it stays undefined for those formats.
+  hasInstallScript?: boolean;
 }
 
 // #1079: `unmatched` is the whole point of this shape. Completeness used to be derived from
@@ -75,6 +82,7 @@ export function parsePackageLock(text: string): ParsedLock {
     license?: string;
     integrity?: string;
     link?: boolean;
+    hasInstallScript?: boolean;
     dependencies?: Record<string, unknown>;
   }
   const lock = JSON.parse(text) as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
@@ -87,6 +95,7 @@ export function parsePackageLock(text: string): ParsedLock {
       ...(meta.dev ? { dev: true } : {}),
       ...(meta.license ? { license: meta.license } : {}),
       ...(meta.integrity ? { integrity: meta.integrity } : {}),
+      ...(meta.hasInstallScript ? { hasInstallScript: true } : {}),
     });
   };
 
@@ -269,6 +278,9 @@ export interface LicenseCandidate {
   // peerDependencies) rather than reached only through the resolved tree. Ordering, not
   // filtering: the registry-lookup budget is spent on declared packages first.
   direct: boolean;
+  // #1351 — carried from SbomComponent so checkDependencyInstallScripts can read the whole
+  // resolved tree (npm only; see SbomComponent's comment on the same field).
+  hasInstallScript?: boolean;
 }
 
 export interface LicenseScope {
@@ -315,6 +327,7 @@ export function licenseScope(dir: string): LicenseScope {
       name: c.name,
       ...(c.version ? { version: c.version } : {}),
       ...(c.license ? { license: c.license } : {}),
+      ...(c.hasInstallScript ? { hasInstallScript: true } : {}),
       direct: declared.has(c.name),
     });
   }

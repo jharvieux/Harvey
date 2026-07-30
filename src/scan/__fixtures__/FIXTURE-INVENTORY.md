@@ -58,9 +58,9 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 
 | # | Tool / pinned version | Location | Status | Live backstop |
 |---|----------------------|----------|--------|---------------|
-| 7 | semgrep | `src/scan/semgrep.test.ts` — `SemgrepOutput` literals fed to `parseSemgrepFindings` | **HAND-WRITTEN** | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`. |
+| 7 | semgrep 1.164.0 | `src/scan/semgrep.test.ts` — `SemgrepOutput` literals fed to `parseSemgrepFindings` | **CAPTURED** (#1156, closes #1150 row 7) — `__fixtures__/semgrep/semgrep-1.164.0-corpus.json` + `PROVENANCE.md` + `build-corpus.mjs`, real output over a purpose-built per-rule corpus; two invented shapes corrected (see below). | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`, AND (#1266) a dedicated schema-drift check (`fixture-drift.ts --tool semgrep`) re-runs `build-corpus.mjs` and asserts the fresh output still satisfies the parser's contract. |
 | 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |
-| 9 | gitleaks | `src/scan/secrets.test.ts` + `src/scan/calibration.test.ts` — `GitleaksResult[]` fed to `parseGitleaksFindings` | **HAND-WRITTEN** (calibration corpora self-describe as "recorded gitleaks output mirroring the live `pnpm validate:calibration` run") | YES — real `gitleaks` runs in `validate-calibration` / dry-run. |
+| 9 | gitleaks 8.30.1 | `src/scan/secrets.test.ts` + `src/scan/calibration.test.ts` — `GitleaksResult[]` fed to `parseGitleaksFindings` | **CAPTURED** (#1156, closes #1150 row 9) — `__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json` + `PROVENANCE.md` + `build-corpus.mjs`, real output over a planted-secret corpus under Harvey's custom ruleset; the #1078 allowlist block stays defanged/synthetic by decision (see below). Calibration corpora (`calibration.test.ts`) remain separately self-describing, not this capture. | YES — real `gitleaks` runs in `validate-calibration` / dry-run, AND (#1266) a dedicated schema-drift check (`fixture-drift.ts --tool gitleaks`) re-runs `build-corpus.mjs` and asserts the fresh output still satisfies the parser's contract, including the #210 demo-key co-location. |
 | 10 | TruffleHog 3.96.0 (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **CAPTURED** (#1150) | PARTIAL — as row 8. RE-CAPTURED: `src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json` + `PROVENANCE.md` — the real one-record output of `trufflehog git --no-verification --results=unverified --json` against a `buildGitHistoryFixture`-shaped repo. The benign file's negative control is by necessity synthetic (a real run emits nothing for it); the "false positive" branch's second record stays hand-built and is labelled so. |
 | 11 | jscpd 4.2.5 | `src/quality-scan.test.ts` — `JscpdReport` literal fed to `jscpdToFindings` | **CAPTURED** (#1150) | ON-DEMAND only — real jscpd runs via `check:duplication` / an M4 audit, neither in `pnpm verify`/CI. RE-CAPTURED: `src/scan/__fixtures__/jscpd/jscpd-4.2.5-report.json` + `PROVENANCE.md` — a real run against a purpose-built clone corpus engineered for exactly four clones (58L Medium / 17L Low same-file / 10L Info / 8L sub-threshold); every downstream assertion updated to the tool's real line/token counts. Version was MEASURED 4.2.5 (cell said 4.0.5). |
 | 12 | knip 5.88.1 | `src/quality-scan.test.ts` — `KnipReport` literals fed to `knipToFindings` | **CAPTURED** (#1150) | YES — `pnpm knip` runs inside `pnpm verify` (against Harvey's own repo, not the fixture). RE-CAPTURED: `src/scan/__fixtures__/knip/knip-5.88.1-report.json` + `PROVENANCE.md` — real `knip --reporter json` output against a mini TS project (one dead file + one file with an unused value export and an unused type). Version was MEASURED 5.88.1 (cell said 5.61.0). The clean-file empty-record skip is now an explicitly-labelled synthetic control (real knip omits fully-used files). |
@@ -74,11 +74,16 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
   vitals 0.2.0 via the `seed.py` corpus-reconstruction — see row 6). No standalone fixture file in
   section A remains HAND-WRITTEN. The remaining invariant-3 debt is entirely inline literals (§B) plus
   the live-only backstops noted below.
-- The inline-literal fixtures for semgrep/gitleaks/knip DO have a live real-binary backstop (a schema
-  drift would fail a gate elsewhere), which lowers — but does not erase — their risk: the literal
-  itself can still encode a field the tool never emits, it just can't leave the tool *entirely* dead.
+- semgrep (row 7) and gitleaks (row 9) are ALSO no longer inline literals at risk: both were
+  RE-CAPTURED in #1156 (real tool output, same as knip/jscpd/lighthouse/vitals/Stryker) and both
+  gained their own drift check in #1266, closing the gap this inventory's own line 112 wrongly
+  claimed was already closed. knip/semgrep/gitleaks additionally have a live real-binary backstop
+  elsewhere (`validate-calibration` / dry-run / `pnpm verify`) — belt-and-suspenders, not their only
+  tie to reality.
 - TruffleHog's verified-secret path, jscpd, Stryker and the PostgREST class have **no automated live
-  backstop**; their only tie to reality is a comment or a manual/live-stack run.
+  backstop OUTSIDE their own drift check**; jscpd/Stryker's only tie to reality besides the drift
+  check is an on-demand/manual run, and TruffleHog-verified/PostgREST's is a comment or the live M2
+  stack (their captures don't exist at all — reason-blocked, see rows 8/14).
 
 ## Re-capture status (criterion 2) and the drift check (criterion 3)
 
@@ -100,35 +105,40 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 - **Criterion 3 — the drift check extended to every OTHER captured tool** (`src/cli/fixture-drift.ts`
   + `src/scan/fixture-drift-contracts.ts`, negative controls in
   `src/scan/fixture-drift-contracts.test.ts`, all under `pnpm verify`). One parameterized CLI
-  (`--tool <jscpd|knip|trufflehog|vitals|stryker|lighthouse>`) re-runs each pinned tool against a
-  reproducible seed and asserts the FRESH output still satisfies the contract the committed fixture
-  and its parser depend on (the #1063 shape invariant), failing loud on a version or schema mismatch.
-  The seeds: jscpd → `targets/calibration/dup` (committed; not the fixture's own capture corpus, which
-  is not committed — disclosed); knip → a rebuilt throwaway mini-project matching row 12's provenance;
-  trufflehog → `buildGitHistoryFixture` (covers BOTH rows 8 and 10 — same tool/command/repo); vitals →
-  `seed.py` (row 6's committed re-capture seed); stryker → `targets/calibration/test-quality/` (npm ci
-  + `npx stryker run`); lighthouse → a locally-served static page via chrome-launcher (shape check, the
-  page's actual performance is irrelevant). Each has an npm-script alias (`<tool>-fixture-drift`) and a
-  `conservation.yml` step. **Every CAPTURED fixture now has a drift check.** The two live-only fixtures
-  — trufflehog **VERIFIED** (row 8's REASON block) and **PostgREST/GoTrue** (row 14) — have no capture
-  and therefore correctly get NO drift check; they are reason-blocked, not missing.
+  (`--tool <jscpd|knip|trufflehog|vitals|stryker|lighthouse|semgrep|gitleaks>`) re-runs each pinned
+  tool against a reproducible seed and asserts the FRESH output still satisfies the contract the
+  committed fixture and its parser depend on (the #1063 shape invariant), failing loud on a version
+  or schema mismatch. The seeds: jscpd → `targets/calibration/dup` (committed; not the fixture's own
+  capture corpus, which is not committed — disclosed); knip → a rebuilt throwaway mini-project
+  matching row 12's provenance; trufflehog → `buildGitHistoryFixture` (covers BOTH rows 8 and 10 —
+  same tool/command/repo); vitals → `seed.py` (row 6's committed re-capture seed); stryker →
+  `targets/calibration/test-quality/` (npm ci + `npx stryker run`); lighthouse → a locally-served
+  static page via chrome-launcher (shape check, the page's actual performance is irrelevant); semgrep
+  and gitleaks (**#1266**) → each tool's own committed corpus builder
+  (`__fixtures__/{semgrep,gitleaks}/build-corpus.mjs`, the exact reproducible recipe each
+  PROVENANCE.md documents), re-run fresh. Each has an npm-script alias (`<tool>-fixture-drift`) and a
+  `conservation.yml` step.
+  **"Every CAPTURED fixture now has a drift check" was FALSE from #1170 until #1266**: PR #1165 added
+  the semgrep and gitleaks corpus fixtures 24 minutes before #1170 landed this drift-check family, and
+  neither was registered in `fixture-drift.ts`'s tool list — a gap this sentence asserted didn't
+  exist. **It is true now**: `checkSemgrepFixtureContract`/`checkGitleaksFixtureContract` close it,
+  proven live 2026-07-30 against installed semgrep 1.164.0 / gitleaks 8.30.1. The two live-only
+  fixtures — trufflehog **VERIFIED** (row 8's REASON block) and **PostgREST/GoTrue** (row 14) — have
+  no capture and therefore correctly get NO drift check; they are reason-blocked, not missing.
 - **Row 5 (`lighthouse-report.json`) drift check** re-runs Lighthouse 13.4.0; **Row 6
   (`vitals-report.json`) drift check** re-runs the `seed.py` corpus reconstruction — both landed here,
   so the row-6 "split to the #1130 remainder" note below is superseded.
 
 **Still open after the #1130 drift-check work above:**
 
-- **Inline-literal rows (7–14)** — restructuring each tool's unit tests to consume committed
-  artifacts; per-tool, and some (TruffleHog verified path, PostgREST) need a live provider / the M2
-  two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.
+- **Inline-literal rows (8, 10, 14)** — TruffleHog verified path and PostgREST need a live provider /
+  the M2 two-tenant stack, so those stay a `REASON:` block where an offline capture is impossible.
   - **Landed in #1150:** rows 10 (trufflehog git-history), 11 (jscpd 4.2.5), 12 (knip 5.88.1), 13
     (Stryker 9.6.1 — the `m8Report`/`vacuousReport` pair). See their table rows above.
-  - **Still open — split from #1150 for PR size (both have a live real-binary backstop, so they are
-    the lower-risk rows):** row 7 (**semgrep**, MEASURED 1.164.0 — needs per-rule target
-    reconstruction across the many `harvey-*` rule scenarios, not one drop-in capture) and row 9
-    (**gitleaks**, MEASURED 8.30.1 — needs a planted-secret corpus with exact file/line placements
-    triggering Harvey's custom `gitleaks-supabase.toml` rules, including the internal correlation
-    markers, across ~15 `parseGitleaksFindings` scenarios plus the `calibration.test.ts` corpora).
+  - **Rows 7 (semgrep) and 9 (gitleaks) are CLOSED, not open** — this bullet used to say otherwise,
+    which is the exact contradiction #1266 was filed to fix: rows 7/9 were RE-CAPTURED in #1156 (see
+    "Landed (this chunk)" below) and their drift check landed in #1266 (criterion 3, above). Nothing
+    remains open for either row.
 - The two #1109 ledger carryovers (producerless `suppressed`/`capped`/`not-applicable` columns; a
   second ledger across `applyBaseline` #457).
 

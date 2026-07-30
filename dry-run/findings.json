@@ -12972,6 +12972,24 @@
     "precisionTier": "review"
   },
   {
+    "id": "SUP-INSTALL-SCRIPT-DEP",
+    "title": "2 resolved dependencies declare an install-time lifecycle script",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Supply chain",
+    "taxonomy": "Install lifecycle script (dependency)",
+    "location": "package-lock.json (resolved tree)",
+    "status": "Open",
+    "evidence": "fsevents@1.2.13, fsevents@2.3.3",
+    "impact": "Install-time scripts run on every `npm install` before any code review — the standard execution foothold for supply-chain worms (Shai-Hulud). This reads the RESOLVED tree, so a transitive dependency's own postinstall is included, not just this project's. Confirm each is expected.",
+    "fix": "Audit each listed package's install script; install with --ignore-scripts in CI and allowlist only the packages whose build genuinely needs one.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "location": "package.json",
     "id": "SUP-SLOPSQUAT-00",
     "title": "Hallucinated-dependency (slopsquat) existence check did not run for 11 dependencies",
@@ -13044,9 +13062,9 @@
   {
     "location": "(repo-wide)",
     "id": "SUP-SCOPE-00",
-    "title": "Supply-chain checks: 3 read the whole resolved dependency tree, 4 are limited to declared manifests",
+    "title": "Supply-chain checks: 4 read the whole resolved dependency tree, 3 are limited to declared manifests",
     "taxonomy": "Coverage — supply-chain check scope",
-    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, which reads the `scripts` block of the manifests above and so sees only lifecycle scripts THIS project declares. A transitive dependency's own install script is not covered, and that is a gap rather than a boundary: npm's lockfile records `hasInstallScript` for every resolved package, so the data is present and unread (#1351); DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
+    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance); SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
     "impact": "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     "fix": "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
     "severity": "Info",
@@ -13701,6 +13719,30 @@
     ],
     "owasp": [
       "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SSRF-wrapper-app-api-dl-ssrf-route-ts-636",
+    "title": "Request-controlled URL reaches `downloadRemote()`, a cross-file fetch wrapper",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Security",
+    "taxonomy": "M1 — SSRF via an uncurated cross-file fetch wrapper",
+    "location": "app/api/dl-ssrf/route.ts:10",
+    "status": "Open",
+    "evidence": "`downloadRemote` is imported from lib/dl-fetch.ts, where its only use of its parameter `target` is passing it straight to a fetch-family call — a thin pass-through with no host check. Here it is called with `new URL(req.url).searchParams.get(\"url\") || \"\"`, a request-derived value.",
+    "impact": "SSRF: the server can be made to fetch an attacker-chosen URL, reaching internal services or cloud metadata endpoints depending on the deploy network.",
+    "fix": "Validate the host against an allowlist and block internal/link-local ranges before the value reaches the wrapper, or add that check inside the wrapper itself.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
     ]
   },
   {
