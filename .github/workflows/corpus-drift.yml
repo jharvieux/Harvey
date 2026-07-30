@@ -177,21 +177,24 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
-            baseline_flag=""
-            [ -f prior-drift/corpus-drift.json ] && baseline_flag="--baseline-findings prior-drift/corpus-drift.json"
-            # Unquoted on purpose: an empty $baseline_flag must vanish rather than pass as a
-            # literal argument, and a populated one is exactly two words (flag + path).
-            pnpm corpus-drift --install --json corpus-drift.json $baseline_flag
+            # An array, not a string: an empty baseline_flag expands to zero arguments
+            # (still vanishing when no prior snapshot exists) and a populated one carries
+            # its flag and path as separate words WITHOUT the unquoted-splitting shellcheck
+            # (SC2086) flags on a plain "$baseline_flag" — quoting that string would instead
+            # pass a single glued argument and break the flag.
+            baseline_flag=()
+            [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+            pnpm corpus-drift --install --json corpus-drift.json "${baseline_flag[@]}"
           else
             for t in ${{ steps.targets.outputs.slugs }}; do
               echo "::group::$t"
-              baseline_flag=""
+              baseline_flag=()
               if [ -f "prior-drift/corpus-drift-$t.json" ]; then
-                baseline_flag="--baseline-findings prior-drift/corpus-drift-$t.json"
+                baseline_flag=(--baseline-findings "prior-drift/corpus-drift-$t.json")
               elif [ -f prior-drift/corpus-drift.json ]; then
-                baseline_flag="--baseline-findings prior-drift/corpus-drift.json"
+                baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
               fi
-              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" $baseline_flag
+              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" "${baseline_flag[@]}"
               echo "::endgroup::"
             done
           fi
