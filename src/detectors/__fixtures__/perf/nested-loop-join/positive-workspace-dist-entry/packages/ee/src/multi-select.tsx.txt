@@ -1,0 +1,9 @@
+interface Option {
+  id: string;
+  label: string;
+}
+
+// Same genuine nested-loop join as the sibling fixture — only the manifest differs.
+export function renderSelected(value: { id: string }[], options: Option[]) {
+  return value.map((v) => options.find((o) => o.id === v.id));
+}

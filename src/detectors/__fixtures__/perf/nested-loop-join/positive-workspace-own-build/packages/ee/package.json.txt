@@ -1,0 +1,5 @@
+{
+  "name": "@acme/ee",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "dev": "tsup src/index.ts --format esm,cjs --watch --dts --external react" }
+}

@@ -504,3 +504,80 @@ describe("field FP families (#1475–#1480)", () => {
     expect(unknown[0]?.evidence).toContain("was not established");
   });
 });
+
+// The dev-tooling suppression's two BOUNDS. The corpus rows in m7-code.entries.ts pin one instance
+// of each; these sweep the shapes a fixture dir leaves unreachable — every tooling-shaped segment,
+// and the manifest permutations that decide whether a file is a package's own declared entry.
+describe("dev-tooling suppression bounds (#1526/#1528)", () => {
+  const N1 = "M7 — Await in loop (N+1)";
+  const JOIN = "M7 — Nested-loop join";
+
+  const routeBody = `import { supabase } from "../../../../lib/db";
+export async function POST(req: Request) {
+  const { ids } = (await req.json()) as { ids: string[] };
+  const out = [];
+  for (const id of ids) {
+    const { data } = await supabase.from("t").select("id").eq("id", id).limit(1);
+    out.push(data);
+  }
+  return Response.json(out);
+}
+`;
+
+  it("#1528: a request route under EVERY tooling-shaped segment still fires", () => {
+    // MEASURED 2026-07-30 before the fix: only `enrich` fired; every other segment was silent,
+    // and `migrations`/`scripts` are entirely ordinary route names.
+    for (const seg of ["enrich", "seeds", "migrations", "bin", "e2e", "ci", "scripts", "cypress", "codemods", "__tests__"]) {
+      const hits = detectPerfCodeFindings([{ path: `app/api/${seg}/route.ts`, text: routeBody }]).filter((f) => f.taxonomy === N1);
+      expect(hits, seg).toHaveLength(1);
+      expect(hits[0]?.confidence, seg).toBe("Likely");
+    }
+  });
+
+  it("#1528: a script-declared tool no request entry point reaches stays suppressed", () => {
+    const files: SourceInput[] = [
+      { path: "app/api/orders/route.ts", text: routeBody },
+      { path: "package.json", text: JSON.stringify({ scripts: { backfill: "tsx tools/backfill.ts" } }) },
+      { path: "tools/backfill.ts", text: routeBody.replace("export async function POST", "export async function backfill") },
+    ];
+    const hits = detectPerfCodeFindings(files).filter((f) => f.taxonomy === N1);
+    expect(hits).toHaveLength(1); // the route only — `tools/backfill.ts` is unreachable from it
+    expect(hits[0]?.location).toContain("app/api/orders/route.ts");
+  });
+
+  const joinBody = `export function pick(value: { id: string }[], options: { id: string }[]) {
+  return value.map((v) => options.find((o) => o.id === v.id));
+}
+`;
+
+  const pkgSources = (manifest: Record<string, unknown>): SourceInput[] => [
+    { path: "packages/ee/package.json", text: JSON.stringify(manifest) },
+    { path: "packages/ee/src/index.ts", text: `import { pick } from "./join";\nexport const api = { pick };\n` },
+    { path: "packages/ee/src/join.tsx", text: joinBody },
+  ];
+
+  it("#1526: the own-entry exclusion resolves an entry declared as BUILT output, not only a literal path", () => {
+    // A literal `main`/`exports` match clears carbon's `exports -> ./src/index.ts` and misses the
+    // far more common `./dist/index.js` + `tsup src/index.ts`, re-silencing the identical finding.
+    for (const manifest of [
+      { name: "@acme/ee", exports: { ".": "./src/index.ts" }, scripts: { dev: "tsup src/index.ts --watch" } },
+      { name: "@acme/ee", main: "./dist/index.js", exports: { ".": "./dist/index.js" }, scripts: { build: "tsup src/index.ts" } },
+      { name: "@acme/ee", module: "./build/index.mjs", scripts: { build: "tsup src/index.ts" } },
+    ]) {
+      const hits = detectPerfCodeFindings(pkgSources(manifest)).filter((f) => f.taxonomy === JOIN);
+      expect(hits, JSON.stringify(manifest)).toHaveLength(1);
+      expect(hits[0]?.location).toContain("packages/ee/src/join.tsx");
+    }
+  });
+
+  it("#1526: the exclusion does not reach the `bin` arm — a CLI whose bin IS its main stays suppressed", () => {
+    const cli: SourceInput[] = [
+      {
+        path: "packages/cli/package.json",
+        text: JSON.stringify({ name: "@acme/cli", main: "./cli.ts", bin: { acme: "./cli.ts" }, scripts: { build: "tsup cli.ts" } }),
+      },
+      { path: "packages/cli/cli.ts", text: joinBody },
+    ];
+    expect(detectPerfCodeFindings(cli).filter((f) => f.taxonomy === JOIN)).toHaveLength(0);
+  });
+});

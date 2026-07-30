@@ -334,32 +334,75 @@ const DEV_TOOLING_PATH =
 // boxyhq's `delete-team.js` sits at the repo root and is an interactive `readline` admin CLI wired
 // to `npm run delete-team`; its `prisma.seed` runs `ts-node ./prisma/seed.ts`. Both were graded
 // request-path N+1 (#1476). Production lifecycle scripts are excluded by name — `npm start` on a
-// custom `server.js` really is the request path — and any file a request entry point can reach is
-// removed by the caller regardless, so a script alias over live server code stays visible here.
+// custom `server.js` really is the request path.
 const PRODUCTION_SCRIPT = /^(start|serve|preview|prod|production)/;
 const SCRIPT_FILE_TOKEN = /(?:^|[\s'"=])(\.{0,2}\/?[\w.@/-]+\.[cm]?[jt]sx?)(?=$|[\s'"&|;])/g;
+
+// A package's own declared production entry, as extension-stripped BASES resolved against its own
+// dir. A workspace member's `build`/`dev` script names that exact file (`tsup src/index.ts --watch`)
+// — that is the package building itself, not a dev/ops tool, and treating it as a tooling ROOT
+// marks its whole import closure as tooling. carbon: `@carbon/ee`'s `dev` script silenced a real
+// nested-loop join in `packages/react/src/MultiSelect.tsx` once #1353 taught the graph to follow
+// workspace specifiers (#1526).
+//
+// Bases, not literal paths, and `src/index`/`src/main` are kept as fallbacks, because the common
+// manifest declares BUILT output the source tree does not contain: `main: "./dist/index.js"` with
+// `build: "tsup src/index.ts"` never matches literally. MEASURED 2026-07-30 (probe in PR): a
+// literal match re-silences the identical finding on that manifest.
+function packageEntryBases(pkg: { main?: unknown; module?: unknown; exports?: unknown }, dir: string): Set<string> {
+  const declared: string[] = [];
+  const add = (v: unknown): void => {
+    if (typeof v === "string") declared.push(v);
+    else if (v && typeof v === "object") for (const inner of Object.values(v)) add(inner);
+  };
+  add(pkg.main);
+  add(pkg.module);
+  add(pkg.exports);
+  const bases = [...declared.map((e) => e.replace(/^\.\//, "").replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "src/main"];
+  return new Set(bases.map((b) => dir + b));
+}
 
 function scriptReferencedFiles(files: SourceInput[]): Set<string> {
   const out = new Set<string>();
   for (const f of files) {
     if (!/(^|\/)package\.json$/.test(f.path)) continue;
     const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
-    let pkg: { scripts?: Record<string, string>; bin?: string | Record<string, string>; prisma?: { seed?: string } };
+    let pkg: {
+      scripts?: Record<string, string>;
+      bin?: string | Record<string, string>;
+      prisma?: { seed?: string };
+      main?: unknown;
+      module?: unknown;
+      exports?: unknown;
+    };
     try {
       pkg = JSON.parse(f.text) as typeof pkg;
     } catch {
       continue; // an unparseable manifest answers nothing; the path arm above still applies
     }
-    const commands: string[] = [];
-    for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) if (!PRODUCTION_SCRIPT.test(name)) commands.push(cmd);
-    if (typeof pkg.bin === "string") commands.push(pkg.bin);
-    else for (const v of Object.values(pkg.bin ?? {})) commands.push(v);
-    if (pkg.prisma?.seed) commands.push(pkg.prisma.seed);
-    for (const cmd of commands) {
-      for (const m of cmd.matchAll(SCRIPT_FILE_TOKEN)) {
-        const rel = m[1]!.replace(/^\.\//, "");
-        if (rel.startsWith("../") || rel.includes("node_modules")) continue;
-        out.add(dir + rel);
+    const entryBases = packageEntryBases(pkg, dir);
+    // Split, because the own-entry exclusion applies to `scripts` ONLY. A `bin` entry declares the
+    // package IS a CLI, and boxyhq's admin CLI names its own `main` — applying the exclusion there
+    // empties the tooling set and re-opens the #1476 false positive (MEASURED 2026-07-30 on the
+    // `bin === main` probe). Same for `prisma.seed`, which is a seeder by definition.
+    const scriptCommands: string[] = [];
+    const toolCommands: string[] = [];
+    for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) if (!PRODUCTION_SCRIPT.test(name)) scriptCommands.push(cmd);
+    if (typeof pkg.bin === "string") toolCommands.push(pkg.bin);
+    else for (const v of Object.values(pkg.bin ?? {})) toolCommands.push(v);
+    if (pkg.prisma?.seed) toolCommands.push(pkg.prisma.seed);
+    for (const [commands, skipOwnEntry] of [
+      [scriptCommands, true],
+      [toolCommands, false],
+    ] as const) {
+      for (const cmd of commands) {
+        for (const m of cmd.matchAll(SCRIPT_FILE_TOKEN)) {
+          const rel = m[1]!.replace(/^\.\//, "");
+          if (rel.startsWith("../") || rel.includes("node_modules")) continue;
+          const abs = dir + rel;
+          if (skipOwnEntry && entryBases.has(abs.replace(/\.[cm]?[jt]sx?$/, ""))) continue;
+          out.add(abs);
+        }
       }
     }
   }
@@ -367,9 +410,22 @@ function scriptReferencedFiles(files: SourceInput[]): Set<string> {
 }
 
 // Modules that are dev/ops tooling: the path arm, plus every module in the import closure of a
-// package.json-script entry point. Always returns a set (the path arm needs no roots), so callers
-// have no undefined case here — the reachability questions below are the ones that can be
-// unanswerable.
+// package.json-script entry point, MINUS everything a request entry point can reach. Always returns
+// a set (the path arm needs no roots), so callers have no undefined case here — the reachability
+// questions below are the ones that can be unanswerable.
+//
+// #1528: the subtraction is the load-bearing half and it did not exist. DEV_TOOLING_PATH matches
+// path SEGMENTS, so any genuine API route whose path merely contains one went silent at all four
+// `tooling.has(path)` call sites. MEASURED 2026-07-30: with the identical N+1 body,
+// `app/api/enrich/route.ts` fired Likely while `app/api/migrations/route.ts`,
+// `app/api/scripts/route.ts`, `app/api/seeds|bin|e2e|ci|cypress/route.ts` were all SILENT — two of
+// those are entirely ordinary route names. It is done HERE rather than at each call site so a fifth
+// consumer stays subtracted too; `scriptReferencedFiles`'s comment used to CLAIM
+// this and no caller performed it.
+//
+// Reachability is only subtracted when it can be ANSWERED: a tree with no request entry point at
+// all also has no route to have wrongly suppressed, so `undefined` keeps #1476's behaviour rather
+// than widening on an unavailable signal.
 export function devToolingModules(files: SourceInput[], sources: Map<string, ts.SourceFile>): Set<string> {
   const allPaths = new Set(sources.keys());
   const tooling = new Set<string>([...allPaths].filter((p) => DEV_TOOLING_PATH.test(p)));
@@ -378,6 +434,8 @@ export function devToolingModules(files: SourceInput[], sources: Map<string, ts.
     const graph = buildImportGraph(sources, allPaths, collectPathAliases(files));
     for (const p of importClosure(scriptRoots, graph)) tooling.add(p);
   }
+  const requestReached = requestReachableModules(files, sources);
+  if (requestReached !== undefined) for (const p of requestReached.keys()) tooling.delete(p);
   return tooling;
 }
 
@@ -982,7 +1040,7 @@ const REQUEST_PATH = /(^|\/)(app|pages)\//;
 function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim
+    if (tooling.has(path)) continue; // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim. #1528: request-reachable modules are already subtracted from `tooling`, so a route under a tooling-shaped segment still fires.
     const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
@@ -1124,7 +1182,7 @@ function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: Next
   const findings: Finding[] = [];
   const helpers = paginatingHelperNames(sources);
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476
+    if (tooling.has(path)) continue; // #1476/#1528 (request-reachable modules are subtracted in devToolingModules)
     const visit = (node: ts.Node) => {
       // Only inspect the outermost call of a chain so one query flags once.
       if (ts.isCallExpression(node) && !(node.parent && ts.isPropertyAccessExpression(node.parent))) {
@@ -1906,7 +1964,7 @@ function declaredWithin(scope: ts.Node, name: string): boolean {
 function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476
+    if (tooling.has(path)) continue; // #1476/#1528 (request-reachable modules are subtracted in devToolingModules)
     const hits: ts.CallExpression[] = [];
 
     const inspectLoop = (itemNames: Set<string>, declScope: ts.Node, body: ts.Node) => {

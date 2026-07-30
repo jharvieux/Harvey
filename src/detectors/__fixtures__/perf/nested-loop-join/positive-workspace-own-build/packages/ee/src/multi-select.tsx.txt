@@ -1,0 +1,9 @@
+interface Option {
+  id: string;
+  label: string;
+}
+
+// carbon's MultiSelect shape: a per-selected-item linear scan over the full option list.
+export function renderSelected(value: { id: string }[], options: Option[]) {
+  return value.map((v) => options.find((o) => o.id === v.id));
+}
