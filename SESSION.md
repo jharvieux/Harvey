@@ -2,7 +2,42 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-30 — **sweep RESUMED and in flight.** 9 issues closed, 3 filed, net −6 so far; PRs #1510/#1447/#1518 merged. The whole queue had been stalled by a CI cache outage, not by the work. Resume from `.git/issue-sweep-ledger.json` + this block. Newest block first._
+_Last updated: 2026-07-30 — **sweep COMPLETE.** 37 closed / 35 filed (6 worked in-sweep, 29 left open) → net −8. 30 PRs merged, 0 open. All 31 ledger batches terminal; `.git/issue-sweep-ledger.json` deleted. Newest block first._
+
+## 2026-07-30 (wrap-up) — the ledger went stale mid-sweep, and `main` quietly gained a 4th required check
+
+**The ledger stopped being written, and reality moved on without it.** On resume it read `phase: executing`
+with **9 non-terminal batches**, five of them `pr-open`/`ci-wait`. Every one of those PRs had already merged;
+`gh pr list --state open` returned `[]`. Reconciled all 31 batches against the forge, not the transcript.
+Standing lesson, already in the skill and re-earned here: `blocked_on`/`next_action` were empty on every
+non-terminal row, which is what made a stalled row indistinguishable from a working one.
+
+**`main` now requires FOUR contexts, not three.** `clone pinned commits + score baselines` (corpus-drift)
+was registered as required on 2026-07-30 — not recorded in the ledger, and it falsified two `CLAUDE.md`
+sentences at once (the "ALL THREE" merge rule, and the "not required" doctrine bullet that used
+corpus-drift as its own example). Both corrected this pass. **Operator: confirm the registration was
+deliberate.** Practical effect: the job runs 22m12s, so a PR is not mergeable when the other three go green.
+
+**Six merged PRs had closed issues on executor-written dispositions with no independent verifier**
+(#1558, #1539, #1553, #1563, #1566, #1510). Three verifiers re-checked all seven issues at wrap-up:
+**all `met`, zero reopens** — but they found four things the PR bodies got wrong, and filed three issues.
+
+### Verification residuals filed at wrap-up
+
+- **#1580** — `corpus-drift`: a standing drift explains itself ONCE, then is silent on every run after
+  (count delta measured against the committed baseline, row diff against the previous run). Also: PR
+  #1566's marquee live proof does not reproduce.
+- **#1581** — acceptance parity still breaks when an issue is closed by TWO linked PRs; #1562's own
+  invariant test varies only one linked PR, so it cannot see it. Population 2 of the last 100 closed.
+- **#1582** — the recorded reason for omitting `pii-classify` from free-recall scoring is FALSE as
+  stated (it does emit `Finding[]`). The conclusion survives on different grounds. `docs/` half is
+  supervised and needs an operator go-ahead.
+
+### Operator's untracked-files request
+
+`AGENTS.md` + `.agents/skills/run-audit/SKILL.md` committed as-is via PR #1578. Both are **stale Codex
+mirrors** of `CLAUDE.md` / the run-audit skill; committing did not create that staleness, so they landed
+unedited and the sync is **#1579**.
 
 ## 2026-07-30 (resumed) — the stall was CI, and ten issues were held open on purpose
 
