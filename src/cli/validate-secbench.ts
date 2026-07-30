@@ -174,7 +174,10 @@ const libTree = arg("--library-source-tree");
 if (libTree && existsSync(libTree)) {
   const libRules = join(dirname(fileURLToPath(import.meta.url)), "..", "scan", "rules", "semgrep", "library-taint.yml");
   const scannedKeys = new Set<string>();
-  const libHitKeys = new Set<string>();
+  // Entry key → the harvey-lib-* rule ids that fired, not a bare "something fired": scoring needs
+  // to know WHICH rule, so a command-injection rule firing inside a ReDoS package is not counted as
+  // ReDoS recall (#1275 — see LIB_RULE_FOR_CLASS for the 20 real entries this separates).
+  const libHits = new Map<string, string[]>();
   for (const e of entries) {
     if (!e.pkg) continue; // multi-dep entries have no single target-package source to scope to
     const pkgDir = join(libTree, e.cls, e.slug, "node_modules", ...e.pkg.split("/"));
@@ -188,19 +191,30 @@ if (libTree && existsSync(libTree)) {
       if (typeof se.stdout === "string" && se.stdout.length > 0) out = se.stdout;
       else throw err;
     }
-    if (((JSON.parse(out) as SemgrepJson).results ?? []).length > 0) libHitKeys.add(e.key);
+    const rules = [...new Set(((JSON.parse(out) as SemgrepJson).results ?? []).map((r) => (r.check_id ?? "").split(".").pop() ?? "").filter(Boolean))];
+    if (rules.length > 0) libHits.set(e.key, rules);
   }
-  const lib = scoreLibrarySource(entries, scannedKeys, libHitKeys);
+  const lib = scoreLibrarySource(entries, scannedKeys, libHits);
   console.log(`\nLibrary-internal SOURCE pathway (#946) — harvey-lib-* parameter-sourced taint over each entry's INSTALLED target-package source:`);
-  console.log(pad("class", 20) + pad("scanned", 9) + "lib-source recall");
+  console.log(pad("class", 20) + pad("scanned", 9) + pad("RECALL (class-matched rule)", 33) + "any harvey-lib-* rule");
   for (const r of [...lib.perClass, lib.all]) {
     if (r.cls !== "ALL" && r.scanned === 0) continue;
     const label = r.cls === "ALL" ? "── ALL ──" : r.cls;
-    console.log(pad(label, 20) + pad(String(r.scanned), 9) + `${r.libFlagged}/${r.scanned} (${recallPct(r.libFlagged, r.scanned)})`);
+    // `n/a` rather than a number for a class no rule models — a 0 there would read as "we looked
+    // and found nothing", which is the inverse of "nothing was ever built to look".
+    const recall = r.classMatched === null ? "n/a — no rule models this class" : `${r.classMatched}/${r.scanned} (${recallPct(r.classMatched, r.scanned)})`;
+    console.log(pad(label, 20) + pad(String(r.scanned), 9) + pad(recall, 33) + `${r.libFlagged}/${r.scanned}${r.crossClass ? ` (${r.crossClass} cross-class)` : ""}`);
   }
+  // `all.semgrepHits`, not a literal 0 (#1275): this line said "request-sourced 0/600" while the
+  // table three lines above printed the MEASURED 1/600 from the same run — a hardcoded number
+  // contradicting the run that produced it, the #1305 stale-scope-string defect in miniature.
   console.log(
-    `  This is the LIBRARY-INTERNAL source axis (#946), REPORTED DISTINCTLY from the SCA number and the\n` +
-      `  request-sourced 0/${entries.length} above. Recall is bounded by OSS Semgrep's intra-procedural taint (#873):\n` +
+    `  RECALL is the class-matched column. The right-hand column is every harvey-lib-* hit, including\n` +
+      `  ${lib.all.crossClass} cross-class ones: a real vulnerability found in the entry's package that is NOT the bug\n` +
+      `  SecBench curated for it. Counting those as recall is the "unscoped match records a gap as COVERED"\n` +
+      `  trap, and on the full corpus it is worth 20 entries in two classes Harvey has no rule for.\n` +
+      `  This is the LIBRARY-INTERNAL source axis (#946), REPORTED DISTINCTLY from the SCA number and the\n` +
+      `  request-sourced ${all.semgrepHits}/${entries.length} above. Recall is bounded by OSS Semgrep's intra-procedural taint (#873):\n` +
       `  a param reaching the sink only across a helper-function boundary is not followed.`,
   );
 } else if (libTree) {

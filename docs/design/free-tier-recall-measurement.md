@@ -1,8 +1,9 @@
 # Free (mechanical) tier — recall measurement
 
 **Issue:** jharvieux/Harvey#868 (the measurement half); §2a re-scored under #1185.
-**Date of this record:** 2026-07-26. **§2a re-measured 2026-07-30** — §§1, 3, 4 still carry their
-2026-07-26 dates and have NOT been re-run since; read every number here against the date beside it.
+**Date of this record:** 2026-07-26. **§2a re-measured 2026-07-30 (#1185) and §3 re-run 2026-07-30
+(#1275)** — §§1 and 4 still carry their 2026-07-26 dates and have NOT been re-run since; read every
+number here against the date beside it.
 
 This is the free-tier-only recall figure #868 asked for: the FREE (mechanical, source-only) tier's
 recall, reported as its own number and **never blended** with the paid semantic tier that carries
@@ -194,17 +195,22 @@ report ships source-only, so 4/8 is the free-tier figure for that target.
 
 ---
 
-## 3. External real-CVE SCA corpus — SecBench.js (`recorded — not re-run here`)
+## 3. External real-CVE SCA corpus — SecBench.js (RE-RUN 2026-07-30, #1275)
 
-`docs/design/secbench-recall-measurement.md`, dated **2026-07-24** (#879). Held-out corpus of ~600
-real npm CVEs. `recorded — not re-run here`: the gate (`validate-secbench.ts`) needs a SecBench
-checkout plus an out-of-process, network-bound `npm install --package-lock-only` + osv-scanner pass
-per entry — too heavy for this session.
+`docs/design/secbench-recall-measurement.md`. Held-out corpus of ~600 real npm CVEs. This section
+carried `recorded — not re-run here` and a 2026-07-24 date; #1275 re-ran the whole pipeline, which
+is now three commands (`secbench-tree` twice — default and `--mode source` — then
+`validate:secbench`) rather than the paragraph of prose the source tree used to be.
 
-- **Dependency-CVE (SCA) recall: 433/594 (72.9%)** any-advisory; 403/594 (67.8%) exact-CVE.
-- **Source-pattern (semgrep) recall: 0/600** — a measured zero, not an estimate. SecBench's bug
-  lives inside the vulnerable library with no HTTP request source, so Harvey's taint-mode source
-  rules have nothing to match. On this corpus the free tier's value is entirely the SCA engine.
+- **Dependency-CVE (SCA) recall: 433/594 (72.9%)** any-advisory; 403/594 (67.8%) exact-CVE —
+  reproduced identically on 2026-07-24, 2026-07-27 and 2026-07-30.
+- **Request-sourced (semgrep) recall: 1/600** (2026-07-27, reproduced 2026-07-30), superseding the
+  0/600 recorded 2026-07-24. Still a structural zero for TAINT: SecBench's bug lives inside the
+  vulnerable library with no HTTP request source, so Harvey's request-sourced taint rules have
+  nothing to match. The single hit is a non-taint pattern rule on the exploit file's own regex.
+- **Library-internal source recall: 152/583 (26.1%)** over the full corpus (2026-07-30) — 152/296
+  (51.4%) over the three classes a `harvey-lib-*` rule models, and `n/a` rather than 0 over the 287
+  entries in prototype-pollution and redos, which no rule models. Never blended with the SCA number.
 
 ---
 
@@ -239,7 +245,9 @@ clearing the board. The FREE mechanical tier lands the §2 range underneath it.*
   lower-confidence indicator is **4/9 to 11/12, 44/57 (77.2%)**. Still target-shape-dependent —
   report the range, the shape-dependence, and WHICH of the two columns you mean. The 2026-07-18
   "0/9 to 11/12" range was the any-tier column read as if it were the graded one.
-- **Real-CVE SCA (recorded 2026-07-24):** **72.9%** dependency-CVE recall; **0/600** source-pattern.
+- **Real-CVE SecBench.js (RE-RUN 2026-07-30, §3):** **72.9%** dependency-CVE (SCA) recall;
+  **1/600** request-sourced; **152/583 (26.1%)** library-internal source over the full corpus. Three
+  different tiers, never one number.
 - **Paid semantic tier (recorded):** carries the 8/8, 9/9, 12/12, 20/20 union headlines.
 
 The blended "100%" hides the mechanical number precisely because it is a **union across tiers** with
