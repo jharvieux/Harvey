@@ -56,9 +56,12 @@
 // `jsonReporter.fileName` (the JSON report) and `incrementalFile` are rewritten to absolute paths
 // under a temp dir, in a COPY of whichever config is about to run (never the target's own file).
 // Stryker honours an absolute value for all three — MEASURED, see withOffTreeScratch in
-// src/mutation-scan.ts for the two-run control/treatment and the exact commands. No copy of the
-// target is made: Stryker already copies the project into its sandbox on every run (Harvey never
-// sets `inPlace`), so this moves an existing copy rather than adding one.
+// src/mutation-scan.ts for the two-run control/treatment and the exact commands. Ordinarily no
+// copy of the target is made: Stryker already copies the project into its sandbox on every run
+// (Harvey never sets `inPlace`), so this moves an existing copy rather than adding one — EXCEPT the
+// #773 TS7 tsconfig-chain fix below, which does stage its own disposable copy (stageTs7TsconfigFix)
+// because getting a rewritten file into Stryker's sandbox means it has to already be on disk at the
+// path Stryker copies from, and #1285 forbids writing that into the target itself.
 //
 // The redirect only reaches what STRYKER writes. #819's line-coverage pass runs the target's OWN
 // test runner, whose caches no Stryker option can move (MEASURED: boxyhq's next/jest writes
@@ -90,6 +93,12 @@
 // config is about to run (see src/mutation-scan.ts's TS7_TSCONFIG_BYPASS_FILENAME comment); a
 // non-JSON target config that can't be safely patched, or a crash the proactive check missed,
 // degrades to a precise partial verdict naming the incompatibility instead of an opaque failure.
+// Bypassing the preprocessor also disables its REAL job (rewriting a tsconfig `extends`/`references`
+// chain that reaches outside the sandboxed dir — the standard monorepo shape) — MEASURED live
+// against a real TS7 target: the bypass alone stops the crash but the target's own test-runner
+// transform pipeline then fails with "Tsconfig not found". stageTs7TsconfigFix replicates that
+// rewrite (planTsconfigRewrites, in src/mutation-scan.ts) in a disposable copy of the target, and
+// Stryker runs against the copy instead of the target itself whenever there's something to rewrite.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -117,6 +126,7 @@ import {
   mutationNotRunModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  planTsconfigRewrites,
   reRootReportToApp,
   resolveJsonReporterPath,
   rootScopedMutateGlobs,
@@ -323,6 +333,27 @@ const readRel = (root: string, rel: string): { path: string; text: string } => (
 // pass): skip the same heavy/irrelevant directories walkRelPaths already skips. `existsSync` first
 // because statSync throws on a dangling symlink, which real repos commit (#944).
 const excludeHeavyDirs = (src: string): boolean => !(WALK_EXCLUDED_DIR.test(basename(src)) && isDirectorySafe(src));
+
+// #773: planTsconfigRewrites is pure (fixture-testable), but ACTING on its plan means physically
+// putting a rewritten tsconfig.json somewhere Stryker's own sandbox-copy step will read it from —
+// and #1285 forbids writing into `dir` itself, even transiently, even restored after. So (same
+// mechanism as #600/#819's other disposable copies) this stages a throwaway copy of `dir`, mirrors
+// node_modules in rather than recopying it, writes the rewritten tsconfig(s) INTO the copy only,
+// and hands back the copy's path for Stryker to run against instead of the real `dir`. Returns
+// undefined when there is nothing to rewrite (no tsconfig.json, or its extends/references chain
+// never leaves `dir`) — the ordinary in-place invocation is unaffected either way.
+function stageTs7TsconfigFix(dir: string, label: string): string | undefined {
+  if (!existsSync(join(dir, "tsconfig.json"))) return undefined;
+  const rewrites = planTsconfigRewrites(dir, "tsconfig.json", (p) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  if (rewrites.length === 0) return undefined;
+  const runDir = mkdtempSync(join(tmpdir(), `harvey-stryker-ts7-copy-${label}-`));
+  cpSync(dir, runDir, { recursive: true, filter: excludeHeavyDirs });
+  if (existsSync(join(dir, "node_modules"))) mirrorNodeModules(dir, runDir);
+  for (const r of rewrites) writeFileSync(join(runDir, relative(dir, r.path)), r.text);
+  process.on("exit", () => rmSync(runDir, { recursive: true, force: true }));
+  console.error(`#773: ${rewrites.length} tsconfig(s) under ${dir} reach outside it via extends/references — rewrote them to absolute paths in a disposable copy at ${runDir} (Stryker's own preprocessor would do this, but its TS7-incompatible compiler-API call is bypassed here) so the target's test-runner transform pipeline still resolves them post-sandbox`);
+  return runDir;
+}
 
 // #1285: the tree census the pristine invariant compares. Deliberately NOT walkRelPaths: that walk
 // excludes `reports` and `stryker-tmp` by name, which are exactly the two directories a Stryker run
@@ -582,7 +613,12 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // verification, not passed to Stryker) stays UNpatched — only the config Stryker actually runs
   // needs the bypass.
   const tsVersion = readInstalledTypeScriptVersion(rootSuite.root);
-  const rootCfgForStryker = isIncompatibleTypeScript7(tsVersion) ? withTs7TsconfigBypass(rootCfg) : rootCfg;
+  const ts7 = isIncompatibleTypeScript7(tsVersion);
+  const rootCfgForStryker = ts7 ? withTs7TsconfigBypass(rootCfg) : rootCfg;
+  // #773: a TS7 root whose tsconfig chain reaches outside rootSuite.root needs Harvey's own
+  // preprocessor replacement staged BEFORE Stryker runs — see stageTs7TsconfigFix. Falls back to
+  // rootSuite.root itself (the ordinary, unmodified path) when there's nothing to rewrite.
+  const runCwd = (ts7 && stageTs7TsconfigFix(rootSuite.root, "root-scoped")) || rootSuite.root;
 
   const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-root-scaffold-"));
   const rootCfgPath = join(scaffoldDir, "stryker.root.config.json");
@@ -590,7 +626,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   writeFileSync(rootCfgPath, JSON.stringify(rootCfgForStryker, null, 2) + "\n");
   writeFileSync(refCfgPath, JSON.stringify(appCfg, null, 2) + "\n");
   console.error(`#655: root-scoped mutation run — invoking the ${runner.runner} suite at ${rootSuite.root} (${rootSuite.reason}), mutate scoped to ${appRelFromRoot} (${JSON.stringify(rootCfg.mutate)})`);
-  if (isIncompatibleTypeScript7(tsVersion)) {
+  if (ts7) {
     console.error(`#773: workspace root TypeScript is v${tsVersion} — bypassing Stryker's incompatible tsconfig preprocessor for this root-scoped run`);
   }
 
@@ -605,7 +641,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // this still degrades rather than lets runStryker's ENOENT throw crash the whole CLI.
   let run: { dryRunFailure?: string; ts7Crash?: boolean };
   try {
-    run = runStryker(redirect.cfgPath, rootSuite.root);
+    run = runStryker(redirect.cfgPath, runCwd);
   } catch (err) {
     assertTreePristine(pristineRoot, "#1285");
     return { degradeReason: (err as Error).message };
@@ -1073,9 +1109,13 @@ if (reportPath) {
   const redirect = redirectStrykerWritesOffTree(applyTs7BypassIfNeeded(effectiveConfigPath, targetDir), "target", targetDir);
   if ("blocked" in redirect) degradeExit(redirect.blocked);
   strykerScratchUsed = redirect.scratchRoot;
+  // #773: a TS7 target whose tsconfig chain reaches outside targetDir needs the chain rewritten in
+  // a disposable copy BEFORE Stryker runs (stageTs7TsconfigFix) — falls back to targetDir itself
+  // (the ordinary in-place invocation) when there's nothing to rewrite.
+  const runCwd = (isIncompatibleTypeScript7(readInstalledTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
-  const run = runStryker(redirect.cfgPath);
+  const run = runStryker(redirect.cfgPath, runCwd);
   // Before the degrade branches, not after: a crashed or dry-run-failed Stryker is exactly when a
   // half-written sandbox would be left behind, so that exit must not skip the check.
   assertTreePristine(pristine, "#1285");
@@ -1090,7 +1130,7 @@ if (reportPath) {
       `Stryker crashed with the exact signature of the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility (#773: "parseConfigFileTextToJson is not a function") — TypeScript 7's native/Go rewrite no longer exports the classic compiler API Stryker's core sandbox preprocessor calls unconditionally; this is a tooling gap, not a defect in the target`,
     );
   }
-  resolvedReportPath = resolveReportPath(redirect.cfgPath, targetDir, redirect.scratchRoot);
+  resolvedReportPath = resolveReportPath(redirect.cfgPath, runCwd, redirect.scratchRoot);
 }
 
 if (!existsSync(resolvedReportPath)) {
