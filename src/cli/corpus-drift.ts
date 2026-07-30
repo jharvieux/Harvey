@@ -12,9 +12,11 @@
 // config. Both are opt-in and both are minutes per target — the scheduled jobs pass them
 // (corpus-drift.yml --install; corpus-m8.yml --install --m8), a local run stays fast by default.
 //
-// NOT part of `pnpm verify`: it clones six repos over the network and shells out to jscpd/knip and
-// the mechanical binaries. It runs on a schedule (.github/workflows/corpus-drift.yml) — `verify`
-// stays deterministic and offline, which is what makes it usable as the required per-PR check.
+// NOT part of `pnpm verify`: it clones every pinned repo over the network and shells out to
+// jscpd/knip and the mechanical binaries. It runs on a daily schedule AND on every pull request
+// (.github/workflows/corpus-drift.yml, which short-circuits in-job when the diff touches nothing
+// the scanners read) — `verify` stays deterministic and offline, which is what makes it usable as
+// the required per-PR check.
 //
 // Exits non-zero naming the module and target that drifted. A drift is EITHER a precision fix
 // (update that target's baseline in the same PR, with the measured note) OR a regression (fix the
