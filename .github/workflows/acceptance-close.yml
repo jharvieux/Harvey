@@ -25,10 +25,14 @@
 # statement about the issue.
 #
 # A NEGATIVE CONTROL RUNS ON EVERY INVOCATION (step 2), the same posture acceptance.yml takes:
-# `--selftest-close` scores seven hermetic cases — bare click with and without a disposition record,
-# sidebar close with and without, a partial record, a hollowed-out `met`, and the bot exemption. It
-# needs no network, so a green run means "this gate passed AND it can still fail" even on a close it
-# had nothing to object to.
+# `--selftest-close` scores eight hermetic cases — bare click with and without a disposition record,
+# sidebar close with and without, a partial record, a hollowed-out `met`, the same dispositions in
+# BOTH the linked PR body and an issue comment, and the bot exemption. It needs no network, so a
+# green run means "this gate passed AND it can still fail" even on a close it had nothing to object to.
+#
+# SINCE #1562 acceptance.yml EVALUATES THE SAME THING this gate does — same venues, same close set —
+# so a PR that goes green there does not get re-opened here. That parity was reached by tightening
+# the PR check; nothing here was loosened, and nothing here may be.
 #
 # BOT-OPENED ISSUES ARE EXEMPT, disclosed rather than silent: the alert-path drills (#1287) open,
 # comment on and close a tracking issue under the job token, and 7 of the 11 bare-click closes

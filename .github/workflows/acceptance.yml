@@ -20,12 +20,22 @@
 # second copy in YAML could disagree with it, and the disagreement would be silent. A PR that closes
 # nothing prints one line and exits 0.
 #
+# THIS JOB AND `acceptance on close` EVALUATE THE SAME THING (#1562). They did not until 2026-07-30:
+# this one read the PR body alone while the close gate reads every venue cumulatively, so a PR whose
+# dispositions were ALSO recorded as issue comments mapped each criterion twice, passed here, merged,
+# and was re-opened by the close gate — PRs #1517/#1519 did exactly that to four issues. The CLI now
+# reads the same venues (this body, every linked PR body, every comment on the issue) and the same
+# close set (`closingIssuesReferences`, which sees a Development-sidebar link), so a green run here
+# predicts the close verdict. Parity was reached by TIGHTENING this check, never by loosening that one.
+#
 # THE NEGATIVE CONTROL IS PART OF THE JOB (step 2). `--selftest` scores a hermetic scenario: one
-# healthy PR body that must PASS and six seeded violations — a dropped disposition, a `met`
+# healthy PR body that must PASS and ten seeded violations — a dropped disposition, a `met`
 # hollowed out to a bare "done", a remainder pointing at a CLOSED issue, a remainder pointing at
 # one that does not exist, a `met` whose only sha-shaped evidence is English words spelt in hex
-# letters, and an acceptance section whose bullets sit below a standalone bold line (which used to
-# truncate the section silently) — that must each FAIL. It needs no network and no live issue state, so
+# letters, an acceptance section whose bullets sit below a standalone bold line (which used to
+# truncate the section silently), a `met` citing a path and a `met` citing a `pnpm` script that do
+# not exist, the same dispositions in the PR body AND an issue comment, and a Development-sidebar
+# close the body never mentions — that must each FAIL. It needs no network and no live issue state, so
 # the proof that the gate can fail does not depend on whichever PR happens to be under test. A
 # green run therefore means "the gate passed AND the gate can still fail", which is a different and
 # much stronger claim: this repo has shipped a gate that could not fire twice (#1246's five recorded

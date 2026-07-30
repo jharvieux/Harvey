@@ -41,6 +41,16 @@
 // 2026-07-27 — is `docs/design/acceptance-conservation.md`, "Deliberate, disclosed bounds", which
 // is authoritative. Do not treat this comment as the full set.
 
+// VENUE PARITY (#1562). Both gates read the SAME surface set — this body, every linked PR body, and
+// every comment on the issue — and a criterion may be dispositioned exactly ONCE across all of them.
+// They did not always agree: the PR-level check read the PR body alone, so a PR whose dispositions
+// were ALSO recorded as issue comments passed it, merged, and was then re-opened by the close-time
+// gate reading the union. MEASURED 2026-07-30: PRs #1517 and #1519 went green, merged, and the close
+// gate re-opened all four issues they closed (#1305, #825, #1469, #1280). A gate that says "safe to
+// merge" about a state that is not is a pure false negative, and it surfaces after the merge, where
+// it is most expensive. The parity is achieved by TIGHTENING the PR check — never by loosening the
+// close check — and both now run the same `checkAcceptance` over the same venues.
+
 type Disposition = "met" | "split" | "relayed";
 
 interface Criterion {
@@ -62,12 +72,20 @@ export interface IssueRecord {
  * OWASP/CheatSheetSeries` exits 0 (measured 2026-07-27), so the earlier `NOT ASSESSED` row was a
  * property of the lookup this gate chose, not of the reference.
  */
-interface ClosingRef {
+export interface ClosingRef {
   repo?: string;
   number: number;
   /** As written: `#1315`, `owner/repo#7`, or the URL. Used in the report so the reader sees their own text. */
   ref: string;
 }
+
+/** A surface disposition lines are read out of, labelled so a DUPLICATE can name where both copies live. */
+interface Venue {
+  label: string;
+  text: string;
+}
+
+const PR_BODY = "the PR body";
 
 /** `undefined` means the issue DOES NOT EXIST. A fetch that merely failed must never reach here. */
 export type IssueLookup = (issue: number, repo?: string) => IssueRecord | undefined;
@@ -92,12 +110,15 @@ interface DispositionLine {
   disposition: Disposition;
   detail: string;
   line: number;
+  /** Which surface it was read from. A line number alone leaves the reader guessing which of two venues holds a duplicate. */
+  venue: string;
 }
 
 interface NoCriteriaLine {
   issue: number;
   bar: string;
   line: number;
+  venue: string;
 }
 
 interface RemainderRef {
@@ -105,6 +126,7 @@ interface RemainderRef {
   /** The issue the work was split OUT OF, when the reference is a `split` disposition. */
   original?: number;
   line: number;
+  venue: string;
 }
 
 interface ParsedBody {
@@ -227,7 +249,7 @@ function closingRef(ref: string, repo?: string): ClosingRef | undefined {
   return owner.toLowerCase() === repo?.toLowerCase() ? { number, ref } : { repo: owner, number, ref };
 }
 
-export function parseBody(prBody: string, repo?: string): ParsedBody {
+export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY): ParsedBody {
   const closes: ClosingRef[] = [];
   const unresolvedCloses: string[] = [];
   for (const m of prBody.matchAll(CLOSING)) {
@@ -252,12 +274,13 @@ export function parseBody(prBody: string, repo?: string): ParsedBody {
         disposition: d[3]!.toLowerCase() as Disposition,
         detail: d[4]!.trim(),
         line: i + 1,
+        venue,
       });
       return;
     }
     const n = NO_CRITERIA_LINE.exec(line);
     if (n) {
-      noCriteria.push({ issue: Number(n[1]), bar: n[2]!.trim(), line: i + 1 });
+      noCriteria.push({ issue: Number(n[1]), bar: n[2]!.trim(), line: i + 1, venue });
       return;
     }
     // A line that names an issue NUMBER and parses as neither is MALFORMED, not absent. Dropping it
@@ -265,16 +288,16 @@ export function parseBody(prBody: string, repo?: string): ParsedBody {
     // separates a real attempt from the `#<issue>` placeholders in .github/pull_request_template.md,
     // which survive in the raw body GitHub hands back even though the reader never sees them.
     if (/^ACCEPTANCE\s+#\d/i.test(line)) {
-      parseErrors.push(`line ${i + 1}: malformed ACCEPTANCE line — expected \`ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>\` or \`ACCEPTANCE #<issue> no-stated-criteria: <bar>\`, got: ${line}`);
+      parseErrors.push(`${venue}, line ${i + 1}: malformed ACCEPTANCE line — expected \`ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>\` or \`ACCEPTANCE #<issue> no-stated-criteria: <bar>\`, got: ${line}`);
       return;
     }
     const r = REMAINDER_LINE.exec(line);
-    if (r) remainders.push({ remainder: Number(r[1]), line: i + 1 });
+    if (r) remainders.push({ remainder: Number(r[1]), line: i + 1, venue });
   });
 
   for (const d of dispositions.filter((x) => x.disposition === "split")) {
     const target = /#(\d+)/.exec(d.detail);
-    if (target) remainders.push({ remainder: Number(target[1]), original: d.issue, line: d.line });
+    if (target) remainders.push({ remainder: Number(target[1]), original: d.issue, line: d.line, venue });
   }
 
   const byRef = new Map(closes.map((c) => [`${c.repo ?? ""}#${c.number}`, c]));
@@ -483,6 +506,8 @@ interface AcceptanceReport {
   unresolvedCloses: string[];
   /** False when no EvidenceWorld was supplied — the run checked shape only, and says so. */
   evidenceVerified: boolean;
+  /** The venues that supplied at least one disposition line, in the order they were read. */
+  venuesContributing: string[];
   issues: IssueVerdict[];
   remainders: RemainderVerdict[];
   parseErrors: string[];
@@ -563,7 +588,7 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
 
   const mine = parsed.dispositions.filter((d) => d.issue === issue);
   for (const d of mine.filter((d) => d.index < 1 || d.index > criteria.length)) {
-    problems.push(`line ${d.line}: disposition names criterion #${issue}.${d.index}, but #${issue} states ${criteria.length}`);
+    problems.push(`${d.venue}, line ${d.line}: disposition names criterion #${issue}.${d.index}, but #${issue} states ${criteria.length}`);
   }
 
   const verdicts = criteria.map((c): CriterionVerdict => {
@@ -572,7 +597,8 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
       return { ...c, problems: [`UNMAPPED — no disposition. Add \`ACCEPTANCE #${issue}.${c.index} <met|split|relayed>: <detail>\``] };
     }
     if (matched.length > 1) {
-      return { ...c, problems: [`mapped ${matched.length} times (lines ${matched.map((m) => m.line).join(", ")}) — a criterion takes exactly one disposition`] };
+      const where = matched.map((m) => `${m.venue}, line ${m.line}`).join("; ");
+      return { ...c, problems: [`#${issue}.${c.index} is mapped ${matched.length} times — ${where} — and a criterion takes exactly one disposition. Every venue is read CUMULATIVELY (this body, every linked PR body, and every comment on #${issue}), so keep ONE copy and neutralise the other before merging`] };
     }
     const d = matched[0]!;
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
@@ -594,15 +620,56 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
   return { issue, ref: target.ref, exists: true, criteria: verdicts, nestedFolded, source, problems, ok };
 }
 
-export function checkAcceptance(prBody: string, lookup: IssueLookup, repo?: string, world?: EvidenceWorld): AcceptanceReport {
+interface AcceptanceExtras {
+  /**
+   * Surfaces read for DISPOSITIONS only, never for closing keywords — a linked PR body closes its
+   * own issues, and dragging those in would put unrelated issues on trial in a check scoped to one.
+   */
+  venues?: Venue[];
+  /**
+   * Closing references GitHub itself records that no body regex can see: `closingIssuesReferences`,
+   * which the Development sidebar populates with no keyword in the body at all. Without them the PR
+   * check green-no-ops on a PR that WILL close an issue on merge — the same false negative as the
+   * venue gap, reached by a different route.
+   */
+  linkedCloses?: ClosingRef[];
+}
+
+export function checkAcceptance(prBody: string, lookup: IssueLookup, repo?: string, world?: EvidenceWorld, extras?: AcceptanceExtras): AcceptanceReport {
   const parsed = parseBody(prBody, repo);
+  const byRef = new Map([...parsed.closes, ...(extras?.linkedCloses ?? [])].map((c) => [`${c.repo ?? ""}#${c.number}`, c]));
+  const closes = [...byRef.values()];
+
+  const absorb = (v: Venue): void => {
+    const p = parseBody(v.text, repo, v.label);
+    parsed.dispositions.push(...p.dispositions);
+    parsed.noCriteria.push(...p.noCriteria);
+    parsed.remainders.push(...p.remainders);
+    parsed.parseErrors.push(...p.parseErrors);
+  };
+  for (const v of extras?.venues ?? []) absorb(v);
+  // THE PARITY STEP. The issue's own comments are a venue on the close path, so they are one here
+  // too — read through the same lookup both paths already use, so the two read one list, not two.
+  for (const c of closes) {
+    lookup(c.number, c.repo)?.comments.forEach((text, i) => absorb({ label: `${c.ref} comment ${i + 1}`, text }));
+  }
+
+  // Two venues repeating one deferral is one deferral, not two — the duplicate DISPOSITION is what
+  // fails, and a second identical remainder row underneath it just says the same thing twice.
+  const seen = new Set<string>();
+  parsed.remainders = parsed.remainders.filter((r) => {
+    const key = `${r.original ?? ""}#${r.remainder}`;
+    return seen.has(key) ? false : (seen.add(key), true);
+  });
+
+  const venuesContributing = [...new Set([...parsed.dispositions, ...parsed.noCriteria, ...parsed.remainders].map((x) => x.venue))];
   // An unresolvable closing reference keeps the run OUT of the green no-op: a body carrying one is
   // not a body carrying nothing, and the no-op's early return would swallow its disclosure row.
-  const noop = parsed.closes.length === 0 && parsed.remainders.length === 0 && parsed.unresolvedCloses.length === 0;
-  const issues = parsed.closes.map((c) => checkIssue(c, parsed, lookup, world));
-  const remainders = parsed.remainders.map((r) => checkRemainder(r, lookup, parsed.closes));
+  const noop = closes.length === 0 && parsed.remainders.length === 0 && parsed.unresolvedCloses.length === 0;
+  const issues = closes.map((c) => checkIssue(c, parsed, lookup, world));
+  const remainders = parsed.remainders.map((r) => checkRemainder(r, lookup, closes));
   const ok = parsed.parseErrors.length === 0 && issues.every((i) => i.ok) && remainders.every((r) => r.ok);
-  return { closes: parsed.closes, unresolvedCloses: parsed.unresolvedCloses, evidenceVerified: world !== undefined, issues, remainders, parseErrors: parsed.parseErrors, noop, ok };
+  return { closes, unresolvedCloses: parsed.unresolvedCloses, evidenceVerified: world !== undefined, venuesContributing, issues, remainders, parseErrors: parsed.parseErrors, noop, ok };
 }
 
 export function formatAcceptance(report: AcceptanceReport): string {
@@ -632,6 +699,13 @@ export function formatAcceptance(report: AcceptanceReport): string {
     "",
   ];
   if (report.noop) return `${out.join("\n")}✓ nothing for either gate to assert on this PR.`;
+
+  // Which surfaces were actually read, whenever more than one contributed. A duplicate disposition
+  // is invisible until the reader knows the gate read BOTH places, and the failure message below
+  // names venues that would otherwise appear from nowhere.
+  if (report.venuesContributing.length > 1) {
+    out.push(`ℹ ${report.venuesContributing.length} venues supplied disposition lines and are read CUMULATIVELY — ${report.venuesContributing.join(", ")}. A criterion may be dispositioned exactly once ACROSS ALL of them.`);
+  }
 
   for (const e of report.parseErrors) out.push(`✗ ${e}`);
 
@@ -709,7 +783,6 @@ interface ClosedIssueInput {
   issue: number;
   /** Bodies of the PRs GitHub links to this issue — `closedByPullRequestsReferences`, which is populated by the Development sidebar as well as by a closing keyword. */
   linkedPrs: { ref: string; body: string }[];
-  comments: string[];
   /**
    * Bot-opened issues are the one exemption, and it is disclosed rather than silent: the alert-path
    * drills (#1287) open, comment on and close a tracking issue under the job token, and 7 of the 11
@@ -732,37 +805,30 @@ interface ClosedIssueReport {
 }
 
 export function checkClosedIssue(input: ClosedIssueInput, lookup: IssueLookup, repo?: string, world?: EvidenceWorld): ClosedIssueReport {
-  const surfaces = [
-    ...input.linkedPrs.map((pr) => ({ label: `linked PR ${pr.ref}`, text: pr.body })),
-    ...input.comments.map((c, i) => ({ label: `issue comment ${i + 1}`, text: c })),
+  // The comments come from the LOOKUP, not from a second field on the input — one collection point
+  // is what makes this gate and the PR gate agree BY CONSTRUCTION rather than by two lists being
+  // kept in step. Keeping them in step is exactly what failed on 2026-07-30.
+  const comments = lookup(input.issue)?.comments ?? [];
+  const surfacesRead = [
+    ...input.linkedPrs.map((pr) => `linked PR ${pr.ref}`),
+    ...comments.map((_, i) => `#${input.issue} comment ${i + 1}`),
   ];
-  const surfacesRead = surfaces.map((s) => s.label);
 
   if (input.authorIsBot) {
     return { issue: input.issue, contributed: [], surfacesRead, notAssessed: "opened by a bot — a tracking or drill issue, not a work item with acceptance criteria", ok: true };
   }
 
-  // Only disposition-bearing lines cross over. A whole PR body would drag in its OTHER closing
-  // keywords and put unrelated issues on trial here; a whole comment would do the same for any
-  // `closes #N` written in passing.
-  const contributed: string[] = [];
-  const collected: string[] = [];
-  for (const s of surfaces) {
-    const found = lines(s.text).map((l) => strip(l).trim()).filter((l) => /^ACCEPTANCE\s+#\d/i.test(l) || REMAINDER_LINE.test(l));
-    if (found.length > 0) contributed.push(s.label);
-    collected.push(...found);
-  }
-
-  const body = [`Closes #${input.issue}`, "", ...collected].join("\n");
-  const report = checkAcceptance(body, lookup, repo, world);
-  return { issue: input.issue, contributed, surfacesRead, report, ok: report.ok };
+  const report = checkAcceptance(`Closes #${input.issue}`, lookup, repo, world, {
+    venues: input.linkedPrs.map((pr) => ({ label: `linked PR ${pr.ref}`, text: pr.body })),
+  });
+  return { issue: input.issue, contributed: report.venuesContributing, surfacesRead, report, ok: report.ok };
 }
 
 export function formatClosedIssue(r: ClosedIssueReport): string {
   const head = `Acceptance conservation on close (#1341) — #${r.issue}`;
   if (r.notAssessed) return `${head}\n\nℹ NOT ASSESSED  ${r.notAssessed}`;
   const where = r.contributed.length > 0
-    ? `● Dispositions read from: ${r.contributed.join(", ")}.`
+    ? `● Surfaces read: ${r.surfacesRead.join(", ")}.`
     : `○ No disposition record on any of the ${r.surfacesRead.length} surface(s) read${r.surfacesRead.length > 0 ? ` (${r.surfacesRead.join(", ")})` : " — this issue closed with no linked PR and no comments, i.e. a bare click"}.`;
   return `${head}\n\n${where}\n\n${formatAcceptance(r.report!)}`;
 }
@@ -847,6 +913,18 @@ const SELFTEST_ISSUES: IssueRecord[] = [
     body: ["## Acceptance", "- one", "", "**This one matters.**", "", "- two", "- three"].join("\n"),
     comments: [],
   },
+  {
+    // The VENUE-PARITY control (#1562): an issue whose dispositions are ALSO recorded as comments.
+    // A PR body repeating them maps every criterion twice, which is the #1517/#1519 shape — and the
+    // PR-level check used to pass it because it read one venue.
+    number: 9005,
+    state: "OPEN",
+    body: ["## Acceptance", "- the gate reads the same venues on both paths", "- a duplicate disposition names both venues"].join("\n"),
+    comments: [
+      "ACCEPTANCE #9005.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+      "ACCEPTANCE #9005.2 met: src/acceptance-conservation.ts now names both venues",
+    ],
+  },
 ];
 
 export const SELFTEST_BODY = [
@@ -905,15 +983,29 @@ const SELFTEST_INVENTED_SCRIPT_BODY = [
   "ACCEPTANCE #9001.3 relayed: asked on the issue — should the gate read commit messages too?",
 ].join("\n");
 
+const SELFTEST_DOUBLE_VENUE_BODY = [
+  "Closes #9005",
+  "",
+  "ACCEPTANCE #9005.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+  "ACCEPTANCE #9005.2 met: src/acceptance-conservation.ts now names both venues",
+].join("\n");
+
+// The Development sidebar: GitHub records the close, the body says nothing, and a body-only gate
+// green-no-ops on a PR that WILL close #9001 on merge.
+const SELFTEST_SIDEBAR_BODY = "Refactors the seeder. refs #9001\n";
+
 interface SelftestCase {
   name: string;
   body: string;
+  extras?: AcceptanceExtras;
   expect: "pass" | "fail";
 }
 
 interface CloseSelftestCase {
   name: string;
   input: ClosedIssueInput;
+  /** Per-case, because the issue's COMMENTS are one of the venues under test. */
+  lookup: IssueLookup;
   expect: "pass" | "fail";
 }
 
@@ -928,37 +1020,57 @@ export function closeSelftestCases(): CloseSelftestCase[] {
     "ACCEPTANCE #9001.2 split: #9002",
     "ACCEPTANCE #9001.3 relayed: asked on the issue — should the gate read commit messages too?",
   ];
-  const base = { issue: 9001, linkedPrs: [], comments: [], authorIsBot: false };
+  const base = { issue: 9001, linkedPrs: [], authorIsBot: false };
+  // Appends to #9001's own prose comments, which is how a real issue looks — and keeps the `relayed`
+  // criterion's question comment in place, so this fixture does not pass for the wrong reason.
+  const commented = (extra: string[]): IssueLookup => (n, repo) => {
+    const record = SELFTEST_LOOKUP(n, repo);
+    return record !== undefined && n === 9001 ? { ...record, comments: [...record.comments, ...extra] } : record;
+  };
   return [
-    { name: "BARE CLICK, no disposition anywhere — the #743 shape", input: { ...base }, expect: "fail" },
-    { name: "BARE CLICK with the dispositions recorded as issue comments", input: { ...base, comments: dispositions }, expect: "pass" },
+    { name: "BARE CLICK, no disposition anywhere — the #743 shape", input: { ...base }, lookup: SELFTEST_LOOKUP, expect: "fail" },
+    { name: "BARE CLICK with the dispositions recorded as issue comments", input: { ...base }, lookup: commented(dispositions), expect: "pass" },
     {
       name: "DEVELOPMENT SIDEBAR — a linked PR whose body carries no closing keyword and no dispositions",
       input: { ...base, linkedPrs: [{ ref: "#9100", body: "Refactors the seeder. refs #9001" }] },
+      lookup: SELFTEST_LOOKUP,
       expect: "fail",
     },
     {
       name: "DEVELOPMENT SIDEBAR with the dispositions in the linked PR's body",
       input: { ...base, linkedPrs: [{ ref: "#9100", body: `Refactors the seeder. refs #9001\n\n${dispositions.join("\n")}` }] },
+      lookup: SELFTEST_LOOKUP,
       expect: "pass",
     },
     {
       name: "a partial record — one criterion mapped, two left unaccounted",
-      input: { ...base, comments: [dispositions[0]!] },
+      input: { ...base },
+      lookup: commented([dispositions[0]!]),
       expect: "fail",
     },
     {
       name: "a `met` hollowed out to a bare assertion in an issue comment",
-      input: { ...base, comments: ["ACCEPTANCE #9001.1 met: done", ...dispositions.slice(1)] },
+      input: { ...base },
+      lookup: commented(["ACCEPTANCE #9001.1 met: done", ...dispositions.slice(1)]),
       expect: "fail",
     },
-    { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, expect: "pass" },
+    {
+      // VENUE PARITY, close side (#1562): the same lines in the linked PR AND in a comment. It has
+      // always failed here — the PR-level twin below is the case that used to pass.
+      name: "the same dispositions in BOTH the linked PR body and an issue comment",
+      input: { ...base, linkedPrs: [{ ref: "#9100", body: `refs #9001\n\n${dispositions.join("\n")}` }] },
+      lookup: commented(dispositions),
+      expect: "fail",
+    },
+    { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, lookup: SELFTEST_LOOKUP, expect: "pass" },
   ];
 }
 
 export function selftestCases(): SelftestCase[] {
   return [
     { name: "the healthy body passes", body: SELFTEST_BODY, expect: "pass" },
+    { name: "the same dispositions in the PR body AND an issue comment — the #1517/#1519 shape", body: SELFTEST_DOUBLE_VENUE_BODY, expect: "fail" },
+    { name: "a Development-sidebar close GitHub records and the body does not mention", body: SELFTEST_SIDEBAR_BODY, extras: { linkedCloses: [{ number: 9001, ref: "#9001" }] }, expect: "fail" },
     { name: "a dropped disposition leaves a bullet unmapped", body: seedDropDisposition(SELFTEST_BODY).body, expect: "fail" },
     { name: "a `met` hollowed out to a bare assertion", body: seedBareEvidence(SELFTEST_BODY).body, expect: "fail" },
     { name: "a remainder pointing at a CLOSED issue", body: seedRemainder(SELFTEST_BODY, 9003), expect: "fail" },

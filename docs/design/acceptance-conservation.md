@@ -399,6 +399,40 @@ That the sidebar link **alone** populates it — with no keyword in the body —
 assumed: issue #1384 and PR #1386, opened on 2026-07-28 as a throwaway probe with the keyword
 deliberately absent, and the field listed the PR.
 
+### Venue parity — the two gates evaluate the same thing (#1562)
+
+For two days they did not, and the gap was a **pure false negative in a merge gate**: the PR-level
+check read the PR body alone, the close-time check read every venue cumulatively, and a criterion may
+be dispositioned exactly once. A PR whose dispositions lived in **both** the PR body and an issue
+comment therefore mapped each criterion twice — invisible to the PR check, fatal to the close check.
+
+**MEASURED 2026-07-30.** PRs #1517 and #1519 passed the PR check, merged, and the close gate then
+re-opened all four issues they closed (#1305, #825, #1469, #1280). The failure surfaces *after* the
+merge, which is the most expensive moment for it to surface, and it cost a supervisor six rejected
+closes in one session.
+
+The parity was achieved by **tightening the PR check, never by loosening the close check**:
+
+- `checkAcceptance` reads the issue's own comments as a venue for every issue the PR closes, through
+  the same `IssueLookup` both paths already use. `checkClosedIssue` no longer collects them itself —
+  it passes the linked PR bodies as extra venues and lets the shared path read the comments. **One
+  collection point** is what makes the verdicts agree by construction rather than by two lists being
+  kept in step, which is exactly what failed.
+- A duplicate names **both venues and both line numbers** (`#1305.1 is mapped 2 times — the PR body,
+  line 82; #1305 comment 5, line 7`). A line number alone leaves the author guessing which copy to delete.
+- `--pr` also reads GitHub's own `closingIssuesReferences`, so a **Development-sidebar** close with
+  no keyword in the body is checked before the merge instead of only after it — the same false
+  negative reached by a different route.
+- `--body-file` runs before the PR exists, so there is no `closingIssuesReferences` to read, and it
+  says so in its output rather than looking like a full run.
+  It does read the issues and their comments over `gh`, so the one-disposition-per-criterion rule is
+  fully checked on the pre-flight.
+
+Two negative controls hold it: `--selftest` carries the double-venue body and the sidebar close, and
+`src/acceptance-conservation.test.ts` asserts the **invariant** rather than one instance of it — over
+six arrangements of the venues, `checkAcceptance(...).ok === checkClosedIssue(...).ok`, with a
+control proving the assertion can still fail.
+
 ### What it does on failure
 
 Stated here and demonstrated end-to-end against issue #1384 on 2026-07-28 under an authenticated
