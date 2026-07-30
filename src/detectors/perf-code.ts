@@ -420,8 +420,8 @@ function scriptReferencedFiles(files: SourceInput[]): Set<string> {
 // `app/api/enrich/route.ts` fired Likely while `app/api/migrations/route.ts`,
 // `app/api/scripts/route.ts`, `app/api/seeds|bin|e2e|ci|cypress/route.ts` were all SILENT — two of
 // those are entirely ordinary route names. It is done HERE rather than at each call site so a fifth
-// consumer stays subtracted too; `scriptReferencedFiles`'s comment used to CLAIM
-// this and no caller performed it.
+// consumer inherits it instead of rejoining the unguarded shape; `scriptReferencedFiles`'s comment
+// used to CLAIM this happened in the callers, and no caller performed it.
 //
 // Reachability is only subtracted when it can be ANSWERED: a tree with no request entry point at
 // all also has no route to have wrongly suppressed, so `undefined` keeps #1476's behaviour rather
