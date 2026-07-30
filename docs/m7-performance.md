@@ -157,6 +157,18 @@ src/cli/validate-precision.ts`), this took the M7 code tier to recall 22/22, neg
 **corpus precision 100.0%** (one planted instance per class, one lookalike per catalogued FP shape —
 corpus numbers, not field numbers).
 
+**Field precision (#1261, MEASURED 2026-07-28).** The 100.0% above is a corpus number and #816's
+four guards are not visible in it: a controlled one-commit before/after of `17a6b7b` over the six
+pinned repos reprints identical per-class counts (64/97 both arms) — the guards matched nothing in
+the field. Triaged against source on those six repos, **47 of 65 graded rows hold (72.3%)**; a
+seeded 40-row random sample from the 858 graded rows on rallly/inbox-zero/ghostfolio/carbon holds
+31/40 (77.5%, 95% CI 62.5–87.7%). Weakest classes: state sprawl 0/6, await-in-loop 2/5, raw `<img>`
+3/7. Strongest: unbounded select 27/27. Per-target and per-class splits, and the six FP families
+filed from this triage (#1475–#1480), are recorded in `src/scan/external-corpus.ts`'s M7 notes. The
+~10% figure in §2a is a different judge on a raw denominator and is not directly comparable;
+same-denominator raw today is 47/98 = 48.0%, and that movement is attributable to #230's demotions
+and #248's React Compiler gate, not to #816.
+
 Classes (severity / confidence — see the detector for per-check evidence and limitations):
 
 | Class | Detects | Sev / Conf |

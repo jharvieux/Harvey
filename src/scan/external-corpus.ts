@@ -496,11 +496,14 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
   // What it buys the corpus that no existing target does: it is the only member with an
   // UNAUTHENTICATED service-role IDOR at Critical (#774 — `app/api/user/delete/route.ts` takes a
   // userId from the query string and soft-deletes that account through the service-role client, no
-  // auth call in the file), so it is the strongest `mustRaiseLoudIndicator: true` row in
-  // FREE_TIER_EXPECTATIONS below. MEASURED 2026-07-28 during the #1174 re-scan: the free tier now
-  // emits 3 High/Confirmed "tenant predicate populated from the request" rows on it, and the same
-  // scan on the 2026-07-26 scanner (d1da2e4) emitted ZERO — a real-code detection this manifest
-  // would otherwise have no baseline for.
+  // auth call in the file). #1473 (still open): it is deliberately NOT in FREE_TIER_EXPECTATIONS
+  // below — measured grade F (51/100) with 0 review-tier tenant-isolation indicators, and all three
+  // values of `mustRaiseLoudIndicator` would state something false about it, since its known
+  // Criticals land in the graded set rather than the indicator channel that expectation scores.
+  // MEASURED 2026-07-28 during the #1174 re-scan: the free tier now emits 3 High/Confirmed "tenant
+  // predicate populated from the request" rows on it, and the same scan on the 2026-07-26 scanner
+  // (d1da2e4) emitted ZERO — a real-code detection this manifest would otherwise have no baseline
+  // for.
   {
     slug: "launch-mvp",
     repo: "ShenSeanChen/launch-mvp-stripe-nextjs-supabase",
