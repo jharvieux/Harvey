@@ -34,6 +34,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
@@ -163,6 +164,11 @@ console.log(
 
 const m9NegFps = m9Matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
 const m9HighMisses = m9Matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
+
+// #1509's second-order defect: like the calibration gate, this one rides inside a shard behind an
+// `if: matrix.shard == 2`. Emitted before the verdict — a failing gate still reached its measuring
+// phase, and that is the thing the workflow asserts.
+recordMeasured("source-recall-gate", matrix.rows.length + m9Matrix.rows.length, "request→sink and M9 source answer-key fixtures scored");
 
 const gatePass = negFps.length === 0 && highMisses.length === 0 && m9NegFps.length === 0 && m9HighMisses.length === 0;
 if (!gatePass) {

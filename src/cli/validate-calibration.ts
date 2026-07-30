@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
@@ -330,6 +331,12 @@ const pairings = ruleCorpusPairings(harveySemgrepRules(), findings);
 const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
+
+// #1509's second-order defect: this gate rides inside `heavy CLI tests (shard 1/3)` behind an
+// `if: matrix.shard == 1`, so a condition that stopped matching would retire the repo's scored recall
+// gate in complete silence — the shape #1301 found when it ran in no workflow at all. Emitted before
+// the verdict: reaching the measuring phase is true of a failing gate too.
+recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
 const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
 if (!gatePass) {

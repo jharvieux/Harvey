@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { OsvScanResult } from "../scan/dependencies.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { readNamesSafe, statSafe } from "../fs-walk.js";
 import {
   indexOsvByEntry,
@@ -238,6 +239,12 @@ console.log(
 // under the measured score on purpose. OSV's advisory coverage moves under this corpus in both
 // directions (advisories are added, and occasionally withdrawn), and a floor tight enough to catch
 // three points of that would spend its life alarming on someone else's database.
+// #1509's second-order defect: this job runs MONTHLY, so a run that dies in its fetch / lockfile-tree
+// / osv-scanner phases is invisible for 30 days and reads no differently from a quiet month. The
+// floor check below already refuses a zero-entry score; the receipt is what lets the workflow refuse
+// to be green when scoring never happened at all.
+recordMeasured("secbench-recall", all.installable, "SecBench.js entries scored for SCA recall");
+
 const minRecall = arg("--min-sca-recall");
 if (minRecall !== undefined) {
   const floor = Number(minRecall);

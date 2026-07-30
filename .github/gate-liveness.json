@@ -1,0 +1,56 @@
+{
+  "_why": [
+    "Which gate jobs prove they reached their measuring phase, and which are exempt.",
+    "",
+    "#1509's second-order defect: `corpus-drift` failed for days at SETUP — the poisoned pipx cache",
+    "killed it before it scored a single baseline — and produced nothing distinguishable from 'ran and",
+    "found no drift'. In that window PR #1447 merged on three green required checks while the gate that",
+    "measures its blast radius had never executed. 653 M5-slop findings were silently suppressed and a",
+    "live regression reached `main`.",
+    "",
+    "So every job here emits a receipt naming HOW MANY UNITS it scored, after it scored them, and",
+    "asserts that receipt before it is allowed to be green — src/audit-runner.ts's `Examined` rule",
+    "(unitsExamined: 0 is a NotAssessed, never a clean scan) applied to CI. Mechanism:",
+    ".github/actions/gate-liveness. Design note: docs/design/ci-gate-liveness.md.",
+    "",
+    "THIS FILE IS THE FAIL-LOUD PART. src/ci-liveness.test.ts (under `pnpm verify`) requires every",
+    "workflow that installs the mechanical binaries — the marker of a job heavy enough to die in setup —",
+    "to appear in `gates` or in `exempt` with a reason, and requires every gate id here to be BOTH",
+    "asserted by its workflow and produced by something (a `gate:` record step, or recordMeasured in a",
+    "gate CLI). A new gate cannot quietly join without one, and a producer/asserter mismatch is a test",
+    "failure rather than a silently vacuous check."
+  ],
+  "gates": [
+    {
+      "workflow": ".github/workflows/corpus-drift.yml",
+      "expect": ["corpus-drift"],
+      "note": "One record per corpus-drift invocation; the #1498 narrowed-PR path emits one per scored target and the assert sums them."
+    },
+    {
+      "workflow": ".github/workflows/conservation.yml",
+      "expect": ["conservation-plants", "conservation-negative-controls"],
+      "note": "Two gates because the negative controls are a separate claim: a gate nobody has watched fail is indistinguishable from one that cannot, so 'the controls ran' must be asserted, not inferred from the steps existing."
+    },
+    {
+      "workflow": ".github/workflows/dry-run-drift.yml",
+      "expect": ["dry-run-regen", "dry-run-diff"],
+      "note": "Regeneration and comparison are separate phases. A regeneration that produced findings and then never got diffed is exactly the produce-vs-deliver gap CLAUDE.md's conservation rule is about."
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "expect": ["heavy-cli-tests", "calibration-gate", "source-recall-gate"],
+      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only and source-recall-gate shard 2 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence."
+    },
+    {
+      "workflow": ".github/workflows/secbench.yml",
+      "expect": ["secbench-recall"],
+      "note": "Monthly, so a dead run is invisible for 30 days. The CLI already refuses a zero-entry score; the receipt is what makes the fetch/lockfile-tree/osv phases upstream of it equally loud."
+    },
+    {
+      "workflow": ".github/workflows/free-recall.yml",
+      "expect": ["free-recall"],
+      "note": "Monthly over five THIRD-PARTY clones, so a run that dies in setup or in the fetch phase is invisible for 30 days. The CLI already refuses a zero-target score; the receipt covers every phase upstream of it. Added because the registry check FAILED LOUD on this workflow the moment #1185 landed it on main — the mechanism working exactly as designed."
+    }
+  ],
+  "exempt": []
+}

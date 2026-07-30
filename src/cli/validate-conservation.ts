@@ -42,6 +42,7 @@
 //                 in fact still delivered. A disposition column credited against a fiction must fail.
 
 import { probeExec } from "../probe-exec.js";
+import { recordMeasured } from "../ci-liveness.js";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -164,5 +165,11 @@ const report = checkConservation({ findingsByModule, recorded: run.recorded, del
 
 if (args.includes("--json")) console.log(JSON.stringify({ ledger, baselineLedger: bLedger, plants: report }, null, 2));
 else console.log(formatConservation(report));
+
+// #1509's second-order defect. Emitted after the plants are scored and BEFORE the verdict, because
+// the claim is "this job reached its measuring phase", which is true of a failing gate too — the
+// negative-control runs below in .github/workflows/conservation.yml are supposed to end non-zero.
+// A run that died in setup writes nothing here and the workflow's assert step names it.
+recordMeasured("conservation-plants", report.rows.length, `module plants asserted probe → deliverable over ${targetDir}`);
 
 process.exit(report.ok && ledger.ok && bLedger.ok ? 0 : 1);
