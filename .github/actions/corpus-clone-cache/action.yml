@@ -1,0 +1,99 @@
+# Cache for the external corpus's pinned clones (#1571). corpus-drift.yml re-clones ~14 repos at
+# FIXED SHAs on every full run — daily schedule, workflow_dispatch, or any PR that touches the
+# harness — and a pinned SHA cannot change, so its clone is safe to reuse until the pin itself is
+# edited.
+#
+# KEY: a hash of src/scan/external-corpus.ts's own pin set (src/cli/corpus-pins.ts, run by the
+# caller into corpus-pins.txt BEFORE this action), never a hand-copied list in this file. Editing a
+# pin is a cache miss BY CONSTRUCTION — the same property the mechanical-binaries action's
+# version-pinned key already holds ("a version bump is a cache miss by construction — there is no
+# way to bump a pinned tool and silently keep running the old one").
+#
+# WHAT'S CACHED: the bare clones only (no `--install` tree, no scan output) — measured 2026-07-30
+# at 663MB for the full 14-target set, well under GitHub's ~10GB per-repo cache budget. The
+# per-target working copies corpus-drift.ts scans are still disposable mkdtemp COPIES of this
+# cache (src/scan/corpus-clone.ts's cloneAtPinCached), so --install/scanning can freely mutate or
+# delete them without ever touching — or polluting — the cached tree.
+#
+# FAIL LOUD ON A POISONED HIT (#1509's precedent: a cache saved without semgrep read as "ran and
+# found nothing" for days). A cache HIT is trusted only after every pinned target is verified
+# present, at the exact pinned commit and clean, in the "Verify" step below — never silently
+# rescanning fewer targets. A MISS is not a failure: every target gets cloned fresh during the run
+# (cloneAtPinCached's own fallback) and the newly-populated cache dir is saved at job end by
+# actions/cache's normal post-job behavior.
+name: Corpus clone cache
+description: Restore (or seed) the pinned external-corpus clones, keyed on the pin set, and fail loudly on a corrupted restore.
+
+outputs:
+  cache-dir:
+    description: Directory holding one pristine clone per pinned repo. Pass as $HARVEY_CORPUS_CACHE_DIR to `pnpm corpus-drift`.
+    value: ${{ steps.paths.outputs.cache-dir }}
+  cache-hit:
+    description: "'true' when the pin-keyed cache was restored (and verified) rather than started empty."
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: echo "cache-dir=$HOME/.cache/harvey-corpus-clones" >> "$GITHUB_OUTPUT"
+
+    # The single source of truth for what's pinned right now — read from the manifest itself, not
+    # retyped here, so this file cannot drift from src/scan/external-corpus.ts.
+    - name: Print the current pin set
+      shell: bash
+      run: pnpm corpus-pins --out corpus-pins.txt
+
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.paths.outputs.cache-dir }}
+        key: corpus-clone-cache-v1-${{ hashFiles('corpus-pins.txt') }}
+
+    # A MISS needs no check: cloneAtPinCached populates the cache dir target-by-target as the run
+    # clones each one, and there is nothing to verify yet.
+    #
+    # A HIT is a claim that every pinned target is already here, correct, at the pinned commit —
+    # and that claim gets checked, not trusted. A restored tree that is missing a target, at the
+    # wrong commit (a stale entry sharing this key's hash by coincidence would be a hash collision;
+    # far more likely is an evicted/partial write), or has a dirty working tree (a truncated
+    # checkout) fails this step BY NAME rather than letting corpus-drift.ts's own per-target
+    # cloneAtPinCached fallback quietly re-clone it — a silent per-target recovery here would mean
+    # a systemically broken cache (e.g. this action writing to the wrong path, #1509's shape)
+    # could sit unnoticed indefinitely, always paying the miss cost with no signal that the cache
+    # was never actually helping.
+    - name: Verify the restored cache reproduces every pinned clone
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        CACHE_DIR="${{ steps.paths.outputs.cache-dir }}"
+        bad=()
+        count=0
+        while read -r slug repoAt; do
+          [ -n "$slug" ] || continue
+          count=$((count + 1))
+          repo="${repoAt%@*}"
+          commit="${repoAt#*@}"
+          dir="$CACHE_DIR/${repo//\//__}"
+          if [ ! -d "$dir/.git" ]; then
+            bad+=("$slug ($repo): no cached clone at $dir")
+            continue
+          fi
+          head=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+          if [ "$head" != "$commit" ]; then
+            bad+=("$slug ($repo): cached HEAD=$head, pin expects $commit")
+            continue
+          fi
+          if [ -n "$(git -C "$dir" status --porcelain 2>&1)" ]; then
+            bad+=("$slug ($repo): cached working tree is dirty — a partial or corrupted checkout")
+          fi
+        done < corpus-pins.txt
+        if [ "${#bad[@]}" -gt 0 ]; then
+          echo "::error::corpus-clone-cache: restored cache is poisoned or incomplete for ${#bad[@]} of $count pinned target(s):"
+          for b in "${bad[@]}"; do echo "::error::  - $b"; done
+          echo "::error::A restored cache must reproduce every pinned clone exactly — never a quietly smaller scan. Re-run to let the cache rebuild, or bump the key suffix above if this repeats."
+          exit 1
+        fi
+        echo "corpus-clone-cache: verified $count/$count cached clones match their pins."

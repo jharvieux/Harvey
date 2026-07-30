@@ -40,7 +40,10 @@ on:
       - "src/mutation-scan.ts"
       - "src/cli/mutation-scan.ts"
       - "src/cli/corpus-drift.ts"
+      - "src/cli/corpus-pins.ts"
+      - "src/scan/corpus-clone.ts"
       - ".github/workflows/corpus-m8.yml"
+      - ".github/actions/corpus-clone-cache/action.yml"
 
 concurrency:
   group: corpus-m8-${{ github.ref }}
@@ -70,10 +73,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # #1571: same pin-keyed clone cache corpus-drift.yml uses — this job scores 4 of the same
+      # pinned targets, so it rides corpus-drift's daily-warmed cache entry rather than re-cloning
+      # cold every month.
+      - name: Corpus clone cache
+        id: corpus-cache
+        uses: ./.github/actions/corpus-clone-cache
+
       # Only the targets with a scoreable suite. --install is redundant with --m8's own install for
       # these, but passing it keeps this job's M5-knip reading consistent with corpus-drift.yml's
       # rather than silently scoring knip against an uninstalled tree.
       - name: Score M8 mutation baselines
+        env:
+          HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
         run: |
           set -euo pipefail
           pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json

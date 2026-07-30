@@ -1,9 +1,10 @@
-# Layer 2 for the external-repo regression corpus (#222/#263). Clones the six PUBLIC targets at
-# their pinned commits, re-runs the source-tier modules, and scores the result against the
-# recorded baselines.
+# Layer 2 for the external-repo regression corpus (#222/#263). Clones the PUBLIC targets (14 as of
+# #1571 — run `pnpm corpus-pins --out /tmp/pins.txt && wc -l /tmp/pins.txt` for the current count
+# rather than trusting a number in this comment) at their pinned commits, re-runs the source-tier
+# modules, and scores the result against the recorded baselines.
 #
-# Why this is NOT part of `pnpm verify` (the required per-PR check): it needs network to clone six
-# repos and external binaries (semgrep/trufflehog/osv-scanner) to run the mechanical tier. `verify`
+# Why this is NOT part of `pnpm verify` (the required per-PR check): it needs network to clone
+# these repos and external binaries (semgrep/trufflehog/osv-scanner) to run the mechanical tier. `verify`
 # stays deterministic and offline so it's fast and never flakes on someone else's infrastructure;
 # Layer 1 (src/scan/external-corpus.test.ts) covers the scorers there.
 #
@@ -43,7 +44,10 @@ on:
     paths:
       - "src/scan/external-corpus.ts"
       - "src/cli/corpus-drift.ts"
+      - "src/cli/corpus-pins.ts"
+      - "src/scan/corpus-clone.ts"
       - ".github/workflows/corpus-drift.yml"
+      - ".github/actions/corpus-clone-cache/action.yml"
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
 # newer run is the interesting one.
@@ -98,6 +102,14 @@ jobs:
       - name: Install mechanical-tier scanner binaries
         uses: ./.github/actions/mechanical-binaries
 
+      # #1571: cache the pinned clones themselves (not the --install tree), keyed on the pin set
+      # so editing a pin is a miss by construction. A restored cache is verified against every
+      # pinned commit before `pnpm corpus-drift` ever reads it — see the action's own comments for
+      # why a poisoned hit fails loud rather than silently rescanning fewer targets.
+      - name: Corpus clone cache
+        id: corpus-cache
+        uses: ./.github/actions/corpus-clone-cache
+
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
       # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
@@ -129,7 +141,7 @@ jobs:
             echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Empty diff — scoring every target."; exit 0
           fi
           # Anything that can change scoring for EVERY target -> full sweep.
-          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml)$'; then
+          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|src/cli/corpus-pins\.ts|src/scan/corpus-clone\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml|\.github/actions/corpus-clone-cache/action\.yml)$'; then
             echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Harness changed — scoring every target."; exit 0
           fi
           if ! echo "$files" | grep -q '^src/scan/external-corpus\.ts$'; then
@@ -151,6 +163,8 @@ jobs:
 
       - name: Score the corpus against its baselines
         if: ${{ !inputs.liveness_drill }}
+        env:
+          HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
         run: |
           set -euo pipefail
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
