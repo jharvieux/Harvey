@@ -486,7 +486,7 @@ describe("the green no-op", () => {
 describe("the hermetic self-test CI runs", () => {
   it("scores exactly as the CLI's --selftest asserts, so CI and `pnpm verify` share one fixture", () => {
     for (const c of selftestCases()) {
-      expect(checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
+      expect(checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD, c.extras).ok, c.name).toBe(c.expect === "pass");
     }
   });
 
@@ -494,6 +494,95 @@ describe("the hermetic self-test CI runs", () => {
     const cases = selftestCases();
     expect(cases.filter((c) => c.expect === "pass")).toHaveLength(1);
     expect(cases.filter((c) => c.expect === "fail").length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// #1562. The PR-level check said "safe to merge" about a state that was not: dispositions in BOTH
+// the PR body and an issue comment map every criterion twice, the close-time check reads every venue
+// cumulatively and fails, the PR check read the body alone and passed. MEASURED 2026-07-30 — PRs
+// #1517 and #1519 merged green and the close gate re-opened all four issues they closed (#1305,
+// #825, #1469, #1280). A false negative in a merge gate is the most expensive kind: it surfaces
+// after the merge.
+describe("venue parity — a green PR check predicts the close-time verdict (#1562)", () => {
+  const CRITERIA = "## Acceptance\n- first\n- second\n";
+  const mapped = [
+    "ACCEPTANCE #700.1 met: src/acceptance-conservation.ts now checks it",
+    "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it",
+  ];
+  const PR_BODY = `Closes #700\n\n${mapped.join("\n")}\n`;
+  const withComments = (...comments: string[]): IssueLookup =>
+    lookupOf(issue({ number: 700, body: CRITERIA, comments }));
+
+  it("REGRESSION: fails a PR whose dispositions are ALSO recorded as issue comments", () => {
+    const lookup = withComments(...mapped);
+    expect(checkAcceptance(PR_BODY, lookup).ok).toBe(false);
+    // Naming BOTH venues is what makes the failure fixable before merge — a line number alone
+    // leaves the author guessing which of two surfaces holds the copy to delete.
+    expect(problems(PR_BODY, lookup)).toEqual([
+      expect.stringContaining("#700.1 is mapped 2 times — the PR body, line 3; #700 comment 1, line 1"),
+      expect.stringContaining("#700.2 is mapped 2 times — the PR body, line 4; #700 comment 2, line 1"),
+    ]);
+  });
+
+  it("keeps PASSING a correct single-venue PR — parity tightened the check, it did not break it", () => {
+    expect(checkAcceptance(PR_BODY, withComments("A prose comment that disposes of nothing.")).ok).toBe(true);
+  });
+
+  it("accounts for a criterion dispositioned ONLY in an issue comment, as the close path does", () => {
+    expect(checkAcceptance("Closes #700\n", withComments(...mapped)).ok).toBe(true);
+  });
+
+  it("says which venues it read, so a duplicate does not appear from nowhere", () => {
+    const out = formatAcceptance(checkAcceptance(PR_BODY, withComments(...mapped)));
+    expect(out).toContain("3 venues supplied disposition lines and are read CUMULATIVELY — the PR body, #700 comment 1, #700 comment 2");
+  });
+
+  // The invariant itself, rather than one instance of it: whatever the arrangement of venues, the
+  // two gates return the same verdict. This is what would have caught the defect.
+  it("PR verdict == close verdict, over every arrangement of the venues", () => {
+    const arrangements = [
+      { name: "dispositions in the PR body only", body: PR_BODY, comments: [] },
+      { name: "dispositions in the issue comments only", body: "Closes #700\n", comments: mapped },
+      { name: "dispositions in BOTH — the #1517 shape", body: PR_BODY, comments: mapped },
+      { name: "dispositions nowhere", body: "Closes #700\n", comments: [] },
+      { name: "one criterion mapped, one left unaccounted", body: `Closes #700\n\n${mapped[0]}\n`, comments: [] },
+      { name: "one in each venue — no duplicate, both accounted for", body: `Closes #700\n\n${mapped[0]}\n`, comments: [mapped[1]!] },
+    ];
+    for (const a of arrangements) {
+      const lookup = withComments(...a.comments);
+      const pr = checkAcceptance(a.body, lookup).ok;
+      const close = checkClosedIssue({ issue: 700, linkedPrs: [{ ref: "#900", body: a.body }], authorIsBot: false }, lookup).ok;
+      expect(pr, `${a.name}: PR check ${pr}, close check ${close}`).toBe(close);
+    }
+  });
+
+  // NEGATIVE CONTROL for the invariant above: it must be able to fail. An arrangement where the two
+  // genuinely differ has to be visible, or "they always agree" is a statement about the assertion.
+  it("NEGATIVE CONTROL: the parity assertion fails when one path is fed a venue the other is not", () => {
+    const lookup = withComments();
+    const pr = checkAcceptance(PR_BODY, lookup).ok;
+    const close = checkClosedIssue({ issue: 700, linkedPrs: [], authorIsBot: false }, lookup).ok;
+    expect(pr).toBe(true);
+    expect(close).toBe(false);
+  });
+
+  // The other half of the same false negative, reached by a different route: GitHub closes on a
+  // Development-sidebar link with no keyword in the body at all, so a body-only close set green-
+  // no-ops on a PR that WILL close the issue.
+  it("checks an issue GitHub records as closing that the body never mentions", () => {
+    const lookup = withComments();
+    const sidebar = "Refactors the seeder. refs #700\n";
+    expect(checkAcceptance(sidebar, lookup).ok).toBe(true);
+    const r = checkAcceptance(sidebar, lookup, undefined, undefined, { linkedCloses: [{ number: 700, ref: "#700" }] });
+    expect(r.ok).toBe(false);
+    expect(r.noop).toBe(false);
+    expect(r.closes.map((c) => c.number)).toEqual([700]);
+  });
+
+  it("does not report a sidebar close twice when the body ALSO carries the keyword", () => {
+    const r = checkAcceptance(PR_BODY, withComments(), undefined, undefined, { linkedCloses: [{ number: 700, ref: "#700" }] });
+    expect(r.closes).toHaveLength(1);
+    expect(r.ok).toBe(true);
   });
 });
 
@@ -513,11 +602,13 @@ describe("the seeders fail loud rather than planting nothing", () => {
 describe("an issue that closes with no PR body to read (#1341)", () => {
   const CRITERIA = "## Acceptance\n- first\n- second\n";
   const closeLookup: IssueLookup = (n) => (n === 700 ? issue({ number: 700, body: CRITERIA }) : undefined);
-  const bare = { issue: 700, linkedPrs: [], comments: [], authorIsBot: false };
+  const bare = { issue: 700, linkedPrs: [], authorIsBot: false };
   const mapped = [
     "ACCEPTANCE #700.1 met: src/acceptance-conservation.ts now checks it",
     "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it",
   ];
+  /** The comments are read through the LOOKUP on both paths, which is what keeps the two in step. */
+  const commented = (...comments: string[]): IssueLookup => (n) => (n === 700 ? issue({ number: 700, body: CRITERIA, comments }) : undefined);
 
   it("fails a BARE CLICK — no linked PR, no comment, and two criteria nobody accounted for", () => {
     const r = checkClosedIssue(bare, closeLookup);
@@ -527,9 +618,9 @@ describe("an issue that closes with no PR body to read (#1341)", () => {
   });
 
   it("passes a bare click whose dispositions are recorded as issue comments — the venue #1341 chose", () => {
-    const r = checkClosedIssue({ ...bare, comments: mapped }, closeLookup);
+    const r = checkClosedIssue(bare, commented(...mapped));
     expect(r.ok).toBe(true);
-    expect(r.contributed).toEqual(["issue comment 1", "issue comment 2"]);
+    expect(r.contributed).toEqual(["#700 comment 1", "#700 comment 2"]);
   });
 
   // The one that looks like a normal close and is not: GitHub acts on the sidebar link, so the issue
@@ -549,7 +640,7 @@ describe("an issue that closes with no PR body to read (#1341)", () => {
   // Only disposition-bearing LINES cross over. A whole PR body would drag its other closing keywords
   // in and put unrelated issues on trial in a check scoped to one issue.
   it("ignores a closing keyword for another issue in the surfaces it reads", () => {
-    const r = checkClosedIssue({ ...bare, comments: [`Closes #999 as well.\n${mapped.join("\n")}`] }, closeLookup);
+    const r = checkClosedIssue(bare, commented(`Closes #999 as well.\n${mapped.join("\n")}`));
     expect(r.ok).toBe(true);
     expect(r.report!.closes.map((c) => c.number)).toEqual([700]);
   });
@@ -568,7 +659,7 @@ describe("an issue that closes with no PR body to read (#1341)", () => {
 
   it("scores exactly as the CLI's --selftest-close asserts, so CI and `pnpm verify` share one fixture", () => {
     for (const c of closeSelftestCases()) {
-      expect(checkClosedIssue(c.input, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
+      expect(checkClosedIssue(c.input, c.lookup, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
     }
   });
 
