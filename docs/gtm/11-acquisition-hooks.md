@@ -118,9 +118,12 @@ Don't work all nine at once. Sequence:
 
 1. **F-1 Security** — already has verified demand; the launch on-ramp.
 2. **M-1 Scalability/load-readiness** — highest-urgency moment hook, distinct lane, real
-   M7 depth.
+   M7 depth. **Shipped 2026-07-30** (`/supabase-load-readiness`, refs #728).
 3. **F-3 The re-fixing trap** *or* **F-2 AI slop** — pick one to open the code-health
    half; both are on-brand and emotionally resonant. (F-3 is broader; F-2 is punchier.)
+   **See "Demand-validation status" below (2026-07-30 pass) — F-2's exact framing is now
+   contested by direct competitors; this changes the trade-off this line describes but the
+   choice is still open, pending an operator call.**
 4. **M-2 Launch-readiness** — the umbrella; cheap to stand up since it's the brand itself.
 
 Add **F-4 compliance** and **M-3 diligence** as the customer base reveals regulated-data
@@ -129,11 +132,64 @@ standalone lane.
 
 ## Demand-validation status
 
-**Verified (2026-07-21 SEO pass):** the F-1 security query cluster only. **NOT yet
-measured:** search demand and current rankers for scalability/load-readiness, AI-slop,
-re-fixing/maintainability, compliance, and test-quality queries. Per repo discipline
-("measure, don't recall"), validate the top new lanes (M-1, F-2/F-3) with a search pass
-before committing content effort — don't assume volume.
+**Verified (2026-07-21 SEO pass):** the F-1 security query cluster (19 live searches,
+competitor pages fetched — `06-seo-aeo.md`).
+
+**Verified (2026-07-30 pass, #728):** a second live-search pass (14 searches, results
+read, no keyword-volume tool available — so this is competitor/content-density evidence,
+the same proxy the 2026-07-21 pass used, not raw search-volume numbers) covering the six
+lanes the 2026-07-21 pass left unmeasured. Findings, marked **[observed]**:
+
+- **M-1 scalability/load-readiness — real, and thinner competition than F-1.**
+  "next.js app slow" and "supabase slow query / laggy" each return a deep bench of
+  dedicated posts (LogRocket, multiple Medium pieces, official Supabase docs) — genuine,
+  recurring founder pain, confirming the doc's "companion felt-pain lane" call. The
+  launch-moment framing itself ("is my supabase app ready for a traffic spike," "load
+  testing before launch") returns Supabase's own production checklist plus scattered SaaS
+  launch-checklist content, but **no competitor packaging this as a paid pre-launch
+  readiness check the way this hook proposes** — the "lane no competitor owns" claim
+  holds. **Shipped this pass:** `/supabase-load-readiness`, routed to the free scan.
+- **F-2 AI slop — real pain, but the exact "audit your AI slop" framing is now
+  contested.** Multiple direct competitors already sell close to this exact positioning:
+  vibeaudits.com, varyence.com ("Vibe Coding Security Assessment"), vallettasoftware.com
+  ("Vibe Coding Audit — Investor-Ready Code from $199"), digitalapplied.com, plus several
+  blog-first entrants (aquilax.ai, codewithseb.com, kunalganglani.com). The underlying
+  pain is confirmed (an arXiv paper on "AI slop," dead-code-from-AI content, a widely
+  quoted "$400M–$4B in AI-codebase cleanup" figure) but the door is no longer empty —
+  this is a **downgrade from the doc's "punchier, uncontested" framing**, not a
+  disqualifier.
+- **F-3 re-fixing the same modules — pain confirmed, framing still open.** "Code churn /
+  complexity hotspot" returns an established but developer-tool-facing content set
+  (swimm.io, opsera.ai, codepulsehq.com, an arXiv hotspots paper) — real methodology,
+  aimed at engineers, not founders. "Why do I keep fixing the same bug" returns generic
+  debugging-psychology content, not hotspot-specific competitor pages — nobody is
+  running the founder-facing "the 3 files causing 60% of your bugs" framing this hook
+  proposes. Confirms the doc's own read: a felt pain with an open door, not a searched
+  phrase.
+- **F-4 compliance/PII — real demand, wrong buyer size.** "GDPR compliance audit
+  startup" and "find PII in your database" both return dense, mature content (Vanta,
+  Drata, Scrut, SecurityMetrics, AWS/Google DLP docs) — but the whole ecosystem is
+  built for compliance teams and mid-market tooling budgets, not a solo founder running
+  a small Supabase app. Real lane, low near-term priority given ICP size — matches the
+  doc's own sequencing (add F-4 "as the customer base reveals regulated-data segments").
+- **M-2 launch-readiness — the umbrella is genuinely crowded** (opslevel.com, getdx.com,
+  cortex.io, port.io, kuberstar.com all publish production-readiness checklists), all
+  ops/SRE-facing rather than whole-codebase-QA-facing. Confirms the doc's framing: this
+  lane wins on brand ("Is your app actually ready to launch?" as Harvey's own umbrella
+  question), not on an open SERP.
+- **Adjacent finding, unprompted by the six lanes above but too material to omit:** a
+  direct "vibe-coding audit service" competitor set already exists (the F-2 names
+  above) selling audits of AI-built apps generally, and a separate competitor
+  (OutSight AI) is already running mutation-testing-over-coverage as its core pitch —
+  the same framing as F-5's "coverage lies" angle. Both are worth a status re-check
+  before those specific lanes get content investment.
+
+**Proposed re-sequencing (operator call, not applied here):** the search pass raises a
+question the priority list did not have data for: F-2 (AI slop) and F-3 (re-fixing) traded
+places on evidence — F-3 now looks like the more open door of the two code-health lanes,
+where the "Priority at $0 budget" list above still names F-2 as the punchier option.
+Whether to build F-3 next, still build F-2, or hedge with a thinner version of both is
+an operator sequencing decision; this pass supplies the evidence, not the call.
 
 ## How hooks connect to the rest of the strategy
 
