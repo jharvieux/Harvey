@@ -62,14 +62,27 @@ tracker write-back.
 
 ## Known limits
 
-- Detector re-run resolvers currently cover the AST engines (M5/M6/M7/M9 taxonomies,
-  `src/fix/detector-rerun.ts`). Findings from semgrep rules, live tiers (M1 live, M2, M7
-  advisors, M10 live), M3/M4/M8 external tools, and LLM passes report `unverifiable` with that
-  reason — disclosed, their tickets stay open, and a full re-audit of that tier remains the
-  verification path. Extending resolvers (semgrep first, when the binary is present) widens the
-  gate without changing its contract.
-- Packaging decision made (#1013): one re-audit/rescan is included in the base engagement, if
-  requested within 30 days of the original audit; additional rescans are a paid add-on at 50%
-  of the original audit price, also within 30 days of the original audit. The gate itself still
-  has no tier flag — encoding the add-on gate into `fix-verify.ts` (mirroring the #824
-  paid-tier pattern) is unbuilt.
+- Detector re-run resolvers cover the AST engines (M5/M6/M7/M9 taxonomies), the harvey-* semgrep
+  rules replayed against the local rule directory (#1012), and — since #1368 — `p/*` registry-pack
+  rules, replayed via a LIVE semgrep run against the same six packs every real engagement scan
+  fetches (`src/scan/semgrep.ts`'s `runRegistryPacksOnFile`). The registry-pack path needs a
+  reachable network on the re-verification machine; offline or with semgrep absent it reports
+  `unverifiable` with the specific reason, never a false clean. #1012's original comment recorded
+  the registry-pack gap as a network fetch it deliberately declined; #1368 found that reason wider
+  than what was tried — the fetch resolves in 1-2s and is a determinism preference, not a capability
+  limit — and re-measured its cost: MEASURED 2026-07-30 against the committed dry-run artifact,
+  counted with the production predicate (`src/fix/detector-rerun.ts`'s `REGISTRY_RULE_SHAPE` plus
+  `harveyRuleOf`, not a bare "taxonomy contains a dot" check — an earlier pass with that looser
+  predicate over-counted at 54/390, 13.8%), **48 of 384 rule-id-shaped findings (12.5%)** are
+  registry-pack rather than harvey-*, so this closes resolvability for that share of a real
+  deliverable's rule findings rather than parking them `unverifiable` permanently. Findings from
+  live tiers (M1 live, M2, M7 advisors, M10 live), M3/M4/M8
+  external tools, and LLM passes still report `unverifiable` with that reason — disclosed, their
+  tickets stay open, and a full re-audit of that tier remains the verification path.
+- Packaging decision made (#1013), and the gate now enforces it (#1357): one re-audit/rescan is
+  included in the base engagement, if requested within 30 days of the original audit; additional
+  rescans are a paid add-on at 50% of the original audit price, also within 30 days of the original
+  audit. `src/cli/fix-verify.ts`'s `writebackGate` treats a run supplying `--prior` as an additional
+  rescan by construction (the accumulated report chain IS the self-serve re-audit) and withholds
+  ticket write-back — never the report itself — until `--paid` is passed, mirroring #824's
+  file-findings gate: disclosed, not silently dropped, and never blocking the diagnostic half.

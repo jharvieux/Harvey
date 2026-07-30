@@ -5,13 +5,15 @@
 //
 // Method: TypeScript compiler API (already a devDependency; no ts-morph in
 // this repo). Cross-file resolution (server→client leak, server-only graph)
-// follows both relative imports and tsconfig/jsconfig `paths` aliases
-// (`@/components/...`), falling back to the create-next-app `@/*`→root default
-// when no config is present (#380). See docs/m9-app-router.md for full
-// per-check limitations.
+// follows relative imports, tsconfig/jsconfig `paths` aliases
+// (`@/components/...`, per-config-scoped since #1353), and workspace package
+// specifiers (`@acme/utils` → `packages/utils/src/index.ts`, #1353), falling
+// back to the create-next-app `@/*`→root default when no config is present
+// (#380). See docs/m9-app-router.md for full per-check limitations.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import { workspacePackages } from "../workspaces.js";
 import {
   FRAMEWORK_LABELS,
   isViteTooling,
@@ -163,12 +165,30 @@ export interface PathAlias {
   // apps/starter and apps/academy — so a specifier has to resolve against ITS OWN package's
   // mapping, not against whichever config happened to be parsed first.
   scope: string;
+  /**
+   * #1353: a workspace member's entry-module bases, tried when the specifier IS the package name
+   * with no subpath. Present only on workspace-package aliases, which match EXACTLY (a tsconfig
+   * alias like `@/` is a prefix and is never itself a whole specifier).
+   */
+  entryBases?: string[];
 }
 
-// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380). ts.parseConfigFileTextToJson
-// tolerates the comments/trailing commas tsconfig commonly carries. With no config paths in the
-// set, fall back to Next.js's own `@/*`→root default rather than giving up — the vast majority of
-// otherwise-unresolved specifiers are exactly that scaffolding default.
+// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
+// workspace member package (#1353). ts.parseConfigFileTextToJson tolerates the comments/trailing
+// commas tsconfig commonly carries. With no config paths in the set, fall back to Next.js's own
+// `@/*`→root default rather than giving up — the vast majority of otherwise-unresolved specifiers
+// are exactly that scaffolding default.
+//
+// Three independent monorepo failures were fixed here on 2026-07-28. They compose — one decides
+// WHICH FILENAMES are read, one HOW MANY of them, one what a NON-tsconfig specifier resolves to.
+// - #1479 widened the filename: an Nx repo keeps its `paths` map in `tsconfig.base.json` and ships
+//   no root `tsconfig.json`, so ghostfolio's whole cross-file import graph was disconnected.
+// - #1461 replaced "the shallowest config with `paths` wins, then stop reading" with per-config
+//   scoping, measured on carbon (below).
+// - #1353 added workspace PACKAGE specifiers, which no tsconfig declares at all: `@rallly/utils`
+//   -> packages/utils, through that package's own `main`/`exports` (wildcards included). Without
+//   it the graph stopped at the package boundary and #1344's reachability gate read a shared
+//   package as unreachable from the app's routes.
 //
 // #1461: this used to stop at the SHALLOWEST config that declared any `paths` and return only its
 // aliases. On a single-app repo that is the repo-root tsconfig and the rule is right; on a MONOREPO
@@ -199,6 +219,12 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
     }
   }
   if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "" });
+  // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
+  // tree, so it must not out-rank an enclosing package's own tsconfig alias.
+  for (const pkg of workspacePackages(files)) {
+    for (const sub of pkg.subpaths) aliases.push({ ...sub, scope: "" });
+    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
+  }
   return aliases;
 }
 
@@ -221,7 +247,14 @@ function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set
   // 0 = declared by some other workspace; higher = a deeper enclosing package, which wins.
   const rank = (a: PathAlias) => (a.scope === "" || fromPath.startsWith(`${a.scope}/`) ? a.scope.length + 1 : 0);
   const ordered = [...aliases].sort((a, b) => rank(b) - rank(a));
-  for (const { prefix, baseDir } of ordered) {
+  for (const { prefix, baseDir, entryBases } of ordered) {
+    if (entryBases) {
+      // #1353: a workspace package named EXACTLY, with no subpath — resolve to its own entry module.
+      if (specifier !== prefix) continue;
+      const hit = entryBases.flatMap(candidatePaths).find((c) => allPaths.has(c));
+      if (hit) return hit;
+      continue;
+    }
     if (!specifier.startsWith(prefix)) continue;
     const rest = specifier.slice(prefix.length);
     const base = normalizeRepoPath(baseDir ? `${baseDir}/${rest}` : rest);

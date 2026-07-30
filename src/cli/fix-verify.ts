@@ -3,13 +3,22 @@
 //
 //   pnpm exec tsx src/cli/fix-verify.ts <findings.json> --target <client-checkout> \
 //     [--prior <prior fix-verify.json>] [--out <file>] [--engagement <label>] \
-//     [--tracker github|gitlab|jira|linear|azure] [--confirm]
+//     [--tracker github|gitlab|jira|linear|azure] [--paid] [--confirm]
 //
 // Scope: ONLY the engagement's delivered findings — the gate re-runs the detectors that produced
 // them and never scans beyond what was already reported. Read-only against the target checkout;
 // the sole outbound write is the ticket write-back, and only with --confirm AND the tracker's
 // token in the environment (mirroring file-findings' guardrail — the default run is a preview
 // that provably cannot touch the network, and never needs a token).
+//
+// #1357 PAID-RESCAN GATE (operator decision, #1013): the base engagement includes ONE re-audit
+// pass at no extra charge; additional rescans are a paid add-on (50% of the original audit price),
+// both within 30 days of the original audit. `--prior` is what makes a run an ADDITIONAL rescan —
+// the accumulated report chain IS the self-serve re-audit (see the module doc above), so a run
+// supplying `--prior` is, by construction, at least the second verification pass. Mirrors #824's
+// file-findings gate: the report itself (local, harmless) is always produced and printed; what's
+// withheld without --paid is the ticket write-back, the chargeable action, always disclosed rather
+// than silently skipped.
 //
 // Exit codes: 1 when any finding REGRESSED (a verified fix was reintroduced — the red-gate signal
 // for CI) or any ticket write-back failed; 0 otherwise. `unverifiable` rows do not fail the gate,
@@ -62,6 +71,18 @@ function flag(args: string[], name: string): string | undefined {
 
 const STATUS_MARK: Record<string, string> = { resolved: "✓", persistent: "·", regressed: "✗", unverifiable: "?" };
 
+// #1357: whether ticket write-back may proceed for this run. A free function (no CLI parsing, no
+// I/O) so it has a direct unit test rather than needing a child-process spawn of this CLI — mirrors
+// how #824's paid-tier gate is tested at the library level (findings-to-tickets.test.ts), not through
+// file-findings.ts's own CLI wrapper.
+export function writebackGate(isAdditionalRescan: boolean, paid: boolean, actionableCount: number): { allowed: boolean; message?: string } {
+  if (!isAdditionalRescan || paid || actionableCount === 0) return { allowed: true };
+  return {
+    allowed: false,
+    message: `${actionableCount} ticket write-back action(s) not applied: this is an ADDITIONAL rescan (a --prior report was supplied) beyond the one rescan included in the base engagement. Additional rescans are a paid add-on (50% of the original audit price, within 30 days of the original audit — #1013). Re-run with --paid once purchased.`,
+  };
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const VALUE_FLAGS = new Set(["--target", "--prior", "--out", "--engagement", "--tracker"]);
@@ -75,7 +96,7 @@ async function main(): Promise<void> {
   const targetArg = flag(args, "--target");
   if (!findingsPath || !targetArg) {
     throw new Error(
-      "usage: fix-verify <findings.json> --target <client-checkout> [--prior <fix-verify.json>] [--out <file>] [--engagement <label>] [--tracker github|gitlab|jira|linear|azure] [--confirm]",
+      "usage: fix-verify <findings.json> --target <client-checkout> [--prior <fix-verify.json>] [--out <file>] [--engagement <label>] [--tracker github|gitlab|jira|linear|azure] [--paid] [--confirm]",
     );
   }
 
@@ -91,6 +112,12 @@ async function main(): Promise<void> {
   const prior = priorPath ? (JSON.parse(readFileSync(priorPath, "utf8")) as GateReport) : undefined;
   const targetDir = resolve(targetArg);
   const outPath = resolve(flag(args, "--out") ?? "fix-verify.json");
+
+  // #1357: a run chaining --prior is, by construction, at least the second verification pass — the
+  // accumulated report chain IS the self-serve re-audit (module doc above). The base engagement
+  // includes the first one; every one after that needs --paid, mirroring #824's file-findings gate.
+  const isAdditionalRescan = prior !== undefined;
+  const paid = args.includes("--paid");
 
   const report = runGate(doc.findings, targetDir, { engagement: flag(args, "--engagement"), prior });
   writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`);
@@ -110,12 +137,17 @@ async function main(): Promise<void> {
   const plan = planWriteback(report);
   const actionable = plan.filter((p) => p.intent !== "none");
   const trackerKind = flag(args, "--tracker");
-  if (!args.includes("--confirm")) {
-    if (actionable.length) {
-      console.log(`\n[dry-run] ticket write-back plan (${actionable.length} action(s)) — re-run with --tracker <kind> --confirm and the tracker's token in the environment to apply:`);
-      for (const p of actionable) console.log(`  ${p.intent === "closed" ? "close " : "reopen"} ticket of ${p.findingId} — ${p.reason}`);
-    }
-  } else if (actionable.length) {
+  const gate = writebackGate(isAdditionalRescan, paid, actionable.length);
+  if (!gate.allowed) {
+    // #1357: the report above still ran in full — only the chargeable write-back is withheld, and
+    // disclosed rather than silently skipped, matching #824's "N below the paid-tier threshold" posture.
+    console.log(`\n${gate.message}`);
+  } else if (actionable.length === 0) {
+    console.log("\nNo ticket write-back needed: nothing newly resolved or regressed.");
+  } else if (!args.includes("--confirm")) {
+    console.log(`\n[dry-run] ticket write-back plan (${actionable.length} action(s)) — re-run with --tracker <kind> --confirm and the tracker's token in the environment to apply:`);
+    for (const p of actionable) console.log(`  ${p.intent === "closed" ? "close " : "reopen"} ticket of ${p.findingId} — ${p.reason}`);
+  } else {
     if (!trackerKind) throw new Error("--tracker is required with --confirm (github|gitlab|jira|linear|azure)");
     const res = await writeBackVerification(makeWriteback(trackerKind), report);
     console.log(`\nWrite-back: closed ${res.closed}, reopened ${res.reopened}, failed ${res.failed}.`);
@@ -125,8 +157,6 @@ async function main(): Promise<void> {
       else if (rec.reason.includes("no ticket found")) console.log(`  · ${rec.findingId}: ${rec.reason}`);
     }
     if (res.failed > 0) process.exitCode = 1;
-  } else {
-    console.log("\nNo ticket write-back needed: nothing newly resolved or regressed.");
   }
 
   // A reintroduced finding is the gate's red signal — a delivered, verified fix is gone.
@@ -136,7 +166,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// #1357: guarded so importing writebackGate for a direct unit test (fix-verify.test.ts) doesn't also
+// run the CLI (main() would otherwise fire on import with no argv, throwing the usage error) — same
+// guard as detect-deeper.ts/scan.ts.
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

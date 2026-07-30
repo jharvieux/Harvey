@@ -15,12 +15,29 @@
 //   doctrine), and needs @next/bundle-analyzer as the follow-up input.
 //
 // [B] depth tier (#179) — duplicate-modules-across-chunks, dependency attribution, and
-// per-route first-load on Turbopack builds all need the @next/bundle-analyzer / webpack-stats
-// JSON (a separate artifact from `.next` — `generateStatsFile: true` writes it via
-// webpack-bundle-analyzer, standard webpack Stats.toJson() shape: `modules[]` with
-// `identifier`/`name`/`size`/`chunks[]`, `namedChunkGroups{}` with `assets[]`). Verified live
-// against real Turbopack builds (#840): parseBundleStats() successfully extracted correct
-// per-route weights from `next build` output with Turbopack.
+// per-route first-load on Turbopack builds all need the webpack-stats JSON (a separate artifact
+// from `.next`: webpack-bundle-analyzer's `generateStatsFile: true` writes it, standard webpack
+// Stats.toJson() shape: `modules[]` with `identifier`/`name`/`size`/`chunks[]`,
+// `namedChunkGroups{}` with `assets[]`).
+//
+// VERIFIED LIVE 2026-07-28 (#1304) — MEASURED, not inferred. `parseBundleAnalyzerStats` had only
+// ever seen synthetic JSON its own test wrote; #862 replaced that honest caveat with a sentence
+// about `parseBundleStats` (a different function), so the file claimed a verification it did not
+// have. What was actually run: the pinned external-corpus target vercel/nextjs-subscription-payments
+// @bdd0813 (Next 14.2.3, webpack) built with the BundleAnalyzerPlugin config recorded in
+// src/detectors/__fixtures__/bundle-analyzer-stats/README.txt; all three findings populated off the
+// real 38 MB artifact (M7B-04 duplicate modules, M7B-05 dependency attribution, and M7B-06 once the
+// route budget is set below this small app's heaviest group). The capture is committed and asserted
+// in bundle-stats.test.ts, so the claim is now gated rather than remembered.
+//
+// TRAP that verification found, and the reason the wording above changed: `@next/bundle-analyzer`
+// does NOT expose `generateStatsFile`. MEASURED 2026-07-28 against 14.2.3 and 16.2.12 — its whole
+// option surface is `{ enabled, logLevel, openAnalyzer, analyzerMode }`, and `analyzerMode: "json"`
+// emits webpack-bundle-analyzer's own treemap report (a top-level ARRAY of `{label, statSize,
+// parsedSize, groups}`), which is NOT the Stats.toJson() shape parsed below. Producing this input
+// needs the underlying BundleAnalyzerPlugin wired into the target's own next.config webpack hook.
+// Anything that asks a client for this artifact has to say that, or the client sends the wrong file.
+//
 // Sizes in this JSON are parsed (pre-gzip) bytes; there's no gzip step over already-emitted
 // JSON, so the budgets here are independently calibrated on uncompressed bytes and are NOT
 // directly comparable to the gzip-based M7B-01/02 budgets above.
@@ -87,12 +104,16 @@ function routeLabel(key: string): string {
 // App Router — on EITHER bundler — writes a client-reference-manifest per page under
 // `server/app/**` so the request-serving runtime knows which client chunks to preload; that
 // runtime-consuming code is bundler-agnostic, so the manifest's existence and location don't
-// depend on which bundler produced the chunks it lists. UNVERIFIED against a live Turbopack
-// production build: no Next.js install in this repo to test against, and the recorded reason for
-// leaving it that way — that `package.json` is supervised — is FALSE (operator ruling 2026-07-27,
-// #1319). Verifying it is a budget call, not a path restriction. The parse below deliberately
-// doesn't depend on the manifest's exact object
-// shape (which has drifted across Next versions) — it only regex-extracts quoted
+// depend on which bundler produced the chunks it lists. VERIFIED LIVE 2026-07-23 (#840): a real
+// 4-route App Router app built with `next build` on Next.js 16.2.11 under Turbopack emitted no
+// app-build-manifest.json but did write `server/app/**/*_client-reference-manifest.js` per route;
+// `parseBundleStats()` discovered all 5 route manifests, derived correct route labels, and measured
+// real gzipped weights — and a differential control (adding a `lodash`-importing client component
+// to /about only) moved that route to 38 KB against 14 KB for the others, so the per-route split is
+// genuine and not a uniform default. This paragraph read "UNVERIFIED" for four days after that
+// measurement (#1304): #840 flagged the staleness and declined the edit as if a source comment were
+// supervised, which it never was. The parse below deliberately doesn't depend on the manifest's
+// exact object shape (which has drifted across Next versions) — it only regex-extracts quoted
 // `static/chunks/*.js` paths from the file text, the one part of the contract that has to
 // stay stable (it's the real on-disk chunk location). If a future Next version stops writing
 // this file, or moves chunks out of `static/chunks`, this falls back to the M7B-03 disclosure.
@@ -355,8 +376,15 @@ function statsRouteLabel(entryName: string): string {
   return routeLabel(`/${entryName.replace(/^(app|pages)\//, "")}`);
 }
 
+// Not every namedChunkGroup is a route. MEASURED on the #1304 capture (real Next 14.2.3 webpack
+// build): alongside the six app/* route groups the stats carry `main`, `main-app`, `pages/_app` and
+// `pages/_error` — framework runtime entries with no URL. `main-app` was reported as a route
+// "/main-app" at 293 KB, which is a weight no user can act on and no route a client can find.
+const FRAMEWORK_ENTRY = /^(main|main-app|polyfills|webpack|amp|react-refresh|pages\/(_app|_error|_document))$/;
+
 function statsRouteAttributionFinding(groups: Record<string, StatsChunkGroup>, routeBudget: number): Finding | undefined {
   const weights = Object.entries(groups)
+    .filter(([name]) => !FRAMEWORK_ENTRY.test(name))
     .map(([name, g]) => ({ route: statsRouteLabel(name), bytes: (g.assets ?? []).reduce((sum, a) => sum + a.size, 0) }))
     .filter((w) => w.bytes > routeBudget)
     .sort((a, b) => b.bytes - a.bytes);

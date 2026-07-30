@@ -1,0 +1,1 @@
+{ "name": "@acme/react", "main": "./src/index.ts" }

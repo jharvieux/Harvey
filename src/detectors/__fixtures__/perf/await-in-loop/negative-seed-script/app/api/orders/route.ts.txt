@@ -1,0 +1,13 @@
+import { supabase } from "../../../lib/db";
+
+// SCOPE CONTROL — a genuine request-path N+1 planted in this same fixture dir. It MUST fire, so a
+// zero on the two seed/codegen files above is not the scanner silently skipping this directory.
+export async function GET(request: Request) {
+  const ids = new URL(request.url).searchParams.getAll("id");
+  const out = [];
+  for (const id of ids) {
+    const { data } = await supabase.from("orders").select("id, amount").eq("id", id);
+    out.push(data);
+  }
+  return Response.json(out);
+}

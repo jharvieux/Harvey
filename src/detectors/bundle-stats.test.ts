@@ -247,3 +247,39 @@ describe("bundle-analyzer stats JSON (#179)", () => {
     expect(parseBundleAnalyzerStats(join(statsDir, "does-not-exist.json"))).toHaveLength(0);
   });
 });
+
+// #1304 — the synthetic fixtures above are JSON this test wrote, so they can only prove the parser
+// agrees with our own idea of the format. This block runs the same three findings over a REAL
+// artifact from a real `next build` (provenance and the reduction in the fixture's README.txt),
+// which is what the module header had been claiming since #862 without it ever having happened.
+describe("bundle-analyzer stats JSON — captured from a real next build (#1304)", () => {
+  const capture = join(import.meta.dirname, "__fixtures__", "bundle-analyzer-stats", "subscription-payments.client.json");
+
+  it("populates all three [B] depth findings — none silently returns []", () => {
+    // 250 KB, not the 750 KB default: this is a 5-route starter, and its heaviest chunk group is
+    // 357 KB. The default budget is right for the field and would clear this app on the merits.
+    const findings = parseBundleAnalyzerStats(capture, { routeBudgetBytes: 250 * 1024 });
+    expect(findings.map((f) => f.id).sort()).toEqual(["M7B-04", "M7B-05", "M7B-06"]);
+  });
+
+  it("attributes duplicated first-party modules and real npm weight", () => {
+    const findings = parseBundleAnalyzerStats(capture);
+    const dup = findings.find((f) => f.id === "M7B-04");
+    // utils/helpers.ts is genuinely emitted into four client chunks by this build.
+    expect(dup).toMatchObject({ location: "./utils/helpers.ts" });
+    expect(dup?.evidence).toContain("4×");
+    const dep = findings.find((f) => f.id === "M7B-05");
+    expect(dep?.evidence).toContain("@supabase/ssr");
+    // ramda reaches the client only through webpack's CONCATENATED child modules — it disappears
+    // from the attribution if the nested `modules` arrays are ever dropped from the capture.
+    expect(dep?.evidence).toContain("ramda");
+  });
+
+  it("does not report webpack's framework entries as routes", () => {
+    const findings = parseBundleAnalyzerStats(capture, { routeBudgetBytes: 250 * 1024 });
+    const route = findings.find((f) => f.id === "M7B-06");
+    // main-app is 293 KB in this build and was reported as a route "/main-app" before #1304.
+    expect(route?.evidence).not.toContain("main-app");
+    expect(route?.evidence).toContain("/account");
+  });
+});
