@@ -243,17 +243,24 @@ export function loadSemanticPass(raw: unknown, target: SemanticTarget, path: str
   }
   const a = raw as Partial<PassArtifact>;
   if (a.module !== "M1") return { ok: false, reason: `${path} records module ${a.module ?? "<none>"}, not M1 — this gate scores the M1 semantic pass` };
-  if (a.pass !== "semantic") return { ok: false, reason: `${path} records the "${a.pass ?? "<none>"}" pass, not "semantic" — a mechanical/dynamic/verdict artifact cannot score the semantic tier` };
-  const ts = a.generatedAt ? Date.parse(a.generatedAt) : NaN;
+  // #1522: the M1 slot accumulates its tiers, so score the semantic pass wherever it sits. Reading
+  // only the newest one meant a connected or live pass recorded afterwards left this gate reporting
+  // the target unscored — the recall number quietly dropping because an operator recorded MORE.
+  const held = [a, ...(a.priorPasses ?? [])];
+  const semantic = held.find((p) => p.pass === "semantic");
+  if (!semantic) {
+    return { ok: false, reason: `${path} holds the ${held.map((p) => `"${p.pass ?? "<none>"}"`).join(", ")} pass(es) and no "semantic" one — a mechanical/dynamic/verdict artifact cannot score the semantic tier` };
+  }
+  const ts = semantic.generatedAt ? Date.parse(semantic.generatedAt) : NaN;
   if (Number.isNaN(ts)) return { ok: false, reason: `${path} has no valid generatedAt timestamp — cannot judge whether this pass describes the current briefs` };
   if (now - ts > MAX_PASS_AGE_MS) {
     const ageDays = Math.round((now - ts) / (24 * 60 * 60 * 1000));
-    return { ok: false, reason: `${path} is stale (generated ${a.generatedAt}, ${ageDays} days ago, past the ${Math.round(MAX_PASS_AGE_MS / (24 * 60 * 60 * 1000))}-day window) — re-run the semantic pass` };
+    return { ok: false, reason: `${path} is stale (generated ${semantic.generatedAt}, ${ageDays} days ago, past the ${Math.round(MAX_PASS_AGE_MS / (24 * 60 * 60 * 1000))}-day window) — re-run the semantic pass` };
   }
-  if (!a.findings) {
+  if (!semantic.findings) {
     return { ok: false, reason: `${path} carries no findings array — record-pass drops an empty one, so this cannot be told apart from "the pass ran and reported nothing". Re-record with --findings <triage.json>` };
   }
-  return { ok: true, artifact: a as PassArtifact };
+  return { ok: true, artifact: semantic as PassArtifact };
 }
 
 // Scores one target's pass findings against its answer key.

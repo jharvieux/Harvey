@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildPassArtifact, findFreshPass, MAX_PASS_AGE_MS, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
+import { buildPassArtifact, findFreshPass, MAX_PASS_AGE_MS, mergePassArtifact, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 
 const NOW = Date.parse("2026-07-17T12:00:00Z");
@@ -83,14 +83,68 @@ describe("findFreshPass (#416 — derive ran only from a fresh, target-matching 
 
 describe("ranFromPass", () => {
   it("carries the pass findings into the outcome when present", () => {
-    const out = ranFromPass(artifact({ findings: [{ id: "F1" } as never] }), "mech");
+    const out = ranFromPass(artifact({ findings: [{ id: "F1" } as never] }), "mech", NOW);
     expect(out.status).toBe("ran");
     expect(out.findings).toHaveLength(1);
     expect(out.detail).toContain("semantic pass");
   });
 
   it("omits findings when the pass produced none", () => {
-    expect(ranFromPass(artifact(), "mech").findings).toBeUndefined();
+    expect(ranFromPass(artifact(), "mech", NOW).findings).toBeUndefined();
+  });
+
+  // #1522: the slot accumulates, so a superseded tier's findings must still reach the deliverable —
+  // before it, recording a second tier deleted the first one's findings at the write side.
+  it("collects the findings of EVERY fresh pass in the slot, and names each tier", () => {
+    const slot = artifact({
+      pass: "connected",
+      findings: [{ id: "SB-DRIFT-01" } as never],
+      priorPasses: [{ module: "M1", target: "/target", pass: "semantic", generatedAt: iso(2 * DAY), findings: [{ id: "TRIAGE-1" } as never] }],
+    });
+    const out = ranFromPass(slot, "mech", NOW);
+    expect(out.findings?.map((f) => f.id)).toEqual(["SB-DRIFT-01", "TRIAGE-1"]);
+    expect(out.detail).toContain("connected pass");
+    expect(out.detail).toContain("semantic pass");
+  });
+
+  // A stale superseded tier is not evidence — but it is never dropped in silence either.
+  it("does NOT collect a stale superseded tier's findings, and says it holds one", () => {
+    const slot = artifact({
+      pass: "connected",
+      findings: [{ id: "SB-DRIFT-01" } as never],
+      priorPasses: [{ module: "M1", target: "/target", pass: "live", generatedAt: iso(MAX_PASS_AGE_MS + DAY), findings: [{ id: "DEEP-1" } as never] }],
+    });
+    const out = ranFromPass(slot, "mech", NOW);
+    expect(out.findings?.map((f) => f.id)).toEqual(["SB-DRIFT-01"]);
+    expect(out.detail).toMatch(/stale and therefore NOT collected: live pass/);
+  });
+});
+
+// #1522: the M1 slot is ONE accumulating file, not one file per tier. The decision and its rationale
+// are recorded in src/audit-pass-artifact.ts; these are the properties the decision has to hold.
+describe("mergePassArtifact — recording a tier never discards another (#1522)", () => {
+  const semantic = buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(2 * DAY), findings: [{ id: "TRIAGE-1" } as never] });
+  const connected = buildPassArtifact({ module: "M1", target: "/t", pass: "connected", generatedAt: iso(DAY), findings: [{ id: "SB-DRIFT-01" } as never] });
+
+  it("moves the superseded tier into priorPasses, newest at the top level", () => {
+    const merged = mergePassArtifact(semantic, connected);
+    expect(merged.pass).toBe("connected");
+    expect(merged.priorPasses?.map((p) => p.pass)).toEqual(["semantic"]);
+    expect(merged.priorPasses?.[0]?.findings).toHaveLength(1);
+  });
+
+  it("re-recording the SAME tier replaces that tier only — a re-run is a correction, not a second pass", () => {
+    const slot = mergePassArtifact(semantic, connected);
+    const reRun = buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(0), summary: "re-triaged" });
+    const merged = mergePassArtifact(slot, reRun);
+    expect(merged.pass).toBe("semantic");
+    expect(merged.summary).toBe("re-triaged");
+    expect(merged.priorPasses?.map((p) => p.pass)).toEqual(["connected"]);
+  });
+
+  it("does not carry a slot recorded for a DIFFERENT target — another engagement's pass is not evidence here", () => {
+    const otherTarget = buildPassArtifact({ module: "M1", target: "/other", pass: "semantic", generatedAt: iso(DAY) });
+    expect(mergePassArtifact(otherTarget, connected).priorPasses).toBeUndefined();
   });
 });
 
@@ -157,8 +211,25 @@ describe("write → derive round-trip (#448 ↔ #416)", () => {
     expect(r.fresh).toBe(true);
     if (r.fresh) {
       expect(r.artifact.findings).toHaveLength(1);
-      expect(ranFromPass(r.artifact, "mech").status).toBe("ran");
+      expect(ranFromPass(r.artifact, "mech", NOW).status).toBe("ran");
     }
+  });
+
+  // #1522, on disk rather than in the merge function: the second write used to overwrite the first,
+  // taking its findings with it. The file is the seam an engagement actually uses.
+  it("a second tier written to the same slot keeps the first — both tiers' findings come back", () => {
+    const write = (pass: string, id: string, msAgo: number) =>
+      writePassArtifact(dir, buildPassArtifact({ module: "M1", target: "/engagement/target", pass, generatedAt: iso(msAgo), findings: [{ id } as never] }));
+    write("semantic", "TRIAGE-1", 2 * DAY);
+    const path = write("connected", "SB-DRIFT-01", DAY);
+
+    const stored = JSON.parse(readFileSync(path, "utf8")) as PassArtifact;
+    expect(stored.pass).toBe("connected");
+    expect(stored.priorPasses?.map((p) => p.pass)).toEqual(["semantic"]);
+
+    const r = findFreshPass(realFsCtx, "M1");
+    expect(r.fresh).toBe(true);
+    if (r.fresh) expect(ranFromPass(r.artifact, "mech", NOW).findings?.map((f) => f.id)).toEqual(["SB-DRIFT-01", "TRIAGE-1"]);
   });
 
   it("an artifact written for a different target is rejected on read", () => {

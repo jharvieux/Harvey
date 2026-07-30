@@ -245,6 +245,22 @@ describe("readDriftPassEvidence", () => {
     expect((readDriftPassEvidence(dir, "/repo", NOW) as { reason: string }).reason).toMatch(/stale/);
   });
 
+  // #1522: the M1 slot accumulates its tiers. Reading only the newest one meant a semantic pass
+  // recorded after the connected one took M2's drift evidence with it, and the scope row silently
+  // fell back to the "nobody looked on this engagement" wording.
+  it("finds the connected pass after a semantic one was recorded on top of it", () => {
+    const connected = pass(checkMigrationDrift([table("quotes", false)], [], migration(PROTECTED)));
+    const dir = artifactsWith({
+      module: "M1",
+      target: "/repo",
+      pass: "semantic",
+      generatedAt: "2026-07-30T11:30:00.000Z",
+      findings: [{ id: "M1-SEM-01", evidence: "a semantic triage row" }],
+      priorPasses: [connected],
+    });
+    expect(readDriftPassEvidence(dir, "/repo", NOW)).toEqual({ observed: true, generatedAt: "2026-07-30T11:00:00.000Z", driftFindings: 2 });
+  });
+
   it("is silent — not a rejection — for an M1 pass that is not a connected one, and for no artifact at all", () => {
     const semantic = artifactsWith(pass([{ id: "M1-SEM-01", evidence: "a semantic triage row" }]));
     expect(readDriftPassEvidence(semantic, "/repo", NOW)).toBeUndefined();

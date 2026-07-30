@@ -78,3 +78,15 @@ step in front of M1 live's `record-pass` call, even though that pass still does 
 gain one — it is an interactive LLM/skill invocation with no CLI Harvey's own code can shell out to,
 so `record-pass` stays its only write path. Recorded reason with a falsifier, exercised both
 directions: `docs/design/audit-pass-artifacts.md`.
+
+**2026-07-30 (#1522) — correcting "derives `ran` … for M1" above.** `<module>.pass.json` was ONE
+slot per module while M1 has THREE out-of-orchestrator tiers (semantic, live, connected), so
+recording one deleted another — and, because the M1 probe's un-run-tier disclosure was gated on the
+newest pass being `semantic`, recording the connected tier ALSO removed the sentence saying the
+other two had never run. MEASURED 2026-07-30: after `record-pass --module M1 --pass connected` the
+row read `ran` with no reason at all. The slot now ACCUMULATES (superseded tiers move to
+`priorPasses`, nothing is discarded), every fresh tier's findings reach the deliverable, and M1
+yields `ran` only when all three tiers have an artifact — short of that the row is `partial` and
+NAMES the ones that do not. Re-measured through the real orchestrator on `targets/calibration`:
+`M1 partial`, reason `1 of M1's 3 out-of-orchestrator tiers has no artifact proving it ran … live
+(pnpm detect-deeper)`, `LEDGER PASS`, `COVERAGE PASS`.

@@ -112,7 +112,27 @@ describe("loadSemanticPass — a pass that did not run must never score as one",
   it("rejects a non-semantic pass — a mechanical dump cannot score the semantic tier", () => {
     const load = loadSemanticPass({ module: "M1", pass: "live", generatedAt: FRESH, findings: [] }, t, "/p", NOW);
     expect(load.ok).toBe(false);
-    expect(load.ok === false && load.reason).toContain("not \"semantic\"");
+    expect(load.ok === false && load.reason).toContain("no \"semantic\" one");
+  });
+
+  // #1522: the M1 slot accumulates, so the semantic pass may sit under a tier recorded later. Before
+  // that, recording another tier deleted it and this gate reported the target unscored — the recall
+  // number dropping because an operator recorded MORE.
+  it("scores the semantic pass when a later tier was recorded on top of it", () => {
+    const load = loadSemanticPass(
+      {
+        module: "M1",
+        pass: "connected",
+        generatedAt: FRESH,
+        findings: [{ id: "SB-DRIFT-01" }],
+        priorPasses: [{ module: "M1", pass: "semantic", target: "/clone", generatedAt: FRESH, findings: [] }],
+      },
+      t,
+      "/p",
+      NOW,
+    );
+    expect(load.ok).toBe(true);
+    expect(load.ok === true && load.artifact.pass).toBe("semantic");
   });
 
   it("rejects a stale artifact", () => {
