@@ -12,8 +12,12 @@ import {
   checkVitalsContract,
   checkStrykerContract,
   checkLighthouseContract,
+  checkSemgrepFixtureContract,
+  checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
   type GitScopeSanity,
+  type SemgrepContractOutput,
+  type GitleaksContractResult,
 } from "./fixture-drift-contracts.js";
 
 // These guard the SHAPE the drift check (src/cli/fixture-drift.ts, needs the binaries) enforces on a
@@ -158,5 +162,54 @@ describe("checkLighthouseContract", () => {
   });
   it("fires when categories.performance.score is missing", () => {
     expect(checkLighthouseContract({ ...fixture, categories: {} }).join("\n")).toContain("categories.performance.score");
+  });
+});
+
+// #1266: FIXTURE-INVENTORY.md claimed "every CAPTURED fixture now has a drift check" — false for
+// semgrep and gitleaks, which #1165 recaptured 24 minutes before #1170 landed the drift-check
+// family and neither was registered in it. These two contracts close that gap.
+describe("checkSemgrepFixtureContract", () => {
+  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.164.0-corpus.json");
+  it("passes the committed semgrep 1.164.0 fixture", () => {
+    expect(checkSemgrepFixtureContract(fixture)).toEqual([]);
+  });
+  it("fires when the free-count rule (harvey-service-role-in-client) no longer fires", () => {
+    const broken = { ...fixture, results: fixture.results!.filter((r) => !r.check_id.endsWith("harvey-service-role-in-client")) };
+    expect(checkSemgrepFixtureContract(broken).join("\n")).toContain('no result with check_id ending "harvey-service-role-in-client"');
+  });
+  it("fires when a registry rule's array-form cwe/owasp become bare strings (the #455 shape)", () => {
+    const results = fixture.results!.map((r) =>
+      r.check_id.endsWith("cors-misconfiguration.cors-misconfiguration")
+        ? { ...r, extra: { ...r.extra, metadata: { ...r.extra?.metadata, cwe: "CWE-346" } } }
+        : r,
+    );
+    expect(checkSemgrepFixtureContract({ ...fixture, results }).join("\n")).toContain("cors-misconfiguration: metadata.cwe/owasp are not both arrays");
+  });
+  it("fires when the bare-string cwe/owasp rule (#976) gains array-form metadata instead", () => {
+    const results = fixture.results!.map((r) =>
+      r.check_id.endsWith("bypass-tls-verification") ? { ...r, extra: { ...r.extra, metadata: { ...r.extra?.metadata, cwe: ["CWE-295"], owasp: ["A02:2021"] } } } : r,
+    );
+    expect(checkSemgrepFixtureContract({ ...fixture, results }).join("\n")).toContain("bypass-tls-verification: metadata.cwe/owasp are not both bare strings");
+  });
+  it("fires when results is empty", () => {
+    expect(checkSemgrepFixtureContract({ ...fixture, results: [] }).join("\n")).toContain("results is empty");
+  });
+});
+
+describe("checkGitleaksFixtureContract", () => {
+  const fixture = load<GitleaksContractResult[]>("./__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json");
+  it("passes the committed gitleaks 8.30.1 fixture", () => {
+    expect(checkGitleaksFixtureContract(fixture)).toEqual([]);
+  });
+  it("fires when the plain private-key rule no longer fires", () => {
+    const broken = fixture.filter((r) => !(r.RuleID === "private-key" && r.File.endsWith("certs/key.pem")));
+    expect(checkGitleaksFixtureContract(broken).join("\n")).toContain('no record with RuleID "private-key" at a File ending "certs/key.pem"');
+  });
+  it("fires when the #210 demo co-location breaks (the two rules land on different lines)", () => {
+    const broken = fixture.map((r) => (r.RuleID === "supabase-demo-key-marker" ? { ...r, StartLine: (r.StartLine ?? 0) + 1 } : r));
+    expect(checkGitleaksFixtureContract(broken).join("\n")).toContain("no longer co-locate");
+  });
+  it("fires when results is empty", () => {
+    expect(checkGitleaksFixtureContract([]).join("\n")).toContain("no gitleaks records");
   });
 });

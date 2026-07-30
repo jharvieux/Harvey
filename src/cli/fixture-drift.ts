@@ -1,7 +1,10 @@
 // Periodic schema-drift check for the CAPTURED external-tool fixtures beyond osv-scanner — the
-// #1130 remainder: lighthouse, vitals, trufflehog (unverified + git-history), jscpd, knip, Stryker.
-// Companion to src/cli/osv-fixture-drift.ts; the pure per-tool contracts + their negative controls
-// live in src/scan/fixture-drift-contracts.ts (under `pnpm verify`), this runs the binaries.
+// #1130 remainder: lighthouse, vitals, trufflehog (unverified + git-history), jscpd, knip, Stryker,
+// plus semgrep and gitleaks (#1266 — FIXTURE-INVENTORY.md claimed these two already had a drift
+// check; they did not, because #1165 recaptured them 24 minutes before #1170 landed this family and
+// neither was registered here). Companion to src/cli/osv-fixture-drift.ts; the pure per-tool
+// contracts + their negative controls live in src/scan/fixture-drift-contracts.ts (under
+// `pnpm verify`), this runs the binaries.
 //
 // For the selected --tool it: (1) asserts the installed tool is the pinned version the committed
 // fixture was captured from; (2) re-checks the COMMITTED fixture against its own contract (so a
@@ -41,14 +44,20 @@ import {
   VITALS_PINNED_VERSION,
   STRYKER_PINNED_VERSION,
   LIGHTHOUSE_PINNED_VERSION,
+  SEMGREP_PINNED_VERSION,
+  GITLEAKS_PINNED_VERSION,
   checkJscpdContract,
   checkKnipContract,
   checkTruffleHogContract,
   checkVitalsContract,
   checkStrykerContract,
   checkLighthouseContract,
+  checkSemgrepFixtureContract,
+  checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
   type GitScopeSanity,
+  type SemgrepContractOutput,
+  type GitleaksContractResult,
 } from "../scan/fixture-drift-contracts.js";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -375,6 +384,52 @@ async function lighthouseDrift(): Promise<never> {
   });
 }
 
+// --- semgrep (FIXTURE-INVENTORY row 7, #1266) --------------------------------
+// Re-runs the committed corpus builder — the exact reproducible recipe
+// __fixtures__/semgrep/PROVENANCE.md documents — against a fresh throwaway per-rule seed, and
+// asserts the FRESH output still satisfies the schema contract the committed fixture and
+// parseSemgrepFindings depend on.
+async function semgrepDrift(): Promise<never> {
+  const version = requireBinary("semgrep", () => execFileSync("semgrep", ["--version"], { encoding: "utf8" }).trim());
+  const builder = join(repoRoot, "src/scan/__fixtures__/semgrep/build-corpus.mjs");
+  return runDrift<SemgrepContractOutput>({
+    tool: "semgrep",
+    pinnedVersion: SEMGREP_PINNED_VERSION,
+    installedVersion: version,
+    fixturePaths: ["src/scan/__fixtures__/semgrep/semgrep-1.164.0-corpus.json"],
+    parse: (raw) => JSON.parse(raw) as SemgrepContractOutput,
+    contract: checkSemgrepFixtureContract,
+    rerun: async () => {
+      const out = execFileSync("node", [builder], { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
+      const parsed = JSON.parse(out) as SemgrepContractOutput;
+      return { parsed, summary: `semgrep ${version} over a rebuilt per-rule seed — ${parsed.results?.length ?? 0} result(s)` };
+    },
+  });
+}
+
+// --- gitleaks (FIXTURE-INVENTORY row 9, #1266) -------------------------------
+// Re-runs the committed corpus builder (__fixtures__/gitleaks/PROVENANCE.md's recipe) against a
+// fresh throwaway planted-secret seed, and asserts the FRESH output still satisfies the schema
+// contract — including the #210 demo-key co-location — the committed fixture and
+// parseGitleaksFindings depend on.
+async function gitleaksDrift(): Promise<never> {
+  const version = requireBinary("gitleaks", () => execFileSync("gitleaks", ["version"], { encoding: "utf8" }).trim());
+  const builder = join(repoRoot, "src/scan/__fixtures__/gitleaks/build-corpus.mjs");
+  return runDrift<GitleaksContractResult[]>({
+    tool: "gitleaks",
+    pinnedVersion: GITLEAKS_PINNED_VERSION,
+    installedVersion: version,
+    fixturePaths: ["src/scan/__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json"],
+    parse: (raw) => JSON.parse(raw) as GitleaksContractResult[],
+    contract: checkGitleaksFixtureContract,
+    rerun: async () => {
+      const out = execFileSync("node", [builder], { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
+      const parsed = JSON.parse(out) as GitleaksContractResult[];
+      return { parsed, summary: `gitleaks ${version} over a rebuilt planted-secret seed — ${parsed.length} record(s)` };
+    },
+  });
+}
+
 const RUNNERS: Record<string, () => Promise<never>> = {
   jscpd: jscpdDrift,
   knip: knipDrift,
@@ -382,6 +437,8 @@ const RUNNERS: Record<string, () => Promise<never>> = {
   vitals: vitalsDrift,
   stryker: strykerDrift,
   lighthouse: lighthouseDrift,
+  semgrep: semgrepDrift,
+  gitleaks: gitleaksDrift,
 };
 
 const tool = arg("--tool");

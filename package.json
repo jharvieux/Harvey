@@ -31,6 +31,8 @@
     "vitals-fixture-drift": "tsx src/cli/fixture-drift.ts --tool vitals",
     "stryker-fixture-drift": "tsx src/cli/fixture-drift.ts --tool stryker",
     "lighthouse-fixture-drift": "tsx src/cli/fixture-drift.ts --tool lighthouse",
+    "semgrep-fixture-drift": "tsx src/cli/fixture-drift.ts --tool semgrep",
+    "gitleaks-fixture-drift": "tsx src/cli/fixture-drift.ts --tool gitleaks",
     "osv-staleness": "tsx src/cli/osv-staleness.ts",
     "quality-scan": "tsx src/cli/quality-scan.ts",
     "detect-deeper": "tsx src/cli/detect-deeper.ts",
