@@ -64,17 +64,30 @@ describe("runGate — a fix is not closed until the re-audit stops detecting it"
     expect(planWriteback(report)[0]?.intent).toBe("closed");
   });
 
-  it("reports unverifiable — never resolved — for a taxonomy whose detector cannot be re-run, and never closes its ticket", () => {
-    // A semgrep REGISTRY rule: #1012's resolver replays only the local harvey-* rule directory (a
-    // registry pack needs a network fetch), so this class is still, deliberately, unverifiable.
+  it("reports unverifiable — never resolved — for a taxonomy with no resolver of any kind, and never closes its ticket", () => {
+    // Not an AST-engine prefix, not a harvey-* rule id, and not shaped like a registry-pack check_id
+    // (src/fix/detector-rerun.ts's REGISTRY_RULE_SHAPE) — no resolver exists for this taxonomy at all.
     const dir = scratch(PLANTED, planted);
-    const f = finding({ taxonomy: "javascript.browser.security.open-redirect.js-open-redirect", location: "pages/api/redirect.js:9" });
+    const f = finding({ taxonomy: "Coverage — some external tool finding", location: "pages/api/redirect.js:9" });
     const report = runGate([f], dir);
     expect(report.results[0]?.status).toBe("unverifiable");
     expect(report.results[0]?.detail).toContain("no detector re-run resolver");
     const plan = planWriteback(report);
     expect(plan[0]?.intent).toBe("none");
     expect(plan[0]?.reason).toContain("never closed on faith");
+  });
+
+  // #1368: a registry-pack rule (`p/*`) IS now a resolvable taxonomy (rerunDetector attempts a live
+  // semgrep replay, src/scan/semgrep.ts's runRegistryPacksOnFile) — but that resolver still checks
+  // the finding's own file exists BEFORE ever shelling out, exactly like the harvey-* path above, so
+  // this stays unverifiable-not-resolved with no live call and no network dependency in this test.
+  it("a registry-pack finding whose file is gone from the checkout is unverifiable, NOT resolved, with no live semgrep call", () => {
+    const dir = scratch(PLANTED, planted);
+    const f = finding({ taxonomy: "javascript.browser.security.open-redirect.js-open-redirect", location: "pages/api/redirect.js:9" });
+    const report = runGate([f], dir);
+    expect(report.results[0]?.status).toBe("unverifiable");
+    expect(report.results[0]?.detail).toContain("does not exist");
+    expect(planWriteback(report)[0]?.intent).toBe("none");
   });
 
   it("a harvey-* finding whose file is gone from the checkout is unverifiable, NOT resolved (#1012)", () => {

@@ -14,8 +14,11 @@
 //   • The same gate again for §8 classes 1/2/5 (zero-row update, unchecked mutation, void-prefixed
 //     async), which had no detector at all until #1021 added src/scan/rules/semgrep/silent-failure.yml
 //     and the §B21 corpus fixtures they score against.
-//   • What is STILL disclosed rather than scored: a semgrep REGISTRY-pack rule (needs a network
-//     fetch to replay).
+//   • The FULL gate once more for a semgrep REGISTRY-pack rule (`p/*`) — #1368 retired the "needs a
+//     network fetch, so deliberately not resolvable" reason this bullet used to record here: the
+//     fetch is the SAME one every real engagement scan already performs, so the registry-pack replay
+//     is now wired, live-only (an offline/unreachable run still reports notRun, never a false clean —
+//     proven in src/fix/detector-rerun.test.ts, not here).
 //   • Clause 2: an out-of-scope planted bug downgraded to recommend-only through intake/screening.
 //
 // #1277 corrects what this header used to say. It read "the diff-GENERATING implementer is still
@@ -208,18 +211,43 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
   }, SEMGREP_TIMEOUT_MS);
 });
 
-describe("fix §8 acceptance — still-disclosed gaps, never faked green (#1009 remainder)", () => {
-  it("a semgrep REGISTRY rule stays notRun — only the local harvey-* rules are replayable without a network fetch", () => {
-    const src = readCalibration(CLASS4_FILE);
-    const fixed = src.replace("  res.redirect(302, parsed.data.url);", '  res.redirect(302, "/");');
+// #1368 — closes the one gap the header above used to record here ("a semgrep REGISTRY-pack rule …
+// needs a network fetch to replay"). That reason was wider than what was tried: the same fetch every
+// real engagement scan already performs (runSemgrep) resolves in 1-2s (MEASURED 2026-07-30), so the
+// registry-pack replay is now wired — live only, same honesty contract as the harvey-* resolver.
+// javascript.browser.security.open-redirect.js-open-redirect genuinely fires (a live six-pack scan)
+// on the existing P-XSS-DANGEROUS-URL planting (GROUND-TRUTH.md), independently of the harvey-*
+// harvey-open-url-sink rule that fixture is documented against — two real rules, same location.
+const REGISTRY_FILE = "components/LocationNav.jsx";
+const REGISTRY_RULE = "javascript.browser.security.open-redirect.js-open-redirect";
+
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a semgrep REGISTRY-pack class (#1368)", () => {
+  it("reaches GREEN: the registry pack replays live and the rule stops firing after the fix", () => {
+    const src = readCalibration(REGISTRY_FILE);
+    const fixed = src.replace(
+      'window.location = params.get("to");',
+      'if (params.get("to") === "settings") window.location = "/settings";',
+    );
     expect(fixed).not.toEqual(src);
-    const registryRule = "javascript.browser.security.open-redirect.js-open-redirect";
-    const finding = m5Finding({ id: "CAL-REG", taxonomy: registryRule, location: `${CLASS4_FILE}:18` });
-    const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const finding = m5Finding({ id: "CAL-REG", taxonomy: REGISTRY_RULE, location: `${REGISTRY_FILE}:10` });
+    const r = runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed }, { allowlist: ["components/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
-    expect(r.detectorAfter.notRun).toContain("no detector re-run resolver");
+    expect(r.execution.railViolations).toEqual([]);
+    expect(r.detectorAfter.notRun).toBeUndefined(); // the rule really re-ran — LIVE, over the network
+    expect(r.detectorAfter.fired).toBe(false);
+    expect(r.green).toBe(true);
+    expect(resolvesToDetector(REGISTRY_RULE)).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("does NOT go green on a cosmetic edit that leaves the sink in place — the gate follows the live rule, not the diff", () => {
+    const src = readCalibration(REGISTRY_FILE);
+    const noop = src.replace("export default function LocationNav() {", "export default function LocationNav() { // touched");
+    expect(noop).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-REG-NOOP", taxonomy: REGISTRY_RULE, location: `${REGISTRY_FILE}:10` });
+    const r = runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed: noop }, { allowlist: ["components/**"] });
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.detectorAfter.fired).toBe(true);
     expect(r.green).toBe(false);
-    expect(resolvesToDetector(registryRule)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 });
 
