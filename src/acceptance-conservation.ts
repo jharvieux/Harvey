@@ -313,7 +313,12 @@ export interface EvidenceWorld {
   testNames: ReadonlySet<string>;
 }
 
-const FILE_PATH = /[\w./-]+\.(?:ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh|py|toml)(?::\d+)?/g;
+// Order matters: JS regex alternation is first-match, not longest-match, so an extension that is a
+// PREFIX of another (js/json, ts/tsx) must be listed AFTER the longer one it would otherwise
+// truncate. MEASURED 2026-07-30: with `js` before `json`, `package-lock.json` matched as
+// `package-lock.js` — a real citation of an existing file reported as pointing at a nonexistent
+// one, on the acceptance-conservation gate's OWN evidence-checking path.
+const FILE_PATH = /[\w./-]+\.(?:tsx|ts|mjs|cjs|json|js|md|ya?ml|sql|sh|py|toml)(?::\d+)?/g;
 const BACKTICKED = /`([^`]+)`/g;
 const QUOTED_SPAN = /"([^"]{8,})"/g;
 

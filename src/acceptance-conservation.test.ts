@@ -261,7 +261,7 @@ describe("evidence, not assertion", () => {
 describe("evidence checked for TRUTH, not only shape", () => {
   const world = {
     topLevelEntries: new Set(["src", "docs"]),
-    pathExists: (p: string) => ["src/acceptance-conservation.ts", "src/cli/validate-acceptance.ts"].includes(p),
+    pathExists: (p: string) => ["src/acceptance-conservation.ts", "src/cli/validate-acceptance.ts", "src/scan/config.json"].includes(p),
     scripts: new Set(["verify", "validate-reasons"]),
     testNames: new Set(["a dropped disposition leaves an UNMAPPED bullet"]),
   };
@@ -294,6 +294,13 @@ describe("evidence checked for TRUTH, not only shape", () => {
     ]) {
       expect(evidenceProblems(detail, world)).toEqual([]);
     }
+  });
+
+  // #1266's PR hit this for real: a `.json` citation was reported as pointing at a nonexistent
+  // `.js` file, because FILE_PATH's extension alternation is first-match, not longest-match, and
+  // `js` was listed before `json` (a prefix of it) — same risk for `ts`/`tsx`.
+  it("NEGATIVE CONTROL (#1266): a cited .json path is not truncated to a nonexistent .js path", () => {
+    expect(evidenceProblems("regenerated `src/scan/config.json`", world)).toEqual([]);
   });
 
   it("leaves a path outside this repo's top level alone rather than failing on a foreign tree", () => {
