@@ -1,12 +1,13 @@
 # M8 (mutation testing) for the external-repo corpus — issue #300.
 #
 # WHY THIS IS A SEPARATE WORKFLOW FROM corpus-drift.yml, which scores every other module of the same
-# targets: cost. corpus-drift's job is ~2 minutes because it clones and reads source. This one runs
-# a per-target install (the target's own lockfile-implied package manager, since #1268) and then
-# re-runs the target's whole test suite once per mutant — minutes
-# per target, and the timeout has to be sized for the suite, not the scan. Folding it into the
-# weekly drift job would make the fast check as slow as the slow one, and a timeout bump there would
-# be paying M8's cost on every module.
+# targets: cost. This one runs a per-target FULL install (the target's own lockfile-implied package
+# manager, since #1268) and then re-runs the target's whole test suite once per mutant — minutes per
+# target on top of corpus-drift's own cost (MEASURED 2026-07-28, a real full-sweep run:
+# ~20m35s scoring 13 targets, dominated by --install and semgrep/detect-static on the largest ones,
+# NOT the ~2 minutes this comment used to claim — #1571), and the timeout has to be sized for the
+# suite, not the scan. Folding this into the daily drift job would make the fast check as slow as
+# the slow one, and a timeout bump there would be paying M8's cost on every module.
 #
 # Monthly, not weekly: the targets are pinned at a commit, so the only thing that can move an M8
 # score is OUR wrapper's reading of Stryker's report — a much narrower surface than the source-tier
