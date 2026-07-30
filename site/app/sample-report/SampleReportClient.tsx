@@ -4,6 +4,7 @@ import { useState } from "react";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 import { sampleMeta, sampleCounts, sampleFindings, sampleLedger } from "./sample-data";
+import { SUPPORT_EMAIL } from "../lib/constants";
 
 export default function SampleReportClient() {
   const [email, setEmail] = useState("");
@@ -24,11 +25,11 @@ export default function SampleReportClient() {
         setStatus("ok");
       } else {
         const d = (await res.json().catch(() => ({}))) as { error?: string };
-        setErrMsg(d.error || "Something went wrong. Please try again or email us directly.");
+        setErrMsg(d.error || `Something went wrong. Please try again or email us at ${SUPPORT_EMAIL}.`);
         setStatus("error");
       }
     } catch {
-      setErrMsg("Network error. Please try again or email us directly.");
+      setErrMsg(`Network error. Please try again or email us at ${SUPPORT_EMAIL}.`);
       setStatus("error");
     }
   };
