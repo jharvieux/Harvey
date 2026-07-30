@@ -67,6 +67,16 @@ describe("site route contract", () => {
     expect(dead).toEqual([]);
   });
 
+  it("reads the result of every Resend send, so no email can fail unobserved", () => {
+    // A Resend rejection is an HTTP 4xx, not a thrown error. Both requester confirmations used to
+    // sit in a bare `try { await sendEmail(...) } catch`, which cannot see one — so a confirmation
+    // bouncing for every single lead (what the resend.dev sandbox sender does for anyone but the
+    // account owner) left no trace anywhere. Discarding the response is the whole failure.
+    const route = readFileSync(join(APP_DIR, "api/scan/route.ts"), "utf8");
+    const discarded = [...route.matchAll(/^[ \t]*await sendEmail\(/gm)].map((m) => m[0].trim());
+    expect(discarded).toEqual([]);
+  });
+
   it("documents every environment variable the site reads, so none can go unprovisioned", () => {
     // The whole of #721: /api/scan reads RESEND_API_KEY and SCAN_NOTIFY_TO, they were never set on
     // the Vercel project, and the site shipped anyway. .env.example is the provisioning checklist —

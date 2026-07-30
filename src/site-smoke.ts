@@ -27,8 +27,19 @@ export interface SmokeInput {
   /** Paths the DEPLOYED /sitemap.xml advertises. */
   served: string[];
   routes: RouteProbe[];
-  /** GET /api/scan — the readiness probe. `configured: null` = the deployment has no GET handler. */
-  readiness: { status: number; configured: boolean | null };
+  /**
+   * Redirect sources the repo declares (site/next.config.mjs), probed WITHOUT following. A redirect
+   * is a live path the sitemap does not list, so the route check above never probes one — which is
+   * how /intake, the symptom #1308 was filed for, 404ed in production while every other check here
+   * stayed green.
+   */
+  redirects: RouteProbe[];
+  /**
+   * GET /api/scan — the readiness probe. `configured: null` = the deployment has no GET handler.
+   * `sandboxSender: null` = this build predates the sender probe, so which sender is in force is
+   * unmeasured — reported as its own state rather than folded into either answer.
+   */
+  readiness: { status: number; configured: boolean | null; sandboxSender: boolean | null };
   /** POST /api/scan with a deliberately invalid body; the handler must reject it with a 400. */
   validation: { status: number };
 }
@@ -69,6 +80,23 @@ export function evaluateSmoke(input: SmokeInput): SmokeCheck[] {
             .join("; "),
   });
 
+  // A redirect that stops redirecting is indistinguishable, to every other check here, from one
+  // that was never declared: the sitemap does not list it and no page file backs it. Only the
+  // deployment's own answer separates them, so ask for it.
+  const deadRedirects = input.redirects.filter((r) => r.status < 300 || r.status >= 400);
+  checks.push({
+    name: "declared redirects still redirect",
+    status: deadRedirects.length === 0 ? "pass" : "fail",
+    detail:
+      input.redirects.length === 0
+        ? "the repo declares no redirects"
+        : deadRedirects.length === 0
+          ? `all ${input.redirects.length} declared redirects answered 3xx`
+          : `${deadRedirects.length} of ${input.redirects.length} did NOT redirect: ${deadRedirects
+              .map((r) => `${r.path} → ${r.status}`)
+              .join(", ")} — a visitor following that path meets a dead end (#1308)`,
+  });
+
   checks.push({
     name: "/api/scan is configured (lead capture is live)",
     status: input.readiness.configured === true ? "pass" : "fail",
@@ -78,6 +106,20 @@ export function evaluateSmoke(input: SmokeInput): SmokeCheck[] {
         : input.readiness.configured === null
           ? `GET /api/scan → ${input.readiness.status} with no readiness body — the deployment predates the readiness probe, so whether leads are being captured is UNKNOWN`
           : `readiness probe reports NOT configured (HTTP ${input.readiness.status}) — RESEND_API_KEY and/or SCAN_NOTIFY_TO are unset on the deployment; every lead submitted right now is rejected`,
+  });
+
+  // The operator notification is the lead capture and the checks above cover it. This covers the
+  // other half: on the sandbox sender the prospect's confirmation is dropped and the request still
+  // answers 200, so the funnel reads healthy from every angle except the prospect's.
+  checks.push({
+    name: "requester confirmations send from a verified domain",
+    status: input.readiness.sandboxSender === false ? "pass" : "fail",
+    detail:
+      input.readiness.sandboxSender === false
+        ? "RESEND_FROM is a non-sandbox sender"
+        : input.readiness.sandboxSender === null
+          ? "the deployment predates the sender probe, so whether requester confirmations are delivered at all is UNKNOWN — redeploy to answer it"
+          : "RESEND_FROM is unset or still the resend.dev sandbox sender — Resend delivers those only to the account owner, so every prospect's confirmation is silently dropped; verify harvey-qa.com in Resend and set RESEND_FROM",
   });
 
   checks.push({
