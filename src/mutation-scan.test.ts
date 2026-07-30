@@ -20,6 +20,7 @@ import {
   noCoverageFindings,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  planTsconfigRewrites,
   reRootReportToApp,
   resolveJsonReporterPath,
   rootScopedMutateGlobs,
@@ -743,6 +744,82 @@ describe("TS7 tsconfig-preprocessor bypass (#773)", () => {
   it("detectTs7TsconfigCrash does not fire on unrelated Stryker output (no false positives)", () => {
     expect(detectTs7TsconfigCrash("Final mutation score of 42.00 is lower than break threshold")).toBe(false);
     expect(detectTs7TsconfigCrash("")).toBe(false);
+  });
+});
+
+describe("planTsconfigRewrites — Harvey's own preprocessor replacement (#773 reopened)", () => {
+  // The exact shape MEASURED 2026-07-27 against a real TS7 target (apps/web extending a
+  // repo-root tsconfig.base.json two levels up) — the standard monorepo pattern the bypass alone
+  // left broken.
+  const files = new Map<string, string>([
+    ["/repo/apps/web/tsconfig.json", JSON.stringify({ extends: "../../tsconfig.base.json", include: ["src"] })],
+    ["/repo/tsconfig.base.json", JSON.stringify({ compilerOptions: { strict: true } })],
+  ]);
+  const readFile = (p: string) => files.get(p);
+
+  it("rewrites an extends chain reaching outside the boundary dir to an absolute path", () => {
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", readFile);
+    expect(rewrites).toHaveLength(1);
+    expect(rewrites[0]!.path).toBe("/repo/apps/web/tsconfig.json");
+    const rewritten = JSON.parse(rewrites[0]!.text);
+    expect(rewritten.extends).toBe("/repo/tsconfig.base.json");
+    expect(rewritten.include).toEqual(["src"]); // everything else survives
+  });
+
+  it("leaves an extends chain that stays inside the boundary dir untouched — no rewrite needed", () => {
+    const inside = new Map([
+      ["/repo/apps/web/tsconfig.json", JSON.stringify({ extends: "./tsconfig.local.json" })],
+      ["/repo/apps/web/tsconfig.local.json", JSON.stringify({ compilerOptions: {} })],
+    ]);
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) => inside.get(p));
+    expect(rewrites).toEqual([]);
+  });
+
+  it("recurses through an inside hop to rewrite a further outside hop (a 2-level chain)", () => {
+    const chain = new Map([
+      ["/repo/apps/web/tsconfig.json", JSON.stringify({ extends: "./tsconfig.local.json" })],
+      ["/repo/apps/web/tsconfig.local.json", JSON.stringify({ extends: "../../tsconfig.base.json" })],
+      ["/repo/tsconfig.base.json", JSON.stringify({ compilerOptions: {} })],
+    ]);
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) => chain.get(p));
+    expect(rewrites).toHaveLength(1);
+    expect(rewrites[0]!.path).toBe("/repo/apps/web/tsconfig.local.json");
+    expect(JSON.parse(rewrites[0]!.text).extends).toBe("/repo/tsconfig.base.json");
+  });
+
+  it("rewrites references[].path the same way as extends", () => {
+    const refs = new Map([
+      ["/repo/apps/web/tsconfig.json", JSON.stringify({ references: [{ path: "../../packages/shared" }] })],
+    ]);
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) => refs.get(p));
+    expect(rewrites).toHaveLength(1);
+    expect(JSON.parse(rewrites[0]!.text).references).toEqual([{ path: "/repo/packages/shared" }]);
+  });
+
+  it("leaves an already-absolute extends alone — Stryker's own preprocessor only rewrites relative refs", () => {
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) =>
+      new Map([["/repo/apps/web/tsconfig.json", JSON.stringify({ extends: "/opt/shared/tsconfig.json" })]]).get(p),
+    );
+    expect(rewrites).toEqual([]);
+  });
+
+  it("returns no rewrites when the entry tsconfig doesn't exist", () => {
+    expect(planTsconfigRewrites("/repo/apps/web", "tsconfig.json", () => undefined)).toEqual([]);
+  });
+
+  it("returns no rewrites for a non-JSON-parseable tsconfig (comments/trailing commas) rather than throwing", () => {
+    const rewrites = planTsconfigRewrites("/repo/apps/web", "tsconfig.json", (p) =>
+      p.endsWith("tsconfig.json") ? "// a comment\n{ \"extends\": \"../../tsconfig.base.json\", }" : undefined,
+    );
+    expect(rewrites).toEqual([]);
+  });
+
+  it("does not infinite-loop on a cyclic extends chain", () => {
+    const cyclic = new Map([
+      ["/repo/a/tsconfig.json", JSON.stringify({ extends: "../b/tsconfig.json" })],
+      ["/repo/b/tsconfig.json", JSON.stringify({ extends: "../a/tsconfig.json" })],
+    ]);
+    expect(() => planTsconfigRewrites("/repo/a", "tsconfig.json", (p) => cyclic.get(p))).not.toThrow();
   });
 });
 

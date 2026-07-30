@@ -13,7 +13,7 @@
 // and Survived count against the score — each is a mutant the suite had the opportunity to kill
 // and did not.
 
-import { dirname, isAbsolute, relative, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
 
 export type MutantStatus =
@@ -1025,6 +1025,88 @@ const TS7_TSCONFIG_CRASH = /(?:ts\.)?parseConfigFileTextToJson is not a function
 
 export function detectTs7TsconfigCrash(output: string): boolean {
   return TS7_TSCONFIG_CRASH.test(output);
+}
+
+// #773 (reopened): the bypass above stops the CRASH, but it also disables the preprocessor's real
+// job — MEASURED 2026-07-27 against a real TS7 target (see the issue): a tsconfig whose `extends`
+// reaches OUTSIDE the directory Stryker sandboxes (the standard monorepo `"extends":
+// "../../tsconfig.base.json"` shape) gets copied into the sandbox UN-rewritten, so the reference no
+// longer resolves there and the target's OWN test-runner transform pipeline (esbuild via
+// vite/vitest, which reads tsconfig.json independently of anything Stryker's `tsconfigFile` option
+// names) fails with "Tsconfig not found" before a single mutant runs.
+//
+// This replicates Stryker's OWN preprocessor (@stryker-mutator/core/dist/src/sandbox/
+// ts-config-preprocessor.js, MEASURED against the installed 9.6.1 source) without depending on the
+// classic compiler API TS7 no longer exports: same recursion (walk `extends`, recursing into a
+// target that resolves INSIDE `boundaryDir`; stop and rewrite one that resolves OUTSIDE it), but an
+// ABSOLUTE path instead of Stryker's own "prepend two `../`" trick — that trick is coupled to the
+// exact depth Stryker's sandbox nests a copy at (an internal, version-specific implementation
+// detail visible only in its source), where an absolute path is unambiguous regardless of sandbox
+// depth and is standard, documented TypeScript `extends`/`references` syntax either way.
+// Not exported (same rule as MutationScope above): callers receive it as planTsconfigRewrites'
+// inferred return type.
+interface TsconfigRewrite {
+  // Absolute path of the tsconfig file to rewrite, always inside `boundaryDir`.
+  path: string;
+  text: string;
+}
+
+// undefined ⇒ `reference` resolves inside `boundaryDir` (no rewrite needed at this hop — the file
+// travels with the rest of the sandboxed tree); a reference already absolute is left alone (Stryker's
+// own preprocessor only ever rewrites relative ones).
+function tryAbsolutizeOutsideBoundary(reference: string, fromDir: string, boundaryDir: string): string | undefined {
+  if (isAbsolute(reference)) return undefined;
+  const resolved = resolve(fromDir, reference);
+  return relative(boundaryDir, resolved).startsWith("..") ? resolved : undefined;
+}
+
+// `boundaryDir` is the directory Stryker will sandbox (whatever `cwd` Harvey invokes it with —
+// the target itself, or the workspace root for a #655 root-scoped run); `entryRelPath` is the
+// tsconfig Stryker would have preprocessed by default ("tsconfig.json", its own documented
+// default). `readFile` is injected so this stays a pure, fixture-testable transform — the CLI
+// wrapper does the real disk reads.
+export function planTsconfigRewrites(boundaryDir: string, entryRelPath: string, readFile: (absPath: string) => string | undefined): TsconfigRewrite[] {
+  const rewrites: TsconfigRewrite[] = [];
+  const visited = new Set<string>(); // cycle guard — also bounds the walk, no separate depth cap needed
+  function visit(absPath: string): void {
+    if (visited.has(absPath)) return;
+    visited.add(absPath);
+    const text = readFile(absPath);
+    if (!text) return;
+    let cfg: { extends?: unknown; references?: unknown };
+    try {
+      cfg = JSON.parse(text) as typeof cfg;
+    } catch {
+      return; // not statically parseable (comments/trailing commas) — left unrewritten, same boundary #773's original bypass already draws around non-JSON config
+    }
+    let changed = false;
+    const fileDir = dirname(absPath);
+    if (typeof cfg.extends === "string") {
+      const abs = tryAbsolutizeOutsideBoundary(cfg.extends, fileDir, boundaryDir);
+      if (abs) {
+        cfg.extends = abs;
+        changed = true;
+      } else {
+        visit(resolve(fileDir, cfg.extends));
+      }
+    }
+    if (Array.isArray(cfg.references)) {
+      cfg.references = cfg.references.map((r: unknown) => {
+        if (!r || typeof r !== "object" || typeof (r as { path?: unknown }).path !== "string") return r;
+        const refPath = (r as { path: string }).path;
+        const abs = tryAbsolutizeOutsideBoundary(refPath, fileDir, boundaryDir);
+        if (abs) {
+          changed = true;
+          return { ...r, path: abs };
+        }
+        visit(resolve(fileDir, refPath));
+        return r;
+      });
+    }
+    if (changed) rewrites.push({ path: absPath, text: JSON.stringify(cfg, null, 2) + "\n" });
+  }
+  visit(resolve(boundaryDir, entryRelPath));
+  return rewrites;
 }
 
 // The explicit degradation ladder (#513): when the full-mutation rung cannot run, the ledger says
