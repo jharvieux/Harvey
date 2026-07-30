@@ -15,34 +15,38 @@
 // unstated limitation reads as a clean bill of health (CLAUDE.md, "fail loud").
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags } from "./args.js";
-import { collect, compare, exportedNames, toBaseline, type Baseline, type Unreferenced } from "../test-only-exports.js";
+import { blindSpotSuspects, collect, compare, exportedNames, hiddenByFlag, toBaseline, type Baseline, type Unreferenced } from "../test-only-exports.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-assertKnownFlags(["--dir", "--config", "--baseline", "--list", "--update-baseline"]);
+assertKnownFlags(["--dir", "--config", "--baseline", "--list", "--update-baseline", "--blind-spot"]);
 
 const dir = resolve(arg("--dir") ?? REPO_ROOT);
 const config = arg("--config") ?? "knip.production.json";
 const baselinePath = resolve(dir, arg("--baseline") ?? "test-only-exports.baseline.json");
 const listAll = process.argv.includes("--list");
 
-const knip = spawnSync(join(REPO_ROOT, "node_modules", ".bin", "knip"), ["--directory", dir, "--config", config, "--no-config-hints", "--reporter", "json"], {
-  encoding: "utf8",
-  maxBuffer: 64 * 1024 * 1024,
-});
 // knip exits 1 whenever it found anything, which is the normal case here; only a crash (no JSON on
 // stdout) is an error, and it must not be mistaken for "nothing unreferenced".
-let rows: Unreferenced[];
-try {
-  rows = collect(JSON.parse(knip.stdout ?? ""));
-} catch {
-  console.error(`knip did not produce a JSON report (exit ${knip.status}). stderr:\n${knip.stderr ?? knip.error?.message ?? ""}`);
-  process.exit(2);
+function runKnip(configPath: string): Unreferenced[] {
+  const knip = spawnSync(join(REPO_ROOT, "node_modules", ".bin", "knip"), ["--directory", dir, "--config", configPath, "--no-config-hints", "--reporter", "json"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  try {
+    return collect(JSON.parse(knip.stdout ?? ""));
+  } catch {
+    console.error(`knip did not produce a JSON report (exit ${knip.status}). stderr:\n${knip.stderr ?? knip.error?.message ?? ""}`);
+    process.exit(2);
+  }
 }
+
+const rows = runKnip(config);
 
 if (process.argv.includes("--update-baseline")) {
   writeFileSync(baselinePath, `${JSON.stringify(toBaseline(rows), null, 2)}\n`);
@@ -51,6 +55,43 @@ if (process.argv.includes("--update-baseline")) {
 }
 
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline;
+
+// --blind-spot (#1328): the compensating check for `ignoreExportsUsedInFile`. Re-runs the same
+// analysis with the key deleted and triages the difference down to rows kept alive ONLY by an
+// in-file consumer that is itself on the baseline — dead capability propping up dead capability.
+// Reports both totals unconditionally: the delta measures how much surface the gate leaves
+// unexamined, and an unstated limitation reads as a clean bill of health.
+if (process.argv.includes("--blind-spot")) {
+  const source = JSON.parse(readFileSync(resolve(dir, config), "utf8")) as Record<string, unknown>;
+  delete source.ignoreExportsUsedInFile;
+  const scratch = mkdtempSync(join(tmpdir(), "harvey-blind-spot-"));
+  const unflaggedConfig = join(scratch, "knip.blind-spot.json");
+  let unflagged: Unreferenced[];
+  try {
+    writeFileSync(unflaggedConfig, JSON.stringify(source, null, 2));
+    unflagged = runKnip(unflaggedConfig);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  const hidden = hiddenByFlag(unflagged, rows);
+  const suspects = blindSpotSuspects(hidden, baseline, (p) => readFileSync(resolve(dir, p), "utf8"));
+
+  console.log("test-only-exports blind spot (#1328) — what `ignoreExportsUsedInFile` hides");
+  console.log(`  gated run (${config}): ${rows.length} rows`);
+  console.log(`  same analysis with ignoreExportsUsedInFile deleted: ${unflagged.length} rows`);
+  console.log(`  hidden by the flag: ${hidden.length} rows — invisible to the gate, by design`);
+  console.log(`  of those, kept alive only by a consumer that is ITSELF on the baseline: ${suspects.length}`);
+  for (const s of suspects) console.log(`    ${s.id} — in-file consumers: ${s.consumers.join(", ")}`);
+
+  if (suspects.length > 0) {
+    console.log("\nEach is dead capability the gate scores as reachable. Wire it up, or record a reason per docs/design/recorded-reasons.md.");
+    process.exit(1);
+  }
+  console.log("\nBLIND SPOT CLEAR — every row the flag hides has a live in-file consumer.");
+  process.exit(0);
+}
+
 const { added, stale } = compare(rows, baseline);
 const count = (kind: Unreferenced["kind"]): number => rows.filter((r) => r.kind === kind).length;
 
