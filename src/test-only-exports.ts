@@ -14,20 +14,24 @@
 //
 // WHAT THE RATCHET CANNOT SEE, recorded here rather than in an issue body the reason registry
 // cannot reach. `knip.production.json` sets `ignoreExportsUsedInFile: true`, deliberately: without
-// it the same run reports 272 rows instead of 26 (MEASURED 2026-07-27 — copy the config, delete the
-// key, `node_modules/.bin/knip --config <copy> --no-config-hints --reporter json`; recorded as 264
-// the day before, so quote the run, not this line), because every `src/scan/**` detector is exported
-// for its own test while being called by a sibling in the same file, and a gate firing on that
-// pattern would fire on nearly every new detector. The cost is a real blind spot with two MEASURED
-// instances, not a hypothetical one: `src/fix/schedule.ts:114 DEFAULT_CAPS` and
-// `src/fix/verify.ts:52 scrubSecrets` are each dead outside tests and invisible to the count of 26,
-// because their only in-file consumer is itself on the baseline. #1328 carries the compensating
-// check (triage only the rows whose in-file consumer is itself on the baseline) as an acceptance
-// bullet.
+// it the same run reports far more rows, because every `src/scan/**` detector is exported for its
+// own test while being called by a sibling in the same file, and a gate firing on that pattern would
+// fire on nearly every new detector. The cost is that a symbol exported AND used inside its own file
+// is invisible to the gate even when the in-file use is ITSELF dead.
 //
-// REASON: a symbol exported AND used inside its own file is invisible to this ratchet even when the in-file use is itself dead, so the row count understates the dead surface — two instances measured (src/fix/schedule.ts DEFAULT_CAPS, src/fix/verify.ts scrubSecrets)
+// That cost is no longer only prose: `--blind-spot` (#1328) runs the same analysis with the flag
+// deleted and triages the difference down to the rows the flag hides whose in-file consumers are
+// ALL themselves on the baseline — the mechanical query that found the two instances #1331 reported
+// by hand. Both of those have since gained production callers and the query is empty; it stays wired
+// so the next one fails loud instead of being found by hand a second time.
+//
+// Do NOT quote a row count from this comment. `pnpm test-only-exports --list` prints the gated count
+// and `--blind-spot` prints both counts and the delta; the numbers move whenever a capability gains
+// or loses a caller.
+//
+// REASON: a symbol exported AND used inside its own file is invisible to this ratchet even when the in-file use is itself dead, so the gated row count understates the dead surface
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-27 — `pnpm test-only-exports --list` reports 26 rows with the flag set; the same analysis with `ignoreExportsUsedInFile` deleted reports 272, and both named symbols appear only in the second run.
+// PROVENANCE: MEASURED 2026-07-30 — `pnpm test-only-exports --blind-spot` runs knip with and without `ignoreExportsUsedInFile` and prints both totals plus the hidden delta; the two instances recorded by #1331 (src/fix/schedule.ts DEFAULT_CAPS, src/fix/verify.ts scrubSecrets) both have production callers as of this run, so the triaged suspect list is empty.
 // FALSIFIER: grep -q '"ignoreExportsUsedInFile": true' knip.production.json && exit 1 || exit 0
 // TOUCHES: knip.production.json
 
@@ -86,6 +90,83 @@ export function exportedNames(path: string, text: string): string[] {
     }
   }
   return names;
+}
+
+/**
+ * Top-level declarations in `path` whose body references `name`, excluding `name`'s own declaration.
+ * The blind spot is a symbol kept alive ONLY by an in-file use, so this names what is keeping it
+ * alive — a caller that is itself dead keeps nothing alive.
+ */
+export function inFileConsumers(path: string, text: string, name: string): string[] {
+  const consumers: string[] = [];
+  for (const stmt of parse(path, text).statements) {
+    const declared = declaredNames(stmt);
+    if (declared.includes(name)) continue;
+    let refers = false;
+    const walk = (node: ts.Node): void => {
+      if (refers) return;
+      if (ts.isIdentifier(node) && node.text === name) refers = true;
+      else ts.forEachChild(node, walk);
+    };
+    walk(stmt);
+    if (refers) consumers.push(...(declared.length > 0 ? declared : ["<module scope>"]));
+  }
+  return [...new Set(consumers)];
+}
+
+function declaredNames(stmt: ts.Statement): string[] {
+  if (ts.isVariableStatement(stmt)) {
+    return stmt.declarationList.declarations.flatMap((d) => (ts.isIdentifier(d.name) ? [d.name.text] : []));
+  }
+  const named =
+    ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt) || ts.isInterfaceDeclaration(stmt) || ts.isTypeAliasDeclaration(stmt) || ts.isEnumDeclaration(stmt);
+  return named && stmt.name ? [stmt.name.text] : [];
+}
+
+interface BlindSpotSuspect {
+  id: string;
+  consumers: string[];
+}
+
+/**
+ * The compensating check for `ignoreExportsUsedInFile` (#1328). `hidden` is the set of rows the
+ * unflagged run reports and the flagged run does not — i.e. everything kept alive by an in-file use
+ * alone. A row is a SUSPECT when every one of those in-file consumers is itself on the baseline:
+ * the symbol is dead capability propping up dead capability, which the gate scores as reachable.
+ * A row with no in-file consumer at all is not a suspect — that is knip disagreeing with itself,
+ * not the blind spot this query is for.
+ */
+export function blindSpotSuspects(
+  hidden: readonly Unreferenced[],
+  baseline: Baseline,
+  read: (path: string) => string,
+): BlindSpotSuspect[] {
+  const deadFiles = new Set(baseline.files);
+  const deadExports = new Set(baseline.exports);
+  const suspects: BlindSpotSuspect[] = [];
+  for (const row of hidden) {
+    if (row.kind === "file") continue;
+    const [path, name] = splitId(row.id);
+    if (name === undefined) continue;
+    const consumers = inFileConsumers(path, read(path), name);
+    if (consumers.length === 0) continue;
+    if (consumers.every((c) => deadFiles.has(path) || deadExports.has(`${path}:${c}`))) {
+      suspects.push({ id: row.id, consumers });
+    }
+  }
+  return suspects;
+}
+
+/** `path:name` — split on the LAST colon, because a Windows-style path can carry one. */
+function splitId(id: string): [string, string | undefined] {
+  const at = id.lastIndexOf(":");
+  return at < 0 ? [id, undefined] : [id.slice(0, at), id.slice(at + 1)];
+}
+
+/** Rows present in the unflagged run and absent from the flagged one: what the flag hides. */
+export function hiddenByFlag(unflagged: readonly Unreferenced[], flagged: readonly Unreferenced[]): Unreferenced[] {
+  const gated = new Set(flagged.map(key));
+  return unflagged.filter((r) => !gated.has(key(r)));
 }
 
 export function toBaseline(rows: readonly Unreferenced[]): Baseline {
