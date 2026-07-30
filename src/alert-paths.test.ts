@@ -191,12 +191,13 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
 
   // The hatch is a named list, not a category that grows: any unproven path has to edit this line,
   // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
-  // retired the same day once its drill ran (run 30376371298, issue #1430), so the list is empty
-  // again — which is the state it should normally be in. `pendingProof`'s own behaviour stays
-  // covered by the fixture tests above, so emptying this list does not un-test the mechanism.
-  it("has no unproven alert path — the hatch is empty and every path carries a proof run", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual([]);
-    expect(reg.paths.every((p) => p.provenBy?.run)).toBe(true);
+  // retired the same day once its drill ran (run 30376371298, issue #1430). `ci-free-recall-alert`
+  // occupies it now (#1185): free-recall.yml is new, and a drill is only dispatchable against a
+  // workflow already on the default branch. Empty is the state this list should normally be in —
+  // retire the row by taking the drill and recording `provenBy`, tracked by #1536.
+  it("has exactly the named unproven alert path — every other path carries a proof run", () => {
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual(["ci-free-recall-alert"]);
+    expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 
   it("expects a marker label for the inlined owasp-ack path too, not only the drilled ones", () => {

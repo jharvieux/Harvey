@@ -1,7 +1,8 @@
 # Free (mechanical) tier — recall measurement
 
-**Issue:** jharvieux/Harvey#868 (the measurement half).
-**Date of this record:** 2026-07-26.
+**Issue:** jharvieux/Harvey#868 (the measurement half); §2a re-scored under #1185.
+**Date of this record:** 2026-07-26. **§2a re-measured 2026-07-30** — §§1, 3, 4 still carry their
+2026-07-26 dates and have NOT been re-run since; read every number here against the date beside it.
 
 This is the free-tier-only recall figure #868 asked for: the FREE (mechanical, source-only) tier's
 recall, reported as its own number and **never blended** with the paid semantic tier that carries
@@ -72,10 +73,85 @@ arbitrary target's shape (§2 is the demonstration of exactly that gap).
 
 These are the recall figures against keys **other people wrote** (each target's own
 CASE-STUDY / README / REMEDIATION-REPORT). They are the honest free-tier number, and they are
-materially lower and highly **target-shape-dependent**. All values below are `recorded — not re-run
-here`: re-running them requires cloning an external repo and then **manually scoring each raw finding
-against the planted answer key**, which is a semantic/manual judgement (the same work the paid tier
-does), not a one-command gate. The dates and sources are the measurement docs in `docs/design/`.
+materially lower and highly **target-shape-dependent**.
+
+### 2a. RE-SCORED 2026-07-30 (#1185) — the current number, and it is now one command
+
+Everything in §2b below was `recorded — not re-run here`, dated **2026-07-18**, and stayed that way
+across the Vite and App-Router coverage campaigns that were expected to have moved it. #1185
+re-measured it. The re-run is no longer a manual judgement: `src/scan/free-recall-corpus.ts` holds
+the five answer keys in machine-readable form (four re-used verbatim from `semantic-corpus.ts`, so
+the free and paid columns score the same rows; vandyand's transcribed from its own measurement doc),
+and `src/cli/validate-free-recall.ts` runs the free tier and scores it.
+
+```
+pnpm validate:free-recall --clone-into /tmp/fr        # fetch the five targets
+pnpm validate:free-recall --clones-dir /tmp/fr        # run + score
+```
+
+**MEASURED 2026-07-30** on the authoring machine, all four mechanical binaries present
+(`semgrep`, `trufflehog`, `osv-scanner`, `gitleaks`), 12s to clone + 60s to scan and score all five.
+The mechanical tier as run: `quick-scan --findings-out` + `detect-static --out`, merged.
+`pii-classify --schema` is not invoked separately — `quick-scan` already classifies the same
+migrations internally, and it emits a data map rather than findings, so a key has nothing to score.
+
+Clone SHAs scored: supatest `38da5060` (main), nocode-rescue `81350ee9` (**master**), vandyand
+`1ef96ab8` (main), cipherx `b6f0d9d7` (main), superredhat `104b81df` (vulnerable).
+
+| Target | Planted | FREE-COUNT tier (`precisionTier: high`) | ANY tier (high + review indicator) | Recorded 2026-07-18 |
+|---|---|---|---|---|
+| `yoanbernabeu/SupatestVibeDemo` | 9 | **0 / 9** | 4 / 9 | 0/9 |
+| `yagaMI-Reverse/nocode-rescue` | 8 | **3 / 8** | 5 / 8 | 3/8 |
+| `vandyand/saas-security-teardown` | 8 | **3 / 8** | 7 / 8 | 4/8 |
+| `thecipherxpro/cipherx-vulnerability-lab` | 20 | **3 / 20** | 17 / 20 | 7/20 |
+| `SuperRedHat/secure-code-review-demo` | 12 | **6 / 12** | 11 / 12 | 11/12 |
+| **Total (blended — hides the skew)** | **57** | **15 / 57 (26.3%)** | **44 / 57 (77.2%)** | 25/57 |
+
+Recorded non-vulnerabilities cleared **4 / 4** — no free-count false positive on any of the three
+planted FP traps (supatest's and cipherx's anon-key traps, superredhat's false "unauthenticated
+route" premise). That is the failure this gate exists to catch; a low recall is not.
+
+**The finding is the COLUMN SPLIT, not the delta.** The 2026-07-18 numbers were not free-count
+numbers — they blended tiers. superredhat is the clearest case: its recorded `11/12` reproduces
+today **exactly**, as the any-tier figure, while the number the free scan actually counts and grades
+is `6/12`. Read the same way, the honest current statement is:
+
+- **What the free scan GRADES: 0/9 to 6/12 — a 26% blended free-count recall against keys we did not write.**
+- **What the free scan SURFACES as an indicator: 4/9 to 11/12 — 77% blended.**
+
+Four cautions that travel with these numbers.
+
+1. **Different instrument.** The 2026-07-18 column was HAND-scored by a human reading each raw
+   finding; this one is machine-scored by location + keyword. A delta is evidence something moved,
+   never by itself proof a campaign raised recall. cipherx `7/20 → 3/20` free-count is mostly the two
+   instruments disagreeing about what "outright" meant, not a regression.
+2. **The matcher is deliberately generous** — one broad finding can satisfy two adjacent entries. The
+   tool prints how many did: 1 (nocode-rescue), 0 (superredhat), 2 (supatest), 6 (cipherx), 1
+   (vandyand).
+3. **Four answer-key entries were scoring vacuously and were fixed in this run** (#1355's rule,
+   reached through a corpus): `superredhat/F-09` matched `"jwt"` against its own location
+   `lib/jwt.ts`, `F-10` matched `"cors"` against `lib/cors.ts`, `cipherx/CX-10` matched
+   `"bucket"`/`"storage"` against `storage_buckets.sql`, `CX-19` matched `"reset"` against
+   `password-reset/route.ts`. Each accepted ANY finding planted in that file whatever the mechanism —
+   MEASURED, a plpgsql-SQL-injection finding was scoring CX-10 as caught. Numbers above are post-fix;
+   cipherx any-tier was 18/20 with the vacuous keys and is 17/20 without.
+4. **Two recorded gaps are now closed at REVIEW tier, not free-count.** vandyand #7 (public bucket,
+   #560) and #5 (broken function-level authz, #561) are recorded in
+   `vandyand-recall-measurement.md` as a clean miss and a partial. Both now fire —
+   `harvey-public-bucket` and `harvey-authed-no-role-check` — at `review`, so they surface as
+   indicators and stay out of the free count. Both issues are CLOSED and the measurement corroborates
+   that, at the tier it corroborates it at.
+
+The gate runs monthly (`.github/workflows/free-recall.yml`, 2nd at 05:00 UTC) plus on any PR
+touching the harness or the keys, so this section should not go stale the way §2b did. It fails only
+on a free-count false positive or on nothing being scored.
+
+### 2b. The 2026-07-18 record, kept as the prior (superseded by 2a)
+
+All values below were `recorded — not re-run here` at the time this document was written: re-running
+them then required cloning an external repo and **manually scoring each raw finding against the
+planted answer key**. That is what 2a replaced. Kept because the 2a table's right-hand column is
+only legible against it.
 
 | Target | Independent key | FREE mechanical (source-only) | Notes | Doc date |
 |---|---|---|---|---|
@@ -158,9 +234,11 @@ clearing the board. The FREE mechanical tier lands the §2 range underneath it.*
   SOURCE subset is **97.4% surfaced as any-tier indicator, 20.5% (8/39) at high-confidence
   free-count**. High internal recall is inflated by the non-source tiers and by counting review-tier
   indicators.
-- **Independent answer keys (recorded 2026-07-18):** free/source-only mechanical recall ranges
-  **0/9 to 11/12**, target-shape-dependent, no single defensible number — report the range and the
-  shape-dependence.
+- **Independent answer keys (RE-MEASURED 2026-07-30, `pnpm validate:free-recall`, §2a):** what the
+  free scan GRADES is **0/9 to 6/12 per target, 15/57 (26.3%) blended**; what it SURFACES as a
+  lower-confidence indicator is **4/9 to 11/12, 44/57 (77.2%)**. Still target-shape-dependent —
+  report the range, the shape-dependence, and WHICH of the two columns you mean. The 2026-07-18
+  "0/9 to 11/12" range was the any-tier column read as if it were the graded one.
 - **Real-CVE SCA (recorded 2026-07-24):** **72.9%** dependency-CVE recall; **0/600** source-pattern.
 - **Paid semantic tier (recorded):** carries the 8/8, 9/9, 12/12, 20/20 union headlines.
 
