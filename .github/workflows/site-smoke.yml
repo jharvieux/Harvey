@@ -1,0 +1,108 @@
+# The schedule src/cli/site-smoke.ts's own header says is "the whole point" (#1308/#721) — closing
+# #1509: `grep -rn site-smoke .github package.json` returned nothing (MEASURED 2026-07-30), so the
+# exact failure the CLI exists to catch (the funnel dead for six days, nothing reporting it) was
+# still undetected by default, caught only when a human remembered to run it by hand.
+#
+# KNOWN DAY-ONE RED (2026-07-30, refs #1308/#1518). Production predates the `sandboxSender` probe
+# PR #1518 added to src/site-smoke.ts, so `pnpm site-smoke` against https://harvey-qa.com currently
+# fails "requester confirmations send from a verified domain" as UNKNOWN and exits 1. One redeploy
+# clears it; the operator has ruled to hold that redeploy until the sweep this workflow shipped in
+# ends. So the FIRST scheduled runs of this job are expected to be red on that one check alone —
+# this is disclosed here and in the alert body so it reads as "known, awaiting a deploy" rather than
+# a fresh incident. Do not weaken evaluateSmoke (src/site-smoke.ts) to paper over it; do not treat a
+# still-red run past the redeploy as this same known cause without re-checking the job log.
+#
+# Distinguishing "couldn't reach the site" from "reached it and it's healthy" (today's lesson,
+# priced in: main's corpus-drift job died at SETUP for days on a poisoned binary cache, reported
+# nothing, and a PR merged on three green checks while the gate that measures it had never run).
+# src/cli/site-smoke.ts's main() throws — and prints a bare error, no per-check breakdown, no
+# "N of M checks passed" line — the moment a probe itself fails (DNS/TLS/connection refused, or a
+# non-2xx GET on /sitemap.xml): that path can never be confused with the all-clear line, which only
+# prints once every declared check has been evaluated. A reachable-but-unhealthy site instead prints
+# the full per-check table with at least one FAIL. Both exit 1 and fail this job LOUDLY; neither
+# reads as a pass — same rule evaluateSmoke enforces one level down, where an UNKNOWN readiness or
+# sender probe (`null`, meaning "this build has no answer to give") is scored a FAIL, never folded
+# into "configured" or "verified".
+#
+# Alert path mirrors corpus-drift.yml/conservation.yml: the shared `.github/actions/alert-issue`
+# composite action, marker `site-smoke-alert`, workflow_dispatch-provable with an `alert_drill`
+# input so the path is re-provable rather than write-only. Structural conformance (dispatch-
+# provability, drill wiring, registry agreement, marker-label existence) is asserted repo-wide by
+# `pnpm exec tsx src/cli/validate-alert-paths.ts` (offline half in `pnpm verify`; `--labels` in
+# alert-paths.yml). This workflow's own drill cannot be dispatched until it is on the default
+# branch (the same circularity #1288 solved for secbench.yml), so `.github/alert-paths.json`
+# registers `site-smoke-alert` under `pendingProof`, tracked by #1543, rather than claiming a proof
+# run that does not exist yet.
+
+name: site-smoke
+
+on:
+  schedule:
+    - cron: "15 8 * * *" # daily, after reasons-drift (08:00 UTC)
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the site-smoke-alert path fires end-to-end (#1287/#1348). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "src/site-smoke.ts"
+      - "src/cli/site-smoke.ts"
+      - ".github/workflows/site-smoke.yml"
+
+# A scheduled smoke check has no reason to run twice concurrently, and a re-dispatch means the newer
+# run is the interesting one (same posture as corpus-drift.yml/conservation.yml).
+concurrency:
+  group: site-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke-check production
+    runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # First step on purpose, mirroring corpus-drift.yml/conservation.yml: the drill proves the
+      # ALERT path, not the smoke check, so it must not pay for a real network run to reach it.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a site-smoke failure."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # No mechanical-binaries install here (unlike corpus-drift/conservation): this CLI only makes
+      # network fetches against the live deployment, no semgrep/trufflehog/osv-scanner/gitleaks.
+      - name: Smoke-check production (https://harvey-qa.com)
+        run: pnpm site-smoke
+
+      # Scheduled runs go red on a branch nobody watches (same precedent as corpus-drift.yml /
+      # conservation.yml / heavy-cli). `workflow_dispatch` stays in the condition permanently so the
+      # path is provable on demand, not only discoverable after a cron fires.
+      - name: Open or update the site-smoke tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: site-smoke-alert
+          label-description: Auto-opened when the scheduled site-smoke run fails against production
+          title: site-smoke scheduled run failing against production
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `site-smoke` run failed against https://harvey-qa.com (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Read the job log first: a bare error with no per-check breakdown means the run never reached the site (DNS/TLS/connection failure, or a broken `/sitemap.xml` fetch) — a different failure than a full check table with one or more FAIL lines. **Known condition as of 2026-07-30 (refs #1308, #1518):** production predates the `sandboxSender` probe, so \"requester confirmations send from a verified domain\" reports UNKNOWN and fails on that basis alone until the pending redeploy lands. If that is the ONLY failing check, this is the known gap awaiting a redeploy, not a new incident — don't action it as one. If any OTHER check is failing, prospects are hitting a dead end right now (#1308) — treat it as live. Close this issue once the run is green, or once the disclosed condition above is the only thing open."

@@ -76,6 +76,15 @@
         "issue": 1430,
         "at": "2026-07-28"
       }
+    },
+    {
+      "workflow": ".github/workflows/site-smoke.yml",
+      "marker": "site-smoke-alert",
+      "pendingProof": {
+        "why": "site-smoke.yml is a brand-new workflow, not yet on the default branch, and its drill (gh workflow run site-smoke.yml -f alert_drill=true) can only be dispatched against a workflow file already on main — the same circularity #1288 recorded for secbench.yml.",
+        "tracking": 1543,
+        "since": "2026-07-30"
+      }
     }
   ],
   "unconverted": [
