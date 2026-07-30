@@ -1061,10 +1061,61 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
       ...over,
     });
 
-  it("M1 reads ran when a fresh semantic-pass artifact proves the LLM/live tier ran", () => {
+  it("M1 reads a fresh semantic-pass artifact as the evidence that tier ran", () => {
     const m1 = status(AUDIT_RUNNERS, withPass("M1", { pass: "semantic" }), "M1");
-    expect(m1?.status).toBe("ran");
     expect(m1?.detail).toMatch(/semantic pass/);
+    // #1522: `ran` needs every M1 tier accounted for; with live and connected unrecorded the row is
+    // partial and names them, rather than reading as a module that ran in full.
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).toMatch(/detect-deeper/);
+  });
+
+  // ---- #1522: recording ONE M1 tier must not silence the others ----
+  //
+  // The defect this replaces, reproduced 2026-07-30 before the fix: `pnpm record-pass --module M1
+  // --pass connected` overwrote M1.pass.json, and the probe returned `{ kind: "examined" }` with NO
+  // reason — status `ran`, the semantic/live disclosure gone, the semantic pass's findings deleted
+  // at the write side. The more diligently an engagement recorded a tier, the quieter its M1 row.
+  it("a connected-only pass still names the semantic and live tiers as un-run (#1522)", () => {
+    const m1 = status(AUDIT_RUNNERS, withPass("M1", { pass: "connected" }), "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).toMatch(/semantic \(LLM `\/vuln-scan` → `\/triage`\)/);
+    expect(m1?.reason).toMatch(/live \(`pnpm detect-deeper`\)/);
+    expect(m1?.reason).not.toMatch(/connected Supabase/); // the tier that DID run is not listed as missing
+  });
+
+  it("M1 names the un-run tiers for every combination, and reads ran only when none is left", () => {
+    const slot = (pass: string, ...prior: string[]) =>
+      withPass("M1", { pass, priorPasses: prior.map((p) => ({ module: "M1", target: "/target", pass: p, generatedAt: iso(DAY) })) });
+    const semanticAndLive = status(AUDIT_RUNNERS, slot("live", "semantic"), "M1");
+    expect(semanticAndLive?.status).toBe("partial");
+    expect(semanticAndLive?.reason).toMatch(/connected Supabase/);
+    expect(semanticAndLive?.reason).not.toMatch(/detect-deeper/);
+
+    const allThree = status(AUDIT_RUNNERS, slot("connected", "semantic", "live"), "M1");
+    expect(allThree?.status).toBe("ran");
+    expect(allThree?.detail).toMatch(/connected pass.*semantic pass.*live pass/);
+  });
+
+  it("a connected pass recorded after a semantic one keeps BOTH tiers' findings (#1522)", () => {
+    const both = withPass("M1", {
+      pass: "connected",
+      findings: [{ id: "SB-DRIFT-01" }],
+      priorPasses: [{ module: "M1", target: "/target", pass: "semantic", generatedAt: iso(DAY), findings: [{ id: "TRIAGE-1" }] }],
+    });
+    const { findings } = runAudit(AUDIT_RUNNERS, both);
+    const ids = findings.map((f) => (f as { id?: string }).id);
+    expect(ids).toContain("SB-DRIFT-01");
+    expect(ids).toContain("TRIAGE-1");
+  });
+
+  // The #502 warning was read off the NEWEST pass, so recording any other tier afterwards lost it.
+  it("keeps the un-focused-semantic warning when a connected pass is recorded on top (#1522)", () => {
+    const superseded = withPass("M1", {
+      pass: "connected",
+      priorPasses: [{ module: "M1", target: "/target", pass: "semantic", generatedAt: iso(DAY) }],
+    });
+    expect(status(AUDIT_RUNNERS, superseded, "M1")?.detail).toMatch(/no M3 hotspot focus/i);
   });
 
   it("M1 carries the pass's triage findings into the deliverable", () => {
@@ -1077,15 +1128,12 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
   // degrades review to un-prioritized, so the ledger detail must make its presence/absence visible.
   it("M1 flags a semantic pass that ran WITHOUT an M3 hotspot focus", () => {
     const noFocus = withPass("M1", { pass: "semantic" }); // hotspotFocus absent
-    const m1 = status(AUDIT_RUNNERS, noFocus, "M1");
-    expect(m1?.status).toBe("ran");
-    expect(m1?.detail).toMatch(/no M3 hotspot focus/i);
+    expect(status(AUDIT_RUNNERS, noFocus, "M1")?.detail).toMatch(/no M3 hotspot focus/i);
   });
 
   it("M1 records a semantic pass that WAS hotspot-focused", () => {
     const focused = withPass("M1", { pass: "semantic", hotspotFocus: true });
     const m1 = status(AUDIT_RUNNERS, focused, "M1");
-    expect(m1?.status).toBe("ran");
     expect(m1?.detail).toMatch(/hotspot-focused/i);
     expect(m1?.detail).not.toMatch(/WARNING/);
   });

@@ -23,7 +23,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AUDIT_MODULES, type AuditModule } from "../audit-coverage.js";
-import { buildPassArtifact, writePassArtifact } from "../audit-pass-artifact.js";
+import { buildPassArtifact, type PassArtifact, writePassArtifact } from "../audit-pass-artifact.js";
 import type { Finding } from "../findings.js";
 
 const args = process.argv.slice(2);
@@ -95,6 +95,10 @@ try {
   });
   const path = writePassArtifact(resolve(out), artifact);
   console.error(`Recorded ${module} ${pass} pass for ${resolve(target)}${findings ? ` (${findings.length} finding(s))` : ""} → ${path}`);
+  // #1522: the slot accumulates, so say which tiers it now holds. Recording one tier used to delete
+  // another's — silently, since the write said only what it had just written.
+  const slot = JSON.parse(readFileSync(path, "utf8")) as PassArtifact;
+  console.error(`  ${module} slot now holds: ${[slot, ...(slot.priorPasses ?? [])].map((p) => `${p.pass} (${p.generatedAt})`).join(", ")}`);
 } catch (err) {
   console.error(`record-pass: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
