@@ -287,6 +287,7 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-KNOWN-IOC-PKG | `fixtures/legacy-app/package.json` (`flatmap-stream@0.1.1`) | `checkKnownIoc` (new) — curated IOC-feed name match (2018 event-stream malware); slopsquat not re-run on the fixture | high |
 | P-LICENSE-COPYLEFT-TRANSITIVE | `package-lock.json` (`@img/sharp-libvips-linux-riscv64@1.2.4`) | `checkLicenseCompliance` — LGPL-3.0-or-later on a package NO manifest declares (#1213) | high |
 | P-KNOWN-IOC-TRANSITIVE | `package-lock.json` (`crossenv`) | `checkKnownIoc` — curated IOC-feed name match on a package NO manifest declares (#1231) | high |
+| P-INSTALL-SCRIPT-DEP-TRANSITIVE | `package-lock.json` (`fsevents`, two tree positions) | `checkDependencyInstallScripts` (new, #1351) — `hasInstallScript: true` on a resolved package NO manifest declares | review |
 
 ### B2 transitive-copyleft plant (#1213)
 
@@ -362,6 +363,34 @@ sits equally transitively and is edit-distance 1 from nothing.
 Side effect, recorded: the entry has no `license`, so like `crossenv` it joins `SUP-LICENSE-00`'s
 indeterminate list on the offline path — the count in that row moves from 9 to 10 packages.
 
+### B2 transitive-install-script plant (#1351)
+
+`package-lock.json` already carried `fsevents` at two tree positions —
+`node_modules/fsevents` (2.3.3) and
+`node_modules/watchpack-chokidar2/node_modules/fsevents` (1.2.13) — real, unmodified npm data (a
+transitive optional dependency of `chokidar`/`webpack`), each with `hasInstallScript: true`. Neither
+is declared by any manifest in this target. This is not a plant in the sense of the copyleft/IOC
+rows above (nothing was added to the lockfile) — it is a pre-existing shape that scored silent
+because no check read `hasInstallScript` at all, which is #1351's whole finding: `SUP-SCOPE-00`
+disclosed this as manifest-only "since a lifecycle script only ever exists in a manifest," which is
+false (`grep -c hasInstallScript targets/calibration/package-lock.json` → 3, two of them these
+`fsevents` entries).
+
+`checkDependencyInstallScripts` reads `hasInstallScript` off `LicenseCandidate`, which
+`licenseScope`/`parsePackageLock` now carry through from the lockfile — the whole resolved tree, so
+both tree positions are named in one aggregate `SUP-INSTALL-SCRIPT-DEP` row (review tier: a
+build/native-addon install script is common and mostly benign, same posture as the existing
+manifest-scoped `SUP-INSTALL-SCRIPT`). `N-INSTALL-SCRIPT-DEP-CLEAN` (`crypto-browserify@3.12.1`,
+already the shared transitive boundary negative above) is the FP control: it sits equally
+transitively and carries no `hasInstallScript` field, so it must never appear in the row's evidence.
+
+Known residual, disclosed rather than silent: this reads package-lock.json only.
+`pnpm-lock.yaml`/`yarn.lock` do not record an equivalent per-package flag in the form Harvey
+parses (MEASURED 2026-07-30 against this repo's own `pnpm-lock.yaml`: zero
+`hasInstallScript`/`requiresBuild` occurrences despite `esbuild` — a package with a real
+postinstall — resolving twice). `supplyChainScopeFinding` states this in `SUP-SCOPE-00` for a
+pnpm/yarn target instead of silently reporting zero.
+
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign / suppression |
@@ -371,6 +400,7 @@ indeterminate list on the offline path — the count in that row moves from 9 to
 | N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
 | N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
 | N-NEXT-SUPPORTED | `fixtures/supported-app/package.json` (`next@15.5.16`) | A current, fully-patched Next version — `checkNextVersionCVEs` draws nothing (no EOL, no 29927/RSC/WS-SSRF). The supported-version half of the EOL pair, resolved by living in its own fixture root. |
+| N-INSTALL-SCRIPT-DEP-CLEAN | `package-lock.json` (`crypto-browserify@3.12.1`) | Sits equally transitively as the `fsevents` plant and carries no `hasInstallScript` field — the FP a "the resolved tree is unreviewed, flag it" rule would throw. `checkDependencyInstallScripts`'s evidence names only packages whose lockfile entry sets the flag, so it never appears. |
 | N-POSTINSTALL-KNOWN | `fixtures/supported-app/package.json` (`esbuild@0.21.5`) | A hugely-popular package that famously runs a postinstall to fetch its native binary — exactly the trait a "has install scripts = suspicious" heuristic false-positives on. `checkKnownIoc` keys on the curated malware-name feed, not install-script presence, so esbuild clears. |
 
 ### B2 manifest-layout decision (the deferred rows' single-manifest conflict, resolved)

@@ -113,6 +113,29 @@ function referencesLine(f) {
   return `<div class="kv"><b>References</b> ${links}</div>`;
 }
 
+// #825: the paid-tier applicable diff, in the report the client actually reads.
+//
+// `Finding.suggestedFix` is written by exactly one place — src/fix/attach.ts — which refuses to
+// attach unless the diff verified green AND the engagement is paid AND the finding clears the same
+// severity/confidence floor the ticket filer applies. So its presence here IS the gate; this
+// renderer re-decides none of it, exactly as ticketBody does not.
+//
+// Why it exists: #825's diff reached filed tickets (src/trackers/fix-diff.ts renderFixSection) and
+// stopped there. The written report is the deliverable a client reads first, and it showed the prose
+// `fix` while the verified patch — the thing the paid tier is sold on — was dropped at the render
+// seam. That is the producer→consumer gap #825 exists to close, one step further out than the
+// ticket body. Rendering mirrors the ticket: the diff under the prose Fix, marked inert, followed by
+// what was actually checked (never a bare "verified", which is a claim with no content behind it).
+function suggestedFixBlock(f) {
+  const sf = f.suggestedFix;
+  if (!sf?.verified || !sf.diff.trim()) return "";
+  return `<div class="sfix">
+    <div class="cu">Suggested fix — inert, for review. Harvey does not apply it.</div>
+    <pre class="diff">${esc(sf.diff.replace(/\n+$/, ""))}</pre>
+    ${sf.verification ? `<div class="sfv">Mechanically verified: ${esc(sf.verification)}</div>` : ""}
+  </div>`;
+}
+
 function findingCard(f) {
   const s = bftb(f);
   const sc = SEV[f.severity]?.c ?? "#64748b";
@@ -134,6 +157,7 @@ function findingCard(f) {
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
+    ${suggestedFixBlock(f)}
     ${referencesLine(f)}
     ${f.lowConfidenceMatch ? `<div class="crit"><div class="cu">⚠ Possible carry-over — confirm manually:</div>
       <div>This looks like it might be the same issue as prior finding <b>${esc(f.lowConfidenceMatch)}</b>, but the match was not confident (a rename or re-label), so it is counted as <b>new</b> and that prior finding still shows as resolved. Confirm whether they are the same before reporting progress.</div></div>` : ""}
@@ -454,6 +478,10 @@ export function buildHtml(data) {
   .crit{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;margin:7px 0 2px;font-size:11px}
   .crit .cu{color:#92400e;font-weight:700;margin-bottom:4px}
   .crit .ok{color:#15803d;font-weight:700}.crit .notok{color:#b3261e;font-weight:700}
+  .sfix{background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 10px;margin:7px 0 2px}
+  .sfix .cu{color:#075985;font-weight:700;font-size:11px;margin-bottom:5px}
+  .sfix .diff{background:#0f172a;color:#e2e8f0;border-radius:5px;padding:8px 10px;margin:0;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+  .sfix .sfv{color:#475569;font-size:10.5px;font-style:italic;margin-top:5px}
   .group{border:1px solid var(--line);border-left:4px solid #64748b;border-radius:8px;padding:10px 12px;margin:14px 0}
   .group-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px}
   .group-title{font-weight:800;font-size:13px}

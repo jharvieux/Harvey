@@ -1,0 +1,34 @@
+// #1532 — the seam exemption's premise is that the HELPER is pure and the CALLER does the I/O.
+// A helper can do I/O without ever writing `await`, and until this fixture the exemption could not
+// see it. Both shapes below were read at source in the 2026-07-30 sample of what the exemption
+// spares across the pinned corpus: `spawnSync` + `process.exit` (inbox-zero
+// packages/cli/src/setup-vercel.ts:339, packages/cli/src/setup-aws.ts:1477, tanstack-com
+// scripts/auth-login.ts:37 via `spawn`; `existsSync` at setup-vercel.ts:350) and a hand-rolled
+// `new Promise` over stream events (carbon packages/jobs/.../renderers.tsx:179). Neither is a pure
+// helper, so neither is the seam — still slop.
+import { spawnSync } from "node:child_process";
+
+function requireCliLogin(scope: string): void {
+  const result = spawnSync("vendor-cli", ["whoami", "--scope", scope], { stdio: "pipe" });
+  if (result.status !== 0) process.exit(1);
+}
+
+export async function runSetup(scope: string, fetchPlan: () => Promise<string>): Promise<string> {
+  requireCliLogin(scope);
+  return await fetchPlan();
+}
+
+function streamToText(stream: { on: (event: string, cb: (chunk: string) => void) => void }): Promise<string> {
+  return new Promise((resolve) => {
+    let out = "";
+    stream.on("data", (chunk) => {
+      out += chunk;
+    });
+    stream.on("end", () => resolve(out));
+  });
+}
+
+export async function renderReport(open: () => Promise<{ on: (event: string, cb: (chunk: string) => void) => void }>): Promise<string> {
+  const stream = await open();
+  return streamToText(stream);
+}

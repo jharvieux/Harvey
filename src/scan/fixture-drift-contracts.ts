@@ -29,6 +29,8 @@ export const TRUFFLEHOG_PINNED_VERSION = "3.96.0";
 export const VITALS_PINNED_VERSION = "0.2.0";
 export const STRYKER_PINNED_VERSION = "9.6.1";
 export const LIGHTHOUSE_PINNED_VERSION = "13.4.0";
+export const SEMGREP_PINNED_VERSION = "1.164.0";
+export const GITLEAKS_PINNED_VERSION = "8.30.1";
 
 function isNum(v: unknown): boolean {
   return typeof v === "number" && Number.isFinite(v);
@@ -292,6 +294,108 @@ export function checkLighthouseContract(result: LighthouseResult): string[] {
   }
   if (!Array.isArray(result.runWarnings)) {
     v.push("runWarnings is not an array — modelled non-optional on the real LHR (#1074)");
+  }
+  return v;
+}
+
+// semgrep 1.164.0 (the six registry packs + src/scan/rules/semgrep/) → parseSemgrepFindings
+// (src/scan/semgrep.ts). Reads check_id, path, start.line, end.line, extra.message, extra.severity,
+// extra.metadata.{confidence, harveySeverity, harveyTaxonomy, cwe, owasp, references, likelihood,
+// impact, source} — the last two (cwe/owasp) admit EITHER a string[] or a bare string (#976).
+// build-corpus.mjs plants one file per required rule below; PROVENANCE.md's "Fiction this capture
+// corrected" is why these five specifically, not a spot check of one.
+export interface SemgrepContractResult {
+  check_id: string;
+  path: string;
+  start?: { line?: number };
+  end?: { line?: number };
+  extra?: {
+    message?: string;
+    severity?: string;
+    metadata?: { confidence?: string; cwe?: string[] | string; owasp?: string[] | string };
+  };
+}
+export interface SemgrepContractOutput {
+  version?: string;
+  results?: SemgrepContractResult[];
+}
+
+const REQUIRED_SEMGREP_RULES = [
+  "harvey-service-role-in-client", // ERROR+HIGH, non-audit — the free-count (high-tier) case
+  "audit.code-string-concat.code-string-concat", // a `.audit.` rule — review tier even at ERROR+HIGH
+  "harvey-open-redirect", // WARNING/MEDIUM — the plain review-tier case
+  "cors-misconfiguration.cors-misconfiguration", // registry rule, cwe/owasp as string[] arrays
+  "bypass-tls-verification", // registry rule, cwe/owasp as BARE STRINGS — the #976 normalization path
+];
+
+export function checkSemgrepFixtureContract(output: SemgrepContractOutput): string[] {
+  const v: string[] = [];
+  if (!isStr(output.version)) v.push("version is not a string");
+  if (!Array.isArray(output.results) || output.results.length === 0) {
+    v.push("results is empty or not an array — the seed corpus should produce matches (corpus or semgrep drift?)");
+    return v;
+  }
+  const byId = (suffix: string): SemgrepContractResult | undefined => output.results!.find((x) => x.check_id?.endsWith(suffix));
+  for (const suffix of REQUIRED_SEMGREP_RULES) {
+    const r = byId(suffix);
+    if (!r) {
+      v.push(`no result with check_id ending "${suffix}" — the seed's planted file for it should still fire this rule (rule renamed/removed, or the registry pack no longer matches?)`);
+      continue;
+    }
+    if (!isStr(r.path)) v.push(`${suffix}: path is not a string`);
+    if (!isNum(r.start?.line) || !isNum(r.end?.line)) v.push(`${suffix}: start.line/end.line are not both numbers — the finding location reads both`);
+    if (!isStr(r.extra?.message)) v.push(`${suffix}: extra.message is not a string`);
+    if (!isStr(r.extra?.severity)) v.push(`${suffix}: extra.severity is not a string — severityFromSemgrep reads it`);
+  }
+  const arrayRule = byId("cors-misconfiguration.cors-misconfiguration");
+  if (arrayRule && (!Array.isArray(arrayRule.extra?.metadata?.cwe) || !Array.isArray(arrayRule.extra?.metadata?.owasp))) {
+    v.push("cors-misconfiguration: metadata.cwe/owasp are not both arrays — the #455 list-form threading path is unexercised");
+  }
+  const bareStringRule = byId("bypass-tls-verification");
+  if (bareStringRule && (typeof bareStringRule.extra?.metadata?.cwe !== "string" || typeof bareStringRule.extra?.metadata?.owasp !== "string")) {
+    v.push("bypass-tls-verification: metadata.cwe/owasp are not both bare strings — the #976 strList normalization path is unexercised");
+  }
+  return v;
+}
+
+// gitleaks 8.30.1 (--config src/scan/rules/gitleaks-supabase.toml --max-decode-depth 2) →
+// parseGitleaksFindings (src/scan/secrets.ts). Reads RuleID, File, StartLine, Match. The
+// service-role/demo-key co-location (#210) is load-bearing: a real demo service-role JWT's decoded
+// body carries BOTH claims, so both rules must fire on the SAME File:StartLine, which is exactly
+// what the suppression logic keys on — build-corpus.mjs's `DEMO_SERVICE_JWT` plants it.
+export interface GitleaksContractResult {
+  RuleID: string;
+  File: string;
+  StartLine?: number;
+  Match?: string;
+}
+
+const REQUIRED_GITLEAKS_RULES = [
+  { rule: "supabase-service-role-jwt", file: "lib/admin.ts" }, // real (non-demo) service-role JWT
+  { rule: "private-key", file: "certs/key.pem" }, // plain private key, no test-IdP context
+];
+
+export function checkGitleaksFixtureContract(results: GitleaksContractResult[]): string[] {
+  const v: string[] = [];
+  if (!Array.isArray(results) || results.length === 0) {
+    v.push("no gitleaks records — the seed corpus should produce matches (corpus or gitleaks drift?)");
+    return v;
+  }
+  for (const { rule, file } of REQUIRED_GITLEAKS_RULES) {
+    const r = results.find((x) => x.RuleID === rule && x.File?.endsWith(file));
+    if (!r) {
+      v.push(`no record with RuleID "${rule}" at a File ending "${file}" — the seed's planted file for it should still fire this rule`);
+      continue;
+    }
+    if (!isNum(r.StartLine)) v.push(`${rule}@${file}: StartLine is not a number — the location reads it`);
+    if (!isStr(r.Match)) v.push(`${rule}@${file}: Match is not a string — the evidence quotes it`);
+  }
+  // .endsWith, not ===: the committed fixture's File is relativized (PROVENANCE.md), but a fresh
+  // rerun's is the raw mkdtemp absolute path — both end in the same corpus-relative suffix.
+  const demoServiceRole = results.find((x) => x.RuleID === "supabase-service-role-jwt" && x.File?.endsWith("supabase/seed.sql"));
+  const demoMarker = results.find((x) => x.RuleID === "supabase-demo-key-marker" && x.File?.endsWith("supabase/seed.sql"));
+  if (!demoServiceRole || !demoMarker || demoServiceRole.StartLine !== demoMarker.StartLine) {
+    v.push("supabase-service-role-jwt and supabase-demo-key-marker no longer co-locate on supabase/seed.sql's line — the #210 demo-key clearance depends on this exact co-location");
   }
   return v;
 }

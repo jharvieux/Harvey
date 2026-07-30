@@ -16,6 +16,10 @@
 //   For every delivered finding, EITHER its own words are in the rendered HTML, OR its omission is
 //   disclosed AND COUNTED — and the count is the number actually omitted.
 //
+// Since #825 "its own words" includes a VERIFIED suggested fix, on any finding whose card is
+// individually rendered — a diff is the most concrete thing the paid tier ships, and it reached
+// filed tickets while the report showed only the prose fix.
+//
 // Three renderer behaviours satisfy the second branch, and each is checked against its own
 // arithmetic rather than against a magic string:
 //
@@ -42,7 +46,7 @@ import type { Finding, FindingsDocument } from "./findings.js";
 
 interface FidelityBreach {
   id: string;
-  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup";
+  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup" | "fix-diff-dropped";
   detail: string;
 }
 
@@ -84,6 +88,22 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
 
   const live = doc.findings.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly);
   const absent = live.filter((f) => !rendered(html, f.evidence));
+
+  // #825 — the same invariant applied to the paid tier's most concrete deliverable. A verified
+  // `suggestedFix` is a patch a client may apply; it reached filed tickets and, until this check,
+  // nothing asserted it reached the REPORT. Scoped to findings whose card is individually rendered:
+  // a finding withheld by the #935 rollup legitimately renders no card, and its withheld-count line
+  // already states that its full evidence and fix live in findings.json.
+  const carded = new Set(live.filter((f) => !absent.includes(f)).map((f) => f.id));
+  for (const f of live) {
+    const diff = f.suggestedFix?.verified ? f.suggestedFix.diff.replace(/\n+$/, "") : "";
+    if (!diff.trim() || !carded.has(f.id) || rendered(html, diff)) continue;
+    breaches.push({
+      id: f.id,
+      kind: "fix-diff-dropped",
+      detail: `a VERIFIED suggested fix is attached to this finding and its diff is absent from the rendered report. The client is shown the prose fix while the applicable patch — the thing the paid tier is sold on — is dropped at the last seam.`,
+    });
+  }
 
   // Group the absentees by the shape the renderer rolls up on, so the disclosed count can be
   // compared with the real one. A shape with absentees but no group block is a silent drop.

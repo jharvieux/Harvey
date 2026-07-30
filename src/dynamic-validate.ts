@@ -24,6 +24,7 @@ import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
 import { buildScopeLedger, type ScopeRow } from "./pentest/scope-ledger.js";
+import { readDriftPassEvidence, type DriftPassEvidence } from "./scan/supabase-drift.js";
 import { buildTwoTenantSeed, type SeedSkip, type TwoTenantSeed } from "./pentest/two-tenant-seed.js";
 
 // The facts about a repo that decide whether — and how fully — we can stand it up for M2.
@@ -383,8 +384,9 @@ function probeOneProject(opts: {
   plan: ProvisioningPlan;
   runner: StandUpRunner;
   clientSuite?: ClientSecuritySuite;
+  driftPass?: DriftPassEvidence;
 }): ProbeResult {
-  const { targetDir, appDir, layout, plan, runner, clientSuite } = opts;
+  const { targetDir, appDir, layout, plan, runner, clientSuite, driftPass } = opts;
 
   const verdict = assessStandUpAbility(layout);
   if (!verdict.canStandUp) {
@@ -447,6 +449,7 @@ function probeOneProject(opts: {
     coverage,
     rows: db.scopeRows ?? [],
     softDeleteProbed: db.softDeleteTables,
+    driftPass,
   });
   findings.push(scope.finding);
   limitations.push(...scope.limitations);
@@ -484,7 +487,8 @@ export function runDynamicValidation(opts: {
   clientSuite?: ClientSecuritySuite; // detected client suite to try as a bonus signal
 }): DynamicValidationResult {
   const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite } = opts;
-  const r = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite });
+  const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
+  const r = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite, driftPass });
   let artifactPath: string | null = null;
   if (r.producedEvidence) {
     const artifact = buildPassArtifact({
@@ -555,6 +559,9 @@ export function runMultiProjectDynamicValidation(opts: {
 }): DynamicValidationResult {
   const { targetDir, layout, artifactsDir, now, makeProject } = opts;
   const projects = splitLayoutByProject(targetDir, layout);
+  // Resolved once against the ENGAGEMENT's target, not per project: the connected pass is recorded
+  // for the repo, while each project's scope statement is keyed on its own app dir.
+  const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));
 
   const results: ProbeResult[] = [];
   const findings: Finding[] = [];
@@ -567,7 +574,7 @@ export function runMultiProjectDynamicValidation(opts: {
     const made = makeProject(project, plan);
     let r: ProbeResult;
     try {
-      r = probeOneProject({ targetDir: project.appDir, appDir: project.appDir, layout: project.layout, plan, runner: made.runner, clientSuite: made.clientSuite });
+      r = probeOneProject({ targetDir: project.appDir, appDir: project.appDir, layout: project.layout, plan, runner: made.runner, clientSuite: made.clientSuite, driftPass });
     } finally {
       made.stop(); // tear this project's stack down before the next binds its ports
     }

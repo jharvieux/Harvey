@@ -10,7 +10,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import type { RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
 
 // The artifact a pass writes. `target` and `generatedAt` are the two fields the probe checks: the
@@ -48,9 +47,21 @@ type PassLookup =
   // artifact ⇒ no reason: the probe falls back to its normal not-run wording.
   | { fresh: false; reason?: string };
 
+// The slice of the orchestrator's RunContext this lookup needs. Narrowed (#1280) so a reader
+// OUTSIDE run-audit — M2's scope ledger asking whether the connected pass ran on this engagement —
+// can use the same freshness/target rules without fabricating an exec/env it has no use for.
+// RunContext satisfies it structurally, so every existing caller is unchanged.
+interface PassArtifactSource {
+  targetDir: string;
+  exists: (path: string) => boolean;
+  artifactsDir?: string;
+  readArtifact?: (path: string) => unknown;
+  now?: number;
+}
+
 // Reads the pass artifact for `module` and decides whether it is fresh evidence THIS target's pass
 // ran. Reaches the filesystem only through ctx (exists/readArtifact), so it stays offline-testable.
-export function findFreshPass(ctx: RunContext, module: AuditModule): PassLookup {
+export function findFreshPass(ctx: PassArtifactSource, module: AuditModule): PassLookup {
   if (!ctx.artifactsDir || !ctx.readArtifact) return { fresh: false };
   const path = join(ctx.artifactsDir, passArtifactName(module));
   if (!ctx.exists(path)) return { fresh: false };

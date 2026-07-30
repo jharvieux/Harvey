@@ -35,6 +35,7 @@ import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { parseLivePolicies, parseLiveTableNames } from "../migration-sql-parse.js";
+import { findFreshPass } from "../audit-pass-artifact.js";
 
 // One live table as the drift queries return it. `extensionOwned` marks a table pg_depend attributes
 // to an installed extension (postgis' spatial_ref_sys, pg_cron's job tables when they land in
@@ -126,6 +127,10 @@ export function loadMigrations(dir: string): MigrationFile[] {
 // absent drift section otherwise reads as "your database matches your migrations", which is exactly
 // the silent-omission shape the disclosure family exists to prevent (#1070's second acceptance
 // criterion: a connected run never omits the topic silently).
+// The opening words of the not-assessed variant's evidence, in one place so the reader below tells a
+// run that COMPARED from one that only reported the topic without re-deriving the wording (#1280).
+const DRIFT_NOT_ASSESSED_PREFIX = "No comparison was made.";
+
 function driftScopeFinding(migrationCount: number, reason?: string): Finding {
   const ran = migrationCount > 0 && !reason;
   return mechanicalFinding({
@@ -140,7 +145,7 @@ function driftScopeFinding(migrationCount: number, reason?: string): Finding {
     location: "(supabase project schema)",
     evidence: ran
       ? `The deployed database was compared against the end state of ${migrationCount} committed migration file${migrationCount === 1 ? "" : "s"}. COMPARED: which public-schema tables exist on each side; whether row-level security is enabled on each table; and the identities (schema, table, name) of the RLS policies on each side. NOT COMPARED: column definitions, types, defaults and nullability; indexes and constraints; triggers; functions, including SECURITY DEFINER bodies; grants, roles and default privileges; installed extensions; and the BODIES of policies — Postgres stores a policy's USING/WITH CHECK clause as a normalised expression tree rather than the text the migration wrote, so a textual diff reports every policy as drifted and is not attempted here.`
-      : `No comparison was made. ${reason}`,
+      : `${DRIFT_NOT_ASSESSED_PREFIX} ${reason}`,
     impact: ran
       ? "A policy whose name is unchanged but whose USING clause was edited in the dashboard is NOT detected by this pass, and neither is a column, index, trigger, function or grant that differs between the deployed database and the migrations. The absence of a drift finding for those classes means they were never compared, not that they match."
       : "The absence of drift findings in this report means the question was never asked — not that the deployed database matches the committed migrations. A table whose RLS was disabled in the dashboard after the last migration would not appear anywhere in this report.",
@@ -296,4 +301,52 @@ export function checkMigrationDrift(
   }
 
   return findings;
+}
+
+// ---- #1280: the connected pass's own evidence, read by M2's scope statement -------------------
+//
+// The two passes are separate runs against separate systems: this one reaches the DEPLOYED project
+// (`scan.ts --supabase <ref> --migrations <dir>`), M2 stands up a reconstruction. They meet at the
+// engagement's artifacts dir — the connected pass's findings are recorded there with
+// `pnpm record-pass --module M1 --pass connected --findings <scan output> --out <artifacts-dir>` —
+// which is what lets M2's scope statement say whether drift WAS observed on THIS engagement instead
+// of pointing at a row the reader has to go and find. Derive, don't assert (#229): no flag says the
+// drift pass ran, the recorded findings do.
+export type DriftPassEvidence =
+  | { observed: true; generatedAt: string; driftFindings: number }
+  // A pass artifact exists for this engagement but leaves drift unestablished either way. Carried
+  // rather than dropped: a rejected artifact that vanishes silently reads exactly like none.
+  | { observed: false; reason: string };
+
+// Read the connected pass recorded for `targetDir` and decide what it proves about drift.
+// undefined ⇒ no connected pass was recorded at all, which is not a rejection and needs no note.
+export function readDriftPassEvidence(artifactsDir: string, targetDir: string, nowMs: number): DriftPassEvidence | undefined {
+  const lookup = findFreshPass(
+    {
+      targetDir,
+      artifactsDir,
+      exists: existsSync,
+      readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
+      now: nowMs,
+    },
+    "M1",
+  );
+  if (!lookup.fresh) return lookup.reason ? { observed: false, reason: lookup.reason } : undefined;
+
+  const findings = lookup.artifact.findings ?? [];
+  const scope = findings.find((f) => f.id === "SB-DRIFT-00");
+  // An M1 pass carrying no SB-DRIFT-00 is a semantic or live pass, not a connected one — it says
+  // nothing either way about drift, so it is neither evidence nor a rejection.
+  if (!scope) return undefined;
+  if (scope.evidence.startsWith(DRIFT_NOT_ASSESSED_PREFIX)) {
+    return {
+      observed: false,
+      reason: `a connected pass was recorded for this engagement (${lookup.artifact.generatedAt}) but its drift comparison did not run — see SB-DRIFT-00 for the reason`,
+    };
+  }
+  return {
+    observed: true,
+    generatedAt: lookup.artifact.generatedAt,
+    driftFindings: findings.filter((f) => f.id.startsWith("SB-DRIFT-") && f.id !== "SB-DRIFT-00").length,
+  };
 }

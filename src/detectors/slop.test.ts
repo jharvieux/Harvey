@@ -54,7 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
-  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 2, severity: "Low", confidence: "Review" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 4, severity: "Low", confidence: "Review" },
   { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
@@ -122,8 +122,27 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("single-use-helper exempts an exported single-caller but still catches a non-exported one, and stays silent on a two-site helper", () => {
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
-    expect(pos.map((f) => f.title)).toEqual([expect.stringContaining("computeDiscount"), expect.stringContaining("loadRate")]);
+    expect(pos.map((f) => f.title)).toEqual([
+      expect.stringContaining("computeDiscount"),
+      expect.stringContaining("loadRate"),
+      expect.stringContaining("requireCliLogin"),
+      expect.stringContaining("streamToText"),
+    ]);
     expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toHaveLength(0);
+  });
+
+  // #1532 — the half of the seam premise `containsAwait` does not look for. MEASURED
+  // 2026-07-30: a seeded 50-row sample of what the #1447 exemption spares across the ten pinned
+  // corpus targets found 5 wrongly spared, and every one was the helper doing the I/O itself
+  // without an `await` — `spawnSync`, `spawn`, `existsSync`, or a hand-rolled `new Promise` over
+  // stream events. Both shapes now fail here, and the scope control keeps the widening honest:
+  // a pure helper that merely CALLS a platform API (`crypto.getRandomValues`) stays spared.
+  it("does not spare a helper that does its own I/O without awaiting — sync spawn or a hand-rolled Promise (#1532)", () => {
+    const titles = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper").map((f) => f.title);
+    expect(titles.some((t) => t.includes("requireCliLogin"))).toBe(true); // spawnSync + process.exit
+    expect(titles.some((t) => t.includes("streamToText"))).toBe(true); // new Promise over stream events
+    // Scope control: widening `doesOwnIo` must not swallow the class it exists to protect.
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]);
   });
 
   // #370 criterion 3, the FP class briefs/quality-extras.txt names and #325 fixtures for M6.
@@ -137,7 +156,13 @@ describe("discrimination boundaries (regression locks)", () => {
     // ...and the exemption is not a blanket async pass: a helper doing the I/O ITSELF is still slop.
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
     expect(pos.some((f) => f.title.includes("loadRate"))).toBe(true);
-    expect(pos.find((f) => f.title.includes("loadRate"))?.evidence).toContain("exempts a pure helper whose one caller does I/O");
+    const evidence = pos.find((f) => f.title.includes("loadRate"))?.evidence ?? "";
+    expect(evidence).toContain("exempts a helper that does no I/O of its own whose one caller is async or awaits");
+    // #1532/#1345: the bound reaches the client WITH ITS POPULATION. #1447 disclosed the bound and
+    // shipped no number, which leaves a reader nothing to weigh it against — 653 spared, 401 on an
+    // await that has nothing to do with the helper, is the fact that makes the trade-off legible.
+    expect(evidence).toContain("653");
+    expect(evidence).toContain("401");
   });
 });
 

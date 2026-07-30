@@ -9,12 +9,20 @@
 // ease+safety ≥ 4, enabled category) AND it carries a `suggestedFix.diff` from an implementer pass.
 // An `auto` finding with no diff is reported as AWAITING IMPLEMENTER, never omitted — the implementer
 // stage is not built yet, and a silently short list would read as "nothing to fix".
+//
+// #1272 remainder: this path used to call executeFixDiff with NEITHER the detector-after hook nor the
+// §2.1 client-check hook, so "diff-verified" here meant `git apply --check` and nothing else — and it
+// still reached the client handoff as `verified-inert` with a merge rank. MEASURED 2026-07-30: a
+// purely cosmetic diff over a planted M5 class was reported "✓ F-COSMETIC [diff-verified]", exit 0,
+// merge rank 1. The batch path now runs the SAME two-halves gate the interactive path runs, by going
+// through ingestFixDiff — one contract, one implementation, no second definition of "verified".
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { validateFindings, type Finding, type FindingsDocument } from "../findings.js";
-import { executeFixDiff, type FixExecution } from "../fix/execute.js";
+import type { FixExecution } from "../fix/execute.js";
 import { assembleHandoff, type FixOutcomeSummary, type HandoffStatus } from "../fix/handoff.js";
+import { ingestFixDiff } from "../fix/interactive.js";
 import { intake, type EngagementManifest } from "../fix/pipeline.js";
 import { fileOfLocation } from "../fix/produce-plan.js";
 import { DEFAULT_CAPS, detectLateConflict, runScheduled, scheduleFixes, type ScheduleNode } from "../fix/schedule.js";
@@ -61,15 +69,23 @@ if (!result.baselineMatches) {
 const targetDir = resolve(targetArg);
 mkdirSync(outDir, { recursive: true });
 
-const executions: FixExecution[] = [];
+// The execution record plus the half of the §2 verdict FixExecution does not carry: whether the two
+// halves actually cleared, and — when they did not — the named reason.
+type ScoredExecution = FixExecution & { green: boolean; rejectReason?: string };
+
+const executions: ScoredExecution[] = [];
 const awaitingImplementer: string[] = [];
 const bftb = (f: Finding) => f.value * f.ease * f.safety;
+// A diff that applies but does not clear both halves has not earned verified-inert — that status
+// carries a merge rank into the client handoff. It is verify-failed, with ingestFixDiff's reason.
 const EXECUTION_STATUS: Record<FixExecution["outcome"], HandoffStatus> = {
   "diff-verified": "verified-inert",
   "rails-blocked": "rails-blocked",
   "verify-failed": "verify-failed",
   aborted: "aborted",
 };
+const statusOf = (e: ScoredExecution): HandoffStatus =>
+  e.outcome === "diff-verified" && !e.green ? "verify-failed" : EXECUTION_STATUS[e.outcome];
 const outcomes: FixOutcomeSummary[] = [];
 
 const withDiff = new Map<string, string>();
@@ -96,14 +112,17 @@ const nodes: ScheduleNode[] = [...withDiff.keys()].map((id) => {
 });
 const components = scheduleFixes(nodes);
 
-// Concurrency is MEASURED here, not asserted: the worker records how many slots were ever live at
-// once and that number is written into fix-execution.json. See CONCURRENCY_NOTE below for what the
-// number means today.
+// Concurrency is MEASURED here, not asserted: the worker records how many slots and how many
+// client-check runs were ever live at once, and those numbers are written into fix-execution.json.
+// See CONCURRENCY_NOTE below for what they mean today.
 let liveSlots = 0;
 let peakSlots = 0;
+let liveChecks = 0;
+let peakClientChecks = 0;
+let clientCheckMs = 0;
 await runScheduled(
   components,
-  async (component) => {
+  async (component, clientCheck) => {
     liveSlots++;
     peakSlots = Math.max(peakSlots, liveSlots);
     try {
@@ -112,21 +131,35 @@ await runScheduled(
       for (const findingId of component.findingIds) {
         const finding = findingById.get(findingId) as Finding;
         const diff = withDiff.get(findingId) as string;
-        const execution = executeFixDiff(findingId, diff, {
-          targetDir,
-          baselineCommit: manifest.baselineCommit,
-          allowlist: manifest.allowlist,
-          diffCap: manifest.diffCap,
+        // The whole ingest sits inside the client-check gate: it is the phase that baselines and
+        // re-runs the client's own suite, which is the scarce resource maxClientChecks bounds.
+        const ingest = await clientCheck(async () => {
+          liveChecks++;
+          peakClientChecks = Math.max(peakClientChecks, liveChecks);
+          try {
+            return ingestFixDiff({
+              finding,
+              diff,
+              targetDir,
+              baselineCommit: manifest.baselineCommit,
+              allowlist: manifest.allowlist,
+              diffCap: manifest.diffCap,
+            });
+          } finally {
+            liveChecks--;
+          }
         });
+        const execution: ScoredExecution = { ...ingest.execution, green: ingest.green, rejectReason: ingest.rejectReason };
+        for (const c of ingest.evidence.clientChecks) clientCheckMs += c.durationMs;
         executions.push(execution);
         outcomes.push({
           findingId,
           severity: finding.severity,
           bftb: bftb(finding),
           files: [...execution.files, ...execution.createdFiles],
-          status: EXECUTION_STATUS[execution.outcome],
+          status: statusOf(execution),
           verification: execution.verification,
-          reason: execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
+          reason: ingest.rejectReason ?? execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
         });
         // A rail-blocked diff is never written out: the rails say it may not touch those paths, and a
         // .diff sitting in the artifacts dir is one `git apply` away from doing exactly that. Its file
@@ -149,7 +182,7 @@ await runScheduled(
 const lateConflicts: { findingId: string; conflictsWith: { findingId: string; files: string[] }[] }[] = [];
 const cleared: { findingId: string; changedFiles: string[] }[] = [];
 for (const e of executions) {
-  if (e.outcome !== "diff-verified") continue;
+  if (!e.green) continue; // only a fix that cleared BOTH halves is on its way to a push
   const changedFiles = [...e.files, ...e.createdFiles];
   const conflictsWith = detectLateConflict(changedFiles, cleared);
   if (conflictsWith.length) lateConflicts.push({ findingId: e.findingId, conflictsWith });
@@ -165,19 +198,25 @@ for (const { finding, screen } of result.recommendOnly) {
 
 const handoff = assembleHandoff({ client: manifest.client, baselineCommit: manifest.baselineCommit, outcomes, notApproved: result.notApproved });
 
-// MEASURED 2026-07-28: peakSlots is 1 on every run, because executeFixDiff is synchronous end to end
-// (execFileSync git + verifySuggestedFix, and — where a caller supplies them — the sync detector
-// re-run and client checks). The semaphore is in the path and enforces the cap; it simply has nothing
-// to hold back yet. The number is REPORTED rather than assumed so that stays visible.
+// MEASURED 2026-07-30, and it CORRECTS what #1463 recorded here. That note read "peakSlots is 1 on
+// every run … the semaphore has nothing to hold back yet". Wiring the client-check gate below put a
+// real await inside the worker, so components are now genuinely in flight together: 2 components →
+// peakSlots 2, and 6 disjoint components → peakSlots 4, i.e. the cap is OBSERVED AT ITS LIMIT rather
+// than merely configured. The 4-slot cap binds.
 //
-// REASON: the 4-slot cap is enforced but not yet binding — no two components overlap in wall-clock.
+// What is still bounded is the CLIENT-CHECK cap: ingestFixDiff never yields while holding that
+// semaphore (execFileSync git + verifySuggestedFix + the sync detector re-run + spawnSync client
+// checks), so no two client-check phases overlap in wall-clock and peakClientChecks is 1 whatever the
+// component count. Both numbers are REPORTED, never assumed, so a change in either is visible.
+//
+// REASON: the 2-client-check cap is enforced but not yet binding — the ingest holds it without ever yielding, so no two client-check phases overlap.
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-28 — the peakSlots field this file writes, plus reading executeFixDiff, which is execFileSync/spawnSync throughout.
+// PROVENANCE: MEASURED 2026-07-30 — six disjoint components through this CLI reported peakSlots 4 (the cap) and peakClientChecks 1; ingestFixDiff is execFileSync/spawnSync throughout.
 // FALSIFIER: test -f src/fix/execute.ts || exit 127; grep -q 'export async function executeFixDiff' src/fix/execute.ts
 // TOUCHES: src/fix/schedule.ts, src/fix/execute.ts, src/cli/fix-execute.ts
 // Tracked as #1464 — the async-executor conversion is a scanner-core change, not a fix-pipeline one.
 const CONCURRENCY_NOTE =
-  "caps enforced by the runScheduled semaphore; peakSlots is 1 while executeFixDiff is synchronous end to end (an async executor is the falsifier)";
+  "caps enforced by the runScheduled semaphores; peakSlots reaches maxSlots once there are enough components, peakClientChecks stays 1 while the ingest is synchronous end to end (an async executor is the falsifier)";
 
 writeFileSync(
   join(outDir, "fix-execution.json"),
@@ -186,7 +225,7 @@ writeFileSync(
       client: manifest.client,
       baselineCommit: manifest.baselineCommit,
       targetDir,
-      concurrency: { ...DEFAULT_CAPS, componentsScheduled: components.length, peakSlots, note: CONCURRENCY_NOTE },
+      concurrency: { ...DEFAULT_CAPS, componentsScheduled: components.length, peakSlots, peakClientChecks, clientCheckMs, note: CONCURRENCY_NOTE },
       lateConflicts,
       executions,
       awaitingImplementer,
@@ -202,16 +241,26 @@ writeFileSync(join(outDir, "fix-handoff.json"), `${JSON.stringify(handoff, null,
 console.log(`Fix execution — ${manifest.client} @ ${manifest.baselineCommit} (target ${targetDir})`);
 console.log(`Artifacts: ${outDir}  ·  inert diffs only — nothing was applied to ${targetDir}, no branch, no push, no PR.\n`);
 
+// The ✓ tracks GREEN, not apply-clean. A diff that applies and leaves the detector firing (or breaks
+// the client's own suite) is a ✗ here and a verify-failed row in the handoff — the outcome word alone
+// used to read "diff-verified" and carry a merge rank (#1272).
 for (const e of executions) {
-  const detail = e.verification ?? e.abortReason ?? e.railViolations.join("; ");
-  console.log(`  ${e.outcome === "diff-verified" ? "✓" : "✗"} ${e.findingId}  [${e.outcome}]  ${e.files.length + e.createdFiles.length} file(s), ~${e.changedLines} lines — ${detail}`);
+  const detail = e.rejectReason ?? e.verification ?? e.abortReason ?? e.railViolations.join("; ");
+  const checks = e.evidence?.clientChecks ?? [];
+  const ran = checks.filter((c) => c.skipped === undefined).length;
+  console.log(`  ${e.green ? "✓" : "✗"} ${e.findingId}  [${statusOf(e)}]  ${e.files.length + e.createdFiles.length} file(s), ~${e.changedLines} lines — ${detail}`);
+  console.log(
+    `      detector ${e.detectorAfter ? (e.detectorAfter.notRun ? `not-run (${e.detectorAfter.notRun})` : e.detectorAfter.fired ? "STILL FIRING" : "clean") : "not re-run"}` +
+      `  ·  client checks: ${checks.length === 0 ? "NONE DISCOVERED — the client half cannot be evidenced, so this fix cannot be green" : `${ran} run, ${checks.length - ran} skipped`}`,
+  );
 }
 
 if (awaitingImplementer.length) {
   console.log(`\nAWAITING IMPLEMENTER (${awaitingImplementer.length}) — screened auto but no suggestedFix.diff supplied: ${awaitingImplementer.join(", ")}`);
 }
 console.log(
-  `\nScheduling: ${components.length} independent component(s), caps ${DEFAULT_CAPS.maxSlots} slot(s)/${DEFAULT_CAPS.maxClientChecks} client-check(s), peak slots observed ${peakSlots} — ${CONCURRENCY_NOTE}.`,
+  `\nScheduling: ${components.length} independent component(s), caps ${DEFAULT_CAPS.maxSlots} slot(s)/${DEFAULT_CAPS.maxClientChecks} client-check(s),` +
+    ` peak slots observed ${peakSlots}, peak client checks observed ${peakClientChecks}, ${clientCheckMs}ms spent in the client's own suite — ${CONCURRENCY_NOTE}.`,
 );
 for (const lc of lateConflicts) {
   console.log(
@@ -227,7 +276,7 @@ if (handoff.mergeOrder.order.length) {
 console.log(`Handoff: ${join(outDir, "fix-handoff.json")} — every approved finding as a row (PR'd / inert / downgraded / blocked), never a silent drop.`);
 
 const blocked = executions.filter((e) => e.outcome === "rails-blocked" || e.outcome === "aborted");
-const failed = executions.filter((e) => e.outcome === "verify-failed");
+const failed = executions.filter((e) => statusOf(e) === "verify-failed");
 if (blocked.length || failed.length) {
   console.error(`\n✗ ${blocked.length} blocked by rails/aborted, ${failed.length} failed verification. None of these is a fix — do not present them as applied.`);
   process.exit(1);

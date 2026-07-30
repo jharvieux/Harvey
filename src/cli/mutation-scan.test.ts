@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
@@ -842,6 +842,60 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     expect(parsed.moduleRecord?.status).toBe("partial");
     expect(parsed.moduleRecord?.note).toMatch(/#773/);
     expect(parsed.moduleRecord?.note).toMatch(/parseConfigFileTextToJson is not a function/);
+  });
+
+  // #773 (reopened): the bypass alone stops the crash but leaves the target's tsconfig.json
+  // un-rewritten, so a monorepo-shaped `extends` reaching outside the sandboxed dir no longer
+  // resolves post-sandbox — MEASURED live against a real TS7 target (apps/web extending a
+  // repo-root tsconfig.base.json). This proves the CLI-level fix end-to-end: Stryker gets staged
+  // into a disposable copy with the chain rewritten to an absolute path, and the real target dir
+  // is never touched.
+  it("a tsconfig reaching outside the target dir is rewritten to an absolute path in a disposable copy — the real target dir is never touched", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFakeTypeScript7(repo);
+
+    // The standard monorepo shape #773 was measured against: a base config OUTSIDE the directory
+    // Stryker will sandbox.
+    const outside = mkdtempSync(join(tmpdir(), "harvey-m8-cli-outside-"));
+    dirs.push(outside);
+    writeFileSync(join(outside, "tsconfig.base.json"), JSON.stringify({ compilerOptions: { strict: true } }));
+    const relFromRepoToOutside = relative(repo, outside).split("\\").join("/");
+    const originalTsconfig = JSON.stringify({ extends: `${relFromRepoToOutside}/tsconfig.base.json` });
+    writeFileSync(join(repo, "tsconfig.json"), originalTsconfig);
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/add.ts"] }));
+
+    // The fake binary records its OWN cwd and the tsconfig it can see there, so the test can prove
+    // Stryker ran somewhere other than `repo`, with the rewritten (not original) tsconfig.
+    const marker = join(outside, "cwd-and-extends.json");
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const tsconfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), "tsconfig.json"), "utf8"));
+fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ cwd: process.cwd(), extends: tsconfig.extends }));
+if (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {
+  const outPath = path.resolve(process.cwd(), cfg.jsonReporter.fileName);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
+  process.exit(0);
+} else {
+  process.exit(1);
+}
+`;
+    writeFileSync(join(binDir, "stryker"), script);
+    chmodSync(join(binDir, "stryker"), 0o755);
+
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    expect(parsed.summary?.overall.totalMutants).toBe(1); // a real run, not a degrade
+
+    const marked = JSON.parse(readFileSync(marker, "utf8")) as { cwd: string; extends: string };
+    expect(marked.cwd).not.toBe(repo); // staged into a disposable copy, not run in-place
+    expect(marked.extends).toBe(join(outside, "tsconfig.base.json")); // rewritten to the real, absolute location
+    expect(readFileSync(join(repo, "tsconfig.json"), "utf8")).toBe(originalTsconfig); // #1285: the original is untouched
   });
 });
 

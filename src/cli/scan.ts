@@ -15,6 +15,11 @@
 // turns on the prod-vs-migration drift comparison (#1280). Without it the scan still reports the
 // topic, as an SB-DRIFT-00 not-assessed row — never as silence.
 //
+// Record the run into the engagement's artifacts dir so M2's scope statement can say drift WAS
+// observed on this engagement rather than pointing at a row elsewhere in the report (#1280):
+//   scan --supabase <ref> --migrations <dir> --out connected.json
+//   pnpm record-pass --module M1 --pass connected --target <dir> --findings connected.json --out <artifacts-dir>
+//
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
 import { writeFileSync } from "node:fs";
