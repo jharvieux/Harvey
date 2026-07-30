@@ -1,11 +1,15 @@
-// #926/#1272: the scheduler is wired into the executing CLI, and its two products are asserted from
+// #926/#1272: the scheduler is wired into the executing CLI, and its products are asserted from
 // the artifact the operator actually reads — not from the module's own unit test.
 //
 //   • scheduleFixes drives execution (components, ordered) instead of a plain `for` loop, and the
-//     observed peak slot count is REPORTED in fix-execution.json rather than assumed.
+//     observed peak slot / peak client-check counts are REPORTED in fix-execution.json, not assumed.
 //   • detectLateConflict fires on the overlap batch time could not see: the schedule nodes carry the
 //     finding's own file, and a diff that touches a SECOND file is exactly the "grew a file
 //     mid-implementation" case §4 describes. The control is the same run's non-overlapping fix.
+//   • #1272 remainder: this CLI ran executeFixDiff with NEITHER §2 hook, so a diff that merely
+//     APPLIED reached the client handoff as `verified-inert` with a merge rank. The last describe
+//     block below drives the real planted M5 class through the batch path in all four directions —
+//     the ✓ has to be watched refusing, or it reads exactly like one with no refusal path at all.
 //
 // Spawned asynchronously so the file never blocks a vitest worker (#1120/#1133).
 
@@ -16,7 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
-import { disposeCorpus, materialize, type MaterializedCorpus } from "../fix/materialize-calibration.js";
+import { capturePatch, disposeCorpus, materialize, readCalibration, type MaterializedCorpus } from "../fix/materialize-calibration.js";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -32,6 +36,15 @@ const finding = (id: string, file: string, diff: string): Finding => ({
 // A one-line replacement patch for `app/<name>.ts`, whose committed body is `const <name> = 0;`.
 const patch = (name: string, value: number) =>
   [`--- a/app/${name}.ts`, `+++ b/app/${name}.ts`, "@@ -1 +1 @@", `-const ${name} = 0;`, `+const ${name} = ${value};`, ""].join("\n");
+
+// Every corpus carries a real client suite: since #1272 the §2.1 half must actually execute, and a
+// target with no discoverable verify command stays short of green (its own direction, asserted below).
+// npm rather than pnpm because a materialized corpus has no lockfile.
+const clientRepo = (files: Record<string, string>, suite = "console.log('client suite ok');\n"): Record<string, string> => ({
+  ...files,
+  "package.json": `${JSON.stringify({ name: "cal-client", private: true, scripts: { test: "node client-test.js" } }, null, 2)}\n`,
+  "client-test.js": suite,
+});
 
 // A patch that touches a SECOND file as well — the overlap that only exists once the diff is written.
 const widePatch = (name: string, alsoName: string, value: number) =>
@@ -65,7 +78,7 @@ function engagement(corpus: MaterializedCorpus, findings: Finding[]): string {
   return dir;
 }
 
-async function run(cfg: string, targetDir: string): Promise<{ code: number; out: string; artifact: Record<string, never> }> {
+async function run(cfg: string, targetDir: string): Promise<{ code: number; out: string; artifact: Record<string, never>; handoff: { rows: { findingId: string; status: string; mergeRank?: number; reason?: string }[] } }> {
   const outDir = join(cfg, "out");
   const args = [CLI, join(cfg, "findings.json"), join(cfg, "manifest.json"), "--target", targetDir, "--out", outDir];
   let code = 0;
@@ -78,32 +91,62 @@ async function run(cfg: string, targetDir: string): Promise<{ code: number; out:
     code = err.code;
     out = `${err.stdout}${err.stderr}`;
   }
-  return { code, out, artifact: JSON.parse(readFileSync(join(outDir, "fix-execution.json"), "utf8")) };
+  return {
+    code,
+    out,
+    artifact: JSON.parse(readFileSync(join(outDir, "fix-execution.json"), "utf8")),
+    handoff: JSON.parse(readFileSync(join(outDir, "fix-handoff.json"), "utf8")),
+  };
 }
 
 describe("fix-execute CLI — the scheduler is the execution driver, and it reports what it observed", () => {
   it("schedules independent fixes as separate components and writes the observed peak concurrency", async () => {
-    const c = materialize({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" });
+    const c = materialize(clientRepo({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" }));
     try {
       const cfg = engagement(c, [finding("F-A", "app/a.ts", patch("a", 1)), finding("F-B", "app/b.ts", patch("b", 1))]);
       const { code, out, artifact } = await run(cfg, c.dir);
       expect(code).toBe(0);
-      const concurrency = artifact.concurrency as unknown as { componentsScheduled: number; peakSlots: number; maxSlots: number; note: string };
+      const concurrency = artifact.concurrency as unknown as {
+        componentsScheduled: number; peakSlots: number; peakClientChecks: number; maxSlots: number; maxClientChecks: number; note: string;
+      };
       expect(concurrency.componentsScheduled).toBe(2); // disjoint files ⇒ parallel-eligible components
       expect(concurrency.maxSlots).toBe(4);
-      // MEASURED, not asserted: executeFixDiff is synchronous end to end, so nothing overlaps yet and
-      // the number says so out loud instead of the cap looking exercised.
-      expect(concurrency.peakSlots).toBe(1);
+      expect(concurrency.maxClientChecks).toBe(2);
+      // MEASURED, not asserted. Both numbers are real observations, and they differ: the slot count
+      // rises with the components because the ingest awaits inside the worker; the client-check count
+      // stays 1 because the ingest never yields while holding that semaphore.
+      expect(concurrency.peakSlots).toBe(2);
+      expect(concurrency.peakClientChecks).toBe(1);
       expect(concurrency.note).toContain("synchronous");
-      expect(out).toContain("peak slots observed 1");
+      expect(out).toContain("peak slots observed 2");
       expect(artifact.lateConflicts as unknown as unknown[]).toEqual([]); // control: no overlap here
     } finally {
       disposeCorpus(c);
     }
   }, 60_000);
 
+  // #926's criterion was "concurrency caps are enforced and observable, not documented", and #1463
+  // could only record that the cap had nothing to hold back. It does now: six disjoint components
+  // would peak at 6 without the semaphore, and the observed number is the cap itself.
+  it("HOLDS AT THE CAP: six independent components peak at maxSlots, not at six", async () => {
+    const names = ["a", "b", "c", "d", "e", "f"];
+    const c = materialize(clientRepo(Object.fromEntries(names.map((n) => [`app/${n}.ts`, `const ${n} = 0;\n`]))));
+    try {
+      const cfg = engagement(c, names.map((n) => finding(`F-${n.toUpperCase()}`, `app/${n}.ts`, patch(n, 1))));
+      const { code, artifact } = await run(cfg, c.dir);
+      expect(code).toBe(0);
+      const concurrency = artifact.concurrency as unknown as { componentsScheduled: number; peakSlots: number; maxSlots: number; peakClientChecks: number };
+      expect(concurrency.componentsScheduled).toBe(6);
+      expect(concurrency.peakSlots).toBe(concurrency.maxSlots); // the cap is the binding constraint
+      expect(concurrency.peakSlots).toBeLessThan(6); // and it is the semaphore doing it, not the workload
+      expect(concurrency.peakClientChecks).toBe(1); // the still-bounded half, stated rather than assumed
+    } finally {
+      disposeCorpus(c);
+    }
+  }, 120_000);
+
   it("flags the LATE conflict a diff introduced — the overlap batch time could not have seen", async () => {
-    const c = materialize({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" });
+    const c = materialize(clientRepo({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" }));
     try {
       // Both findings look independent from their locations alone; F-A's diff also rewrites app/b.ts.
       const cfg = engagement(c, [
@@ -122,4 +165,71 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
       disposeCorpus(c);
     }
   }, 60_000);
+});
+
+// #1272 remainder. The batch CLI used to score a diff on `git apply --check` alone: MEASURED
+// 2026-07-30 against the pre-fix code, the cosmetic diff below produced "✓ F-COSMETIC
+// [diff-verified]", exit 0, and a `verified-inert` handoff row at merge rank 1 — a fix that changes a
+// comment and nothing else, recommended to the client. These four directions are the same §2 contract
+// the interactive path enforces, now asserted from the artifacts on the batch path.
+describe("fix-execute CLI — a diff that merely APPLIES is not verified (#1272)", () => {
+  const M5_FILE = "app/api/ar-cors-reflected-safe/route.ts"; // the planted M5 unused-param class
+  const m5 = (id: string, diff: string): Finding => ({
+    ...finding(id, M5_FILE, diff),
+    location: `${M5_FILE}:8`,
+    evidence: "GET(request: Request) never reads request",
+  });
+  // The client's own suite, written so the CORRECT fix breaks it — the #1272 shape: detector clean,
+  // client red. Nothing but an executed client check can tell this apart from a good fix.
+  const brittleSuite =
+    `const s = require('fs').readFileSync(${JSON.stringify(M5_FILE)}, 'utf8');\n` +
+    `if (!s.includes('request: Request')) { console.error('client contract broken by the fix'); process.exit(1); }\n`;
+  const realFix = (src: string) => src.replace("export async function GET(request: Request) {", "export async function GET() {");
+  const cosmetic = (src: string) => src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
+
+  async function batch(variant: (src: string) => string, suite?: string, withClient = true) {
+    const src = readCalibration(M5_FILE);
+    const files = { [M5_FILE]: src };
+    const c = materialize(withClient ? clientRepo(files, suite) : files);
+    try {
+      const cfg = engagement(c, [m5("F-1", capturePatch(c, M5_FILE, variant(src)))]);
+      return await run(cfg, c.dir);
+    } finally {
+      disposeCorpus(c);
+    }
+  }
+
+  it("GREEN: the real fix clears the detector AND the client's own suite, and only then gets a merge rank", async () => {
+    const { code, out, handoff } = await batch(realFix);
+    expect(code).toBe(0);
+    expect(out).toContain("✓ F-1  [verified-inert]");
+    expect(out).toContain("detector clean");
+    expect(handoff.rows[0]).toMatchObject({ findingId: "F-1", status: "verified-inert", mergeRank: 1 });
+  }, 120_000);
+
+  it("REJECTS a cosmetic diff — it applies clean, and the detector is still firing", async () => {
+    const { code, out, handoff } = await batch(cosmetic);
+    expect(code).toBe(1);
+    expect(out).toContain("✗ F-1  [verify-failed]");
+    expect(out).toContain("STILL FIRING");
+    expect(handoff.rows[0]!.status).toBe("verify-failed");
+    expect(handoff.rows[0]!.mergeRank).toBeUndefined(); // never recommended to the client
+    expect(handoff.rows[0]!.reason).toContain("still fires");
+  }, 120_000);
+
+  it("REJECTS a real fix that breaks the client's own suite — the half that used to pass vacuously", async () => {
+    const { code, out, handoff } = await batch(realFix, brittleSuite);
+    expect(code).toBe(1);
+    expect(out).toContain("detector clean"); // the detector half is genuinely satisfied
+    expect(handoff.rows[0]!.status).toBe("verify-failed");
+    expect(handoff.rows[0]!.reason).toContain("the client's own checks FAIL after the fix");
+  }, 120_000);
+
+  it("REJECTS when NO client command is discoverable — nothing ran, so nothing passed", async () => {
+    const { code, out, handoff } = await batch(realFix, undefined, false);
+    expect(code).toBe(1);
+    expect(out).toContain("NONE DISCOVERED");
+    expect(handoff.rows[0]!.status).toBe("verify-failed");
+    expect(handoff.rows[0]!.reason).toContain("client half cannot be evidenced");
+  }, 120_000);
 });
