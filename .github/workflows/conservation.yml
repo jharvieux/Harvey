@@ -68,6 +68,10 @@ on:
         description: "Prove the ci-conservation-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509). SKIPS the gate and its negative controls, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
   pull_request:
   # #1498: merge queue. Without this the required `plant → deliverable, and the produced/delivered
   # arithmetic` context never reports on a queue entry and the queue deadlocks.
@@ -96,6 +100,10 @@ jobs:
       contents: read
       issues: write
     timeout-minutes: 20
+    # The receipt both validate-conservation.ts and .github/actions/gate-liveness read. A literal
+    # path, not ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
       # The M3 probe reads the target's authorship history and the M1 secrets tier reads git history,
       # so a shallow clone would degrade both into honest-but-useless not-run rows. fetch-depth: 0
@@ -172,6 +180,18 @@ jobs:
           if [ "$relevant" = "true" ] && [ "$drift" = "false" ]; then
             echo "Running the gate but SKIPPING the 9 captured-fixture drift checks: they re-run pinned external tools and assert the FRESH output still satisfies the committed contract, so they detect an UPSTREAM release changing a tool's output schema. That is a function of time, not of this diff — no change to a fixture, a contract or the drift CLI can make them say anything about this PR. The daily scheduled run executes all of them."
           fi
+
+      # #1509: a short-circuited job and a dead job are both "no scoring happened", and until now they
+      # looked identical from outside. The no-op is DECLARED, with its reason, so the assert step at
+      # the end can pass it while still printing something a reader cannot mistake for a scoring run.
+      - name: Declare the no-op (a short-circuit must not read like a scoring run)
+        if: steps.filter.outputs.relevant != 'true'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: conservation-plants, conservation-negative-controls
+          status: declared-no-op
+          scope: "in-job filter found no change to the conservation pipeline, its probes, its fixtures or this workflow — nothing was scored, and this run is evidence about nothing. The daily scheduled run covers the tree regardless."
 
       - uses: pnpm/action-setup@v4
         if: steps.filter.outputs.relevant == 'true'
@@ -261,7 +281,7 @@ jobs:
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool gitleaks
 
       - name: Conservation gate (must PASS)
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-conservation.ts
 
       # #1105: the vitest wiring test for this gate (src/cli/validate-conservation.test.ts) is
@@ -276,7 +296,7 @@ jobs:
         run: pnpm exec vitest run src/cli/validate-conservation.test.ts
 
       - name: Negative control — a seeded producer loss must FAIL the gate
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-loss M7; then
             echo "::error::--seed-loss M7 discarded everything the M7 probe produced and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
@@ -284,12 +304,37 @@ jobs:
           fi
 
       - name: Negative control — a seeded unaccounted drop must FAIL the ledger
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-unaccounted; then
             echo "::error::--seed-unaccounted removed a finding from the assembled deliverable with no disposition and the conservation ledger still exited 0. The arithmetic is not being asserted (#1096)."
             exit 1
           fi
+
+      # The negative controls are a SEPARATE claim from the gate, so they get their own record: a
+      # gate nobody has watched fail is indistinguishable from one that cannot (#350/#1065), and an
+      # `if:` that quietly stopped matching would retire both controls in silence. Recorded here
+      # rather than by the CLI because what is being asserted is that both steps EXECUTED — the CLI
+      # runs are supposed to exit non-zero.
+      - name: Record that both negative controls executed
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: conservation-negative-controls
+          units: 2
+          scope: "seeded producer loss (--seed-loss M7) + seeded unaccounted drop (--seed-unaccounted), both required to exit non-zero"
+
+      # #1509: without this, a job that died in setup reports the same absence of drift as a job that
+      # ran the whole pipeline and found none. `always()` so it still reports after an earlier step
+      # failed — naming the phase that never ran is exactly what that case needs. Excluded on the
+      # alert drill, which fails on purpose before anything is scored.
+      - name: Gate liveness — did this job actually assert anything?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: conservation-plants, conservation-negative-controls
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here by
       # #1142). On a scheduled failure, find-or-update ONE tracking issue by the marker label.

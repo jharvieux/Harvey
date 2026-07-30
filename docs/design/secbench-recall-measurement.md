@@ -155,13 +155,72 @@ entry in the three rule-covered classes (296), so the number above is no longer 
 remaining 15 exclusions are enumerated by name. This number is REPORTED DISTINCTLY from the SCA
 number and the request-sourced pathway — never blended.
 
+### FULL-CORPUS re-measurement, 2026-07-30 (#1275) — 583 of 600, and the 296 denominator was wrong
+
+Two things were still true after 2026-07-27. The tree covered **three of five classes** on the
+strength of an untested sentence — *"prototype-pollution and redos have no library-taint rule, so
+scanning them would measure nothing"* — and **no command built it**, so the 154/296 had a paragraph
+behind it, not a run. #1275 fixed both.
+
+`pnpm secbench-tree --mode source` now builds the installed-target-package tree the way the default
+mode builds the lockfile tree, so the whole pipeline is three commands:
+
+```
+pnpm secbench-tree --dir <checkout> --out <lock>  --concurrency 12          # SCA input
+pnpm secbench-tree --dir <checkout> --out <src> --mode source --concurrency 12   # library-taint input
+pnpm validate:secbench --dir <checkout> --lockfile-tree <lock> --osv-report <osv.json> --library-source-tree <src>
+```
+
+**MEASURED 2026-07-30** (semgrep 1.164.0, npm 11.12.1, same pin). Source tree: **583/600 built in
+50s**, 17 named exclusions — the 15 already enumerated above plus
+`prototype-pollution/{copy-props_2.0.4, fast-json-patch_2.0.4}`, both multi-dependency. Scoring the
+583: 645s.
+
+| SecBench class | scanned | RECALL (class-matched rule) | any `harvey-lib-*` rule |
+|----------------|--------:|----------------------------:|------------------------:|
+| prototype-pollution | 190 | n/a — no rule models this class |   8/190 (8 cross-class) |
+| redos               |  97 | n/a — no rule models this class |  12/97 (12 cross-class) |
+| command-injection   |  91 | **28/91 (30.8%)**               |  29/91 (1 cross-class)  |
+| path-traversal      | 167 | **121/167 (72.5%)**             | 121/167                 |
+| code-injection      |  38 | **3/38 (7.9%)**                 |   4/38 (1 cross-class)  |
+| **ALL**             | **583** | **152/583 (26.1%)**         | **174/583 (22 cross-class)** |
+
+**The 97-entry subset is kept above, not replaced** (#1275's second criterion): 33/97 (34.0%,
+2026-07-26) → 154/296 (52.0%, 2026-07-27) → **152/583 class-matched (26.1%, 2026-07-30)**. All three
+denominators are different populations and none supersedes the others as a like-for-like.
+
+**Two corrections fall out of the full tree, and both raise the same defect.**
+
+1. **"Scanning them would measure nothing" is FALSE, and the right answer is still not a recall
+   number.** 8 of 190 prototype-pollution packages and 12 of 97 redos packages DO draw a
+   `harvey-lib-*` finding. Every one is a path-traversal / command-injection / code-injection flaw
+   found in the same library — correct findings, and **not** the prototype-pollution or ReDoS bug
+   SecBench curated for that entry. So the sentence was wrong about the observation and right about
+   the conclusion: recall on those two classes is not 8/190 and 12/97, and it is not 0 either — it
+   is **not a quantity this pathway has**, because no rule was ever built to look. The table says
+   `n/a`, never `0`, for exactly the reason the coverage-guard family exists: a zero reads as "we
+   looked and found nothing."
+2. **The recorded 154/296 was 2 entries inflated by the same cross-class effect.** Scored
+   class-matched, the three modelled classes are **152/296 (51.4%)**, not 154/296: one
+   command-injection entry and one code-injection entry were flagged only by a rule for a different
+   class. Small in the three classes, decisive in five — and it is CLAUDE.md's corpus rule ("an
+   unscoped match would have recorded all three gaps as COVERED") reached through a real corpus
+   rather than a fixture. `scoreLibrarySource` now takes the rule ids rather than a boolean and
+   reports RECALL and any-hit as separate columns, with `crossClass` counted rather than folded in.
+
+The per-class shape is unchanged by the correction and unchanged by the wider denominator:
+path-traversal carries the pathway (72.5%), command-injection sits near 31%, code-injection under
+10% — the intra-procedural taint ceiling (#873) described above, measured over 2× the entries.
+
 ## The free/mechanical-tier answer for #868
 
 **Harvey's free/mechanical-tier recall on SecBench.js is a dependency-CVE (SCA) number: 433/594
 (72.9%) of installable entries flagged as known-vulnerable (measured 2026-07-24, reproduced exactly
-2026-07-27). The REQUEST-sourced detector recall is a measured 0/600 (2026-07-24) / 1/600
-(2026-07-27); the LIBRARY-internal source recall is a separately-measured 154/296 (52.0%,
-2026-07-27) over the three rule-covered classes.** These are separate tiers and MUST NOT be blended into one "free-tier recall on real CVEs"
+2026-07-27 and again 2026-07-30). The REQUEST-sourced detector recall is a measured 0/600
+(2026-07-24) / 1/600 (2026-07-27, reproduced 2026-07-30); the LIBRARY-internal source recall is a
+separately-measured 152/583 (26.1%, 2026-07-30) over the FULL corpus — 152/296 (51.4%) over the
+three classes a `harvey-lib-*` rule models, and `n/a` (not 0) over the 287 entries in the two it
+does not.** These are separate tiers and MUST NOT be blended into one "free-tier recall on real CVEs"
 figure — a blended number would read as source-detector performance, which is 0 here. #868 should
 cite the SCA number as an SCA number, explicitly scoped, or not at all.
 

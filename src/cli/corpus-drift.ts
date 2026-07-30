@@ -48,6 +48,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
@@ -387,6 +388,11 @@ const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.
 
 console.error("\n──── corpus drift ────");
 for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd(23)} ${r.check.padEnd(46)} ${r.detail}`);
+
+// #1509's second-order defect: this job died in SETUP for days and read no differently from "ran and
+// found no drift". Emitted HERE, after scoring, so only a run that got this far writes the receipt —
+// and `rows.length === 0` throws rather than printing "✓ 0 checks pass" below.
+recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.length} pinned target(s)`);
 
 // #1564: `findings` alongside `rows` so THIS run's own --json output can serve as a
 // FUTURE run's --baseline-findings — no separate artifact, no second scan, just the same data this

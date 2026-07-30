@@ -1,0 +1,156 @@
+# The FREE (mechanical, source-only) recall gate on a cadence (#1185).
+#
+# `validate-free-recall` scores Harvey's free tier against the five INDEPENDENT answer keys —
+# supatest, nocode-rescue, vandyand, cipherx, superredhat — each of which documents its own planted
+# bugs in a README / CASE-STUDY / REMEDIATION-REPORT that we did not write and cannot quietly edit.
+# Every other recall gate in this repo except SecBench and the OWASP corpora reads fixtures we
+# planted, which measures internal consistency (CLAUDE.md: "an answer key we wrote cannot measure
+# our coverage").
+#
+# Why it needed a cadence at all: the free-tier numbers for these five targets sat in
+# docs/design/free-tier-recall-measurement.md §2 marked `recorded — not re-run here`, dated
+# 2026-07-18, for twelve days across two coverage campaigns that were expected to have moved them.
+# Nobody could tell whether they had. That is the exact "a recorded number is a claim about the
+# past" failure this repo names as its signature defect, and a doc line cannot fix it — only a run.
+#
+# MONTHLY, not daily, and the reasoning is secbench.yml's inverted. SecBench is monthly because
+# nothing in this repo moves its number. Here the OPPOSITE is true — a Harvey detector change is
+# precisely what moves it — but the inputs are five external repos, so a per-PR cadence would clone
+# them on every PR and make the gate hostage to five third parties' uptime. The PR trigger below
+# covers the harness itself; the month is the latency on a detector regression that no planted
+# fixture happens to cover.
+#
+# WHAT MAKES IT ABLE TO GO RED. A low recall is NOT a failure here — it is the measurement, and
+# saying so is the whole point of free-tier-recall-measurement.md. The gate fails on the two things
+# that would make the printed number a lie: a free-count (high-tier) finding landing on a recorded
+# NON-vulnerability, which is the one error a free scan cannot afford; and NOTHING SCORED, so a run
+# where every clone failed cannot exit 0 and read as a clean result. A single dead upstream repo
+# costs that target its row (printed NOT SCORED with the reason, excluded from the denominator) and
+# not the job.
+
+name: free-recall
+
+on:
+  # 05:00 UTC on the 2nd. secbench takes 05:00 on the 1st; a day apart so the two monthly jobs that
+  # both clone external corpora and install the scanner binaries do not stack.
+  schedule:
+    - cron: "0 5 2 * *"
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-free-recall-alert path fires end-to-end (#1287/#1536). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  # The monthly schedule is the point; the PR trigger exists so a change to the harness or to the
+  # answer keys is exercised by the harness. Not a required status check (#1379 owns that decision).
+  pull_request:
+    paths:
+      - "src/cli/validate-free-recall.ts"
+      - "src/scan/free-recall-corpus.ts"
+      - "src/scan/semantic-corpus.ts"
+      - ".github/workflows/free-recall.yml"
+
+concurrency:
+  group: free-recall-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  free-recall:
+    name: FREE mechanical recall (5 independent answer keys)
+    runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue, mirroring
+    # secbench.yml / conservation.yml (#1138/#1142). A job-level block replaces the top-level one,
+    # so contents: read is restated.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 30
+    # The receipt both validate-free-recall.ts and .github/actions/gate-liveness read. A literal
+    # path, not ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the five clones and the five scans on purpose: the drill proves the ALERT path, not
+      # the corpus, and must not pay for the corpus to reach it (secbench.yml's ordering).
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1536): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a free-recall failure."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install mechanical-tier scanner binaries
+        uses: ./.github/actions/mechanical-binaries
+
+      # --clone-into reads the repo/ref out of the corpus source, so the workflow cannot drift away
+      # from the refs the answer keys are scoped to. It reports a dead upstream and carries on; only
+      # a total fetch failure exits non-zero.
+      - name: Fetch the five answer-keyed targets
+        run: pnpm validate:free-recall --clone-into "$RUNNER_TEMP/free-recall-clones"
+
+      - name: Score FREE mechanical recall
+        run: |
+          pnpm validate:free-recall \
+            --clones-dir "$RUNNER_TEMP/free-recall-clones" \
+            2>&1 | tee "$RUNNER_TEMP/free-recall.log"
+          exit "${PIPESTATUS[0]}"
+
+      # #1509: this job runs MONTHLY over five third-party clones, so a run that dies in setup or in
+      # the fetch phase is invisible for 30 days and reads no differently from a quiet month.
+      # `always()` names the phase that never ran instead of leaving a reader to infer it.
+      - name: Gate liveness — did this job actually score any target?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: free-recall
+
+      # The per-target table is what tells a reader WHICH target moved, and the blended total
+      # deliberately hides that. Worth keeping off a run that is otherwise 30 days from repeating.
+      - name: Upload the recall report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-recall
+          path: ${{ runner.temp }}/free-recall.log
+          if-no-files-found: warn
+
+      - name: Summarise the score in the run summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/free-recall.log" ]; then
+            {
+              echo '### FREE (mechanical) recall — independent answer keys'
+              echo ''
+              echo '```'
+              cat "$RUNNER_TEMP/free-recall.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A scheduled run goes red on a branch nobody watches (#1128/#1138). workflow_dispatch is in
+      # the condition permanently, not as a convenience: a cron-only alert path cannot be proven to
+      # work, which is how #1287 found five of them shipped unfired. Never fires on the PR trigger —
+      # that failure is already on the PR.
+      - name: Open or update the free-recall tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-free-recall-alert
+          label-description: Auto-opened when the monthly FREE-tier recall CI run fails
+          title: FREE mechanical recall gate failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The monthly `free-recall` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A LOW recall does not fail this gate — read the per-target table in the `free-recall` artifact before assuming a detector broke. It fails on exactly two things: a FREE-COUNT (high-tier) finding landing on a recorded NON-vulnerability, which is a free-scan false positive and the one error the free tier cannot afford; or NOTHING SCORED, which means every one of the five external clones failed. Reproduce locally with `pnpm validate:free-recall --clone-into /tmp/fr && pnpm validate:free-recall --clones-dir /tmp/fr`. If an upstream repo has moved or gone private, fix the `ref`/`repo` in `src/scan/semantic-corpus.ts` (or `free-recall-corpus.ts` for vandyand) rather than dropping the target — a target silently missing from the denominator is the omission this corpus exists to prevent. Close this issue once green."

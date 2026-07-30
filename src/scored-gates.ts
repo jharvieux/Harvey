@@ -112,6 +112,18 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     cadence: { kind: "workflow", file: ".github/workflows/secbench.yml", job: "secbench-recall", when: "monthly (1st, 05:00 UTC) + workflow_dispatch" },
   },
   {
+    id: "validate-free-recall",
+    script: "validate:free-recall",
+    measures: "FREE (mechanical, source-only) recall against the five INDEPENDENT answer keys",
+    // Monthly, for secbench.yml's reason inverted: its inputs are five third-party repos that
+    // change rarely, and what DOES move the number is a Harvey detector — which the PR trigger on
+    // the harness covers. MEASURED 2026-07-30 on the authoring machine: five clones in 12s, then
+    // 60s to run quick-scan + detect-static over all five and score them. It is the only gate whose
+    // answer keys were written by people outside this repo, so a miss here is evidence in a way a
+    // miss on our own fixtures is not.
+    cadence: { kind: "workflow", file: ".github/workflows/free-recall.yml", job: "free-recall", when: "monthly (2nd, 05:00 UTC) + workflow_dispatch" },
+  },
+  {
     id: "validate-connected",
     script: "validate:connected",
     measures: "live-tier corpus recall against a running Supabase stack (local / connected / hosted venues)",

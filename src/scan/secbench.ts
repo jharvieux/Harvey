@@ -239,26 +239,73 @@ export function recallPct(caught: number, denom: number): string {
 // scanning the INSTALLED target-package source scores this axis. Denominator is the entries whose
 // target-package source was present to scan (`scannedKeys`), mirroring the SCA installable/flagged
 // split — an installed-but-unflagged entry is a MISS, never dropped.
+/**
+ * Which `harvey-lib-*` rule models which SecBench class. `undefined` — prototype-pollution, redos —
+ * means NO library-taint rule models that class at all.
+ *
+ * This map is what separates recall from coincidence, and #1275 is the measurement that made it
+ * necessary. Until then the tree was only ever built for the three classes below, so "any
+ * harvey-lib-* finding in the package" and "the curated bug was caught" were the same predicate.
+ * Building the FULL tree broke that: MEASURED 2026-07-30 over all 583 installable single-target
+ * entries, 8 of 190 prototype-pollution packages and 12 of 97 redos packages draw a harvey-lib-*
+ * finding — every one a path-traversal / command-injection / code-injection flaw found in the same
+ * library, correct, and NOT the prototype-pollution or ReDoS bug SecBench curated. Scored
+ * unqualified, those 20 would have read as 20 points of recall on two classes Harvey has no rule
+ * for. That is CLAUDE.md's corpus rule ("an unscoped match would have recorded all three gaps as
+ * COVERED") reached through a real corpus rather than a fixture — and it was already live in the
+ * three covered classes at a smaller scale: 2 of the recorded 154/296 were cross-class.
+ */
+const LIB_RULE_FOR_CLASS: Partial<Record<SecbenchClass, string>> = {
+  "path-traversal": "harvey-lib-path-traversal",
+  "command-injection": "harvey-lib-command-injection",
+  "code-injection": "harvey-lib-code-injection",
+};
+
 interface LibrarySourceRecall {
   cls: SecbenchClass | "ALL";
   scanned: number; // entries whose target-package source was present to scan
-  libFlagged: number; // of those, whose source drew a harvey-lib-* finding
+  libFlagged: number; // of those, whose source drew ANY harvey-lib-* finding
+  // Of those, whose source drew the rule that MODELS this class — the recall number. `null` for a
+  // class no harvey-lib-* rule models, where "recall" is not a quantity this pathway has.
+  classMatched: number | null;
+  // Flagged by some harvey-lib-* rule, but not the one modelling this class: a real finding about a
+  // different vulnerability in the same package. Reported, never folded into recall.
+  crossClass: number;
 }
 
 export function scoreLibrarySource(
   entries: SecbenchEntry[],
   scannedKeys: Set<string>,
-  libHitKeys: Set<string>,
+  /** entry key → the `harvey-lib-*` rule ids that fired in its target-package source. */
+  libHits: Map<string, string[]>,
 ): { perClass: LibrarySourceRecall[]; all: LibrarySourceRecall } {
-  const blank = (cls: SecbenchClass | "ALL"): LibrarySourceRecall => ({ cls, scanned: 0, libFlagged: 0 });
+  const blank = (cls: SecbenchClass | "ALL"): LibrarySourceRecall => ({
+    cls,
+    scanned: 0,
+    libFlagged: 0,
+    classMatched: cls === "ALL" || LIB_RULE_FOR_CLASS[cls] ? 0 : null,
+    crossClass: 0,
+  });
   const byCls = new Map<SecbenchClass, LibrarySourceRecall>();
   for (const cls of SECBENCH_CLASSES) byCls.set(cls, blank(cls));
   const all = blank("ALL");
   for (const e of entries) {
     if (!scannedKeys.has(e.key)) continue;
     const row = byCls.get(e.cls)!;
-    row.scanned += 1; all.scanned += 1;
-    if (libHitKeys.has(e.key)) { row.libFlagged += 1; all.libFlagged += 1; }
+    row.scanned += 1;
+    all.scanned += 1;
+    const rules = libHits.get(e.key) ?? [];
+    if (rules.length === 0) continue;
+    row.libFlagged += 1;
+    all.libFlagged += 1;
+    const want = LIB_RULE_FOR_CLASS[e.cls];
+    if (want && rules.includes(want)) {
+      row.classMatched! += 1;
+      all.classMatched! += 1;
+    } else {
+      row.crossClass += 1;
+      all.crossClass += 1;
+    }
   }
   return { perClass: [...byCls.values()], all };
 }

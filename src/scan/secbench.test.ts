@@ -152,7 +152,7 @@ describe("scoreLibrarySource (#946)", () => {
   it("scores only entries whose target-package source was present, unflagged = MISS", () => {
     // 3 of 5 entries had their source installed; only aaptjs's source drew a harvey-lib-* finding.
     const scanned = new Set(["command-injection/aaptjs_1.3.1", "path-traversal/basic-static_2.0.2", "code-injection/y_2.0.0"]);
-    const hits = new Set(["command-injection/aaptjs_1.3.1"]);
+    const hits = new Map([["command-injection/aaptjs_1.3.1", ["harvey-lib-command-injection"]]]);
     const { all, perClass } = scoreLibrarySource(entries, scanned, hits);
     expect(all.scanned).toBe(3); // denominator is scanned, not all entries
     expect(all.libFlagged).toBe(1); // the 2 unflagged scanned entries are MISSES, not dropped
@@ -161,5 +161,28 @@ describe("scoreLibrarySource (#946)", () => {
     expect(cmd.libFlagged).toBe(1);
     const redos = perClass.find((r) => r.cls === "redos")!;
     expect(redos.scanned).toBe(0); // its source was not in the tree — excluded from the denominator
+  });
+
+  // #1275: the distinction that stopped being free once the FULL tree could be built. Before it,
+  // the tree only ever held the three classes a harvey-lib-* rule models, so "any rule fired" and
+  // "the curated bug was caught" were the same predicate. Over all five classes they are not.
+  it("does not count a cross-class rule hit as recall", () => {
+    const scanned = new Set(["command-injection/aaptjs_1.3.1"]);
+    // A path-traversal rule fired inside a command-injection entry's package: a real finding about
+    // a DIFFERENT vulnerability, so it is flagged and cross-class, never recall.
+    const { all } = scoreLibrarySource(entries, scanned, new Map([["command-injection/aaptjs_1.3.1", ["harvey-lib-path-traversal"]]]));
+    expect(all.libFlagged).toBe(1);
+    expect(all.classMatched).toBe(0);
+    expect(all.crossClass).toBe(1);
+  });
+
+  it("reports null recall, not zero, for a class no harvey-lib-* rule models", () => {
+    // A 0 would read as "we looked and found nothing"; null says nothing was ever built to look.
+    // 8/190 prototype-pollution and 12/97 redos packages DO draw a finding (MEASURED 2026-07-30) —
+    // reporting those as recall on two unmodelled classes is exactly what this guards.
+    const { perClass } = scoreLibrarySource(entries, new Set(), new Map());
+    expect(perClass.find((r) => r.cls === "redos")!.classMatched).toBeNull();
+    expect(perClass.find((r) => r.cls === "prototype-pollution")!.classMatched).toBeNull();
+    expect(perClass.find((r) => r.cls === "path-traversal")!.classMatched).toBe(0);
   });
 });

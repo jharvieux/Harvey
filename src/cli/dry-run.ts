@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
 import { classifyDefinerFunctions, definerFindings, type DefinerFunction } from "../definer-classifier.js";
@@ -211,6 +212,12 @@ async function main(): Promise<void> {
   writeFileSync(join(outDir, "findings.json"), JSON.stringify(portableFindings, null, 2));
   writeFileSync(join(outDir, "pii-data-map.json"), JSON.stringify(dataMap, null, 2));
   writeFileSync(join(outDir, "timing.json"), JSON.stringify(phases, null, 2));
+
+  // #1509's second-order defect: the dry-run-drift job's own value is the DIFF, and a job that dies
+  // before regenerating anything diffs nothing and reports the same green as a job whose artifact was
+  // already correct. The receipt makes the regeneration phase assertable; the workflow records the
+  // diff phase separately.
+  recordMeasured("dry-run-regen", allFindings.length, `findings regenerated from ${targetDir}`);
 
   console.log(`dry-run complete: ${allFindings.length} findings, ${Object.keys(dataMap).length} PII-bearing tables`);
   for (const p of phases) console.log(`  ${p.phase.padEnd(20)} ${String(p.ms).padStart(8)}ms  ${p.module}`);
