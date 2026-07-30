@@ -1040,7 +1040,14 @@ const REQUEST_PATH = /(^|\/)(app|pages)\//;
 function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim. #1528: request-reachable modules are already subtracted from `tooling`, so a route under a tooling-shaped segment still fires.
+    // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim. This
+    // is also where #230's SIXTH precision suppression finally lives — "N+1 in seed/build scripts
+    // (prisma/seed.ts, turbo codegen). Exclude." — dropped by PR #236 and still firing when
+    // re-measured 2026-07-27 (#1306). `Review` confidence was never silence: `Perf` severity is a
+    // COUNTED finding, so the client was still being told their seed script has a defect. #1528:
+    // request-reachable modules are already subtracted from `tooling`, so a route under a
+    // tooling-shaped segment still fires.
+    if (tooling.has(path)) continue;
     const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {

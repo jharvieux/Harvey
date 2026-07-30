@@ -29,6 +29,10 @@ import { mechanicalFinding } from "./common.js";
 // `<batch>.yml` here (no shared file → conflict-free parallel batches).
 const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 
+// The maintained registry packs every real engagement scan fetches (runSemgrep below) — shared with
+// runRegistryPacksOnFile's single-file replay (#1368) so the two can never drift apart.
+const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
+
 export interface SemgrepResult {
   check_id: string;
   path: string;
@@ -82,6 +86,11 @@ export interface SemgrepOutput {
   // semgrepignore, minified) is only populated at `--verbose`; runSemgrep now passes it instead of
   // `--quiet` (mutually exclusive) so this is never silently empty.
   paths?: { scanned?: string[]; skipped?: { path?: string; reason?: string }[] };
+  // #1368: `--time`'s exhaustive list of rule ids semgrep actually loaded and considered for the
+  // scan, present regardless of match. This is the only offline-unavailable way to tell "a registry
+  // rule id that was evaluated and found nothing" from "not a rule id this scan ever ran at all" —
+  // registry packs carry no local file a re-run can read the id list from the way harvey-* rules do.
+  time?: { rules?: string[] };
 }
 
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
@@ -287,12 +296,7 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
 // which flags we passed.
 export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
   const args = [
-    "--config", "p/typescript",
-    "--config", "p/react",
-    "--config", "p/nextjs",
-    "--config", "p/owasp-top-ten",
-    "--config", "p/secrets",
-    "--config", "p/security-audit",
+    ...REGISTRY_PACKS.flatMap((p) => ["--config", p]),
     "--config", CUSTOM_RULES,
     "--exclude", "node_modules",
     "--disable-nosem",
@@ -605,11 +609,13 @@ export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding
 }
 
 // #1012 — the fix pipeline's detector re-run replays ONE finding's rule against ONE fixed file
-// (src/fix/detector-rerun.ts). Only the custom rule directory is replayed: the `p/*` registry packs
-// need a network fetch, so a registry-rule finding is deliberately NOT resolvable this way and is
-// reported notRun rather than given a false clean. These are the rule ids that CAN be replayed —
-// read from the rule files themselves, so a renamed or deleted rule stops resolving (a rule that no
-// longer exists would otherwise "not fire" and read as a fixed bug).
+// (src/fix/detector-rerun.ts). These are the harvey-* rule ids that CAN be replayed offline — read
+// from the rule files themselves, so a renamed or deleted rule stops resolving (a rule that no
+// longer exists would otherwise "not fire" and read as a fixed bug). A `p/*` REGISTRY-pack rule is a
+// separate, ONLINE-only path (runRegistryPacksOnFile below, #1368) — corrected from this comment's
+// own prior claim that a registry rule was "deliberately not resolvable": the network fetch it needs
+// is the same one every real engagement scan already performs (runSemgrep), so declining it here was
+// a determinism preference, not a capability limit, and had been recorded in impossibility's register.
 export function harveyRuleIds(): Set<string> {
   const ids = new Set<string>();
   for (const file of readNamesSafe(CUSTOM_RULES)) {
@@ -652,6 +658,41 @@ export function runSemgrepOnFile(absFile: string, root: string): { result: Semgr
     return { result, failure: `semgrep did not scan ${rel} under ${root} (ignored by .gitignore/.semgrepignore, or an unrecognised extension)` };
   }
   return { result };
+}
+
+// #1368 — replay the registry packs (the same six every real scan fetches, REGISTRY_PACKS above)
+// against ONE fixed file, for the fix-verification gate's registry-rule findings. Requires network
+// (MEASURED 2026-07-30: `p/owasp-top-ten` alone resolves in ~1.4-2.2s; offline it times out with no
+// output) — a caller with no network gets `failure` and must report notRun, never a false clean.
+//
+// `ruleIds` is `--time`'s exhaustive list of every rule id semgrep actually loaded and evaluated for
+// this file, present whether or not it matched. That is the only way to tell "this taxonomy names a
+// registry rule that ran and found nothing" from "this taxonomy is not a registry rule the packs
+// carry at all" (renamed upstream, or not a semgrep taxonomy in the first place) — harvey-* rules
+// have a local file `harveyRuleIds` can read for the same distinction; a registry pack has none.
+export function runRegistryPacksOnFile(absFile: string, root: string): { result: SemgrepOutput; ruleIds: Set<string>; failure?: string } {
+  const rel = relative(root, absFile);
+  const configArgs = REGISTRY_PACKS.flatMap((p) => ["--config", p]);
+  let out: string;
+  try {
+    out = execFileSync(
+      "semgrep",
+      [...configArgs, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", "--time", root],
+      { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 },
+    );
+  } catch (err) {
+    const e = err as { stdout?: string; code?: string; message?: string };
+    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
+    else return { result: {}, ruleIds: new Set(), failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
+  }
+  const result = JSON.parse(out) as SemgrepOutput;
+  const ruleIds = new Set(result.time?.rules ?? []);
+  const pathError = (result.errors ?? []).find((e) => e.path === absFile);
+  if (pathError) return { result, ruleIds, failure: `semgrep could not scan the file: ${pathError.message ?? pathError.type ?? "unknown error"}` };
+  if (!(result.paths?.scanned ?? []).includes(absFile)) {
+    return { result, ruleIds, failure: `semgrep did not scan ${rel} under ${root} (ignored by .gitignore/.semgrepignore, or an unrecognised extension)` };
+  }
+  return { result, ruleIds };
 }
 
 // Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00/SEC-BUNDLE-00: a visible not-assessed row,

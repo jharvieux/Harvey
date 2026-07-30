@@ -3,7 +3,8 @@ import { join, relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { detectAppRouterFindings, type SourceInput } from "./app-router.js";
+import { buildImportGraph, collectPathAliases, detectAppRouterFindings, resolveImport, type SourceInput } from "./app-router.js";
+import { parse } from "./common.js";
 
 const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/", import.meta.url));
 
@@ -1525,5 +1526,75 @@ describe("client-reachability of a server-exclusive module (#1461)", () => {
       secretModule,
     ]);
     expect(taxonomies(findings)).not.toContain(GUARD);
+  });
+});
+
+// #1353 — the import graph used to stop at the package boundary. #1344 gated M7's generic
+// sync-I/O tier on import-reachability from a request entry point, which silenced three MEASURED
+// true positives in shared monorepo packages (rallly packages/utils pbkdf2Sync, two documenso rows)
+// purely because `@rallly/utils` resolved to nothing. Every consumer of resolveImport had the same
+// blind spot in the MISSING-findings direction: detectMissingServerOnly's client-reachability
+// check, service-role-literal.ts, and M9's whole graph.
+describe("import resolution across a workspace (#1353)", () => {
+  const files = loadFixtureDir("perf/workspace-reachability");
+  const allPaths = new Set(files.map((f) => f.path));
+  const aliases = collectPathAliases(files);
+  const from = "apps/web/app/api/reset/route.ts";
+
+  it("resolves a workspace package specifier to the member's entry module", () => {
+    // `main: "./src/index.ts"` and `exports: { ".": … }` are both in the fixture — neither is a
+    // path the resolver could have guessed from the specifier alone.
+    expect(resolveImport(from, "@acme/crypto", allPaths, aliases)).toBe("packages/crypto/src/index.ts");
+    expect(resolveImport(from, "@acme/utils", allPaths, aliases)).toBe("packages/utils/src/index.ts");
+  });
+
+  it("resolves a subpath under a workspace package specifier", () => {
+    expect(resolveImport(from, "@acme/utils/src/slugify", allPaths, aliases)).toBe("packages/utils/src/slugify.ts");
+  });
+
+  it("does not resolve a third-party package that merely shares a member's prefix", () => {
+    expect(resolveImport(from, "@acme/utils-external", allPaths, aliases)).toBeUndefined();
+    expect(resolveImport(from, "react", allPaths, aliases)).toBeUndefined();
+  });
+
+  it("reads the tsconfig nearest the importing file, not the shallowest one with paths", () => {
+    // Root tsconfig maps @/* -> shared/*; apps/web's own maps @/* -> apps/web/*. The root's is
+    // shallower, so before #1353 it won and every `@/…` inside apps/web resolved to nothing.
+    expect(resolveImport(from, "@/lib/session", allPaths, aliases)).toBe("apps/web/lib/session.ts");
+  });
+
+  // Three independent fixes landed in collectPathAliases on 2026-07-28, from three separate PRs,
+  // and this pins that they COMPOSE rather than one quietly undoing another: #1479's variant
+  // filename, #1461's per-config scoping, and #1353's workspace-package resolution — all on one
+  // Nx-shaped tree with NO plain root tsconfig.json, the ghostfolio shape that disconnected the
+  // whole graph. Each assertion below is falsifiable by reverting exactly one of the three.
+  it("reads tsconfig.base.json, scopes a nested config, and still resolves a workspace package", () => {
+    const nx = [
+      { path: "tsconfig.base.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@myorg/*": ["./libs/*"] } } }) },
+      { path: "apps/api/tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }) },
+      { path: "libs/shared/package.json", text: JSON.stringify({ name: "@myorg/shared", main: "./src/index.ts" }) },
+      { path: "libs/shared/src/index.ts", text: "export const x = 1;" },
+      // No package.json — reachable ONLY through tsconfig.base.json's paths map, so the assertion
+      // below isolates the variant-filename fix from the workspace resolver's work.
+      { path: "libs/util/index.ts", text: "export const u = 1;" },
+      { path: "apps/api/src/handler.ts", text: "export const h = 1;" },
+      { path: "apps/api/src/main.ts", text: "" },
+    ];
+    const paths = new Set(nx.map((f) => f.path));
+    const nxAliases = collectPathAliases(nx);
+    const importer = "apps/api/src/main.ts";
+    // #1479: the paths map lives only in tsconfig.base.json. libs/util carries no manifest, so a
+    // narrowed filename regex leaves it unresolvable.
+    expect(resolveImport(importer, "@myorg/util", paths, nxAliases)).toBe("libs/util/index.ts");
+    // #1353 workspace resolution, on the same tree.
+    expect(resolveImport(importer, "@myorg/shared", paths, nxAliases)).toBe("libs/shared/src/index.ts");
+    // #1461 scoping: apps/api's own `@/*` applies to apps/api files, and would resolve to nothing
+    // if the root's base config had won and stopped the loop.
+    expect(resolveImport(importer, "@/handler", paths, nxAliases)).toBe("apps/api/src/handler.ts");
+  });
+
+  it("puts the shared package in the route's import closure", () => {
+    const graph = buildImportGraph(new Map(files.filter((f) => /\.tsx?$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)])), allPaths, aliases);
+    expect(graph.get(from)).toContain("packages/crypto/src/index.ts");
   });
 });

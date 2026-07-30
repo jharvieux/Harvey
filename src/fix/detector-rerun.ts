@@ -1,16 +1,19 @@
 // Detector re-run (design §2.3). A fix is not green until the detector that found the problem no
 // longer fires. This resolves a Finding's taxonomy to a runnable detector and re-runs it SCOPED to the
 // fixed file, so an unrelated instance of the same class elsewhere in the target does not keep the fix
-// red forever. Two resolver families: the in-process AST engines (M5/M6/M7/M9), and — since #1012 —
-// the harvey-* semgrep rules, which cover the §8 in-scope M1 classes (open redirect, verbose error,
-// SQLi, …) and are replayed by running the rule directory against the one fixed file.
+// red forever. Three resolver families: the in-process AST engines (M5/M6/M7/M9); the harvey-* semgrep
+// rules (since #1012), which cover the §8 in-scope M1 classes (open redirect, verbose error, SQLi, …)
+// and are replayed by running the rule directory against the one fixed file; and — since #1368 — the
+// `p/*` registry-pack rules, replayed the same way but requiring a live semgrep run (the registry
+// fetch every real engagement scan already performs, src/scan/semgrep.ts's runSemgrep).
 //
 // Two honesty rules from CLAUDE.md's coverage doctrine are load-bearing here:
 //   • detectorBefore is carried VERBATIM from the original scan (§2.4), never re-derived.
 //   • a taxonomy with no resolver — or an external engine that isn't available — is reported `notRun`,
 //     which computeGreen treats as not-green. An unrun detector is never a clean detector. That is
-//     why the semgrep path distinguishes "the rule ran and matched nothing" from "semgrep was absent,
-//     the file was unreadable, or the source did not parse": only the first is a clean detector.
+//     why the semgrep paths distinguish "the rule ran and matched nothing" from "semgrep was absent,
+//     the file was unreadable, the source did not parse, or (registry-pack only) the network fetch
+//     failed": only the first is a clean detector.
 
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -22,7 +25,7 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectOrm, detectTargetFramework, nonNextWorkspaces } from "../scan/framework-detect.js";
-import { harveyRuleIds, partitionGuardTokenSuppressed, runSemgrepOnFile } from "../scan/semgrep.js";
+import { harveyRuleIds, partitionGuardTokenSuppressed, runRegistryPacksOnFile, runSemgrepOnFile } from "../scan/semgrep.js";
 import { fileOfLocation } from "./produce-plan.js";
 import type { DetectorRun } from "./verify.js";
 
@@ -55,12 +58,24 @@ function harveyRuleOf(taxonomy: string): string | undefined {
   return (ruleIds ??= harveyRuleIds()).has(id) ? id : undefined;
 }
 
-// A taxonomy has a resolver if an AST engine owns it, or it names a harvey-* semgrep rule that still
-// exists in the rule directory. Whether the semgrep BINARY is available is a separate question,
-// answered at re-run time as notRun — an engagement machine without semgrep must not silently
-// downgrade to "clean".
+// #1368: a registry-pack rule's check_id carries no config-path prefix (it's fetched by name, not
+// loaded from a local dir), so it is always a dotted, multi-segment id like
+// "javascript.browser.security.open-redirect.js-open-redirect" — never the bare or
+// "…semgrep.harvey-*"-suffixed shape a harvey-* rule id takes. This is a SHAPE check only — confirming
+// existence needs a live run, which is what this path is FOR; rerunRegistryPack below resolves the
+// ambiguity by checking the taxonomy against `--time`'s actual rule-id list.
+const REGISTRY_RULE_SHAPE = /^[a-z][\w-]*(?:\.[a-z][\w-]*){2,}$/;
+function looksLikeRegistryRule(taxonomy: string): boolean {
+  return REGISTRY_RULE_SHAPE.test(taxonomy) && harveyRuleOf(taxonomy) === undefined;
+}
+
+// A taxonomy has a resolver if an AST engine owns it, it names a harvey-* semgrep rule that still
+// exists in the rule directory, or it has the shape of a registry-pack rule id (#1368), whose
+// existence can only be confirmed live. Whether the semgrep BINARY/network is available is a
+// separate question, answered at re-run time as notRun — an engagement machine without semgrep, or
+// without network for the registry-pack path, must not silently downgrade to "clean".
 export function resolvesToDetector(taxonomy: string): boolean {
-  return AST_ENGINES.some((e) => e.matches(taxonomy)) || harveyRuleOf(taxonomy) !== undefined;
+  return AST_ENGINES.some((e) => e.matches(taxonomy)) || harveyRuleOf(taxonomy) !== undefined || looksLikeRegistryRule(taxonomy);
 }
 
 // #1012: replay one harvey-* semgrep rule against the finding's own file in the fixed worktree. The
@@ -90,6 +105,39 @@ function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): Dete
   };
 }
 
+// #1368: replay a registry-pack rule against the finding's own file in the fixed worktree. Unlike
+// harvey-* rules, a registry rule's taxonomy IS its check_id verbatim (no config-path prefix — the
+// pack is fetched by name, not loaded from a local dir), so the match is exact, not by suffix.
+// Requires network (runRegistryPacksOnFile fetches the same six packs every real scan does); offline
+// or with semgrep absent, this is notRun — never given a false clean. Returns undefined when the
+// taxonomy's SHAPE looked like a registry rule but the live run's own rule-id list (--time) doesn't
+// contain it: this run did not identify it as a registry rule at all (renamed upstream, invented, or
+// coincidentally shaped), so the caller falls back to the generic "no resolver" notRun rather than
+// reporting a registry-specific reason for a taxonomy that may not be one.
+function rerunRegistryPack(finding: Finding, targetDir: string): DetectorRun | undefined {
+  const notRun = (reason: string): DetectorRun => ({ detectorId: finding.taxonomy, fired: false, output: "", notRun: reason });
+  const file = fileOfLocation(finding.location);
+  const abs = isAbsolute(file) ? file : join(targetDir, file);
+  if (!existsSync(abs)) return notRun(`registry-pack rule ${finding.taxonomy} could not be re-run: ${file} does not exist under ${targetDir}`);
+
+  const { result, ruleIds, failure } = runRegistryPacksOnFile(abs, targetDir);
+  if (failure !== undefined) {
+    return notRun(
+      `registry-pack rule ${finding.taxonomy} could not be re-run: ${failure} (a registry-pack replay needs a live semgrep run — the same network fetch every real scan performs)`,
+    );
+  }
+  if (!ruleIds.has(finding.taxonomy)) return undefined;
+
+  const hits = (result.results ?? []).filter((r) => r.check_id === finding.taxonomy);
+  return {
+    detectorId: finding.taxonomy,
+    fired: hits.length > 0,
+    output: hits.length
+      ? `${finding.taxonomy} still firing at ${hits.map((h) => `${file}${h.start?.line ? `:${h.start.line}` : ""}`).join(", ")}`
+      : `${finding.taxonomy} clean at ${file}`,
+  };
+}
+
 // §2.4: the before-state goes verbatim into the PR body — it is the finding the scan already produced,
 // not a re-derivation. fired is true by construction (the scan fired to produce the finding).
 export function detectorBefore(finding: Finding): DetectorRun {
@@ -105,6 +153,10 @@ export function rerunDetector(finding: Finding, targetDir: string, sources?: Sou
   if (!engine) {
     const ruleId = harveyRuleOf(finding.taxonomy);
     if (ruleId !== undefined) return rerunSemgrep(finding, ruleId, targetDir);
+    if (looksLikeRegistryRule(finding.taxonomy)) {
+      const registryRun = rerunRegistryPack(finding, targetDir);
+      if (registryRun !== undefined) return registryRun;
+    }
     return {
       detectorId: finding.taxonomy,
       fired: false,

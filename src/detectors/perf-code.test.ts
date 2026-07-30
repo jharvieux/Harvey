@@ -177,6 +177,12 @@ describe("await in loop (N+1)", () => {
   it("does not flag a loop over a hardcoded/inline-literal list — bounded by source code, not data (#816)", () => {
     expect(byTaxonomy("await-in-loop/negative-static-list", TAX)).toHaveLength(0);
   });
+  it("does not flag seed/codegen scripts, but still flags the route in the same tree (#1306)", () => {
+    const hits = byTaxonomy("await-in-loop/negative-seed-script", TAX);
+    // Not "no findings" — the suppression must not have taken the request path with it, which is
+    // how an FP fix turns into a silent FN nothing measures.
+    expect(hits.map((h) => h.location.split(":")[0])).toEqual(["app/api/orders/route.ts"]);
+  });
 });
 
 describe("unbounded select", () => {
@@ -388,6 +394,18 @@ describe("nested-loop join", () => {
   });
   it("does not flag the Map/Set-indexed fix, a hardcoded or SCREAMING_SNAKE config list, a per-item field scan, or String.includes", () => {
     expect(byTaxonomy("nested-loop-join/negative", TAX)).toHaveLength(0);
+  });
+  // #1526: a workspace package's own `dev`/`build` script commonly names its own declared entry
+  // (`tsup src/index.ts`, matching its `exports`/`main`) — devToolingModules must not read that as
+  // a dev/ops script and mark the entry's whole import closure (here, a sibling package reached
+  // through a workspace specifier) as tooling. Before #1353 taught the import graph to follow a
+  // workspace-package specifier this never surfaced, because the closure never left @acme/ee; it
+  // reproduces the exact carbon shape (`@carbon/ee` -> `@carbon/react` -> MultiSelect.tsx) that
+  // silenced a real M7 finding via corpus-drift.
+  it("still flags a nested-loop join in a component reached only through a sibling package's own build script (#1526)", () => {
+    const hits = byTaxonomy("nested-loop-join/positive-workspace-own-build", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toContain("packages/react/src/MultiSelect.tsx");
   });
 });
 

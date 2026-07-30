@@ -93,17 +93,16 @@ describe("rerunDetector — §2.3 against targets/calibration", () => {
     expect(rerunDetector(finding(), dir).fired).toBe(false); // the other file's instance is out of scope
   });
 
-  it("reports notRun for a taxonomy with no resolver — never a false clean", () => {
-    // A semgrep REGISTRY rule (p/owasp-top-ten et al): #1012 replays only the local harvey-* rule
-    // directory, because a registry pack needs a network fetch. So this stays deliberately unresolvable.
-    const registryRule = "javascript.browser.security.open-redirect.js-open-redirect";
+  it("reports notRun for a taxonomy with no resolver of any kind — never a false clean", () => {
+    // Not an AST-engine prefix, not a harvey-* rule id, not shaped like a registry-pack check_id
+    // (#1368 gave registry rules a real, if online-only, resolver — see the block below).
     const dir = scratch(PLANTED, planted);
-    const run = rerunDetector(finding({ taxonomy: registryRule, location: "pages/api/redirect.js:9" }), dir);
+    const run = rerunDetector(finding({ taxonomy: "Coverage — some external tool finding", location: "pages/api/redirect.js:9" }), dir);
     expect(run.notRun).toContain("no detector re-run resolver");
     expect(run.fired).toBe(false);
     // fail loud: an unrun detector is not clean, so a fix over it can never be green
     expect(detectorHalfClean(run)).toBe(false);
-    expect(resolvesToDetector(registryRule)).toBe(false);
+    expect(resolvesToDetector("Coverage — some external tool finding")).toBe(false);
   });
 
   it("a harvey-* rule id that no longer exists in the rule directory does NOT resolve — a deleted rule is not a fixed bug", () => {
@@ -228,7 +227,65 @@ describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012
   }, SEMGREP_TIMEOUT_MS);
 });
 
-describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012)", () => {
+// #1368 — the registry-pack resolver. #1012's comment claimed a registry rule was "deliberately not
+// resolvable" because replaying it needs a network fetch; that reason was wider than what was tried
+// (MEASURED 2026-07-30: the same fetch every real engagement scan already performs resolves in
+// 1-2s). Proven here against a REAL registry rule and a REAL planted fixture — unlike the harvey-*
+// block above, no calibration file exists yet for an in-scope §8 class this specific rule catches, so
+// this uses javascript.browser.security.open-redirect.js-open-redirect, which genuinely fires on the
+// existing P-XSS-DANGEROUS-URL planting (components/LocationNav.jsx) per a live six-pack scan.
+const LOCATION_NAV = "components/LocationNav.jsx";
+const REGISTRY_RULE = "javascript.browser.security.open-redirect.js-open-redirect";
+const locationNavFinding = (o: Partial<Finding> = {}): Finding =>
+  finding({
+    id: "F-registry", title: "Open redirect via window.location", taxonomy: REGISTRY_RULE, location: `${LOCATION_NAV}:10`,
+    category: "Next.js/web footgun", confidence: "Review", evidence: "window.location = params.get(\"to\") with no host allowlist", ...o,
+  });
+
+describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the registry-pack resolver (#1368), against targets/calibration", () => {
+  const locationNavSrc = readFileSync(join(REPO_ROOT, "targets/calibration", LOCATION_NAV), "utf8");
+
+  it("the taxonomy now resolves (shape-only — existence is confirmed live, not offline)", () => {
+    expect(resolvesToDetector(REGISTRY_RULE)).toBe(true);
+  });
+
+  it("fires on the real planted class before the fix", () => {
+    const run = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, locationNavSrc));
+    expect(run.notRun).toBeUndefined();
+    expect(run.fired).toBe(true);
+    expect(run.output).toContain(`${REGISTRY_RULE} still firing`);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("is clean after the mechanical fix (no request-controlled value reaches window.location)", () => {
+    const fixed = locationNavSrc.replace(
+      'window.location = params.get("to");',
+      'if (params.get("to") === "settings") window.location = "/settings";',
+    );
+    expect(fixed).not.toEqual(locationNavSrc);
+    const after = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, fixed));
+    expect(after.notRun).toBeUndefined(); // the rule really re-ran
+    expect(after.fired).toBe(false);
+    expect(detectorHalfClean(after)).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", () => {
+    const noop = locationNavSrc.replace("export default function LocationNav() {", "export default function LocationNav() { // touched");
+    expect(noop).not.toEqual(locationNavSrc);
+    expect(rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, noop)).fired).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", () => {
+    const fixed = locationNavSrc.replace('window.location = params.get("to");', 'window.location = "/";');
+    const dir = scratch(LOCATION_NAV, fixed);
+    mkdirSync(join(dir, "components/other"), { recursive: true });
+    writeFileSync(join(dir, "components/other/Nav.jsx"), "export default function Nav() {\n  window.location = new URLSearchParams(window.location.search).get(\"to\");\n}\n");
+    const run = rerunDetector(locationNavFinding(), dir);
+    expect(run.notRun).toBeUndefined(); // the rule really re-ran, it wasn't skipped
+    expect(run.fired).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+});
+
+describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012/#1368)", () => {
   const redirectSrc = readFileSync(join(REPO_ROOT, "targets/calibration", REDIRECT), "utf8");
 
   it("a file the fix's location names but that is absent from the worktree is notRun, not clean", () => {
@@ -251,6 +308,18 @@ describe("rerunDetector — the semgrep resolver never manufactures a clean dete
   it.skipIf(SEMGREP_PRESENT)("semgrep absent from PATH is notRun on this machine — resolvable ≠ runnable", () => {
     const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
     expect(run.notRun).toContain("semgrep not found on PATH");
+    expect(detectorHalfClean(run)).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  // #1368: the SAME "resolvable ≠ runnable" honesty rule, for the registry-pack path — and here it is
+  // proven WITHOUT needing a real network outage (MEASURED 2026-07-30: pointing semgrep at a dead
+  // proxy to force a live network failure took 96s, an unusable test time), because the identical
+  // execFileSync-throws failure branch fires whether semgrep itself is on PATH or not — the fail-loud
+  // posture is widened here (a registry-specific reason), never weakened (still notRun, never clean).
+  it.skipIf(SEMGREP_PRESENT)("registry-pack replay is notRun on a machine with no semgrep — never a false clean, widened reason", () => {
+    const run = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, readFileSync(join(REPO_ROOT, "targets/calibration", LOCATION_NAV), "utf8")));
+    expect(run.notRun).toContain("semgrep not found on PATH");
+    expect(run.notRun).toContain("registry-pack rule");
     expect(detectorHalfClean(run)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 });

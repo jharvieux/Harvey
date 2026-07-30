@@ -1,5 +1,5 @@
-import { renderSelected } from "./multi-select";
+import { MultiSelect } from "@acme/react";
 
-// The package's own declared `exports["."]`, which its `dev` script rebuilds. Watching a
-// package's public entry point is not a dev/ops tool, so this must not seed the tooling closure.
-export const api = { renderSelected };
+export function useMultiSelect() {
+  return MultiSelect;
+}
