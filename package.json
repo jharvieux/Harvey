@@ -45,6 +45,7 @@
     "simplify-scan": "tsx src/cli/simplify-scan.ts",
     "scan-focus": "tsx src/cli/scan-focus.ts",
     "corpus-drift": "tsx src/cli/corpus-drift.ts",
+    "corpus-pins": "tsx src/cli/corpus-pins.ts",
     "site-smoke": "tsx src/cli/site-smoke.ts",
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
     "detector-census": "tsx src/cli/detector-census.ts",

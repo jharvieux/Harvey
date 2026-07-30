@@ -56,7 +56,7 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
-import { cloneAtPin } from "../scan/corpus-clone.js";
+import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
@@ -257,7 +257,11 @@ for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
   console.error(`\n=== ${target.slug} (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
   try {
-    cloneAtPin(target.repo, target.commit, dir);
+    // #1571: a per-run copy from $HARVEY_CORPUS_CACHE_DIR's pristine checkout when CI has one
+    // (set by .github/actions/corpus-clone-cache) — a bare network clone otherwise, exactly as
+    // before. `dir` stays a disposable mkdtemp copy either way, so --install/scanning below can
+    // still mutate or delete it freely.
+    cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR);
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
     if (install) installTargetDeps(dir, target.m8?.installFlags ?? []);

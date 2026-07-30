@@ -1,12 +1,13 @@
 # M8 (mutation testing) for the external-repo corpus — issue #300.
 #
 # WHY THIS IS A SEPARATE WORKFLOW FROM corpus-drift.yml, which scores every other module of the same
-# targets: cost. corpus-drift's job is ~2 minutes because it clones and reads source. This one runs
-# a per-target install (the target's own lockfile-implied package manager, since #1268) and then
-# re-runs the target's whole test suite once per mutant — minutes
-# per target, and the timeout has to be sized for the suite, not the scan. Folding it into the
-# weekly drift job would make the fast check as slow as the slow one, and a timeout bump there would
-# be paying M8's cost on every module.
+# targets: cost. This one runs a per-target FULL install (the target's own lockfile-implied package
+# manager, since #1268) and then re-runs the target's whole test suite once per mutant — minutes per
+# target on top of corpus-drift's own cost (MEASURED 2026-07-28, a real full-sweep run:
+# ~20m35s scoring 13 targets, dominated by --install and semgrep/detect-static on the largest ones,
+# NOT the ~2 minutes this comment used to claim — #1571), and the timeout has to be sized for the
+# suite, not the scan. Folding this into the daily drift job would make the fast check as slow as
+# the slow one, and a timeout bump there would be paying M8's cost on every module.
 #
 # Monthly, not weekly: the targets are pinned at a commit, so the only thing that can move an M8
 # score is OUR wrapper's reading of Stryker's report — a much narrower surface than the source-tier
@@ -40,7 +41,10 @@ on:
       - "src/mutation-scan.ts"
       - "src/cli/mutation-scan.ts"
       - "src/cli/corpus-drift.ts"
+      - "src/cli/corpus-pins.ts"
+      - "src/scan/corpus-clone.ts"
       - ".github/workflows/corpus-m8.yml"
+      - ".github/actions/corpus-clone-cache/**"
 
 concurrency:
   group: corpus-m8-${{ github.ref }}
@@ -70,10 +74,25 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # #1571: same pin-keyed clone cache corpus-drift.yml uses — this job scores 4 of the same
+      # pinned targets, so it rides corpus-drift's daily-warmed cache entry rather than re-cloning
+      # cold every month.
+      #
+      # READ-ONLY on purpose: there is no `mode: save` step in this job, because the key hashes ALL
+      # fourteen pins and this job only ever clones four. It did save, once, and that is what
+      # poisoned the cache on 2026-07-30 — a 4-target tree took the 14-target key, corpus-drift's
+      # complete tree was then refused as a duplicate, and every later run restored the partial one.
+      # Warming this entry is corpus-drift.yml's job; this one consumes it.
+      - name: Corpus clone cache
+        id: corpus-cache
+        uses: ./.github/actions/corpus-clone-cache
+
       # Only the targets with a scoreable suite. --install is redundant with --m8's own install for
       # these, but passing it keeps this job's M5-knip reading consistent with corpus-drift.yml's
       # rather than silently scoring knip against an uninstalled tree.
       - name: Score M8 mutation baselines
+        env:
+          HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
         run: |
           set -euo pipefail
           pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json

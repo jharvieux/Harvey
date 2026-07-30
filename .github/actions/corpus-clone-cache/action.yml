@@ -1,0 +1,115 @@
+# Cache for the external corpus's pinned clones (#1571). corpus-drift.yml re-clones ~14 repos at
+# FIXED SHAs on every full run — daily schedule, workflow_dispatch, or any PR that touches the
+# harness — and a pinned SHA cannot change, so its clone is safe to reuse until the pin itself is
+# edited.
+#
+# KEY: a hash of src/scan/external-corpus.ts's own pin set (src/cli/corpus-pins.ts, run by this
+# action into corpus-pins.txt), never a hand-copied list in this file. Editing a pin is a cache miss
+# BY CONSTRUCTION — the same property the mechanical-binaries action's version-pinned key already
+# holds ("a version bump is a cache miss by construction — there is no way to bump a pinned tool and
+# silently keep running the old one").
+#
+# WHAT'S CACHED: the bare clones only (no `--install` tree, no scan output) — measured 2026-07-30
+# at 663MB for the full 14-target set, well under GitHub's ~10GB per-repo cache budget. The
+# per-target working copies corpus-drift.ts scans are still disposable mkdtemp COPIES of this
+# cache (src/scan/corpus-clone.ts's cloneAtPinCached), so --install/scanning can freely mutate or
+# delete them without ever touching — or polluting — the cached tree.
+#
+# THE KEY PROMISES THE WHOLE PIN SET, SO ONLY A WHOLE-PIN-SET RUN MAY WRITE IT. This is why the
+# action has an explicit `mode: save` half rather than actions/cache's implicit post-job save, and
+# it is not hypothetical — it is exactly how this cache poisoned itself on 2026-07-30 (run
+# 30573579859, fixed under #1571):
+#
+#   * corpus-m8.yml clones FOUR of the pinned targets. corpus-drift.yml on a PR clones only the
+#     slugs the diff touched (#1498's narrowing). Both used this key, which hashes all fourteen.
+#   * corpus-m8 SUCCEEDED and its post-job save wrote a 4-target tree under the 14-target key at
+#     19:21:58. Thirteen minutes later corpus-drift finished with all fourteen cloned and its own
+#     save was REFUSED — "Unable to reserve cache with key ..., another job may be creating this
+#     cache" — because a cache key is immutable once written. The complete tree lost to the partial
+#     one purely on finishing order.
+#   * Every run after that restored the 4-target entry and failed the verify step below with
+#     "poisoned or incomplete for 10 of 14". A re-run could not fix it: it restores the same entry.
+#
+# Note what this was NOT: actions/cache@v4 declares `post-if: success()`, so a FAILED job never
+# saves. The poisoning job passed. The defect was the key/content contract, not the failure path.
+#
+# FAIL LOUD ON A POISONED HIT (#1509's precedent: a cache saved without semgrep read as "ran and
+# found nothing" for days). A cache HIT is trusted only after every pinned target is verified
+# present, at the exact pinned commit and clean — never silently rescanning fewer targets. A MISS is
+# not a failure: every target gets cloned fresh during the run (cloneAtPinCached's own fallback).
+name: Corpus clone cache
+description: Restore (or seed) the pinned external-corpus clones, keyed on the pin set, and fail loudly on a corrupted restore.
+
+inputs:
+  mode:
+    description: "'restore' (default) before scoring — restores and verifies. 'save' after scoring — writes the key ONLY when this run holds every pinned clone."
+    required: false
+    default: restore
+
+outputs:
+  cache-dir:
+    description: Directory holding one pristine clone per pinned repo. Pass as $HARVEY_CORPUS_CACHE_DIR to `pnpm corpus-drift`.
+    value: ${{ steps.paths.outputs.cache-dir }}
+  cache-hit:
+    description: "'true' when the pin-keyed cache was restored (and verified) rather than started empty."
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: echo "cache-dir=$HOME/.cache/harvey-corpus-clones" >> "$GITHUB_OUTPUT"
+
+    # The single source of truth for what's pinned right now — read from the manifest itself, not
+    # retyped here, so this file cannot drift from src/scan/external-corpus.ts.
+    - name: Print the current pin set
+      shell: bash
+      run: pnpm corpus-pins --out corpus-pins.txt
+
+    # Derived once and reused by both halves: restore and save resolving to different keys would
+    # reintroduce the mismatch this action exists to prevent.
+    - id: key
+      shell: bash
+      run: echo "key=corpus-clone-cache-v2-${{ hashFiles('corpus-pins.txt') }}" >> "$GITHUB_OUTPUT"
+
+    # restore/save split rather than plain actions/cache: the save has to be CONDITIONAL on this
+    # run holding the whole pin set, and the implicit post-job save cannot be conditioned on
+    # anything but job status — which is not the question.
+    - id: cache
+      if: inputs.mode == 'restore'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.paths.outputs.cache-dir }}
+        key: ${{ steps.key.outputs.key }}
+
+    # A MISS needs no check: cloneAtPinCached populates the cache dir target-by-target as the run
+    # clones each one, and there is nothing to verify yet.
+    #
+    # A HIT is a claim that every pinned target is already here, correct, at the pinned commit —
+    # and that claim gets checked, not trusted. A restored tree that is missing a target, at the
+    # wrong commit, or with a dirty working tree (a truncated checkout) fails BY NAME rather than
+    # letting corpus-drift.ts's own per-target cloneAtPinCached fallback quietly re-clone it — a
+    # silent per-target recovery here would mean a systemically broken cache (e.g. this action
+    # writing to the wrong path, #1509's shape) could sit unnoticed indefinitely, always paying the
+    # miss cost with no signal that the cache was never actually helping.
+    - name: Verify the restored cache reproduces every pinned clone
+      if: inputs.mode == 'restore' && steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: bash "${{ github.action_path }}/verify-clones.sh" "${{ steps.paths.outputs.cache-dir }}" corpus-pins.txt restore
+
+    # The save guard, and the reason a partial entry can no longer be written: this reads the tree
+    # on disk and reports whether it holds all fourteen. It never fails the job — a caller that
+    # scores a subset (corpus-m8, or corpus-drift's narrowed PR path) is behaving correctly and is
+    # simply not eligible to write this key.
+    - id: complete
+      if: inputs.mode == 'save'
+      shell: bash
+      run: bash "${{ github.action_path }}/verify-clones.sh" "${{ steps.paths.outputs.cache-dir }}" corpus-pins.txt save
+
+    - name: Save the pinned clones
+      if: inputs.mode == 'save' && steps.complete.outputs.complete == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.paths.outputs.cache-dir }}
+        key: ${{ steps.key.outputs.key }}
