@@ -93,7 +93,9 @@ batches dispatched after that point. The ledger queue is deliberately NOT empty 
 | M9/TanStack residuals | #1459 #1460 #1461 #1462 | pending |
 | Inert entries + reasons without falsifiers | #1428 #1436 | pending |
 
-### Merge queue — 14 open PRs, ALL behind branch protection (`strict: true`)
+### Merge queue — 14 open PRs, ALL behind branch protection (~~`strict: true`~~ — FALSE, see below)
+
+**CORRECTION 2026-07-30, MEASURED.** `main` has `strict: false`. `gh api repos/jharvieux/Harvey/branches/main/protection/required_status_checks` returns `{"strict": false, "contexts": ["verify", "regenerate dry-run findings + diff committed artifact", "plant → deliverable, and the produced/delivered arithmetic"]}`. A branch does NOT have to be current before merging, so merges do not serialise for that reason. The claim below was written from an assumption and repeated by a later supervisor without checking — the same laundering shape this file records elsewhere. Re-run the command rather than trusting either version.
 
 Every branch must be current before merging, so merges serialise: update → CI → merge → everything
 else goes BEHIND. Merge **by risk, not FIFO**. `#1444` (the CLAUDE.md relay pass) is armed and was
@@ -179,37 +181,7 @@ Every brief now requires a gate **watched failing**, both exit codes shown.
 | **`site-smoke` cadence** (2026-07-30) | `src/cli/site-smoke.ts`'s own header says "Run it on a schedule against production; that is the whole point." That sentence is **false**: `grep -rn site-smoke .github package.json` returns nothing. The check written to catch a silent 6-day outage is itself only run by hand. Add a daily workflow wired to the shared `.github/actions/alert-issue` composite? (A net-new cron is excluded from inline fixing.) |
 | **#1304 — one line in a runbook** (2026-07-30) | `docs/runbooks/engagement-access.md` needs the bundle-analyzer stats-file request. It is the ONLY thing keeping #1304 open; wording is drafted verbatim on the issue. The sibling document `docs/templates/auth-questionnaire.md` got it (PR #1452), this one did not, and #1452's body did not disclose dropping it. Consequence: the **[B] depth tier stays half-unreachable in real engagements** — capability built and proven, artifact requested on only one of the two onboarding paths. `docs/runbooks/**` sat outside the docs grant, so it was relayed rather than applied. |
 | **#1272 — `plansDisagree`** (2026-07-30) | Product call, three options on the issue (comment 5132445273). It is the last unmet criterion of #1272 (the other three are met and shipped in PR #1527); its grep returns no call site. **Recommended: option 3**, originated by the executor and not previously offered — `emitFixPrompt` drafts a plan at emit time and `producePlan` runs again at ingest, days apart against a checkout the client may have moved, so comparing them makes the trigger fire on REAL plan drift instead of being dead code. Options 1 and 2 are delete-with-evidence and keep-as-declared-dead. |
-| **`RESEND_FROM` unverified** (2026-07-30) | Present but **encrypted**, so nobody has confirmed it moved off the `onboarding@resend.dev` sandbox. On the sandbox Resend delivers only to the account owner: the form returns 200, you get notified, and **the prospect silently receives nothing.** PR #1518 made it answerable from outside (`GET /api/scan` now reports `sandboxSender` as a boolean, never an env value) — it needs one deploy to answer. Note two other "provisioned" vars on this project turned out EMPTY, so presence is not evidence of value. |
-
-### Process rules adopted mid-session
-
-- **Dispatch BEFORE reporting.** Reporting is the middle of a turn, not the end — the queue drained
-  to zero twice and the operator caught it both times. Merge-queue watching is not work.
-- **A remainder split is bookkeeping, not a handoff** (operator ruling). File it, then KEEP WORKING
-  it. Stop only for an operator ruling, a supervised path, a blocking issue, or genuinely different
-  work.
-- **A conflicted PR gets NO CI runs.** GitHub cannot build a merge ref, so no `pull_request` runs are
-  created — that is a conflict, not a dropped webhook. (Refinement: runs are created at push time, so
-  a PR that goes dirty LATER keeps them.) Two executors misdiagnosed this; so did I, less carefully.
-- `pnpm <script>` fails in a worktree with a symlinked `node_modules`, and now in the primary checkout
-  too when the lockfile moves — run `./node_modules/.bin/*` directly rather than letting pnpm purge.
-
-## 2026-07-28 — SWEEP PAUSED. Resume from `.git/issue-sweep-ledger.json` + this block.
-
-### The rule that governed this sweep, and its amendment
-
-Operator, opening: *"You are forbidden from closing any issue that doesn't meet every single acceptance criteria. If an executor wants to close without meeting the criteria leave it open and label it `Failed`."*
-
-Operator, later: *"if the failed issues have clear next steps to satisfy 100% of the acceptance criteria, you may open new issues for the remainder(s) and close the failed issue."*
-
-**Applied as:** an unmet criterion never closes as done. Where the remainder has clear next steps → file a remainder issue carrying the unmet criteria **verbatim** plus the evidence they were unmet, then close the original **keeping the `Failed` label** as the review trail. Where the remainder is an unmade decision or an unknown root cause → leave it open and `Failed`, and say why on the issue.
-
-Review trail: `gh issue list --label Failed --state all` (10 issues; 9 closed with a live remainder, 1 open).
-
-**Do not defend the rule on issue-count grounds** — close+split is −1/+1 = net 0 and leave-open is net 0. The counts are identical; what differs is *attribution*. The skill's `closed N / filed K` metric rewards the laundering.
-
-### Scoreboard
-
+| **`RESEND_FROM`** (2026-07-30) | **Operator updated it.** But it is NOT externally verifiable yet: live `GET https://harvey-qa.com/api/scan` returns `{"service":"scan-intake","configured":true}` with **no `sandboxSender` field**, because the deployed build predates PR #1518 which added that probe. The value is set; the instrument built to confirm it ships with the held redeploy. One deploy answers it in one call. |
 | | |
 |---|---|
 | PRs merged | #1381 #1382 #1383 #1387 #1397 #1398 #1405 #1417 |
