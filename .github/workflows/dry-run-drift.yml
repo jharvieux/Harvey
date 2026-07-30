@@ -36,6 +36,11 @@ on:
   schedule:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
   workflow_dispatch:
+    inputs:
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509). SKIPS the regenerate + diff steps, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
   pull_request:
   # #1498: merge queue. Without this the required `regenerate dry-run findings + diff committed
   # artifact` context never reports on a queue entry and the queue deadlocks. The relevance filter
@@ -61,6 +66,10 @@ jobs:
     name: regenerate dry-run findings + diff committed artifact
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The receipt both dry-run.ts and .github/actions/gate-liveness read. A literal path, not
+    # ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
       # fetch-depth: 0 so the filter step can diff against the PR base. It does not affect what the
       # scan sees: dry-run.ts copies the target into a scratch dir and `git init`s a fresh repo
@@ -95,6 +104,18 @@ jobs:
             echo "No change to the dry-run harness, its rules, its fixture or its committed artifact — the artifact cannot have drifted from this PR. Nothing to regenerate."
           fi
 
+      # #1509: a short-circuited job and a job that died in setup are both "nothing was regenerated,
+      # nothing was diffed". Declaring the no-op is what keeps the two distinguishable in the job
+      # summary — the same problem the #1107 in-job filter creates one level down.
+      - name: Declare the no-op (a short-circuit must not read like a diffed run)
+        if: steps.filter.outputs.relevant != 'true'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: dry-run-regen, dry-run-diff
+          status: declared-no-op
+          scope: "in-job filter found no change to the dry-run harness, its rules, its fixture or the committed artifact — the artifact cannot have drifted from this PR, so nothing was regenerated and nothing was diffed."
+
       - uses: pnpm/action-setup@v4
         if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
@@ -113,11 +134,11 @@ jobs:
         uses: ./.github/actions/mechanical-binaries
 
       - name: Regenerate dry-run findings
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'SEEDED-NEVER-MATCHES' # #1509 proof: scoring phase forced off
         run: pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out /tmp/dry-run-regen
 
       - name: Diff regenerated findings.json against the committed artifact
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'SEEDED-NEVER-MATCHES' # #1509 proof: scoring phase forced off
         run: |
           if ! diff -u dry-run/findings.json /tmp/dry-run-regen/findings.json; then
             echo "::error::dry-run/findings.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
@@ -125,9 +146,31 @@ jobs:
           fi
 
       - name: Diff regenerated pii-data-map.json against the committed artifact
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'SEEDED-NEVER-MATCHES' # #1509 proof: scoring phase forced off
         run: |
           if ! diff -u dry-run/pii-data-map.json /tmp/dry-run-regen/pii-data-map.json; then
             echo "::error::dry-run/pii-data-map.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
             exit 1
           fi
+
+      # The regeneration and the comparison are separate phases and only the second one is this
+      # job's product. A regeneration that produced findings and then never got diffed reads exactly
+      # like a clean diff — the produce-vs-deliver gap CLAUDE.md's conservation rule is about. dry-run.ts
+      # records the regeneration; this records the comparison.
+      - name: Record that both committed artifacts were actually diffed
+        if: steps.filter.outputs.relevant == 'SEEDED-NEVER-MATCHES' # #1509 proof: scoring phase forced off
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: dry-run-diff
+          units: 2
+          scope: "findings.json and pii-data-map.json each diffed against the freshly regenerated output"
+
+      # #1509: this is a REQUIRED context, so "green" here is a merge decision. `always()` so a job
+      # that died in setup says which phase never ran instead of leaving a reader to infer it.
+      - name: Gate liveness — did this job actually regenerate and diff?
+        if: always()
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: dry-run-regen, dry-run-diff
