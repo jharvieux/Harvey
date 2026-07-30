@@ -2,7 +2,83 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-28 — **round 2 WRAPPING UP at operator instruction; 3 executors mid-flight, 13 PRs open, ledger queue NOT drained.** 20 PRs merged this round (measured, not recalled), ~14 operator rulings taken, and a single defect class found eight times: a mechanism that looks authoritative and is checked by nothing. Resume from `.git/issue-sweep-ledger.json` + this block. Newest block first._
+_Last updated: 2026-07-30 — **sweep RESUMED and in flight.** 9 issues closed, 3 filed, net −6 so far; PRs #1510/#1447/#1518 merged. The whole queue had been stalled by a CI cache outage, not by the work. Resume from `.git/issue-sweep-ledger.json` + this block. Newest block first._
+
+## 2026-07-30 (resumed) — the stall was CI, and ten issues were held open on purpose
+
+**Root cause of the "stalled" sweep.** Both open sweep PRs were red for ONE shared reason, not their
+diffs: #1498's binary cache saved `~/.local` without semgrep (the runner's preinstalled pipx writes to
+`/opt/pipx_bin`, outside every cached path) so every required check died in ~15s at
+`semgrep missing after install/restore`. PR **#1510** fixed it and was sitting green **and absent from
+the ledger entirely**. Merged it; #1447 and #1450 both recovered with no change to their own code
+(#1450's heavy shards went 15s-dead → 2m57s/2m37s/2m7s of real work). #1509 closed, residual #1516
+filed — the liveness check still uses bare `command -v` over the full PATH, so an incomplete cache can
+still be SAVED and fail on someone else's PR.
+
+**The bigger finding: 10 issues were deliberately held open and nothing was scheduled to release them.**
+Five PRs merged 2026-07-28/29 with empty close-sets by design, each body carrying an explicit "do not
+close" pending an operator read — #1465 (#1293/#1276), #1482 (#1261/#1279), #1472 (#1174/#1372),
+#1468 (#1305/#825), #1445 (#1280/#1070). Two of the "outstanding" rulings had in fact already been
+made (#1070 reinstate-narrowed via #1446; #1305's M10 risk band via #1468). Operator then authorized:
+*"if the acceptance criteria is 100% met you can close the issues with the merged prs."*
+
+### Closed this session (9)
+
+#1509 (+#1516) · #1290 · #370 · #1371 · #1279 · #1174 · #1293 · #1276 · #1070 (+#1520)
+
+`#1371` was closed SEPARATELY from PR #1447 on purpose — its criteria are met in the tree but by
+`4fb2e4d` / `a3b4297` (#1453) / #1454, so crediting #1447 would have misattributed the work.
+
+### Filed this session (3)
+
+- **#1516** — CI cache save-side guard (the #1509 residual).
+- **#1520** — redeploy `site/`; live `/llms.txt` still serves the retracted un-narrowed drift claim.
+- **#1521** — CWE-to-pattern binding, **re-homed from a comment misfiled on #1293**; both its parents
+  (#493/#455) were already closed, so it would have died silently at close. The "closed in favour of"
+  tracker-loss shape, caught by a verifier.
+- **#1522** — recording an M1 *connected* pass overwrites the semantic/live slot AND silences M1's
+  un-run-tier disclosure. Introduced one module over by #1519's new doc section.
+
+### A corpus-drift failure that was a REGRESSION, not a precision fix (#1526)
+
+PR #1450's corpus gate failed on one row: `carbon M7: expected 536, got 535`. The gate's own message
+offers both readings — *"a precision fix (update the baseline) or a regression (fix the scanner)"* —
+and **it cannot tell which.** The PR contains #1306 ("N+1 still fires on seed/build scripts"), so a −1
+was *consistent with* a false positive being correctly suppressed. Bumping the baseline would have
+looked entirely reasonable.
+
+It was a regression. The vanished row was a genuine `M7 — Nested-loop join` at
+`packages/react/src/MultiSelect.tsx:153` (`options.find(...)` inside `value.map(...)`).
+
+Cause: **#1353's own change in the same PR.** Teaching `buildImportGraph`/`resolveImport` to follow
+workspace-package specifiers is correct and needed — but `devToolingModules` REUSES that graph to mark
+a package.json script's whole import closure as "dev tooling". `@carbon/ee`'s `dev` script
+(`tsup src/index.ts --watch`) rebuilds its own declared `exports['.']` entry; pre-#1353 that closure
+stayed inside `@carbon/ee`, post-#1353 it crosses into `@carbon/react` and silenced the finding.
+
+Fixed in `src/detectors/perf-code.ts` — a script-referenced file that is also its own package's
+declared main/module/exports entry is excluded from the dev-tooling root set. **Baseline NOT updated**;
+carbon returned to 536, byte-identical to `origin/main`. Regression fixture added, proven to fail
+without the fix via a `git stash` control.
+
+**Rule for next time:** identify the specific row that moved and read its source before touching any
+baseline. A silently-updated baseline is how a real regression becomes permanent, and a true-positive
+loss is invisible inside a count that also contains legitimate movement.
+
+### The acceptance-close gate reopened THREE of my closes, and was right every time
+
+1. #1509 — prose evidence, no machine-readable disposition; and since the issue states no criteria it
+   needed the specific `ACCEPTANCE #N no-stated-criteria:` form.
+2. #1290 — my disposition named a criterion `#1290.3` the issue does not state (it states 2).
+3. #370 — an em-dash where the grammar requires a colon; then a DOUBLE-MAP, because **the gate reads
+   every comment cumulatively, so a corrected comment does not supersede a malformed one** — the bad
+   comment had to be neutralized in place.
+
+Same class as the 2026-07-28 supervisor error already on record: the repo has a machine-readable form
+and the supervisor reached for prose. **Grammar, for the next session:**
+`ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>`, one line per stated criterion, numbered
+positionally by the bullets in `## Acceptance`, evidence containing a backticked command/path/
+identifier/test name. Bare assertions are rejected.
 
 ## 2026-07-28 (resumed) — ROUND 2. Wrapping up; 3 executors mid-flight, queue NOT drained.
 
@@ -77,16 +153,33 @@ Every brief now requires a gate **watched failing**, both exit codes shown.
   so every deploy ERRORED at build. Fixed server-side; `/pricing` `/the-audit` `/sample-report`
   `/supabase-security-checker` 200 (were 404), `/intake` 307, `POST /api/scan` 400 (was 503).
 
-### Awaiting the operator
+### Operator rulings taken 2026-07-30 (later session)
 
+| item | ruling |
+|---|---|
+| **Site contact address** | **`info@harvey-qa.com`.** Wired into every user-facing error path that says "email us directly" — the site previously published no address at all while telling prospects to write in. In flight. |
+| **Site redeploy (#1520)** | **HOLD until the end of the sweep.** Nothing deploys before then. Consequence to remember: #742 cannot close and `site-smoke` against production stays red until it happens, both by design rather than by defect. |
+| **#1070 rendered pages** | **INCLUDE** the narrowed prod-vs-migration drift claim on `site/app/pricing/page.tsx` (×2) and `site/app/supabase-security-audit/page.tsx`. In flight, with a by-CONCEPT re-search afterwards because this claim has escaped three keyword sweeps. |
+| **`site-smoke` cadence** | **GO.** Daily scheduled workflow wired to the shared `.github/actions/alert-issue` composite, its own marker label created, and a re-runnable drill exercising the same `find_or_update()` the production branch calls (#1348's rule). In flight. |
+| **#1305 option (b)** | **Retired as moot, not answered.** The acceptance was an explicit disjunction, arm (a) shipped, and #1305 is CLOSED. The only residual is cosmetic: the record still lists a (b) that was never struck through. One line on the issue would tidy it; nothing is blocked either way. |
+| **jscpd 60s ceiling** | **RULED 2026-07-30: re-measure first.** Time jscpd across the pinned corpus and pick the ceiling from the distribution, not from intuition. **AND a false premise corrected by the operator:** the question was framed as "is 60s too long for a scan sold as instant" — the free scan has NEVER been claimed to be instant. MEASURED 2026-07-30: the stated promise is *"Same-day turnaround"* (`site/app/page.tsx:432`) and *"report emailed within 24h"* (`docs/gtm/05-website-plan.md:61`); the only "instant" copy refers to the QUOTE (*"an instant, transparent quote"* — no sales call), not scan latency, and is correct as written. The phrase travelled from a code comment to an issue comment to a status report to THIS FILE without anyone testing it — the laundering shape CLAUDE.md names, with the supervisor as the hop that made it durable. With a 24h turnaround the product tension dissolves entirely; this is a performance bound, nothing more. |
 | item | ask |
 |---|---|
 | **#778** | Disclosure wording. A Critical (`next` CVE-2025-29927) is missing from it; honest framing is "your floor is vulnerable and you ship no lockfile" (#1471). **All 20 recorded findings still fire** — none was an FP. |
-| **Resend key** | Create the account/key; set `RESEND_API_KEY` + `SCAN_NOTIFY_TO` on the `harvey` Vercel project, then redeploy. Requester confirmations stay dark until `harvey-qa.com` is verified. |
+| ~~**Resend key**~~ | **DONE 2026-07-29.** All five site env vars provisioned on the `harvey` project across Production/Preview/Development; operator filled `RESEND_API_KEY` + `SCAN_NOTIFY_TO` and redeployed. MEASURED: `GET https://harvey-qa.com/api/scan` → **200 `{"configured":true}`** (was 503). **Unconfirmed:** whether `RESEND_FROM` moved off the `onboarding@resend.dev` sandbox — if not, requester confirmations still only reach the Resend account owner until `harvey-qa.com` is verified in Resend. The two `NEXT_PUBLIC_*_SITE_VERIFICATION` vars exist but are still empty (no verification `<meta>` renders — checked against live HTML). |
 | **"A property check is not a triage"** | New CLAUDE.md doctrine bullet — wording proposed, held for review. |
 | **#1069** | DRAFT liability wording to counsel. |
 | **#900 item 3/4** | The recurrence rule (applied provisionally), and the disclosure sign-off — **not granted**; nothing has left the repo. |
 | **#1483** | Wiring `pentest.ts --mode=coverage` into a venue (`.github/workflows/`, supervised). |
+| **Site has no email address** (2026-07-30) | Every error path in `site/app/api/scan/route.ts` and `site/app/page.tsx` says "email us directly", and `grep -rn 'mailto:\|@harvey-qa.com' site/app` returns **nothing**. A prospect who hits an error on the only conversion path has nowhere to go. Needs a real address — an executor must not invent one. First raised 2026-07-28, never ruled; re-relayed with proposed wording. |
+| **#1520** (2026-07-30) | Redeploy `site/`. Live `/llms.txt` still serves the retracted un-narrowed "prod drift" claim — a ONE-line `curl … \| diff - site/public/llms.txt` proves no deploy since #1446 merged. `vercel` is authenticated (`vercel whoami` → `jharvieux-1491`), so this is an authority/blast-radius call, not a capability one: **do sweep executors run production site deploys, or does that stay with you?** |
+| **#1070 rendered pages** (2026-07-30) | The narrowed drift claim landed in `llms.txt` + both GTM sources, but `site/app/pricing/page.tsx:52`/`:123` and `site/app/supabase-security-audit/page.tsx:230` still list Connected as "live RLS, Supabase advisors, PII in production" — no drift. Under-claiming a shipped capability. Exact wording for all three drafted on #1070. PR #1446 asked this and was never answered. |
+| **#1305 option (b)** (2026-07-30) | (b) asked for a ruling that the free tier stays M1-mechanical-only; the 2026-07-28 rulings answered in the OPPOSITE direction. Foreclosed in substance, unstated in words — and the acceptance gate reads it as an open criterion, so **#1305 cannot close until it is formally withdrawn.** Proposed wording on the issue. |
+| ~~**jscpd 60s ceiling**~~ | **ANSWERED 2026-07-30 — see the rulings table above.** Re-measure first. The framing this row used to carry ("the free scan is sold as instant") was FALSE and is corrected there: the promise is same-day / within-24h, and the only "instant" copy is about the QUOTE, not scan latency. |
+| **`site-smoke` cadence** (2026-07-30) | `src/cli/site-smoke.ts`'s own header says "Run it on a schedule against production; that is the whole point." That sentence is **false**: `grep -rn site-smoke .github package.json` returns nothing. The check written to catch a silent 6-day outage is itself only run by hand. Add a daily workflow wired to the shared `.github/actions/alert-issue` composite? (A net-new cron is excluded from inline fixing.) |
+| **#1304 — one line in a runbook** (2026-07-30) | `docs/runbooks/engagement-access.md` needs the bundle-analyzer stats-file request. It is the ONLY thing keeping #1304 open; wording is drafted verbatim on the issue. The sibling document `docs/templates/auth-questionnaire.md` got it (PR #1452), this one did not, and #1452's body did not disclose dropping it. Consequence: the **[B] depth tier stays half-unreachable in real engagements** — capability built and proven, artifact requested on only one of the two onboarding paths. `docs/runbooks/**` sat outside the docs grant, so it was relayed rather than applied. |
+| **#1272 — `plansDisagree`** (2026-07-30) | Product call, three options on the issue (comment 5132445273). It is the last unmet criterion of #1272 (the other three are met and shipped in PR #1527); its grep returns no call site. **Recommended: option 3**, originated by the executor and not previously offered — `emitFixPrompt` drafts a plan at emit time and `producePlan` runs again at ingest, days apart against a checkout the client may have moved, so comparing them makes the trigger fire on REAL plan drift instead of being dead code. Options 1 and 2 are delete-with-evidence and keep-as-declared-dead. |
+| **`RESEND_FROM` unverified** (2026-07-30) | Present but **encrypted**, so nobody has confirmed it moved off the `onboarding@resend.dev` sandbox. On the sandbox Resend delivers only to the account owner: the form returns 200, you get notified, and **the prospect silently receives nothing.** PR #1518 made it answerable from outside (`GET /api/scan` now reports `sandboxSender` as a boolean, never an env value) — it needs one deploy to answer. Note two other "provisioned" vars on this project turned out EMPTY, so presence is not evidence of value. |
 
 ### Process rules adopted mid-session
 
