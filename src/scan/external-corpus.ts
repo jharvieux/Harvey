@@ -1033,6 +1033,24 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
   },
 ];
 
+// Every free-tier expectation must name a target that is actually in the corpus, or nothing can
+// ever clone and score it — the expectation becomes a promise no run can keep or break.
+//
+// At MODULE LOAD, beside the data, rather than in a consumer: corpus-drift's unscored guard scopes
+// itself by slug to the targets a given run owns (#1586 — a `--shard` run owns a subset), and that
+// scoping is only sound while this containment holds. Checked here, it holds for every consumer and
+// fails before a run clones anything; checked in one CLI it would fire after the scan, and checked
+// only by a test in another file it would be a cross-file coupling held together by a comment.
+// Same posture, and the same reason, as FREE_RECALL_CORPUS's baseline check in free-recall-corpus.ts.
+const orphanedFreeTierExpectations = FREE_TIER_EXPECTATIONS.filter((e) => !EXTERNAL_CORPUS.some((t) => t.slug === e.slug));
+if (orphanedFreeTierExpectations.length > 0) {
+  throw new Error(
+    `free-tier expectation(s) name a target that is not in EXTERNAL_CORPUS, so no run can ever score them: ${orphanedFreeTierExpectations
+      .map((e) => e.slug)
+      .join(", ")}. Add the target to the corpus with a pinned commit, or drop the expectation — leaving it here silently costs the free tier a target.`,
+  );
+}
+
 interface FreeTierRow {
   slug: string;
   check: string;

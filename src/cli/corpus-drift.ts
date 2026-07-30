@@ -445,8 +445,8 @@ const freeTierScored = new Set(rows.filter((r) => r.check.startsWith("free tier:
 // one shard, and a target this run DID own but failed to score is still caught below.
 // Scoping by slug is only safe because every free-tier expectation is guaranteed to name a real
 // corpus target — one that did not would silently vanish under this rule instead of being flagged
-// forever as unscored. That containment is already enforced in `pnpm verify`, by
-// "covers exactly #227's four named repos plus #934's scale case" (src/scan/external-corpus.test.ts).
+// forever as unscored. external-corpus.ts throws at module load if that ever stops holding, so an
+// orphaned expectation fails at import, before this line runs and before anything is cloned.
 const scopedSlugs = new Set(targets.map((t) => t.slug));
 const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.has(e.slug) && scopedSlugs.has(e.slug));
 
