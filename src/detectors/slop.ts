@@ -682,6 +682,36 @@ function containsAwait(node: ts.Node): boolean {
   return found;
 }
 
+// A function can do I/O without ever writing `await`, and `containsAwait` looks only for `await`
+// (#1532). These three mechanisms are MEASURED, not guessed: every one comes from a row in the
+// 50-row seeded sample of what the #1447 seam exemption spares across the ten pinned corpus
+// targets (2026-07-30) — `spawnSync("vercel"|"copilot", …)`, `spawn(opener, …)`, `existsSync(…)`
+// and a hand-rolled `new Promise((res) => stream.on("data", …))`. All four were spared as "pure
+// helpers" while being the I/O half outright.
+//
+// Its own bound, stated because the vocabulary is a LIST and a list is never closed: an I/O
+// primitive outside it still reads as pure. The `Sync` suffix rule is the generic half (it covers
+// every `fs`/`child_process` sync API without naming them); `new Promise` covers callback and
+// event I/O; the bare `child_process` spawners and `process.exit` are named because neither
+// pattern reaches them.
+const SYNC_IO_CALLEE = /^(spawn|exec|execFile|fork)$/;
+function doesOwnIo(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (n !== node && ts.isFunctionLike(n)) return;
+    if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "Promise") found = true;
+    if (ts.isCallExpression(n)) {
+      const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : ts.isIdentifier(n.expression) ? n.expression.text : "";
+      if (callee.endsWith("Sync") || SYNC_IO_CALLEE.test(callee) || (ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === "process" && callee === "exit")) found = true;
+    }
+    if (found) return;
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
 function isAsync(node: ts.Node): boolean {
   return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false);
 }
@@ -697,12 +727,34 @@ function isAsync(node: ts.Node): boolean {
 // out to keep money-math testable without a Supabase client is the brief's own MISSING SEAMS remedy,
 // so inlining it is the wrong advice whether or not the module chose to export it.
 //
-// Deliberately conservative — a caller that awaits something unrelated also exempts. On the class the
-// repo calls "the likeliest real-world FP for the paid tier", a spared true positive costs less than
-// telling a team to entangle their tested logic with I/O. The bound is stated in the finding text so
-// a reader knows what the rule spares, not only what it flags.
+// #1532 — the POPULATION #1447 shipped without. MEASURED 2026-07-30 by running detect-static over
+// the ten pinned corpus targets at their pinned commits with and without this exemption: it spares
+// 653 candidates, 26% of inbox-zero's whole M5-slop reading and 20% of tanstack-com's. A seeded
+// random sample of 50 (mulberry32, seed 20260730, over the population sorted by
+// target|file|line|helper) was read at source and graded against the exemption's own premise —
+// "a pure helper whose sole caller does the I/O". 45 held. 5 did not, and all 5 failed the SAME
+// half: the helper was doing the I/O itself, through a mechanism `containsAwait` does not look for
+// (`spawnSync`, `spawn`, `existsSync`, a hand-rolled `new Promise` over stream events).
+// `doesOwnIo` closes that half; 10% wrongly spared, Wilson 95% CI [4.3%, 21.4%], so an estimated
+// 65 of the 653 (CI [28, 139]) were being dropped for a premise that did not hold.
+//
+// Two sub-populations are COUNTED AND LEFT, not silently accepted — the sample says neither is
+// reliably a defect, and disclosing a measured number beats narrowing on a hunch:
+//   * 401 of 653 have a caller whose awaits never touch the helper's result. Every one of the 36
+//     such rows in the sample was a genuine seam: the caller is entangled with I/O either way, so
+//     extracting the pure half still buys what the brief asks for. This is the exemption's
+//     deliberate conservatism, now with a number on it.
+//   * 39 of 653 have a caller declared `async` with ZERO awaits. This one is MIXED, which is
+//     exactly why it is not narrowed: inbox-zero utils/outlook/mail.ts:408 is a genuine seam whose
+//     caller does its I/O by RETURNING a promise, while saas-lite app/sitemap.xml/route.ts:24 and
+//     mvp-boilerplate app/api/og/route.tsx:15 have callers that do nothing asynchronous at all.
+//     Separating them means knowing what the returned call does — a cross-file question. ONE
+//     mechanism was tried (require a real `await` in the caller) and it turns the inbox-zero row
+//     into a false positive, so it was not shipped. `buildImportGraph` is the untried candidate
+//     and is the first thing to reach for. Tracked as #1533; do not read "not narrowed" as
+//     "not narrowable" — one failed attempt is not a proof.
 function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression): boolean {
-  if (isAsyncHelper || containsAwait(helperBody)) return false; // the helper does I/O itself — not a pure seam
+  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody)) return false; // the helper does the I/O — not a pure seam
   let enclosing: ts.Node | undefined = callSite.parent;
   while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
   if (!enclosing) return false;
@@ -749,7 +801,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it already exempts a pure helper whose one caller does I/O — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape.`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (2026-07-30, ten pinned corpus repos): it spares 653 helpers, of which 401 have a caller whose awaits never touch the helper's result and 39 have a caller that awaits nothing at all, so a genuinely single-use helper sitting next to unrelated I/O is spared with them. A 50-row seeded sample read at source put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,
