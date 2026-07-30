@@ -7,3 +7,15 @@ function computeDiscount(price: number, rate: number): number {
 export function checkout(price: number, rate: number): number {
   return computeDiscount(price, rate);
 }
+
+// The seam exemption must not swallow the general case: this helper is non-exported, called once,
+// and its caller awaits — but the HELPER itself does the I/O, so it is not the pure-logic seam
+// quality-extras.txt protects. Still slop.
+async function loadRate(fetchRate: () => Promise<number>): Promise<number> {
+  const rate = await fetchRate();
+  return Math.max(rate, 0);
+}
+
+export async function applyRate(price: number, fetchRate: () => Promise<number>): Promise<number> {
+  return price * (await loadRate(fetchRate));
+}

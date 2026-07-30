@@ -36,12 +36,12 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
 import { writePassArtifact } from "../audit-pass-artifact.js";
-import { buildFallbackReport, buildM3PassArtifact, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
+import { buildFallbackReport, buildM3PassArtifact, capScopeFinding, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, vitalsScope, type VitalsReport } from "../hotspot-scan.js";
 
 // #808: the vitals version src/hotspot-scan.ts's VitalsReport shape is verified against (#94/#369).
 // A mismatch fails loud with expected/actual BEFORE the report schema-drift check, so version drift
@@ -147,14 +147,54 @@ function checkVersion(bin: string, prefixArgs: string[]): "ok" | "absent" {
 
 // Resolves how to invoke a version-verified vitals: on PATH, else via a discovered plugin install.
 // Returns undefined when neither is present/runnable, so the caller drops to the reduced tier.
-function resolveVitals(): { bin: string; prefixArgs: string[] } | undefined {
-  if (checkVersion("vitals_cli.py", []) === "ok") return { bin: "vitals_cli.py", prefixArgs: [] };
+// `scriptPath` (#1290) is the on-disk vitals_cli.py whose SIBLING MODULES deriveCouplingTotal
+// imports — undefined when vitals resolved off PATH with no plugin install to point at, in which
+// case the coupling denominator is disclosed as underivable rather than guessed.
+function resolveVitals(): { bin: string; prefixArgs: string[]; scriptPath?: string } | undefined {
   const pluginPath = discoverVitalsCli();
+  if (checkVersion("vitals_cli.py", []) === "ok") return { bin: "vitals_cli.py", prefixArgs: [], scriptPath: pluginPath };
   if (pluginPath && checkVersion("python3", [pluginPath]) === "ok") {
     console.log(`✓ Found vitals_cli.py at ${pluginPath}`);
-    return { bin: "python3", prefixArgs: [pluginPath] };
+    return { bin: "python3", prefixArgs: [pluginPath], scriptPath: pluginPath };
   }
   return undefined;
+}
+
+// #1290: vitals emits `coupling_data[:5]` (vitals_cli.py:305) and never the pre-cap total, so a
+// 5-row list is indistinguishable from "exactly 5 coupled pairs exist in this repo". #1075 recorded
+// that as undisclosable because vitals truncates upstream. It is not: the plugin ships the function
+// that produced the list, beside the CLI Harvey already spawns.
+//
+// This calls the plugin's OWN `git_analysis.get_co_change_coupling` with the arguments vitals_cli.py
+// itself passes (:122-124 — days=180, min_support=2) and re-applies vitals' own `is_source_file`
+// filter (:125-130), so the number is vitals', not a re-implementation that could drift from it.
+// scope_path is derived the same way run_report derives it (:64-83): relpath of the target from the
+// repo root, or None when they are the same directory.
+//
+// MEASURED 2026-07-28 against this repo: 10 pairs pre-cap vs the 5 vitals reports, in 0.207s.
+function deriveCouplingTotal(scriptPath: string): { total: number } | { unavailable: string } {
+  const py = [
+    "import sys, os, json",
+    `sys.path.insert(0, ${JSON.stringify(dirname(scriptPath))})`,
+    "import git_analysis as g",
+    `target = ${JSON.stringify(targetDir)}`,
+    "root = g.get_repo_root(target)",
+    "if root is None: raise SystemExit('not a git checkout')",
+    "scope = os.path.relpath(os.path.abspath(target), root)",
+    "if scope == '.': scope = None",
+    "raw = g.get_co_change_coupling(root, days=180, min_support=2, scope_path=scope)",
+    "print(len([c for c in raw if g.is_source_file(c['file_a']) and g.is_source_file(c['file_b'])]))",
+  ].join("\n");
+  let out: string;
+  try {
+    out = execFileSync("python3", ["-c", py], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    return { unavailable: `re-running vitals' own get_co_change_coupling failed: ${(e.stderr || e.message || "").trim().split("\n").pop()}` };
+  }
+  const total = Number(out.trim());
+  if (!Number.isInteger(total)) return { unavailable: `vitals' get_co_change_coupling returned unparseable output: ${JSON.stringify(out.trim().slice(0, 120))}` };
+  return { total };
 }
 
 // #807 reduced tier: Harvey computes the churn×complexity ranking itself from git when vitals is not
@@ -192,27 +232,42 @@ function buildReducedReport(): { report: VitalsReport; qualifying: number } {
   return { report: buildFallbackReport(files, Math.max(topK, 50)), qualifying: fallbackQualifyingCount(files) };
 }
 
-function loadReport(): { report: VitalsReport; reduced: boolean; qualifying?: number } {
+type LoadedReport = { report: VitalsReport; reduced: boolean; qualifying?: number; coupling: { total: number } | { unavailable: string } };
+
+// A pre-captured --report is deliberately NOT re-derived against the target's CURRENT git state:
+// the coupling total would then describe a different repository state than the report it bounds.
+const CAPTURED_REPORT = "the report was supplied pre-captured via --report, so the pre-cap total cannot be recomputed against the state it was captured from";
+const NO_PLUGIN_DIR = "vitals resolved off PATH with no plugin install beside it, so its git_analysis module could not be imported";
+
+function loadReport(): LoadedReport {
   if (reportPath) {
-    return { report: parseReport(readFileSync(resolve(reportPath), "utf8")), reduced: false };
+    return { report: parseReport(readFileSync(resolve(reportPath), "utf8")), reduced: false, coupling: { unavailable: CAPTURED_REPORT } };
   }
   const vitals = resolveVitals();
   if (!vitals) {
     const { report, qualifying } = buildReducedReport();
-    return { report, reduced: true, qualifying };
+    return { report, reduced: true, qualifying, coupling: { unavailable: "the reduced M3 tier computes no coupling at all" } };
   }
   let raw: string;
   try {
-    raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    // maxBuffer: vitals' --json carries a file_health entry per scored file, so the payload scales
+    // with the repo. Node's 1MB default made M3 unrunnable against Harvey's own checkout — MEASURED
+    // 2026-07-28 on `main` @8d7bd1a: `✗ vitals report failed: spawnSync python3 ENOBUFS`, the report
+    // being 1.2MB. Matches the ceiling buildReducedReport already uses for `git log`.
+    raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
     console.error(`✗ vitals report failed: ${e.stderr || e.message}`);
     process.exit(1);
   }
-  return { report: parseReport(raw), reduced: false };
+  return {
+    report: parseReport(raw),
+    reduced: false,
+    coupling: vitals.scriptPath ? deriveCouplingTotal(vitals.scriptPath) : { unavailable: NO_PLUGIN_DIR },
+  };
 }
 
-const { report, reduced, qualifying } = loadReport();
+const { report, reduced, qualifying, coupling } = loadReport();
 if (reduced) {
   console.log("⚠ M3 REDUCED TIER (vitals plugin unavailable) — Harvey-computed churn×complexity ranking from git history only.");
   console.log("  NOT assessed in this tier: file health, co-change coupling, knowledge-risk (truck-factor), AI-provenance. Install the vitals plugin for the full M3 signal.");
@@ -225,12 +280,30 @@ const unranked = isUnranked(report);
 const ranked = rankHotspots(report);
 const top = unranked ? [] : topKFiles(report, topK);
 const findings = toFactFindings(report);
+// #1075 point 3 disclosed vitals' own caps but with no denominators ("capped at the first 50 source
+// files"), so a reader could not tell 50-of-52 from 50-of-1792. #1290 replaces the hedge with the
+// measured "N of M" per cap — and, because a console line reaches no client, ships the same three
+// statements as a Finding (M3-SCOPE-00) that travels in --out and the pass artifact. #1112's
+// correction survives inside vitalsScope: the knowledge denominator follows vitals' own branch
+// (churning-with-complexity when any file cleared the gate, all tracked source files otherwise).
+// The reduced tier is excluded because none of vitals' caps applies to a Harvey-computed ranking.
+const scopeFinding = reduced ? undefined : capScopeFinding(report, "total" in coupling ? coupling.total : undefined, "unavailable" in coupling ? coupling.unavailable : "");
+if (scopeFinding) findings.push(scopeFinding);
 
+// #1290: the FULL tier truncates too and never said so — vitals slices `hotspots[:10]` off a
+// population it emits in full as file_health, so "(10 rows, worst first)" read as a whole-repo
+// table while 304 scored files were dropped (measured on this repo 2026-07-28). Both truncated
+// forms keep the "(showing top N of M files" prefix src/audit-runners.ts:246 parses the ranked-row
+// count out of.
+const scoredFiles = vitalsScope(report).scored;
 const rowsTruncated = reduced && qualifying !== undefined && qualifying > ranked.length;
+const scoredTruncated = !reduced && scoredFiles !== undefined && scoredFiles > ranked.length;
 console.log(
   rowsTruncated
     ? `M3 hotspot table — ${targetDir} (showing top ${ranked.length} of ${qualifying} files that cleared the churn gate, worst first)`
-    : `M3 hotspot table — ${targetDir} (${ranked.length} rows, worst first)`,
+    : scoredTruncated
+      ? `M3 hotspot table — ${targetDir} (showing top ${ranked.length} of ${scoredFiles} files vitals scored, worst first)`
+      : `M3 hotspot table — ${targetDir} (${ranked.length} rows, worst first)`,
 );
 if (unranked) {
   // "M3 UNRANKED" is matched by src/audit-runners.ts to record this run `partial` (mirrors "M3
@@ -255,7 +328,7 @@ if (report.trends) {
 
 const byTaxonomy = new Map<string, number>();
 for (const f of findings) byTaxonomy.set(f.taxonomy, (byTaxonomy.get(f.taxonomy) ?? 0) + 1);
-console.log(`\n${findings.length} M3 boolean-fact finding(s):`);
+console.log(`\n${findings.length} M3 finding(s):`);
 for (const [tax, count] of byTaxonomy) console.log(`  ${count}× ${tax}`);
 // Fail-loud doctrine: an absent sub-signal is stated, never silently omitted.
 if (!report.provenance) {
@@ -263,18 +336,7 @@ if (!report.provenance) {
 } else if (!report.provenance.has_data) {
   console.log("  AI-provenance: no data — no .vitals provenance DB in the target (vitals capture hooks not installed, or no AI edits logged)");
 }
-// #1075 point 3: vitals itself caps these two lists before Harvey ever sees them (vitals_cli.py:
-// `coupling_data[:5]`, `knowledge_files = code_files[:50] if code_files else source_files[:50]`) —
-// stated so "N found" is never read as the full census, mirroring coveredScopeLine's honesty
-// pattern (src/mutation-scan.ts). #1112 corrects the second half: this line used to say "the first
-// 50 CHURNING source files", which is false when nothing cleared the churn gate — vitals then
-// analyses the first 50 TRACKED source files instead. MEASURED 2026-07-26 on a fully backdated
-// throwaway repo: 0 hotspot rows, 2 truck-factor rows.
-if (!reduced) {
-  console.log(
-    "  NOTE: vitals caps co-change coupling at the top 5 pairs, and truck-factor/knowledge-risk at the first 50 source files — the churning ones, or, when nothing is churning, the first 50 tracked. The counts above are capped inputs, not a full census.",
-  );
-}
+if (scopeFinding) console.log(`  ${scopeFinding.evidence.split("\n").join("\n  ")}`);
 
 let crossReferenced: ReturnType<typeof crossReferenceHotspots> | undefined;
 if (findingsPaths.length) {
