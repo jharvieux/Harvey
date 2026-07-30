@@ -740,10 +740,11 @@ function isAsync(node: ts.Node): boolean {
 //
 // Two sub-populations are COUNTED AND LEFT, not silently accepted — the sample says neither is
 // reliably a defect, and disclosing a measured number beats narrowing on a hunch:
-//   * 401 of 653 have a caller whose awaits never touch the helper's result. Every one of the 36
-//     such rows in the sample was a genuine seam: the caller is entangled with I/O either way, so
-//     extracting the pure half still buys what the brief asks for. This is the exemption's
-//     deliberate conservatism, now with a number on it.
+//   * 401 of 653 have a caller whose awaits never touch the helper's result. The sample drew 36 of
+//     them; 3 were among the 5 defects above and now fire, and every one of the 33 that REMAIN
+//     spared was a genuine seam. So this shape is not itself the error — the caller is entangled
+//     with I/O either way, so extracting the pure half still buys what the brief asks for. This is
+//     the exemption's deliberate conservatism, now with a number on it.
 //   * 39 of 653 have a caller declared `async` with ZERO awaits. This one is MIXED, which is
 //     exactly why it is not narrowed: inbox-zero utils/outlook/mail.ts:408 is a genuine seam whose
 //     caller does its I/O by RETURNING a promise, while saas-lite app/sitemap.xml/route.ts:24 and
