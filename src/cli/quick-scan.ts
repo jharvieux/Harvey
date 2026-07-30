@@ -102,9 +102,30 @@ function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefi
   process.exit(2);
 }
 
-// #1305: the free scan's duplication pass gets a hard ceiling. #505 measured jscpd hanging
-// indefinitely on a multi-app repo; a free scan that never returns is worse than one that says it
-// could not measure duplication, so a timeout becomes a disclosed not-assessed row.
+// #1305: the free scan's duplication pass gets a hard ceiling of 60s.
+//
+// CORRECTED 2026-07-30 (sweep/jscpd-ceiling): this comment used to say "#505 measured jscpd hanging
+// indefinitely on a multi-app repo." That misattributes #505's own hang: its body names the culprit
+// as "the knip workspace-resolution stage," and #544 (src/cli/quality-scan.ts:9-29) measured jscpd
+// completing the SAME monorepo in 1.9s — jscpd has no workspace-resolution stage to get stuck in.
+// jscpd has never been measured to hang on a real target, including the pinned corpus's largest
+// (carbon: 39.4s per #897 at 4,110 files, 20.3s re-measured below at 4,157). So this cap is a
+// defensive ceiling against a hypothetical pathological tree, not a response to an observed jscpd
+// hang — a free scan that never returns is still worse than one that discloses "could not measure
+// duplication," so the timeout stays regardless, and a trip becomes a disclosed not-assessed row.
+//
+// MEASURED 2026-07-30: cloned every src/scan/external-corpus.ts EXTERNAL_CORPUS pin fresh (git fetch
+// --depth 1 at the pinned commit, via src/scan/corpus-clone.ts's cloneAtPin) and timed
+// src/scan/duplication.ts's runJscpd() directly against each, with a 300s ceiling so a slow run would
+// still show its real time instead of being truncated at 60s. Result: 0/14 pinned targets hit the
+// 60s cap. Wall-clock: carbon (4,157 files) 20.3s, inbox-zero (2,345 files) 8.3s, documenso (2,074
+// files) 6.3s, tanstack-com (808 files) 3.9s, ghostfolio (810 files) 2.7s, rallly (787 files) 2.5s,
+// proposit (285 files) 1.2s, every remaining target (saas-lite, boxyhq, mvp-boilerplate, launch-mvp,
+// multi-tenant-starter, subscription-payments, supabase-security-labs) under 0.7s. The cap is
+// UNTRIGGERED on this corpus (population zero, per CLAUDE.md's "a limit with a population of zero is
+// not a limit, it is a guess") — 60s stays unchanged: nothing measured here supports raising OR
+// lowering it, and the largest real target still clears it with ~3x headroom. Re-run by repeating the
+// recipe above; do not move this number without first watching a real target approach it.
 const JSCPD_TIMEOUT_MS = 60_000;
 
 // A recursive read, matching src/cli/dry-run.ts's: a Prisma migration lives one directory deeper
