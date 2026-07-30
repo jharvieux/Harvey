@@ -32,14 +32,41 @@ async function sendEmail(apiKey: string, body: Record<string, unknown>, idempote
   });
 }
 
+// The requester confirmations are best-effort — they must never fail the lead capture, which is the
+// operator notification. But "best-effort" was reading as "unobservable": a Resend REJECTION is an
+// HTTP 4xx, not a thrown error, so the try/catch these calls used to sit in never saw one. Every
+// confirmation could have been bouncing (which is exactly what the resend.dev sandbox sender does
+// for anyone but the account owner) and the logs would have been empty. Swallow the failure, not
+// the evidence.
+async function sendBestEffort(
+  label: string,
+  apiKey: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<void> {
+  try {
+    const res = await sendEmail(apiKey, body, idempotencyKey);
+    if (!res.ok) console.error(`resend ${label} failed (non-fatal)`, res.status, await res.text().catch(() => ""));
+  } catch (err) {
+    console.error(`resend ${label} failed (non-fatal)`, err);
+  }
+}
+
 // Readiness probe. The intake sat unconfigured in production for five days (#1308) because the
 // only way to learn it was dead was to submit a lead and read the error — i.e. to be the prospect
 // who got dropped. This makes that state machine-readable from outside, so a monitor can see it
 // (src/cli/site-smoke.ts). Booleans only: never echo an env VALUE here.
 export async function GET() {
   const ready = Boolean(process.env.RESEND_API_KEY && process.env.SCAN_NOTIFY_TO);
+  // `configured` covers the OPERATOR half of the lead path. The requester half has its own silent
+  // failure mode: on Resend's sandbox sender, delivery is restricted to the Resend account owner,
+  // so the form returns 200, the operator gets their notification, and the prospect's confirmation
+  // is dropped with nothing anywhere reporting it. Report which sender is in force as a BOOLEAN —
+  // still never an env VALUE — so that state is answerable from outside instead of by asking the
+  // Resend dashboard.
+  const from = process.env.RESEND_FROM;
   return NextResponse.json(
-    { service: "scan-intake", configured: ready },
+    { service: "scan-intake", configured: ready, sandboxSender: !from || from.includes("resend.dev") },
     { status: ready ? 200 : 503 },
   );
 }
@@ -95,23 +122,20 @@ export async function POST(req: Request) {
       console.error("resend checker-lead notify failed", leadNotify.status, await leadNotify.text().catch(() => ""));
       return NextResponse.json({ error: "Something went wrong — please email us directly." }, { status: 502 });
     }
-    try {
-      await sendEmail(
-        apiKey,
-        {
-          from,
-          to: [email],
-          subject: "Harvey — your RLS check, a closer look",
-          html:
-            `<p>Thanks for running the free RLS checker. We've got your note and we'll follow up with a closer look.</p>` +
-            `<p>Just so it's clear: we only received what you typed — your Supabase URL and anon key stayed in your browser and were never sent to us.</p>` +
-            `<p>— Harvey · harvey-qa.com</p>`,
-        },
-        `checker-lead-confirm/${email}`,
-      );
-    } catch (err) {
-      console.error("resend checker-lead confirmation failed (non-fatal)", err);
-    }
+    await sendBestEffort(
+      "checker-lead confirmation",
+      apiKey,
+      {
+        from,
+        to: [email],
+        subject: "Harvey — your RLS check, a closer look",
+        html:
+          `<p>Thanks for running the free RLS checker. We've got your note and we'll follow up with a closer look.</p>` +
+          `<p>Just so it's clear: we only received what you typed — your Supabase URL and anon key stayed in your browser and were never sent to us.</p>` +
+          `<p>— Harvey · harvey-qa.com</p>`,
+      },
+      `checker-lead-confirm/${email}`,
+    );
     return NextResponse.json({ ok: true });
   }
 
@@ -143,23 +167,20 @@ export async function POST(req: Request) {
 
   // Confirmation to the requester — best-effort. Fails in the resend.dev sandbox until the
   // domain is verified, so never fail the request on it.
-  try {
-    await sendEmail(
-      apiKey,
-      {
-        from,
-        to: [email],
-        subject: "Your Harvey free scan is on the way",
-        html:
-          `<p>Thanks — we've got your request and we'll send your ten-module readiness report within one business day.</p>` +
-          `<p>Nothing to do on your end: we only need read access to the code you pointed us at — no database, no credentials.</p>` +
-          `<p>— Harvey · harvey-qa.com</p>`,
-      },
-      `scan-confirm/${email}`,
-    );
-  } catch (err) {
-    console.error("resend confirmation failed (non-fatal)", err);
-  }
+  await sendBestEffort(
+    "scan confirmation",
+    apiKey,
+    {
+      from,
+      to: [email],
+      subject: "Your Harvey free scan is on the way",
+      html:
+        `<p>Thanks — we've got your request and we'll send your ten-module readiness report within one business day.</p>` +
+        `<p>Nothing to do on your end: we only need read access to the code you pointed us at — no database, no credentials.</p>` +
+        `<p>— Harvey · harvey-qa.com</p>`,
+    },
+    `scan-confirm/${email}`,
+  );
 
   return NextResponse.json({ ok: true });
 }

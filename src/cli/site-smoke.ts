@@ -16,10 +16,12 @@
 // It never submits a real lead: the readiness probe is a GET, and the validation probe is a body
 // the handler is required to reject before it sends anything.
 
+import { readFileSync } from "node:fs";
 import { evaluateSmoke, smokeFailed, type RouteProbe, type SmokeInput } from "../site-smoke.js";
 
 const DEFAULT_BASE = "https://harvey-qa.com";
 const SITEMAP_SOURCE = new URL("../../site/app/sitemap.ts", import.meta.url).pathname;
+const NEXT_CONFIG_SOURCE = new URL("../../site/next.config.mjs", import.meta.url).pathname;
 
 function parseBase(argv: string[]): string {
   const i = argv.indexOf("--base");
@@ -41,6 +43,17 @@ async function declaredPaths(): Promise<string[]> {
   return mod.default().map((entry) => toPath(entry.url));
 }
 
+/**
+ * Redirect sources declared in site/next.config.mjs. Read from the config the same way
+ * site/app/site-contract.test.ts reads it, and for the same reason as declaredPaths(): the repo's
+ * own declaration IS the contract, so restating the list here would let one be added in one place
+ * and go unchecked in the other.
+ */
+function declaredRedirects(): string[] {
+  const config = readFileSync(NEXT_CONFIG_SOURCE, "utf8");
+  return [...config.matchAll(/source:\s*"([^"]+)"/g)].map((m) => m[1] ?? "");
+}
+
 async function servedPaths(base: string): Promise<string[]> {
   const res = await fetch(`${base}/sitemap.xml`);
   if (!res.ok) throw new Error(`GET ${base}/sitemap.xml → HTTP ${res.status}; cannot compare the deployment against the repo`);
@@ -59,11 +72,16 @@ async function probeRoutes(base: string, paths: string[]): Promise<RouteProbe[]>
 
 async function probeReadiness(base: string): Promise<SmokeInput["readiness"]> {
   const res = await fetch(`${base}/api/scan`);
-  const body = (await res.json().catch(() => null)) as { configured?: unknown } | null;
+  const body = (await res.json().catch(() => null)) as { configured?: unknown; sandboxSender?: unknown } | null;
   // A deployment without the GET handler answers 405 with no body. That is NOT "not configured" —
   // it is "this build has no answer to give", and reporting the two as one state would be the
-  // silent-omission shape (CLAUDE.md's coverage guard) one level down.
-  return { status: res.status, configured: typeof body?.configured === "boolean" ? body.configured : null };
+  // silent-omission shape (CLAUDE.md's coverage guard) one level down. The same applies to a build
+  // predating the sender probe, which is why the two fields are read independently.
+  return {
+    status: res.status,
+    configured: typeof body?.configured === "boolean" ? body.configured : null,
+    sandboxSender: typeof body?.sandboxSender === "boolean" ? body.sandboxSender : null,
+  };
 }
 
 async function probeValidation(base: string): Promise<{ status: number }> {
@@ -80,14 +98,15 @@ async function main(): Promise<void> {
   console.log(`Smoke-checking ${base}\n`);
 
   const declared = await declaredPaths();
-  const [served, routes, readiness, validation] = await Promise.all([
+  const [served, routes, redirects, readiness, validation] = await Promise.all([
     servedPaths(base),
     probeRoutes(base, declared),
+    probeRoutes(base, declaredRedirects()),
     probeReadiness(base),
     probeValidation(base),
   ]);
 
-  const checks = evaluateSmoke({ declared, served, routes, readiness, validation });
+  const checks = evaluateSmoke({ declared, served, routes, redirects, readiness, validation });
   for (const check of checks) {
     console.log(`  ${check.status === "pass" ? "ok  " : "FAIL"}  ${check.name}`);
     console.log(`        ${check.detail}`);
