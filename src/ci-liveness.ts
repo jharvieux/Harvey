@@ -13,13 +13,9 @@ import { appendFileSync } from "node:fs";
 
 const RECEIPT_ENV = "HARVEY_LIVENESS_RECEIPT";
 
-/**
- * Record that `gate` reached its measuring phase and scored `units` of `scope`.
- *
- * Off CI (no receipt path in the environment) this is silent apart from the invariant check — the
- * point is that a local `pnpm corpus-drift` reads exactly as it did before, while the same code path
- * still refuses to claim a zero-unit run measured anything.
- */
+// Off CI (no receipt path in the environment) this writes nothing and prints nothing, so a local
+// `pnpm corpus-drift` reads exactly as it did before — but the invariant still runs, so the same code
+// path refuses to claim a zero-unit run measured anything wherever it is called from.
 export function recordMeasured(gate: string, units: number, scope: string): void {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(gate)) {
     throw new Error(`gate-liveness: gate id "${gate}" must be lowercase [a-z0-9-] — it is matched literally by .github/actions/gate-liveness/gate-liveness.sh.`);

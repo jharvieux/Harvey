@@ -97,7 +97,11 @@ case "${MODE:-}" in
 
       if [ "$measured_units" -gt 0 ]; then
         live=$((live + 1))
-        rows="${rows}| \`$gate\` | ✅ MEASURED | $measured_units | $detail |"$'\n'
+        # A gate invoked more than once in a job (corpus-drift's #1498 per-target loop, conservation's
+        # gate plus its two negative controls) sums. Say so, or 3 runs x 10 plants reads as 30 plants.
+        units_cell="$measured_units"
+        [ "$measured_records" -gt 1 ] && units_cell="$measured_units (sum of $measured_records runs)"
+        rows="${rows}| \`$gate\` | ✅ MEASURED | $units_cell | $detail |"$'\n'
       elif [ -n "$noop_reason" ]; then
         noop=$((noop + 1))
         rows="${rows}| \`$gate\` | ⏭️ DECLARED NO-OP | 0 | $noop_reason |"$'\n'

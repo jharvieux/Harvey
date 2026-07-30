@@ -151,7 +151,9 @@ describe("gate-liveness.sh — the three verdicts a reader has to tell apart", (
     run({ MODE: "record", GATE: "corpus-drift", UNITS: "7", SCOPE: "target b", HARVEY_LIVENESS_RECEIPT: path });
     const r = run({ MODE: "assert", EXPECT: "corpus-drift", HARVEY_LIVENESS_RECEIPT: path });
     expect(r.status).toBe(0);
-    expect(r.out).toContain("| 12 |");
+    // and the summing is SAID, not left to be inferred: conservation invokes its gate three times
+    // over ten module plants, and a bare "30" reads as thirty plants.
+    expect(r.out).toContain("| 12 (sum of 2 runs) |");
   });
 
   it("an assert that expects nothing is refused rather than passing vacuously", () => {

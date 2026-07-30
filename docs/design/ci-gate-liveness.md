@@ -112,3 +112,26 @@ default branch, so the first proof of a newly-wired job happens on its PR instea
   failing gate that reached its measuring phase records `MEASURED` and is red on its own merits —
   which is correct, and is why the conservation negative controls (which are *supposed* to exit
   non-zero) can be covered at all.
+
+## What it does not yet cover — two tracked bounds
+
+**#1568 — nine gate workflows are outside the registry.** The registration trigger is "this workflow
+installs the mechanical binaries", which is a proxy chosen because that is literally what #1509 broke,
+not a statement that the rest are safe. `disclosure-venue`, `reasons-drift`, `acceptance`,
+`acceptance-close`, `alert-paths`, `corpus-m8`, `osv-staleness`, `owasp-ack-watch` and `site-smoke`
+are outside it, and several of them score something real — `reasons-drift` re-runs every empirical
+falsifier, `corpus-m8` runs Stryker per target. #1568 replaces the proxy with a trigger that leaves
+no gate out by construction.
+
+**#1569 — no `liveness_drill` has been dispatched.** The guard is proven live in both directions on
+`dry-run-drift` (run 30569627289 failing, run 30569498565 passing), but that failing proof lives in a
+closed PR and a deleted branch rather than in a re-runnable command, and the `corpus-drift` /
+`conservation` drills have never executed — a `workflow_dispatch` input does not exist until the
+workflow is on the default branch. #1569 dispatches each one and records the proof run in
+`.github/gate-liveness.json`, the way `.github/alert-paths.json` records `provenBy`, because a path
+that has never fired reads exactly like one with no failing direction (#1287's own finding).
+
+The **DECLARED NO-OP** verdict is likewise proven by `src/ci-liveness.test.ts` against the real
+script, but has not yet been observed on a live short-circuited job: every PR that touches this
+mechanism also touches the paths those jobs filter on, so their in-job filters correctly report
+`relevant=true`. The first docs-only PR after this lands will exercise it.
