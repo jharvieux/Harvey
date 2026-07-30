@@ -62,6 +62,30 @@ function realExtCoverageRow(): Finding {
   return rows[0] as Finding;
 }
 
+// #825 — a paid-tier finding carrying a diff that src/fix/attach.ts verified green. Its own unique
+// taxonomy+severity so it never joins the rollup and always renders as an individual card, which is
+// the case this invariant is scoped to.
+const VERIFIED_DIFF = [
+  "--- a/src/dead/consumer.ts",
+  "+++ b/src/dead/consumer.ts",
+  "@@ -3,5 +3,5 @@",
+  "-export function wrap(x: string) { return inner(x); }",
+  "+// removed: single-call wrapper (M5)",
+  "",
+].join("\n");
+
+const fixedFinding = (): Finding =>
+  finding({
+    id: "M5-FIX-01", title: "Single-call wrapper", severity: "Low", confidence: "Confirmed",
+    category: "Quality", taxonomy: "M5 — Dead code", location: "src/dead/consumer.ts:3",
+    evidence: "wrap() has exactly one caller and adds no behaviour",
+    fix: "inline the wrapper at its single call site",
+    suggestedFix: {
+      diff: VERIFIED_DIFF, verified: true,
+      verification: "applies cleanly to the pinned baseline; the detector that found it (M5 — Single-call wrapper) no longer fires; your own check `npm run test` passes.",
+    },
+  });
+
 /** The document under test: the disclosure family, an Info row, and a shape above the rollup threshold. */
 function deliverable(): FindingsDocument {
   const rolled = Array.from({ length: 14 }, (_, i) =>
@@ -73,6 +97,7 @@ function deliverable(): FindingsDocument {
     // and the easiest thing in a report to compress away.
     finding({ id: "M9-INFO-01", severity: "Info", confidence: "Likely", category: "Architecture", taxonomy: "M9 — App Router boundary", evidence: "an Info row whose body text must survive the main findings list, not just its title" }),
     realExtCoverageRow(),
+    fixedFinding(),
     ...rolled,
   ];
   // No dataMap ⇒ the assembler appends the real M10-ESCALATION-00 not-assessed row (#1049).
@@ -140,6 +165,32 @@ describe("#1435 a finding's own words survive the render seam", () => {
     rmSync(out, { recursive: true, force: true });
     expect(written).toBe(html);
     expect(renderFidelityBreaches(doc, written)).toEqual([]);
+  });
+
+  // #825 — the seam one step past the ticket body. `attachSuggestedFix` decides paid + green + above
+  // the filing floor; by the time a diff is on a Finding, the report's only job is not to lose it.
+  it("a VERIFIED suggested fix reaches the rendered report, diff and verification sentence both", () => {
+    expect(html).toContain(esc(VERIFIED_DIFF.replace(/\n+$/, "")));
+    expect(html).toContain(esc("the detector that found it (M5 — Single-call wrapper) no longer fires"));
+    expect(html).toMatch(/inert, for review/);
+  });
+
+  it("CONTROL — the shipped state before this change: the report renders the prose fix and drops the diff", () => {
+    const f = doc.findings.find((x) => x.id === "M5-FIX-01") as Finding;
+    const broken = html.replace(esc(VERIFIED_DIFF.replace(/\n+$/, "")), "");
+    expect(broken, "the control must actually remove the diff").not.toBe(html);
+    expect(broken).toContain(esc(f.fix)); // the prose survives — which is exactly why nothing noticed
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.map((b) => b.id)).toContain("M5-FIX-01");
+    expect(breaches.find((b) => b.id === "M5-FIX-01")?.kind).toBe("fix-diff-dropped");
+  });
+
+  it("an UNVERIFIED fix is neither rendered nor demanded — the same fail-closed gate the ticket filer applies", () => {
+    const unverified = { ...fixedFinding(), id: "M5-FIX-02", suggestedFix: { diff: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", verified: false } };
+    const d = assembleEngagementDocument(RECORDED, ENV, [finding({ id: "M1-02" }), unverified], META);
+    const h = buildHtml(d);
+    expect(h).not.toContain(esc("-a\n+b"));
+    expect(renderFidelityBreaches(d, h)).toEqual([]);
   });
 
   it("CONTROL — a withheld COUNT that understates what was withheld is caught", () => {
