@@ -35,7 +35,7 @@ import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { parseLivePolicies, parseLiveTableNames } from "../migration-sql-parse.js";
-import { findFreshPass } from "../audit-pass-artifact.js";
+import { findFreshPass, passSlotCensus } from "../audit-pass-artifact.js";
 
 // One live table as the drift queries return it. `extensionOwned` marks a table pg_depend attributes
 // to an installed extension (postgis' spatial_ref_sys, pg_cron's job tables when they land in
@@ -333,20 +333,24 @@ export function readDriftPassEvidence(artifactsDir: string, targetDir: string, n
   );
   if (!lookup.fresh) return lookup.reason ? { observed: false, reason: lookup.reason } : undefined;
 
-  const findings = lookup.artifact.findings ?? [];
-  const scope = findings.find((f) => f.id === "SB-DRIFT-00");
-  // An M1 pass carrying no SB-DRIFT-00 is a semantic or live pass, not a connected one — it says
-  // nothing either way about drift, so it is neither evidence nor a rejection.
-  if (!scope) return undefined;
+  // #1522: the M1 slot holds every recorded tier, so look for the connected pass wherever it sits —
+  // reading only the newest one meant a semantic pass recorded afterwards took M2's drift evidence
+  // with it, and the scope row silently fell back to the "nobody looked" wording.
+  const connected = passSlotCensus(lookup.artifact, nowMs).fresh.find((p) => (p.findings ?? []).some((f) => f.id === "SB-DRIFT-00"));
+  // An M1 slot with no SB-DRIFT-00 in any pass holds no connected pass — it says nothing either way
+  // about drift, so it is neither evidence nor a rejection.
+  if (!connected) return undefined;
+  const findings = connected.findings ?? [];
+  const scope = findings.find((f) => f.id === "SB-DRIFT-00")!;
   if (scope.evidence.startsWith(DRIFT_NOT_ASSESSED_PREFIX)) {
     return {
       observed: false,
-      reason: `a connected pass was recorded for this engagement (${lookup.artifact.generatedAt}) but its drift comparison did not run — see SB-DRIFT-00 for the reason`,
+      reason: `a connected pass was recorded for this engagement (${connected.generatedAt}) but its drift comparison did not run — see SB-DRIFT-00 for the reason`,
     };
   }
   return {
     observed: true,
-    generatedAt: lookup.artifact.generatedAt,
+    generatedAt: connected.generatedAt,
     driftFindings: findings.filter((f) => f.id.startsWith("SB-DRIFT-") && f.id !== "SB-DRIFT-00").length,
   };
 }

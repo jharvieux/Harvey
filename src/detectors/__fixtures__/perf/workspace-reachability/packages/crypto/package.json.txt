@@ -1,0 +1,1 @@
+{ "name": "@acme/crypto", "exports": { ".": "./src/index.ts" } }

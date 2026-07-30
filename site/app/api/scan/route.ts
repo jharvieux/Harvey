@@ -1,7 +1,21 @@
 import { NextResponse } from "next/server";
+import fs from "node:fs";
+import path from "node:path";
+import { SUPPORT_EMAIL } from "../../lib/constants";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const esc = (s: string) => s.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string);
+
+// The sample-report PDF (#742): synthetic "Larkspur" engagement rendered once via
+// report-template/render.mjs from report-template/sample-findings.json and committed as a static
+// asset — the marketing sample doesn't need per-request Chromium rendering. Read once per cold
+// start, not per request.
+const SAMPLE_PDF_PATH = path.join(process.cwd(), "public", "harvey-sample-report.pdf");
+let samplePdfBase64: string | null = null;
+function loadSamplePdfBase64(): string {
+  if (samplePdfBase64 === null) samplePdfBase64 = fs.readFileSync(SAMPLE_PDF_PATH).toString("base64");
+  return samplePdfBase64;
+}
 
 // Best-effort in-memory rate limit: caps requests per IP per window. Resets on cold start
 // and isn't shared across serverless instances, but stops trivial floods of a public form.
@@ -95,7 +109,10 @@ export async function POST(req: Request) {
 
   if (!apiKey || !notifyTo) {
     console.error("scan intake not configured: RESEND_API_KEY and/or SCAN_NOTIFY_TO missing");
-    return NextResponse.json({ error: "Scan intake isn't set up yet — please email us directly." }, { status: 503 });
+    return NextResponse.json(
+      { error: `Our scan intake is temporarily unavailable — please email us at ${SUPPORT_EMAIL} and we'll pick it up from there.` },
+      { status: 503 },
+    );
   }
 
   // RLS-checker lead (#749): opt-in follow-up from the free browser checker. No repo — the user
@@ -120,7 +137,10 @@ export async function POST(req: Request) {
     );
     if (!leadNotify.ok) {
       console.error("resend checker-lead notify failed", leadNotify.status, await leadNotify.text().catch(() => ""));
-      return NextResponse.json({ error: "Something went wrong — please email us directly." }, { status: 502 });
+      return NextResponse.json(
+        { error: `Something went wrong — please email us at ${SUPPORT_EMAIL} and we'll pick it up from there.` },
+        { status: 502 },
+      );
     }
     await sendBestEffort(
       "checker-lead confirmation",
@@ -135,6 +155,58 @@ export async function POST(req: Request) {
           `<p>— Harvey · harvey-qa.com</p>`,
       },
       `checker-lead-confirm/${email}`,
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  // Sample-report PDF request (#742): the visible download is email-gated rather than a public
+  // static link, so a request always leaves a lead. The PDF itself IS what was asked for, so —
+  // unlike the best-effort confirmations above — sending it is the leg that gates the response;
+  // the operator lead notification is the auxiliary one here.
+  if (payload.kind === "sample-report-pdf") {
+    let pdfBase64: string;
+    try {
+      pdfBase64 = loadSamplePdfBase64();
+    } catch (err) {
+      console.error("sample-report PDF missing on disk", err);
+      return NextResponse.json(
+        { error: `Something went wrong — please email us at ${SUPPORT_EMAIL} and we'll pick it up from there.` },
+        { status: 500 },
+      );
+    }
+    const deliver = await sendEmail(
+      apiKey,
+      {
+        from,
+        to: [email],
+        subject: "Your Harvey sample report",
+        html:
+          `<p>Here's the sample Harvey report — a full ten-module readiness audit on a fictional booking app,` +
+          ` shown with synthetic data so you can see the shape of what a real engagement delivers.</p>` +
+          `<p>Want this on your own codebase? <a href="https://harvey-qa.com/#scan">Run the free scan</a>.</p>` +
+          `<p>— Harvey · harvey-qa.com</p>`,
+        attachments: [{ filename: "harvey-sample-report.pdf", content: pdfBase64 }],
+      },
+      `sample-report-pdf/${email}`,
+    );
+    if (!deliver.ok) {
+      console.error("resend sample-report-pdf delivery failed", deliver.status, await deliver.text().catch(() => ""));
+      return NextResponse.json(
+        { error: `Something went wrong sending the PDF — please email us at ${SUPPORT_EMAIL} and we'll pick it up from there.` },
+        { status: 502 },
+      );
+    }
+    await sendBestEffort(
+      "sample-report-pdf lead",
+      apiKey,
+      {
+        from,
+        to: [notifyTo],
+        reply_to: email,
+        subject: `Sample-report PDF requested — ${email}`,
+        html: `<h2>Sample-report PDF requested</h2><p><b>Email:</b> ${esc(email)}</p>`,
+      },
+      `sample-report-pdf-lead/${email}`,
     );
     return NextResponse.json({ ok: true });
   }
@@ -162,7 +234,10 @@ export async function POST(req: Request) {
 
   if (!notify.ok) {
     console.error("resend notify failed", notify.status, await notify.text().catch(() => ""));
-    return NextResponse.json({ error: "Something went wrong sending your request — please email us directly." }, { status: 502 });
+    return NextResponse.json(
+      { error: `Something went wrong sending your request — please email us at ${SUPPORT_EMAIL} and we'll pick it up from there.` },
+      { status: 502 },
+    );
   }
 
   // Confirmation to the requester — best-effort. Fails in the resend.dev sandbox until the

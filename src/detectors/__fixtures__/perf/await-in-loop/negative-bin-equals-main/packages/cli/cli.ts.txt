@@ -1,0 +1,10 @@
+import { supabase } from "../../lib/db";
+
+// The package declares this file as BOTH its `bin` and its `main`. It is an admin CLI (boxyhq's
+// `delete-team.js` shape, #1476) and makes no request-path latency claim, so the own-entry
+// exclusion #1526 adds to the `scripts` arm must not reach the `bin` arm.
+export async function deleteTeams(teamIds: string[]) {
+  for (const id of teamIds) {
+    await supabase.from("teams").select("id").eq("id", id).limit(1);
+  }
+}

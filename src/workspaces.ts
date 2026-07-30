@@ -40,6 +40,100 @@ interface WorkspaceScope {
   unreadable: string[];
 }
 
+/** A workspace member as an IMPORT TARGET: the package name a sibling writes, and its directory. */
+interface WorkspacePackage {
+  name: string;
+  /** Repo-relative directory holding the manifest ("" for the root package). */
+  dir: string;
+  /** Entry-module bases to try for a bare `import … from "<name>"`, best guess first. */
+  entryBases: string[];
+  /**
+   * Subpath prefixes for `import … from "<name>/<sub>"`, most specific first: the specifier prefix
+   * to strip and the repo-relative dir the remainder resolves under. A wildcard `exports` entry is
+   * why this is not simply the package dir — `"./*": "./src/*.ts"` (rallly's @rallly/utils) puts
+   * `@rallly/utils/encryption` at packages/utils/SRC/encryption.ts, and resolving it against the
+   * package dir finds nothing at all.
+   */
+  subpaths: { prefix: string; baseDir: string }[];
+}
+
+// #1353: the import-graph side of the same question collectWorkspaceManifests answers from disk.
+// M7/M9 reachability runs over an in-memory SourceInput[] (the loader already reads every
+// package.json — see CONFIG_FILE in src/detectors/load-sources.ts), so it has no repo root to walk, and
+// the two must not grow separate ideas of what a member is. `workspacePackagesTest` in
+// src/workspaces.test.ts pins them to the same answer on a real two-member tree.
+//
+// Deliberate difference from collectWorkspaceManifests, which gates on the DECLARED globs: that
+// discipline exists to stop a fixtures/ or examples/ package's dependencies being counted as the
+// application's own. Resolution has no such exposure — a manifest is only ever reached here because
+// some file in the tree imports it BY NAME, which is exactly the edge the reachability graph wants
+// to follow. Gating on globs would also mean reading pnpm-workspace.yaml, which the source loader
+// does not load, so every pnpm monorepo (rallly, documenso — the targets #1353 measured) would
+// silently resolve nothing.
+export function workspacePackages(manifests: { path: string; text: string }[]): WorkspacePackage[] {
+  const out: WorkspacePackage[] = [];
+  for (const m of manifests) {
+    if (!/(^|\/)package\.json$/.test(m.path)) continue;
+    let pkg: { name?: string; main?: string; module?: string; exports?: unknown };
+    try {
+      pkg = JSON.parse(m.text) as typeof pkg;
+    } catch {
+      continue;
+    }
+    if (typeof pkg.name !== "string" || !pkg.name) continue;
+    const dir = m.path.includes("/") ? m.path.slice(0, m.path.lastIndexOf("/")) : "";
+    const declared = [pkg.main, pkg.module, exportsDot(pkg.exports)].filter((e): e is string => typeof e === "string");
+    // candidatePaths() appends the extensions and /index, so strip a declared extension rather than
+    // guessing which one is on disk — an internal package declaring "./src/index.ts" and one
+    // declaring "./dist/index.js" both want src/index in a source-only view of the tree.
+    const bases = [...declared.map((e) => e.replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "index", "src/main"];
+    const subpaths = exportsWildcards(pkg.exports)
+      .map((w) => ({ prefix: `${pkg.name}/${w.from}`, baseDir: joinRepoPath(dir, w.to) }))
+      // Longest specifier prefix first, so `./server-only/*` beats a catch-all `./*`.
+      .sort((a, b) => b.prefix.length - a.prefix.length);
+    // A package with no wildcard exports still takes `<name>/<file>` against its own directory —
+    // the pre-exports convention, and what a `"files"`-only internal package relies on.
+    subpaths.push({ prefix: `${pkg.name}/`, baseDir: dir });
+    out.push({ name: pkg.name, dir, entryBases: [...new Set(bases.map((b) => joinRepoPath(dir, b)))], subpaths });
+  }
+  return out;
+}
+
+// `exports` keys carrying a `*`, reduced to the literal prefix on each side: `"./*": "./src/*.ts"`
+// → { from: "", to: "src/" }, `"./server-only/*": "./dist/server-only/*.js"` →
+// { from: "server-only/", to: "dist/server-only/" }. Everything after the `*` is dropped, because
+// candidatePaths() re-adds the extension set — a `.js` target in an internal TypeScript package
+// names a file that only exists after a build, and the source tree has the `.ts`.
+function exportsWildcards(exp: unknown): { from: string; to: string }[] {
+  if (!exp || typeof exp !== "object") return [];
+  const out: { from: string; to: string }[] = [];
+  for (const [key, value] of Object.entries(exp as Record<string, unknown>)) {
+    if (!key.startsWith("./") || !key.includes("*")) continue;
+    const target = typeof value === "string" ? value : exportsDot(value);
+    if (typeof target !== "string" || !target.includes("*")) continue;
+    out.push({ from: key.slice(2, key.indexOf("*")), to: target.slice(0, target.indexOf("*")) });
+  }
+  return out;
+}
+
+function exportsDot(exp: unknown): string | undefined {
+  if (typeof exp === "string") return exp;
+  if (!exp || typeof exp !== "object") return undefined;
+  const dot = (exp as Record<string, unknown>)["."] ?? exp;
+  if (typeof dot === "string") return dot;
+  if (!dot || typeof dot !== "object") return undefined;
+  const c = dot as Record<string, unknown>;
+  for (const key of ["import", "default", "require"]) if (typeof c[key] === "string") return c[key] as string;
+  return undefined;
+}
+
+function joinRepoPath(dir: string, rest: string): string {
+  return `${dir}/${rest}`
+    .split("/")
+    .filter((p) => p !== "" && p !== ".")
+    .join("/");
+}
+
 export function parseWorkspaceGlobs(repoRoot: string): { globs: string[]; source: string } {
   const pnpm = join(repoRoot, "pnpm-workspace.yaml");
   if (existsSync(pnpm)) {

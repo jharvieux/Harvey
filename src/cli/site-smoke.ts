@@ -11,7 +11,9 @@
 //
 // NOT part of `pnpm verify` — it needs the network and a live deployment, and verify stays offline
 // and deterministic (same posture as osv-staleness). Its arithmetic IS in verify, via
-// src/site-smoke.test.ts. Run it on a schedule against production; that is the whole point.
+// src/site-smoke.test.ts. Run on a schedule against production by
+// .github/workflows/site-smoke.yml (#1509) — that is the whole point, and until that workflow
+// existed nothing invoked this file outside a human remembering to run it by hand.
 //
 // It never submits a real lead: the readiness probe is a GET, and the validation probe is a body
 // the handler is required to reject before it sends anything.

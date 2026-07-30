@@ -1,0 +1,4 @@
+{
+  "name": "tooling-unreachable-negative",
+  "scripts": { "backfill": "tsx tools/backfill.ts", "dev": "next dev" }
+}

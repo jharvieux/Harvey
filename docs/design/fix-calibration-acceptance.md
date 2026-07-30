@@ -116,8 +116,14 @@ what §8 needs is that the gate reports what the detector says.
 
 **What stays disclosed rather than scored** (the honesty half of the same change):
 
-- A semgrep **registry-pack** rule (`p/owasp-top-ten` et al) is `notRun`: replaying it needs a network
-  fetch, so only the local rule directory is replayable.
+- A semgrep **registry-pack** rule (`p/owasp-top-ten` et al) IS now resolvable (#1368) — replaying it
+  needs a live semgrep run (the same registry fetch every real engagement scan already performs,
+  1-2s per `src/scan/semgrep.ts`'s `runRegistryPacksOnFile`), so it reaches GREEN in
+  `src/fix/calibration-acceptance.test.ts`'s `javascript.browser.security.open-redirect.js-open-redirect`
+  case (`components/LocationNav.jsx`), gated `skipIf(!SEMGREP_PRESENT)` like the harvey-* cases above.
+  What stays `notRun` is the OFFLINE/unreachable-registry case — proven in
+  `src/fix/detector-rerun.test.ts`, not here, since this file's binary-present cases assume network is
+  also reachable (consistent with the whole real-scan assumption, not a new one).
 - A `harvey-*` rule id that no longer exists in `src/scan/rules/semgrep/` does not resolve — a deleted
   rule must not "stop firing" and read as a fixed bug.
 - semgrep absent from PATH, the finding's file missing from the checkout, or source semgrep cannot

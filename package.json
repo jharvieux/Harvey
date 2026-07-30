@@ -2,7 +2,7 @@
   "name": "harvey",
   "version": "0.1.0",
   "private": true,
-  "description": "External code-audit service — multi-tenant Supabase/Next.js security & codebase-health scanning",
+  "description": "External code-audit service \u2014 multi-tenant Supabase/Next.js security & codebase-health scanning",
   "type": "module",
   "packageManager": "pnpm@11.1.3",
   "engines": {
@@ -45,6 +45,7 @@
     "simplify-scan": "tsx src/cli/simplify-scan.ts",
     "scan-focus": "tsx src/cli/scan-focus.ts",
     "corpus-drift": "tsx src/cli/corpus-drift.ts",
+    "site-smoke": "tsx src/cli/site-smoke.ts",
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
     "detector-census": "tsx src/cli/detector-census.ts",
     "brief-freshness": "tsx src/cli/brief-freshness.ts",
@@ -67,6 +68,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
+    "@puppeteer/browsers": "^3.0.6",
     "@types/node": "^24.0.0",
     "eslint": "^9.30.0",
     "eslint-plugin-react-hooks": "^7.1.1",

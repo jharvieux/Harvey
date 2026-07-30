@@ -1,0 +1,14 @@
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
+
+// #1306: a one-shot seed. The awaits are deliberately serial so each tenant's rows land after the
+// tenant row they reference — the "batch it with Promise.all" advice is wrong here, and the loop
+// runs once at setup, never on a request. #230's sixth suppression, finally implemented.
+export async function seedTenants(tenants: { slug: string; name: string }[]) {
+  for (const tenant of tenants) {
+    await prisma.tenant.create({ data: { slug: tenant.slug, name: tenant.name } });
+  }
+}
+
+seedTenants([{ slug: "acme", name: "Acme" }]);

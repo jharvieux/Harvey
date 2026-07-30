@@ -1,0 +1,13 @@
+import { supabase } from "../lib/db";
+
+// `tools/` matches no path pattern — only the package.json `backfill` script says this is
+// dev/ops tooling, and no request entry point imports it. It must stay suppressed after
+// #1528's request-reachability subtraction.
+export async function backfill(tenantIds: string[]) {
+  for (const id of tenantIds) {
+    const { data } = await supabase.from("accounts").select("id").eq("tenant_id", id).limit(1);
+    console.log(data);
+  }
+}
+
+backfill(process.argv.slice(2));

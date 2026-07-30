@@ -9,7 +9,7 @@
 
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, type PassArtifact, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
@@ -38,8 +38,6 @@ const trimOut = (output: string): string => output.trim().slice(0, 200);
 // derive-don't-assert rule. A requires-live-run does become a partial, because something demonstrably
 // ran and produced output. A present-but-rejected artifact (stale, wrong target, malformed) is
 // surfaced on the row too, so an unconsumed artifact is never silent either way.
-const passLabel = (artifact: PassArtifact): string => `${artifact.pass} pass (${artifact.generatedAt}${artifact.summary ? `: ${artifact.summary}` : ""})`;
-
 // #1096: both fold helpers preserve the typed shape for a migrated probe (Examined | NotAssessed)
 // and the legacy shape for an unmigrated one. A NotAssessed folded with a fresh pass becomes an
 // Examined over ONE recorded artifact — that artifact is literally what the probe examined, and
@@ -78,6 +76,19 @@ function rejectedPassNote(outcome: ProbeReport, reason: string): ProbeReport {
   return outcome.status === "ran" ? { ...outcome, detail: withRejectedPass(outcome.detail, reason) } : { ...outcome, reason: withRejectedPass(outcome.reason, reason) };
 }
 
+// The note and findings a recorded pass contributes to one of the six folded rows. #1522: EVERY
+// fresh tier the slot holds, because a superseded tier's findings are evidence in the same way the
+// newest tier's are — and a stale one is named rather than passed over in silence.
+const recordedPassNote = (artifact: PassArtifact, now: number): [string, Finding[]] => {
+  const { fresh, stale } = passSlotCensus(artifact, now);
+  const findings = fresh.flatMap((p) => p.findings ?? []);
+  const one = fresh.length === 1;
+  return [
+    `${one ? "A recorded" : "Recorded"} ${fresh.map(passLabel).join(", ")} contributed ${findings.length} finding(s) to this row; ${one ? "it covers" : "they cover"} one tier of this module, so ${one ? "it is" : "they are"} not by ${one ? "itself" : "themselves"} evidence the module ran in full (#1042)${stale.length ? `. Also recorded but STALE, and therefore not collected: ${stale.map(passLabel).join(", ")}` : ""}`,
+    findings,
+  ];
+};
+
 const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
   ...runner,
   run: (ctx) => {
@@ -87,13 +98,9 @@ const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
     const outcomes = Array.isArray(result) ? result : [result];
     // Folded into the FIRST outcome only: on a per-app fan-out the pass covers the MODULE, not each
     // app, so repeating it per instance would multiply one recorded finding across every row.
-    const first = pass.fresh
-      ? foldPassInto(
-          outcomes[0]!,
-          `A recorded ${passLabel(pass.artifact)} contributed ${(pass.artifact.findings ?? []).length} finding(s) to this row; it covers one tier of this module, so it is not by itself evidence the module ran in full (#1042)`,
-          pass.artifact.findings ?? [],
-        )
-      : rejectedPassNote(outcomes[0]!, pass.reason!);
+    // #1522: the slot accumulates, so fold EVERY fresh pass it holds — a superseded tier's findings
+    // are evidence in the same way the newest tier's are, and used to be deleted at the write side.
+    const first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
     return [first, ...outcomes.slice(1)];
   },
 });
@@ -261,6 +268,15 @@ const rankedFiles = (output: string): number | undefined => {
 // to the sub-gap. quick-scan derives the SAME fact from isGitRepoRoot(ctx.targetDir) (src/scan/
 // secrets.ts, exported in #533), so the M1 probe checks that directly instead: no capture dir, no
 // raw-findings file, and it works on every run.
+// #1522: M1's out-of-orchestrator tiers — the passes that run outside run-audit and can only reach
+// it as a recorded artifact (docs/design/audit-pass-artifacts.md). The row names every one of them
+// and says which has evidence, so recording ONE never reads as "M1 ran in full".
+const M1_PASS_TIERS: { pass: string; label: string }[] = [
+  { pass: "semantic", label: "semantic (LLM `/vuln-scan` → `/triage`)" },
+  { pass: "live", label: "live (`pnpm detect-deeper`)" },
+  { pass: "connected", label: "connected Supabase (`pnpm scan --supabase <ref|local> --migrations <dir>`)" },
+];
+
 const gitHistoryGapNote = (ctx: RunContext): string => {
   if (!ctx.isGitRepoRoot || ctx.isGitRepoRoot(ctx.targetDir)) return "";
   return " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528/#537).";
@@ -305,18 +321,30 @@ const m1: ModuleRunner = {
     // it, M1 stays honestly partial on the mechanical tier alone.
     const pass = findFreshPass(ctx, "M1");
     if (pass.fresh) {
-      const ran = ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)");
+      const now = ctx.now ?? Date.now();
+      const ran = ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)", now);
       const findings = [...mechanical, ...(ran.findings ?? [])];
+      const recorded = passSlotCensus(pass.artifact, now).fresh;
       // #502: the M3→M1 hotspot focus is a designed dependency; an un-focused semantic pass silently
       // degrades the flagship review to un-prioritized. Surface it in the ledger detail either way so
-      // a missing focus is visible rather than assumed.
-      const focusNote =
-        pass.artifact.pass !== "semantic"
-          ? ""
-          : pass.artifact.hotspotFocus
-            ? " [hotspot-focused: M3 → M1 (#502)]"
-            : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
-      return { kind: "examined", detail: `${ran.detail}${focusNote}`, unitsExamined: filesMeasured, scope: "application source files", findings };
+      // a missing focus is visible rather than assumed. Read off the SEMANTIC pass wherever it sits in
+      // the slot (#1522) — gating on the newest pass lost this warning the moment any other tier was
+      // recorded after it.
+      const semantic = recorded.find((p) => p.pass === "semantic");
+      const focusNote = !semantic
+        ? ""
+        : semantic.hotspotFocus
+          ? " [hotspot-focused: M3 → M1 (#502)]"
+          : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
+      // #1522: the un-run tiers are named on EVERY combination, not only when nothing was recorded.
+      // Recording one tier used to take the whole disclosure with it, so the row read fully examined
+      // while two of M1's three out-of-orchestrator tiers had never run — a clean bill of health
+      // bought by diligence (#345's shape). A tier with no fresh artifact keeps M1 partial.
+      const missing = M1_PASS_TIERS.filter((t) => !recorded.some((p) => p.pass === t.pass));
+      const reason = missing.length
+        ? `${missing.length} of M1's ${M1_PASS_TIERS.length} out-of-orchestrator tiers has no artifact proving it ran on this engagement: ${missing.map((t) => t.label).join("; ")}. Recorded here: ${recorded.map((p) => p.pass).join(", ")}. Absence of an un-run tier's findings is not-collected, not clean (#420) — record one with \`pnpm record-pass --module M1 --pass <tier> --target <dir> --out <artifacts-dir>\` (#311/#416/#1522).${gitHistoryGapNote(ctx)}`
+        : undefined;
+      return { kind: "examined", detail: `${ran.detail}${focusNote}`, unitsExamined: filesMeasured, scope: "application source files", findings, ...(reason ? { reason } : {}) };
     }
     return {
       kind: "examined",
@@ -326,7 +354,7 @@ const m1: ModuleRunner = {
       findings: mechanical,
       reason:
         withRejectedPass(
-          "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is the semantic/live tier's output, so absence of THOSE is not-collected, not clean (#420)",
+          `mechanical tier only — none of M1's out-of-orchestrator tiers (${M1_PASS_TIERS.map((t) => t.label).join("; ")}) left an artifact proving it ran, so the orchestrator will not assert \`ran\` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is those tiers' output, so absence of THOSE is not-collected, not clean (#420)`,
           pass.reason,
         ) +
         (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out/--sarif-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +
@@ -357,7 +385,7 @@ const m2: ModuleRunner = {
     // run against a stood-up stack) is the reachable-stack evidence #356 said the flag was not.
     const pass = findFreshPass(ctx, "M2");
     if (pass.fresh) {
-      const ran = ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)");
+      const ran = ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)", ctx.now ?? Date.now());
       return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M2 dynamic pass artifact" };
     }
     const base = ctx.env.dynamic
@@ -413,7 +441,7 @@ const m3: ModuleRunner = {
     // A fresh pass artifact is the one thing these branches demonstrably read; #530's hotspot
     // ranking rides out on it exactly as before.
     const fromPass = (artifact: PassArtifact): Examined => {
-      const ran = ranFromPass(artifact, "captured vitals report");
+      const ran = ranFromPass(artifact, "captured vitals report", ctx.now ?? Date.now());
       return {
         kind: "examined",
         detail: ran.detail,
@@ -643,7 +671,7 @@ const m6: ModuleRunner = {
     // verdict reads `ran` regardless of whether the paid tier is flagged this run.
     const pass = findFreshPass(ctx, "M6");
     if (pass.fresh) {
-      const ran = ranFromPass(pass.artifact, "pnpm simplify-scan (packet)");
+      const ran = ranFromPass(pass.artifact, "pnpm simplify-scan (packet)", ctx.now ?? Date.now());
       return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M6 verdict artifact" };
     }
 
@@ -753,8 +781,11 @@ const m7: ModuleRunner = {
   typed: true,
   run: (ctx) => {
     const lh = findFreshPass(ctx, "M7");
-    const cwv = lh.fresh
-      ? { note: `Core Web Vitals WERE measured — a recorded ${passLabel(lh.artifact)} supplied ${(lh.artifact.findings ?? []).length} finding(s), merged into this deliverable (#1042)`, findings: lh.artifact.findings ?? [] }
+    // #1522: every fresh pass the slot holds, not just the newest — a second recorded M7 tier no
+    // longer overwrites the first, so both must reach the row.
+    const lhFresh = lh.fresh ? passSlotCensus(lh.artifact, ctx.now ?? Date.now()).fresh : [];
+    const cwv = lhFresh.length
+      ? { note: `Core Web Vitals WERE measured — recorded ${lhFresh.map(passLabel).join(", ")} supplied ${lhFresh.flatMap((p) => p.findings ?? []).length} finding(s), merged into this deliverable (#1042)`, findings: lhFresh.flatMap((p) => p.findings ?? []) }
       : undefined;
     const rejectedCwv = lh.fresh ? undefined : lh.reason;
     // Only a fresh pass changes a row (merging its findings, upgrading a not-run to partial because
