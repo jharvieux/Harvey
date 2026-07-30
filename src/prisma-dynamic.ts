@@ -15,6 +15,7 @@ import type { Coverage, DynamicValidationResult, StandUpResult } from "./dynamic
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
 import { buildScopeLedger } from "./pentest/scope-ledger.js";
+import { readDriftPassEvidence } from "./scan/supabase-drift.js";
 
 // The facts about a Prisma repo that decide whether — and how — we stand it up for M2.
 export interface PrismaLayout {
@@ -245,6 +246,7 @@ export function runPrismaDynamicValidation(opts: {
       revision: db.revision ?? null,
       coverage,
       rows: db.scopeRows ?? [],
+      driftPass: readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now())),
     });
     findings.push(scope.finding);
     limitations.push(...scope.limitations);
