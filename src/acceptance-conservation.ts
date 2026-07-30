@@ -659,7 +659,9 @@ export function checkAcceptance(prBody: string, lookup: IssueLookup, repo?: stri
   const seen = new Set<string>();
   parsed.remainders = parsed.remainders.filter((r) => {
     const key = `${r.original ?? ""}#${r.remainder}`;
-    return seen.has(key) ? false : (seen.add(key), true);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 
   const venuesContributing = [...new Set([...parsed.dispositions, ...parsed.noCriteria, ...parsed.remainders].map((x) => x.venue))];
