@@ -3713,7 +3713,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -3737,7 +3737,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')"
     ],
     "owasp": [
       "A03:2021 - Injection"
@@ -3745,15 +3745,15 @@
   },
   {
     "id": "SEM-52",
-    "title": "src.scan.rules.semgrep.harvey-internal-state-response: The response body includes process.env or process.cwd() — this returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.",
+    "title": "src.scan.rules.semgrep.harvey-internal-state-response: The response body includes process.env or process.cwd() — an information exposure that returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-internal-state-response",
     "location": "app/api/ar-debug-env/route.ts:15",
     "status": "Open",
-    "evidence": "The response body includes process.env or process.cwd() — this returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.\n",
-    "impact": "The response body includes process.env or process.cwd() — this returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.\n",
+    "evidence": "The response body includes process.env or process.cwd() — an information exposure that returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.\n",
+    "impact": "The response body includes process.env or process.cwd() — an information exposure that returns the server's environment (every secret it holds) or its filesystem layout to the caller. Return only the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS CHECK: it matches the whole object in a RESPONSE position only. Reading a single value (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 3,
     "ease": 4,
@@ -5245,7 +5245,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -5443,7 +5443,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -5467,7 +5467,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -6460,7 +6460,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+      "CWE-598: Use of HTTP Request With Sensitive Query String"
     ],
     "owasp": [
       "A04:2021 - Insecure Design"
@@ -6556,7 +6556,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -7749,7 +7749,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')"
     ],
     "owasp": [
       "A03:2021 - Injection"
@@ -7893,7 +7893,7 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+      "CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"
     ],
     "owasp": [
       "A05:2021 - Security Misconfiguration"
@@ -8079,7 +8079,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')"
     ],
     "owasp": [
       "A03:2021 - Injection"
@@ -9418,7 +9418,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')"
     ],
     "owasp": [
       "A03:2021 - Injection"
@@ -9466,7 +9466,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')"
     ],
     "owasp": [
       "A03:2021 - Injection"
@@ -11743,7 +11743,7 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+      "CWE-598: Use of HTTP Request With Sensitive Query String"
     ],
     "owasp": [
       "A04:2021 - Insecure Design"
