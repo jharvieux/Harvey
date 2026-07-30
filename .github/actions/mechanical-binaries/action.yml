@@ -25,6 +25,13 @@ runs:
         echo "osv=2.3.8" >> "$GITHUB_OUTPUT"
         echo "gitleaks=8.30.1" >> "$GITHUB_OUTPUT"
         echo "trufflehog=head" >> "$GITHUB_OUTPUT"
+        # #1266: semgrep was the one tool `pipx install semgrep` left UNPINNED, contradicting this
+        # action's own "pins EVERY version" comment above. MEASURED 2026-07-30: a runner resolved
+        # 1.172.0 while the committed fixture (src/scan/__fixtures__/semgrep/) and
+        # SEMGREP_PINNED_VERSION (src/scan/fixture-drift-contracts.ts) are both 1.164.0 — the new
+        # semgrep-fixture-drift check correctly failed loud on that mismatch (its whole job), which
+        # is what surfaced the gap. Pinned here to match.
+        echo "semgrep=1.164.0" >> "$GITHUB_OUTPUT"
 
     - id: cache
       uses: actions/cache@v4
@@ -34,7 +41,7 @@ runs:
         path: |
           ~/.local/bin
           ~/.local/pipx
-        key: mech-bins-${{ runner.os }}-osv${{ steps.versions.outputs.osv }}-gl${{ steps.versions.outputs.gitleaks }}-th${{ steps.versions.outputs.trufflehog }}-semgrep-pipx-v2
+        key: mech-bins-${{ runner.os }}-osv${{ steps.versions.outputs.osv }}-gl${{ steps.versions.outputs.gitleaks }}-th${{ steps.versions.outputs.trufflehog }}-sg${{ steps.versions.outputs.semgrep }}-v3
 
     - name: Install (cache miss only)
       if: steps.cache.outputs.cache-hit != 'true'
@@ -55,7 +62,7 @@ runs:
         # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED 2026-07-28, where
         # the osv-scanner `curl -o` into it failed with `curl: (23)` on a fresh runner.
         mkdir -p "$HOME/.local/bin"
-        pipx install semgrep
+        pipx install "semgrep==${{ steps.versions.outputs.semgrep }}"
         curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
           | sh -s -- -b "$HOME/.local/bin"
         curl -sSfL -o "$HOME/.local/bin/osv-scanner" \

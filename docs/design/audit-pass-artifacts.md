@@ -94,7 +94,26 @@ only ONE pass did (`pnpm record-pass` itself is the generic manual path, not a s
 | M3 vitals (`pnpm exec tsx src/cli/hotspot-scan.ts --artifacts-dir <dir>`) | **yes** — writes `M3.pass.json` directly, findings + top-K hotspots + which of the three CLI tiers (full/reduced/unranked) produced them |
 | M6 verdict (`pnpm exec tsx src/cli/m6-agreement.ts a.json b.json --target <dir> --artifacts-dir <dir>`) | **yes** — writes `M6.pass.json` from the UNANIMOUS-flag verdicts only (`toM6Findings`, `src/m6-agreement.ts`); a split is never auto-promoted, it still goes to the human adjudicator the agreement report already routes it to |
 | M1 live (`pnpm detect-deeper --findings-out <file>`) | no — but no longer needs hand-extraction either: `--findings-out` writes the bare `Finding[]` `record-pass --findings` reads, so recording it is `detect-deeper --findings-out f.json` then `record-pass --module M1 --pass live --findings f.json --out <dir>`, no manual JSON surgery |
+| M1 connected Supabase (`scan.ts --supabase <ref\|local> --migrations <dir> --out f.json`) | no — recorded with `record-pass --module M1 --pass connected --findings f.json --target <dir> --out <artifacts-dir>`; `--out` already writes the bare `Finding[]`, so no hand-extraction |
 | M1 semantic (`/vuln-scan → /triage`) | no — see the recorded reason below |
+
+### A second reader: M2's scope statement (#1280)
+
+The connected pass's artifact is read by one consumer besides the M1 probe. `readDriftPassEvidence`
+(`src/scan/supabase-drift.ts`) looks for `SB-DRIFT-00` in a fresh, target-matching `M1.pass.json`
+and hands the answer to `buildScopeLedger`, so M2's scope disclosure can say whether
+prod-vs-migration drift **was observed on this engagement** rather than pointing the reader at a row
+elsewhere in the report. It uses the same `findFreshPass` freshness/target rules (narrowed to
+`PassArtifactSource`), so a stale or wrong-target artifact is named as rejected, never dropped.
+
+The four states the scope statement distinguishes, none of which is silence:
+
+| What the artifacts dir holds | What M2's scope row says |
+|---|---|
+| a connected pass whose `SB-DRIFT-00` reports a comparison | drift **WAS OBSERVED** on this engagement, with the count of drift rows; the class leaves the not-assessed list |
+| a connected pass whose `SB-DRIFT-00` is the not-assessed variant | **NOT** observed, naming that the pass ran without `--migrations`; the class stays not-assessed |
+| a stale / wrong-target `M1.pass.json` | **NOT** observed, carrying `findFreshPass`'s rejection reason |
+| no `M1.pass.json`, or an M1 semantic/live pass carrying no `SB-DRIFT-00` | the standing wording — the class is not-assessed by M2 and points at the connected tier |
 
 ### Recorded reason: M1 semantic stays on the generic `record-pass` path
 

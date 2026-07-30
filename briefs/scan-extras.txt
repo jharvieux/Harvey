@@ -1,7 +1,7 @@
 # scan-extras — multi-tenant Supabase/Next.js security brief
 #
 # Pass to the reference harness scan:
-#   /vuln-scan <client-repo>/src --extra docs/scan-extras.txt
+#   /vuln-scan <client-repo>/src --extra briefs/scan-extras.txt
 #
 # These are ADDITIONAL vulnerability categories to hunt for, on top of the
 # default scan brief — the high-signal, security-adjacent bug classes that
@@ -9,7 +9,7 @@
 # Supabase/Next.js SaaS. Ordered by blast radius. Stack-generic (no client
 # file paths). Derived from the D-091 taxonomy.
 #
-# Catalog sync: covers ALL D-091 classes (see docs/runbooks/anti-patterns.md),
+# Catalog sync: covers ALL D-091 classes (see briefs/anti-patterns.md),
 # synced from ATC canonical @ 04a565d (2026-07-19, 28 ATC classes; Harvey total
 # 29 = 28 vendored + 1 Harvey-specific). Round-3 integrity/concurrency classes
 # (ATC 21-26 = Harvey 22-27) are in the MEDIUM section; the two Harvey-audit

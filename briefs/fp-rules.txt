@@ -1,7 +1,7 @@
 # fp-rules — triage exclusions for the multi-tenant Supabase/Next.js scan
 #
 # Pass to the reference harness triage:
-#   /triage VULN-FINDINGS.json --fp-rules docs/fp-rules.txt
+#   /triage VULN-FINDINGS.json --fp-rules briefs/fp-rules.txt
 #
 # These suppress the known false-positive classes so the report is high-signal.
 # A scanner that flags these wastes the client's trust. Each rule says when NOT
