@@ -576,4 +576,39 @@ describe("the connected drift pass reaches M2's scope statement (#1280)", () => 
     expect(scopeOf(written.findings).evidence).toMatch(/dashboard after the last committed migration/);
     rmSync(clean, { recursive: true, force: true });
   });
+
+  // `runDynamicValidation` above has no production caller (test-only-exports.baseline.json) —
+  // `src/cli/dynamic-validate.ts` drives the fleet via `runMultiProjectDynamicValidation` only. The
+  // wiring that actually ships this capability is ITS `probeOneProject` call, so it needs its own
+  // case: deleting `driftPass` there left the suite fully green with the case above alone (verified
+  // against feature/sweep-drift-1070 before this test existed).
+  it("also reaches the scope statement through runMultiProjectDynamicValidation, the path the CLI actually calls", () => {
+    const multiDir = mkdtempSync(join(tmpdir(), "harvey-dynval-drift-multi-artifacts-"));
+    const repo = mkdtempSync(join(tmpdir(), "harvey-dynval-drift-multi-repo-"));
+    const mig = join(repo, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001_init.sql"), "create table tenants (id uuid primary key, name text not null);\ncreate table docs (id uuid primary key, tenant_id uuid not null, body text);");
+    writeFileSync(
+      join(multiDir, "M1.pass.json"),
+      JSON.stringify({
+        module: "M1",
+        target: repo,
+        pass: "connected",
+        generatedAt: "2026-07-17T09:00:00.000Z",
+        findings: [
+          { id: "SB-DRIFT-00", evidence: "The deployed database was compared against the end state of 1 committed migration file." },
+          { id: "SB-DRIFT-RLS-public-docs", evidence: "rls off live" },
+        ],
+      }),
+    );
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: layout({ migrationDirs: [mig] }), artifactsDir: multiDir, now,
+      makeProject: () => ({ runner: runner(), stop: () => undefined }),
+    });
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(scopeOf(written.findings).evidence).toMatch(/PROD-VS-MIGRATION DRIFT WAS OBSERVED ON THIS ENGAGEMENT/);
+    expect(scopeOf(written.findings).evidence).toMatch(/1 drift finding\(s\)/);
+    rmSync(multiDir, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
 });
