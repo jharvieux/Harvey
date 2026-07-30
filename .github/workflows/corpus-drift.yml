@@ -1,19 +1,41 @@
-# Layer 2 for the external-repo regression corpus (#222/#263). Clones the six PUBLIC targets at
-# their pinned commits, re-runs the source-tier modules, and scores the result against the
-# recorded baselines.
+# Layer 2 for the external-repo regression corpus (#222/#263). Clones every PUBLIC target at its
+# pinned commit, re-runs the source-tier modules, and scores the result against the recorded
+# baselines. (This header said "six" until 2026-07-30; the manifest has grown since — count it,
+# don't quote it: `grep -c 'slug: "' src/scan/external-corpus.ts` measured 19 that day.)
 #
-# Why this is NOT part of `pnpm verify` (the required per-PR check): it needs network to clone six
-# repos and external binaries (semgrep/trufflehog/osv-scanner) to run the mechanical tier. `verify`
+# Why this is NOT part of `pnpm verify` (the required per-PR check): it needs network to clone every
+# pinned repo and external binaries (semgrep/trufflehog/osv-scanner) to run the mechanical tier. `verify`
 # stays deterministic and offline so it's fast and never flakes on someone else's infrastructure;
 # Layer 1 (src/scan/external-corpus.test.ts) covers the scorers there.
 #
-# Scheduled, not per-PR: the targets are frozen at a commit, so nothing changes between runs except
+# Scheduled AND per-PR: the targets are frozen at a commit, so nothing changes between runs except
 # OUR scanners. Daily (was weekly until #1138) shrinks the drift-accumulation window from 7 days to
-# 1 — the systemic fix behind #1128, where 12 baselines drifted unseen for up to a week — without
-# paying the clone-and-scan cost on every PR. workflow_dispatch is for checking a scanner change on
-# demand, and pull_request runs it when the corpus or its scorer is itself edited. A scheduled
-# failure find-or-updates a tracking issue (label ci-corpus-drift-alert) so red on this branch that
-# nobody watches can't be scrolled past.
+# 1 — the systemic fix behind #1128, where 12 baselines drifted unseen for up to a week.
+# workflow_dispatch is for checking a scanner change on demand. A scheduled failure find-or-updates
+# a tracking issue (label ci-corpus-drift-alert) so red on this branch that nobody watches can't be
+# scrolled past.
+#
+# BECOMING A REQUIRED STATUS CHECK on `main` (operator-approved 2026-07-30). "Not required" is not
+# "not important": this job died at SETUP for days (#1509's poisoned pipx cache) and PR #1447 merged
+# on three green required checks while the gate measuring its blast radius had never executed — 653
+# M5-slop findings silently suppressed and a live regression on `main`.
+#
+# Being required is why this workflow has NO `paths:` filter on `pull_request` any more. GitHub
+# waits forever for a required context that never reports, so a path-filtered required check
+# deadlocks every PR outside its filter (#1107, and gotcha 5 on #1379). The filter moved INSIDE the
+# job (the `filter` step below), same shape conservation.yml and dry-run-drift.yml already use: the
+# job always runs and always reports, and only the expensive work is conditional.
+#
+# THE RELEVANCE RULE IS A DENY-LIST, NOT AN ALLOW-LIST — and that polarity is the point. The old
+# three-path `pull_request` filter (src/scan/external-corpus.ts, src/cli/corpus-drift.ts, this file)
+# was scoped for an advisory check and is far too narrow to gate a merge: what a corpus baseline
+# scores is the OUTPUT OF THE SCANNERS, so a change to any detector, rule, taxonomy or scan helper
+# moves a baseline without touching one of those three files. Enumerating the reachable set would be
+# a transitive-import guess that decays silently — exactly the failure this promotion exists to
+# prevent — so the job instead names the directories it can show are UNREACHABLE from clone →
+# detect-static/quality-scan/mutation-scan/quick-scan → score, and treats everything else as
+# relevant. FAIL OPEN: an unknown path scores. A false "relevant" costs ~23 minutes; a false "not
+# relevant" is a silently unscored regression.
 #
 # On failure: the job names the module and target that drifted. A drift is EITHER an intended
 # precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
@@ -40,13 +62,17 @@ on:
         type: boolean
         default: false
   pull_request:
-    paths:
-      - "src/scan/external-corpus.ts"
-      - "src/cli/corpus-drift.ts"
-      - ".github/workflows/corpus-drift.yml"
+  # #1498: merge queue. Without this the required context never reports on a queue entry and the
+  # queue deadlocks — a lesson already learned twice in these same workflows. The relevance filter
+  # below sets relevant=true on any non-`pull_request` event, so a queue entry scores for real.
+  merge_group:
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
-# newer run is the interesting one.
+# newer run is the interesting one. Safe on a required check: a cancellation here is only ever
+# caused by a NEWER run on the same `github.ref` — for a PR that is `refs/pull/N/merge`, so the
+# superseding run reports against the newer head commit, which is the commit branch protection
+# actually evaluates. A `cancelled` conclusion is therefore never the latest result for the head
+# SHA and cannot strand a merge. (Same posture dry-run-drift.yml and ci.yml already take.)
 concurrency:
   group: corpus-drift-${{ github.ref }}
   cancel-in-progress: true
@@ -73,7 +99,15 @@ jobs:
     env:
       HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
+      # fetch-depth: 0 so the two diff-reading steps below can reach the PR base. MEASURED
+      # 2026-07-30 on run 30569519496: at the default depth 1 the #1498 narrowing step printed
+      # `fatal: bad object <base.sha>` and fell open to "Empty diff — scoring every target" on EVERY
+      # pull request, so the per-target narrowing it added has never once applied. The relevance
+      # filter reads the same diff and would have degraded the same way — permanently relevant, the
+      # short-circuit unreachable.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Before the six clones and installs on purpose: the drill proves the ALERT path, not the
       # corpus, so it must not pay 30 minutes to reach it. Everything below is skipped once it fails.
@@ -83,12 +117,86 @@ jobs:
           echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a corpus-drift failure."
           exit 1
 
+      # The `paths:` filter that used to live on the `pull_request` trigger, moved in-job so this
+      # context reports on EVERY PR (see the header note on the #1107 deadlock).
+      #
+      # A DENY-LIST, deliberately inverted from conservation.yml's allow-list, because the two jobs
+      # have opposite reachability: conservation names a short pipeline it can enumerate, while a
+      # corpus baseline scores the output of the whole scanner tree, which is nearly all of `src/`.
+      # So this lists only what it can show is UNREACHABLE from clone → detect-static / quality-scan
+      # / mutation-scan / quick-scan → scoreExternalBaseline, and everything else — src/**,
+      # targets/**, tools/**, briefs/**, package.json, pnpm-lock.yaml, the root tool configs
+      # (.jscpd.json, knip.json — the scanner CLIs run with cwd=repoRoot, so they are live inputs),
+      # and any path nobody has classified yet — is RELEVANT. `case` patterns, not pathspecs: in
+      # `case` a `*` matches `/` too, so `docs/*` covers the whole subtree.
+      #
+      # The two forced-relevant entries come first because `.github/*` below would otherwise swallow
+      # them: this workflow itself, and `.github/actions/**` (mechanical-binaries provisions the
+      # scanner binaries the free-tier invariant shells out to; gate-liveness is this job's own
+      # receipt machinery).
+      #
+      # Schedule, workflow_dispatch and merge_group always run the full job. A merge-queue entry is
+      # the last gate before `main` and its diff is the whole batch, so it scores rather than
+      # inheriting any PR's verdict.
+      - id: filter
+        name: Does this change set touch anything that can move a corpus baseline?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
+          echo "Changed files:"
+          echo "$files"
+          if [ -z "$files" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "manifest_only=false" >> "$GITHUB_OUTPUT"
+            echo "Could not read the diff — scoring everything. A narrowing that cannot see the change set must cost time, never coverage."
+            exit 0
+          fi
+          # manifest_only feeds the #1498 per-target narrowing below: it may fire ONLY when the
+          # manifest is the sole relevant edit. A PR that touches the manifest AND a detector must
+          # score every target — the detector can move a baseline the changed slugs don't name.
+          relevant=false
+          manifest_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/scan/external-corpus.ts) relevant=true ;;
+              .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true; manifest_only=false ;;
+              .claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
+              CLAUDE.md|README.md|SESSION.md) ;;
+              *) relevant=true; manifest_only=false ;;
+            esac
+          done <<< "$files"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "manifest_only=$manifest_only" >> "$GITHUB_OUTPUT"
+          if [ "$relevant" = "false" ]; then
+            echo "Every changed path is prose, site or agent-config — none of it is read by the clone-and-score pipeline, so no baseline can have moved from this PR. The daily scheduled run covers the tree regardless."
+          fi
+
+      # #1509: a short-circuited job and a job that died in setup are both "nothing was scored", and
+      # from outside they look identical — which is how #1447 merged past a gate that had never run.
+      # The no-op is DECLARED, with its reason, so the assert step at the end can pass it while
+      # printing something a reader cannot mistake for a scoring run.
+      - name: Declare the no-op (a short-circuit must not read like a scoring run)
+        if: steps.filter.outputs.relevant != 'true'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: corpus-drift
+          status: declared-no-op
+          scope: "in-job filter found no changed path that the clone-and-score pipeline reads — every one is prose, site or agent config, so no corpus baseline can have moved from this PR. Nothing was cloned and nothing was scored; this run is evidence about nothing. The daily scheduled run covers the tree regardless."
+
       - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.relevant == 'true'
 
       # The baseline modules (M4/M5/M7/M8/M9) run on this repo's own devDependencies, but #261's
       # free-tier invariant scores a real quick-scan, whose mechanical tier shells out to these.
@@ -96,44 +204,38 @@ jobs:
       # which on a must-raise-an-indicator target would look like the free tier staying quiet. So
       # they are installed explicitly rather than left to chance.
       - name: Install mechanical-tier scanner binaries
+        if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/mechanical-binaries
 
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
       # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
       # targets instead of 4. It is what pushes this job past its old ~2m: six real installs.
-      # #1498: on a PULL REQUEST, score only the targets whose baselines the diff actually touches.
+      # #1498: on a PULL REQUEST whose ONLY relevant edit is the manifest, score just the targets
+      # whose baselines the diff actually touches.
       #
       # MEASURED 2026-07-28: this job ran 37 times on pull requests that day against ONE scheduled
-      # run, ~23 minutes each — roughly 14 hours of runner time for a signal that is ADVISORY (this
-      # is not a required context) and therefore usually lands after the merge decision. Six separate
-      # batches edited src/scan/external-corpus.ts, and every one re-cloned and re-installed all 13
-      # pinned repos to re-score the one or two baselines it had changed.
+      # run, ~23 minutes each — roughly 14 hours of runner time. Six separate batches edited
+      # src/scan/external-corpus.ts, and every one re-cloned and re-installed all 13 pinned repos to
+      # re-score the one or two baselines it had changed.
       #
-      # The full sweep is NOT weakened: it still runs on the daily schedule and on workflow_dispatch,
-      # which is where it belongs — it detects OUR scanner moving against frozen pins, and a day is
-      # the right resolution for that. What changes is only which targets a PR re-scores.
+      # The full sweep is NOT weakened: it still runs on the daily schedule, on workflow_dispatch,
+      # on a merge-queue entry and on any PR that touches a scanner. What narrows is only the
+      # manifest-only edit, where the changed slugs ARE the change.
       #
-      # FAIL-OPEN BY DESIGN, in the safe direction: if the harness itself changed, if the diff cannot
-      # be read, or if no slug can be attributed, this scores EVERYTHING. A narrowing that guesses
-      # wrong must cost time, never coverage.
+      # FAIL-OPEN BY DESIGN, in the safe direction: if anything besides the manifest was touched, if
+      # the diff cannot be read, or if no slug can be attributed, this scores EVERYTHING. A narrowing
+      # that guesses wrong must cost time, never coverage.
       - name: Which targets does this diff touch?
         id: targets
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Not a PR — scoring every target."; exit 0
           fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
-          if [ -z "$files" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Empty diff — scoring every target."; exit 0
-          fi
-          # Anything that can change scoring for EVERY target -> full sweep.
-          if echo "$files" | grep -qE '^(src/cli/corpus-drift\.ts|\.github/workflows/corpus-drift\.yml|\.github/actions/mechanical-binaries/action\.yml)$'; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Harness changed — scoring every target."; exit 0
-          fi
-          if ! echo "$files" | grep -q '^src/scan/external-corpus\.ts$'; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Trigger fired without a manifest edit — scoring every target."; exit 0
+          if [ "${{ steps.filter.outputs.manifest_only }}" != "true" ]; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "This PR touches more than the manifest — a scanner change can move a baseline the changed slugs don't name, so scoring every target."; exit 0
           fi
           # Attribute changed lines to slugs: every target block opens with `slug: "<name>"`, so the
           # nearest preceding slug above a changed line is that line's target.
@@ -150,7 +252,7 @@ jobs:
           echo "Scoring only: $(echo "$slugs" | tr '\n' ' ')"
 
       - name: Score the corpus against its baselines
-        if: ${{ !inputs.liveness_drill }}
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           set -euo pipefail
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
@@ -164,9 +266,10 @@ jobs:
           fi
 
       # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
-      # table showing exactly what moved.
+      # table showing exactly what moved. Skipped on a declared no-op, where there is no scorecard
+      # and `if-no-files-found: warn` would hang an annotation on an otherwise clean required check.
       - name: Upload drift scorecard
-        if: always()
+        if: always() && steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: corpus-drift-scorecard
@@ -178,7 +281,9 @@ jobs:
       # required checks. `pnpm corpus-drift` writes a receipt AFTER it scores; without that record
       # this step fails naming the phase that never ran. `always()` so it still reports when an
       # earlier step already failed — that is exactly the case it exists to explain. Excluded on the
-      # alert drill, which fails on purpose before anything is scored.
+      # alert drill, which fails on purpose before anything is scored. A short-circuited run reaches
+      # here too and passes on the DECLARED NO-OP record above, printing its reason rather than a
+      # count — which is what stops "the filter skipped it" reading like "it scored and found none".
       - name: Gate liveness — did this job actually score anything?
         if: always() && !inputs.alert_drill
         uses: ./.github/actions/gate-liveness
