@@ -451,7 +451,7 @@ rules:
     languages: [typescript, javascript]
     severity: ERROR
     metadata:
-      cwe: ["CWE-942: Permissive Cross-domain Policy with Untrusted Domains"]
+      cwe: ["CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"]
       owasp: ["A05:2021 - Security Misconfiguration"]
       confidence: HIGH
       category: security
@@ -519,7 +519,7 @@ rules:
     languages: [typescript, javascript]
     severity: ERROR
     metadata:
-      cwe: ["CWE-942: Permissive Cross-domain Policy with Untrusted Domains"]
+      cwe: ["CWE-942: Permissive Cross-domain Security Policy with Untrusted Domains"]
       owasp: ["A05:2021 - Security Misconfiguration"]
       confidence: HIGH
       category: security
