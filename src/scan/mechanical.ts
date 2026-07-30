@@ -13,6 +13,7 @@ import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
+import { scanSsrfWrapper } from "./ssrf-wrapper.js";
 import { scanCounterRace } from "./counter-race.js";
 import { scanPgIdor } from "./pg-idor.js";
 import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
@@ -425,6 +426,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #433 — authenticated pages/api handler scoping a service-role query by a request-supplied
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
+
+    // #1325 (#570 remainder) — cross-file SSRF through a fetch wrapper whose name is NOT one of
+    // harvey-ssrf-fetch's curated four (fetchRemote/fetchUrl/fetchExternal/proxyFetch). Resolves
+    // the actual import + checks the callee's definition SHAPE instead of guessing by name.
+    findings.push(...scanSsrfWrapper(scanDir));
 
     // #663 — Express + pg repo-function IDOR: an authenticated handler passes a client-supplied
     // id straight into a name-gated read-by-id repo function, no ownership comparison.

@@ -548,7 +548,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// that provably cannot touch the network, and never needs a token).",
   ],
   "src/cli/fixture-drift.ts": [
-    "// #1130 remainder: lighthouse, vitals, trufflehog (unverified + git-history), jscpd, knip, Stryker.",
+    "// #1130 remainder: lighthouse, vitals, trufflehog (unverified + git-history), jscpd, knip, Stryker,",
   ],
   "src/cli/heavy-shard.ts": [
     "// the shard membership is derived from src/heavy-cli-tests.ts and an eighth heavy file cannot be",
@@ -1148,8 +1148,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "| 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |",
     "| 10 | TruffleHog 3.96.0 (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **CAPTURED** (#1150) | PARTIAL — as row 8. RE-CAPTURED: `src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json` + `PROVENANCE.md` — the real one-record output of `trufflehog git --no-verification --results=unverified --json` against a `buildGitHistoryFixture`-shaped repo. The benign file's negative control is by necessity synthetic (a real run emits nothing for it); the \"false positive\" branch's second record stays hand-built and is labelled so. |",
     "| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **REASON (live-only)** (#1146) — offline capture is impossible; the block is recorded below. | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |",
-    "itself can still encode a field the tool never emits, it just can't leave the tool *entirely* dead.",
-    "two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.",
+    "the M2 two-tenant stack, so those stay a `REASON:` block where an offline capture is impossible.",
     "- **Row 8 (TruffleHog, unverified path)** RE-CAPTURED — `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json`",
     "from a real `trufflehog git --no-verification --results=unverified --json` run (trufflehog 3.96.0,",
     "below), because an offline capture is genuinely impossible — not a fabricated fixture.",

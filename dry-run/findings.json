@@ -13722,6 +13722,30 @@
     ]
   },
   {
+    "id": "SSRF-wrapper-app-api-dl-ssrf-route-ts-636",
+    "title": "Request-controlled URL reaches `downloadRemote()`, a cross-file fetch wrapper",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Security",
+    "taxonomy": "M1 — SSRF via an uncurated cross-file fetch wrapper",
+    "location": "app/api/dl-ssrf/route.ts:10",
+    "status": "Open",
+    "evidence": "`downloadRemote` is imported from lib/dl-fetch.ts, where its only use of its parameter `target` is passing it straight to a fetch-family call — a thin pass-through with no host check. Here it is called with `new URL(req.url).searchParams.get(\"url\") || \"\"`, a request-derived value.",
+    "impact": "SSRF: the server can be made to fetch an attacker-chosen URL, reaching internal services or cloud metadata endpoints depending on the deploy network.",
+    "fix": "Validate the host against an allowlist and block internal/link-local ranges before the value reaches the wrapper, or add that check inside the wrapper itself.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
     "id": "SEC-PG-IDOR-lib-express-pg-idor-js-438",
     "title": "lib/express-pg-idor.js — authenticated handler passes a client-supplied id straight into findOrderById(...)",
     "severity": "High",

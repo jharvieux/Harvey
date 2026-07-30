@@ -45,6 +45,7 @@ const CWE: Record<string, string> = {
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
   "79": "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+  "918": "CWE-918: Server-Side Request Forgery (SSRF)",
 };
 
 const OWASP: Record<string, string> = {
@@ -54,6 +55,7 @@ const OWASP: Record<string, string> = {
   A07: "A07:2021 - Identification and Authentication Failures",
   A08: "A08:2021 - Software and Data Integrity Failures",
   A09: "A09:2021 - Security Logging and Monitoring Failures",
+  A10: "A10:2021 - Server-Side Request Forgery (SSRF)",
 };
 
 // taxonomy string → [CWE short id, OWASP short id | null]. `null` = the CWE is not placed under any
@@ -71,6 +73,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Storage object path without a tenant prefix (cross-tenant object read/overwrite)": ["639", "A01"],
   "Service-role query in a background-job path with no tenant predicate": ["639", "A01"],
   "Unscoped service-role UPDATE/DELETE (no WHERE)": ["639", "A01"],
+  // #455's mapping is unambiguous: OWASP A10:2021 is literally titled "Server-Side Request Forgery
+  // (SSRF)" — same CWE/OWASP pair harvey-ssrf-fetch's own semgrep metadata carries.
+  "M1 — SSRF via an uncurated cross-file fetch wrapper": ["918", "A10"],
   // Server trusting client-side security enforcement.
   "Client-side authorization decision": ["602", "A04"],
   "Client-supplied payment amount trusted by server": ["602", "A04"],
