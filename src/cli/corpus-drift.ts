@@ -73,6 +73,7 @@ import {
   scoreMutationBaseline,
   type DriftExplanation,
 } from "../scan/external-corpus.js";
+import { shardTargets } from "../scan/corpus-shards.js";
 import type { M8CorpusConfig } from "../scan/m8-corpus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -97,10 +98,51 @@ const baselineFindingsPath = flag("--baseline-findings");
 const install = args.includes("--install");
 const m8 = args.includes("--m8");
 
-const targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : EXTERNAL_CORPUS;
+// #1586: `--shard i/n` selects this runner's slice of the corpus so corpus-drift.yml can score the
+// targets in parallel across n machines. Deterministic and coordination-free — every runner computes
+// the same partition and takes its own index. `--target` addresses ONE target for a local run; the
+// two are different addressing modes and combining them is a mistake worth failing on rather than
+// silently letting one win.
+const shardSpec = flag("--shard");
+if (shardSpec && onlySlug) {
+  console.error("--shard and --target are different addressing modes — pass one or the other, not both");
+  process.exit(2);
+}
+
+let targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : EXTERNAL_CORPUS;
 if (targets.length === 0) {
   console.error(`no corpus target "${onlySlug}" — known: ${EXTERNAL_CORPUS.map((t) => t.slug).join(", ")}`);
   process.exit(2);
+}
+
+if (shardSpec) {
+  const [rawIndex, rawCount] = shardSpec.split("/");
+  const shardIndex = Number(rawIndex);
+  const shardCount = Number(rawCount);
+  if (!Number.isInteger(shardIndex) || !Number.isInteger(shardCount)) {
+    console.error(`--shard expects <index>/<count>, e.g. --shard 1/3 — got "${shardSpec}"`);
+    process.exit(2);
+  }
+  // shardTargets asserts the partition is exhaustive and disjoint before returning this slice: a
+  // target silently dropped from the split stops being scored while every shard still exits 0,
+  // which is a coverage change wearing a green tick.
+  let mine: Set<string>;
+  try {
+    mine = new Set(shardTargets(EXTERNAL_CORPUS.map((t) => t.slug), shardIndex, shardCount));
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(2);
+  }
+  targets = targets.filter((t) => mine.has(t.slug));
+  console.error(
+    `shard ${shardIndex}/${shardCount} — scoring ${targets.length} of ${EXTERNAL_CORPUS.length} target(s): ${targets.map((t) => t.slug).join(", ")}`,
+  );
+  // A shard that draws no targets is a partition or shard-count bug, not a fast pass. Failing here
+  // keeps it from reporting green having measured nothing.
+  if (targets.length === 0) {
+    console.error(`shard ${shardIndex}/${shardCount} drew no targets — the partition or the shard count is wrong`);
+    process.exit(2);
+  }
 }
 
 let priorFindingsBySlug: Record<string, Finding[]> | undefined;
@@ -256,6 +298,10 @@ const findingsBySlug: Record<string, Finding[]> = {};
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
   console.error(`\n=== ${target.slug} (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
+  // #1586: the shard weights in corpus-shards.ts are an estimate derived once, from banner
+  // intervals in one run's log. Printing each target's real elapsed time means any run re-measures
+  // them directly, so a weight that has gone stale is visible rather than inferred.
+  const startedAt = Date.now();
   try {
     // #1571: a per-run copy from $HARVEY_CORPUS_CACHE_DIR's pristine checkout when CI has one
     // (set by .github/actions/corpus-clone-cache) — a bare network clone otherwise, exactly as
@@ -379,6 +425,7 @@ for (const target of targets) {
       rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
     }
   } finally {
+    console.error(`  ${target.slug}: ${Math.round((Date.now() - startedAt) / 1000)}s`);
     if (keep) console.error(`  (kept clone: ${dir})`);
     else rmSync(dir, { recursive: true, force: true });
   }
