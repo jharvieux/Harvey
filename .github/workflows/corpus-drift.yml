@@ -59,10 +59,13 @@ jobs:
     name: clone pinned commits + score baselines
     runs-on: ubuntu-latest
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
+    # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
+    # artifact — see "Fetch prior scorecard" below.
     # contents: read is restated because a job-level block replaces (not extends) the top-level one.
     permissions:
       contents: read
       issues: write
+      actions: read
     # 30m still holds with #251's six per-target installs added: measured locally they total ~1m
     # (largest: proposit's 1010 packages in 33s), and CI's cold npm cache is the slack this covers.
     # M8's mutation runs are what genuinely didn't fit here — those are corpus-m8.yml.
@@ -149,16 +152,59 @@ jobs:
           echo "slugs=$(echo "$slugs" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
           echo "Scoring only: $(echo "$slugs" | tr '\n' ' ')"
 
+      # #1564: a DRIFT line names a count moving; it does not say WHICH findings moved,
+      # and both 2026-07-30 incidents this closes (carbon M7 -1, M5-slop -653) were resolved only by
+      # a human cloning the target and diffing by hand. corpus-drift.ts's --baseline-findings flag
+      # turns that into a real added/removed row list — but it needs a PRIOR run's own --json
+      # output to diff against, never a second scan. Every run now writes one (the `findings` key
+      # alongside `rows`, see corpus-drift.ts), so the source is just YESTERDAY's own scorecard
+      # artifact, fetched here and never a fresh clone-and-scan.
+      #
+      # Fail-open, in the safe direction: no prior successful run (first-ever run), an expired
+      # artifact, or a `gh` hiccup all fall through to "not found" rather than failing the job —
+      # corpus-drift.ts already handles a missing/partial prior snapshot by disclosing the fallback
+      # (naming the module's CURRENT findings) rather than staying silent, so the worst case here is
+      # a less detailed explanation, never a broken run.
+      - name: Fetch prior scorecard for --baseline-findings (#1564)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p prior-drift
+          run_id=$(gh run list --repo "${{ github.repository }}" --workflow=corpus-drift.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId // empty' || true)
+          if [ -z "$run_id" ]; then
+            echo "No prior successful corpus-drift run found — proceeding without a baseline snapshot."
+            exit 0
+          fi
+          if gh run download "$run_id" --repo "${{ github.repository }}" -n corpus-drift-scorecard -D prior-drift 2>/dev/null; then
+            echo "Downloaded the corpus-drift-scorecard artifact from run $run_id."
+          else
+            echo "Run $run_id has no corpus-drift-scorecard artifact (expired, or that run errored before uploading) — proceeding without it."
+          fi
+
       - name: Score the corpus against its baselines
         if: ${{ !inputs.liveness_drill }}
         run: |
           set -euo pipefail
           if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
-            pnpm corpus-drift --install --json corpus-drift.json
+            # An array, not a string: an empty baseline_flag expands to zero arguments
+            # (still vanishing when no prior snapshot exists) and a populated one carries
+            # its flag and path as separate words WITHOUT the unquoted-splitting shellcheck
+            # (SC2086) flags on a plain "$baseline_flag" — quoting that string would instead
+            # pass a single glued argument and break the flag.
+            baseline_flag=()
+            [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+            pnpm corpus-drift --install --json corpus-drift.json "${baseline_flag[@]}"
           else
             for t in ${{ steps.targets.outputs.slugs }}; do
               echo "::group::$t"
-              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json"
+              baseline_flag=()
+              if [ -f "prior-drift/corpus-drift-$t.json" ]; then
+                baseline_flag=(--baseline-findings "prior-drift/corpus-drift-$t.json")
+              elif [ -f prior-drift/corpus-drift.json ]; then
+                baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+              fi
+              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" "${baseline_flag[@]}"
               echo "::endgroup::"
             done
           fi

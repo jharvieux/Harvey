@@ -3,7 +3,7 @@
 // free-tier calibration invariant (#261). Layer 1 (src/scan/external-corpus.test.ts) proves the
 // scorers in `pnpm verify` with no network; this is the pass that actually re-measures real repos.
 //
-//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--install] [--m8]
+//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--baseline-findings <path>] [--install] [--m8]
 //
 // --install (#251) installs each clone's own dependency tree before the scanners — with the package
 // manager that clone's lockfile implies, since #1268 — which is what lets knip resolve the target's
@@ -18,7 +18,13 @@
 //
 // Exits non-zero naming the module and target that drifted. A drift is EITHER a precision fix
 // (update that target's baseline in the same PR, with the measured note) OR a regression (fix the
-// scanner) — the run does not guess which, it just refuses to be quiet about the movement.
+// scanner) — the run does not guess which, it just refuses to be quiet about the movement, and
+// (#1564) it no longer stops at the count: every DRIFT line is immediately followed by
+// the ADDED/REMOVED rows that moved (file:line, taxonomy, severity), on by default because the data
+// costs nothing extra to print — it's the same finding list this run already computed. The true
+// added/removed split needs a prior run's row-level output, via --baseline-findings <path> (this
+// run's own --json output already writes one, so tomorrow's run can read today's); without it, the
+// run discloses that and names the module's CURRENT findings instead of guessing or staying silent.
 //
 // Modules scored here are the source-only tier: M4/M5 (quality-scan), M7/M8-intent/M9
 // (detect-static), M8 (mutation-scan --detect-only: only where the absence of a suite IS the
@@ -52,6 +58,7 @@ import { cloneAtPin } from "../scan/corpus-clone.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
+  explainDrift,
   FREE_TIER_EXPECTATIONS,
   isMutationBaseline,
   isNotRun,
@@ -62,6 +69,7 @@ import {
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
+  type DriftExplanation,
 } from "../scan/external-corpus.js";
 import type { M8CorpusConfig } from "../scan/m8-corpus.js";
 
@@ -75,6 +83,12 @@ const flag = (name: string): string | undefined => {
 const onlySlug = flag("--target");
 const jsonOut = flag("--json");
 const keep = args.includes("--keep");
+// #1564: a prior run's OWN --json output (this run's shape also now writes one — see
+// `findingsBySlug` below), so a drift can be EXPLAINED — which rows moved, not just how many —
+// without a second scan. Optional: absent on a target's first-ever run, or a local ad-hoc
+// invocation; explainDrift then falls back to naming the module's current findings instead of a
+// true added/removed split, disclosed as exactly that rather than silently saying nothing.
+const baselineFindingsPath = flag("--baseline-findings");
 // #251/#300: both opt-in because both cost real minutes of install per target. The scheduled jobs
 // pass them (corpus-drift.yml --install, corpus-m8.yml --install --m8); a local run stays fast and
 // scores the source-tier modules exactly as before.
@@ -85,6 +99,16 @@ const targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : 
 if (targets.length === 0) {
   console.error(`no corpus target "${onlySlug}" — known: ${EXTERNAL_CORPUS.map((t) => t.slug).join(", ")}`);
   process.exit(2);
+}
+
+let priorFindingsBySlug: Record<string, Finding[]> | undefined;
+if (baselineFindingsPath) {
+  if (!existsSync(baselineFindingsPath)) {
+    console.error(`--baseline-findings ${baselineFindingsPath} not found — proceeding without a prior snapshot (a drift will name its current findings, not a true added/removed split)`);
+  } else {
+    const parsed = JSON.parse(readFileSync(baselineFindingsPath, "utf8")) as { findings?: Record<string, Finding[]> };
+    priorFindingsBySlug = parsed.findings ?? {};
+  }
 }
 
 // #251: knip resolves a target's config imports only when the target's own deps are present
@@ -213,9 +237,19 @@ interface Row {
   check: string;
   pass: boolean;
   detail: string;
+  // Set only on a count-baseline row (scoreExternalBaseline's output) — the module name, so a
+  // failed row can be explained (explainDrift) against this run's own current findings without
+  // re-parsing it out of `check`. Absent on every other row kind (free tier, M8 mutation, a stale
+  // not-run reason): those aren't a finding-count drift and explainDrift has nothing to say about
+  // them.
+  module?: string;
 }
 
 const rows: Row[] = [];
+// #1564: the current findings this run computed per target, keyed by slug — captured so
+// a drift can be explained from data already in memory, and so THIS run's --json output can serve
+// as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
+const findingsBySlug: Record<string, Finding[]> = {};
 
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
@@ -304,8 +338,10 @@ for (const target of targets) {
         : m10FindingsFromSchema(readMigrationSql(schemaPath))));
     }
 
+    findingsBySlug[target.slug] = findings;
+
     for (const row of scoreExternalBaseline(target, findings)) {
-      rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail });
+      rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail, module: row.module });
     }
 
     // #470: this pass runs no Stryker, so a target whose M8 is a mutation baseline is not
@@ -358,13 +394,42 @@ for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd
 // and `rows.length === 0` throws rather than printing "✓ 0 checks pass" below.
 recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.length} pinned target(s)`);
 
-if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify(rows, null, 2)}\n`);
+// #1564: `findings` alongside `rows` so THIS run's own --json output can serve as a
+// FUTURE run's --baseline-findings — no separate artifact, no second scan, just the same data this
+// run already computed, kept instead of discarded.
+if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug }, null, 2)}\n`);
 
 const failed = rows.filter((r) => !r.pass);
 if (failed.length === 0 && unscored.length === 0) {
   console.error(`\n✓ ${rows.length} checks pass — every module reproduces its baseline and the free-tier invariant holds.`);
   process.exit(0);
 }
-for (const r of failed) console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
+const EXPLAIN_CAP = 20;
+function printExplainRows(label: string, driftRows: { location: string; taxonomy: string; severity: string }[]): void {
+  if (driftRows.length === 0) return;
+  const shown = Math.min(EXPLAIN_CAP, driftRows.length);
+  const suffix = driftRows.length > EXPLAIN_CAP ? ` (showing ${shown} of ${driftRows.length})` : ` (${driftRows.length})`;
+  console.error(`    ${label}${suffix}:`);
+  for (const r of driftRows.slice(0, EXPLAIN_CAP)) console.error(`      ${r.location}  ${r.taxonomy} [${r.severity}]`);
+}
+// On by default, not behind a flag: the data is already in memory from this same run (`current`),
+// costs nothing extra to print, and the reader who most needs the exact rows that moved is the one
+// who did not know to ask for them (both 2026-07-30 incidents this exists for were resolved only by
+// someone cloning the target and diffing by hand — 20+ minutes each).
+function printExplain(r: Row): void {
+  if (!r.module) return; // not a count-baseline row (free tier / M8 mutation / stale not-run reason) — explainDrift has nothing to add
+  const explanation: DriftExplanation = explainDrift(r.module, findingsBySlug[r.slug] ?? [], priorFindingsBySlug?.[r.slug]);
+  if (!explanation.hasBaseline) {
+    console.error(`    no prior findings snapshot for ${r.slug} — pass --baseline-findings <path> (a previous run's --json output) for a true added/removed diff; showing the current ${r.module} finding(s) instead:`);
+    printExplainRows("CURRENT", explanation.current);
+    return;
+  }
+  printExplainRows("ADDED", explanation.added);
+  printExplainRows("REMOVED", explanation.removed);
+}
+for (const r of failed) {
+  console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
+  printExplain(r);
+}
 for (const e of unscored) console.error(`\n✗ NOT SCORED ${e.slug} / free-tier invariant — the check never ran, which is not a pass.`);
 process.exit(1);
