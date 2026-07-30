@@ -1,0 +1,6 @@
+import { renderSelected } from "./multi-select";
+
+// The declared entry is BUILT output (`./dist/index.js`) the source tree does not contain, while
+// the build script names `src/index.ts`. A literal path match against `main`/`exports` misses it
+// and re-marks this whole package as dev tooling.
+export const api = { renderSelected };

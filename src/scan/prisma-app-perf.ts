@@ -333,7 +333,7 @@ export function detectPrismaAppPerfFindings(files: SourceInput[], schema: string
   // generic tier, so a later widening of one keeps the other in step.
   const tooling = devToolingModules(files, sources);
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue;
+    if (tooling.has(path)) continue; // #1528: request-reachable modules are subtracted in devToolingModules
     findings.push(...detectN1(path, sf));
     collectUnindexedFilters(path, sf, schemaModels, filterHits);
   }

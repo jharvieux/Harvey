@@ -1,0 +1,6 @@
+{
+  "name": "@acme/cli",
+  "main": "./cli.ts",
+  "bin": { "acme": "./cli.ts" },
+  "scripts": { "build": "tsup cli.ts" }
+}

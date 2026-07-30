@@ -1,0 +1,6 @@
+{
+  "name": "@acme/ee",
+  "main": "./dist/index.js",
+  "exports": { ".": "./dist/index.js" },
+  "scripts": { "build": "tsup src/index.ts" }
+}
