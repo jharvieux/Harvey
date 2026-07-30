@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkMigrationDrift, expectedRlsEnabled, loadMigrations, type DriftLivePolicy, type DriftLiveTable } from "./supabase-drift.js";
+import { checkMigrationDrift, expectedRlsEnabled, loadMigrations, readDriftPassEvidence, type DriftLivePolicy, type DriftLiveTable } from "./supabase-drift.js";
 
 const table = (name: string, rlsEnabled: boolean, extensionOwned = false): DriftLiveTable => ({ schema: "public", name, rlsEnabled, extensionOwned });
 const policy = (table: string, name: string): DriftLivePolicy => ({ schema: "public", table, name });
@@ -186,5 +186,70 @@ describe("loadMigrations", () => {
 
   it("returns nothing for a path that does not exist", () => {
     expect(loadMigrations(join(tmpdir(), "harvey-drift-does-not-exist"))).toEqual([]);
+  });
+});
+
+// #1280 — M2's scope statement can only say drift WAS observed on an engagement if something proves
+// it. The proof is the connected pass's own recorded artifact, not a flag: these assert the reader
+// distinguishes "compared", "recorded but did not compare", "rejected" and "never recorded".
+describe("readDriftPassEvidence", () => {
+  const NOW = Date.parse("2026-07-30T12:00:00.000Z");
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  const artifactsWith = (artifact: unknown): string => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-drift-pass-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "M1.pass.json"), JSON.stringify(artifact));
+    return dir;
+  };
+
+  const pass = (findings: unknown[], over: Record<string, unknown> = {}) => ({
+    module: "M1",
+    target: "/repo",
+    pass: "connected",
+    generatedAt: "2026-07-30T11:00:00.000Z",
+    findings,
+    ...over,
+  });
+
+  it("reports OBSERVED with the drift-row count when the connected pass compared", () => {
+    const dir = artifactsWith(
+      pass([
+        ...checkMigrationDrift([table("quotes", false)], [], migration(PROTECTED)),
+        { id: "SB-RLS-01", evidence: "unrelated connected-tier row" },
+      ]),
+    );
+    const ev = readDriftPassEvidence(dir, "/repo", NOW);
+    expect(ev).toEqual({ observed: true, generatedAt: "2026-07-30T11:00:00.000Z", driftFindings: 2 });
+  });
+
+  it("reports NOT observed, with the reason, when the pass ran but made no comparison", () => {
+    const dir = artifactsWith(pass(checkMigrationDrift([], [], [])));
+    const ev = readDriftPassEvidence(dir, "/repo", NOW);
+    expect(ev).toMatchObject({ observed: false });
+    expect((ev as { reason: string }).reason).toMatch(/drift comparison did not run/);
+  });
+
+  it("carries the rejection reason rather than dropping a wrong-target artifact", () => {
+    const dir = artifactsWith(pass(checkMigrationDrift([table("quotes", false)], [], migration(PROTECTED)), { target: "/some-other-repo" }));
+    const ev = readDriftPassEvidence(dir, "/repo", NOW);
+    expect(ev).toMatchObject({ observed: false });
+    expect((ev as { reason: string }).reason).toMatch(/not evidence THIS target's M1 ran/);
+  });
+
+  it("carries the rejection reason for a stale artifact", () => {
+    const dir = artifactsWith(pass(checkMigrationDrift([table("quotes", false)], [], migration(PROTECTED)), { generatedAt: "2026-01-01T00:00:00.000Z" }));
+    expect((readDriftPassEvidence(dir, "/repo", NOW) as { reason: string }).reason).toMatch(/stale/);
+  });
+
+  it("is silent — not a rejection — for an M1 pass that is not a connected one, and for no artifact at all", () => {
+    const semantic = artifactsWith(pass([{ id: "M1-SEM-01", evidence: "a semantic triage row" }]));
+    expect(readDriftPassEvidence(semantic, "/repo", NOW)).toBeUndefined();
+    const empty = mkdtempSync(join(tmpdir(), "harvey-drift-pass-"));
+    dirs.push(empty);
+    expect(readDriftPassEvidence(empty, "/repo", NOW)).toBeUndefined();
   });
 });

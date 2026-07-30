@@ -536,3 +536,44 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
     rmSync(single, { recursive: true, force: true });
   });
 });
+
+// #1280 — the seam, not the library. The reader and the ledger are unit-tested in their own files;
+// what is unguarded without this is the WIRING (#1407's lesson: three round-trips proven at library
+// level had their CLI wiring reverted and every test still passed). This asserts the connected
+// pass's artifact reaches the M2 scope statement that ships in M2.pass.json.
+describe("the connected drift pass reaches M2's scope statement (#1280)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-dynval-drift-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const now = () => "2026-07-17T12:00:00.000Z";
+
+  const scopeOf = (findings: Finding[]): Finding => findings.find((f) => f.id === "M2-SCOPE-RECONSTRUCTION")!;
+
+  it("says drift WAS observed on this engagement when a connected pass is recorded for it", () => {
+    writeFileSync(
+      join(dir, "M1.pass.json"),
+      JSON.stringify({
+        module: "M1",
+        target: "/repo",
+        pass: "connected",
+        generatedAt: "2026-07-17T09:00:00.000Z",
+        findings: [
+          { id: "SB-DRIFT-00", evidence: "The deployed database was compared against the end state of 3 committed migration files." },
+          { id: "SB-DRIFT-RLS-public-quotes", evidence: "rls off live" },
+        ],
+      }),
+    );
+    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), plan: plan(), artifactsDir: dir, now, runner: runner() });
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(scopeOf(written.findings).evidence).toMatch(/PROD-VS-MIGRATION DRIFT WAS OBSERVED ON THIS ENGAGEMENT/);
+    expect(scopeOf(written.findings).evidence).toMatch(/1 drift finding\(s\)/);
+  });
+
+  it("keeps the honest not-observed wording when no connected pass was recorded", () => {
+    const clean = mkdtempSync(join(tmpdir(), "harvey-dynval-nodrift-"));
+    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), plan: plan(), artifactsDir: clean, now, runner: runner() });
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(scopeOf(written.findings).evidence).not.toMatch(/WAS OBSERVED ON THIS ENGAGEMENT/);
+    expect(scopeOf(written.findings).evidence).toMatch(/dashboard after the last committed migration/);
+    rmSync(clean, { recursive: true, force: true });
+  });
+});

@@ -230,4 +230,21 @@ describe("runPrismaDynamicValidation", () => {
     expect(r.findings.map((f) => f.id)).toContain("M2-APP-IDOR-OBJECT");
     expect(r.artifactPath).not.toBeNull();
   });
+
+  // #1280 — the Prisma path builds the same M2 scope statement, so it reads the same engagement
+  // evidence. Without this, deleting its one-line wiring leaves the whole suite green.
+  it("reads the engagement's connected pass into its scope statement", () => {
+    const artifacts = join(dir, "artifacts");
+    mkdirSync(artifacts, { recursive: true });
+    writeFileSync(
+      join(artifacts, "M1.pass.json"),
+      JSON.stringify({
+        module: "M1", target: dir, pass: "connected", generatedAt: "2026-07-22T00:00:00.000Z",
+        findings: [{ id: "SB-DRIFT-00", evidence: "The deployed database was compared against the end state of 2 committed migration files." }],
+      }),
+    );
+    const r = run(fakeRunner());
+    const scope = r.findings.find((f) => f.id === "M2-SCOPE-RECONSTRUCTION")!;
+    expect(scope.evidence).toMatch(/PROD-VS-MIGRATION DRIFT WAS OBSERVED ON THIS ENGAGEMENT/);
+  });
 });
