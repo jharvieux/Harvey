@@ -3,14 +3,20 @@
 # exact failure the CLI exists to catch (the funnel dead for six days, nothing reporting it) was
 # still undetected by default, caught only when a human remembered to run it by hand.
 #
-# KNOWN DAY-ONE RED (2026-07-30, refs #1308/#1518). Production predates the `sandboxSender` probe
-# PR #1518 added to src/site-smoke.ts, so `pnpm site-smoke` against https://harvey-qa.com currently
-# fails "requester confirmations send from a verified domain" as UNKNOWN and exits 1. One redeploy
-# clears it; the operator has ruled to hold that redeploy until the sweep this workflow shipped in
-# ends. So the FIRST scheduled runs of this job are expected to be red on that one check alone —
-# this is disclosed here and in the alert body so it reads as "known, awaiting a deploy" rather than
-# a fresh incident. Do not weaken evaluateSmoke (src/site-smoke.ts) to paper over it; do not treat a
-# still-red run past the redeploy as this same known cause without re-checking the job log.
+# KNOWN DAY-ONE RED (2026-07-30, refs #1308/#1518). MEASURED on this PR's own first run against
+# https://harvey-qa.com (run 30562482788): 3 of 6 checks failed, and every one traces to production
+# being older than `main`, not to three separate incidents —
+#   - "declared routes serve 200" / "deployed sitemap matches the repo's": /supabase-load-readiness
+#     404s — a route `main` declares that the live build predates.
+#   - "requester confirmations send from a verified domain": UNKNOWN — production predates the
+#     `sandboxSender` probe PR #1518 added to src/site-smoke.ts.
+# One redeploy clears all three at once; the operator has ruled to hold that redeploy until the
+# sweep this workflow shipped in ends. So the FIRST scheduled runs of this job are expected to be
+# red on exactly this shape — disclosed here and in the alert body so it reads as "known, awaiting a
+# deploy" rather than a fresh incident. Do not weaken evaluateSmoke (src/site-smoke.ts) to paper over
+# it; do not treat a still-red run past the redeploy as this same known cause without re-checking the
+# job log — a NEW failing check, or a failure shape other than "stale build" (5xx, timeout, broken
+# validation, or the site unreachable outright), is a real incident.
 #
 # Distinguishing "couldn't reach the site" from "reached it and it's healthy" (today's lesson,
 # priced in: main's corpus-drift job died at SETUP for days on a poisoned binary cache, reported
@@ -105,4 +111,4 @@ jobs:
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The scheduled `site-smoke` run failed against https://harvey-qa.com (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Read the job log first: a bare error with no per-check breakdown means the run never reached the site (DNS/TLS/connection failure, or a broken `/sitemap.xml` fetch) — a different failure than a full check table with one or more FAIL lines. **Known condition as of 2026-07-30 (refs #1308, #1518):** production predates the `sandboxSender` probe, so \"requester confirmations send from a verified domain\" reports UNKNOWN and fails on that basis alone until the pending redeploy lands. If that is the ONLY failing check, this is the known gap awaiting a redeploy, not a new incident — don't action it as one. If any OTHER check is failing, prospects are hitting a dead end right now (#1308) — treat it as live. Close this issue once the run is green, or once the disclosed condition above is the only thing open."
+          body: "The scheduled `site-smoke` run failed against https://harvey-qa.com (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Read the job log first: a bare error with no per-check breakdown means the run never reached the site (DNS/TLS/connection failure, or a broken `/sitemap.xml` fetch) — a different failure than a full check table with one or more FAIL lines. **Known condition as of 2026-07-30 (refs #1308, #1518):** production predates `main` by design right now (the redeploy that would fix it is deliberately held) — MEASURED to fail 3 checks at once: `/supabase-load-readiness` 404ing (declared-routes and sitemap-match both name it), plus the `sandboxSender` probe reading UNKNOWN. If every failing check below is one of those three, this is that same known gap, not a new incident — don't action it as one. If a DIFFERENT check is failing, or the failure shape is a 5xx/timeout/unreachable-site rather than a stale build, prospects are hitting a dead end right now (#1308) — treat it as live. Resolve this issue once the run is green, or once the checks failing are exactly the disclosed set above."
