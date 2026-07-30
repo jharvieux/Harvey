@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
-import type { LicenseScope } from "../sbom.js";
+import type { LicenseCandidate, LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 
 // High-traffic npm packages a typosquat/slopsquat target would mimic. Not exhaustive.
@@ -192,10 +192,17 @@ function describeManifestSources(from: LicenseScope["declaredFrom"]): string {
 // disclosure row does not admit the limit reads as a clean bill of health.
 //
 // #1350: of those declines, three survived re-testing and one did not. SUP-INSTALL-SCRIPT was
-// disclosed as manifest-only "since a lifecycle script only ever exists in a manifest" — false, and
-// it is now stated as the outstanding gap it is (#1351). The lesson repeats one this repo already
-// names: the decline was written in the same confident register as the three true ones, so nothing
-// in the row's own shape distinguished the claim that held from the claim that did not.
+// disclosed as manifest-only "since a lifecycle script only ever exists in a manifest" — false. The
+// lesson repeats one this repo already names: the decline was written in the same confident
+// register as the three true ones, so nothing in the row's own shape distinguished the claim that
+// held from the claim that did not.
+//
+// #1351 closed the gap the false reason had excused: SUP-INSTALL-SCRIPT-DEP (checkDependencyInstallScripts,
+// below) now reads `hasInstallScript` off every RESOLVED package, transitive ones included — but only
+// when the lockfile is package-lock.json. pnpm-lock.yaml and yarn.lock carry no equivalent per-package
+// flag in the form Harvey parses (MEASURED 2026-07-30: this repo's own pnpm-lock.yaml has zero
+// `hasInstallScript`/`requiresBuild` occurrences despite esbuild — a package with a real postinstall —
+// resolving twice), so that half stays a disclosed, tested gap rather than a silent zero.
 export function supplyChainScopeFinding(s: {
   license: LicenseScope;
   treeNames: number;
@@ -208,16 +215,12 @@ export function supplyChainScopeFinding(s: {
   const manifestOnly = [
     "SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask",
     `SUP-SLOPSQUAT-* over ${s.declaredNames} declared name${s.declaredNames === 1 ? "" : "s"}, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves`,
-    // #1350 CORRECTION. This used to read "since a lifecycle script only ever exists in a manifest",
-    // which is false and, worse, unfalsifiable-sounding: npm lockfile v2/v3 records
-    // `hasInstallScript: true` per RESOLVED package, transitive ones included (MEASURED 2026-07-27,
-    // `grep -c hasInstallScript targets/calibration/package-lock.json` -> 3, two of them the
-    // transitive fsevents no manifest declares). The tree can answer this; Harvey has not yet asked
-    // it. Stated as outstanding work with the issue that owns it, because the old wording forecloses
-    // the very check whose own impact text names Shai-Hulud — a worm that travels by transitive
-    // postinstall, i.e. entirely within the half this row currently excludes.
-    "SUP-INSTALL-SCRIPT, which reads the `scripts` block of the manifests above and so sees only lifecycle scripts THIS project declares. A transitive dependency's own install script is not covered, and that is a gap rather than a boundary: npm's lockfile records `hasInstallScript` for every resolved package, so the data is present and unread (#1351)",
   ];
+  if (s.license.source === "package-lock.json") {
+    treeWide.push("SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351)");
+  } else {
+    manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP, not computable against ${s.license.source}: neither pnpm-lock.yaml nor yarn.lock records a per-package install-script flag in the form Harvey parses (MEASURED 2026-07-30 against this repo's own pnpm-lock.yaml — falsifier: \`grep -c hasInstallScript <the lockfile>\` returning >0 on a real pnpm/yarn project)`);
+  }
   if (s.osvRan) {
     manifestOnly.push("DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows");
   } else {
@@ -428,6 +431,36 @@ export function checkInstallScripts(manifests: readonly { label: string; scripts
       evidence: present.map((p) => (p.manifest === "package.json" ? `${p.hook}: ${p.cmd}` : `${p.manifest} → ${p.hook}: ${p.cmd}`)).join("; "),
       impact: "Install-time scripts run on every `npm install` before any code review — the standard execution foothold for supply-chain worms (Shai-Hulud). Confirm each is expected.",
       fix: "Confirm the script is intentional; install with --ignore-scripts in CI where the build doesn't need it.",
+      precisionTier: "review",
+    }),
+  ];
+}
+
+// #1351: checkInstallScripts (above) reads only the WORKSPACE's own manifest `scripts` blocks — it
+// answers "does this project define an install hook", never "does a package this project depends on
+// define one". That second question is the Shai-Hulud propagation path (a compromised or malicious
+// package's own postinstall running on `npm install`), and it was previously disclosed as
+// unanswerable ("a lifecycle script only ever exists in a manifest") — false: npm's package-lock.json
+// v2/v3 records `hasInstallScript: true` per RESOLVED package, transitive ones included. This reads
+// that field off the whole tree. Always "review": a resolved package running a build/native-addon
+// script during install is common and mostly benign (esbuild, fsevents, sharp, …), so presence alone
+// is not evidence of compromise — matching checkInstallScripts' own posture and how mainstream SCA
+// tools report this class.
+export function checkDependencyInstallScripts(candidates: readonly LicenseCandidate[]): Finding[] {
+  const flagged = candidates.filter((c) => c.hasInstallScript === true);
+  if (flagged.length === 0) return [];
+  const names = flagged.map((c) => (c.version ? `${c.name}@${c.version}` : c.name)).sort();
+  return [
+    mechanicalFinding({
+      id: "SUP-INSTALL-SCRIPT-DEP",
+      title: `${flagged.length} resolved dependenc${flagged.length === 1 ? "y" : "ies"} declare an install-time lifecycle script`,
+      severity: "Medium",
+      category: "Supply chain",
+      taxonomy: "Install lifecycle script (dependency)",
+      location: "package-lock.json (resolved tree)",
+      evidence: names.join(", "),
+      impact: "Install-time scripts run on every `npm install` before any code review — the standard execution foothold for supply-chain worms (Shai-Hulud). This reads the RESOLVED tree, so a transitive dependency's own postinstall is included, not just this project's. Confirm each is expected.",
+      fix: "Audit each listed package's install script; install with --ignore-scripts in CI and allowlist only the packages whose build genuinely needs one.",
       precisionTier: "review",
     }),
   ];

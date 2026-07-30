@@ -1393,6 +1393,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/scan/mechanical.ts": [
     "// diff above can't catch it — and paths.skipped is a distinct silence again. Named here so",
     "// premise, not the symptom: these names are not registry packages, so the registry cannot",
+    "// #1351 — the resolved-tree half checkInstallScripts cannot see (a dependency's OWN install",
     "// #1194 — the OTHER half of tenant scoping, which #760/#901 structurally cannot see: the tenant",
     "// access cannot be reconstructed afterwards, which undercuts the sheet's own detective control.",
     "// Column names are strings inside the query chain, so tsc cannot see the break.",

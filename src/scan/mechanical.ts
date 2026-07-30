@@ -73,7 +73,7 @@ import {
   inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding, type DependencyMap } from "./supply-chain.js";
+import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
 import { licenseScope } from "../sbom.js";
 import { collectWorkspaceManifests } from "../workspaces.js";
@@ -385,6 +385,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkUnpinnedDependencies(declared));
       findings.push(...checkNonRegistryDependencies(declared));
       findings.push(...checkInstallScripts(workspace.manifests));
+      // #1351 — the resolved-tree half checkInstallScripts cannot see (a dependency's OWN install
+      // script, transitive ones included). Reads license.candidates below, which already carries
+      // hasInstallScript when the resolved-tree source is package-lock.json.
+      findings.push(...checkDependencyInstallScripts(license.candidates));
       if (skipNetworkChecks) {
         // #1067 — a deliberately skipped tier is still an unassessed tier. The committed dry-run
         // artifact has to SAY this never ran, or its silence reads as a clean verdict.
