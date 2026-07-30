@@ -32,7 +32,7 @@
 // ever scores is a number nobody has checked.
 
 import { M4_DIVERGED_TAXONOMY } from "../diverged-clones.js";
-import type { Finding } from "../findings.js";
+import type { Finding, Severity } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
@@ -1266,9 +1266,17 @@ export function moduleMatches(taxonomy: string, module: string): boolean {
 // ruling) — excluding Info the way every other module does would score this baseline's `counted`
 // as 0 on every target forever, making the drift check permanently unable to fail. Every match
 // counts here regardless of severity.
-function countedFor(findings: Finding[], module: string): number {
+//
+// Exported (not just counted) so a drift can be EXPLAINED, not just sized (#1564): the
+// same filtered list that decides `actual` is what explainDrift below diffs against a prior run's
+// snapshot to name which rows moved.
+export function countedFindingsFor(findings: Finding[], module: string): Finding[] {
   const includeInfo = module === "M6-indicator";
-  return findings.filter((f) => moduleMatches(f.taxonomy, module) && (includeInfo || f.severity !== "Info")).length;
+  return findings.filter((f) => moduleMatches(f.taxonomy, module) && (includeInfo || f.severity !== "Info"));
+}
+
+function countedFor(findings: Finding[], module: string): number {
+  return countedFindingsFor(findings, module).length;
 }
 
 // #321: the coverage guard fails loud on SILENCE (a module omitted with no reason) but is trusting
@@ -1345,4 +1353,59 @@ export function scoreExternalBaseline(target: ExternalTarget, findings: Finding[
         : `DRIFT ${drift > 0 ? "+" : ""}${drift}: expected ${baseline.counted} counted, got ${actual} — a precision fix (update the baseline) or a regression (fix the scanner)`) + scopeNote,
     }];
   });
+}
+
+// Issue #1564: `scoreExternalBaseline` says a count moved; it does not say WHICH findings
+// moved. Both 2026-07-30 drifts (carbon M7 -1, M5-slop -653 across ten targets) were resolved only
+// by a human cloning the target and diffing the finding sets by hand — the run already computes the
+// CURRENT finding set (`current`, the same list `countedFor` filters to reach `actual` above); what
+// it does NOT hold is the finding set the PRIOR baseline run counted — only that run's bare integer
+// was ever kept (`ModuleBaseline.counted`/`.total`), never its rows. So a true added/removed split
+// needs a prior run's row-level output, which corpus-drift.ts's `--baseline-findings` flag supplies
+// from a PREVIOUS run's own `--json` output (a file already produced for other reasons — the CI
+// scorecard artifact) — never a second scan of this run. When no prior snapshot is available
+// (`baseline` undefined: the first run ever, or a local ad-hoc run with no flag passed), the honest
+// fallback is `current` itself — the module's present-day findings — disclosed as exactly that
+// rather than silently printing an empty added/removed pair that would read as "nothing to explain".
+export interface DriftFindingRow {
+  location: string;
+  taxonomy: string;
+  severity: Severity;
+}
+
+export interface DriftExplanation {
+  hasBaseline: boolean;
+  added: DriftFindingRow[];
+  removed: DriftFindingRow[];
+  // Always populated with the module's current counted findings — the fallback rendering when
+  // hasBaseline is false, and available either way so a caller never has to re-derive it.
+  current: DriftFindingRow[];
+}
+
+function toDriftRow(f: Finding): DriftFindingRow {
+  return { location: f.location, taxonomy: f.taxonomy, severity: f.severity };
+}
+
+// Findings carry no stable cross-run id (M9's #1461 note above shows two "identical-looking" rows
+// can be genuinely different findings) — location + taxonomy is the same identity a human diffing
+// two finding lists by hand would use, and is exactly what #1509's carbon incident named
+// ("packages/react/src/MultiSelect.tsx:153").
+function driftRowKey(f: Finding): string {
+  return `${f.location} ${f.taxonomy}`;
+}
+
+export function explainDrift(module: string, current: Finding[], baseline: Finding[] | undefined): DriftExplanation {
+  const currentSet = countedFindingsFor(current, module);
+  if (!baseline) {
+    return { hasBaseline: false, added: [], removed: [], current: currentSet.map(toDriftRow) };
+  }
+  const baselineSet = countedFindingsFor(baseline, module);
+  const currentKeys = new Set(currentSet.map(driftRowKey));
+  const baselineKeys = new Set(baselineSet.map(driftRowKey));
+  return {
+    hasBaseline: true,
+    added: currentSet.filter((f) => !baselineKeys.has(driftRowKey(f))).map(toDriftRow),
+    removed: baselineSet.filter((f) => !currentKeys.has(driftRowKey(f))).map(toDriftRow),
+    current: currentSet.map(toDriftRow),
+  };
 }
