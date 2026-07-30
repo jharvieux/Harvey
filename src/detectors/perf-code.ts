@@ -339,17 +339,45 @@ const DEV_TOOLING_PATH =
 const PRODUCTION_SCRIPT = /^(start|serve|preview|prod|production)/;
 const SCRIPT_FILE_TOKEN = /(?:^|[\s'"=])(\.{0,2}\/?[\w.@/-]+\.[cm]?[jt]sx?)(?=$|[\s'"&|;])/g;
 
+// A package's own declared production entry (`main`/`module`/`exports`, resolved against ITS OWN
+// dir) — resolved separately from the script scan below, because a workspace package's `dev`/
+// `build` script commonly names that exact file (`tsup src/index.ts --watch`), and that is the
+// package building itself, not a dev/ops tool. Before #1353 taught buildImportGraph to follow a
+// workspace-package specifier, that file's import closure never left its own package, so this
+// never surfaced; now it does, and carbon's `@carbon/ee` -> `@carbon/react` (a workspace import) ->
+// MultiSelect.tsx chain marked a real, request-reachable UI component as "tooling" and silenced its
+// M7 nested-loop-join finding. #1526.
+function packageEntryFiles(pkg: { main?: string; module?: string; exports?: unknown }, dir: string): Set<string> {
+  const out = new Set<string>();
+  const add = (v: unknown): void => {
+    if (typeof v === "string") out.add(dir + v.replace(/^\.\//, ""));
+    else if (v && typeof v === "object") for (const inner of Object.values(v)) add(inner);
+  };
+  add(pkg.main);
+  add(pkg.module);
+  add(pkg.exports);
+  return out;
+}
+
 function scriptReferencedFiles(files: SourceInput[]): Set<string> {
   const out = new Set<string>();
   for (const f of files) {
     if (!/(^|\/)package\.json$/.test(f.path)) continue;
     const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
-    let pkg: { scripts?: Record<string, string>; bin?: string | Record<string, string>; prisma?: { seed?: string } };
+    let pkg: {
+      scripts?: Record<string, string>;
+      bin?: string | Record<string, string>;
+      prisma?: { seed?: string };
+      main?: string;
+      module?: string;
+      exports?: unknown;
+    };
     try {
       pkg = JSON.parse(f.text) as typeof pkg;
     } catch {
       continue; // an unparseable manifest answers nothing; the path arm above still applies
     }
+    const entryFiles = packageEntryFiles(pkg, dir);
     const commands: string[] = [];
     for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) if (!PRODUCTION_SCRIPT.test(name)) commands.push(cmd);
     if (typeof pkg.bin === "string") commands.push(pkg.bin);
@@ -359,7 +387,9 @@ function scriptReferencedFiles(files: SourceInput[]): Set<string> {
       for (const m of cmd.matchAll(SCRIPT_FILE_TOKEN)) {
         const rel = m[1]!.replace(/^\.\//, "");
         if (rel.startsWith("../") || rel.includes("node_modules")) continue;
-        out.add(dir + rel);
+        const abs = dir + rel;
+        if (entryFiles.has(abs)) continue; // this package's own shipped entry, not a dev script
+        out.add(abs);
       }
     }
   }

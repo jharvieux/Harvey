@@ -1,0 +1,5 @@
+import { MultiSelect } from "@acme/react";
+
+export function useMultiSelect() {
+  return MultiSelect;
+}
