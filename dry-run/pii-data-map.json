@@ -613,5 +613,63 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "compliance_case_notes": {
+    "columns": [
+      {
+        "column": "national_id",
+        "infotype": "NATIONAL_ID",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "note",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NATIONAL_ID",
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "SENSITIVE_PII",
+      "PII"
+    ],
+    "severityScore": 2.7,
+    "severity": "Medium",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "compliance_case_notes_archived": {
+    "columns": [
+      {
+        "column": "national_id",
+        "infotype": "NATIONAL_ID",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "note",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NATIONAL_ID",
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "SENSITIVE_PII",
+      "PII"
+    ],
+    "severityScore": 2.7,
+    "severity": "Medium",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

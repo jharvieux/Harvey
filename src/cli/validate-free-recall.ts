@@ -13,9 +13,22 @@
 // That is the free tier as a client gets it. `pii-classify --schema` is NOT invoked separately —
 // quick-scan already runs classifyMigrationSql over the same migrations (src/cli/quick-scan.ts's
 // classifySchema) and feeds it to the scorecard and the cross-signal RLS findings, so a separate
-// invocation would double-count the same input. It emits a data map, not Finding[], so it could not
-// score against an answer key on its own.
+// invocation would double-count the same input.
 //
+// #1582 — an independent acceptance verifier re-checking #1185 found the reason ABOVE this line used
+// to give was FALSE: it said pii-classify "emits a data map, not Finding[], so it could not score
+// against an answer key on its own". `tools/pii-classify.mjs --out` DOES write report-schema
+// Finding[] (dataMapToFindings). The omission is still correct, on the real ground below.
+//
+// REASON: dataMapToFindings sets every M10 finding's `location` to the bare table name (tools/pii-classify.mjs: `location: table`), and matches() in both src/scan/semantic-corpus.ts and src/scan/free-recall-corpus.ts requires the FINDING's location to CONTAIN the answer-key entry's path-shaped `locations` string (`loc.includes(l.toLowerCase())`). A bare table name like "profiles" never contains a path like "app/api/team/route.ts", so an M10 finding can never satisfy any of these five corpora's path-keyed rows — scoring it would add a producer that can only ever miss, never a real recall signal.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-30 by the #1582 verifier — running pii-classify on the vandyand clone yields 5 findings whose `location` values are bare table names (profiles, documents, invoices, line_items); re-confirmed 2026-07-31 by re-reading the current dataMapToFindings and matches() implementations at the cited call sites, and by running `pnpm exec tsx tools/pii-classify.mjs --schema targets/calibration/supabase/migrations --out <tmp>` locally — 24 findings, none with a "/" in `location`.
+// FALSIFIER: out=$(mktemp) && pnpm exec tsx tools/pii-classify.mjs --schema targets/calibration/supabase/migrations --out "$out" >/dev/null 2>&1 || { rm -f "$out"; exit 127; }; node -e "const fs=require('fs'); const f=JSON.parse(fs.readFileSync(process.argv[1])); process.exit(f.some(x=>String(x.location).includes('/'))?0:1)" "$out"
+//
+// Exercised both directions 2026-07-31: exits 1 as committed (every location is still a bare table
+// name, the blocker holds); exits 0 against a copy of the same output with one location rewritten to
+// a path-qualified form (the blocker gone — an M10 finding could then satisfy a path-keyed row);
+// exits 127 against a schema path that does not exist (unverifiable, not "still blocked").
 // Exit 1 when a free-count finding lands on a recorded non-vulnerability, or when NOTHING could be
 // scored. A LOW recall is the measurement, not a failure — see docs/design/free-tier-recall-measurement.md.
 
