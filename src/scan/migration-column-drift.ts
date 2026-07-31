@@ -53,7 +53,7 @@ interface DroppedColumn {
 
 // Migration DDL in apply order. Only directories that carry an ORDERED history are read — a bare
 // root schema.sql is a snapshot, and a snapshot cannot state that anything was ever dropped.
-function readMigrations(dir: string): { file: string; sql: string }[] {
+export function readMigrations(dir: string): { file: string; sql: string }[] {
   const out: { file: string; sql: string }[] = [];
   for (const rel of [join("supabase", "migrations"), join("prisma", "migrations"), "migrations"]) {
     const base = join(dir, rel);
@@ -73,7 +73,7 @@ function readMigrations(dir: string): { file: string; sql: string }[] {
 
 // Blank comments rather than delete them, so a commented-out DROP can't register while line
 // numbers stay accurate — the same handling checkMigrationRlsStatic uses.
-function stripComments(raw: string): string {
+export function stripComments(raw: string): string {
   return raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
 }
 

@@ -19,11 +19,20 @@
 //   GET  /v1/projects/{ref}/config/auth
 // Table/extension/storage-bucket data needs a SQL read, done via the Management API's SQL
 // endpoint:
-//   POST /v1/projects/{ref}/database/query   { query: "<read-only SQL>" }
-// That endpoint's exact request/response envelope was NOT independently re-verified against
-// the live OpenAPI spec in this session (unlike the two GET endpoints above) — confirm the
-// request body key and response shape (bare row array vs. a wrapper object) before the first
-// real hosted run, and adjust managementApiQuery below if it differs.
+//   POST /v1/projects/{ref}/database/query   { query: "<read-only SQL>", read_only: true }
+// #1265 settled that envelope, which had been assumed since the module was written. MEASURED
+// 2026-07-31 against the published spec, captured to
+// src/scan/__fixtures__/supabase/database-query-schema-2026-07-31.json:
+//   - REQUEST — `V1RunQueryBody` requires `query` (string) and accepts optional `parameters` and
+//     `read_only`. Harvey's body key was right; what it was missing is `read_only: true`, now sent.
+//   - STATUS — the documented success code is 201, not 200. `res.ok` already covered it.
+//   - RESPONSE — the spec documents 201 with NO content schema, so it settles nothing on its own.
+//     The shape is confirmed instead against the vendor's own first-party client:
+//     @supabase/mcp-server-supabase 0.9.0, src/platform/api-platform.ts `executeSql`, which returns
+//     `response.data as unknown as T[]` and whose callers `.map()` straight over rows. A BARE ROW
+//     ARRAY, which is what managementApiQuery below has always assumed.
+// What is still not committed is a live 201 BODY from a real project; the residual reason and its
+// falsifier are in src/scan/__fixtures__/supabase/PROVENANCE.md.
 //
 // Local mode (`--supabase local`) targets a `supabase start` stack directly over Postgres
 // (default: postgresql://postgres:postgres@127.0.0.1:54322/postgres) using the `postgres`
@@ -115,6 +124,9 @@ const DRIFT_POLICIES_SQL = `select schemaname as schema, tablename as "table", p
 // call, GET /v1/projects/<ref>/postgrest → HTTP 200): the key IS `db_schema` and its value is a
 // comma-separated list, e.g. "public,graphql_public". The shape is confirmed, so a `[]` from
 // parseExposedSchemas now means the allow-list is genuinely empty, not that the key was misnamed.
+// #1265 re-confirmed it independently against the published spec (captured fixture): `db_schema` is
+// a REQUIRED string on PostgrestConfigWithJWTSecretResponse, so an absent key at runtime is a
+// response-shape change rather than a project without an allow-list.
 // The response ALSO carries the project's `jwt_secret` — extract only what a check needs and never
 // put the raw object into a finding's evidence or a scan artifact.
 interface PostgrestConfig {
@@ -181,12 +193,21 @@ async function managementApiGet<T>(path: string, token: string, fetchImpl: typeo
   return (await res.json()) as T;
 }
 
+// #1265: `read_only: true` is sent on EVERY call, and its absence was a real defect rather than a
+// stylistic one. This endpoint's OAuth scope is `database:write` (spec badge, captured fixture) and
+// its x-fga-permissions list both `database_read` and `database_write`, so a token that can reach it
+// can also mutate the client's project — while every statement this module sends is a read. The
+// vendor's own client sends `read_only` for each of its read tools, and the spec's example for the
+// endpoint is `{ "query": "…", "read_only": true }`. Sending it makes a write-shaped bug in a future
+// query string fail at the API rather than execute against a client's production database.
 async function managementApiQuery<T>(ref: string, sql: string, token: string, fetchImpl: typeof fetch): Promise<T> {
   const res = await fetchImpl(`${MANAGEMENT_API}/projects/${ref}/database/query`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: sql }),
+    body: JSON.stringify({ query: sql, read_only: true }),
   });
+  // The endpoint answers 201, not 200 (captured fixture) — `res.ok` covers both, and
+  // supabase.test.ts pins that so a narrowing to `=== 200` fails rather than breaking every scan.
   if (!res.ok) throw new Error(`Supabase Management API SQL query failed: ${res.status} ${res.statusText}`);
   return (await res.json()) as T;
 }
