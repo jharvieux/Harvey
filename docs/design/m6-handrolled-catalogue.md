@@ -293,11 +293,30 @@ unwound.
 ## Follow-up work this catalogue creates (tracked, not silent)
 
 1. **Measure real frequency** — DONE 2026-07-16 (#406 item 1) and extended 2026-07-18 (#413): the
-   AI-generated corpus tier that #406's follow-up asked for now exists (four AI-authored repos,
-   provenance-tagged), and `pnpm handrolled-frequency` reports per-provenance density — organic
-   ai-generated code carries the catalogue at ~3.4x professional density (measured, in
-   `docs/design/m6-corpus-frequency.md`). Still true: no "common"/"rampant" claim may appear in
-   client-facing text — the AI figure is grounded in 3 organic ai-generated repos, not a client's.
+   AI-generated corpus tier that #406's follow-up asked for now exists (provenance-tagged repos),
+   and `pnpm handrolled-frequency` reports per-provenance density in
+   `docs/design/m6-corpus-frequency.md`.
+
+   **The AI-vs-professional density RATIO that used to be quoted here — "~3.4x professional
+   density" — was WITHDRAWN 2026-07-30 (#1600). Do not restore it, and do not quote a replacement
+   ratio from the per-tier table.** The `provenance` tiers it compares are assigned **by us, by
+   inspection, and are verified by nothing**; a ratio across labels we assigned reports the
+   labelling rather than the code. The same 2026-07-30 run supports either "4.0x" (ai-generated tier) or "1.3x"
+   (all organic AI) depending only on which guessed tiers are grouped, which is the demonstration
+   that the figure reports the labelling rather than the code.
+
+   **What replaced it, and what it found.** `pnpm genai-admission-census --density` compares
+   hand-rolled density WITHIN a single repo between commits whose own author DECLARED GenAI use
+   (`Co-authored-by:` trailer or a message naming an assistant) and commits that did not — same
+   team, same era, same language, and a label we did not assign. Measured 2026-07-30 on the 3 of 18
+   corpus repos that supply both arms: rate ratios **1.32x / 0.90x / 0.79x**, every 95% interval
+   spanning 1, pooled **0.95**. **The difference does not reproduce.** Do not read that as
+   "AI code is fine" either — the population, the arms' known biases and the full result are in
+   `docs/design/m6-corpus-frequency.md`, and they bound it in both directions.
+
+   Still true, and unaffected: no "common"/"rampant" claim may appear in client-facing text — the
+   corpus is a convenience sample selected for scanner calibration, not a client's codebase and not
+   a market sample.
 2. **Next detector batch** — DONE. Batch 2 2026-07-16 (#406 item 2): the eight measured-nonzero
    YES entries (28, 41, 88, 81, 29, 37, 42, 52) shipped in measured order, fixtures first, on the
    `depGatePresent` gate from PR #409. Batch 3 2026-07-18 (#542): the eight organic-AI-tier YES
