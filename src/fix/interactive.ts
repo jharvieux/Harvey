@@ -27,13 +27,16 @@ import { fileOfLocation } from "./produce-plan.js";
 import type { FixPlan } from "./plan.js";
 import { DEFAULT_DIFF_CAP, parseDiffFacts, type DiffCap } from "./rails.js";
 import {
+  baselineCacheKey,
   buildVerificationEvidence,
+  cmdKey,
   detectRunner,
   discoverClientCommands,
   extractCiRunSteps,
   linkNodeModules,
   runBaseline,
   withBaselineWorktree,
+  type BaselineCache,
   type DiscoveredCommand,
 } from "./verify-harness.js";
 import { computeGreen, type CommandRun, type DetectorRun, type VerificationEvidence } from "./verify.js";
@@ -112,6 +115,14 @@ interface IngestInput {
   // hardcoded `clientChecks: []`. Absent ⇒ detectRunner reads it off the target's own lockfile.
   runner?: string;
   attempts?: number; // which escalation attempt produced this diff — recorded in the evidence
+  /**
+   * #1529: a baseline run is the most expensive thing in the pipeline and it is IDENTICAL for every
+   * finding in one batch — same checkout, same pinned commit, same discovered command. Caching it
+   * per call made an N-fix batch run the client's own suite 2N times where it used to run it zero.
+   * Supply one map for the whole batch and each distinct command is baselined once. Absent ⇒ the
+   * old per-call behaviour, which is what a single interactive ingest wants.
+   */
+  baselineCache?: BaselineCache;
 }
 
 // The monorepo rule (§2.1): each workspace the diff touches, plus the root. A file's workspace is
@@ -142,6 +153,13 @@ interface IngestResult {
   green: boolean;
   rejected: boolean; // !green — the diff is not shippable
   rejectReason?: string; // named reason, for the operator and the handoff (fail loud, never silent)
+  /**
+   * What the §2.1 baseline actually cost THIS ingest (#1529). `requested` is every discovered
+   * command; `executed` is the subset this call had to run because no shared cache already held it.
+   * Reported rather than inferred: a batch that shares a cache and a batch that does not are
+   * otherwise indistinguishable in the artifact, which is how the 2N cost went unnoticed.
+   */
+  baseline: { requested: number; executed: number; durationMs: number };
 }
 
 // Run the operator's diff through the existing rails and score it. `green` is DECIDED by computeGreen —
@@ -160,9 +178,40 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
   // §2.1 step 3, computed LAZILY: a baseline run of the client's own suite is the most expensive
   // thing in the pipeline, and a rails-blocked or non-applying diff never needs one. The hook below
   // is only reached once the diff has cleared the apply gate.
+  //
+  // And computed ONCE PER DISTINCT COMMAND across a batch when a cache is supplied (#1529). Only the
+  // commands the cache is missing are run, in one worktree; the results are written back so the next
+  // finding reads them. A FAILING baseline caches exactly like a passing one — that is the point, not
+  // a side effect: every finding sharing that command must still record
+  // `skipped: "pre-existing-failure-on-baseline"`, and dropping the failure from the second fix's
+  // evidence would re-attribute a pre-existing break to the fix.
   let baselineRuns: Map<string, CommandRun> | undefined;
-  const baseline = () =>
-    (baselineRuns ??= withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(commands, root)));
+  let baselineRequested = 0;
+  let baselineExecuted = 0;
+  let baselineMs = 0;
+  const baseline = (): Map<string, CommandRun> => {
+    if (baselineRuns) return baselineRuns;
+    const cache = input.baselineCache;
+    const missing = cache ? commands.filter((c) => !cache.has(baselineCacheKey(input.targetDir, input.baselineCommit, c))) : commands;
+    baselineRequested = commands.length;
+    baselineExecuted = missing.length;
+    const started = Date.now();
+    const fresh = missing.length === 0
+      ? new Map<string, CommandRun>()
+      : withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(missing, root));
+    baselineMs = Date.now() - started;
+    if (!cache) return (baselineRuns = fresh);
+    for (const c of missing) {
+      const run = fresh.get(cmdKey(c));
+      if (run) cache.set(baselineCacheKey(input.targetDir, input.baselineCommit, c), run);
+    }
+    return (baselineRuns = new Map(
+      commands.flatMap((c) => {
+        const run = cache.get(baselineCacheKey(input.targetDir, input.baselineCommit, c));
+        return run ? [[cmdKey(c), run] as const] : [];
+      }),
+    ));
+  };
 
   const execution = executeFixDiff(input.finding.id, input.diff, {
     targetDir: input.targetDir,
@@ -223,5 +272,14 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
             ? `the detector is clean but the client's own checks FAIL after the fix: ${failedChecks.map((c) => `${c.command} (exit ${c.exitCode})`).join(", ")}`
             : `no client verify command could be discovered under ${input.targetDir} — the §2.1 client half cannot be evidenced, so this fix is not verifiable green (add a verify/check/ci/test script, or a pull_request-triggered workflow, to the target)`;
 
-  return { execution, evidence: { ...evidence, green }, green, rejected: !green, rejectReason };
+  return {
+    execution,
+    evidence: { ...evidence, green },
+    green,
+    rejected: !green,
+    rejectReason,
+    // Zeroes here mean the baseline was never REACHED (a rails-blocked or non-applying diff), which
+    // is a different fact from "it ran and cost nothing".
+    baseline: { requested: baselineRequested, executed: baselineExecuted, durationMs: baselineMs },
+  };
 }
