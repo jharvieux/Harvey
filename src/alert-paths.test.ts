@@ -265,13 +265,16 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // MEASURED FALSE the same day — a workflow_dispatch run executes the copy on the ref you name, so
   // a job or input present only on a branch is dispatchable from it (see .github/alert-paths.json's
   // `_why`). ci-main-red-alert (#1507/#1612) was the last occupant whose reason was neither the
-  // circularity nor a missing file: it had narrowed itself honestly to a COST claim — a full red
-  // ci.yml run during a live merge train. #1612 (2026-07-31) priced that claim instead of inheriting
-  // it and it was small: dispatch 20:57:55Z → `PROVED ci-main-red-alert — #1729` at 21:01:50Z, under
-  // four minutes, because the drill fails heavy-cli shard 1 on its first step and only shards 2 and 3
-  // are the wait. Drilled, `provenBy` recorded, hatch dropped — which is the shape every retirement
-  // takes. `pendingProof`'s own behaviour stays covered by the fixture tests above, so naming the
-  // current occupants here does not un-test the mechanism.
+  // circularity nor a missing file, and it was BORN STALE: its `why` said "NOT ATTEMPTED this round"
+  // while the attempt sat two entries above it in the same file. Run 30607143343 — recorded there as
+  // ci-heavy-cli-alert's proof — is a `-f alert_drill=true` dispatch whose job list ends `a red main
+  // raises an alarm  success`, and it opened drill issue #1642 under the ci-main-red-alert marker.
+  // One dispatch proves both of ci.yml's paths, which is what the workflow's own comment says; only
+  // the second half went unrecorded. #1612 (2026-07-31) re-drilled at a known sha (run 30664857256,
+  // issue #1729) and priced the hatch's other claim — "a full red ci.yml run" during a merge train —
+  // at under four minutes. Drilled, `provenBy` recorded, hatch dropped, which is the shape every
+  // retirement takes. `pendingProof`'s own behaviour stays covered by the fixture tests above, so
+  // naming the current occupants here does not un-test the mechanism.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
     // TWO occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
     // default — and both are now the SAME kind, the one case #1333's narrowing left the hatch for.
