@@ -17,13 +17,18 @@
 import type { SourceInput } from "../detectors/common.js";
 import type { Provenance } from "./external-corpus.js";
 
-// #413: AI-authored repos measured for M6 hand-rolled-frequency ONLY — deliberately NOT full
-// ExternalTarget corpus entries. The corpus contract requires MEASURED per-module drift baselines
-// (M4/M5/M7/M8/M9/M10), which cost a full scan + triage per repo to establish honestly; fabricating
-// them would be exactly the junk-number the repo's measure-don't-recall doctrine forbids. The M6
-// frequency question — "do the catalogue's 17 measured-zero YES shapes fire on genuinely
-// AI-generated code?" — needs only the source tree, so these are a lightweight clone-and-count
-// list. Full corpus-drift baselines for these repos are a separate, heavier follow-up (see #413).
+// #413: AI-authored repos measured for M6 hand-rolled-frequency. The M6 frequency question — "do
+// the catalogue's 17 measured-zero YES shapes fire on genuinely AI-generated code?" — needs only
+// the source tree, so this stayed a lightweight clone-and-count list even after #1524 gave three
+// of these four (cravab, flori-web, effective) a full ExternalTarget entry in external-corpus.ts
+// too: the two measurements are independent questions (shape frequency vs. drift baseline) over
+// the SAME pinned tree, so a slug legitimately lives in both lists — handrolled-frequency.test.ts's
+// "never duplicate a slug" check was relaxed to "if a slug is in both, the pin must agree" once
+// that overlap became intentional rather than a bookkeeping accident. `teardown` remains
+// frequency-only per #1524's own scoping: it already serves as a live M1/M2 ground-truth target
+// (the vandyand/saas-security-teardown measurements, verified in #1325) rather than needing a
+// source-tier drift baseline — a fourth full ExternalTarget entry for it is untracked, separate
+// follow-up work, not part of #1524.
 //
 // Source is NEVER vendored (same posture as external-corpus.ts): clone-on-demand only, so AGPL /
 // no-license repos are usable for internal scanning as long as their source isn't copied into

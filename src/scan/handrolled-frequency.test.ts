@@ -42,11 +42,19 @@ describe("catalogue bookkeeping", () => {
     }
   });
 
-  it("AI frequency targets are pinned to a full 40-hex commit and never duplicate a corpus slug", () => {
-    const corpusSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+  it("AI frequency targets are pinned to a full 40-hex commit, and any slug shared with the drift corpus agrees on the pin", () => {
+    // #1524 gave cravab/flori-web/effective a full ExternalTarget entry too — shape frequency and
+    // drift baseline are independent measurements over the SAME pinned tree, so overlap is now
+    // intentional. What must never happen is the bookkeeping accident this check originally
+    // guarded against: the same slug naming two DIFFERENT repos/commits in the two lists.
+    const corpusBySlug = new Map(EXTERNAL_CORPUS.map((t) => [t.slug, t]));
     for (const t of AI_FREQUENCY_CORPUS) {
       expect(t.commit, t.slug).toMatch(/^[0-9a-f]{40}$/);
-      expect(corpusSlugs.has(t.slug), t.slug).toBe(false);
+      const shared = corpusBySlug.get(t.slug);
+      if (shared) {
+        expect(shared.repo, t.slug).toBe(t.repo);
+        expect(shared.commit, t.slug).toBe(t.commit);
+      }
     }
   });
 

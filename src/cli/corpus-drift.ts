@@ -309,6 +309,16 @@ for (const target of targets) {
     // still mutate or delete it freely.
     cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR);
 
+    // #1524: strip any vendored reference subtree BEFORE any scanner or install sees this disposable
+    // clone — schemaPath/installTargetDeps below still resolve against `dir` itself, which this
+    // never touches, only named subdirectories under it.
+    for (const sub of target.vendoredSubtrees ?? []) {
+      const subDir = join(dir, sub);
+      if (!existsSync(subDir)) throw new Error(`${target.slug}: vendoredSubtrees names "${sub}", not found in the cloned tree — the manifest entry is stale`);
+      console.error(`  #1524: removing vendored subtree ${sub}/ before scanning (not this target's own code)`);
+      rmSync(subDir, { recursive: true, force: true });
+    }
+
     // #251: before any scanner — knip needs these present to resolve the target's config.
     if (install) installTargetDeps(dir, target.m8?.installFlags ?? []);
 
