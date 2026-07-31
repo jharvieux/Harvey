@@ -114,7 +114,10 @@ function isDbMutationChain(text: string): boolean {
 //
 // The narrowing is a SUBTRACTION, not a replacement: the text regex stays the primary gate and an
 // action is spared only when the AST can see EVERY mutation-named call in it landing on a built-in
-// collection. An action where the AST models no such call at all keeps firing, so a spelling this
+// collection. #1681's criterion names `.set()` alongside `.delete()`; `set` is not in
+// MUTATION_PATTERN today, so it is already outside the gate and the exclusion for it has a
+// population of zero. `onlyBuiltinCollectionMutations` reads the same MUTATION_PATTERN rather than
+// its own list, so adding `set` there later inherits the exclusion instead of needing a second edit. An action where the AST models no such call at all keeps firing, so a spelling this
 // walk does not understand can only over-report, never silently go dark.
 const BUILTIN_COLLECTION_CTOR = /^(Headers|Map|Set|WeakMap|WeakSet|URLSearchParams|FormData)$/;
 // A property whose value is one of those by platform definition (`request.headers`,
