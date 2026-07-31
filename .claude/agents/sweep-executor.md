@@ -59,7 +59,30 @@ ACCEPTANCE #<issue> no-stated-criteria: <what the bar was>
 - **Every venue is read cumulatively** — the PR body AND every issue comment — and a criterion takes **exactly one** disposition. If your PR closes the issue, put the lines in the PR body ONLY and post no `ACCEPTANCE` comment.
 - Evidence is checked against the **checked-out ref**, so do not cite a file that exists only on your unmerged branch when closing by hand.
 
-Pre-flight with `validate-acceptance --body-file` before opening the PR.
+### Write the body to a FILE, always — this is what makes the pre-flight possible
+
+MEASURED 2026-07-30: the `acceptance` check failed **15 of its last 100 runs**, while every rule
+above was already written down. So the gap is not knowledge, it is the shape of the command.
+
+`gh pr create --body "$(cat <<'EOF' … )"` is the ergonomic path and it silently bypasses BOTH
+safeguards: it never renders `.github/pull_request_template.md` (which carries this whole format),
+and an inline heredoc is not a file, so there is nothing to pre-check. The failure is then a CI
+round-trip instead of a local one.
+
+So the rule is mechanical, not a matter of care:
+
+```bash
+cat > /tmp/pr-body.md <<'EOF'
+…the body, including its ACCEPTANCE lines…
+EOF
+pnpm validate-acceptance --body-file /tmp/pr-body.md --repo <owner/repo>   # must exit 0
+gh pr create --body-file /tmp/pr-body.md …
+```
+
+`--body-file` reads the issues and their comments over `gh` exactly as the PR check does, so a pass
+here is the same verdict CI will reach — including the one-venue rule, which an issue comment you
+posted earlier can silently violate. **Never pass `--body` inline.** If the body is not in a file,
+it was not checked.
 
 ## Closing-keyword hygiene
 
