@@ -198,12 +198,12 @@ function lookup(issue: number, repo?: string): IssueRecord | undefined {
     }
     die(`\`gh issue view ${issue}${repo ? ` --repo ${repo}` : ""}\` failed (exit ${r.status}): ${r.stderr.trim()}\n  A repository that does not RESOLVE is not a repository that does not EXIST — a private repo this token cannot read fails identically — so this stops the run rather than reporting the reference as nonexistent.`);
   }
-  const raw = JSON.parse(r.stdout) as { number: number; state: string; body: string; comments: { body: string }[]; closedByPullRequestsReferences?: { number: number; repository?: { name: string; owner: { login: string } } }[] };
+  const raw = JSON.parse(r.stdout) as { number: number; state: string; body: string; comments: { body: string; url?: string }[]; closedByPullRequestsReferences?: { number: number; repository?: { name: string; owner: { login: string } } }[] };
   const record: IssueRecord = {
     number: raw.number,
     state: raw.state === "OPEN" ? "OPEN" : "CLOSED",
     body: raw.body ?? "",
-    comments: (raw.comments ?? []).map((c) => c.body ?? ""),
+    comments: (raw.comments ?? []).map((c) => ({ body: c.body ?? "", url: c.url })),
     linkedPrs: linkedPrBodies(raw.closedByPullRequestsReferences ?? []),
   };
   cache.set(key, record);
@@ -224,7 +224,7 @@ if (closedIssueFlag) {
     number: number;
     state: string;
     body: string;
-    comments: { body: string }[];
+    comments: { body: string; url?: string }[];
     author: { login: string; is_bot: boolean };
     closedByPullRequestsReferences: { number: number; repository?: { name: string; owner: { login: string } } }[];
   };
@@ -232,7 +232,7 @@ if (closedIssueFlag) {
     number: raw.number,
     state: raw.state === "OPEN" ? "OPEN" : "CLOSED",
     body: raw.body ?? "",
-    comments: (raw.comments ?? []).map((c) => c.body ?? ""),
+    comments: (raw.comments ?? []).map((c) => ({ body: c.body ?? "", url: c.url })),
     linkedPrs: linkedPrBodies(raw.closedByPullRequestsReferences ?? []),
   });
 
