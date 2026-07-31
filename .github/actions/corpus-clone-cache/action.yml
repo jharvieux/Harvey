@@ -1,4 +1,5 @@
-# Cache for the external corpus's pinned clones (#1571). corpus-drift.yml re-clones ~14 repos at
+# Cache for the external corpus's pinned clones (#1571). corpus-drift.yml re-clones the whole pin
+# set (17 repos on 2026-07-31; `pnpm corpus-pins` is the count, never a number retyped here) at
 # FIXED SHAs on every full run — daily schedule, workflow_dispatch, or any PR that touches the
 # harness — and a pinned SHA cannot change, so its clone is safe to reuse until the pin itself is
 # edited.
@@ -10,7 +11,7 @@
 # silently keep running the old one").
 #
 # WHAT'S CACHED: the bare clones only (no `--install` tree, no scan output) — measured 2026-07-30
-# at 663MB for the full 14-target set, well under GitHub's ~10GB per-repo cache budget. The
+# at 663MB for the 14 targets pinned that day, well under GitHub's ~10GB per-repo cache budget. The
 # per-target working copies corpus-drift.ts scans are still disposable mkdtemp COPIES of this
 # cache (src/scan/corpus-clone.ts's cloneAtPinCached), so --install/scanning can freely mutate or
 # delete them without ever touching — or polluting — the cached tree.
@@ -20,8 +21,10 @@
 # it is not hypothetical — it is exactly how this cache poisoned itself on 2026-07-30 (run
 # 30573579859, fixed under #1571):
 #
-#   * corpus-m8.yml clones FOUR of the pinned targets. corpus-drift.yml on a PR clones only the
-#     slugs the diff touched (#1498's narrowing). Both used this key, which hashes all fourteen.
+#   * corpus-m8.yml clones only the targets that carry an M8 config — four of them at the time,
+#     five since #1692, and whatever src/scan/m8-corpus.ts lists next. corpus-drift.yml on a PR
+#     clones only the slugs the diff touched (#1498's narrowing). Both used this key, which hashes
+#     the whole pin set (fourteen then, seventeen today).
 #   * corpus-m8 SUCCEEDED and its post-job save wrote a 4-target tree under the 14-target key at
 #     19:21:58. Thirteen minutes later corpus-drift finished with all fourteen cloned and its own
 #     save was REFUSED — "Unable to reserve cache with key ..., another job may be creating this
@@ -99,7 +102,7 @@ runs:
       run: bash "${{ github.action_path }}/verify-clones.sh" "${{ steps.paths.outputs.cache-dir }}" corpus-pins.txt restore
 
     # The save guard, and the reason a partial entry can no longer be written: this reads the tree
-    # on disk and reports whether it holds all fourteen. It never fails the job — a caller that
+    # on disk and reports whether it holds every pin. It never fails the job — a caller that
     # scores a subset (corpus-m8, or corpus-drift's narrowed PR path) is behaving correctly and is
     # simply not eligible to write this key.
     - id: complete

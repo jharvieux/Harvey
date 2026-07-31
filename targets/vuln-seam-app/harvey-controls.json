@@ -1,0 +1,6 @@
+{
+  "CROSS-SERVICE-WEBHOOK": "/api/webhooks/stripe-verified",
+  "DIRECT-SERVICE-CALL": "/api/internal/reports",
+  "SERVICE-JWT-UNVERIFIED": "/api/ingest/events-verified",
+  "NO-RATE-LIMIT": "/api/checkout"
+}
