@@ -1,0 +1,8 @@
+// The only caller is HERE, in a different module, and it's on the render path: a bare call in the
+// component's own body, not deferred behind a handler or effect.
+import { handleCommandNavigation } from "../lib/helper";
+
+export function SlashCommand() {
+  const el = handleCommandNavigation(null);
+  return <div>{el}</div>;
+}

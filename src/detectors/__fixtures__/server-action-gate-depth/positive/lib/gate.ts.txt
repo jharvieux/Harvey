@@ -1,0 +1,6 @@
+// hop 1. Purely a logging call — no check, no denial.
+import { announceDetail } from "./auth";
+
+export async function announceModeration() {
+  return await announceDetail({ event: "moderate" });
+}

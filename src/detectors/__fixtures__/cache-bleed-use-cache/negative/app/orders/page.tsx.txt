@@ -1,0 +1,17 @@
+import { getServerSession } from "next-auth";
+import { supabase } from "../../lib/db";
+
+// Correct `"use cache"` shape: the identity arrives as an ARGUMENT, which is what the cached
+// scope is keyed on — no session read happens inside the cached function.
+async function orderCountFor(userId: string) {
+  "use cache";
+  const { count } = await supabase.from("orders").select("id", { count: "exact" }).eq("user_id", userId);
+  return count;
+}
+
+export default async function OrdersPage() {
+  const session = await getServerSession();
+  const total = await orderCountFor(session!.user.id);
+
+  return <p>{total}</p>;
+}

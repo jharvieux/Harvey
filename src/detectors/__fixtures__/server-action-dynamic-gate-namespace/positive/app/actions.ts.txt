@@ -1,0 +1,20 @@
+// #1462, split out of the bundled `server-action-dynamic-gate` positive by #1484's criterion-3
+// sweep. ONE shape per fixture.
+//
+// This one: the NAMESPACE form of a dynamic import — `const format = await import("…")`, then
+// `format.normaliseOrgId(…)`. It resolves, and what it resolves to checks nothing. A separate code
+// point from the destructured form next door (`namespaces` rather than `named` in
+// collectDynamicImports, and GateResolver's `site.qualifier` arm rather than its identifier arm),
+// so a fail-open introduced in one leaves the other's row green — which is why they are two rows.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const format = await import("../lib/format");
+  await supabase.from("organisations").update({ name }).eq("id", format.normaliseOrgId(orgId));
+}

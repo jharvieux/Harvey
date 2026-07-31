@@ -1,0 +1,10 @@
+// hop 3. Matches no name on AUTH_PATTERN itself — the real check is one hop further, in
+// `createGuards`'s returned object.
+import { createGuards } from "./guards";
+
+let cached: ReturnType<typeof createGuards> | undefined;
+
+export function getAuthGuards() {
+  if (!cached) cached = createGuards();
+  return cached;
+}

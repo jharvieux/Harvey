@@ -1,0 +1,19 @@
+// #1500 — the FP shape MEASURED on TanStack/tanstack.com's pin (6 rows across
+// showcase.functions.ts / docFeedback.functions.ts). The real check sits 4 resolvable hops from
+// the action, one of them reached only through a helper-wrapped dynamic import, one through a
+// re-export barrel. GATE_DEPTH was 2; both fixes (depth + the wrapper/barrel resolution) are
+// needed together for this to clear — reverting either must turn this red again.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { requireModerate } from "../lib/gate";
+
+const ModerateSchema = z.object({ showcaseId: z.string().uuid(), action: z.enum(["approve", "deny"]) });
+
+export async function moderateShowcase(input: unknown) {
+  const { showcaseId, action } = ModerateSchema.parse(input);
+  await requireModerate();
+
+  await supabase.from("showcases").update({ status: action }).eq("id", showcaseId);
+}

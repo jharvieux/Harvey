@@ -1,0 +1,10 @@
+// The precision boundary for the FAN-OUT half: the mapped array is sliced to a fixed window
+// before the map.
+const MAX_FANOUT = 20;
+
+export async function POST(request: Request) {
+  const { url, ids } = await request.json();
+
+  const results = await Promise.all(ids.slice(0, MAX_FANOUT).map((id: string) => fetch(`${url}/${id}`)));
+  return Response.json(results.length);
+}

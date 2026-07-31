@@ -1,0 +1,4 @@
+// A re-export BARREL — declares nothing itself. `~/auth/index.server` on the real target has the
+// identical shape: `getAuthGuards` is re-exported, not declared, so a resolver that only checks
+// `declaredIn` (never a re-export) dead-ends exactly here.
+export { getAuthGuards } from "./context";

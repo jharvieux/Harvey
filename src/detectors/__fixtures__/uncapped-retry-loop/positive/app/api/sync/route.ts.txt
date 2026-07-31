@@ -1,0 +1,17 @@
+// #1262 — the RETRY half (#1484 split this out of a bundled fixture that used to hold both the
+// retry-loop and fan-out shapes together, sharing one taxonomy/match key). A retry loop whose
+// attempt count comes from the request body.
+export async function POST(request: Request) {
+  const { url, attempts } = await request.json();
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url);
+      return Response.json(await res.json());
+    } catch {
+      // swallow and retry
+    }
+  }
+
+  return Response.json({ ok: false });
+}

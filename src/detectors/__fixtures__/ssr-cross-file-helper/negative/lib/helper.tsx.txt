@@ -1,0 +1,5 @@
+// Same shape as the positive — exported, no in-file call site — but this one's only caller (in the
+// sibling module) is deferred behind a useEffect, so the read never happens during SSR.
+export function handleCommandNavigation(event: unknown) {
+  return document.activeElement;
+}

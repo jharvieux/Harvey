@@ -1,0 +1,27 @@
+// #1462, split out of the bundled `server-action-dynamic-gate` positive by #1484's criterion-3
+// sweep. ONE shape per fixture, and this is the other FAIL-SAFE half.
+//
+// The specifier is a plain string literal — so `dynamicImportSpecifier` DOES evaluate it — but it
+// names a package outside the loaded source set, so `resolveImport` returns nothing. A DIFFERENT
+// code point from the computed positive next door (the `if (resolved)` guard rather than the
+// `specifier === undefined` branch), which is why they are two rows: a fail-open introduced at one
+// leaves the other green.
+//
+// STRENGTHENED the same way its computed sibling is: `../lib/roles` really does export a real gate
+// named `requireAdmin`, and it is right there in this fixture's own tree. The pass must not reach
+// for it — an import of `@vendor/org-utils` says nothing about a same-named export elsewhere in the
+// repo. So the only reason this fires is that the specifier resolves to nothing.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const { requireAdmin } = await import("@vendor/org-utils");
+  await requireAdmin();
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}

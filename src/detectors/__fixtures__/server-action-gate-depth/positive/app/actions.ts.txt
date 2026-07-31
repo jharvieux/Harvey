@@ -1,0 +1,19 @@
+// The adversarial control for #1500: the SAME 4-hop shape as the negative — a helper-wrapped
+// dynamic import and a re-export barrel both resolve successfully all the way to hop 4 — but
+// nothing anywhere in the chain actually checks or denies anything. Raising GATE_DEPTH (and
+// resolving the wrapper/barrel) must not turn "we could follow every hop" into "therefore it's
+// gated" — this must still fire missing-authorization.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { announceModeration } from "../lib/gate";
+
+const ModerateSchema = z.object({ showcaseId: z.string().uuid(), action: z.enum(["approve", "deny"]) });
+
+export async function moderateShowcase(input: unknown) {
+  const { showcaseId, action } = ModerateSchema.parse(input);
+  await announceModeration();
+
+  await supabase.from("showcases").update({ status: action }).eq("id", showcaseId);
+}

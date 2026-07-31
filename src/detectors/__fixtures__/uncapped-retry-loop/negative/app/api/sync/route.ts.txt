@@ -1,0 +1,18 @@
+// The precision boundary for the RETRY half: the attempt count is a numeric constant this pass
+// resolves.
+const MAX_ATTEMPTS = 3;
+
+export async function POST(request: Request) {
+  const { url } = await request.json();
+
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(url);
+      return Response.json(await res.json());
+    } catch {
+      // swallow and retry, capped
+    }
+  }
+
+  return Response.json({ ok: false });
+}

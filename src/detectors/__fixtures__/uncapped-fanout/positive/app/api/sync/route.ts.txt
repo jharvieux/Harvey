@@ -1,0 +1,9 @@
+// #1262 — the FAN-OUT half (#1484 split this out of a bundled fixture that used to hold both the
+// retry-loop and fan-out shapes together, sharing one taxonomy/match key). One outbound call per
+// element of a request-supplied array, with no bound.
+export async function POST(request: Request) {
+  const { url, ids } = await request.json();
+
+  const results = await Promise.all(ids.map((id: string) => fetch(`${url}/${id}`)));
+  return Response.json(results.length);
+}

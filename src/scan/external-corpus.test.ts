@@ -165,9 +165,12 @@ describe("scoreExternalBaseline", () => {
     // The negative control the issue asked for, as a unit: gutting the mutation collector removes
     // every `M1 — … missing authorization check` row and leaves the M9 count untouched. Before this
     // key, that produced NO failing row anywhere in the manifest.
-    const rows = scoreExternalBaseline(target("tanstack-com"), []);
-    expect(rows.find((r) => r.module === "M1-boundary")).toMatchObject({ pass: false, drift: -6 });
-    expect(rows.find((r) => r.module === "M1-boundary")!.detail).toContain("DRIFT -6");
+    // #1500 zeroed tanstack-com's own M1-boundary baseline (6 -> 0, its whole family was cleared),
+    // so this control moved to inbox-zero, whose 5 counted rows are ALL this same taxonomy (see
+    // that baseline's note) rather than a mix with the owner-id class.
+    const rows = scoreExternalBaseline(target("inbox-zero"), []);
+    expect(rows.find((r) => r.module === "M1-boundary")).toMatchObject({ pass: false, drift: -5 });
+    expect(rows.find((r) => r.module === "M1-boundary")!.detail).toContain("DRIFT -5");
   });
 
   it("#1459: keeps the SQL/RLS tier's `M1 — Multi-tenant security` out of the boundary key", () => {

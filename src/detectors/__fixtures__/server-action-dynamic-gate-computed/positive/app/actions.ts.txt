@@ -1,0 +1,34 @@
+// #1462, split out of the bundled `server-action-dynamic-gate` positive by #1484's criterion-3
+// sweep. ONE shape per fixture, and this is the FAIL-SAFE half — the half a regression could break
+// while the bundled row stayed green on its siblings.
+//
+// The specifier is a COMPUTED expression, so `dynamicImportSpecifier` returns undefined and the
+// module goes unidentified. This pass may only ever SUPPRESS, so anything it does not evaluate has
+// to leave the finding standing. Reading "we could not see the module" as "there is a gate in it"
+// is the exact failure #1263's suppression-only constraint exists to prevent.
+//
+// STRENGTHENED over the bundled version it replaces, and this is the point of the split: the
+// fallback names `../lib/roles`, which DOES contain a real gate and sits right there in the
+// fixture tree. So the only reason this must still fire is that the specifier is unevaluable —
+// a fail-open at the `specifier === undefined` branch of collectDynamicImports turns this row red
+// on its own. The bundled version pointed its fallback at a non-gate, which meant it would have
+// fired either way and tested nothing its `named` sibling did not already test.
+//
+// Nor may a future pass "improve" its way past this: `process.env.GATE_MODULE` decides the real
+// module at runtime, so const-folding the `??` fallback would vouch for a module that may never be
+// loaded. This row forbids that permanently.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const specifier = process.env.GATE_MODULE ?? "../lib/roles";
+  const { requireAdmin } = await import(specifier);
+  await requireAdmin();
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}

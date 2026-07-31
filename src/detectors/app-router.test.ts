@@ -331,36 +331,46 @@ describe("client-supplied owner id — widened service-role shapes (#465)", () =
 
 // #1434 — the residual #1263 left: this detector kept the raw-text AUTH_PATTERN test, so a
 // house-style gate was invisible to it and its evidence asserted "makes no auth/session call at
-// all". The corpus pair (M9C-OWNER-GATE-POS/NEG) scores the class; these are the per-shape locks,
-// because one `match` key is satisfied by one finding and the positive dir carries two shapes.
+// all". #1484 split the bundled `owner-id-helper-gate` fixture (logger + comment shapes, one
+// `match` key) into its own dir per shape — see M9C-OWNER-GATE-LOGGER-POS/NEG and
+// M9C-OWNER-GATE-COMMENT-POS/NEG in calibration/m9-checks.entries.ts.
 describe("client-supplied owner id — house-style gate resolution (#1434)", () => {
   it("does not flag a service-role action gated by a resolvable helper that can deny", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/negative"));
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate-logger/negative"));
     expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
     expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
     // Scope control: the fixture WAS scanned. A dir the loader never read reports the same zero.
     expect(taxonomies(findings)).toContain("M9 — Server Action missing input validation");
   });
 
-  it("still flags the two shapes a helper does not gate — a logger, and the word `auth` in a comment", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/positive"));
+  it("still flags a logger that reads the session but cannot deny", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate-logger/positive"));
     const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("updateUserProfile");
+  });
 
-    // One per action: reverting either half of the fix drops one of these and reds this line,
-    // where the corpus entry alone would stay green.
-    expect(hits.map((f) => f.title).join(" ")).toContain("updateUserProfile");
-    expect(hits.map((f) => f.title).join(" ")).toContain("updateUserEmail");
-    expect(hits).toHaveLength(2);
+  it("still flags the word `auth` in a comment, not a real call", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate-comment/positive"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("updateUserEmail");
+  });
+
+  it("does not flag the comment shape's negative, where the same call is real, not commented out", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate-comment/negative"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
   });
 
   it("never claims a helper was read and cleared when none authenticates", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/positive"));
-    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
-
-    for (const f of hits) {
-      // The claim #1434 exists to remove. What replaces it names both what was read and its bound.
-      expect(f.evidence).not.toContain("makes no auth/session call at all");
-      expect(f.evidence).toContain("none in any helper it calls that this pass could resolve");
+    for (const dir of ["owner-id-helper-gate-logger/positive", "owner-id-helper-gate-comment/positive"]) {
+      const findings = detectAppRouterFindings(loadFixtureDir(dir));
+      const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+      for (const f of hits) {
+        // The claim #1434 exists to remove. What replaces it names both what was read and its bound.
+        expect(f.evidence).not.toContain("makes no auth/session call at all");
+        expect(f.evidence).toContain("none in any helper it calls that this pass could resolve");
+      }
     }
   });
 });
@@ -459,18 +469,33 @@ describe("unsafe/missing cache config (MED, best-effort)", () => {
 describe("cross-user cache bleed (HIGH)", () => {
   const BLEED = "M9 — Cross-user cache bleed";
 
-  it("flags per-user data cached under a global key, a session read inside a `use cache` scope, and a public Cache-Control on an authenticated response", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed/positive"));
+  // #1484 split the bundled `cache-bleed` fixture (three shapes, one match key) into one dir per
+  // shape, each with its own corpus pair — see calibration/m9-checks.entries.ts.
+  it("flags per-user data cached under a global unstable_cache key", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed-unstable-cache/positive"));
     const bleeds = findings.filter((f) => f.taxonomy === BLEED);
+    expect(bleeds).toHaveLength(1);
+    expect(bleeds[0]).toMatchObject({ severity: "High", category: "Security", location: "app/orders/page.tsx:7" });
+  });
 
-    expect(bleeds).toHaveLength(3);
-    for (const f of bleeds) expect(f).toMatchObject({ severity: "High", category: "Security" });
-    expect(bleeds.map((f) => f.location).sort()).toEqual(["app/api/invoices/route.ts", "app/dashboard/page.tsx:6", "app/orders/page.tsx:7"]);
+  it("flags a session read inside a `use cache` scope", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed-use-cache/positive"));
+    const bleeds = findings.filter((f) => f.taxonomy === BLEED);
+    expect(bleeds).toHaveLength(1);
+    expect(bleeds[0]).toMatchObject({ severity: "High", category: "Security", location: "app/dashboard/page.tsx:6" });
+  });
+
+  it("flags a public Cache-Control on an authenticated response", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed-cache-control/positive"));
+    const bleeds = findings.filter((f) => f.taxonomy === BLEED);
+    expect(bleeds).toHaveLength(1);
+    expect(bleeds[0]).toMatchObject({ severity: "High", category: "Security", location: "app/api/invoices/route.ts" });
   });
 
   it("stays quiet when the identity is in the cache key, arrives as a `use cache` argument, or the response is private", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed/negative"));
-    expect(taxonomies(findings)).not.toContain(BLEED);
+    for (const dir of ["cache-bleed-unstable-cache/negative", "cache-bleed-use-cache/negative", "cache-bleed-cache-control/negative"]) {
+      expect(taxonomies(detectAppRouterFindings(loadFixtureDir(dir)))).not.toContain(BLEED);
+    }
   });
 
   // The existing missing-config negative caches a non-user-specific `teams` list — it must stay a
@@ -573,16 +598,23 @@ describe("waterfall escape rule: which guards actually skip the second query (#1
     expect(taxonomies(findings)).not.toContain(WATERFALL_TAX);
   });
 
-  // The corpus entry M9C-WATERFALL-ESCAPE-POS scores one fixture dir carrying BOTH shapes, and a
-  // `match` key is satisfied by any one finding — so on its own the entry would stay green with
-  // half the fix reverted. The count is what makes it discriminate: one finding per function, two
-  // functions, so either shape going silent drops it to 1.
-  it("the committed positive fixture yields ONE finding per shape, so neither can regress under the other", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-escape/positive"));
+  // #1484: the bundled `waterfall-escape` fixture carried BOTH shapes in one dir, and a `match` key
+  // is satisfied by any one finding — so its corpus entry would stay green with half the fix
+  // reverted. Split into `waterfall-escape-switch` / `waterfall-escape-loop`, each with its own
+  // corpus pair, so a regression in either shape fails the ROW that names it rather than hiding
+  // behind the other shape's finding.
+  it("the switch-break fixture still fires — the escape rule narrows the switch case, not the pair", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-escape-switch/positive"));
     const hits = findings.filter((f) => f.taxonomy === WATERFALL_TAX);
-    expect(hits).toHaveLength(2);
-    expect(hits.map((f) => f.evidence).join(" ")).toContain("projects");
-    expect(hits.map((f) => f.evidence).join(" ")).toContain("invoices");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("projects");
+  });
+
+  it("the inner-loop-break fixture still fires — the escape rule narrows the loop, not the pair", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("waterfall-escape-loop/positive"));
+    const hits = findings.filter((f) => f.taxonomy === WATERFALL_TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("invoices");
   });
 
   it("does not flag the pair on the strength of a break inside a nested function — that break is not even reachable from here", () => {
@@ -602,6 +634,27 @@ describe("waterfall: aborting guards, and the scope row that counts what is set 
   it("flags two READS separated by an error-only guard — the request ends, so nothing observes the second result", () => {
     const findings = detectAppRouterFindings([{ path: PAGE, text: READ_THEN_READ }]);
     expect(taxonomies(findings)).toContain(WATERFALL_TAX);
+  });
+
+  // #1484: the abort relaxation changes which ERROR surfaces, not just control flow — sequentially
+  // the guard's own throw always wins; under Promise.all a rejection from the second query can
+  // surface instead, which matters on a data layer that REJECTS (Prisma, a raw driver) rather than
+  // returning an error object (Supabase's `.error`). The finding must say so, and only when this
+  // relaxation is actually why the pair fired — not on an ordinary independent pair with no guard.
+  it("names the error-precedence change in the finding's own text when the abort relaxation is why the pair fired", () => {
+    const findings = detectAppRouterFindings([{ path: PAGE, text: READ_THEN_READ }]);
+    const wf = findings.find((f) => f.taxonomy === WATERFALL_TAX);
+    expect(wf?.evidence).toContain("error-only guard between them was excused");
+    expect(wf?.evidence).toContain("Prisma");
+    expect(wf?.fix).toContain("rejecting data layer");
+  });
+
+  it("does not add the error-precedence caveat to an ordinary independent pair with no guard at all", () => {
+    const text = `export default async function Page() {\n  const { data: teams } = await supabase.from("teams").select("id");\n  const { data: projects } = await supabase.from("projects").select("id");\n  return { teams, projects };\n}\n`;
+    const findings = detectAppRouterFindings([{ path: PAGE, text }]);
+    const wf = findings.find((f) => f.taxonomy === WATERFALL_TAX);
+    expect(wf?.evidence).not.toContain("error-only guard between them was excused");
+    expect(wf?.fix).not.toContain("rejecting data layer");
   });
 
   it("treats `throw redirect(...)` the same way — it aborts the request, it does not skip the query", () => {
@@ -650,17 +703,21 @@ describe("waterfall: aborting guards, and the scope row that counts what is set 
 describe("Server Action gate resolution: a resolved callee must be able to deny (#1439)", () => {
   const AUTHZ = "M1 — Server Action missing authorization check";
 
+  // #1484: the bundled `action-gate-strength` fixture carried BOTH shapes in one dir, so its
+  // corpus entry's `match` key would stay green with half the fix reverted. Split into
+  // `action-gate-strength-logger` / `action-gate-strength-discarded`, each with its own pair.
   it("does not accept a LOGGER as a gate, however much its body reads the session", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/positive"));
+    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength-logger/positive"));
     const hits = findings.filter((f) => f.taxonomy === AUTHZ);
-    expect(hits.map((f) => f.title).join(" ")).toContain("renameLogged");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("renameLogged");
   });
 
   it("does not accept a boolean gate whose result is discarded", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/positive"));
+    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength-discarded/positive"));
     const hits = findings.filter((f) => f.taxonomy === AUTHZ);
-    expect(hits.map((f) => f.title).join(" ")).toContain("renameUnchecked");
-    expect(hits).toHaveLength(2);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("renameUnchecked");
   });
 
   it("accepts the same boolean gate once a branch consumes it", () => {
@@ -674,13 +731,35 @@ describe("Server Action gate resolution: a resolved callee must be able to deny 
   });
 
   it("resolves a NAMESPACE-imported gate, so `guards.ensureMember(id)` stops false-firing", () => {
-    const findings = detectAppRouterFindings(loadFixtureDir("action-gate-strength/negative"));
-    expect(taxonomies(findings)).not.toContain(AUTHZ);
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("action-gate-strength-logger/negative")))).not.toContain(AUTHZ);
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("action-gate-strength-discarded/negative")))).not.toContain(AUTHZ);
   });
 
   it("still resolves the named-import gate #1263 shipped — the namespace path is an addition, not a swap", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-helper-gate/negative"));
     expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  // #1500: the dynamic-import-wrapper resolution is narrow ON PURPOSE — only a THIN PASSTHROUGH
+  // (`return [await] import("literal")`, nothing else) counts. A wrapper that does anything else
+  // (extra logic before/after the import) is a shape this pass does not evaluate, so it must leave
+  // the finding standing rather than guessing — the same suppression-only bound every other
+  // resolution step in this file keeps.
+  it("does not resolve a dynamic-import wrapper that does more than passthrough — the finding stays standing", () => {
+    const action = `"use server";\nimport { requireAdmin } from "../lib/roles";\nimport { supabase } from "../lib/db";\nexport async function rename(id: string, name: string) {\n  await requireAdmin();\n  await supabase.from("projects").update({ name }).eq("id", id);\n}\n`;
+    // The real gate is one hop further, in `getAuthenticatedUser` (matches AUTH_PATTERN AND
+    // throws) — reachable only through `loadAuthServer`, whose body does more than passthrough
+    // the dynamic import (`console.log` first), so this pass must not resolve it.
+    const roles = `async function loadAuthServer() {\n  console.log("loading auth server");\n  return import("./auth-helpers");\n}\nexport async function requireAdmin() {\n  const { getAuthenticatedUser } = await loadAuthServer();\n  await getAuthenticatedUser();\n}\n`;
+    const helpers = `export async function getAuthenticatedUser() {\n  const user = await getCurrentUser();\n  if (!user) throw new Error("unauthenticated");\n  return user;\n}\n`;
+    const findings = detectAppRouterFindings([
+      { path: "app/actions.ts", text: action },
+      { path: "lib/roles.ts", text: roles },
+      { path: "lib/auth-helpers.ts", text: helpers },
+    ]);
+    // The real gate lives behind the impure wrapper — unreached, so the action still reads as
+    // missing authorization even though `getAuthenticatedUser` genuinely denies unauthorized callers.
+    expect(taxonomies(findings)).toContain(AUTHZ);
   });
 });
 
@@ -1444,25 +1523,33 @@ describe("TanStack Start boundary adapter (#918)", () => {
 describe("gate reached through a dynamic import (#1462)", () => {
   const AUTHZ = "M1 — Server Action missing authorization check";
 
-  it("resolves `const { x } = await import(…)` two hops out and clears the gated action", () => {
-    // The shape MEASURED on TanStack/tanstack.com: `requireAdmin` binds its real check with a
-    // dynamic import, so #1263's resolver saw a callee that matched nothing and stopped.
-    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/negative"));
-    expect(taxonomies(findings)).not.toContain(AUTHZ);
-  });
+  // #1484 criterion 3, second pass: these four shapes used to live in ONE fixture dir behind ONE
+  // corpus entry that passed on any one of them. They are four dirs and four corpus rows now, and
+  // this suite asserts each on its own fixture rather than counting four evidences in one.
+  const SHAPES = [
+    { shape: "named", why: "a destructured dynamic import that resolves, to a helper that checks nothing" },
+    { shape: "namespace", why: "the namespace form of the same non-gate module" },
+    { shape: "computed", why: "a COMPUTED specifier, so the module goes unidentified" },
+    { shape: "package", why: "a specifier naming a package outside the loaded source set" },
+  ];
 
-  it("leaves EVERY unresolvable or non-gate dynamic-import shape flagged", () => {
-    // The corpus positive passes on any one of these four, which is exactly why they are asserted
-    // individually here: widening resolution must not turn "awaits something it imported
-    // dynamically" into "is gated", and a specifier this pass does not evaluate must leave the
-    // finding standing rather than read as a gate.
-    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/positive"));
-    const flagged = findings.filter((f) => f.taxonomy === AUTHZ).map((f) => f.evidence);
-    expect(flagged).toHaveLength(4);
-    for (const action of ["renameA", "renameB", "renameC", "renameD"]) {
-      expect(flagged.some((e) => e.includes(`\`${action}\``)), `${action} must still be flagged`).toBe(true);
-    }
-  });
+  for (const { shape, why } of SHAPES) {
+    it(`clears the gated action reached through a ${shape} dynamic import`, () => {
+      // The shape MEASURED on TanStack/tanstack.com: `requireAdmin` binds its real check with a
+      // dynamic import, so #1263's resolver saw a callee that matched nothing and stopped.
+      const findings = detectAppRouterFindings(loadFixtureDir(`server-action-dynamic-gate-${shape}/negative`));
+      expect(taxonomies(findings)).not.toContain(AUTHZ);
+    });
+
+    it(`leaves the ${shape} shape flagged — ${why}`, () => {
+      // Widening resolution must not turn "awaits something it imported dynamically" into "is
+      // gated", and a specifier this pass does not evaluate must leave the finding standing.
+      const findings = detectAppRouterFindings(loadFixtureDir(`server-action-dynamic-gate-${shape}/positive`));
+      const flagged = findings.filter((f) => f.taxonomy === AUTHZ).map((f) => f.evidence);
+      expect(flagged).toHaveLength(1);
+      expect(flagged[0]).toContain("`renameOrganisation`");
+    });
+  }
 });
 
 describe("browser global in a module-level helper (#1460)", () => {

@@ -1,0 +1,11 @@
+// hop 2, reached through the same THIN-PASSTHROUGH dynamic-import-wrapper shape as the negative
+// (`loadTelemetry` -> `return import("./telemetry-index")`), so this positive proves the wrapper
+// resolution itself does not manufacture a suppression — only a real gate at the far end may.
+async function loadTelemetry() {
+  return import("./telemetry-index");
+}
+
+export async function announceDetail(input: { event: string }) {
+  const { getTelemetry } = await loadTelemetry();
+  return getTelemetry().announceDetail(input.event);
+}

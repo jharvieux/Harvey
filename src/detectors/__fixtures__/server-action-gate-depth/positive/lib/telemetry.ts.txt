@@ -1,0 +1,11 @@
+// hop 4 — every hop resolves, and NONE of them checks or denies anything. `console.log` matches no
+// name on AUTH_PATTERN, throws nothing, and calls no `redirect`/`notFound`/`forbidden`. The chain
+// must still read as missing-authorization: resolving four hops out is not the same as finding a
+// gate at the end of them.
+export function createTelemetry() {
+  return {
+    announceDetail(event: string) {
+      console.log("moderation event", event);
+    },
+  };
+}

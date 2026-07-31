@@ -1,0 +1,10 @@
+// hop 3. Matches no name on AUTH_PATTERN — the chain bottoms out one hop further, in
+// `createTelemetry`'s returned object, which is where hop 4 finds NO check at all.
+import { createTelemetry } from "./telemetry";
+
+let cached: ReturnType<typeof createTelemetry> | undefined;
+
+export function getTelemetry() {
+  if (!cached) cached = createTelemetry();
+  return cached;
+}

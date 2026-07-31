@@ -1,0 +1,16 @@
+// #1439 — the same real gate as the logger family's negative: `canAccess`-shaped helpers must not
+// be confused with a helper whose RETURN VALUE is actually consumed. Nothing must fire.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import * as guards from "../lib/guards";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  await guards.ensureMember(orgId);
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}

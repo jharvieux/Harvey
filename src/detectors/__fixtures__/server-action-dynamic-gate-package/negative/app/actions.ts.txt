@@ -1,0 +1,18 @@
+// The boundary for the package positive next door, and it is the SAME FILE with ONE variable
+// flipped: the specifier is the in-tree relative path instead of a package name. Same binding, same
+// gate, same call, same mutation. `resolveImport` finds `../lib/roles` in the loaded source set,
+// `requireAdmin` reaches a session read one further dynamic hop in, and nothing must fire.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const { requireAdmin } = await import("../lib/roles");
+  await requireAdmin();
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}
