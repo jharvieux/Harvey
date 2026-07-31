@@ -65,21 +65,26 @@ case "$cmd $sub" in
       data=$(cat "$STORE")
       release
     fi
-    echo "$data" | jq '[.[] | select(.state=="open")] | map({number, title})'
+    # Always includes `body` regardless of the caller's --json list, same as the rest of this mock
+    # ignoring which fields were actually requested — reconcile_duplicates (#1595) reads .body to
+    # extract the run id two open issues must share before one is closed as a duplicate of the other.
+    echo "$data" | jq '[.[] | select(.state=="open")] | map({number, title, body})'
     ;;
   "issue create")
     title=""
+    body=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --title) title="$2"; shift 2 ;;
-        --body|--label) shift 2 ;;
+        --body) body="$2"; shift 2 ;;
+        --label) shift 2 ;;
         *) shift ;;
       esac
     done
     acquire
     data=$(cat "$STORE")
     num=$(echo "$data" | jq '([.[].number] + [0]) | max + 1')
-    data=$(echo "$data" | jq --arg t "$title" --argjson n "$num" '. + [{number: $n, title: $t, state: "open", comments: 0}]')
+    data=$(echo "$data" | jq --arg t "$title" --arg b "$body" --argjson n "$num" '. + [{number: $n, title: $t, body: $b, state: "open", comments: 0}]')
     echo "$data" > "$STORE"
     release
     echo "https://example.invalid/issues/$num"
