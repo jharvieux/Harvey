@@ -252,14 +252,14 @@ if (roots.length > 0) {
 } else {
   // The baseline total is printed whether or not the gate fires. #1318's rule: the output must name
   // the number so it cannot be quietly ignored the way the advisory census was for months.
-  console.log(`\nRatchet (#1318/#1399): ${claimTotal(census)} claim line(s) in repo files against a committed baseline of ${claimTotal(baselineCounts)}. The recorded SET may shrink, never gain a member — a reword is a new member.`);
+  console.log(`\nRatchet (#1318/#1399/#1685): ${claimTotal(census)} claim line(s) in repo files against a committed baseline of ${claimTotal(baselineCounts)}. The recorded SET may shrink, never gain a member — a reword is a new member, and a member that is GONE has to be pruned in the diff, not left behind.`);
   for (const d of drift) {
     failed = true;
     // Only the lines the baseline does not account for. Printing all of them is the guessing game
     // #1318's third criterion names: on a file with a baseline of 18, a breach printed nineteen
     // lines with nothing marking the new one.
     console.error(`\n✗ CLAIM RATCHET  ${d.file} — ${d.baseline} → ${d.now}`);
-    console.error(`    ${d.added.length} line(s) not in the committed baseline for this file (${d.now - d.added.length} carried over, not shown):`);
+    if (d.added.length > 0) console.error(`    ${d.added.length} line(s) not in the committed baseline for this file (${d.now - d.added.length} carried over, not shown):`);
     for (const claim of d.added) {
       console.error(`      NEW  ${d.file}:${claim.line}  ${claim.text.slice(0, 120)}`);
       // #1401 — say where it came from. Repo-wide scoring means a breaching line can be in a file
@@ -279,15 +279,26 @@ if (roots.length > 0) {
     // what let it read as an ordinary new claim. Pairing them is the whole point of the verbatim
     // baseline: the reviewer sees what the claim USED to say next to what it says now.
     if (d.dropped.length > 0) {
-      console.error(`    ${d.dropped.length} baseline line(s) for this file are no longer present. If one pairs with a NEW row above, that claim was REWORDED — read the two together and check the new text is not a stronger claim:`);
+      // #1685 — a DEAD baseline row is a breach in its own right, not a footnote to an added one.
+      // Left unfailed it sat in the baseline forever, inflating the very backlog number this gate
+      // prints. Pruning it has to be an act someone performs in a diff, the way test-only-exports
+      // makes a self-healed row fail rather than dropping it silently.
+      console.error(
+        d.added.length > 0
+          ? `    ${d.dropped.length} baseline line(s) for this file are no longer present. If one pairs with a NEW row above, that claim was REWORDED — read the two together and check the new text is not a stronger claim:`
+          : `    ${d.dropped.length} baseline line(s) for this file are no longer present and nothing replaced them. The claim was retired — prune the row so the recorded count falls deliberately (#1685):`,
+      );
       for (const text of d.dropped) console.error(`      WAS  ${text.slice(0, 120)}`);
     }
   }
-  if (drift.length > 0) {
+  if (drift.some((d) => d.added.length > 0)) {
     console.error(`\n  ${inherited.authored} row(s) AUTHORED on this branch, ${inherited.arrived} INHERITED from the base branch, ${inherited.unknown} unattributable.`);
     if (inherited.arrived > 0) console.error(`  An INHERITED row is not a defect in your diff — it reached the base branch unbaselined. Baseline it and say so; do not go looking for it in your own changes (#1401).`);
     console.error(`\n  Write the new claim as a REASON:/KIND:/PROVENANCE:/FALSIFIER: block (docs/design/recorded-reasons.md) so --revalidate re-tests it,`);
     console.error(`  or run \`pnpm validate-reasons --update-baseline\` and commit the raised number for a human to review.`);
+  }
+  if (drift.some((d) => d.dropped.length > 0)) {
+    console.error(`\n  For the DEAD rows: \`pnpm validate-reasons --update-baseline\` prunes them and the diff shows the recorded set shrinking, which is the direction this ratchet is for (#1685).`);
   }
 }
 
