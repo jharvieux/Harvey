@@ -109,6 +109,107 @@ x-request-source: &request_source
             (..., $RSCPROP, ...) => ...
 # ---------------------------------------------------------------------------------------------
 
+# #1248: the (a2) validator guards, with a failure branch that THROWS instead of returning.
+# Throwing is the idiomatic guard in a Next.js Server Action or route handler under an error
+# boundary, in Express with http-errors/createError, and in NestJS (BadRequestException) — so
+# before this block a correct throwing guard read as a Critical injection. MEASURED 2026-07-31
+# (semgrep 1.164.0): the issue's own repro fired harvey-sql-injection-template at Critical.
+#
+# WHY IT IS A SEPARATE SANITIZER AND NOT A WIDENED ARM. A `return` is unconditionally an exit.
+# A `throw` is an exit only if nothing between the guard and the sink catches it: with the guard
+# inside a `try` whose `catch` swallows, execution continues into the sink with the rejected
+# value live, and a `finally` runs the sink even when the throw propagates. That has no analogue
+# on the return path, so the throw spellings carry a constraint the return spellings do not —
+# the guard must not be lexically inside a try statement. This is deliberately conservative: a
+# guard AND its sink both inside one try (where the throw does skip the sink) is not cleared,
+# which costs precision in the safe direction and never clears a live value.
+# MEASURED 2026-07-31, both directions: with the two pattern-not-inside conjuncts the swallowed
+# and finally-run shapes FIRE; with them deleted both go silent — a real bug cleared by a guard
+# that never protected it. Adversarial positives P-SQLI-THROW-SWALLOWED / P-SQLI-THROW-FINALLY.
+#
+# `throw $E;` rather than `throw ...;`: a throw always carries an operand, so there is no
+# valueless twin to cover the way `return;` needed one.
+x-throw-guard: &throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# #1248: the SCHEMA-validator (a2) guard whose failure branch throws. Same soundness argument and
+# the same two try exclusions as x-throw-guard above, and the same allowlist constraints as the
+# return spelling — an ANCHORED, POSITIVE-class `.regex(...)` or an `.enum([...])` membership list,
+# because a bare `z.string()` accepts everything and `$P.data` IS then the raw input.
+#
+# UNLIKE the return spelling it is `by-side-effect` on `$P`, not a `pattern-inside` region ending
+# at `$P.data`. MEASURED 2026-07-31: semgrep's statement `...` matches DEEPLY, so a region written
+# `safeParse(...); ... if (!$P.success) throw $E; ...` matches a guard nested inside a `try` — and
+# the try exclusions, attached to the `$P.data` use site, sat outside that try and cleared it. Both
+# swallowed-throw fixtures went silent under that form and fire under this one
+# (P-CMD-ZOD-THROW-SWALLOWED, P-CMD-ZOD-ENUM-THROW-SWALLOWED).
+x-throw-schema-guard: &throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # SQL injection via untrusted input interpolated into a template-literal / concatenated SQL
   # string. Taint mode so it fires whether the interpolation is inline in the .query() call or
@@ -237,6 +338,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -268,7 +371,10 @@ rules:
       SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
       it follows the value within this file only. A host allowlist enforced elsewhere — in shared
       middleware, a route wrapper, or a helper the value passes through — is not something this
-      rule reads, so confirm no such guard runs before treating this as unmitigated.
+      rule reads, so confirm no such guard runs before treating this as unmitigated. A host
+      allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the
+      `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself
+      wrapped in try/catch is reported here rather than cleared.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -323,6 +429,53 @@ rules:
                   ...
                   if (!$ALLOW.has($HOST)) return ...;
                   ...
+          - focus-metavariable: $X
+      # #1248: the same projection guard rejecting by THROW. It gets its own sanitizer entry rather
+      # than four more arms above, because the try exclusion the throw spellings need cannot ride on
+      # the same conjuncts. The guard here is required by a `pattern-inside` REGION, and semgrep's
+      # statement `...` matches deeply, so the region spans a guard nested inside a `try` — while
+      # the match the exclusion is tested against is the PROJECTION statement, which in the
+      # swallowed shape sits outside that try. MEASURED 2026-07-31: `pattern-not-inside: try {...}`
+      # alone therefore excludes nothing here, and the swallowed shape is silently cleared. The
+      # third exclusion is what closes it — no `try` may follow the projection at all, which is
+      # deliberately coarser than "no try between the guard and the sink" and errs toward reporting.
+      # Both directions measured on N-REDIRECT-HOST-ALLOWLIST-THROW / P-REDIRECT-HOST-THROW-SWALLOWED.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $HOST = new URL($X).hostname
+              - pattern: $HOST = new URL($X).host
+          - pattern-either:
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) throw $E;
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) throw $E;
+                  ...
+          - pattern-not-inside: |
+              try { ... }
+          - pattern-not-inside: |
+              try { ... } finally { ... }
+          - pattern-not-inside: |
+              $H = new URL(...).hostname;
+              ...
+              try { ... }
+              ...
+          - pattern-not-inside: |
+              $H = new URL(...).host;
+              ...
+              try { ... }
+              ...
           - focus-metavariable: $X
     pattern-sinks:
       - patterns:
@@ -468,6 +621,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -712,7 +867,9 @@ rules:
       reaching the network through a differently-named helper, or through a host allowlist applied
       in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends
       on the deploy network (which internal ranges and metadata endpoints are reachable), which no
-      source scan can determine.
+      source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248)
+      only when no `try` follows the `new URL(...)` projection in the same scope, so a correct
+      guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -743,6 +900,53 @@ rules:
                   if (!$ALLOW.has($HOST)) return ...;
                   ...
           - focus-metavariable: $X
+      # #1248: the same projection guard rejecting by THROW. It gets its own sanitizer entry rather
+      # than four more arms above, because the try exclusion the throw spellings need cannot ride on
+      # the same conjuncts. The guard here is required by a `pattern-inside` REGION, and semgrep's
+      # statement `...` matches deeply, so the region spans a guard nested inside a `try` — while
+      # the match the exclusion is tested against is the PROJECTION statement, which in the
+      # swallowed shape sits outside that try. MEASURED 2026-07-31: `pattern-not-inside: try {...}`
+      # alone therefore excludes nothing here, and the swallowed shape is silently cleared. The
+      # third exclusion is what closes it — no `try` may follow the projection at all, which is
+      # deliberately coarser than "no try between the guard and the sink" and errs toward reporting.
+      # Both directions measured on N-REDIRECT-HOST-ALLOWLIST-THROW / P-REDIRECT-HOST-THROW-SWALLOWED.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $HOST = new URL($X).hostname
+              - pattern: $HOST = new URL($X).host
+          - pattern-either:
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) throw $E;
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) throw $E;
+                  ...
+          - pattern-not-inside: |
+              try { ... }
+          - pattern-not-inside: |
+              try { ... } finally { ... }
+          - pattern-not-inside: |
+              $H = new URL(...).hostname;
+              ...
+              try { ... }
+              ...
+          - pattern-not-inside: |
+              $H = new URL(...).host;
+              ...
+              try { ... }
+              ...
+          - focus-metavariable: $X
       # #1240: (a2) validator-guard on the value the fetch RECEIVES, which the projection guard
       # above structurally does not reach. Needed once the RSC `{ params }` source landed: the sheet's
       # own correct form validates the route segment itself, so without this the rule would fire on
@@ -753,8 +957,13 @@ rules:
       # because MEASURED 2026-07-27 (semgrep 1.164.0) `{ ... throw $E; }` does not match a braceless
       # `if (…) throw new Error(…);` — the shape a Server Component uses, since a bare `return` there
       # renders an empty page instead of erroring. This is #1248's class (throw-based guards read as
-      # vulnerable) closed for ONE rule where the widened source made it urgent; #1248 stays open for
-      # the other twenty.
+      # vulnerable) closed for ONE rule ahead of the issue, where the widened source made it urgent;
+      # #1248 has since closed it for the rest through the shared `*throw_guard` anchor.
+      #
+      # THIS BLOCK NEEDS NO TRY EXCLUSION, which is what the *throw_guard anchor carries — MEASURED
+      # 2026-07-31, not assumed by symmetry. Its guards open `pattern-inside` REGIONS at the guard,
+      # and a region opened inside a `try` does not extend past that try's end, so an RSC page whose
+      # throw guard is swallowed by a catch still fires while its unwrapped twin still clears.
       #
       # `pattern-inside` + a consistency-bound `pattern: $X`, NOT `by-side-effect` like the #989
       # copies: the guarded value here is a PROPERTY ACCESS (`params.id`), not a variable, and
