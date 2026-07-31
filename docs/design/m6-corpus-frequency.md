@@ -219,33 +219,205 @@ Source is never vendored, so the AGPL/no-license repos are scan-only.
 ATC (jharvieux/atc), operator-confirmed all-AI-generated, is a PRIVATE repo and was NOT cloned;
 excluded here rather than guessed (no already-measured M6 frequency numbers exist for it in-repo).
 
-## The headline: AI-generated code carries the catalogue at ~3x professional density
+## WITHDRAWN 2026-07-30 (#1600): the AI-vs-professional density ratio
 
-Per-provenance-tier indicator density (mixed-unit sum — matches/files/findings — so read as an
-order of magnitude, normalised per KLOC of product code the loader sees). Measured 2026-07-18:
+This section used to publish a headline: *"Organic ai-generated code shows ~3.4x the hand-rolled-
+primitive density of professional code (1.10 vs 0.32 per KLOC)."* **That claim is withdrawn.** It is
+not being refreshed with a newer number, because the number's age was never the defect.
+
+**Why.** The ratio is computed across the per-repo `provenance` tiers in
+`src/scan/external-corpus.ts`, and every one of those tiers was assigned **by us, by inspection** — a
+`CLAUDE.md` here, a `Co-Authored-By` trailer there, the tone of a README. Nothing verifies them, and
+nothing ever did. A ratio computed across labels we assigned reports the labelling, on exactly the
+reasoning `CLAUDE.md` already applies to answer keys: an answer key we wrote measures our internal
+consistency rather than our coverage. Two further problems ride along: 18 repos chosen for scanner-calibration
+purposes is a convenience sample, so it supports a claim about itself rather than about AI code *in
+general*, which is how a bolded "~3.4x" reads; and the tiers compare **different repos**, so team, era, domain and language
+mix all vary alongside the label.
+
+**Treat every tier-based number below as bookkeeping.** The `provenance` field stays: it is
+genuinely useful for describing what the corpus contains and for choosing what to add next. What it
+may not do is carry a published comparison. The disclosure this issue requires — that the tiers are
+assigned by inspection and checked by nothing — is recorded as a re-testable claim rather than as
+prose, so that the day someone builds the verifier, this paragraph fails loud instead of quietly
+becoming false:
+
+```
+REASON: the per-repo `provenance` tiers in src/scan/external-corpus.ts are assigned by our own inspection and no tool, test or gate checks one against evidence, so no comparison computed across those tiers is published
+KIND: empirical
+PROVENANCE: MEASURED 2026-07-30 — the field is set as a literal on each corpus entry and read only for grouping and reporting (src/cli/handrolled-frequency.ts, src/cli/genai-admission-census.ts); the repo has no provenance verifier. Exercised in both directions the same day: as committed it exits 1, and with a `src/cli/validate-provenance.ts` present it exits 0.
+FALSIFIER: test -d src/cli || exit 127; ls src/cli/validate-provenance.ts >/dev/null 2>&1 && exit 0 || exit 1
+TOUCHES: src/scan/external-corpus.ts docs/design/m6-corpus-frequency.md
+```
+
+**What the tiers measure today.** Re-measured 2026-07-30 with `pnpm handrolled-frequency` over the
+18-repo pinned corpus (branch base `d41ba3a`). Mixed-unit indicator sum — matches/files/findings —
+normalised per KLOC of the product code the loader sees, so read as an order of magnitude:
 
 | Tier | Repos | Indicators | Product LOC | Indicators / KLOC |
-|---|---|---:|---:|---:|
-| **professional** | subscription-payments, boxyhq, saas-lite | 13 | 41,222 | **0.32** |
-| **ai-assisted** | proposit, effective | 86 | 426,843 | **0.20** |
-| **ai-generated** (organic) | mvp-boilerplate, cravab, flori-web | 151 | 137,661 | **1.10** |
-| unclear | multi-tenant-starter | 3 | 1,526 | 1.97 |
-| curated (weighted separately) | teardown | 7 | 1,409 | 4.97 |
+|---|---:|---:|---:|---:|
+| professional | 5 | 90 | 321,744 | 0.28 |
+| ai-assisted | 6 | 587 | 1,941,955 | 0.30 |
+| ai-generated | 4 | 155 | 137,082 | 1.13 |
+| unclear | 2 | 12 | 7,919 | 1.52 |
+| curated (bucketed separately) | 1 | 7 | 1,409 | 4.97 |
 
-**Organic ai-generated code shows ~3.4x the hand-rolled-primitive density of professional code
-(1.10 vs 0.32 per KLOC).** That is the measured signal #413 asked for, and it is in the expected
-direction: the vibe-coded MVP tier reinvents standard primitives markedly more than maintained
-professional starter kits do.
+**The strongest single reason not to publish any ratio from this table is inside the table.** That
+one run supports either of these sentences, both arithmetically correct:
 
-Two honesty caveats, both measured:
-- **ai-assisted is NOT elevated** (0.20/KLOC, actually below professional). effective (390k of the
-  426k ai-assisted LOC) is higher-skill Effect TS and dilutes the tier — consistent with
-  "capable-dev-with-AI" being a genuinely different population from vibe-coding, which is exactly
-  why the classification keeps them apart. The blended "all organic AI" figure (0.42/KLOC over
-  564k LOC) is therefore an underread, dragged down by effective's size; the ai-*generated* tier is
-  the honest AI-vibe-coding number.
-- **curated (teardown) is highest (4.97/KLOC) but must not be read as an AI-frequency signal** —
-  its shapes are authored to demonstrate bugs, not organic. It is reported and bucketed separately.
+- "AI code carries the catalogue at **4.0x** professional density" — ai-generated 1.13 vs professional 0.28.
+- "AI code carries the catalogue at **1.3x** professional density" — all organic AI (ai-generated + ai-assisted) 0.36 vs professional 0.28.
+
+They differ threefold, and the only thing that moved between them is which of our own guessed tiers
+were grouped together. A figure that swings 3x on a labelling choice is reporting the labelling.
+
+One correction for the record, because the drift is easy to misread in the opposite direction: the
+withdrawn 3.4x was the **ai-generated-tier** comparison (1.10 vs 0.32), and that same quantity
+measures **4.04x** today — it went up, not down. The 1.3x figure quoted while #1600 was being triaged
+is the *blend*, a different quantity. The claim is withdrawn for having no verified ground truth
+underneath it, which is true at any value; had it been withdrawn only for being stale, a re-measure
+would have "confirmed" it.
+
+Two observations that survive as observations about **these 18 repos**, under the label disclosure
+recorded above, and that are not comparisons:
+
+- **The `ai-assisted` tier is not elevated** (0.30/KLOC, level with professional's 0.28). Its two
+  largest members, carbon (1.03M LOC) and effective (390k), are high-skill codebases. Whatever the
+  tier names, it does not behave like the vibe-coded end of the corpus.
+- **`curated` (teardown) is highest at 4.97/KLOC and is not an AI signal at all** — its shapes are
+  authored to demonstrate bugs. It is bucketed separately for that reason.
+
+## What replaced it (#1600 step 2): a within-repo, self-declared comparison — and its NEGATIVE result
+
+The operator ruling on #1600 was option (b): **re-found the claim on a methodology whose ground
+truth does not come from us guessing.** That was done, and the answer is that **the difference does
+not reproduce.**
+
+### The method, and why it is not the old one
+
+`pnpm genai-admission-census --density` (`src/cli/genai-admission-census.ts`). The label is
+**commit-level self-admission**: a commit whose own author declared GenAI involvement, either by a
+`Co-authored-by:` trailer naming an assistant or by naming one in the message. Three properties the
+per-tier ratio never had:
+
+1. **The label is declared, not inferred.** It is written by the commit's author or their tool, not
+   assigned by us from a README's tone.
+2. **The comparison is WITHIN one repo.** Same team, same language, same era, same domain, same
+   reviewers. The per-tier version compared different repos and attributed the difference to the
+   label; every one of those confounds is held constant here.
+3. **Attribution is per line.** `git blame` maps every product line at the pinned commit to the
+   commit that last wrote it; each arm's findings are normalised by that arm's own attributed lines,
+   so the larger arm does not dominate the smaller.
+
+### The population, stated before the result
+
+Measured 2026-07-30 over the 18-repo pinned corpus, at each repo's pinned commit, merges excluded:
+
+- **30,330** commits in corpus history; **21,123** touch product source.
+- **1,112** of those are self-admitted; **20,011** are not.
+- By signal: **1,289** admissions carry a trailer (high precision), **171** are prose-only (low
+  precision — reported separately, never blended).
+- **12 of 18** repos contain at least one self-admission.
+- **3 of 18** supply BOTH arms at ≥30 product-touching commits: **rallly, inbox-zero, carbon**. The
+  other 15 are effectively single-armed — flori-web is 119 admitted against 8 not, boxyhq 0 against
+  342 — and pooling them across repos would rebuild the per-repo confound this design exists to
+  remove, so they are excluded rather than pooled.
+
+That population is the reason the answer is three repos and not eighteen. It is a real limit, and it
+is measured rather than assumed.
+
+### The result
+
+| Repo | AI-declared lines | findings | /KLOC | Not-declared lines | findings | /KLOC | rate ratio | 95% CI |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| rallly | 37,603 | 14 | 0.37 | 35,357 | 10 | 0.28 | **1.32x** | [0.54, 3.31] |
+| inbox-zero | 76,270 | 15 | 0.20 | 164,990 | 36 | 0.22 | **0.90x** | [0.46, 1.69] |
+| carbon | 207,034 | 8 | 0.04 | 822,446 | 40 | 0.05 | **0.79x** | [0.32, 1.72] |
+
+Intervals are exact Poisson rate-ratio intervals (conditional-binomial / Clopper-Pearson). Pooled
+across the three repos as strata (Mantel-Haenszel): **0.95**. Totals: 37 findings in the declared-AI
+arm, 86 in the not-declared arm.
+
+**Every interval includes 1, and two of the three point estimates are BELOW 1** — that is, in
+inbox-zero and carbon the self-declared-AI code carried *fewer* hand-rolled primitives per KLOC than
+the rest of the same repo. **On the only ground truth here that we did not assign ourselves, there is
+no detectable difference in hand-rolled-primitive density between declared-AI code and the rest.**
+
+This is recorded as the finding. It is not a smaller version of the old claim and it is not a
+starting point for tuning: the withdrawn number said 3.4x, the same tiers say 4.0x today, and the
+re-founded method says 0.95x with intervals that span 1. Nothing here licenses restating a
+difference at any magnitude.
+
+### What this result does NOT establish
+
+- **It is not evidence that AI code is the same as human code in general.** Three repos are not a
+  sample of anything, all three sit in the `ai-assisted` tier under the label disclosure recorded
+  above, and the M6
+  hand-rolled catalogue measures one narrow property.
+- **The arms are not clean.** Self-admission is a **biased sample**: the not-declared arm certainly
+  contains AI-written code whose author did not say so, which biases any real difference *toward*
+  the null. A null result under that bias is weaker evidence of no effect than it looks.
+- **Declaration practice is tool-driven.** An assistant that writes a trailer by default produces
+  admissions; one that does not produces none, independent of how much code it wrote.
+- **Blame is last-writer, not author-of-the-logic.** An admitted commit that reformats or moves a
+  file inherits every line it touched.
+- **The counts are small** (8–36 findings per arm). The intervals say so.
+
+### External research — read in full vs. skimmed
+
+Recorded because #1600 requires it, and because quoting an unread number is the defect this section
+exists to correct.
+
+**Read in full (the retrieved PDF, end to end):**
+
+- **Xiao et al., "Self-Admitted GenAI Usage in Open-Source Software"** ([arXiv:2507.10422](https://arxiv.org/pdf/2507.10422), 9pp).
+  Source of the method above. Load-bearing details that came from reading it rather than from a
+  summary: their funnel is 207,062 repositories → 14,785 engineered projects → 3,004 raw mentions →
+  **1,292 true-positive self-admissions across 156 repos**; **1,003 of the 1,292 target COMMIT
+  MESSAGES**, only ~176 target source files, and 1,000 of the 1,009 "PR description" instances come
+  from a single repository. Their prose retrieval kept 1,292 of 3,004 (~43%) after manual review —
+  the reason our prose bucket is reported separately from the trailer bucket. Their Table 7
+  catalogues projects whose policies **prohibit** GenAI contributions, which is the concrete
+  mechanism behind "self-admission is a biased sample". Two departures from them, deliberate: they
+  searched prose for `ChatGPT`/`Copilot` only and did **not** use `Co-authored-by:` trailers, which
+  is the signal that carries almost all of this corpus's admissions (1,289 of 1,460).
+  **Their own RQ3 is the closest published analogue to our question — an RDD on code churn across
+  151 repos at each project's first GenAI mention — and it found NO general increase in churn,
+  explicitly contradicting the GitClear narrative.** Our null is consistent with theirs.
+- **Cotroneo, Improta, Liguori, "Human-Written vs. AI-Generated Code"** ([arXiv:2508.21634](https://arxiv.org/abs/2508.21634), 8pp).
+  Read to decide whether their design transfers. **It does not**, for two reasons only visible in the
+  paper: the corpus is **Python and Java** exclusively (Table II: 285,249 Python / 221,795 Java
+  samples), and the unit is an isolated function **regenerated from its own docstring**. The M6
+  catalogue is about reinventing *ecosystem* primitives in a JS/TS project with a dependency tree —
+  a docstring-scoped function regeneration has no dependency tree to reinvent against. Worth noting
+  in the other direction: they report human-written code carrying *more* maintainability issues and
+  greater structural complexity, which cuts against the direction of the withdrawn claim.
+
+**Read in part:**
+
+- **Suh et al., "An Empirical Study on Automatically Detecting AI-Generated Source Code"**
+  ([arXiv:2411.04299](https://arxiv.org/abs/2411.04299)). The retrieved PDF was 3 pages and appears
+  to be a partial rendering of the paper; those 3 pages were read in full, the rest was not. Only its
+  abstract-level finding is used, read directly rather than via a summary: existing AI-code detectors
+  *"all perform poorly and lack sufficient generalizability to be practically deployed"*, and their
+  own best fine-tuned model reaches F1 82.55. That is the reason no detector-based labelling was
+  attempted here — the declared label was chosen instead.
+
+**Not read (cited nowhere, and no figure from either is used):**
+
+- GitClear's 2025 AI code-quality report and "Maintainability Gap" — vendor reports behind a
+  marketing page; the duplication/churn figures circulating from them are NOT quoted anywhere in this
+  repo. Note Xiao et al. §RQ3 tests the churn claim directly and does not reproduce it.
+- "Impact of GenAI on Code Expertise Models" (arXiv:2507.08160), and the devclass summary piece.
+
+### Cadence
+
+`pnpm genai-admission-census` runs on no schedule, and neither does `pnpm handrolled-frequency` —
+which is exactly why the withdrawn figure survived a 3x growth of the corpus. A scheduled re-measure
+needs a `.github/workflows/` change, a supervised path, so the operator question is recorded on
+#1600 with the proposed wording rather than made here. **Until it is answered, every figure in this
+section is point-in-time**: quote it with its date (2026-07-30) and its corpus base (`d41ba3a`), or
+re-run the tool.
 
 ## #413's core question: which of the 17 measured-zero YES entries now fire?
 
@@ -301,7 +473,8 @@ organic AI code, so it stays a YES-not-yet-graduated candidate in the catalogue.
 2. **Graduation of the 8 candidates above** — DONE 2026-07-18 (#542): all 8 organic-AI-tier YES
    entries shipped as mechanical M6 indicators under the #395 fixture discipline. Entry 76 stays a
    YES candidate (curated-only evidence).
-3. **ATC and a wider organic-AI sample.** ATC is private (excluded here); the ai-generated tier is
-   3 repos. More organic vibe-coded repos on this exact stack (the AI code-gen platforms emit
-   Vite/React without committed Supabase migrations, so the pool is Cursor/Claude-assisted) would
-   tighten the 1.10/KLOC figure and give the 8 still-zero entries a chance to appear.
+3. **A wider organic-AI sample — for COVERAGE, not for the ratio.** ATC is private (excluded here);
+   the ai-generated tier is 4 repos as of 2026-07-30. More repos on this exact stack would give the
+   still-zero entries a chance to appear, which is a genuine reason to add them. It would **not**
+   rehabilitate the withdrawn density ratio: adding repos does not verify the labels, and the ratio
+   was withdrawn for the labels, not the sample size (see the withdrawal section above).
