@@ -209,6 +209,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
+  { id: "validate-supervised-declines", why: "structural — counts merged PR bodies that decline a supervised path with no relay artifact (#1545); a violation count over prose, not a recall or precision number" },
   { id: "validate-semantic-freshness", why: "staleness alarm — reports how old the recorded M1 semantic measurement is, not what it scored (#1270)" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];

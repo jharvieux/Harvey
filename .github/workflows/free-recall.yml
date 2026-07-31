@@ -41,6 +41,10 @@ on:
         description: "Prove the ci-free-recall-alert path fires end-to-end (#1287/#1536). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1569). SKIPS the fetch and scoring steps, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red. Cheap on purpose: nothing is cloned."
+        type: boolean
+        default: false
   # The monthly schedule is the point; the PR trigger exists so a change to the harness or to the
   # answer keys is exercised by the harness. Not a required status check (#1379 owns that decision).
   pull_request:
@@ -97,9 +101,11 @@ jobs:
       # from the refs the answer keys are scoped to. It reports a dead upstream and carries on; only
       # a total fetch failure exits non-zero.
       - name: Fetch the five answer-keyed targets
+        if: ${{ !inputs.liveness_drill }}
         run: pnpm validate:free-recall --clone-into "$RUNNER_TEMP/free-recall-clones"
 
       - name: Score FREE mechanical recall
+        if: ${{ !inputs.liveness_drill }}
         run: |
           pnpm validate:free-recall \
             --clones-dir "$RUNNER_TEMP/free-recall-clones" \
@@ -144,7 +150,7 @@ jobs:
       # work, which is how #1287 found five of them shipped unfired. Never fires on the PR trigger —
       # that failure is already on the PR.
       - name: Open or update the free-recall tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-free-recall-alert

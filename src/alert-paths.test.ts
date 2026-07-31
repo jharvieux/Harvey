@@ -275,7 +275,17 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // new workflow FILE, so the dispatch 404s on the default branch. ATTEMPTED, not assumed — the 404
   // is quoted verbatim in its `why`. Tracked by #1711, one command from retirement once it merges.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-genai-census-alert", "ci-main-red-alert"]);
+    // Three occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
+    // default. `ci-supervised-declines-alert` (#1688, from #1545) and `ci-genai-census-alert`
+    // (#1711, from #1691) both joined the same day and for the SAME reason: their workflow FILE is
+    // not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not.
+    // Both are ATTEMPTED rather than assumed — each `why` quotes the verbatim 404 from the dispatch
+    // API. This list is meant to SHRINK; both retire with one command once their files land.
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
+      "ci-genai-census-alert",
+      "ci-main-red-alert",
+      "ci-supervised-declines-alert",
+    ]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 

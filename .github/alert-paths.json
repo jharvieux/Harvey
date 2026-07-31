@@ -131,7 +131,7 @@
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
       "pendingProof": {
-        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural — the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` — it proves ci-heavy-cli-alert in the same run.",
+        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural \u2014 the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` \u2014 it proves ci-heavy-cli-alert in the same run.",
         "tracking": 1612,
         "since": "2026-07-31"
       }
@@ -173,6 +173,15 @@
       }
     },
     {
+      "workflow": ".github/workflows/supervised-declines.yml",
+      "marker": "ci-supervised-declines-alert",
+      "pendingProof": {
+        "why": "The workflow FILE is not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not \u2014 MEASURED 2026-07-31: `gh api repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f ref=feature/sweep-ci-1545` returned HTTP 404, while ten sibling drills dispatched from that same branch the same hour all ran. The marker label therefore does not exist, and that absence is the evidence \u2014 do not create it by hand.",
+        "tracking": 1688,
+        "since": "2026-07-31"
+      }
+    },
+    {
       "workflow": ".github/workflows/genai-census.yml",
       "marker": "ci-genai-census-alert",
       "pendingProof": {
@@ -198,7 +207,7 @@
     "deleting it: this is the ONE hatch in this gate that fails OPEN. A scheduled workflow listed",
     "here goes red on a branch nobody watches and raises nothing; only the tracking issue carries it,",
     "which is why checkDisclosureTracking re-reads that issue and fails when it is closed. The four",
-    "workflows that sat here — alert-paths, dry-run-drift, osv-staleness, corpus-m8 — now alert and",
+    "workflows that sat here \u2014 alert-paths, dry-run-drift, osv-staleness, corpus-m8 \u2014 now alert and",
     "are recorded above with their drill runs."
   ],
   "scheduledWithoutAlertPath": []

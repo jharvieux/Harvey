@@ -79,7 +79,7 @@ export const GROUND_TRUTH_BUGS: PlantedBug[] = [
     id: "CACHE-CROSS-USER",
     severity: "High",
     location: "pages/api/me/summary.js",
-    ...m2("CACHE-CROSS-USER", "warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache"),
+    ...m2("CACHE-CROSS-USER", "reads the route as Tenant A and again as anon, proving the bug only when the two bodies differ (the response is per-identity) AND it carries a shared-cache directive with no Vary on the credential — or, where a cache really is in front, when anon is served A's tenant_id outright (#1669)"),
   },
   {
     id: "ANON-PRIVILEGED-RPC",

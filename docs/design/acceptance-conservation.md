@@ -411,11 +411,14 @@ closes in one session.
 
 The parity was achieved by **tightening the PR check, never by loosening the close check**:
 
-- `checkAcceptance` reads the issue's own comments as a venue for every issue the PR closes, through
-  the same `IssueLookup` both paths already use. `checkClosedIssue` no longer collects them itself —
-  it passes the linked PR bodies as extra venues and lets the shared path read the comments. **One
-  collection point** is what makes the verdicts agree by construction rather than by two lists being
-  kept in step, which is exactly what failed.
+- `checkAcceptance` reads the issue's own comments **and every linked closing PR's body** as venues,
+  for every issue the PR closes, through the same `IssueLookup` both paths already use.
+  `checkClosedIssue` collects neither itself: it names the issue, and `venuesOf()` builds the surface
+  set for both gates. **One collection point** is what makes the verdicts agree by construction
+  rather than by two lists being kept in step, which is exactly what failed.
+- The PR under test is EXCLUDED from its own linked-PR venues (`selfPr`), because an open PR
+  carrying a closing keyword is already in its issue's `closedByPullRequestsReferences` — without
+  the exclusion every criterion of a correct PR would read as mapped twice.
 - A duplicate names **both venues and both line numbers** (`#1305.1 is mapped 2 times — the PR body,
   line 82; #1305 comment 5, line 7`). A line number alone leaves the author guessing which copy to delete.
 - `--pr` also reads GitHub's own `closingIssuesReferences`, so a **Development-sidebar** close with
@@ -426,10 +429,25 @@ The parity was achieved by **tightening the PR check, never by loosening the clo
   It does read the issues and their comments over `gh`, so the one-disposition-per-criterion rule is
   fully checked on the pre-flight.
 
-Two negative controls hold it: `--selftest` carries the double-venue body and the sidebar close, and
-`src/acceptance-conservation.test.ts` asserts the **invariant** rather than one instance of it — over
-six arrangements of the venues, `checkAcceptance(...).ok === checkClosedIssue(...).ok`, with a
-control proving the assertion can still fail.
+Two negative controls hold it: `--selftest` carries the double-venue body, the sidebar close and the
+two-linked-PR shape, and `src/acceptance-conservation.test.ts` asserts the **invariant** rather than
+one instance of it — over ten arrangements of the venues, `checkAcceptance(...).ok ===
+checkClosedIssue(...).ok`, with a control proving the assertion can still fail.
+
+**#1581 — the same divergence one field over.** The invariant's arrangement space varied body and
+comment arrangements over ONE linked PR, so an issue closed by TWO linked PRs was *beside* the guard
+rather than inside it, and the `--pr` path passed none of the linked PR bodies while the close path
+passed all of them. Reproduced 2026-07-31 before the fix: one criterion dispositioned identically in
+PR A's body and PR B's body, both closing the same issue — `PR-check ok = true | CLOSE-check ok =
+false`. Population, re-measured 2026-07-31 over the WHOLE closed-issue history rather than a
+100-issue window (`gh api graphql`, `closedByPullRequestsReferences(includeClosedPrs: true)`):
+**13 of 850 closed issues (1.5%)** carry two or more — #7, #126, #275, #370, #773, #825, #1063,
+#1200, #1201, #1206, #1212, #1222, #1237. Note the correction: #1581 recorded "2 of the last 100
+(#1212, #1222)", and that same *last-100* window measures **0** today, because 100 further issues
+have closed since and both named instances have fallen out of it. A window that moves is not a
+population. The arrangement space now names the PR under test and the full linked-PR set, and
+`src/cli/validate-acceptance.test.ts` drives the real CLI against a stub `gh` so the FETCH of that
+set has a failing direction too (#1407's class).
 
 ### What it does on failure
 
