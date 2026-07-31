@@ -157,7 +157,7 @@ describe("runSplinter argv (#1297)", () => {
   });
 
   // #1264 — the parser can only recover a piped identifier if psql was asked for a separator the
-  // identifier cannot contain. Revert this to "|" and the pipe-bearing lint above goes back to
+  // identifier will not contain. Revert this to "|" and the pipe-bearing lint above goes back to
   // being unparseable on every real local scan.
   it("asks psql for the unit separator, not the pipe", () => {
     vi.mocked(execFileSync).mockReturnValue("");

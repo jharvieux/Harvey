@@ -4,12 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkEdgeFunctionVerifyJwt,
+  checkMigrationDefinerAnonGrant,
   checkMigrationDefinerAuthz,
+  checkMigrationDynamicSqlInjection,
   checkMigrationPolicySemantics,
   checkMigrationRlsBypass,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
+  checkUnreadSqlSurfaces,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -1081,5 +1084,154 @@ describe("checkMigrationPolicySemantics — USING(true) × M10 PII (#1183)", () 
   it("does not upgrade when the operator DECLARED per-user mode — that is an assertion, not a silence", () => {
     const dir = writeMigrations(openTable("subscribers", ["email text not null"]));
     expect(upgraded(dir, { mode: "per-user" })).toHaveLength(0);
+  });
+});
+
+
+// #1323 — #565 broadened ONE reader (checkMigrationRlsStatic, via readRlsSqlSources) to see a root
+// `schema.sql`. Six sibling checks read SQL through a SECOND loader, readMigrations, which stayed
+// `if (!existsSync(supabase/migrations)) return []` — so on the no-code / Vite export shape, where
+// the whole schema is one root schema.sql, all six returned [] with no not-assessed row.
+//
+// MEASURED 2026-07-30 before the fix, by replaying targets/calibration/supabase/migrations/** (24
+// files, 1180 lines) as a single root schema.sql: policy-semantics 11 -> 0, RLS-initplan 7 -> 0,
+// definer-authz 2 -> 0, definer-anon-grant 1 -> 0, dynamic-SQL-injection 1 -> 0, storage-buckets
+// 3 -> 2 (its bucket-insert half already read the broadened source; its storage.objects policy half
+// did not).
+//
+// This suite is the BLOCKING guard, and it exists because the corpus alone is not one: the six
+// matching entries in b13-supa.entries.ts are review-tier, and `validate-calibration` prints a
+// review-tier miss as a tracked non-fatal gap and still exits 0. MEASURED the same day: with
+// readMigrations reverted, the live gate listed all five newly-dark rows under "Review-tier recall
+// gaps" and exited 0. So the corpus makes the regression VISIBLE; this makes it FAIL.
+describe("root schema.sql feeds every static SQL check, not just the RLS one (#1323)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const SQL = `
+create table public.invoices (id uuid primary key, tenant_id uuid not null, owner_id uuid not null);
+alter table public.invoices enable row level security;
+create policy invoices_read on public.invoices for select to authenticated using (true);
+create policy invoices_own on public.invoices for update to authenticated using (owner_id = auth.uid());
+
+create or replace function public.set_role(target_user_id uuid, new_role text)
+returns void language plpgsql security definer as $$
+begin
+  update public.profiles set role = new_role where id = target_user_id;
+end;
+$$;
+
+create or replace function public.search_invoices(p_filter text)
+returns setof public.invoices language plpgsql security definer as $$
+begin
+  return query execute 'select * from public.invoices where id::text like ''%' || p_filter || '%''';
+end;
+$$;
+
+create or replace function public.all_invoices()
+returns setof public.invoices language plpgsql security definer as $$
+begin
+  return query select * from public.invoices;
+end;
+$$;
+grant execute on function public.all_invoices() to anon;
+
+insert into storage.buckets (id, name, public) values ('attachments', 'attachments', true);
+create policy attachments_public_read on storage.objects for select to anon using (bucket_id = 'attachments');
+`;
+
+  // One case per check, each asserting the finding is LOCATED in the file under test — not merely
+  // that the count is non-zero, which a finding sourced from anywhere else would also satisfy.
+  //
+  // checkMigrationStorageBuckets is split in two on purpose: its bucket-insert half already read the
+  // broadened source (#565), so only its storage.objects-policy half went dark here. Rolled into one
+  // row it would have passed the reverted control and reported the check as guarded when half of it
+  // was not — measured, that is exactly what happened before this split.
+  const CHECKS: [string, (dir: string) => { id: string; location: string }[]][] = [
+    ["checkMigrationPolicySemantics", (d) => checkMigrationPolicySemantics(d).filter((f) => f.id !== "SB-RLS-TENANCY-MODEL")],
+    ["checkMigrationDefinerAuthz", checkMigrationDefinerAuthz],
+    ["checkMigrationDynamicSqlInjection", checkMigrationDynamicSqlInjection],
+    ["checkMigrationDefinerAnonGrant", checkMigrationDefinerAnonGrant],
+    ["checkMigrationStorageBuckets — public bucket insert", (d) => checkMigrationStorageBuckets(d).filter((f) => f.id.startsWith("SB-STORAGE-PUBLIC-BUCKET"))],
+    ["checkMigrationStorageBuckets — storage.objects anon policy", (d) => checkMigrationStorageBuckets(d).filter((f) => f.id.startsWith("SB-STORAGE-ANON-READ"))],
+    ["checkMigrationRlsInitplanStatic", checkMigrationRlsInitplanStatic],
+  ];
+
+  for (const [name, check] of CHECKS) {
+    it(`${name} reads a root schema.sql`, () => {
+      root = mkdtempSync(join(tmpdir(), "harvey-rootschema-"));
+      writeFileSync(join(root, "schema.sql"), SQL);
+
+      const found = check(root);
+      expect(found.length).toBeGreaterThan(0);
+      expect(found.every((f) => f.location.startsWith("schema.sql"))).toBe(true);
+    });
+  }
+
+  // The other direction: the broadened reader must not have LOST the migrations path it already had.
+  it("still reads supabase/migrations when that is where the schema lives", () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-rootschema-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001.sql"), SQL);
+
+    for (const [name, check] of CHECKS) {
+      const found = check(root);
+      expect(found.length, name).toBeGreaterThan(0);
+      expect(found.every((f) => f.location.startsWith("supabase/migrations/0001.sql")), name).toBe(true);
+    }
+  });
+});
+
+
+// #1323 — the reader's own bound, stated. Two surfaces are read (supabase/migrations/*.sql and a
+// root schema.sql); everything else is SQL nobody looked at, and an empty static-SQL section reads
+// as a clean bill of health. Population is measured, not assumed: `git ls-files 'targets/**/*.sql'`
+// on 2026-07-30 returns targets/calibration/public/backup.sql and targets/calibration/supabase/
+// seed.sql outside the read surfaces — and `supabase/seed.sql` is a standard Supabase layout file
+// that can legitimately carry `create policy` or `insert into storage.buckets`.
+describe("M1-SQL-SCOPE-00 — SQL the static pass did not read is counted, not silent (#1323)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function plant(files: Record<string, string>): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-sqlscope-"));
+    for (const [rel, body] of Object.entries(files)) {
+      const full = join(root, rel);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, body);
+    }
+    return root;
+  }
+
+  it("names every .sql outside the two read surfaces, and counts them", () => {
+    const dir = plant({
+      "schema.sql": "create table public.t (id uuid primary key);",
+      "supabase/migrations/0001.sql": "alter table public.t enable row level security;",
+      "db/schema.sql": "create policy t_all on public.t for select using (true);",
+      "supabase/seed.sql": "insert into public.t values (gen_random_uuid());",
+    });
+    const [row] = checkUnreadSqlSurfaces(dir);
+
+    expect(row?.id).toBe("M1-SQL-SCOPE-00");
+    expect(row?.title).toContain("2 SQL file(s)");
+    expect(row?.evidence).toContain("db/schema.sql");
+    expect(row?.evidence).toContain("supabase/seed.sql");
+    // The two surfaces that WERE read must not be listed as skipped, or the row cries wolf on
+    // every scan and stops being read.
+    expect(row?.evidence).not.toContain("supabase/migrations/0001.sql");
+  });
+
+  it("stays silent when every .sql in the tree was read, so the row means something", () => {
+    const dir = plant({
+      "schema.sql": "create table public.t (id uuid primary key);",
+      "supabase/migrations/0001.sql": "alter table public.t enable row level security;",
+    });
+    expect(checkUnreadSqlSurfaces(dir)).toEqual([]);
+  });
+
+  it("is silent on a target with no SQL at all rather than announcing an empty bound", () => {
+    const dir = plant({ "src/index.ts": "export const x = 1;" });
+    expect(checkUnreadSqlSurfaces(dir)).toEqual([]);
   });
 });

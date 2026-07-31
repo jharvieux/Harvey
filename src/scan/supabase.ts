@@ -304,7 +304,7 @@ function localScopeFinding(): Finding[] {
 }
 
 // #1264. The Splinter lint set arrives as delimited text, so a lint whose detail/metadata/cache_key
-// contains the field separator cannot be split back into its 10 columns. Those rows used to be
+// contains the field separator does not split back into its 10 columns. Those rows used to be
 // dropped by a bare `continue` — no finding, no count, no row — which is the exact silent-omission
 // shape the disclosure family exists to prevent. The separator moved to ASCII 0x1F so the collision
 // should no longer occur; this row exists because "should no longer" is a claim, and a residual
