@@ -1,9 +1,9 @@
 {
   "summary": {
-    "asserted": 2,
+    "asserted": 5,
     "surfaced-for-review": 5,
-    "missed": 1,
-    "requires-live-run": 4
+    "missed": 2,
+    "requires-live-run": 0
   },
   "bugs": [
     {
@@ -82,32 +82,35 @@
       "severity": "High",
       "location": "pages/api/v1/export.js",
       "expectedModule": "SHADOW-API-VERSION (src/pentest/verify.ts) — M2 dynamic pen-test replay: GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
-      "status": "requires-live-run",
-      "note": "SHADOW-API-VERSION (src/pentest/verify.ts) — M2 dynamic pen-test replay: GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
+      "status": "caught",
+      "tier": "high",
+      "note": "M2 replay SHADOW-API-VERSION scored \"caught\" against http://127.0.0.1:3100 in the pen-test scorecard generated 2026-07-31T08:41:03.087Z: Deprecated route /api/v1/export answered anon with 2 row(s); an old API version is left live with weaker auth than the current route."
     },
     {
       "id": "NO-RATE-LIMIT",
       "severity": "High",
       "location": "pages/api/coupon/redeem.js",
       "expectedModule": "NO-RATE-LIMIT (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
-      "status": "requires-live-run",
-      "note": "NO-RATE-LIMIT (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
+      "status": "caught",
+      "tier": "high",
+      "note": "M2 replay NO-RATE-LIMIT scored \"caught\" against http://127.0.0.1:3100 in the pen-test scorecard generated 2026-07-31T08:41:03.087Z: /api/coupon/redeem accepted 5/5 repeated calls with no anti-automation/rate limit."
     },
     {
       "id": "CACHE-CROSS-USER",
       "severity": "High",
       "location": "pages/api/me/summary.js",
       "expectedModule": "CACHE-CROSS-USER (src/pentest/verify.ts) — M2 dynamic pen-test replay: warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
-      "status": "requires-live-run",
-      "note": "CACHE-CROSS-USER (src/pentest/verify.ts) — M2 dynamic pen-test replay: warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
+      "status": "missed",
+      "note": "M2 replay CACHE-CROSS-USER scored \"cleared\" against http://127.0.0.1:3100 in the pen-test scorecard generated 2026-07-31T08:41:03.087Z: Probed 1 cacheable route(s); none served another user's cached response to anon."
     },
     {
       "id": "ANON-PRIVILEGED-RPC",
       "severity": "Critical",
       "location": "supabase/migrations/20260710000002_dynamic_probes.sql",
       "expectedModule": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
-      "status": "requires-live-run",
-      "note": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
+      "status": "caught",
+      "tier": "high",
+      "note": "M2 replay ANON-PRIVILEGED-RPC scored \"caught\" against http://127.0.0.1:3100 in the pen-test scorecard generated 2026-07-31T08:41:03.087Z: Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised from INSIDE the function — the body executed as anon and only a data constraint stopped it); EXECUTE is granted to anon with no auth.uid() check."
     }
   ]
 }

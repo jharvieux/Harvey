@@ -1,0 +1,37 @@
+{
+  "target": "http://127.0.0.1:3100",
+  "generatedAt": "2026-07-31T08:41:03.087Z",
+  "allowDestructive": true,
+  "probes": [
+    {
+      "findingId": "SHADOW-API-VERSION",
+      "status": "caught",
+      "severity": "High",
+      "evidence": "Deprecated route /api/v1/export answered anon with 2 row(s); an old API version is left live with weaker auth than the current route."
+    },
+    {
+      "findingId": "NO-RATE-LIMIT",
+      "status": "caught",
+      "severity": "High",
+      "evidence": "/api/coupon/redeem accepted 5/5 repeated calls with no anti-automation/rate limit."
+    },
+    {
+      "findingId": "CACHE-CROSS-USER",
+      "status": "cleared",
+      "severity": "High",
+      "evidence": "Probed 1 cacheable route(s); none served another user's cached response to anon."
+    },
+    {
+      "findingId": "ANON-PRIVILEGED-RPC",
+      "status": "caught",
+      "severity": "Critical",
+      "evidence": "Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised from INSIDE the function — the body executed as anon and only a data constraint stopped it); EXECUTE is granted to anon with no auth.uid() check."
+    }
+  ],
+  "summary": {
+    "caught": 3,
+    "cleared": 1,
+    "not-applicable": 0,
+    "not-run": 0
+  }
+}

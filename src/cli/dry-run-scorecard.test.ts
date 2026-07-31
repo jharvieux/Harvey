@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import { AUTOMATED_REPLAY_IDS } from "../pentest/verify.js";
-import { scoreCoverage } from "../coverage-scorecard.js";
+import type { DynamicScorecard } from "../pentest/scorecard.js";
+import { scoreCoverage, summarizeCoverage } from "../coverage-scorecard.js";
 import { CORPUS, scoreEntry } from "../scan/calibration.js";
 import { GROUND_TRUTH_BUGS, resolveDetection } from "./dry-run-scorecard.js";
 
@@ -95,12 +96,68 @@ describe("corpus-derived verdicts over the committed dry-run findings (#425)", (
     expect(CORPUS.find((e) => e.id === bug.corpusId)!.expectedTier).toBe("none");
   });
 
-  it("every dynamic (M2) bug scores requires-live-run — deferred with a reason, never absent", () => {
+  it("every dynamic (M2) bug scores requires-live-run when NO pen-test scorecard is supplied", () => {
     for (const b of GROUND_TRUTH_BUGS.filter((x) => x.replayId)) expect(statusOf(b.id)).toBe("requires-live-run");
   });
 
   it("classifies all twelve planted bugs — none silently dropped", () => {
     expect(scored).toHaveLength(GROUND_TRUTH_BUGS.length);
     expect(GROUND_TRUTH_BUGS).toHaveLength(12);
+  });
+});
+
+// #1310 — `statusFromDynamicProbe` was built for exactly this and had NO production caller for
+// eleven days, so the four M2 rows could never leave requires-live-run however many live runs
+// happened. These bind the dynamic half of resolveDetection in BOTH directions: a recorded verdict
+// resolves the row, and an absent/undecided one still does not.
+describe("dynamic (M2) rows resolve against a committed pen-test scorecard (#1310/#347)", () => {
+  const dynamicBug = (id: string) => GROUND_TRUTH_BUGS.find((b) => b.replayId === id)!;
+  const card = (probes: DynamicScorecard["probes"]): DynamicScorecard => ({
+    target: "http://127.0.0.1:3100",
+    generatedAt: "2026-07-31T08:27:46.786Z",
+    allowDestructive: true,
+    probes,
+    summary: { caught: 0, cleared: 0, "not-applicable": 0, "not-run": 0 },
+  });
+  const probe = (findingId: string, status: DynamicScorecard["probes"][number]["status"]) =>
+    ({ findingId, status, severity: "High", evidence: `${findingId} scored ${status}` }) as DynamicScorecard["probes"][number];
+
+  it("a probe that CAUGHT the bug live scores caught, at high tier — a live replay asserts, it does not surface", () => {
+    const d = resolveDetection(dynamicBug("SHADOW-API-VERSION"), findings, card([probe("SHADOW-API-VERSION", "caught")]));
+    expect(d).not.toBeNull();
+    expect(d!.caught).toBe(true);
+    expect(d!.tier).toBe("high");
+    expect(d!.note).toContain("http://127.0.0.1:3100");
+  });
+
+  // The direction that matters most: `cleared` means the probe RAN against a target where the bug is
+  // planted and did not prove it. That is a MISS, and collapsing it into requires-live-run would hide
+  // a real detection gap behind a deferral.
+  it("a probe that ran and CLEARED the bug scores missed, not a deferral", () => {
+    const d = resolveDetection(dynamicBug("CACHE-CROSS-USER"), findings, card([probe("CACHE-CROSS-USER", "cleared")]));
+    expect(d!.caught).toBe(false);
+    expect(d!.tier).toBeUndefined();
+  });
+
+  it.each(["not-applicable", "not-run"] as const)("a probe recorded %s yields no verdict — the row stays requires-live-run", (status) => {
+    expect(resolveDetection(dynamicBug("NO-RATE-LIMIT"), findings, card([probe("NO-RATE-LIMIT", status)]))).toBeNull();
+  });
+
+  it("a scorecard that names OTHER replays leaves this row requires-live-run — it never borrows another probe's verdict", () => {
+    expect(resolveDetection(dynamicBug("ANON-PRIVILEGED-RPC"), findings, card([probe("NO-RATE-LIMIT", "caught")]))).toBeNull();
+  });
+
+  it("scoreCoverage drops requires-live-run as the recorded verdicts land", () => {
+    const live = card([
+      probe("SHADOW-API-VERSION", "caught"),
+      probe("NO-RATE-LIMIT", "caught"),
+      probe("CACHE-CROSS-USER", "cleared"),
+    ]);
+    const summary = summarizeCoverage(
+      scoreCoverage(GROUND_TRUTH_BUGS.map((b) => ({ id: b.id, severity: b.severity, location: b.location, expectedModule: b.expectedModule, detection: resolveDetection(b, findings, live) }))),
+    );
+    // Four M2 rows; three now carry a live verdict, so only ANON-PRIVILEGED-RPC still defers.
+    expect(summary["requires-live-run"]).toBe(1);
+    expect(summary.asserted).toBeGreaterThanOrEqual(4);
   });
 });
