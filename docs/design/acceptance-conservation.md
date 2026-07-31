@@ -451,21 +451,28 @@ set has a failing direction too (#1407's class).
 
 ### What it does on failure
 
-Stated here and demonstrated end-to-end against issue #1384 on 2026-07-28 under an authenticated
-`gh` — all four branches, in order:
+One terminal state for a failed close, whatever failed and however many times (#1696):
 
 | Situation | Action | Demonstrated |
 | --- | --- | --- |
-| Fails, first time | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | #1384 went `CLOSED` → commented, labelled, `OPEN` |
-| Fails, label already present | comment and re-label, **do not re-open** | second close of #1384 stayed `CLOSED` |
-| Passes, label present | **remove** the label | label removed, issue stayed `CLOSED`, exit 0 |
+| Fails — first time or repeat | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | first-failure branch: #1384 went `CLOSED` → commented, labelled, `OPEN` (2026-07-28). Repeat-failure branch: CLI-layer proof against a stub `gh` (`src/cli/validate-acceptance.test.ts`); live workflow drill pending post-merge, tracked as #1750 |
+| Passes, label present | **remove** the label | label removed, issue stayed `CLOSED`, exit 0 (#1384, 2026-07-28) |
 | Bot-opened issue | `NOT ASSESSED`, with the reason | #1340 (a `ci-heavy-cli-alert` drill) |
 
-The label is the memory. Re-opening once makes this a gate rather than a note; re-opening *every*
-time would put a bot in a fight with a human who closed deliberately, and the label then stands as
-the permanent record that a criterion was never accounted for. A passing run removes it, because a
-label asserting an unaccounted criterion on an accounted-for issue is a false statement about the
-issue.
+Until 2026-07-31 the gate re-opened only ONCE — "the label is the memory": a repeat failure was
+commented and re-labelled but stood CLOSED, on the theory that a human who closed deliberately
+should not fight a bot, with the label as the standing record. #1696 measured that theory against
+its population: **all 10** closed issues carrying `acceptance-unaccounted` on 2026-07-31 had reached
+exactly that closed-and-labelled state, **every one still failing the gate** when re-run read-only —
+including one "re-dispositioned by hand" whose repair double-mapped two criteria and left a
+malformed third. None was a deliberate override; all were bookkeeping that stayed defective, and the
+standing record had reached nobody, because a closed issue looks completed to `gh issue list` and to
+every reader not on its page. So the once-rule traded a loud nuisance (a re-open) for a silent one
+(a phantom completion), which is the wrong direction for this repo. The way out of a re-open costs
+one disposition line per criterion — cheaper than the fight the once-rule feared. The decision is
+`closeActions()` in `src/acceptance-conservation.ts`, pure, so the suite fails if the divergent
+terminal state is reintroduced. A passing run still removes the label, because a label asserting an
+unaccounted criterion on an accounted-for issue is a false statement about the issue.
 
 Bot-opened issues are the one exemption and it is disclosed, not silent: the #1287 alert drills open,
 comment on and close a tracking issue under the job token, and seven of the eleven bare-click closes
@@ -480,10 +487,11 @@ measured above were exactly that. They state no criteria and are not work items.
 gh workflow run "acceptance on close" -f issue=1155
 ```
 
-Step 1 is the negative control (`--selftest-close`, seven hermetic cases — each close path in both
-directions, a partial record, a hollowed-out `met`, and the bot exemption), so a green run means the
-gate passed **and can still fail** even on a close it had nothing to object to. Step 2 runs the check
-with `--act`.
+Step 1 is the negative control (`--selftest-close`, nine hermetic cases — each close path in both
+directions, a partial record, a hollowed-out `met`, a double-venue record, a near-miss `met —`
+separator, and the bot exemption; this sentence read "seven" while the set held eight, so count them
+in `closeSelftestCases()` rather than here), so a green run means the gate passed **and can still
+fail** even on a close it had nothing to object to. Step 2 runs the check with `--act`.
 
 **The bound, stated because it is the #1287 shape:** a workflow on the `issues` event runs from the
 **default branch only**, so this trigger cannot fire until it is merged and has therefore **never

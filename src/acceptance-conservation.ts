@@ -1055,6 +1055,23 @@ export function formatClosedIssue(r: ClosedIssueReport): string {
 }
 
 /**
+ * ONE terminal state for a failed close (#1696), decided here so the rule has a failing direction
+ * in the suite instead of living as an `if` in the CLI. The gate used to re-open only ONCE — "the
+ * label is the memory" — so the terminal state of a failed close depended on whether the label was
+ * already present: first failure re-opened (back in the queue), repeat failure stood CLOSED with
+ * only the label as a trace, which reads as completed to `gh issue list` and every reader who is
+ * not on the issue page. MEASURED 2026-07-31: all 10 issues then carrying `acceptance-unaccounted`
+ * closed were in exactly that state, every one still failing the gate when re-run read-only — the
+ * standing record had reached nobody, ten out of ten times. The deliberate-human-override concern
+ * the once-rule served is priced at one comment line per criterion, so re-opening every time is a
+ * fight only with bookkeeping that stays defective.
+ */
+export function closeActions(ok: boolean, alreadyLabelled: boolean): { comment: boolean; addLabel: boolean; reopen: boolean; removeLabel: boolean } {
+  if (!ok) return { comment: true, addLabel: true, reopen: true, removeLabel: false };
+  return { comment: false, addLabel: false, reopen: false, removeLabel: alreadyLabelled };
+}
+
+/**
  * What the workflow posts on the issue when the check fails. A gate whose failure is a red tick on a
  * branch nobody watches is the alert path #1287 found four of — this one lands where the person who
  * closed the issue will see it, and says the two ways out.
@@ -1298,6 +1315,18 @@ export function closeSelftestCases(): CloseSelftestCase[] {
       name: "the same dispositions in BOTH the linked PR body and an issue comment",
       input: { ...base },
       lookup: venues(dispositions, [{ ref: "#9100", body: `refs #9001\n\n${dispositions.join("\n")}` }]),
+      expect: "fail",
+    },
+    {
+      // #1696's likely input: `met —` instead of `met:`. #1645 gave it a distinct malformed-line
+      // diagnostic naming the exact line; this case keeps the CLOSE path FAILING on it, so a later
+      // decision to normalise the separator is a deliberate fixture edit, never a silent pass.
+      name: "a near-miss separator — `met —` instead of `met:` in an issue comment",
+      input: { ...base },
+      lookup: commented([
+        "ACCEPTANCE #9001.1 met — `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+        ...dispositions.slice(1),
+      ]),
       expect: "fail",
     },
     { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, lookup: SELFTEST_LOOKUP, expect: "pass" },
