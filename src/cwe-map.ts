@@ -41,6 +41,7 @@ const CWE: Record<string, string> = {
   "770": "CWE-770: Allocation of Resources Without Limits or Throttling",
   "778": "CWE-778: Insufficient Logging",
   "798": "CWE-798: Use of Hard-coded Credentials",
+  "807": "CWE-807: Reliance on Untrusted Inputs in a Security Decision",
   "837": "CWE-837: Improper Enforcement of a Single, Unique Action",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
@@ -82,6 +83,14 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Server trusting client-side security enforcement.
   "Client-side authorization decision": ["602", "A04"],
   "Client-supplied payment amount trusted by server": ["602", "A04"],
+  // #135/#1366 — Host / X-Forwarded-Host used to build an absolute link. CWE-807 (Reliance on
+  // Untrusted Inputs in a Security Decision) rather than CWE-601 (open redirect): nothing here
+  // redirects the CALLER anywhere, the header decides where a password-reset token gets DELIVERED,
+  // to a third party who never made the request. A01 rather than A07 for the same reason — the
+  // failure is that an attacker-set input governs a security-relevant destination, not that the
+  // recovery mechanism itself is weak (CWE-640 would say the latter, and the fixed-origin twin
+  // N-HOST-HEADER-FIXED-ORIGIN uses the identical recovery flow and is correct).
+  "Host header trusted in URL construction": ["807", "A01"],
   // Missing authorization on a resource/route/channel.
   "Migration table without RLS (static)": ["862", "A01"],
   // #1425 — same outcome as the line above (no authorization on the table), reached by a later

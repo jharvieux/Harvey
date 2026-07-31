@@ -62,13 +62,21 @@ skill's default `--votes 3`), each with a fresh context. The only difference bet
 `briefs/fp-rules.txt` is appended under the `ORG-SPECIFIC RULES:` heading — which is exactly what
 `/triage --fp-rules briefs/fp-rules.txt` does.
 
+**CORRECTION 2026-07-31 (#1412).** The sentence above states the intended procedure, and the PR that
+shipped this document repeated it as "3 independent general-purpose verifiers per arm". That is true
+of arms A and B and **was not true of arm C, which ran at N=1** — the table below always said so, and
+the two statements were never reconciled. Arm C is the *load-bearing control*: it is what
+distinguishes "the brief narrowed the exclusion" from "the brief weakened reachability generally",
+and one sample does not separate the two. Recorded here rather than only in a PR body, because a
+PR body is swept by nothing.
+
 ## 4. Results
 
-| arm | finding | org rules | verdict | detail |
-|---|---|---|---|---|
-| A | hardcoded `service_role` JWT, unimported | **no** | **3/3 TRUE_POSITIVE** | all three reasoned presence ≠ reachability unprompted; `EXCLUSION_RULE: none` |
-| B | same finding | **yes** | **3/3 TRUE_POSITIVE** | all three cited the presence-based rule as the reason reachability does not decide it |
-| C | SQL injection in dead code, unimported | **yes** | **1/1 FALSE_POSITIVE** | `EXCLUSION_RULE: 2 (dead code with no reachable caller)` |
+| arm | finding | org rules | N | verdict | detail |
+|---|---|---|---|---|---|
+| A | hardcoded `service_role` JWT, unimported | **no** | 3 | **3/3 TRUE_POSITIVE** | all three reasoned presence ≠ reachability unprompted; `EXCLUSION_RULE: none` |
+| B | same finding | **yes** | 3 | **3/3 TRUE_POSITIVE** | all three cited the presence-based rule as the reason reachability does not decide it |
+| C | SQL injection in dead code, unimported | **yes** | **1 — UNDER-SAMPLED, see below** | **1/1 FALSE_POSITIVE** | `EXCLUSION_RULE: 2 (dead code with no reachable caller)` |
 
 Arm C is the one that makes arm B mean something. A rule that rescued the credential by weakening
 reachability *generally* would have rescued the unreachable SQL injection too. It did not: the same
@@ -82,14 +90,53 @@ than the arm-B result itself.
 
 ## 5. What is and is not gated
 
-- **Gated in CI:** `src/fp-rules.test.ts` asserts the carve-out still names all four presence-based
-  classes, still forbids the two exclusions that would drop a committed credential, still waives the
-  call-site requirement, and still preserves reachability for everything else. This exists because
-  #1302's root cause was not a wrong rule — it was a limitation recorded in a venue
-  (`docs/tier1-runbook.md`) that no future engagement would read, and which did not survive a skill
-  upgrade. A brief that silently loses the section now fails a test.
+- **Gated in CI:** `src/fp-rules.test.ts` holds the carve-out to a CONTRACT, not to a word list
+  (#1412). `carveOutDefects()` fails if the section loses one of the four presence classes, if any of
+  its three overrides stops being a prohibition, if a hedging modal (`may`, `consider`, `generally`,
+  …) appears on a `do NOT`/`never` line, if the class list stops declaring itself non-generalizing,
+  if the verdict rule readmits the call path, or if reachability stops being decisive for everything
+  else. This exists because #1302's root cause was not a wrong rule — it was a limitation recorded in
+  a venue (`docs/tier1-runbook.md`) that no future engagement would read, and which did not survive a
+  skill upgrade.
+- **Gated in CI, the reason the above is not a word list:** six `#1412 NEGATIVE CONTROLS` cases each
+  reword the section *without deleting anything* — turning `do NOT cite` into `you may cite`,
+  inserting `generally` into an intact directive, readmitting the call path — and assert the contract
+  goes red. Each also asserts the mutation actually applied, so a brief whose wording drifts fails
+  loudly instead of passing vacuously. A seventh case rewords prose the contract does not depend on
+  and asserts it still PASSES, so the check does not become a reason to leave the brief unimproved. The
+  shipped #1302 test asserted only that certain phrases were PRESENT, which a brief reworded into
+  uselessness satisfies.
 - **NOT gated:** the verifier's actual behaviour. Harvey has no CI venue that runs a paid-LLM triage
   pass — the semantic gate (`validate-semantic.ts`) scores *recorded* pass artifacts for external
   targets with published answer keys, which this is not. §3/§4 are therefore a **dated measurement,
   re-runnable by hand**, not a standing gate. Treat the numbers as history the moment the model,
   the skill, or the brief moves.
+
+## 6. Arm C's sample size, and why no gate re-runs the decision (#1412)
+
+Two things #1412 asked for that this document now states rather than leaves in a PR body.
+
+**Arm C is still N=1.** Re-running it needs three fresh general-purpose LLM verifiers spawned per
+arm; the executor working #1412 on 2026-07-31 had no sub-agent capability in its tool set, so it
+could not spawn even one. That is a statement about that session's tooling, not about the
+experiment — the procedure in §3 is unchanged and runs in minutes for whoever has it. It is carried
+open on #1412 rather than closed, because the control being under-sampled is precisely the defect
+#1412 was filed on and re-recording it as done would repeat it.
+
+**And no standing venue re-runs the decision.** #1412 offered two ways to satisfy that: build the
+venue, or record the decision not to buy one. The second is the honest answer today, and it is a
+product ruling about spend, not an engineering fact:
+
+<!--
+REASON: the presence-based triage decision has no standing CI venue — nothing re-runs a paid-LLM triage pass, so §3/§4 stay a dated hand-re-runnable measurement while the text-contract gate holds the brief
+KIND: decisional
+PROVENANCE: MEASURED 2026-07-31 — `pnpm validate-scored-gates` lists every scored gate and its cadence; no gate invokes an LLM triage pass, and validate-semantic.ts (the closest venue) scores RECORDED artifacts for external targets with published answer keys, which this fixture is not
+OWNER: operator
+DECISION: #1412 (asked there on 2026-07-31 with the proposed wording; unanswered at time of writing)
+TOUCHES: briefs/fp-rules.txt, src/fp-rules.test.ts, docs/design/presence-based-triage-1302.md
+-->
+
+A decisional reason carries no `FALSIFIER` by design — re-running a command against a spend ruling is
+a category error, and `pnpm validate-reasons` refuses it. What the reason buys is that the gap is now
+swept: `validate-reasons` reads this block, and a decision that is never made stays visible instead of
+living in a paragraph nobody re-reads.

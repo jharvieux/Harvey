@@ -25,7 +25,7 @@ import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, resolvedTree } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
-import { harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
+import { freeCountCoverage, harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
 const FLAGS = [
@@ -356,6 +356,20 @@ const pairings = ruleCorpusPairings(harveySemgrepRules(), findings);
 const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
+
+// #1414 — the BOUND of the line above, printed beside it rather than left to be inferred. The gate
+// enumerates `harvey-*` semgrep rules and nothing else, while `precisionTier: "high"` is also set by
+// AST detectors, the secret scanners, the dependency/licence checks and third-party semgrep packs.
+// Stating the covered share as a measured fraction is the difference between a bound and a belief.
+const coverage = freeCountCoverage(findings, harveySemgrepRules(), pairings);
+console.log(
+  `FREE-COUNT COVERAGE OF THAT GATE (#1414): ${coverage.coveredByPairingGate}/${coverage.highTier} high-tier findings on this run come from an enumerated harvey-* rule; ` +
+    `${coverage.outsidePairingGate} (${((coverage.outsidePairingGate / coverage.highTier) * 100).toFixed(1)}%) come from detectors it does not enumerate and therefore does not validate — ${coverage.outsideTaxonomies.slice(0, 6).join("; ")}${coverage.outsideTaxonomies.length > 6 ? `; +${coverage.outsideTaxonomies.length - 6} more` : ""}`,
+);
+console.log(
+  `PER-RULE FREE-COUNT GATE, prototyped and measured (#1414): a free count gated on VALIDATION STATUS rather than the self-declared precisionTier tag would withhold ${coverage.droppedByPerRuleGate.length} finding(s) today` +
+    `${coverage.droppedByPerRuleGate.length ? `: ${coverage.droppedByPerRuleGate.join(", ")}` : " — zero, and zero by construction, because the pairing gate above fails `pnpm verify` on an unpaired rule so one cannot reach `main`"}`,
+);
 
 // #1509's second-order defect: this gate rides inside `heavy CLI tests (shard 1/3)` behind an
 // `if: matrix.shard == 1`, so a condition that stopped matching would retire the repo's scored recall
