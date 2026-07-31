@@ -275,6 +275,67 @@ CLOSED` over an API answering lowercase `closed` exits 1 in *both* directions an
 down: blocker holds → non-zero but not 127; blocker gone → 0; cannot run → 127. A falsifier nobody
 has watched exit 0 is indistinguishable from one that cannot.
 
+### The shell that scores a falsifier is not the shell that wrote it (#1646/#1647)
+
+Two ways a falsifier answers a question about the *tooling* instead of about the world, both of
+which land in the "still blocked" bucket and are therefore silent.
+
+**1. `grep` is shadowed in an agent shell — do not invert it.** A Claude Code session's shell
+installs a `grep` shell **function** (`~/.claude/shell-snapshots/snapshot-zsh-*.sh`) that re-execs
+the CLI as `ugrep`, forwarding to the real binary only for a short flag allow-list. `--revalidate`
+runs falsifiers through `spawnSync("sh", ["-c", …])` and an Actions step runs `bash -e {0}`, and
+**neither inherits that function** — so a command can be exercised by its author and answer the
+opposite way in the venue that scores it.
+
+MEASURED 2026-07-31 across a 26-cell flag probe (`-q -qv -v -c -L -l -o -m -qE -qEv -qi -qw -qx -qF
+-qs -qc -qn -qr -rq -qL -ql`, plus the split `-q -v` and `-vq` forms), same file and predicate:
+
+| form | agent shell | `/usr/bin/grep` |
+|---|---|---|
+| `grep -q beta f` | 0 | 0 |
+| `grep -qv beta f` | **1** | **0** |
+| `grep -c`, `-L`, `-l`, `-o`, `-m1`, `-qE`, `-qi`, `-qw`, `-qx`, `-qF`, `-rq`, … | agree | agree |
+
+The one divergence is **`-v` with output suppressed**. `-c`, `-L`, `-o` and `-m` — the flags #1646
+asked about — agree, so the rule is a ban on inversion, not a vague "prefer `git grep`". Population
+when it was found: **1 of 42** empirical falsifiers. `src/disclosure-venue.ts`'s `grep -qv` measured
+`sh -c` = 1 (blocker holds) and agent shell = 0 (blocker **gone**) against the same tree — #1345's
+shape, where the verdict depends on who ran it.
+
+`validateRecordedReason` now refuses `-v`/`--invert-match` on a **bare** `grep` in a `FALSIFIER:`.
+`git grep`, `command grep`, an absolute path, and anything inside `sh -c '…'` are exempt by
+construction: the function shadows the bare word only, and `sh -c` starts a process that inherits no
+zsh functions.
+
+**2. A git pathspec is not a shell glob — `**` needs `:(glob)`.** Git matches pathspecs with
+wildmatch and `WM_PATHNAME` **off**, so a bare `*` already crosses `/` and `**/` therefore demands at
+least one intervening directory. MEASURED 2026-07-31 in this checkout:
+
+```
+git ls-files -- 'src/**/*.ts'         # 478 files, NOT ONE top-level src/*.ts
+git ls-files -- ':(glob)src/**/*.ts'  # 611 files, top level included
+```
+
+`src/pentest/calibration-fixture.ts`'s falsifier shipped on the first form and exited **1 — "still
+blocked" — with a production importer planted at `src/__probe.ts`**. `validateRecordedReason` now
+refuses a `**` pathspec without `:(glob)` magic in any `FALSIFIER:` that runs a git subcommand.
+
+So the exclusion idiom is:
+
+```bash
+git grep -q "<pattern>" -- ':(glob)src/**/*.ts' ':(glob,exclude)src/**/*.test.ts'
+```
+
+Both guards are enforced under `pnpm verify` by `src/recorded-reasons.test.ts` and by
+`pnpm validate-reasons`. **Exercise a changed falsifier in every direction under `sh -c`, the agent
+shell AND `bash -e -c`, and write all three columns down** — an author who checks one shell has
+measured their prompt, not their claim.
+
+Known outside the gate's reach, said rather than left silent: `DEFAULT_ROOTS` does not include
+`targets/`, so `targets/test-only-export-control/src/lib.ts`'s reason block is structurally
+unvalidated. It names an explicit file path and carries neither defect (checked 2026-07-31), but it
+is not held to either rule.
+
 ### `TOUCHES:` is declared **or derived** — and never mandatory
 
 Subsystem drift only ever watched the reasons whose author happened to declare `TOUCHES:` — 9 of 15

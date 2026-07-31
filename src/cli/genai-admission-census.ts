@@ -32,26 +32,27 @@
 // handrolled-frequency.ts. The classification it depends on IS covered by verify, via
 // src/scan/genai-admission.test.ts.
 //
-// CADENCE. This tool has none, and that is the specific failure mode #1600 was opened about: the
-// withdrawn ~3.4x ratio survived a 3x growth of the corpus precisely because
+// CADENCE. This tool now has one: .github/workflows/genai-census.yml, monthly on the 3rd, plus a PR
+// trigger on the corpus and the classifier. That closes the specific failure mode #1600 was opened
+// about — the withdrawn ~3.4x ratio survived a 3x growth of the corpus precisely because
 // src/cli/handrolled-frequency.ts is invoked by no test and no workflow, so nothing re-measured it.
-// A scheduled re-measure means adding a job to .github/workflows/, which CLAUDE.md lists as a
-// supervised path, so the operator question is recorded on the issue with the wording proposed
-// rather than the edit being made here — a supervised path stops the EDIT, never the CRITERION
-// (#1319). Until it is answered, every figure this tool produces is POINT-IN-TIME and must be
-// quoted with its date and the corpus base commit, never as a standing fact.
 //
-// REASON: pnpm genai-admission-census runs on no CI cadence because a scheduled re-measure means adding a job to .github/workflows/, which CLAUDE.md lists as a supervised path, and no command re-tests whether the operator has approved it
-// KIND: decisional
-// PROVENANCE: MEASURED 2026-07-30 — the tool itself runs clean over all 18 pinned repos in both modes; the only missing piece is the venue. `grep -rl "genai-admission-census" .github/workflows/` returns nothing today.
-// OWNER: operator (jharvieux)
-// DECISION: #1600 — carries the proposed workflow step verbatim for the operator to approve or decline
-// TOUCHES: src/cli/genai-admission-census.ts .github/workflows
+// The block below used to record NO CADENCE as decisional, blocked on `.github/workflows/` being a
+// supervised path. #1691 called that a false decline and it was: supervision stops the EDIT, never
+// the CRITERION, and workflow edits are granted routinely. What remains empirical is the SCOPE of
+// the cadence, and that is what the reason records now.
+//
+// REASON: the monthly re-measure covers the CENSUS only — `--density`, the arm-vs-arm ratio, is not on any cadence, because it needs a FULL-history clone plus a per-file `git blame` of every product source in each two-armed repo rather than the blobless fetch the census uses
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-31 — the workflow runs `pnpm genai-admission-census` without `--density`; the density half re-clones each usable repo at full depth (`git fetch` with no `--filter`) and blames every product file, which is why it is opt-in in the tool and off the schedule. Any ratio quoted from it is POINT-IN-TIME: quote it with its date and the corpus base commit, never as a standing fact.
+// FALSIFIER: test -d .github/workflows || exit 127; git grep -q -- '--density' -- '.github/workflows/genai-census.yml' && exit 0 || exit 1
+// TOUCHES: src/cli/genai-admission-census.ts .github/workflows/genai-census.yml
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordMeasured } from "../ci-liveness.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import {
@@ -248,6 +249,11 @@ out.push("  • This is a census of COMMITS, not of lines or of surviving code. 
 out.push("    does not tell you which lines still stand at the pinned commit.");
 
 console.log(out.join("\n"));
+
+// #1509's receipt, after the scoring rather than before it: this job clones 18 repos on a monthly
+// schedule, so a run that dies in the fetch phase is invisible for 30 days and reads exactly like a
+// quiet month. recordMeasured throws on units=0, so an empty census cannot render as a clean one.
+recordMeasured("genai-admission-census", rows.length, "pinned corpus repos censused for commit-level self-admission");
 
 // Fail loud rather than let a broken classifier render as a negative result — see
 // allZeroAdmissionError's own doc comment for why zero is treated as broken, not quiet, on this

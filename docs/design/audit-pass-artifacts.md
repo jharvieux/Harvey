@@ -150,12 +150,20 @@ The four states the scope statement distinguishes, none of which is silence:
 > REASON: the M1 semantic pass (/vuln-scan → /triage) has no CLI Harvey's own code invokes — it is a Claude Code skill pair run interactively, not a subprocess any src/cli/*.ts can shell out to — so there is no producer file to add a self-emit branch to, and `pnpm record-pass --module M1 --pass semantic --findings triage.json --out <dir>` (the pre-existing generic path, #448) stays the only way to record it.
 > KIND: empirical
 > PROVENANCE: TRIED 2026-07-28 — surveyed every production caller of buildPassArtifact (src/prisma-dynamic.ts, src/dynamic-validate.ts, src/hotspot-scan.ts, src/m6-agreement.ts, src/cli/record-pass.ts); none is, or could mechanically become, a semantic-pass self-emitter, because the pass itself has no CLI entry point to attach one to.
-> FALSIFIER: test -d src || exit 127; grep -rl 'buildPassArtifact(' src --include='*.ts' > /tmp/harvey-bpa-callers.txt 2>/dev/null || exit 127; grep -vE 'record-pass\.ts|prisma-dynamic\.ts|dynamic-validate\.ts|hotspot-scan\.ts|m6-agreement\.ts|audit-pass-artifact\.ts|audit-conservation\.ts|\.test\.ts' /tmp/harvey-bpa-callers.txt > /tmp/harvey-bpa-new.txt; grep -q . /tmp/harvey-bpa-new.txt
+> FALSIFIER: test -d src || exit 127; git grep -qF 'buildPassArtifact(' -- ':(glob)src/**/*.ts' ':(glob,exclude)src/**/*.test.ts' ':(exclude)src/cli/record-pass.ts' ':(exclude)src/prisma-dynamic.ts' ':(exclude)src/dynamic-validate.ts' ':(exclude)src/hotspot-scan.ts' ':(exclude)src/m6-agreement.ts' ':(exclude)src/audit-pass-artifact.ts' ':(exclude)src/audit-conservation.ts'
 > TOUCHES: src/cli, src/audit-pass-artifact.ts
 
 Exercised both directions 2026-07-28: exits 1 (non-zero) as committed; exits 0 against a planted
 dummy `src/cli/` file that calls `buildPassArtifact` outside the five known producers, proving the
 falsifier actually flips when the blocker is gone rather than being vacuously true or false.
+
+Rewritten off `grep -vE` onto git exclude pathspecs 2026-07-31 (#1646): a bare `grep` is shadowed by
+a shell function in a Claude Code agent shell, so a falsifier an author exercises there can answer
+the opposite way under the `sh -c` that `--revalidate` actually uses. Re-exercised four states in
+three shells (`sh -c`, agent zsh, `bash -e -c`), old form and new agreeing on every one: **1** as
+committed, **0** with a producer planted at `src/cli/__probe.ts`, **0** with one planted at
+top-level `src/__probe.ts` (which `':(glob)src/**/*.ts'` reaches and a bare `'src/**/*.ts'` would
+not — #1647), **1** when the planted caller is a `.test.ts`.
 
 ## What this is not
 

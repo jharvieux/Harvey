@@ -76,8 +76,8 @@
 //
 //    REASON: a bound written in a TS/AST detector's source comments is outside what any gate reads — this one parses `src/scan/rules/semgrep/*.yml` and src/conditional-scan.ts checks call-shape, not prose — so neither says anything about whether a detector's recorded limit reaches the finding it bounds
 //    KIND: empirical
-//    PROVENANCE: MEASURED 2026-07-28 — #1330's population grep re-run over src/scan + src/detectors still reports comment lines declaring a bound in files no disclosure gate parses; the conditional-omission half it also covered is now gated (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`).
-//    FALSIFIER: test -d src/scan || exit 127; test -d src/detectors || exit 127; grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors > /tmp/harvey-ts-bounds.txt 2>/dev/null; grep -qv '\.test\.ts$' /tmp/harvey-ts-bounds.txt && exit 1 || exit 0
+//    PROVENANCE: MEASURED 2026-07-31 — #1330's population grep re-run over src/scan + src/detectors still reports 11 non-test files carrying comment lines that declare a bound no disclosure gate parses; the conditional-omission half it also covered is now gated (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`). The falsifier below was rewritten off `grep -qv` (#1646): under a Claude Code agent shell that form answered 0 — "blocker gone" — against the same tree `sh -c` answered 1 on, so which verdict you got depended on who ran it. Re-exercised both directions in three shells at the new form.
+//    FALSIFIER: test -d src/scan || exit 127; test -d src/detectors || exit 127; git grep -qE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' -- ':(glob)src/scan/**/*.ts' ':(glob)src/detectors/**/*.ts' ':(glob,exclude)src/**/*.test.ts' && exit 1 || exit 0
 //    TOUCHES: src/scan src/detectors
 //
 // A lower bound on the defect, not a census of it.

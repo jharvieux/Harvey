@@ -184,6 +184,11 @@ function expand(baseline: Baseline): Unreferenced[] {
 
 const key = (r: Unreferenced): string => `${r.kind} ${r.id}`;
 
+/** A whole-word occurrence of `subject`, so `alphaBetaGamma` does not stand in for `alpha` (#1648). */
+function names(text: string, subject: string): boolean {
+  return new RegExp(String.raw`(?<![\w$])${subject.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?![\w$])`).test(text);
+}
+
 /**
  * #1547. The standing ruling is that an uncalled export gets **a caller or a recorded reason** — but
  * the gate could only see callers, so a row someone had genuinely triaged into a `REASON:` block
@@ -191,19 +196,35 @@ const key = (r: Unreferenced): string => `${r.kind} ${r.id}`;
  * wiring. Both halves of the ruling are now countable.
  *
  * The binding is deliberately narrow, because a loose one would let any reason anywhere in a file
- * absolve every export in it: the block must live IN the file the row names, and must name the row's
- * own symbol (or, for a whole-file row, its path). Structural validity is NOT re-checked here —
- * `pnpm validate-reasons` already fails the build on a malformed block, and duplicating that
- * judgement would give two answers to one question.
+ * absolve every export in it: the block must live IN the file the row names, and its `REASON:` — the
+ * field that carries the claim — must name the row's own subject. Structural validity is NOT
+ * re-checked here: `pnpm validate-reasons` already fails the build on a malformed block, and
+ * duplicating that judgement would give two answers to one question.
+ *
+ * #1648 tightened two ways the old binding was satisfiable by a PASSING MENTION, both probed against
+ * the real function on 2026-07-31:
+ *
+ *   • it read EVERY field, so `PROVENANCE: MEASURED … — grepped for alpha` absolved `alpha` while
+ *     the claim itself said nothing about it, and a whole-file row was absolved by a `TOUCHES:` that
+ *     merely listed the file — which is the conventional content of `TOUCHES:`, i.e. every block in
+ *     a file absolved that file. Only `REASON:` counts now;
+ *   • it matched by SUBSTRING, so `alphaBetaGamma is deliberate` absolved `alpha`.
+ *
+ * A whole-file row means every export in the file is unreachable, so the claim is about the row when
+ * it names the path OR any of those exports — `readSource` is required rather than optional because
+ * a caller that forgot it would silently stop triaging every file row, which is the under-count this
+ * function exists to remove.
  */
 export function reasonTriaged(
   rows: readonly Unreferenced[],
   reasons: readonly { file: string; line: number; fields: Partial<Record<string, string>> }[],
+  readSource: (path: string) => string,
 ): { row: Unreferenced; file: string; line: number }[] {
   const out: { row: Unreferenced; file: string; line: number }[] = [];
   for (const r of rows) {
-    const [path, symbol] = r.kind === "file" ? [r.id, r.id] : (r.id.split(":") as [string, string]);
-    const match = reasons.find((x) => x.file === path && Object.values(x.fields).some((v) => v !== undefined && v.includes(symbol)));
+    const [path, symbol] = splitId(r.id);
+    const subjects = r.kind === "file" ? [path, ...exportedNames(path, readSource(path))] : [symbol as string];
+    const match = reasons.find((x) => x.file === path && subjects.some((s) => names(x.fields.REASON ?? "", s)));
     if (match) out.push({ row: r, file: match.file, line: match.line });
   }
   return out;

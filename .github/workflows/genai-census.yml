@@ -1,0 +1,140 @@
+# The commit-level self-admitted-GenAI census on a cadence (#1600 step 2, #1691).
+#
+# WHY IT NEEDED A VENUE. `pnpm genai-admission-census` answers "is there a population to measure?"
+# for a within-repo declared-AI vs not-declared comparison. It ran in NO workflow, which is the exact
+# failure #1600 was opened about one level down: the withdrawn ~3.4x hand-rolled-density ratio
+# survived a 3x growth of the pinned corpus because `src/cli/handrolled-frequency.ts` is invoked by
+# no test and no workflow, so nothing re-measured it. A population figure with no cadence decays the
+# same way a recall figure does.
+#
+# The reason block in src/cli/genai-admission-census.ts previously recorded this as DECISIONAL,
+# blocked on `.github/workflows/` being a supervised path. #1691 found that to be a false decline —
+# supervision stops the EDIT, never the CRITERION, and workflow grants are routine — so the venue is
+# here and the block now records what is genuinely still open: the `--density` half is off the
+# schedule because it needs full-history clones plus a per-file `git blame`.
+#
+# MONTHLY, on the 3rd. secbench takes the 1st and free-recall the 2nd; a day apart so the jobs that
+# each clone a pile of third-party repos do not stack. Monthly rather than per-PR because the inputs
+# are 18 external repos: a per-PR cadence would clone them on every PR and make the gate hostage to
+# 18 third parties' uptime. The PR trigger below covers the harness, the corpus and the classifier —
+# the three things in THIS repo that move the number.
+#
+# WHAT MAKES IT ABLE TO GO RED, stated because a census has no "score" to fail:
+#   • the classifier reporting zero admissions corpus-wide (`allZeroAdmissionError`) — on this
+#     corpus that is a broken classifier, not a quiet result, and the CLI refuses to exit 0;
+#   • a dead upstream. The census loop has no per-repo catch on purpose: a repo silently missing
+#     from the denominator would corrupt the population figure, which is the one thing this tool
+#     exists to state honestly. So one dead clone fails the run and opens the tracking issue below.
+#     Read the log before assuming the classifier broke;
+#   • the gate-liveness receipt (#1509). A monthly job that dies in setup is invisible for 30 days
+#     and reads no differently from a quiet month.
+
+name: genai-census
+
+on:
+  schedule:
+    - cron: "0 5 3 * *"
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-genai-census-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "src/cli/genai-admission-census.ts"
+      - "src/scan/genai-admission.ts"
+      - "src/scan/handrolled-frequency.ts"
+      - "src/detectors/handrolled.ts"
+      - ".github/workflows/genai-census.yml"
+
+concurrency:
+  group: genai-census-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  genai-census:
+    name: self-admitted-GenAI population census (18 pinned repos)
+    runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue, mirroring
+    # free-recall.yml / secbench.yml (#1138/#1142). A job-level block replaces the top-level one.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 45
+    # A literal path, not ${{ runner.temp }}: the `runner` context is unavailable in a job-level env.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the 18 clones on purpose: the drill proves the ALERT path, not the corpus, and must
+      # not pay for the corpus to reach it (secbench.yml / free-recall.yml ordering).
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a census failure."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # No mechanical-binaries step: the census reads git history and runs the TS/AST hand-rolled
+      # detector. Nothing here shells out to semgrep/trufflehog/osv-scanner/gitleaks.
+      - name: Census the pinned corpus
+        run: |
+          pnpm genai-admission-census 2>&1 | tee "$RUNNER_TEMP/genai-census.log"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Gate liveness — did this job actually census any repo?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: genai-admission-census
+
+      - name: Upload the census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: genai-census
+          path: ${{ runner.temp }}/genai-census.log
+          if-no-files-found: warn
+
+      # The per-repo table is what tells a reader WHICH repo gained or lost an arm, and the POPULATION
+      # totals deliberately hide that. Worth keeping off a run that is 30 days from repeating.
+      - name: Summarise the census in the run summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/genai-census.log" ]; then
+            {
+              echo '### Commit-level self-admitted-GenAI census'
+              echo ''
+              echo '```'
+              cat "$RUNNER_TEMP/genai-census.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A scheduled run goes red on a branch nobody watches (#1128/#1138). workflow_dispatch stays in
+      # the condition permanently: a cron-only alert path cannot be proven to work, which is how
+      # #1287 found five of them shipped unfired. Never fires on the PR trigger — that failure is
+      # already on the PR.
+      - name: Open or update the genai-census tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-genai-census-alert
+          label-description: Auto-opened when the monthly self-admitted-GenAI census CI run fails
+          title: self-admitted-GenAI census failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The monthly `genai-census` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A NEGATIVE result does not fail this gate — `VERDICT — NO within-repo commit-level comparison is available` is a valid, publishable answer and exits 0. It fails on three things, and the artifact tells them apart: ZERO admissions corpus-wide, which on this corpus means the classifier broke rather than that the corpus went quiet; a DEAD UPSTREAM, since the census refuses to drop a repo from the denominator and so fails instead; and a missing gate-liveness receipt, meaning the job died before it censused anything. Reproduce locally with `pnpm genai-admission-census`. If a pinned repo has moved or gone private, fix its entry in `src/scan/handrolled-frequency.ts` rather than dropping it — a repo silently missing from the population is the omission this census exists to prevent. Close this issue once green."

@@ -420,6 +420,59 @@ const PROVENANCE_FORM = /^(MEASURED|TRIED|ASSUMED) (\d{4}-\d{2}-\d{2})\b/;
 // re-testing nothing.
 const PLACEHOLDER = /^(n\/?a|tbd|todo|none|unknown|\?+)$/i;
 
+// #1646 — THE COMMAND AN AUTHOR EXERCISES IS NOT ALWAYS THE COMMAND THE GATE RUNS. In a Claude Code
+// agent shell, `grep` is a shell function installed by ~/.claude/shell-snapshots/snapshot-zsh-*.sh
+// that re-execs the CLI as `ugrep`; it forwards to the real binary only for a short flag allow-list.
+// `--revalidate` runs falsifiers through `spawnSync("sh", ["-c", …])` and an Actions `run:` step uses
+// `bash -e {0}`, and NEITHER inherits that function — so the same command can be exercised by its
+// author and answer the opposite way in the venue that scores it.
+//
+// MEASURED 2026-07-31 across a 26-cell flag probe (`-q -qv -v -c -L -l -o -m -qE -qEv -qi -qw -qx
+// -qF -qs -qc -qn -qr -rq -qL -ql`, plus the split `-q -v` and `-vq` forms): the ONLY divergence is
+// `-v` combined with suppressed output — wrapper 1, `/usr/bin/grep` 0, on the same file and
+// predicate. `-c`, `-L`, `-o` and `-m`, which #1646 asked about, agree. So the ban is `-v`, not a
+// vague "prefer git grep".
+//
+// Population when this landed: 1 of 42 empirical falsifiers — src/disclosure-venue.ts's `grep -qv`,
+// which measured `sh -c`=1 (blocker holds) and agent-shell=0 (blocker GONE) against the same tree.
+// That is #1345's shape exactly: a falsifier whose answer depends on who ran it re-tests nothing.
+//
+// A `grep` inside `sh -c '…'` is exempt, and not as a convenience: `sh -c` starts a new process that
+// inherits no zsh functions. MEASURED 2026-07-31 — `sh -c "grep -qv beta f"` exits 0 from inside the
+// agent shell, agreeing with /usr/bin/grep, while the same words unwrapped exit 1. `git grep`,
+// `command grep` and an absolute path are exempt for the same reason: the function shadows the bare
+// word only.
+const SH_C_SEGMENT = /\bsh -c '[^']*'/g;
+const GREP_INVOCATION = /(?:^|[\s|;&(])((?:git\s+|command\s+|\/\S*\/)?grep)((?:\s+-{1,2}[^\s'"]+)*)/g;
+
+/** The first bare-`grep` invocation in `command` that uses `-v`, or undefined. */
+export function shadowedInvertGrep(command: string): string | undefined {
+  for (const m of command.replace(SH_C_SEGMENT, " ").matchAll(GREP_INVOCATION)) {
+    if (m[1] !== "grep") continue;
+    const flags = m[2] ?? "";
+    if (/\s--invert-match\b/.test(flags) || /\s-[A-Za-z]*v/.test(flags)) return `grep${flags}`;
+  }
+  return undefined;
+}
+
+// #1647 — a git pathspec is NOT a shell glob. Without `:(glob)` magic git matches with wildmatch and
+// WM_PATHNAME off, so a bare `*` already crosses `/` and `**/` therefore requires at least one
+// intervening directory. MEASURED 2026-07-31 in this checkout: `git ls-files -- 'src/**/*.ts'` lists
+// 478 files and NOT ONE top-level `src/*.ts`, while `:(glob)src/**/*.ts` lists 611 including them.
+// The falsifier that shipped with that pathspec exited 1 — "still blocked" — with a production
+// importer planted at src/__probe.ts, which is the one answer a falsifier may never give wrongly.
+const UNGLOBBED_DOUBLE_STAR = /'((?::\([^)]*\))?[^']*\*\*[^']*)'/g;
+
+/** The first `**`-bearing git pathspec in `command` that lacks `:(glob)` magic, or undefined. */
+export function unglobbedPathspec(command: string): string | undefined {
+  if (!/\bgit\s+(?:grep|ls-files|log|diff)\b/.test(command)) return undefined;
+  for (const m of command.matchAll(UNGLOBBED_DOUBLE_STAR)) {
+    const spec = m[1] as string;
+    if (!/^:\([^)]*\bglob\b[^)]*\)/.test(spec)) return spec;
+  }
+  return undefined;
+}
+
 // #1319 — A SUPERVISED PATH PRODUCES A RELAY, NOT A SILENT CLOSE. No executor has ever recorded
 // "asked the operator, was refused", while grants are routine and on the record (#1141, #1205,
 // #1216) — yet "that path is supervised" silently terminated acceptance criteria in #945, #1056,
@@ -509,6 +562,14 @@ export function validateRecordedReason(r: ParsedReason, exists: (path: string) =
     else if (PLACEHOLDER.test(f.FALSIFIER)) errors.push(`FALSIFIER: "${f.FALSIFIER}" is a placeholder, not a command — it would satisfy this gate while re-testing nothing`);
     if (f.OWNER) errors.push("OWNER: belongs on a decisional reason (who makes the ruling); an empirical reason is settled by its FALSIFIER, not by a person");
     if (tier !== undefined && !KNOWN_FALSIFIER_TIERS.has(tier)) errors.push(`FALSIFIER-TIER: "${tier}" is not a registered live tier — a typo would make this falsifier silently always-skipped. Known tiers: ${[...KNOWN_FALSIFIER_TIERS].join(", ")} (register a new one in KNOWN_FALSIFIER_TIERS, #1072)`);
+    const inverted = f.FALSIFIER ? shadowedInvertGrep(f.FALSIFIER) : undefined;
+    if (inverted) {
+      errors.push(`FALSIFIER: \`${inverted}\` inverts a BARE \`grep\` (#1646). In a Claude Code agent shell \`grep\` is a function re-execing as ugrep, whose \`-v\` exit status disagrees with /usr/bin/grep's — so this command answers one way when its author exercises it and the other way under \`sh -c\`, which is what --revalidate and CI actually run. Express the exclusion as a git pathspec (\`git grep -q … -- ':(glob,exclude)…'\`), count with \`grep -c\` and test the number, or call \`/usr/bin/grep\`.`);
+    }
+    const unglobbed = f.FALSIFIER ? unglobbedPathspec(f.FALSIFIER) : undefined;
+    if (unglobbed) {
+      errors.push(`FALSIFIER: git pathspec '${unglobbed}' uses \`**\` without \`:(glob)\` magic (#1647). Git matches pathspecs with WM_PATHNAME off, so a bare \`*\` already crosses \`/\` and \`**/\` instead demands an intervening directory — 'src/**/*.ts' silently matches nothing at the top level of src/. Write ':(glob)src/**/*.ts' (and ':(glob,exclude)…' for the negations), or drop the \`**\`.`);
+    }
     const unbindable = f.FALSIFIER ? falsifierPlaceholders(f.FALSIFIER) : [];
     if (unbindable.length > 0 && tier === undefined) {
       errors.push(`FALSIFIER: names placeholder(s) ${bindingHint(unbindable)} but declares no FALSIFIER-TIER. Offline the command is run as written, where the shell reads \`<${unbindable[0]}>\` as an input redirect — it exits non-zero without testing anything, which reads as "the blocker holds" forever. Either write real paths, or tag the tier so the placeholders become run-time bindings (#1072).`);
