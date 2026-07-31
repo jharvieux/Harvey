@@ -115,7 +115,8 @@ export function isMutationBaseline(m: ModuleBaseline | ModuleNotRun | MutationBa
 // #319: the ONE way a mutation score is written into the manifest's drift output — score always
 // carried with the covered scope that makes it honest, never a bare percentage. scoreMutationBaseline
 // routes every pass/fail line through this so "20%" can't appear without "over lib/server-common.ts".
-function formatMutationClaim(b: MutationBaseline): string {
+function formatMutationClaim(b: MutationBaseline, numbers?: { mutationScore: number; killed: number; valid: number }): string {
+  const n = numbers ?? b;
   const scope = b.coveredScope.length === 1
     ? b.coveredScope[0]
     : `${b.coveredScope.length} files (${b.coveredScope.join(", ")})`;
@@ -123,7 +124,7 @@ function formatMutationClaim(b: MutationBaseline): string {
   // wherever the claim is printed, so a reader doesn't read "20% (7/35 killed)" as more precise
   // than it is.
   const band = b.tolerance ? ` (±${b.tolerance} killed, measured flaky — see note)` : "";
-  return `${b.mutationScore}% (${b.killed}/${b.valid} killed)${band} over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
+  return `${n.mutationScore}% (${n.killed}/${n.valid} killed)${band} over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
 }
 
 // #413: authorship provenance of a corpus repo, classified by evidence (commit trailers, AI-tool
@@ -1330,6 +1331,7 @@ export function scoreMutationBaseline(
   actual: { mutationScore: number; killed: number; valid: number },
 ): DriftRow {
   const pass = Math.abs(actual.killed - baseline.killed) <= (baseline.tolerance ?? 0) && actual.valid === baseline.valid;
+  const identical = actual.mutationScore === baseline.mutationScore && actual.killed === baseline.killed && actual.valid === baseline.valid;
   return {
     slug,
     module: "M8",
@@ -1340,8 +1342,17 @@ export function scoreMutationBaseline(
     scope: "whole-repo", // the mutate-glob subset is already stated in the claim itself (#319)
     // #319: even the drift line states the covered scope — the score never appears bare, so a
     // reader of the scorecard sees "20% over lib/server-common.ts", not a repo-level "20%".
+    // #1419: a PASSING row used to print the BASELINE's percentage, never the one this run measured.
+    // inbox-zero measured 75.2% in CI and the scorecard read `matches baseline: 76%` — a number
+    // nobody measured, printed by a scorecard whose entire subject is measurements, which is what
+    // #319 forbids one field over. The pass/fail arithmetic was and is sound: it keys on `killed`,
+    // and the percentage moves independently because Stryker counts a TIMEOUT as detected but not as
+    // killed. So the two numbers legitimately differ on a pass, and the row now says both and which
+    // is which rather than silently substituting one for the other.
     detail: pass
-      ? `matches baseline: ${formatMutationClaim(baseline)}`
+      ? identical
+        ? `matches baseline exactly: ${formatMutationClaim(baseline, actual)}`
+        : `MEASURED ${formatMutationClaim(baseline, actual)} — within the baseline's band; RECORDED baseline is ${baseline.mutationScore}% (${baseline.killed}/${baseline.valid} killed)`
       : `DRIFT: expected ${formatMutationClaim(baseline)}, got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`,
   };
 }
