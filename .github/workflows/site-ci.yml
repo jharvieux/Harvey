@@ -3,10 +3,16 @@
 # deploys, and site-smoke stays green against the last good deployment while `main` carries the
 # break. This job runs `site/`'s own toolchain instead: `npm run build` (which typechecks via the
 # Next TS plugin AND performs the static-generation pass — see below) and `npm run lint`
-# (`next lint`, now backed by a real `eslint-config-next` config; #1592 found it had previously
-# been a permanent no-op because no eslint dependency was installed at all — `next lint` printed
-# "No ESLint warnings or errors" and exited 0 unconditionally, on every input, including a file
-# with a deliberately introduced `no-unused-vars` violation).
+# (`next lint`, now backed by a real `eslint-config-next` config). CORRECTED 2026-07-30: an earlier
+# draft of this comment claimed pre-PR `next lint` exited 0 unconditionally ("No ESLint warnings or
+# errors") — that is FALSE. MEASURED 2026-07-30 from a clean `npm ci` at `main@9001e7a`
+# (no eslint dependency present, no eslint config file): `npm run lint` prints Next's "How would
+# you like to configure ESLint?" interactive setup prompt, then exits 1 because CI has no TTY to
+# answer it (reproduced via `CI=true npm run lint < /dev/null`, both in a plain shell and matching
+# GitHub Actions' non-interactive stdin) — it never reached any actual lint check, so the gap was a
+# loud, unconditional exit-1 failure, not a silent pass. `site-smoke.yml`/nothing invoked
+# `npm run lint` before this PR either way, so the broken command's exit code never blocked
+# anything — the real defect this PR closes.
 #
 # `site/` is a SEPARATE, self-contained npm project — its own `package.json` under npm, not a
 # pnpm workspace member (`pnpm-workspace.yaml` declares no packages). A pnpm invocation inside it
@@ -78,6 +84,6 @@ jobs:
       - run: npm run build
 
       # `next lint`, backed by `site/eslint.config.mjs` (flat config, `next/core-web-vitals` via
-      # `FlatCompat`). See the header note: without an eslint dependency present this was a silent
-      # no-op that could never fail.
+      # `FlatCompat`). See the header note: without an eslint dependency present this exited 1 on
+      # an unanswerable interactive setup prompt and never ran a real lint check.
       - run: npm run lint
