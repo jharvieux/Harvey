@@ -319,7 +319,21 @@ const MODULE_LIMITATIONS = {
   // nested-loop-join class is the one place this executor's own reading disagreed with the
   // recorded triage in the FP direction (#1488) — so read 96% as "the six named families are
   // fixed", never as the scanner's settled precision.
-  M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a share of them do not survive review. Read against source on six pinned open-source codebases: 47 of 65 graded findings held (2026-07-28, 72%); after six named false-positive families were fixed, 48 of the 50 findings that still emit hold — but on a residual of only 50 rows, and one class (nested-loop join) has a recorded open disagreement about its true rate. A 40-row random sample drawn from 858 graded findings on four larger codebases held 78% before those fixes and has not been re-sampled since. Treat the code-tier list as a strong lead list that still needs reading, not as a verified defect list. Per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity notes (hook dependencies, and since 2026-07-28 the state-sprawl maintainability observation) are excluded from these counts and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
+  //
+  // SETTLED 2026-07-30 (#1488): a third, independent read of the class's 7 field rows against
+  // source agrees with the STRICTER prior reading, 5 of 7 false, not #1261's original 2 of 7 —
+  // proposit's multi-select.tsx:82 (a UI selection array, bounded by what a user clicked), boxyhq's
+  // products.ts:49 and mvp-boilerplate's stripe.ts:151 (both a small fixed Stripe pricing catalog,
+  // not tenant data), and saas-lite's is-route-active.ts:96 + app-breadcrumbs.tsx:65 (both
+  // collections are URL path segments, bounded by URL depth). Only proposit's members-tab.tsx:77
+  // and proposals-server.ts:82 hold — both collections there scale with real org/proposal data.
+  // No guard changed — src/detectors/perf-code.ts's #1488 comment on detectNestedLoopJoin records
+  // why: the false rows' shape (a parameter-typed array with no local trace to its own origin) is
+  // also the shape an existing corpus positive relies on to fire, so a guard broad enough to
+  // silence the false rows would silence a real one too. This is therefore a RE-GRADING of the
+  // same emitted rows, unlike the 72%->96% before/after above: 3 rows move from held to false in
+  // the 50-row residual, 45/50 (90%), not 48/50 (96%).
+  M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a share of them do not survive review. Read against source on six pinned open-source codebases: 47 of 65 graded findings held (2026-07-28, 72%); after six named false-positive families were fixed, 45 of the 50 findings that still emit hold (2026-07-30, 90%) — a residual of only 50 rows. One class, nested-loop join, carried a recorded disagreement about its true rate (2 vs. 5 of its 7 field rows false); a third independent read settled it at 5 false, and this figure reflects that reading. A 40-row random sample drawn from 858 graded findings on four larger codebases held 78% before those fixes and has not been re-sampled since. Treat the code-tier list as a strong lead list that still needs reading, not as a verified defect list. Per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity notes (hook dependencies, and since 2026-07-28 the state-sprawl maintainability observation) are excluded from these counts and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
   M8: { name: "Test quality", note: "A mutation score is only as good as its stated scope — a scoped run is not a whole-repo coverage claim (see Test quality below when present)." },
   M9: { name: "App Router boundary/rendering", note: "AST pattern coverage of App Router conventions, not full framework-semantics execution." },
   M10: { name: "Data classification (PII/PHI/PCI)", note: "Classification is derived from column/schema naming and structure. A JSON/JSONB container is flagged for review, not asserted, and its actual contents are not read." },

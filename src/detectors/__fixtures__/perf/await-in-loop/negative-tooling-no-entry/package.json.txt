@@ -1,0 +1,4 @@
+{
+  "name": "gen-tool",
+  "scripts": { "gen": "tsx src/index.ts" }
+}
