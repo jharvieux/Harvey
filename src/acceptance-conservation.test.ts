@@ -586,31 +586,60 @@ describe("venue parity — a green PR check predicts the close-time verdict (#15
   // whose dispositions are recorded as issue comments — the venue #1341 chose", "ignores a closing
   // keyword for another issue in the surfaces it reads", and both `--selftest` parity tests. Do not
   // read a green parity assertion as covering the venue set's existence.
+  //
+  // WIDENED for #1581: the arrangement space used to vary body/comment arrangements over ONE linked
+  // PR, so an issue closed by TWO of them was outside the space and parity was broken there while
+  // this assertion read green. Every arrangement now names the PR under test AND the full linked-PR
+  // set, which is the state both gates actually see.
   it("PR verdict == close verdict, over every arrangement of the venues", () => {
+    const other = (body: string): { ref: string; body: string } => ({ ref: "#901", body });
     const arrangements = [
-      { name: "dispositions in the PR body only", body: PR_BODY, comments: [] },
-      { name: "dispositions in the issue comments only", body: "Closes #700\n", comments: mapped },
-      { name: "dispositions in BOTH — the #1517 shape", body: PR_BODY, comments: mapped },
-      { name: "dispositions nowhere", body: "Closes #700\n", comments: [] },
-      { name: "one criterion mapped, one left unaccounted", body: `Closes #700\n\n${mapped[0]}\n`, comments: [] },
-      { name: "one in each venue — no duplicate, both accounted for", body: `Closes #700\n\n${mapped[0]}\n`, comments: [mapped[1]!] },
+      { name: "dispositions in the PR body only", body: PR_BODY, comments: [], others: [] },
+      { name: "dispositions in the issue comments only", body: "Closes #700\n", comments: mapped, others: [] },
+      { name: "dispositions in BOTH — the #1517 shape", body: PR_BODY, comments: mapped, others: [] },
+      { name: "dispositions nowhere", body: "Closes #700\n", comments: [], others: [] },
+      { name: "one criterion mapped, one left unaccounted", body: `Closes #700\n\n${mapped[0]}\n`, comments: [], others: [] },
+      { name: "one in each venue — no duplicate, both accounted for", body: `Closes #700\n\n${mapped[0]}\n`, comments: [mapped[1]!], others: [] },
+      // #1581's own shape and its neighbours.
+      { name: "TWO linked PRs that both disposition every criterion", body: PR_BODY, comments: [], others: [other(PR_BODY)] },
+      { name: "TWO linked PRs, one criterion each — no duplicate", body: `Closes #700\n\n${mapped[0]}\n`, comments: [], others: [other(`Closes #700\n\n${mapped[1]}\n`)] },
+      { name: "TWO linked PRs, only the OTHER one dispositions anything", body: "Closes #700\n", comments: [], others: [other(PR_BODY)] },
+      { name: "THREE linked PRs, the third duplicating a comment", body: `Closes #700\n\n${mapped[0]}\n`, comments: [mapped[1]!], others: [other("refs #700\n"), { ref: "#902", body: `refs #700\n\n${mapped[1]}\n` }] },
     ];
     for (const a of arrangements) {
-      const lookup = withComments(...a.comments);
-      const pr = checkAcceptance(a.body, lookup).ok;
-      const close = checkClosedIssue({ issue: 700, linkedPrs: [{ ref: "#900", body: a.body }], authorIsBot: false }, lookup).ok;
+      const lookup = lookupOf(issue({ number: 700, body: CRITERIA, comments: a.comments, linkedPrs: [{ ref: "#900", body: a.body }, ...a.others] }));
+      const pr = checkAcceptance(a.body, lookup, undefined, undefined, { selfPr: "#900" }).ok;
+      const close = checkClosedIssue({ issue: 700, authorIsBot: false }, lookup).ok;
       expect(pr, `${a.name}: PR check ${pr}, close check ${close}`).toBe(close);
     }
   });
 
   // NEGATIVE CONTROL for the invariant above: it must be able to fail. An arrangement where the two
   // genuinely differ has to be visible, or "they always agree" is a statement about the assertion.
+  // It reproduces the PRE-FIX behaviour directly — the PR path reading only its own body, with the
+  // other linked PR's venue withheld — so what it watches fail is the defect, not a stand-in.
   it("NEGATIVE CONTROL: the parity assertion fails when one path is fed a venue the other is not", () => {
-    const lookup = withComments();
-    const pr = checkAcceptance(PR_BODY, lookup).ok;
-    const close = checkClosedIssue({ issue: 700, linkedPrs: [], authorIsBot: false }, lookup).ok;
-    expect(pr).toBe(true);
-    expect(close).toBe(false);
+    const both = lookupOf(issue({ number: 700, body: CRITERIA, linkedPrs: [{ ref: "#900", body: PR_BODY }, { ref: "#901", body: PR_BODY }] }));
+    const prOnly = lookupOf(issue({ number: 700, body: CRITERIA }));
+    expect(checkAcceptance(PR_BODY, prOnly).ok).toBe(true);
+    expect(checkClosedIssue({ issue: 700, authorIsBot: false }, both).ok).toBe(false);
+  });
+
+  // #1581's live shape, stated as the defect rather than as an arrangement: two PRs closing one
+  // issue, each carrying the same disposition lines. MEASURED 2026-07-31 before the fix — PR check
+  // ok = true, close check ok = false.
+  it("REGRESSION: fails a PR whose criterion is ALSO dispositioned by a second linked closing PR", () => {
+    const lookup = lookupOf(issue({ number: 700, body: CRITERIA, linkedPrs: [{ ref: "#900", body: PR_BODY }, { ref: "#901", body: PR_BODY }] }));
+    const r = checkAcceptance(PR_BODY, lookup, undefined, undefined, { selfPr: "#900" });
+    expect(r.ok).toBe(false);
+    expect(r.issues[0]!.criteria[0]!.problems[0]).toContain("#700.1 is mapped 2 times — the PR body, line 3; linked PR #901, line 3");
+  });
+
+  it("does not read the PR under test as its own linked venue — `selfPr` excludes it", () => {
+    const lookup = lookupOf(issue({ number: 700, body: CRITERIA, linkedPrs: [{ ref: "#900", body: PR_BODY }] }));
+    expect(checkAcceptance(PR_BODY, lookup, undefined, undefined, { selfPr: "#900" }).ok).toBe(true);
+    // and without the exclusion the same state is a duplicate, so the filter is load-bearing
+    expect(checkAcceptance(PR_BODY, lookup).ok).toBe(false);
   });
 
   // The other half of the same false negative, reached by a different route: GitHub closes on a
@@ -747,13 +776,14 @@ describe("the seeders fail loud rather than planting nothing", () => {
 describe("an issue that closes with no PR body to read (#1341)", () => {
   const CRITERIA = "## Acceptance\n- first\n- second\n";
   const closeLookup: IssueLookup = (n) => (n === 700 ? issue({ number: 700, body: CRITERIA }) : undefined);
-  const bare = { issue: 700, linkedPrs: [], authorIsBot: false };
+  const bare = { issue: 700, authorIsBot: false };
   const mapped = [
     "ACCEPTANCE #700.1 met: src/acceptance-conservation.ts now checks it",
     "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it",
   ];
-  /** The comments are read through the LOOKUP on both paths, which is what keeps the two in step. */
+  /** Both venue kinds are read through the LOOKUP on both paths, which is what keeps the two in step. */
   const commented = (...comments: string[]): IssueLookup => (n) => (n === 700 ? issue({ number: 700, body: CRITERIA, comments }) : undefined);
+  const linked = (...linkedPrs: { ref: string; body: string }[]): IssueLookup => (n) => (n === 700 ? issue({ number: 700, body: CRITERIA, linkedPrs }) : undefined);
 
   it("fails a BARE CLICK — no linked PR, no comment, and two criteria nobody accounted for", () => {
     const r = checkClosedIssue(bare, closeLookup);
@@ -771,13 +801,13 @@ describe("an issue that closes with no PR body to read (#1341)", () => {
   // The one that looks like a normal close and is not: GitHub acts on the sidebar link, so the issue
   // closes on merge while a body-reading gate sees a PR that closes nothing.
   it("fails a DEVELOPMENT-SIDEBAR close whose linked PR body carries no closing keyword and no dispositions", () => {
-    const r = checkClosedIssue({ ...bare, linkedPrs: [{ ref: "#800", body: "Refactors the seeder. refs #700" }] }, closeLookup);
+    const r = checkClosedIssue(bare, linked({ ref: "#800", body: "Refactors the seeder. refs #700" }));
     expect(r.ok).toBe(false);
     expect(r.surfacesRead).toEqual(["linked PR #800"]);
   });
 
   it("passes a sidebar close whose dispositions live in the linked PR's body, so nothing is written twice", () => {
-    const r = checkClosedIssue({ ...bare, linkedPrs: [{ ref: "#800", body: `refs #700\n\n${mapped.join("\n")}` }] }, closeLookup);
+    const r = checkClosedIssue(bare, linked({ ref: "#800", body: `refs #700\n\n${mapped.join("\n")}` }));
     expect(r.ok).toBe(true);
     expect(r.contributed).toEqual(["linked PR #800"]);
   });

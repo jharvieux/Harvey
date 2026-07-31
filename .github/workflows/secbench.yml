@@ -39,6 +39,10 @@ on:
         description: "Prove the ci-secbench-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1569). SKIPS the fetch and scoring steps, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red. Cheap on purpose: nothing is cloned."
+        type: boolean
+        default: false
   # The monthly schedule is the point of this workflow; the PR trigger exists so a change to the
   # harness is exercised by the harness. Without it the first evidence that a refactor of the
   # loader/scorer/tree-builder broke the pipeline would arrive up to a month later, on a branch
@@ -100,6 +104,7 @@ jobs:
       # history. SECBENCH_PIN/SECBENCH_REPO are read out of the source so the workflow cannot drift
       # away from the pin the loader and every recorded measurement are scoped to.
       - name: Fetch SecBench.js at the pinned commit
+        if: ${{ !inputs.liveness_drill }}
         run: |
           set -euo pipefail
           # Filtered rather than eval'd raw: `pnpm run` prints a banner line, and eval'ing that
@@ -119,6 +124,7 @@ jobs:
       # SecBench ships no lockfiles, so osv-scanner has nothing to read until this runs. Fails loud
       # past a 5% miss rate — see the tool's header for why a quiet partial tree INFLATES recall.
       - name: Generate the per-entry lockfile tree
+        if: ${{ !inputs.liveness_drill }}
         run: |
           pnpm secbench-tree \
             --dir "$RUNNER_TEMP/secbench/checkout" \
@@ -130,6 +136,7 @@ jobs:
       # real tool failure and must not be laundered into an empty report, which would score as a
       # total recall collapse and be indistinguishable from a detector regression.
       - name: Scan the lockfile tree with osv-scanner
+        if: ${{ !inputs.liveness_drill }}
         run: |
           set -uo pipefail
           # `|| status=$?` rather than a bare call then `$?`: the default step shell is `bash -e`, so
@@ -150,6 +157,7 @@ jobs:
       # --max-failure-pct's default alone — a class of packages going unresolvable would shrink the
       # denominator, which the CLI now reports per class so the shrink is visible in the artifact.
       - name: Build the installed target-package source tree
+        if: ${{ !inputs.liveness_drill }}
         run: |
           pnpm secbench-tree \
             --dir "$RUNNER_TEMP/secbench/checkout" \
@@ -164,6 +172,7 @@ jobs:
       # library-source table is reported, not gated (#1275 records why its two uncovered classes are
       # `n/a` rather than 0).
       - name: Score SecBench recall
+        if: ${{ !inputs.liveness_drill }}
         run: |
           pnpm validate:secbench \
             --dir "$RUNNER_TEMP/secbench/checkout" \
@@ -212,7 +221,7 @@ jobs:
       # work, which is how #1287 found five of them shipped unfired. Never fires on the PR trigger —
       # that failure is already on the PR.
       - name: Open or update the SecBench tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-secbench-alert

@@ -25,6 +25,7 @@ import {
   readConditionalScan,
   type ConditionalScan,
 } from "../conditional-scan.js";
+import { recordMeasured } from "../ci-liveness.js";
 
 // Removing a check the sibling path still runs is the exact defect: a path quietly stops covering a
 // class. Seeding it on the REAL source (rather than on a synthetic file) proves the gate fires on
@@ -86,6 +87,10 @@ function main(): void {
     );
     process.exit(1);
   }
+
+  // #1568: gate 4b rides inside the disclosure-venue job, whose in-job filter can make it a green
+  // no-op. Its own receipt, so "the job was green" never stands in for "4b scored anything".
+  recordMeasured("conditional-scan", CONDITIONAL_SCANS.length, `modules with sibling scan paths audited (${declaredOmissions.length} omissions declared)`);
 
   console.log(
     "\n✓ every module with sibling scan paths is registered, and every omission it makes is declared and" +
