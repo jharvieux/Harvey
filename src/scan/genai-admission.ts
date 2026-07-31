@@ -122,3 +122,18 @@ export function blameLineShas(porcelain: string): string[] {
 }
 
 export const density = (findings: number, lines: number): number | null => (lines === 0 ? null : findings / (lines / 1000));
+
+/** A broken classifier renders as a clean negative result — the exact shape of this tool's own
+ *  first-revision bug (#1600), which scored every repo at 0 trailer admissions and exited 0 with a
+ *  plausible table. This corpus is not merely likely to contain admissions: several targets were
+ *  selected BECAUSE their history carries known assistant `Co-authored-by` trailers, so a genuine
+ *  zero across every repo would be a first for this specific population. Returns an error message
+ *  when the run should fail loud, `null` when the population looks sane. */
+export function allZeroAdmissionError(totalAdmitted: number, totalCommits: number, repoCount: number): string | null {
+  if (totalAdmitted > 0) return null;
+  return (
+    `0 of ${totalCommits} commits register as self-admitted across all ${repoCount} repos. This corpus is ` +
+    "known to contain assistant Co-authored-by trailers (flori-web, cravab, mvp-boilerplate, etc.), so an " +
+    "all-zero result means the classifier broke, not that the population is empty."
+  );
+}

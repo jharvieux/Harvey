@@ -242,13 +242,13 @@ assigned by inspection and checked by nothing — is recorded as a re-testable c
 prose, so that the day someone builds the verifier, this paragraph fails loud instead of quietly
 becoming false:
 
-```
+<!--
 REASON: the per-repo `provenance` tiers in src/scan/external-corpus.ts are assigned by our own inspection and no tool, test or gate checks one against evidence, so no comparison computed across those tiers is published
 KIND: empirical
 PROVENANCE: MEASURED 2026-07-30 — the field is set as a literal on each corpus entry and read only for grouping and reporting (src/cli/handrolled-frequency.ts, src/cli/genai-admission-census.ts); the repo has no provenance verifier. Exercised in both directions the same day: as committed it exits 1, and with a `src/cli/validate-provenance.ts` present it exits 0.
 FALSIFIER: test -d src/cli || exit 127; ls src/cli/validate-provenance.ts >/dev/null 2>&1 && exit 0 || exit 1
 TOUCHES: src/scan/external-corpus.ts docs/design/m6-corpus-frequency.md
-```
+-->
 
 **What the tiers measure today.** Re-measured 2026-07-30 with `pnpm handrolled-frequency` over the
 18-repo pinned corpus (branch base `d41ba3a`). Mixed-unit indicator sum — matches/files/findings —
@@ -309,6 +309,17 @@ per-tier ratio never had:
    commit that last wrote it; each arm's findings are normalised by that arm's own attributed lines,
    so the larger arm does not dominate the smaller.
 
+**A fourth difference, forced by the blame requirement rather than chosen: the two density figures
+in this document use different instruments and are not on the same scale.** The per-tier table
+above counts SHIPPED_SHAPES findings (5 taxonomies) plus the MEASURED_SHAPES regex signatures —
+the catalogue's ~55 measured shapes. The within-repo comparison below counts every taxonomy
+`detectHandrolledFindings` emits (~33), because blame needs a finding's line location and the
+narrower per-tier count was never wired to expose one. The choice is forced and it is applied
+identically to both arms of the within-repo comparison, so that comparison's own ratio still
+stands — but the two "/KLOC" figures should never be read against each other: carbon alone scores
+0.272/KLOC on the per-tier instrument and 0.047/KLOC on the within-repo one, a 6x gap from the
+instrument change alone, nothing to do with AI provenance.
+
 ### The population, stated before the result
 
 Measured 2026-07-30 over the 18-repo pinned corpus, at each repo's pinned commit, merges excluded:
@@ -316,12 +327,19 @@ Measured 2026-07-30 over the 18-repo pinned corpus, at each repo's pinned commit
 - **30,330** commits in corpus history; **21,123** touch product source.
 - **1,112** of those are self-admitted; **20,011** are not.
 - By signal: **1,289** admissions carry a trailer (high precision), **171** are prose-only (low
-  precision — reported separately, never blended).
+  precision). The POPULATION counts above report the two signals in separate columns, but the
+  density comparison below does NOT keep them apart: its declared-AI arm admits a commit on trailer
+  OR message, so a prose-only commit lands in the "declared" arm too, not in a quarantined bucket of
+  its own. See "The arms are not clean", below, for what that costs.
 - **12 of 18** repos contain at least one self-admission.
-- **3 of 18** supply BOTH arms at ≥30 product-touching commits: **rallly, inbox-zero, carbon**. The
-  other 15 are effectively single-armed — flori-web is 119 admitted against 8 not, boxyhq 0 against
-  342 — and pooling them across repos would rebuild the per-repo confound this design exists to
-  remove, so they are excluded rather than pooled.
+- **3 of 18** supply BOTH arms at ≥30 product-touching commits: **rallly, inbox-zero, carbon**.
+  **One repo is a near-miss, not "effectively single-armed" like the rest: tanstack-com is 29
+  admitted against 1,502 not — one commit short of the 30-commit floor.** Sensitivity check: at
+  `MIN_ARM = 25` or `MIN_ARM = 29` it clears both arms and becomes a 4th usable repo; at the
+  committed `MIN_ARM = 30` it does not. The other 14 are genuinely single-armed by a wide margin —
+  flori-web is 119 admitted against 8 not, boxyhq 0 against 342 — and pooling any of them across
+  repos would rebuild the per-repo confound this design exists to remove, so they are excluded
+  rather than pooled.
 
 That population is the reason the answer is three repos and not eighteen. It is a real limit, and it
 is measured rather than assumed.
@@ -354,9 +372,15 @@ difference at any magnitude.
   sample of anything, all three sit in the `ai-assisted` tier under the label disclosure recorded
   above, and the M6
   hand-rolled catalogue measures one narrow property.
-- **The arms are not clean.** Self-admission is a **biased sample**: the not-declared arm certainly
-  contains AI-written code whose author did not say so, which biases any real difference *toward*
-  the null. A null result under that bias is weaker evidence of no effect than it looks.
+- **The arms are not clean, and not only on the side this is usually stated for.** Self-admission
+  is a **biased sample**: the not-declared arm certainly contains AI-written code whose author did
+  not say so, which biases any real difference *toward* the null. A null result under that bias is
+  weaker evidence of no effect than it looks. **The declared arm is not clean either** — it admits a
+  commit on trailer OR message, so an unreviewed prose mention (Xiao et al. kept only ~43% of prose
+  mentions after manual review; this tool reviews none) lands in the "declared" arm exactly as a
+  trailer admission does, not in a separate low-precision bucket. Both directions bias toward null:
+  a genuinely-human commit wrongly admitted by prose dilutes the AI-declared arm's true rate down,
+  the same direction as the not-declared arm's contamination pushes the comparison toward 1.
 - **Declaration practice is tool-driven.** An assistant that writes a trailer by default produces
   admissions; one that does not produces none, independent of how much code it wrote.
 - **Blame is last-writer, not author-of-the-logic.** An admitted commit that reformats or moves a

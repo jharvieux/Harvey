@@ -9,8 +9,12 @@
 // bucket. It exited 0 and produced a plausible-looking table. So these cases assert the counts in
 // both directions, not merely that the parser runs.
 
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ADMISSION_FORMAT, admittedCommits, blameLineShas, CENSUS_FORMAT, censusOfLog, density } from "./genai-admission.js";
+import { admittedCommits, allZeroAdmissionError, ADMISSION_FORMAT, blameLineShas, CENSUS_FORMAT, censusOfLog, density } from "./genai-admission.js";
 
 // Builds the same text `git log --format=CENSUS_FORMAT --name-only` produces, from the format
 // constant itself, so a change to the format keeps the fixture and the parser in step (a fixture
@@ -67,6 +71,49 @@ describe("censusOfLog", () => {
 
   it("reports nothing for an empty history rather than inventing a commit", () => {
     expect(censusOfLog("")).toMatchObject({ commits: 0, productCommits: 0, admittedProduct: 0, unadmittedProduct: 0 });
+  });
+});
+
+// Every case above builds its `git log` text by string-replacing CENSUS_FORMAT — a format change
+// moves fixture and parser together, so a real divergence between what git actually PRINTS for
+// `%(trailers:...)` and what the fixture assumes it prints stays invisible. This describe block runs
+// the real command against a real local repo instead: no network (git init + commit is entirely
+// local), under a second. If a git version ever renders the trailers placeholder or the sentinel
+// format differently than the synthesized fixtures assume, this is the only case that would fail.
+describe("censusOfLog against a REAL `git log` invocation, not a synthesized fixture", () => {
+  it("reproduces the trailer/prose/unadmitted split off real git output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-genai-admission-real-"));
+    try {
+      const git = (...args: string[]): string => execFileSync("git", args, { cwd: dir }).toString();
+      git("init", "-q");
+      git("config", "user.email", "test@example.com");
+      git("config", "user.name", "Test");
+
+      writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+      git("add", "a.ts");
+      git("commit", "-q", "-m", "feat: a\n\nCo-authored-by: Claude <noreply@anthropic.com>");
+
+      writeFileSync(join(dir, "b.ts"), "export const b = 2;\n");
+      git("add", "b.ts");
+      git("commit", "-q", "-m", "fix: rewrote this with ChatGPT's help");
+
+      writeFileSync(join(dir, "c.ts"), "export const c = 3;\n");
+      git("add", "c.ts");
+      git("commit", "-q", "-m", "fix: c\n\nCo-authored-by: Dana Rivera <dana@example.com>");
+
+      const log = execFileSync("git", ["-C", dir, "log", "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`]).toString();
+      const c = censusOfLog(log);
+      expect(c).toMatchObject({
+        commits: 3,
+        productCommits: 3,
+        trailerAdmitted: 1,
+        proseOnlyAdmitted: 1,
+        admittedProduct: 2,
+        unadmittedProduct: 1,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -137,5 +184,21 @@ describe("density", () => {
 
   it("returns null rather than dividing by an empty arm", () => {
     expect(density(3, 0)).toBeNull();
+  });
+});
+
+// The census's own first-revision bug scored every repo at 0 trailer admissions and exited 0 with a
+// plausible table (see this file's header comment). This guard is the fix for the residual: an
+// all-zero run must fail loud rather than render as a clean negative result.
+describe("allZeroAdmissionError", () => {
+  it("flags a run where NOTHING admitted across the whole corpus as broken, not empty", () => {
+    const msg = allZeroAdmissionError(0, 20_000, 18);
+    expect(msg).not.toBeNull();
+    expect(msg).toContain("0 of 20000 commits");
+    expect(msg).toContain("18 repos");
+  });
+
+  it("passes through a run with at least one real admission", () => {
+    expect(allZeroAdmissionError(1, 20_000, 18)).toBeNull();
   });
 });

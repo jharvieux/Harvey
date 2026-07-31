@@ -57,6 +57,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import {
   ADMISSION_FORMAT,
   admittedCommits,
+  allZeroAdmissionError,
   blameLineShas,
   CENSUS_FORMAT,
   censusOfLog,
@@ -237,9 +238,22 @@ out.push("    absence of GenAI, and the unadmitted arm is therefore NOT a clean 
 out.push("  • Trailer practice is tool-driven, not developer-driven — an assistant that writes the");
 out.push("    trailer by default produces admissions, one that does not produces none, independent");
 out.push("    of how much code it wrote.");
-out.push("  • Prose matches are LOW precision and are reported separately, never blended: Xiao et al.");
-out.push("    kept 1,292 of 3,004 retrieved mentions (~43%) after manual review; this does none.");
+out.push("  • Prose matches are LOW precision. The POPULATION table above reports them in their own");
+out.push("    column, but the density comparison's declared-AI arm (admittedCommits) admits on trailer");
+out.push("    OR message, so a prose-only commit lands in the declared arm too — it is not blended only");
+out.push("    for reporting, it is blended for the density measurement itself. Xiao et al. kept 1,292 of");
+out.push("    3,004 retrieved mentions (~43%) after manual review; this does none, so the declared arm");
+out.push("    inherits that unreviewed risk, not only the not-declared arm.");
 out.push("  • This is a census of COMMITS, not of lines or of surviving code. A commit-level label");
 out.push("    does not tell you which lines still stand at the pinned commit.");
 
 console.log(out.join("\n"));
+
+// Fail loud rather than let a broken classifier render as a negative result — see
+// allZeroAdmissionError's own doc comment for why zero is treated as broken, not quiet, on this
+// specific corpus.
+const allZeroError = allZeroAdmissionError(totals.admitted, totals.commits, rows.length);
+if (allZeroError) {
+  console.error(`ERROR: ${allZeroError} Refusing to exit 0.`);
+  process.exitCode = 1;
+}
