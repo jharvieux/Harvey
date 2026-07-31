@@ -175,11 +175,10 @@
     {
       "workflow": ".github/workflows/supervised-declines.yml",
       "marker": "ci-supervised-declines-alert",
-      "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING",
-        "sourceSha": "PENDING"
+      "pendingProof": {
+        "why": "The workflow FILE is not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not — MEASURED 2026-07-31: `gh api repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f ref=feature/sweep-ci-1545` returned HTTP 404, while ten sibling drills dispatched from that same branch the same hour all ran. The marker label therefore does not exist, and that absence is the evidence — do not create it by hand.",
+        "tracking": 1688,
+        "since": "2026-07-31"
       }
     }
   ],

@@ -80,6 +80,8 @@ function quotesAGrant(body: string): boolean {
 /** The replacement wording an orchestrator can apply — the deliverable CLAUDE.md's own rule asks for in the PR body. */
 const PROPOSED_WORDING = /\bproposed (?:wording|replacement|text|sentence)\b|\brecommended (?:wording|replacement)\b|\breplacement wording\b|\bfor the orchestrator\b|\bfor (?:an|the) operator to apply\b/i;
 
+const CLAUDE_MD = /CLAUDE\.md/i;
+
 /** A check that ran and came back empty is not a decline. Kept as its own verdict so "we looked and there was nothing" cannot be read as "we declined". */
 const NOTHING_OWED = /\bno sentence\b[^\n]{0,80}\bfalsif/i;
 
@@ -139,7 +141,16 @@ function paragraphAround(lines: string[], i: number): string {
 export function judgeDecline(hit: DeclineHit, body: string, lookup: (issue: number) => IssueLike | undefined): DeclineVerdict {
   if (NOTHING_OWED.test(hit.paragraph)) return { hit, relay: "nothing-owed", detail: "reports a check that came back empty — nothing was declined" };
   if (quotesAGrant(body)) return { hit, relay: "quoted-grant", detail: "the PR body quotes the grant it was given" };
-  if (PROPOSED_WORDING.test(hit.paragraph)) return { hit, relay: "orchestrator-report", detail: "carries the replacement wording for the orchestrator to apply — the venue CLAUDE.md's own rule prescribes" };
+  // SCOPED TO CLAUDE.md, and the scope is load-bearing. CLAUDE.md is the one file whose own rule
+  // makes the PR body the prescribed venue ("a dispatched agent must never edit it, even when the
+  // operator has granted CLAUDE.md changes for the session … name the exact sentence and recommend
+  // the replacement wording"). For `.github/workflows/` or `docs/` the doctrine says the opposite —
+  // put the question on the issue. MEASURED 2026-07-31: without this scope the exemption cleared PR
+  // #1481 itself, whose `.github/workflows/` decline reads "Proposed wording for the operator, if
+  // approved:", i.e. the check silenced the instance it was built from.
+  if (CLAUDE_MD.test(hit.paragraph) && PROPOSED_WORDING.test(hit.paragraph)) {
+    return { hit, relay: "orchestrator-report", detail: "a CLAUDE.md sentence reported with its replacement wording — the venue CLAUDE.md's own rule prescribes" };
+  }
   const unreadable: number[] = [];
   for (const n of hit.issues) {
     const issue = lookup(n);

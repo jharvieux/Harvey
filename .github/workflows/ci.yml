@@ -259,6 +259,22 @@ jobs:
         if: matrix.shard == 2 && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
+      # #1483, and the relay #1481 owed. M2 carries the parity exemption whose substitute gates are
+      # the conservation plant (daily, required) and THIS — `assertComplete`, which throws naming any
+      # enumerated-but-untested M2 target. Until now it ran in no venue at all, so the exemption
+      # stood on a gate nothing invoked, which is the #1288/#1301 shape one level up. PR #1481
+      # declined the wiring as a supervised-path edit and proposed this exact step; the operator
+      # granted workflow edits for the 2026-07-31 sweep, so the relay is DISCHARGED rather than
+      # re-recorded.
+      #
+      # Shard 3, because shards 1 and 2 already carry a scored gate each. Offline and sub-second —
+      # MEASURED 2026-07-31: 0.9s wall, exit 0 on `--tested app:root`, exit 1 on `--tested bogus-id`
+      # ("Incomplete target coverage — 1 enumerated target(s) untested: app:root"). Both directions,
+      # so this is not a step that can only pass.
+      - name: M2 target-coverage gate (assertComplete over the discovered manifest)
+        if: matrix.shard == 3 && !inputs.liveness_drill
+        run: pnpm exec tsx src/cli/pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested app:root
+
       # #1491 WITHDRAWN from this shard (2026-07-31), and the reason is recorded rather than left as
       # an absent step. A `supabase/setup-cli@v1` + `supabase start -x vector,logflare` pair landed
       # here to give `validate-connected` its first CI cadence, and the stack never came up:
@@ -294,7 +310,7 @@ jobs:
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
-          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }}
+          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }} ${{ matrix.shard == 3 && 'm2-coverage-gate' || '' }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
