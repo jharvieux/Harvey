@@ -431,8 +431,9 @@ rules:
                   ...
           - focus-metavariable: $X
       # #1248: the same projection guard rejecting by THROW. It gets its own sanitizer entry rather
-      # than four more arms above, because the try exclusion the throw spellings need cannot ride on
-      # the same conjuncts. The guard here is required by a `pattern-inside` REGION, and semgrep's
+      # than four more arms above, because MEASURED 2026-07-31 the try exclusion the throw spellings
+      # need does not work when it rides on the same conjuncts as the return arms. The guard here is
+      # required by a `pattern-inside` REGION, and semgrep's
       # statement `...` matches deeply, so the region spans a guard nested inside a `try` — while
       # the match the exclusion is tested against is the PROJECTION statement, which in the
       # swallowed shape sits outside that try. MEASURED 2026-07-31: `pattern-not-inside: try {...}`
@@ -901,8 +902,9 @@ rules:
                   ...
           - focus-metavariable: $X
       # #1248: the same projection guard rejecting by THROW. It gets its own sanitizer entry rather
-      # than four more arms above, because the try exclusion the throw spellings need cannot ride on
-      # the same conjuncts. The guard here is required by a `pattern-inside` REGION, and semgrep's
+      # than four more arms above, because MEASURED 2026-07-31 the try exclusion the throw spellings
+      # need does not work when it rides on the same conjuncts as the return arms. The guard here is
+      # required by a `pattern-inside` REGION, and semgrep's
       # statement `...` matches deeply, so the region spans a guard nested inside a `try` — while
       # the match the exclusion is tested against is the PROJECTION statement, which in the
       # swallowed shape sits outside that try. MEASURED 2026-07-31: `pattern-not-inside: try {...}`

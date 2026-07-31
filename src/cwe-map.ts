@@ -198,6 +198,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Top-10-2021 category by OWASP's mapping, so owasp is omitted rather than forced.
   "Quota gate consumed across a loop without re-reading": ["367", null],
   "Batch send stamped after dispatch instead of claimed before": ["362", null],
+  // #1257 / D-091 item 25: a check-then-act across two round trips with no lock between them, which
+  // is CWE-362's definition rather than CWE-367's — TOCTOU (367) is about the state changing between
+  // a check and a use of the SAME resource handle, and both concurrent callers here act on a
+  // correct read. Same basis as the sibling row above. No OWASP Top-10-2021 category.
+  "SELECT-then-INSERT dedup with no unique constraint": ["362", null],
   "External send without a deterministic idempotency key": ["837", null],
   "Idempotency row written before the dispatched handler": ["754", null],
   // #1204: X-Powered-By names the server framework to any caller. MEASURED against MITRE's own

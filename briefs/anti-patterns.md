@@ -451,9 +451,18 @@ migration files ARE the history and are checked in, so it folds to a single-snap
 VCS archaeology). Corpus: `src/scan/calibration/b23-d091-gaps.entries.ts`, one planted positive and
 one benign lookalike per class.
 
-**Still not covered, and why — the three that survived the re-check.** Each is planted in the same
+**Now covered (shipped by #1257)**: 25 (`dedup-unique.ts` — a single-row `.select().eq(…).maybeSingle()`
+read followed in the same function by an insert writing those same columns, when no UNIQUE or
+PRIMARY KEY set the migrations declare is a subset of the columns read). Three benign lookalikes,
+two of them on a deliberately UNCONSTRAINED table, so the schema does not clear them and each is
+cleared only by an app-side conjunct.
+
+**Still not covered, and why — the TWO that survived the re-check.** Each is planted in the same
 corpus at `expectedTier: "none"` so the gate holds it: a rule firing on one is a GATE FAIL, and the
 gap cannot quietly graduate into a claimed catch.
+It was three until #1257 shipped item 25, and the label is why: item 25 was recorded as a
+`measured-gap` rather than a boundary, so it stayed outstanding work with a falsifier watching it
+instead of becoming a permanent decline.
 
 - Item 23 (collectively-atomic multi-writes) — M1 semantic pass.
 
@@ -481,20 +490,6 @@ gap cannot quietly graduate into a claimed catch.
   this reason, and 27 extends 20. Shipping a mechanical 27 while 20 stays at LLM tier would be
   inconsistent, not thorough.
 
-- Item 25 (DB uniqueness wherever app code assumes it) — **outstanding work, not a boundary.**
-
-  > REASON: Does Harvey detect a SELECT-then-INSERT dedup whose predicate columns have no UNIQUE constraint in the migrations?
-  > KIND: empirical
-  > PROVENANCE: MEASURED 2026-07-27
-  > FALSIFIER: grep -q "d091/dedup-without-unique" dry-run/findings.json
-
-  Re-checked against #1230's "cross-time dataflow" framing and it is neither cross-time nor out of
-  reach: the dedup predicate is in the app code and the constraint set is in the migrations — the
-  same fold `migration-column-drift.ts` already ships. It is uncaught because this pass ran out of
-  scope, and saying otherwise would relabel outstanding work as a boundary. The fixture
-  (`src/d091/dedup-without-unique.ts` + `d091_contacts` in
-  `20260727000003_d091_column_drift.sql`) plants both halves so the answer key is complete.
-
 **Not covered — ATC-specific, not portable**: 9 (wrong `assertPermission` action for multi-
 operation routes) and 14 (`assertPermission` pair missing from `permission-grants.ts`) both name
 ATC's own auth-helper API and grants-file convention; a generic multi-tenant target has no
@@ -506,7 +501,10 @@ LLM-tier class with no mechanical rule by design, and flips the gate loud if one
 
 Item 19's regex bug and the eight OWASP multi-tenant gaps are closed; #1242 closed the ninth
 (audit log entries without tenant context, `src/scan/audit-log-tenant.ts`). Of the nine listed
-above, six shipped in #1230 and item 25 remains — tracked in that PR's remainder issue.
+above, six shipped in #1230 and item 25 shipped in #1257 (`src/scan/dedup-unique.ts` — the app-side
+dedup predicate folded against the UNIQUE/PRIMARY KEY sets the migrations declare, with a table the
+pass never saw declared skipped rather than reported). The blanket "cross-statement or cross-time
+dataflow" reason #1230 attached to all nine was false for seven of them.
 
 ---
 
