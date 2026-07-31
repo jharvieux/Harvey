@@ -7,10 +7,20 @@
 
 create extension if not exists pgcrypto with schema extensions;
 
+-- confirmation_token / recovery_token / email_change_token_new / email_change are written as ''
+-- and NOT left to the column default, because those four are the ONLY auth.users text columns
+-- GoTrue scans that have no `''::character varying` default (MEASURED 2026-07-31 against
+-- supabase/postgres on a stood-up local stack: `select column_name, column_default from
+-- information_schema.columns where table_schema='auth' and table_name='users'` — the other four
+-- string columns GoTrue reads, phone_change / phone_change_token / email_change_token_current /
+-- reauthentication_token, all default to ''). Left NULL, GoTrue's row scan fails and the password
+-- grant answers `500 {"code":500,"error_code":"unexpected_failure","msg":"Database error querying
+-- schema"}`, so the two logins documented above have never worked (#1670).
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password,
   email_confirmed_at, created_at, updated_at,
-  raw_app_meta_data, raw_user_meta_data
+  raw_app_meta_data, raw_user_meta_data,
+  confirmation_token, recovery_token, email_change_token_new, email_change
 )
 values
   ('00000000-0000-0000-0000-000000000000',
@@ -18,13 +28,15 @@ values
    'authenticated', 'authenticated', 'alice@tenant-a.test',
    extensions.crypt('password123', extensions.gen_salt('bf')),
    now(), now(), now(),
-   '{"provider":"email","providers":["email"]}', '{}'),
+   '{"provider":"email","providers":["email"]}', '{}',
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000',
    '22222222-2222-2222-2222-222222222222',
    'authenticated', 'authenticated', 'bob@tenant-b.test',
    extensions.crypt('password123', extensions.gen_salt('bf')),
    now(), now(), now(),
-   '{"provider":"email","providers":["email"]}', '{}');
+   '{"provider":"email","providers":["email"]}', '{}',
+   '', '', '', '');
 
 insert into auth.identities (
   id, user_id, identity_data, provider, provider_id,
