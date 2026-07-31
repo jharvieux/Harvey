@@ -77,7 +77,7 @@ const BASE_EXCLUDE = [
 // REASON: vitest exposes no configuration knob for the worker→main birpc ack window, so a blocking call that outlasts it cannot be waited out — only the load that makes calls that slow can be reduced.
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-26 — vitest 3.2.6 ships `const DEFAULT_TIMEOUT = 6e4` in node_modules/vitest/dist/chunks/index.B521nVV-.js, and the option it would have to be exposed as is absent from the published config types (the same grep finds minForks/maxForks/singleFork, so the search was not the problem).
-// FALSIFIER: test -d node_modules/vitest/dist/chunks && ! grep -rq "DEFAULT_TIMEOUT = 6e4" node_modules/vitest/dist/chunks
+// FALSIFIER: test -d node_modules/vitest/dist/chunks || exit 127; grep -rq "DEFAULT_TIMEOUT = 6e4" node_modules/vitest/dist/chunks && exit 1 || exit 0
 //
 // REASON: `dangerouslyIgnoreUnhandledErrors` is not an acceptable fix for this flake even though it would silence it, because it is all-or-nothing and would equally swallow a genuine unhandled rejection thrown by code under test.
 // KIND: decisional

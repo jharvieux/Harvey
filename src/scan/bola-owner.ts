@@ -13,7 +13,8 @@
 //   - a pages/api file whose DEFAULT-EXPORTED handler is analyzable in this file;
 //   - a session/auth value is BOUND in the body. An unauthenticated handler is the
 //     missing-auth/IDOR class (harvey-route-noauth and the semantic tier own it — firing here
-//     would double-count it, and would swallow P-MW-SOLE-AUTHZ's by-design LLM-tier status);
+//     would double-count it, and would swallow P-MW-SOLE-AUTHZ, which #1366 re-ruled on 2026-07-31
+//     from "by-design LLM-tier" to a MEASURED GAP — outstanding work, not a boundary);
 //   - an `.eq("<ownership column>", <request-rooted value>)` on a `.from(…)` chain rooted in
 //     the service/admin client. On the RLS client the query is still row-gated by policies;
 //     bare `.eq("id", …)` is excluded (that is the IDOR-by-primary-key class, not this one);

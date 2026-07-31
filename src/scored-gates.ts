@@ -28,19 +28,31 @@
 // registry's definition of STALE. A reason kept past the day its blocker dissolved is the decay this
 // repo names as its signature defect, so the row is gone rather than reworded.
 //
-// validate-connected has no cadence for a DIFFERENT reason, and it is not an empirical one: the gate
-// runs fine (measured 2026-07-28 against a live `supabase start` stack — 16 of 20 live rows scored,
-// all held, and each of its three B24 detectors gutted in turn exits it 1). What is missing is a CI
-// venue, and adding one means editing .github/workflows/, which CLAUDE.md lists as supervised. The
-// operator question, with the wording proposed, is recorded on #1491 — a supervised path stops the
-// EDIT, never the CRITERION (#1319).
+// validate-connected still has no cadence, and its reason has CHANGED KIND — which is the whole
+// point of re-testing one rather than carrying it forward. It used to be decisional: the gate ran
+// fine (measured 2026-07-28 against a live `supabase start` stack: 16 of 20 live rows scored, all
+// held, each of its three B24 detectors gutted in turn exiting it 1), and the only missing piece was
+// a CI venue behind the supervised `.github/workflows/` path, tracked on #1491.
 //
-// REASON: validate-connected has no CI cadence because standing a Supabase stack up in a workflow is a change to .github/workflows/, which is a supervised path, and no command re-tests whether the operator has approved it
-// KIND: decisional
-// PROVENANCE: MEASURED 2026-07-28 — the gate itself runs and fails correctly against a live stack; the missing piece is only the venue. `grep -rl "supabase start" .github/workflows/` returns nothing today.
-// OWNER: operator (jharvieux)
-// DECISION: #1491 — carries the proposed workflow step verbatim for the operator to approve or decline
-// TOUCHES: src/cli/validate-connected.ts .github/workflows
+// The operator granted workflow edits on 2026-07-31, the decision was TAKEN, and the step landed in
+// ci.yml's heavy-cli shard 2 — where it immediately found a SECOND, empirical blocker nobody had
+// hit, because nothing had ever tried to stand this fixture's stack up in CI. The decisional reason
+// is therefore discharged and the empirical one below replaces it. Both the step and the
+// `workflow` cadence row are gone again: a registry asserting a venue that has never once executed
+// is worse than the gap it papers over, because `validate-scored-gates` then prints GATE PASS over
+// it. #1491 stays open, now with a measured cause rather than a supervised-path deferral.
+
+// REASON: validate-connected has no CI cadence because `supabase start` in targets/calibration cannot come up under a current Supabase CLI — config.toml declares [functions.admin-refund] and [functions.user-profile] and neither directory exists in git, so the CLI aborts before the stack the gate scores against exists
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-31 — the step ran in ci.yml heavy-cli shard 2 on feature/sweep-ci-1333 and died with `failed to read file: open targets/calibration/supabase/functions/admin-refund/index.ts: no such file or directory`. `git ls-files targets/calibration/supabase/functions` lists only send-billing-email, send-email, send-email-safe, send-welcome-email. The 2.102.0 CLI on the authoring machine tolerates the declaration, which is why the same step passed locally; supabase/setup-cli@v1 at `version: latest` does not. The GATE itself is not the blocker — it scored 16 of 20 live rows on 2026-07-28 against a stack stood up by hand.
+// FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-connected\.ts' .github/workflows/ && exit 0 || exit 1
+// TOUCHES: src/cli/validate-connected.ts targets/calibration/supabase/config.toml .github/workflows
+
+// The falsifier watches the VENUE, not the fixture, deliberately. Two different fixes clear this
+// blocker — commit the two Edge Function directories, or pin the CLI — and a falsifier keyed to
+// either one would keep reporting "still blocked" after the other landed. What makes the reason
+// stale is a workflow invoking the gate, whichever way that became possible; this is the same shape
+// as validate-secbench's retired falsifier, which is what retired that row.
 
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
@@ -140,6 +152,8 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-connected",
     script: "validate:connected",
     measures: "live-tier corpus recall against a running Supabase stack (local / connected / hosted venues)",
+    // #1491, still open. Its reason is a REASON block in this file's header, carrying the falsifier
+    // that retires it; that block changed KIND on 2026-07-31, so read it rather than this line.
     cadence: { kind: "none", issue: 1491 },
   },
   {

@@ -42,12 +42,12 @@ import {
   KNOWN_FALSIFIER_TIERS,
   claimCensusByFile,
   claimCounts,
-  claimRatchetBreaches,
+  attributeClaim,
+  claimDrift,
   claimTotal,
   censusScope,
   collectSources,
   issueSources,
-  markNewClaims,
   parseRecordedReasons,
   placeholderEnvVar,
   reasonKind,
@@ -112,6 +112,29 @@ function runFalsifier(command: string): FalsifierResult {
 function commitsSince(paths: string[], since: string): string[] {
   const r = spawnSync("git", ["log", `--since=${since} 23:59:59`, "--format=%h", "--", ...paths], { cwd: REPO_ROOT, encoding: "utf8" });
   return (r.stdout ?? "").split("\n").filter(Boolean);
+}
+
+// #1401 — where a breaching claim line came from. `git blame --porcelain` is used for its stable
+// first line (`<sha> <orig-line> <final-line>`); the subject comes from a second, cheap lookup so a
+// porcelain header parser is not needed. Both degrade to `undefined`, which attributeClaim renders
+// as a stated "provenance unavailable" rather than a guess.
+function blameLine(file: string, line: number): { sha: string; subject: string } | undefined {
+  const b = spawnSync("git", ["blame", "-L", `${line},${line}`, "--porcelain", "--", file], { cwd: REPO_ROOT, encoding: "utf8" });
+  const sha = b.status === 0 ? (b.stdout ?? "").split(" ")[0] : undefined;
+  if (!sha || /^0+$/.test(sha)) return undefined;
+  const s = spawnSync("git", ["log", "-1", "--format=%h %s", sha], { cwd: REPO_ROOT, encoding: "utf8" });
+  return { sha, subject: (s.stdout ?? "").trim() };
+}
+
+/** Full shas of the commits this branch adds to its base, or undefined when the range is unknowable. */
+function branchCommits(): Set<string> | undefined {
+  for (const base of ["origin/main", "main"]) {
+    const mb = spawnSync("git", ["merge-base", "HEAD", base], { cwd: REPO_ROOT, encoding: "utf8" });
+    if (mb.status !== 0) continue;
+    const list = spawnSync("git", ["rev-list", `${(mb.stdout ?? "").trim()}..HEAD`], { cwd: REPO_ROOT, encoding: "utf8" });
+    if (list.status === 0) return new Set((list.stdout ?? "").split("\n").filter(Boolean));
+  }
+  return undefined;
 }
 
 const inRepo = (path: string): boolean => existsSync(resolve(REPO_ROOT, path));
@@ -214,7 +237,9 @@ if (process.argv.includes("--census")) {
 const repoProse = prose.filter((c) => !c.file.startsWith("issue #"));
 const census = claimCensusByFile(repoProse);
 const baselineCounts = claimCounts(CLAIM_BASELINE);
-const breaches = claimRatchetBreaches(baselineCounts, census);
+const drift = claimDrift(CLAIM_BASELINE, repoProse);
+const branchShas = drift.length > 0 ? branchCommits() : undefined;
+const inherited = { authored: 0, arrived: 0, unknown: 0 };
 
 // The baseline describes DEFAULT_ROOTS. Scored against a caller-narrowed --root it would compare
 // two different populations, so it is skipped — and said out loud, because a silently skipped gate
@@ -227,19 +252,40 @@ if (roots.length > 0) {
 } else {
   // The baseline total is printed whether or not the gate fires. #1318's rule: the output must name
   // the number so it cannot be quietly ignored the way the advisory census was for months.
-  console.log(`\nRatchet (#1318): ${claimTotal(census)} claim line(s) in repo files against a committed baseline of ${claimTotal(baselineCounts)}. The count may fall, never rise.`);
-  for (const b of breaches) {
+  console.log(`\nRatchet (#1318/#1399): ${claimTotal(census)} claim line(s) in repo files against a committed baseline of ${claimTotal(baselineCounts)}. The recorded SET may shrink, never gain a member — a reword is a new member.`);
+  for (const d of drift) {
     failed = true;
     // Only the lines the baseline does not account for. Printing all of them is the guessing game
     // #1318's third criterion names: on a file with a baseline of 18, a breach printed nineteen
     // lines with nothing marking the new one.
-    const marked = markNewClaims(CLAIM_BASELINE[b.file] ?? [], repoProse.filter((c) => c.file === b.file));
-    const fresh = marked.filter((m) => m.isNew);
-    console.error(`\n✗ CLAIM RATCHET  ${b.file} — ${b.baseline} → ${b.now}`);
-    console.error(`    ${fresh.length} line(s) not in the committed baseline for this file (${marked.length - fresh.length} carried over, not shown):`);
-    for (const { claim } of fresh) console.error(`      NEW  ${b.file}:${claim.line}  ${claim.text.slice(0, 120)}`);
+    console.error(`\n✗ CLAIM RATCHET  ${d.file} — ${d.baseline} → ${d.now}`);
+    console.error(`    ${d.added.length} line(s) not in the committed baseline for this file (${d.now - d.added.length} carried over, not shown):`);
+    for (const claim of d.added) {
+      console.error(`      NEW  ${d.file}:${claim.line}  ${claim.text.slice(0, 120)}`);
+      // #1401 — say where it came from. Repo-wide scoring means a breaching line can be in a file
+      // this branch never opened, and "your PR broke the ratchet" sends the author hunting in their
+      // own diff. INHERITED rows are still the author's to baseline; they are just not their defect.
+      const origin = attributeClaim(claim, blameLine, branchShas);
+      if (!origin.known) inherited.unknown += 1;
+      else if (origin.authoredHere) inherited.authored += 1;
+      else inherited.arrived += 1;
+      console.error(
+        origin.known
+          ? `           ↳ ${origin.authoredHere ? "AUTHORED on this branch" : "INHERITED — already on the base branch"} by ${origin.subject}`
+          : `           ↳ provenance unavailable: ${origin.why}`,
+      );
+    }
+    // #1399 — a REWORD is one added line and one dropped line, and printing only the added half is
+    // what let it read as an ordinary new claim. Pairing them is the whole point of the verbatim
+    // baseline: the reviewer sees what the claim USED to say next to what it says now.
+    if (d.dropped.length > 0) {
+      console.error(`    ${d.dropped.length} baseline line(s) for this file are no longer present. If one pairs with a NEW row above, that claim was REWORDED — read the two together and check the new text is not a stronger claim:`);
+      for (const text of d.dropped) console.error(`      WAS  ${text.slice(0, 120)}`);
+    }
   }
-  if (breaches.length > 0) {
+  if (drift.length > 0) {
+    console.error(`\n  ${inherited.authored} row(s) AUTHORED on this branch, ${inherited.arrived} INHERITED from the base branch, ${inherited.unknown} unattributable.`);
+    if (inherited.arrived > 0) console.error(`  An INHERITED row is not a defect in your diff — it reached the base branch unbaselined. Baseline it and say so; do not go looking for it in your own changes (#1401).`);
     console.error(`\n  Write the new claim as a REASON:/KIND:/PROVENANCE:/FALSIFIER: block (docs/design/recorded-reasons.md) so --revalidate re-tests it,`);
     console.error(`  or run \`pnpm validate-reasons --update-baseline\` and commit the raised number for a human to review.`);
   }

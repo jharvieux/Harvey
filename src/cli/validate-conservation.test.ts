@@ -55,7 +55,7 @@ function hasBinary(name: string): boolean {
 // REASON: this end-to-end block cannot run under the CI `verify` job — it needs HARVEY_CONSERVATION_E2E=1 plus the mechanical tier and the vitals plugin, and no verify-gated ci.yml job sets that env var or runs this file (heavy-cli installs the binaries but its include list excludes this file); it is exercised by .github/workflows/conservation.yml instead
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-26 (#1072: the old falsifier grepped ci.yml for the scanner binary names as a proxy for "verify installs them"; #1120's heavy-cli job now installs them for a DIFFERENT set of files, so that grep went stale while the claim held. Re-read ci.yml + vitest.config.ts: the block gates on HARVEY_CONSERVATION_E2E, which only conservation.yml:135 sets)
-// FALSIFIER: grep -q HARVEY_CONSERVATION_E2E .github/workflows/ci.yml
+// FALSIFIER: test -f .github/workflows/ci.yml || exit 127; grep -q HARVEY_CONSERVATION_E2E .github/workflows/ci.yml
 // TOUCHES: .github/workflows/ci.yml
 const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks", "osv-scanner"].every(hasBinary);
 
@@ -75,7 +75,7 @@ function vitalsAvailable(): boolean {
 // REASON: this end-to-end block cannot run under the CI `verify` job — beyond the mechanical tier it asserts M3's plant, and M3's truck-factor-1 signal comes from the `vitals` plugin, which is a Claude Code plugin rather than a package `pnpm install` brings in
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-26 (ran `HOME=<empty dir> pnpm exec tsx src/cli/hotspot-scan.ts targets/calibration`: "M3 REDUCED TIER", 0 rows, no Knowledge-risk findings; with the plugin resolvable, 2× truck-factor-1)
-// FALSIFIER: grep -q vitals .github/workflows/ci.yml
+// FALSIFIER: test -f .github/workflows/ci.yml || exit 127; grep -q vitals .github/workflows/ci.yml
 // TOUCHES: .github/workflows/ci.yml .github/workflows/conservation.yml
 const VITALS_PRESENT = vitalsAvailable();
 

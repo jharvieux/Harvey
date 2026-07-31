@@ -28,6 +28,11 @@ on:
   schedule:
     - cron: "45 7 * * *" # Daily 07:45 UTC — between conservation (07:30) and reasons-drift (08:00)
   workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-alert-paths-alert path fires end-to-end (#1287/#1333). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
   pull_request:
 
 concurrency:
@@ -36,28 +41,48 @@ concurrency:
 
 permissions:
   contents: read
-  issues: read # `--labels` re-reads the tracking issue behind every no-alert-path disclosure.
+  # read for `--labels`, which re-reads the tracking issue behind every no-alert-path disclosure;
+  # write since #1333, for this gate's own alert path.
+  issues: write
 
 jobs:
   alert-paths:
     name: every alert path is dispatch-provable and its marker label exists
     runs-on: ubuntu-latest
-    # This gate holds every other scheduled workflow to "alert on failure, and prove it once", and
-    # it does NOT yet meet its own rule: an alert path's proof requires `gh workflow run`, whose
-    # inputs are read from the DEFAULT BRANCH's copy of the file. Measured on this branch:
-    #   $ gh workflow run alert-paths.yml --ref feature/sweep-alerts-1287 -f alert_drill=true
-    #   could not create workflow dispatch event: HTTP 422: Unexpected inputs provided:
-    #   ["alert_drill"] (https://api.github.com/repos/jharvieux/Harvey/actions/workflows/321758855/dispatches)
-    # So a brand-new workflow cannot be drilled in the PR that introduces it. Rather than register an
-    # unprovable path — the exact
-    # "recorded as working, never fired" shape #1287 exists to kill — it is DISCLOSED in
-    # .github/alert-paths.json's scheduledWithoutAlertPath, printed on every gate run, and tracked
-    # by #1333, which adds and drills it once this file is on main.
+    # #1333: this gate holds every other scheduled workflow to "alert on failure, and prove it
+    # once", and until now it did not meet its own rule. It does now — see the alert step at the
+    # bottom of this job, and it was DRILLED ON THIS BRANCH BEFORE MERGING, not one merge late.
+    #
+    # This comment used to say the opposite, in MEASURED's register, and it was wrong. It claimed
+    # `gh workflow run` validates `-f` inputs against the DEFAULT BRANCH's copy of the file, so the
+    # drill for a newly-declared `alert_drill` input was "only dispatchable after this file is on
+    # main", and quoted an HTTP 422 to prove it. Run 30605765391 dispatched that exact command
+    # successfully at 2026-07-31T05:03:52Z — eight seconds after this comment was committed — on
+    # `--ref feature/sweep-ci-1333`, with the input accepted and the branch's own drill step
+    # executing. The 422 does not reproduce; three sibling paths drilled the same way the same night
+    # (30605813952, 30605818422, 30605815019).
+    #
+    # The corrected rule, which is what .github/alert-paths.json now records: only the workflow FILE
+    # must exist on the default branch (#1288's genuine evidence is a 404 on a file that did not:
+    # `HTTP 404: workflow secbench.yml not found on the default branch`). The INPUTS, JOBS and STEPS
+    # need not be — a workflow_dispatch run executes the copy on the `--ref` you name, so a newly
+    # declared `alert_drill` input is drillable from the branch that declares it. Consequence for
+    # anyone adding an alert path to an EXISTING workflow file: you need no `pendingProof` hatch,
+    # drill it on your branch. The hatch remains for the genuine case — a workflow file not yet on
+    # main.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # After the checkout (the alert step below is a LOCAL composite action) and before the install,
+      # so the drill proves the ALERT path without paying for the gate it guards.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an alert-path gate failure."
+          exit 1
 
       - id: filter
         name: Does this change set touch the alert-path gate itself?
@@ -121,6 +146,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if pnpm exec tsx src/cli/validate-alert-paths.ts --labels --seed-closed-tracking; then
-            echo "::error::--seed-closed-tracking closed every no-alert-path disclosure's tracking issue and the gate still exited 0. That hatch is the one place this gate fails OPEN: the day #1333 closes, four workflows with no alarm at all go back to passing silently (#1287)."
+            echo "::error::--seed-closed-tracking closed every no-alert-path disclosure's tracking issue and the gate still exited 0. That hatch is the one place this gate fails OPEN: a pendingProof whose tracker closes with no proof recorded has quietly become a permanent exemption (#1287/#1288)."
             exit 1
           fi
+
+      # #1333: the daily label check is the one assertion in this repo that NO DIFF CAN SPEAK TO, so
+      # a scheduled failure here is precisely the case nobody would otherwise notice.
+      - name: Open or update the alert-paths tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-alert-paths-alert
+          label-description: Auto-opened when the scheduled alert-paths gate fails
+          title: alert-paths scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `alert-paths` gate failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Most likely a marker label was deleted out of band — which breaks find-or-update, so every future alarm opens a duplicate issue instead of updating one — or a `pendingProof`/`scheduledWithoutAlertPath` disclosure now points at a closed tracking issue. Reproduce with `pnpm exec tsx src/cli/validate-alert-paths.ts --labels`. Close this issue once green."

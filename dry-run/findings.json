@@ -14554,6 +14554,30 @@
     ]
   },
   {
+    "id": "AUTH-host-header-url-lib-reset-link-js",
+    "title": "lib/reset-link.js — an absolute URL is built from the request's Host / X-Forwarded-Host header",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Host header trusted in URL construction",
+    "location": "lib/reset-link.js",
+    "status": "Open",
+    "evidence": "Heuristic \"host-header-url\" matched in lib/reset-link.js.",
+    "impact": "Both Host and X-Forwarded-Host are set by the caller, and most proxies forward them untouched, so an attacker who triggers a password-reset/verification mail gets the victim's real token delivered inside a link pointing at a domain they control.",
+    "fix": "Build absolute links from a fixed deploy-time origin (an env var), or validate the incoming host against an allowlist before it reaches the URL.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-807: Reliance on Untrusted Inputs in a Security Decision"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "AUTH-mw-matcher-excludes-api-middleware-ts",
     "title": "middleware.ts — middleware matcher excludes /api routes",
     "severity": "High",

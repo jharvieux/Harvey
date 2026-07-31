@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
@@ -25,7 +25,7 @@ import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, resolvedTree } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
-import { harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
+import { freeCountCoverage, harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
 const FLAGS = [
@@ -220,7 +220,17 @@ console.log(
     "  below; the other seven modules have fixture counts above and no metric anywhere), and precision over a corpus is a\n" +
     "  property of the positive:negative ratio WE chose, not of how often each shape occurs in a real repo.",
 );
-if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
+// The roll-up used to call every `none` row "by design". It is two populations: settled boundaries
+// and MEASURED GAPS, which are outstanding work. Naming only the first reports undone work as a
+// decision — the misreport `gapKind` exists to prevent. Both counts, so neither can hide the other.
+if (matrix.noRuleTotal) {
+  const byDesign = matrix.noRuleTotal - matrix.noRuleMeasuredGap;
+  console.log(
+    `No-mechanical-rule gaps (excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held` +
+      ` — ${byDesign} by design, ${matrix.noRuleMeasuredGap} measured-gap (OUTSTANDING work, not a boundary; see the entry note for the tracking issue).` +
+      ` A rule firing on one is a GATE FAIL`,
+  );
+}
 // #1248: mustCatch rows are excluded here — they are fatal, and printing them under a "non-fatal"
 // heading is how a soundness miss reads as an accepted gap.
 const reviewGaps = reviewMisses.filter((r) => !r.mustCatch);
@@ -321,6 +331,19 @@ const selfMatching = selfMatchingMatchKeys(CORPUS);
 console.log(`\nCORPUS SELF-MATCH (#1355): ${selfMatching.length === 0 ? `0 of ${CORPUS.filter((e) => e.match?.length).length} keyed entries carry a key that is a substring of their own location` : `${selfMatching.length} vacuous entr(ies)`}`);
 if (selfMatching.length) console.log(formatSelfMatchingKeys(selfMatching).replace(/^/gm, "  "));
 
+// #1388, the omission half of the same masking shape, and the COVERAGE of the withholding check that
+// scores it. Printed as a fraction on purpose: the check's population used to be "positives with a
+// `match` list" (363 of 400 when it was measured), and a denominator that quietly shrinks is exactly
+// what the number is here to make visible.
+const positives = CORPUS.filter((e) => e.kind === "positive");
+const unkeyed = unkeyedPositives(CORPUS);
+console.log(
+  `CORPUS KEY COVERAGE (#1388): ${positives.length - unkeyed.length}/${positives.length} positives carry a \`match\` list` +
+    (unkeyed.length === 0
+      ? " — the withholding check in calibration.test.ts covers all of them"
+      : ` — ${unkeyed.length} accept EVERY finding at their own location (relevantFindings short-circuits with no keys): ${unkeyed.map((e) => e.id).join(", ")}`),
+);
+
 // #1314's negative control: delete a module's entries and prove the parity gate fails. It must be
 // a module that PASSES today, so the fixtures being removed are the only thing holding it up — the
 // exhaustive census is what makes the resulting zero visible at all (before it, the module simply
@@ -344,17 +367,32 @@ const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
 
+// #1414 — the BOUND of the line above, printed beside it rather than left to be inferred. The gate
+// enumerates `harvey-*` semgrep rules and nothing else, while `precisionTier: "high"` is also set by
+// AST detectors, the secret scanners, the dependency/licence checks and third-party semgrep packs.
+// Stating the covered share as a measured fraction is the difference between a bound and a belief.
+const coverage = freeCountCoverage(findings, harveySemgrepRules(), pairings);
+console.log(
+  `FREE-COUNT COVERAGE OF THAT GATE (#1414): ${coverage.coveredByPairingGate}/${coverage.highTier} high-tier findings on this run come from an enumerated harvey-* rule; ` +
+    `${coverage.outsidePairingGate} (${((coverage.outsidePairingGate / coverage.highTier) * 100).toFixed(1)}%) come from detectors it does not enumerate and therefore does not validate — ${coverage.outsideTaxonomies.slice(0, 6).join("; ")}${coverage.outsideTaxonomies.length > 6 ? `; +${coverage.outsideTaxonomies.length - 6} more` : ""}`,
+);
+console.log(
+  `PER-RULE FREE-COUNT GATE, prototyped and measured (#1414): a free count gated on VALIDATION STATUS rather than the self-declared precisionTier tag would withhold ${coverage.droppedByPerRuleGate.length} finding(s) today` +
+    `${coverage.droppedByPerRuleGate.length ? `: ${coverage.droppedByPerRuleGate.join(", ")}` : " — zero, and zero by construction, because the pairing gate above fails `pnpm verify` on an unpaired rule so one cannot reach `main`"}`,
+);
+
 // #1509's second-order defect: this gate rides inside `heavy CLI tests (shard 1/3)` behind an
 // `if: matrix.shard == 1`, so a condition that stopped matching would retire the repo's scored recall
 // gate in complete silence — the shape #1301 found when it ran in no workflow at all. Emitted before
 // the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
-const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && mustCatchMisses.length === 0;
+const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && mustCatchMisses.length === 0;
 if (!gatePass) {
   if (mustCatchMisses.length) console.log(`\nGATE FAIL — soundness positive not caught (#1248): ${mustCatchMisses.map((r) => r.id).join(", ")}. These rows are adversarial fixtures planted to prove a sanitizer's exclusions still work, not review-recall aspirations — a miss means a guard was widened into clearing a live bug, never "we don't catch that yet".`);
   if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
+  if (unkeyed.length) console.log(`\nGATE FAIL — unkeyed positive (#1388): ${unkeyed.map((e) => e.id).join(", ")} — a positive with no \`match\` list accepts every finding at its own location, so the detection it exists to score can go silent while the row stays green. Give it a key from the taxonomy vocabulary of the finding it scores.`);
   if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (negReviewDrift.length) console.log(`GATE FAIL — review-tier regression on planted negatives (#1344): ${negReviewDrift.map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);

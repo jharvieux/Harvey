@@ -60,9 +60,10 @@ can.
 ## 3. How it's assessed — rubric agreement, not precision
 
 M6's **verdict** — the assertion that a shape is a genuine reinvention plus the concrete
-replacement to use — has no `Finding[]`-emitting scanner, so it cannot plug into
+replacement to use — has no `Finding[]`-emitting scanner, so it does not plug into
 `src/scan/calibration.ts`'s `buildCoverageMatrix` the way M4/M5/M7/M8/M10 do (those all have an
-adapter that maps a real tool's output into `Finding[]` with a `precisionTier`). The verdict's
+adapter that maps a real tool's output into `Finding[]` with a `precisionTier`). Since #1371/#1453
+M6's INDICATOR tier does — see the 2026-07-31 correction below. The verdict's
 output is prose — a reviewer's writeup, produced by running the `/simplify` skill (or an M6-scoped
 LLM review pass) against a target directory.
 
@@ -74,14 +75,17 @@ LLM review pass) against a target directory.
 > the verdict this eval is about, and (b) M6 has no `*.entries.ts` in the calibration corpus —
 > `ls src/scan/calibration/*.entries.ts` shows M1/M3/M4/M5/M7/M8/M9/M10 files and no M6 one — so
 > nothing about M6 is scored by `buildCoverageMatrix` regardless.
-
-<!--
-REASON: M6 has no *.entries.ts in the calibration corpus, so nothing about M6 is scored by buildCoverageMatrix — the indicator detectors in src/detectors/handrolled.ts emit shape PRESENCE, never the verdict this eval is about
-KIND: empirical
-PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
-FALSIFIER: grep -rlq "M6" src/scan/calibration/
-TOUCHES: src/scan/calibration src/scan/calibration.ts
--->
+>
+> **Correction (2026-07-31, #1422).** Half (b) above is now FALSE, and a REASON block asserting it
+> sat below this quote until today. #1371/#1453 landed `src/scan/calibration/m6-handrolled.entries.ts`
+> and its scorer `src/scan/m6-indicator-corpus.ts`. MEASURED 2026-07-31: **73 M6 entries, all 73
+> present in `CORPUS`** (840 rows total), so `buildCoverageMatrix` scores M6's INDICATOR tier like
+> any other module's, and #1314's M6 parity exemption is retired. Half (a) is untouched and is what
+> this document is about: the entries score whether a detector fires on a planted shape, never the
+> verdict. Excluding the VERDICT from that machinery is a **product decision, not a measurement** —
+> `docs/design/spec-72-crossmodule-corpus.md` §M6 preamble item 2 (revised 2026-07-15) is the
+> authority, restated in `m6-handrolled.entries.ts`'s own header, and it is deliberately not
+> re-recorded here as a second copy of one ruling.
 
 **The eval, concretely:**
 

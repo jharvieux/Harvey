@@ -106,11 +106,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # `exit "${PIPESTATUS[0]}"` is not decoration — WITHOUT it this step could not fail (#1422).
+      # A `run:` with no `shell:` key gets `bash -e {0}`, NOT `bash -eo pipefail {0}` (the run log
+      # prints the invocation: `shell: /usr/bin/bash -e {0}`), so a pipeline exits with `tee`'s code.
+      # MEASURED on the scheduled run of 2026-07-30 (run 30534660455): this step printed three
+      # `✗ STALE` rows, exited 0, and the job was green — the gate against decayed claims had itself
+      # decayed into a check that re-tested everything and could report nothing. Every scheduled run
+      # since 2026-07-28 was green for the same reason. secbench.yml and free-recall.yml already
+      # carried the fix; this step and osv-staleness.yml did not.
       - id: check
         name: Re-validate every recorded reason, in the repo and in open issues
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pnpm validate-reasons --revalidate --issues 2>&1 | tee reasons-drift.log
+        run: |
+          pnpm validate-reasons --revalidate --issues 2>&1 | tee reasons-drift.log
+          exit "${PIPESTATUS[0]}"
 
       - name: Plant the negative-control corpus
         env:

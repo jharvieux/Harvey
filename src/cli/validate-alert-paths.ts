@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
-import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, staleProofs, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
@@ -75,6 +75,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`  (no alert path)          ${w.workflow} — scheduled failure raises nothing; tracked by #${w.tracking}`);
   }
 
+  // #1604: every converted path's alert step runs through the ONE shared find-or-update.sh, so a
+  // change to it is a claim-invalidating event for every OTHER marker's provenBy, not just the one
+  // PR that touched it. Informational, not a violation — see staleProofs' own doc comment.
+  const sharedActionSha = spawnSync("git", ["rev-parse", "HEAD:.github/actions/alert-issue/find-or-update.sh"], { encoding: "utf8", cwd: REPO_ROOT });
+  if (sharedActionSha.status === 0) {
+    const stale = staleProofs(registry, sharedActionSha.stdout.trim());
+    if (stale.length > 0) {
+      console.log(`\n⚠ ${stale.length} proof(s) predate the current find-or-update.sh (${sharedActionSha.stdout.trim().slice(0, 12)}):`);
+      for (const s of stale) console.log(`  ${s.marker} — recorded against ${s.recordedSha.slice(0, 12)}; re-drill to refresh`);
+    }
+  }
+
   if (process.argv.includes("--labels")) {
     const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     const runGh = (args: string[]) => retrying(() => spawnSync("gh", args, { encoding: "utf8", cwd: REPO_ROOT }), 3, sleep);
@@ -105,7 +117,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (r.status !== 0) unverifiable(`\`gh issue view ${issue}\``, r.stderr || r.error?.message || "");
       return r.stdout.trim();
     };
-    const stale = checkDisclosureTracking(registry, trackingState);
+    // #1333: the control has to have a population — see seedClosedTrackingPopulation for why zero
+    // hatches would otherwise turn this control into a green light nobody can read.
+    const seeded = seedClosed ? seedClosedTrackingPopulation(registry) : registry;
+    if (seeded !== registry) {
+      console.log("\nℹ --seed-closed-tracking: no live hatch exists, so the control ran against a synthetic disclosure row. It still proves checkDisclosureTracking rejects a CLOSED tracker; it proves nothing about today's registry, which has nothing to check.");
+    }
+    const stale = checkDisclosureTracking(seeded, trackingState);
     violations.push(...stale);
     // Counted over BOTH hatches this function now covers — the no-alarm disclosures and the
     // unproven paths. Reporting only the first would understate what was checked, in the one line a
