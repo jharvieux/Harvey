@@ -43,54 +43,60 @@
       "workflow": ".github/workflows/conservation.yml",
       "marker": "ci-conservation-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331405114",
-        "issue": 1390,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607129629",
+        "issue": 1634,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "marker": "ci-corpus-drift-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331544561",
-        "issue": 1393,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607137067",
+        "issue": 1635,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/reasons-drift.yml",
       "marker": "ci-reasons-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331546673",
-        "issue": 1392,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607140427",
+        "issue": 1636,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-heavy-cli-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331545597",
-        "issue": 1395,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607143343",
+        "issue": 1639,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "ci-owasp-watch-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331547885",
-        "issue": 1394,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607146192",
+        "issue": 1637,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/secbench.yml",
       "marker": "ci-secbench-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30376371298",
-        "issue": 1430,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607149170",
+        "issue": 1638,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
@@ -99,7 +105,8 @@
       "provenBy": {
         "run": "https://github.com/jharvieux/Harvey/actions/runs/30597869743",
         "issue": 1601,
-        "at": "2026-07-31"
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {

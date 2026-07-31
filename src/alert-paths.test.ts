@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, SYNTHETIC_HATCH, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, staleProofs, SYNTHETIC_HATCH, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
 import { loadFacts, loadRegistry } from "./cli/validate-alert-paths.js";
 
 const PROVEN = { run: "https://github.com/o/r/actions/runs/1", issue: 7, at: "2026-07-27" };
@@ -204,6 +204,34 @@ describe("retrying — a required check must not fail on one API blip", () => {
     const paused: number[] = [];
     expect(retrying(attempt([1, 1, 1]), 3, (ms) => paused.push(ms)).status).toBe(1);
     expect(paused).toEqual([1000, 2000]);
+  });
+});
+
+// #1604: six provenBy entries cited shas that predated two later changes to the ONE shared
+// find-or-update.sh every alert step invokes — an argument that the old and new logic were
+// equivalent in the drills' single-open-issue namespace, not a re-measurement. sourceSha makes
+// that class of drift detectable rather than something a reviewer has to notice by hand.
+describe("staleProofs — a shared-script change invalidates every OTHER marker's provenBy, not just the one that touched it (#1604)", () => {
+  const withShas = (a: string | undefined, b: string | undefined) =>
+    registry({
+      paths: [
+        { workflow: "a.yml", marker: "m-a", provenBy: { ...PROVEN, sourceSha: a } },
+        { workflow: "b.yml", marker: "m-b", provenBy: { ...PROVEN, sourceSha: b } },
+      ],
+    });
+
+  it("reports nothing when every recorded sourceSha matches the current one", () => {
+    expect(staleProofs(withShas("abc123", "abc123"), "abc123")).toEqual([]);
+  });
+
+  it("flags a marker whose recorded sourceSha no longer matches the current file", () => {
+    expect(staleProofs(withShas("abc123", "def456"), "abc123")).toEqual([{ marker: "m-b", recordedSha: "def456" }]);
+  });
+
+  // An entry with no sourceSha predates the field (or is inlined, not routed through the shared
+  // script) — reporting it stale would be a false positive, not a stricter check.
+  it("silently skips a path with no recorded sourceSha at all", () => {
+    expect(staleProofs(withShas("abc123", undefined), "zzz999")).toEqual([{ marker: "m-a", recordedSha: "abc123" }]);
   });
 });
 

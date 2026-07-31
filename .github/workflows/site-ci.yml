@@ -1,10 +1,11 @@
 # #1592: nothing in CI ran the site's OWN build or lint. `site-smoke.yml` only probes the
 # DEPLOYED site over HTTP, so a page that fails to build never reaches it — a broken page never
 # deploys, and site-smoke stays green against the last good deployment while `main` carries the
-# break. This job runs `site/`'s own toolchain instead: `pnpm run build` (`next build`, which
-# typechecks via the Next TS plugin AND performs the static-generation pass — see below) and
-# `pnpm run lint` (`next lint`, now backed by a real `eslint-config-next` config). CORRECTED
-# 2026-07-30: an earlier draft of this comment claimed pre-PR `next lint` exited 0 unconditionally
+# break. This job runs `site/`'s own toolchain: `pnpm run build` (`next build`, which typechecks
+# via the Next TS plugin, LINTS via the same config as `next lint` — see the no-separate-lint-step
+# note below — AND performs the static-generation pass — see the no-separate-tsc note below), now
+# backed by a real `eslint-config-next` config. CORRECTED 2026-07-30: an earlier draft of this
+# comment claimed pre-PR `next lint` exited 0 unconditionally
 # ("No ESLint warnings or errors") — that is FALSE. MEASURED 2026-07-30 from a clean `npm ci` at
 # `main@9001e7a` (no eslint dependency present, no eslint config file — this predates #1597's
 # conversion to pnpm): `npm run lint` prints Next's "How would you like to configure ESLint?"
@@ -17,7 +18,7 @@
 #
 # Since #1597 `site/` is a `pnpm-workspace.yaml` MEMBER, not a separate npm project — there is no
 # `site/package-lock.json` any more, and its deps resolve out of the one lockfile at the repo
-# root. So install happens at the repo root (`pnpm install --frozen-lockfile`) and build/lint run
+# root. So install happens at the repo root (`pnpm install --frozen-lockfile`) and build run
 # inside `site/` via pnpm, never npm.
 #
 # Why no separate `tsc --noEmit` step: MEASURED 2026-07-30 — a page that throws at render time
@@ -29,6 +30,19 @@
 # MEASURED, same session: exit 1 on an injected `number`/`string` mismatch). So `next build` is a
 # strict superset of `tsc --noEmit` here — it typechecks AND catches the render-time class `tsc`
 # structurally cannot see — and a bare `tsc` step would add CI time without adding coverage.
+#
+# Why no separate `pnpm run lint` (`next lint`) step either — same principle, second instance
+# (#1607): `site/next.config.mjs` sets no `eslint.ignoreDuringBuilds` override (default `false`),
+# so `next build`'s "Linting and checking validity of types" step already runs the SAME ESLint
+# pass, over the SAME default directories (`app/`, `components/`, `lib/`, etc.), as standalone
+# `next lint` — both read `site/eslint.config.mjs`. MEASURED 2026-07-30: a planted
+# react/no-unescaped-entities violation in app/page.tsx fails `pnpm run build` and
+# `pnpm run lint` with the byte-identical error (line:col, rule name, and message all matched).
+# And GitHub Actions skips a later step by default once an earlier
+# one fails (confirmed live in run `30600773918`), so there is no code path where a separate lint
+# step's outcome could ever differ from build's: pass, it already passed inside build; fail, it
+# never runs. The `lint` script in `site/package.json` stays — useful for a local
+# `pnpm run lint` — only the redundant CI step is dropped.
 #
 # NOT a required status check (operator call — #1592's acceptance says recommend, don't
 # self-grant). Because of that this uses a plain `paths:` filter on the trigger rather than the
@@ -86,13 +100,9 @@ jobs:
       # since #1597; its deps resolve out of pnpm-lock.yaml at the root.
       - run: pnpm install --frozen-lockfile
 
-      # Typechecks (via the Next TS plugin) AND performs the static-generation pass — see the
-      # header note on why no separate `tsc` step is added.
+      # Typechecks (via the Next TS plugin), LINTS via `site/eslint.config.mjs` (flat config,
+      # `next/core-web-vitals` via `FlatCompat` — same config `next lint` reads), AND performs the
+      # static-generation pass. See the header notes on why neither a separate `tsc --noEmit` step
+      # nor a separate `pnpm run lint` step is added: both are provably redundant with this one.
       - run: pnpm run build
-        working-directory: site
-
-      # `next lint`, backed by `site/eslint.config.mjs` (flat config, `next/core-web-vitals` via
-      # `FlatCompat`). See the header note: without an eslint dependency present this exited 1 on
-      # an unanswerable interactive setup prompt and never ran a real lint check.
-      - run: pnpm run lint
         working-directory: site

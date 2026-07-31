@@ -45,6 +45,16 @@ export interface ProvenBy {
   run: string;
   issue: number;
   at?: string;
+  /**
+   * Git blob sha (`git rev-parse HEAD:.github/actions/alert-issue/find-or-update.sh`) of the
+   * shared `find_or_update` implementation at the moment this path was drilled (#1604). Every
+   * converted path's alert step runs through that one script, so a change to it — #1594 and
+   * #1602 both landed one without re-drilling the other six markers — makes every OTHER entry's
+   * `provenBy` a claim about code that no longer exists, with nothing to notice it. Optional
+   * because `unconverted` entries are inlined, not routed through the shared script, and older
+   * entries predate the field.
+   */
+  sourceSha?: string;
 }
 
 // REASON: a brand-new alerting workflow's drill is not dispatchable until the workflow file is on the DEFAULT branch, so its alert path has no way to be proven before it merges — which is why `pendingProof` exists at all rather than every new path simply being drilled first
@@ -252,6 +262,21 @@ export function seedClosedTrackingPopulation(registry: AlertPathRegistry): Alert
   const live = registry.scheduledWithoutAlertPath.length + registry.paths.filter((p) => p.pendingProof).length;
   if (live > 0) return registry;
   return { ...registry, scheduledWithoutAlertPath: [{ workflow: SYNTHETIC_HATCH, tracking: 1333 }] };
+}
+
+/**
+ * #1604's fifth acceptance line: make the staleness it found DETECTABLE rather than something a
+ * reviewer has to notice by reading `find-or-update.sh`'s own git log. Reported INFORMATIONALLY,
+ * not folded into `checkAlertPaths`'s violations — the operator decision recorded in #1604's PR
+ * body was to surface drift rather than block every future PR on a full re-drill of every
+ * marker (that would need `workflow_dispatch` on all six-plus paths before an unrelated
+ * find-or-update.sh change could merge). A path with no recorded `sourceSha` predates the field
+ * and is silently skipped, not reported stale.
+ */
+export function staleProofs(registry: AlertPathRegistry, currentSourceSha: string): { marker: string; recordedSha: string }[] {
+  return registry.paths
+    .filter((p): p is typeof p & { provenBy: ProvenBy & { sourceSha: string } } => !!p.provenBy?.sourceSha && p.provenBy.sourceSha !== currentSourceSha)
+    .map((p) => ({ marker: p.marker, recordedSha: p.provenBy.sourceSha }));
 }
 
 /**
