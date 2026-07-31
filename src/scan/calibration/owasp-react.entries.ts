@@ -236,7 +236,40 @@ export const owaspReactEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "JSX spread of an object literal whose prop names are source literals",
     location: "src/owasp-react/prop-spread-literal-pick.tsx",
-    note: "#1237/#1344: harvey-jsx-prop-spread-injection fired High on `{...{ placeholder: raw.placeholder, disabled: raw.disabled }}` — MEASURED 2026-07-27. The rule's own message says the weakness is that \"the caller chooses which props the component receives\"; here the prop NAMES are literals in the source, so no name can be injected and the sink does not exist (a tainted value reaching `placeholder` is a different question and not XSS). The existing negative prop-spread-allowlisted.tsx could not catch this: it uses the single `Object.fromEntries(...filter(...includes))` spelling the rule lists as a sanitizer, so \"the planted negative stays silent\" was satisfiable by matching one literal spelling — the #1191 lesson one level up. NOT fixed by a widened sanitizer, which would have traded precision for silently-cleared bugs; fixed structurally, with P-OWASP-REACT-PROP-LITERAL-RESPREAD as the adversarial control. STILL OPEN on #1237: the loop-copy allowlist spelling (`for (const k of ALLOWED) safe[k] = raw[k]`) also over-fires and needs a real sanitizer with its own adversarial positives — deliberately not done here.",
+    note: "#1237/#1344: harvey-jsx-prop-spread-injection fired High on `{...{ placeholder: raw.placeholder, disabled: raw.disabled }}` — MEASURED 2026-07-27. The rule's own message says the weakness is that \"the caller chooses which props the component receives\"; here the prop NAMES are literals in the source, so no name can be injected and the sink does not exist (a tainted value reaching `placeholder` is a different question and not XSS). The existing negative prop-spread-allowlisted.tsx could not catch this: it uses the single `Object.fromEntries(...filter(...includes))` spelling the rule lists as a sanitizer, so \"the planted negative stays silent\" was satisfiable by matching one literal spelling — the #1191 lesson one level up. NOT fixed by a widened sanitizer, which would have traded precision for silently-cleared bugs; fixed structurally, with P-OWASP-REACT-PROP-LITERAL-RESPREAD as the adversarial control. The loop-copy allowlist spelling (`for (const k of ALLOWED) safe[k] = raw[k]`) was the residual left open here; it is CLOSED by the #1237(a) rows below, again with adversarial positives rather than a bare widening.",
+  },
+  // #1237(a) — the residual the literal-pick fix left open: the OWASP sheet's remedy written
+  // IMPERATIVELY. MEASURED 2026-07-31, `for (const k of ALLOWED_PROPS) if (k in raw) safe[k] =
+  // raw[k]` fired at High, so the rule was reporting a correct fix. Cleared by a sanitizer arm whose
+  // whole guard is that $ALLOW must be a bare identifier — the key must come from somewhere other
+  // than the untrusted object. The two positives below are the shapes that spoof a looser version of
+  // that arm; drop the identifier constraint and both go silent, which is the #989/#1066 trade.
+  {
+    id: "N-OWASP-REACT-PROP-LOOP-ALLOWLIST",
+    kind: "negative",
+    cls: "Untrusted props copied key-by-key from a named allowlist before the spread",
+    location: "src/owasp-react/prop-spread-loop-allowlist.tsx",
+    note: "#1237(a): `for (const k of ALLOWED_PROPS) if (k in raw) safe[k] = raw[k]` — the same remedy prop-spread-allowlisted.tsx expresses functionally. MEASURED 2026-07-31 before the fix: harvey-jsx-prop-spread-injection fired High here, so the rule flagged a correct fix, and the existing negative could not catch that because it matched the ONE spelling the sanitizer list named (the #1191 lesson, one level up, for the second time in this rule). Its adversarial siblings are prop-spread-loop-own-keys.tsx and prop-spread-loop-tainted-list.tsx — one file each, so no row can satisfy another's relevance check.",
+  },
+  {
+    id: "P-OWASP-REACT-PROP-LOOP-OWN-KEYS",
+    kind: "positive",
+    cls: "Key-by-key copy iterating the untrusted object's OWN keys, then spread",
+    location: "src/owasp-react/prop-spread-loop-own-keys.tsx",
+    match: ["prop-spread-injection"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "#1237(a) adversarial control: `for (const k of Object.keys(raw)) safe[k] = raw[k]` is a for-of copy that looks exactly like the negative above, and every prop name is still the caller's choice — dangerouslySetInnerHTML reaches the component. It must keep firing, which is what makes the sanitizer's identifier constraint falsifiable rather than merely plausible. MEASURED 2026-07-31: fires with the arm in place, goes silent without the constraint.",
+  },
+  {
+    id: "P-OWASP-REACT-PROP-LOOP-ATTACKER-ALLOWLIST",
+    kind: "positive",
+    cls: "Key-by-key copy whose allowlist comes out of the untrusted object",
+    location: "src/owasp-react/prop-spread-loop-tainted-list.tsx",
+    match: ["prop-spread-injection"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "#1237(a) adversarial control: `for (const k of raw.fields) safe[k] = raw[k]` — structurally identical to the safe form apart from where the key list originates, which is exactly the difference the sanitizer has to read. MEASURED 2026-07-31: a first attempt that excluded only `Object.keys(...)` cleared this one silently; constraining $ALLOW to a bare identifier is what brings it back. Its own bound is stated in the rule message and measured: the same allowlist laundered through a local const (`const allowed = raw.fields; for (const k of allowed) ...`) is NOT reported — the one-hop indirection the .has/.includes arm has always had.",
   },
   {
     id: "N-RSC-PARAM-PLAIN-PARAMETER",

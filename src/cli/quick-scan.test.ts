@@ -83,3 +83,43 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
     expect(findings.some((f) => SCRATCH_PREFIX.test(f.location))).toBe(false);
   }, 120000);
 });
+
+
+// #1237(a) — the loop-copy allowlist sanitizer, driven through the REAL semgrep run rather than a
+// recorded fixture, because what it has to prove is the sanitizer's behaviour and a recording
+// does not. It lives here rather than in the calibration entries alone for a measured reason:
+// `validate-calibration` scores all three rows correctly, but `harvey-jsx-prop-spread-injection` is
+// review-tier and that gate prints a review-tier miss as a tracked NON-FATAL gap and still exits 0.
+// MEASURED 2026-07-31 — with the sanitizer's identifier constraint deleted, both adversarial
+// positives went silent, both rows read FAIL, and the gate still printed GATE PASS and exited 0.
+// So the corpus makes a regression visible; this makes it fail.
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("harvey-jsx-prop-spread-injection: the loop-copy allowlist (#1237)", () => {
+  const FIXTURES = join(CALIBRATION, "src", "owasp-react");
+
+  async function propSpreadHits(): Promise<string[]> {
+    const outDir = mkdtempSync(join(tmpdir(), "harvey-propspread-test-"));
+    dirs.push(outDir);
+    const findingsOutPath = join(outDir, "findings.json");
+    await run([CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")]);
+    const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { taxonomy: string; location: string }[];
+    return findings
+      .filter((f) => f.taxonomy.includes("prop-spread-injection"))
+      .map((f) => f.location.split("/").pop() ?? f.location);
+  }
+
+  it("clears the named-allowlist loop and still fires on both shapes that spoof it", async () => {
+    const hit = await propSpreadHits();
+    // Sanity: the rule ran at all. Without this the three assertions below all pass on an empty set.
+    expect(hit.some((l) => l.startsWith("prop-spread-injection.tsx"))).toBe(true);
+    expect(FIXTURES).toBeTruthy();
+
+    // The fix: `for (const k of ALLOWED_PROPS) if (k in raw) safe[k] = raw[k]` is the sheet's own
+    // remedy written imperatively, and the rule was reporting it at High.
+    expect(hit.some((l) => l.startsWith("prop-spread-loop-allowlist.tsx"))).toBe(false);
+
+    // The two shapes a looser version of that sanitizer would clear silently. Neither is a
+    // hypothetical: dropping the `$ALLOW` identifier constraint makes both of these go dark.
+    expect(hit.some((l) => l.startsWith("prop-spread-loop-own-keys.tsx"))).toBe(true);
+    expect(hit.some((l) => l.startsWith("prop-spread-loop-tainted-list.tsx"))).toBe(true);
+  }, 120000);
+});
