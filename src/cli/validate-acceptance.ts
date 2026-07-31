@@ -9,10 +9,11 @@
 // issue it would close is mapped to `met` (with evidence), `split` (to a live remainder) or
 // `relayed` (to a question recorded ON the issue). See src/acceptance-conservation.ts for why.
 //
-// --pr and --closed-issue evaluate THE SAME THING (#1562): the same venues — the body, every linked
-// PR body and every comment on the issue, read cumulatively, one disposition per criterion across
-// all of them — and, on --pr, the same close set, since `closingIssuesReferences` sees a
-// Development-sidebar link that no keyword regex can. So a green --pr predicts the close verdict.
+// --pr and --closed-issue evaluate THE SAME THING (#1562/#1581): the same venues — the body, every
+// linked PR body (however many, minus the PR under test) and every comment on the issue, read
+// cumulatively, one disposition per criterion across all of them — and, on --pr, the same close set,
+// since `closingIssuesReferences` sees a Development-sidebar link that no keyword regex can. So a
+// green --pr predicts the close verdict.
 //
 // PRE-FLIGHT, before the PR exists: write the body to a file and run
 //   pnpm validate-acceptance --body-file <path> --repo <owner/repo>
@@ -152,17 +153,37 @@ function currentRepo(): string | undefined {
   return r.status === 0 ? (r.stdout ?? "").trim() || undefined : undefined;
 }
 
+// Resolved once, before anything can look an issue up: the lookup itself needs it to tell a
+// cross-repo linked PR from a local one.
+const self = currentRepo();
+
 // `undefined` must mean "does not exist" and nothing else — a fetch that merely failed has to stop
 // the run, never quietly become a nonexistent issue that fails the gate for the wrong reason.
 const cache = new Map<string, IssueRecord | undefined>();
 // `repo` is set when the closing reference named ANOTHER repository. `gh issue view N --repo
 // owner/repo` resolves those (measured 2026-07-27 against OWASP/CheatSheetSeries#2196), so a
 // cross-repo close is held to its own acceptance criteria instead of getting a NOT ASSESSED row.
+/**
+ * The bodies of the PRs GitHub links to an issue as closing it. Fetched here, into the lookup, so
+ * the PR gate and the close gate read one venue list rather than two kept in step (#1581).
+ * `closedByPullRequestsReferences` names the repository of each PR, so a cross-repo link resolves
+ * instead of being fetched out of the wrong repo.
+ */
+function linkedPrBodies(refs: { number: number; repository?: { name: string; owner: { login: string } } }[]): { ref: string; body: string }[] {
+  return refs.map((pr) => {
+    const owner = pr.repository ? `${pr.repository.owner.login}/${pr.repository.name}` : undefined;
+    const where = owner !== undefined && owner.toLowerCase() !== self?.toLowerCase() ? ["--repo", owner] : repoArgs;
+    const p = gh(["pr", "view", String(pr.number), ...where, "--json", "body"]);
+    if (p.status !== 0) die(`\`gh pr view ${pr.number}\` failed (exit ${p.status}): ${p.stderr.trim()}\n  A linked PR this gate cannot read is not a linked PR that carries no disposition.`);
+    return { ref: `#${pr.number}`, body: (JSON.parse(p.stdout) as { body: string }).body ?? "" };
+  });
+}
+
 function lookup(issue: number, repo?: string): IssueRecord | undefined {
   const key = `${repo ?? ""}#${issue}`;
   if (cache.has(key)) return cache.get(key);
   const where = repo ? ["--repo", repo] : repoArgs;
-  const r = gh(["issue", "view", String(issue), ...where, "--json", "number,state,body,comments"]);
+  const r = gh(["issue", "view", String(issue), ...where, "--json", "number,state,body,comments,closedByPullRequestsReferences"]);
   if (r.status !== 0) {
     if (issueDoesNotExist(r.stderr)) {
       cache.set(key, undefined);
@@ -170,12 +191,13 @@ function lookup(issue: number, repo?: string): IssueRecord | undefined {
     }
     die(`\`gh issue view ${issue}${repo ? ` --repo ${repo}` : ""}\` failed (exit ${r.status}): ${r.stderr.trim()}\n  A repository that does not RESOLVE is not a repository that does not EXIST — a private repo this token cannot read fails identically — so this stops the run rather than reporting the reference as nonexistent.`);
   }
-  const raw = JSON.parse(r.stdout) as { number: number; state: string; body: string; comments: { body: string }[] };
+  const raw = JSON.parse(r.stdout) as { number: number; state: string; body: string; comments: { body: string }[]; closedByPullRequestsReferences?: { number: number; repository?: { name: string; owner: { login: string } } }[] };
   const record: IssueRecord = {
     number: raw.number,
     state: raw.state === "OPEN" ? "OPEN" : "CLOSED",
     body: raw.body ?? "",
     comments: (raw.comments ?? []).map((c) => c.body ?? ""),
+    linkedPrs: linkedPrBodies(raw.closedByPullRequestsReferences ?? []),
   };
   cache.set(key, record);
   return record;
@@ -197,20 +219,20 @@ if (closedIssueFlag) {
     body: string;
     comments: { body: string }[];
     author: { login: string; is_bot: boolean };
-    closedByPullRequestsReferences: { number: number }[];
+    closedByPullRequestsReferences: { number: number; repository?: { name: string; owner: { login: string } } }[];
   };
-  cache.set(`#${issue}`, { number: raw.number, state: raw.state === "OPEN" ? "OPEN" : "CLOSED", body: raw.body ?? "", comments: (raw.comments ?? []).map((c) => c.body ?? "") });
-
-  const linkedPrs = (raw.closedByPullRequestsReferences ?? []).map((pr) => {
-    const p = gh(["pr", "view", String(pr.number), ...repoArgs, "--json", "body"]);
-    if (p.status !== 0) die(`\`gh pr view ${pr.number}\` failed (exit ${p.status}): ${p.stderr.trim()}\n  A linked PR this gate cannot read is not a linked PR that carries no disposition.`);
-    return { ref: `#${pr.number}`, body: (JSON.parse(p.stdout) as { body: string }).body ?? "" };
+  cache.set(`#${issue}`, {
+    number: raw.number,
+    state: raw.state === "OPEN" ? "OPEN" : "CLOSED",
+    body: raw.body ?? "",
+    comments: (raw.comments ?? []).map((c) => c.body ?? ""),
+    linkedPrs: linkedPrBodies(raw.closedByPullRequestsReferences ?? []),
   });
 
   const closeReport = checkClosedIssue(
-    { issue, linkedPrs, authorIsBot: raw.author?.is_bot === true },
+    { issue, authorIsBot: raw.author?.is_bot === true },
     lookup,
-    currentRepo(),
+    self,
     evidenceWorld(),
   );
   console.log(args.includes("--json") ? JSON.stringify(closeReport, null, 2) : formatClosedIssue(closeReport));
@@ -244,8 +266,6 @@ const prFlag = flag("--pr");
 const bodyFile = flag("--body-file");
 if (!prFlag && !bodyFile) die("nothing to check — pass --pr <number>, --body-file <path>, --closed-issue <number>, --selftest or --selftest-close");
 
-const self = currentRepo();
-
 let body: string;
 let source: string;
 // `closingIssuesReferences` is the close set GITHUB will act on. It includes a Development-sidebar
@@ -259,7 +279,7 @@ if (bodyFile) {
   // Every clause here has to be true READ ALONE (#1573). The row used to open "reads the text
   // supplied and nothing else" and then correctly say two sentences later that issue comments WERE
   // read — and the opening clause is the part a skimmer keeps.
-  sidebarNote = "ℹ NOT ASSESSED  --body-file takes the CLOSE SET from the supplied text alone, so GitHub's own `closingIssuesReferences` (which a Development-sidebar link populates with no keyword in the body) was NOT consulted. Issue comments WERE read, over `gh`, so the one-disposition-per-criterion rule is checked in full. Re-run with `--pr <n>` once the PR exists for the sidebar half.";
+  sidebarNote = `ℹ NOT ASSESSED  --body-file takes the CLOSE SET from the supplied text alone, so GitHub's own \`closingIssuesReferences\` (which a Development-sidebar link populates with no keyword in the body) was NOT consulted. Issue comments and every LINKED PR body WERE read, over \`gh\`, so the one-disposition-per-criterion rule is checked in full. Re-run with \`--pr <n>\` once the PR exists for the sidebar half.${prFlag ? "" : " If this body already belongs to an open PR, pass `--pr <n>` alongside --body-file so that PR is not read as a linked venue AND as this body."}`;
 } else {
   const r = gh(["pr", "view", prFlag!, ...repoArgs, "--json", "body,closingIssuesReferences"]);
   if (r.status !== 0) die(`\`gh pr view ${prFlag}\` failed (exit ${r.status}): ${r.stderr.trim()}`);
@@ -301,6 +321,8 @@ if (sidebarNote) console.log(`${sidebarNote}\n`);
 for (const s of seeded) console.log(`⚠ SEEDED VIOLATION: ${s}`);
 if (seeded.length > 0) console.log("  The gate MUST exit 1 below. Exit 0 means it cannot fail; exit 2 means it could not run.\n");
 
-const report = checkAcceptance(body, lookup, self, evidenceWorld(), { linkedCloses });
+// `selfPr` keeps this PR from being read twice: it is one of its issues' linked PRs as well as the
+// body under test (#1581).
+const report = checkAcceptance(body, lookup, self, evidenceWorld(), { linkedCloses, selfPr: prFlag ? `#${prFlag}` : undefined });
 console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatAcceptance(report));
 process.exit(report.ok ? 0 : 1);
