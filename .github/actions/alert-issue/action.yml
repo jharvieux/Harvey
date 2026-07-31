@@ -16,12 +16,19 @@
 # #1287 shipped the drill as a PARALLEL branch: the production `DRILL != true` path
 # (find_open real → `gh issue comment "$existing"` → else create) was executed by no drill, only its
 # shared label-create step and the same `gh issue create/comment/close` primitives. #1348 closed that
-# gap: `find_or_update()` below is now the ONE function both branches call. The production branch
-# calls it once; the drill calls it twice — create-when-absent, then comment-on-existing — against
-# its own drill-suffixed namespace, so a drill run can never be mistaken for, or overwrite, a live
-# alarm. Breaking `find_or_update`'s `gh issue comment "$existing"` line now breaks the drill AND
-# production identically, because it is the same line — proven live 2026-07-28, run 30331463282
-# (jharvieux/Harvey#1391), reverted immediately after (see .github/alert-paths.json).
+# gap: `find_or_update()` (now in find-or-update.sh, see below) is the ONE function both branches
+# call. The production branch calls it once; the drill calls it twice — create-when-absent, then
+# comment-on-existing — against its own drill-suffixed namespace, so a drill run can never be
+# mistaken for, or overwrite, a live alarm. Breaking `find_or_update`'s `gh issue comment "$existing"`
+# line now breaks the drill AND production identically, because it is the same line — proven live
+# 2026-07-28, run 30331463282 (jharvieux/Harvey#1391), reverted immediately after (see
+# .github/alert-paths.json).
+#
+# #1511/#1512: ci.yml's heavy-cli job runs 3 matrix shards, each calling this action independently on
+# failure, so `find_open` → `gh issue create` raced and opened two tracker issues for one failure.
+# `find-or-update.sh` (sourced below) now self-heals that via `reconcile_duplicates` — see its header
+# comment for why a lock was not the fix. It is a separate file, not inlined here, specifically so a
+# real concurrency test can source it and race it against a mocked `gh` (src/alert-issue-race.test.ts).
 #
 # Registry of markers and their proof runs: .github/alert-paths.json.
 
@@ -80,44 +87,10 @@ runs:
           exit 1
         fi
 
-        # $1 = drill|real. Partitions open issues on the marker by title so a drill and a live alarm
-        # can never be confused for one another.
-        find_open() {
-          gh issue list --state open --label "$MARKER" --json number,title \
-            | jq -r --arg s "$SUFFIX" --arg want "$1" \
-                '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | .[0].number // empty'
-        }
-
-        # THE find-or-update logic (#1348) — the ONE code path both the production branch and the
-        # drill run. $1 = namespace (drill|real), $2 = title, $3 = body. Prints
-        # "created\t<number>\t<url>" or "commented\t<number>\t" (tab-separated, one line) so a caller
-        # can tell which half ran without re-deriving it.
-        # `|| return $?` on every gh/find_open call below is load-bearing, not defensive filler: a
-        # bare `existing=$(find_open ...)` or `gh issue comment ...` followed unconditionally by more
-        # commands means the function's own exit status (its LAST command) is whatever THAT command
-        # returns, not the one that actually failed — and dry-running this against a `gh` shim rigged
-        # to fail (#1348) proved it two different ways: the caller reported "Commented on existing
-        # tracking issue" even though the comment call itself had failed, and separately a failing
-        # `find_open` was swallowed the same way. `set -e` does not save either case: a function
-        # invoked inside a command substitution (`result=$(find_or_update ...)`) does not abort on an
-        # interior failure the way a true-top-level command does — proven empirically, not assumed.
-        # Explicitly forwarding the failing command's exit code makes the function's return status
-        # meaningful again, which the call sites below rely on.
-        find_or_update() {
-          local namespace="$1" title="$2" body="$3" existing url
-          existing=$(find_open "$namespace") || return $?
-          if [ -n "$existing" ]; then
-            # `gh issue comment` prints the new comment's URL to stdout on success — which, inside
-            # `result=$(find_or_update ...)`, would land in the SAME captured stream as the `printf`
-            # below and break the caller's parse (a live drill run caught this, #1348: pass 2 reported
-            # a comment URL where a "commented" status was expected). Discarded on purpose.
-            gh issue comment "$existing" --body "$body" > /dev/null || return $?
-            printf 'commented\t%s\t\n' "$existing"
-          else
-            url=$(gh issue create --title "$title" --label "$MARKER" --body "$body") || return $?
-            printf 'created\t%s\t%s\n' "${url##*/}" "$url"
-          fi
-        }
+        # find_open / find_or_update / reconcile_duplicates live in find-or-update.sh, not inline
+        # here (#1511/#1512) — see that file's header for the duplicate-alarm race it fixes and why.
+        # shellcheck source=find-or-update.sh
+        source "$GITHUB_ACTION_PATH/find-or-update.sh"
 
         if [ "$DRILL" != "true" ]; then
           # Captured as a plain top-level assignment (not nested inside another command's word) so
