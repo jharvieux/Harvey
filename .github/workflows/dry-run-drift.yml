@@ -193,9 +193,11 @@ jobs:
       # #1333: until now this scheduled job went red on a branch nobody watches and raised nothing.
       # Never fires on PR/push/merge_group — those failures are already visible on the PR — but
       # workflow_dispatch is permanently in the condition (#1287) because a cron-only alert path
-      # cannot be proven to work.
+      # cannot be proven to work. EXCLUDED on a liveness drill (#1569): that drill fails the job on
+      # purpose at the liveness assert, so without this clause it would open a REAL
+      # `ci-dry-run-drift-alert` issue rather than proving anything about the artifacts.
       - name: Open or update the dry-run-drift tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-dry-run-drift-alert

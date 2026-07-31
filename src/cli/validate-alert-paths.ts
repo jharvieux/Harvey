@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
+import { recordMeasured } from "../ci-liveness.js";
 import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, staleProofs, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -146,6 +147,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // this gate was written to stop believing.
   const pending = registry.paths.filter((p) => p.pendingProof);
   const total = alerting.reduce((n, f) => n + f.alertSteps.length, 0);
+  // #1568: this gate's own liveness receipt. The label half is the one assertion in this repo that
+  // no diff can speak to, so a run that died before reaching it reports an absence that reads like
+  // "every label is there". Recorded only on the passing path, and only when the label pass ran —
+  // a structure-only run scored a strictly smaller thing and must not claim the larger one.
+  if (process.argv.includes("--labels")) recordMeasured("alert-paths", total, `alert path(s) checked for structure and marker-label existence across ${facts.length} workflow(s)`);
   console.log(
     pending.length === 0
       ? `\n✓ ${total} alert path(s): every one dispatch-provable and carrying a recorded proof run`
