@@ -272,9 +272,9 @@ describe("the claim ratchet's provenance attribution, through the real CLI (#161
     execFileSync("sh", ["-c", `git ls-files -z | tar --null -T - -cf - | tar -x -C '${fixture}'`], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     // The fixture is a copy of the TRACKED tree only, so it has no node_modules. The CLI resolves
     // its imports relative to its own path, so anything it pulls in from a package must resolve
-    // inside the fixture. Symlink the real one in: it is not tracked, so it cannot arrive with the
-    // tar, and this broke `main` once already (2026-07-31) when #1732 gave src/scored-gates.ts a
-    // `yaml` import that this CLI transitively loads — neither PR was wrong alone.
+    // inside the fixture. node_modules is untracked, so the tar leaves it out; symlink the real one
+    // in. This broke `main` once already (2026-07-31), when #1732 gave src/scored-gates.ts a
+    // `yaml` import that this CLI transitively loads.
     symlinkSync(join(REPO_ROOT, "node_modules"), join(fixture, "node_modules"), "dir");
     git("init", "-q", "-b", "main");
     git("add", "-A");
