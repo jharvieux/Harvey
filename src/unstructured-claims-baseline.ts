@@ -182,7 +182,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/design/m6-simplification-eval.md": [
     "and a documented FP/negative class) — M6 just can't be scored by a tool the way a Semgrep rule",
-    "replacement to use — has no `Finding[]`-emitting scanner, so it cannot plug into",
     "| 4 | 2026-07-16 | Claude Fable 5 (a second, distinct fresh-context subagent), the packet as the sole input, against the seven-file corpus (M6-N-SEAM added, #325) | 4/4 | **2/3** | the new seam negative spared for the designed reason; `framework-adapter.ts` flagged on a new, self-rated-low-confidence argument the packet gave it no way to check — see §3.4 |",
     "This reviewer cannot certify which signal it actually used. Both the labels and the genuine",
     "so `InvoicePageAdapter` cannot be called by the framework at all, the interface has one",
@@ -437,11 +436,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "\"Don't know\" is itself a finding: unverified security posture. Tag it taxonomy `Config`, severity",
   ],
   "SESSION.md": [
+    "staleness, is why the claim cannot stand. Had 1.3x been right, a re-measure would have appeared to",
     "- **#1318's claim ratchet** failed `verify` on the word *\"cannot\"* in a comment defending that guard.",
     "invariant test varies only one linked PR, so it cannot see it. Population 2 of the last 100 closed.",
     "and **it cannot tell which.** The PR contains #1306 (\"N+1 still fires on seed/build scripts\"), so a −1",
     "6. M7's false-positive floor target scores **0% precision** — the control cannot fail in the",
-    "| **Site redeploy (#1520)** | **HOLD until the end of the sweep.** Nothing deploys before then. Consequence to remember: #742 cannot close and `site-smoke` against production stays red until it happens, both by design rather than by defect. |",
     "| **#1305 option (b)** (2026-07-30) | (b) asked for a ruling that the free tier stays M1-mechanical-only; the 2026-07-28 rulings answered in the OPPOSITE direction. Foreclosed in substance, unstated in words — and the acceptance gate reads it as an open criterion, so **#1305 cannot close until it is formally withdrawn.** Proposed wording on the issue. |",
     "- **PR #1406** (reason registry, `#1311`/`#1349`/`#1253`). **Never verified** — the operator halted new agents before its acceptance verifier was dispatched. **Do not merge on the executor's own claim**; every other PR this sweep had a verifier and 12 of 19 issue-verdicts moved as a result.",
   ],

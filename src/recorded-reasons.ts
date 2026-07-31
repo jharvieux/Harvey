@@ -132,6 +132,13 @@ export function parseRecordedReasons(text: string, file: string, fenced = file.e
  * carries the same kind of standing claim. */
 export const DEFAULT_ROOTS = ["src", "docs", "briefs", "CLAUDE.md", "SESSION.md", "vitest.config.ts"];
 
+// REASON: SESSION.md stays inside DEFAULT_ROOTS and inside the ratchet, despite being an actively-rewritten scratch log — a standing claim in the session log is the shape that has done the most damage here, and exempting one file would be the first entry on a suppression list this gate deliberately does not have
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-07-31 — SESSION.md contributes 7 census rows today (#1401's body says 45; that figure is stale, run `pnpm validate-reasons --census`). Over the 32 commits touching it since 2026-07-24: 15 already breached the COUNT ratchet, and per-row text comparison (#1399) adds 3 more. So the marginal cost of keeping it in scope is 3 commits in 32, not a breach on every session-log edit.
+// OWNER: operator
+// DECISION: #1401 — recorded there with the measurement above, and reversible by an operator ruling; the counter-case is CLAUDE.md's own record of "the free scan is sold as instant", a claim invented in an issue comment, written into SESSION.md, and used as the premise of a decision put to the operator
+// TOUCHES: SESSION.md
+
 const SCANNED = /\.(ts|md|txt|yml|sql)$/;
 // targets/ is vendored third-party source — Harvey's convention does not govern it.
 const SKIP_DIR = new Set(["node_modules", ".git", "dist", "coverage", "targets"]);
@@ -287,12 +294,18 @@ export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]):
 // the current lines against the recorded ones as a MULTISET reduces that to the actual delta, and it
 // makes a baseline bump reviewable: the diff shows the new claims, not a number going up.
 //
+// #1399 — AND THE GATE NOW SCORES THAT TEXT, not the count. It used to record verbatim and score
+// counts, which is a boundary with a consequence the old note here did not state: a baselined claim
+// could be REWRITTEN INTO A STRONGER OR MATERIALLY DIFFERENT CLAIM and the gate stayed green,
+// because the count never moved. See claimDrift below for the measurement that found it, the one
+// that priced the extra churn, and the reason a per-row comparison is the right trade.
+//
 // Deliberately no exemption list. Suppressing a file recreates exactly the invisibility this exists
 // to remove; the way past a breach is to write the claim as a falsifiable block, or to bump that
 // file's baseline in a diff a human reads.
 type ClaimBaseline = Record<string, number>;
 
-/** The committed baseline records each claim verbatim (see above); the ratchet still scores counts. */
+/** Line counts from the verbatim baseline, for the report line only — the GATE scores text (#1399). */
 export function claimCounts(baseline: Record<string, string[]>): ClaimBaseline {
   return Object.fromEntries(Object.entries(baseline).map(([file, texts]) => [file, texts.length]));
 }
@@ -314,24 +327,88 @@ export function markNewClaims(baselineLines: string[], current: UntriagedClaim[]
   });
 }
 
+// #1401 — THE FAILURE MESSAGE USED TO MISATTRIBUTE BLAME. The ratchet is repo-wide over source, so a
+// breaching line can sit in a file the author never opened: three PRs hit that in one session
+// (#1387 through `src/fp-rules.test.ts`, arriving from #1383 mid-flight; #1397 through
+// `src/recorded-reasons.test.ts` on a rebase; and #1347's own executor through seven files after
+// `main` gained `src/scan/rule-corpus-pairing.ts`). The reader's first move is to hunt for a defect
+// in their own diff, and the repair — "just regenerate the baseline" — is one keystroke from
+// "allowlist my own new claims", which is the loophole the gate exists to close. So the row says
+// where it came from, and the repo-wide scoring is left alone: narrowing the gate to the diff would
+// let a claim added by a PR that touches nothing else escape entirely.
+type ClaimOrigin =
+  | { known: false; why: string }
+  | { known: true; sha: string; subject: string; authoredHere: boolean };
+
+export function attributeClaim(
+  claim: UntriagedClaim,
+  blame: (file: string, line: number) => { sha: string; subject: string } | undefined,
+  branchShas: Set<string> | undefined,
+): ClaimOrigin {
+  // A shallow CI checkout blames every line to one grafted commit, which would attribute EVERY row
+  // to this branch — worse than saying nothing, because it reads as a confident answer.
+  if (!branchShas) return { known: false, why: "no commit range against the base branch — a shallow checkout (`actions/checkout` defaults to depth 1) cannot attribute a line. Re-run locally, or fetch the base." };
+  const at = blame(claim.file, claim.line);
+  if (!at) return { known: false, why: `git blame could not read ${claim.file}:${claim.line} — an uncommitted line has no commit yet` };
+  return { known: true, sha: at.sha, subject: at.subject, authoredHere: branchShas.has(at.sha) };
+}
+
 export function claimCensusByFile(claims: { file: string }[]): ClaimBaseline {
   const out: ClaimBaseline = {};
   for (const c of claims) out[c.file] = (out[c.file] ?? 0) + 1;
   return out;
 }
 
-interface RatchetBreach {
+interface ClaimDrift {
   file: string;
+  /** Current claim lines the baseline does not account for. Any row here is a gate failure. */
+  added: UntriagedClaim[];
+  /** Baseline lines no longer present. A REWORD produces one of each; a retirement, only these. */
+  dropped: string[];
   baseline: number;
   now: number;
 }
 
-/** A file absent from the baseline has an implicit budget of 0, so a NEW doc full of claims breaches. */
-export function claimRatchetBreaches(baseline: ClaimBaseline, current: ClaimBaseline): RatchetBreach[] {
-  return Object.entries(current)
-    .filter(([file, now]) => now > (baseline[file] ?? 0))
-    .map(([file, now]) => ({ file, baseline: baseline[file] ?? 0, now }))
-    .sort((a, b) => b.now - b.baseline - (a.now - a.baseline));
+/**
+ * #1399 — THE GATE SCORES TEXT, NOT COUNTS, because a count is satisfied by rewriting a claim in
+ * place. MEASURED 2026-07-28 by the acceptance verifier on PR #1387: editing `src/audit-runners.ts`'s
+ * baselined "with no live DB" to "lacking a live DB" left `pnpm validate-reasons` at exit 0 with the
+ * per-file count unchanged. The consequence, which the old disclosure did not state, is that a
+ * baselined claim could be rewritten into a STRONGER or materially different one in silence — and
+ * since #1347 widened the census to source comments, the population of that loophole is where this
+ * repo's confident-register claims actually live (the taint-source block falsified in #1344).
+ *
+ * The baseline already records every claim VERBATIM, so this needs no new data — only for the
+ * comparison to use it. A file absent from the baseline has an implicit budget of zero, so a new doc
+ * full of claims still breaches, and this strictly subsumes the count ratchet: if a file's count
+ * rises, at least (now − baseline) lines come back in `added`.
+ *
+ * The cost is churn, and it was MEASURED before being accepted rather than argued about (2026-07-31,
+ * over every commit touching each surface): SESSION.md 3 of 32 commits, `src` 3 of 67, `docs` 2 of 22
+ * would newly breach — 8 of 121, against 58 of the same 121 that already breached the count ratchet.
+ * So per-row comparison adds roughly a seventh again of an already-frequent gate, not a breach on
+ * every innocuous edit.
+ */
+export function claimDrift(baseline: Record<string, string[]>, current: UntriagedClaim[]): ClaimDrift[] {
+  const byFile = new Map<string, UntriagedClaim[]>();
+  for (const c of current) byFile.set(c.file, [...(byFile.get(c.file) ?? []), c]);
+  return [...new Set([...Object.keys(baseline), ...byFile.keys()])]
+    .map((file) => {
+      const recorded = baseline[file] ?? [];
+      const now = byFile.get(file) ?? [];
+      const marked = markNewClaims(recorded, now);
+      const matched = new Map<string, number>();
+      for (const m of marked.filter((x) => !x.isNew)) matched.set(m.claim.text, (matched.get(m.claim.text) ?? 0) + 1);
+      const dropped = recorded.filter((text) => {
+        const left = matched.get(text) ?? 0;
+        if (left === 0) return true;
+        matched.set(text, left - 1);
+        return false;
+      });
+      return { file, added: marked.filter((m) => m.isNew).map((m) => m.claim), dropped, baseline: recorded.length, now: now.length };
+    })
+    .filter((d) => d.added.length > 0)
+    .sort((a, b) => b.added.length - a.added.length);
 }
 
 export function claimTotal(census: ClaimBaseline): number {
