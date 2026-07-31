@@ -463,21 +463,46 @@ rules:
       harveySeverity: High
     message: >
       A privilege/role value is read directly from a client-supplied request field
-      (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can
+      (req.body/req.query/req.params, or a body awaited out of an App Router request with
+      `await req.json()`). If it gates authorization or is persisted, any caller can
       escalate their own privileges by adding the field to the request. Derive role/admin status
       from the verified session, never from the request.
       SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
       it reports the READ of a role field off the request. Code that reads the field only to reject
       it is a benign shape this rule does not distinguish from a trusting one, so a defensive check
-      will appear here too.
+      will appear here too. The App Router arm requires the body to be bound by a `const`/`let`
+      declaration from `await <req>.json()` in the same function, so a body destructured at the
+      await, or reached through a helper, is not assessed.
     patterns:
       - pattern-either:
-          - pattern: $REQ.body.$FLAG
-          - pattern: $REQ.query.$FLAG
-          - pattern: $REQ.params.$FLAG
-      - metavariable-regex:
-          metavariable: $REQ
-          regex: ^(req|request)$
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.body.$FLAG
+                  - pattern: $REQ.query.$FLAG
+                  - pattern: $REQ.params.$FLAG
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^(req|request)$
+          # #1682: the App Router spelling, where the body is awaited into a local first so there
+          # is no literal `req.body` anywhere. `harvey-client-trusted-price` (#1373) shipped this
+          # arm and its role sibling did not, so ONE taxonomy class was covered unevenly by
+          # spelling — the same gap #1221 closed for 17 of 21 other rules. MEASURED 2026-07-31
+          # (semgrep 1.164.0, three identical runs, `--jobs 1 --timeout 0`, zero errors) on two
+          # handlers differing only in how the body is read: `req.body.role` fired, `const body =
+          # await req.json(); body.role` was silent. Same `pattern-inside` idiom as the price rule
+          # and `harvey-mass-assignment-bare`.
+          - patterns:
+              - pattern: $BODY.$FLAG
+              - pattern-either:
+                  - pattern-inside: |
+                      const $BODY = await $REQ.json();
+                      ...
+                  - pattern-inside: |
+                      let $BODY = await $REQ.json();
+                      ...
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^(req|request|nextReq|nextRequest)$
       - metavariable-regex:
           metavariable: $FLAG
           regex: (?i)^(is_?admin|is_?superuser|is_?root|is_?owner|admin|superuser|role)$
