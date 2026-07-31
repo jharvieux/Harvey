@@ -23,6 +23,9 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   env: { connected: false, dynamic: false, llm: false },
   exec: () => ({ ok: true, output: "" }),
   exists: () => true,
+  // #1556: doubled for the same reason `exists` is — "/target" is not a real directory, and the M1
+  // probe reads the architecture off it. "unknown" leaves every M1 tier applicable, unchanged.
+  detectOrm: () => "unknown",
   ...over,
 });
 

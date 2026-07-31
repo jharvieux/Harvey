@@ -16,6 +16,7 @@ import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
+import { detectOrm, ORM_LABELS, type TargetOrm } from "./scan/framework-detect.js";
 
 // #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
 // so a pass artifact that was present but rejected fails loud rather than being silently ignored.
@@ -273,11 +274,38 @@ const rankedFiles = (output: string): number | undefined => {
 // #1522: M1's out-of-orchestrator tiers — the passes that run outside run-audit and can only reach
 // it as a recorded artifact (docs/design/audit-pass-artifacts.md). The row names every one of them
 // and says which has evidence, so recording ONE never reads as "M1 ran in full".
-const M1_PASS_TIERS: { pass: string; label: string }[] = [
+// #1556: the connected-Supabase tier is N/A BY ARCHITECTURE wherever `detectOrm` routes the target
+// to the app-layer M1 tier — a Prisma/Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose or bare-driver
+// app has no Supabase project to connect to, and the same routing already gates the Supabase RLS
+// detectors off and emits an `M1-ARCH-<LAYER>` not-assessed row (#757/#869/#901). Naming it as
+// un-run made M1 read `partial` PERMANENTLY on that whole class of target, over a tier that could
+// never become `ran` there — a status carrying no information. `unknown` is deliberately NOT N/A:
+// detectOrm returns it when no data layer is recognised at all, and the RLS detectors still run.
+const connectedTierNotApplicable = (orm: TargetOrm): string | undefined =>
+  orm === "supabase" || orm === "unknown"
+    ? undefined
+    : `this target's data layer is ${ORM_LABELS[orm]} with no Supabase project, so there is no PostgREST/RLS surface to connect to — N/A by architecture, disclosed as the M1-ARCH-${orm.toUpperCase()} row (#757/#869/#901)`;
+
+const M1_PASS_TIERS: { pass: string; label: string; notApplicable?: (orm: TargetOrm) => string | undefined }[] = [
   { pass: "semantic", label: "semantic (LLM `/vuln-scan` → `/triage`)" },
   { pass: "live", label: "live (`pnpm detect-deeper`)" },
-  { pass: "connected", label: "connected Supabase (`pnpm scan --supabase <ref|local> --migrations <dir>`)" },
+  { pass: "connected", label: "connected Supabase (`pnpm scan --supabase <ref|local> --migrations <dir>`)", notApplicable: connectedTierNotApplicable },
 ];
+
+// #1556: split M1's out-of-orchestrator tiers into the ones this ARCHITECTURE could run and the ones
+// that are not applicable here. The N/A half never holds M1 at `partial` and is never listed as
+// missing — but it is always STATED, on the `detail` side of the row rather than the `reason` side,
+// because "we did not run this" and "this does not exist here" are different claims and dropping the
+// second is #345's shape one level down. `detail` is rendered next to `reason` on every row since
+// #1555, so the sentence reaches the client report on a `ran` row and on a `partial` one alike.
+function m1TierScope(orm: TargetOrm): { applicable: typeof M1_PASS_TIERS; naNote: string } {
+  const scoped = M1_PASS_TIERS.map((tier) => ({ tier, why: tier.notApplicable?.(orm) }));
+  const na = scoped.filter((s) => s.why !== undefined);
+  return {
+    applicable: scoped.filter((s) => s.why === undefined).map((s) => s.tier),
+    naNote: na.length ? ` Not applicable to this target's architecture, so not counted as un-run: ${na.map((s) => `${s.tier.label} — ${s.why}`).join("; ")}.` : "",
+  };
+}
 
 const gitHistoryGapNote = (ctx: RunContext): string => {
   if (!ctx.isGitRepoRoot || ctx.isGitRepoRoot(ctx.targetDir)) return "";
@@ -317,6 +345,8 @@ const m1: ModuleRunner = {
         falsifier: `${command} — a non-zero "lines of application code across N file(s)" count on that report makes this reason false`,
       };
     }
+    // #1556: which of M1's out-of-orchestrator tiers this target's ARCHITECTURE can run at all.
+    const tierScope = m1TierScope((ctx.detectOrm ?? detectOrm)(ctx.targetDir));
     const mechanical = [
       ...briefProvenanceFinding(ctx.targetDir),
       ...readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00"),
@@ -345,21 +375,21 @@ const m1: ModuleRunner = {
       // Recording one tier used to take the whole disclosure with it, so the row read fully examined
       // while two of M1's three out-of-orchestrator tiers had never run — a clean bill of health
       // bought by diligence (#345's shape). A tier with no fresh artifact keeps M1 partial.
-      const missing = M1_PASS_TIERS.filter((t) => !recorded.some((p) => p.pass === t.pass));
+      const missing = tierScope.applicable.filter((t) => !recorded.some((p) => p.pass === t.pass));
       const reason = missing.length
-        ? `${missing.length} of M1's ${M1_PASS_TIERS.length} out-of-orchestrator tiers has no artifact proving it ran on this engagement: ${missing.map((t) => t.label).join("; ")}. Recorded here: ${recorded.map((p) => p.pass).join(", ")}. Absence of an un-run tier's findings is not-collected, not clean (#420) — record one with \`pnpm record-pass --module M1 --pass <tier> --target <dir> --out <artifacts-dir>\` (#311/#416/#1522).${gitHistoryGapNote(ctx)}`
+        ? `${missing.length} of M1's ${tierScope.applicable.length} applicable out-of-orchestrator tiers has no artifact proving it ran on this engagement: ${missing.map((t) => t.label).join("; ")}. Recorded here: ${recorded.map((p) => p.pass).join(", ")}. Absence of an un-run tier's findings is not-collected, not clean (#420) — record one with \`pnpm record-pass --module M1 --pass <tier> --target <dir> --out <artifacts-dir>\` (#311/#416/#1522).${gitHistoryGapNote(ctx)}`
         : undefined;
-      return { kind: "examined", detail: `${ran.detail}${focusNote}`, unitsExamined: filesMeasured, scope: "application source files", findings, ...(reason ? { reason } : {}) };
+      return { kind: "examined", detail: `${ran.detail}${focusNote}${tierScope.naNote}`, unitsExamined: filesMeasured, scope: "application source files", findings, ...(reason ? { reason } : {}) };
     }
     return {
       kind: "examined",
-      detail: "pnpm quick-scan (mechanical tier)",
+      detail: `pnpm quick-scan (mechanical tier)${tierScope.naNote}`,
       unitsExamined: filesMeasured,
       scope: "application source files",
       findings: mechanical,
       reason:
         withRejectedPass(
-          `mechanical tier only — none of M1's out-of-orchestrator tiers (${M1_PASS_TIERS.map((t) => t.label).join("; ")}) left an artifact proving it ran, so the orchestrator will not assert \`ran\` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is those tiers' output, so absence of THOSE is not-collected, not clean (#420)`,
+          `mechanical tier only — none of M1's applicable out-of-orchestrator tiers (${tierScope.applicable.map((t) => t.label).join("; ")}) left an artifact proving it ran, so the orchestrator will not assert \`ran\` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is those tiers' output, so absence of THOSE is not-collected, not clean (#420)`,
           pass.reason,
         ) +
         (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out/--sarif-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +

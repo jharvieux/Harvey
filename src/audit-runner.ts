@@ -18,6 +18,7 @@
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { DataClassMap } from "./data-class-escalation.js";
 import type { Finding, TestQuality } from "./findings.js";
+import type { TargetOrm } from "./scan/framework-detect.js";
 
 // What a probe reports about its OWN execution. It is deliberately not ModuleCoverage: a probe may
 // only describe what it did, and cannot claim a status for a module it isn't registered under.
@@ -235,6 +236,12 @@ export interface RunContext {
   // original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays
   // silent on this sub-gap.
   isGitRepoRoot?: (dir: string) => boolean;
+  // #1556: the target's data layer, as `detectOrm` resolves it — the same routing that gates the
+  // Supabase RLS detectors off and emits the M1-ARCH-<LAYER> row. The M1 probe reads it to tell an
+  // out-of-orchestrator tier that DID NOT RUN from one that does not apply to this architecture at
+  // all. Absent ⇒ the probe calls the real `detectOrm` on ctx.targetDir; injected so a probe test
+  // can pin an architecture without standing up a target tree.
+  detectOrm?: (dir: string) => TargetOrm;
 }
 
 export interface ModuleRunner {

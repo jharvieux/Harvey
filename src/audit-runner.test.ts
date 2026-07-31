@@ -7,6 +7,7 @@ import { assertRegistryComplete, formatFailures, formatIdCollisions, type Module
 import { discoverSchemaFiles } from "./dynamic-validate.js";
 import { type Finding, type ReportMeta, validateFindings } from "./findings.js";
 import { conservationLedger } from "./conservation-ledger.js";
+import type { TargetOrm } from "./scan/framework-detect.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
@@ -54,6 +55,10 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   exec: (_command, argv) => cleanRun(argv),
   exists: () => true,
   isGitRepoRoot: () => true,
+  // #1556: the filesystem probes are doubled here for the same reason `exists` is — "/target" does
+  // not exist. "unknown" is the shape that changes nothing: no data layer recognised, so every M1
+  // tier stays applicable and the pre-#1556 expectations in this file hold unchanged.
+  detectOrm: () => "unknown",
   ...over,
 });
 
@@ -1095,6 +1100,84 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     const allThree = status(AUDIT_RUNNERS, slot("connected", "semantic", "live"), "M1");
     expect(allThree?.status).toBe("ran");
     expect(allThree?.detail).toMatch(/connected pass.*semantic pass.*live pass/);
+  });
+
+  // ---- #1556: a tier that is N/A BY ARCHITECTURE is not a tier that failed to run ----
+  //
+  // `detectOrm` already routes a Prisma/Drizzle/… target to the app-layer M1 tier, gates the
+  // Supabase RLS detectors off and emits an M1-ARCH-<LAYER> row. Naming the connected-Supabase tier
+  // as un-run there made M1 read `partial` PERMANENTLY over a tier that could never become `ran`.
+  // Both arms are asserted here because the fix must not become a way for a genuinely un-run tier
+  // to go quiet: the Supabase arm still names it, the Prisma arm states it as not applicable.
+  describe("the connected-Supabase tier is N/A by architecture on a non-Supabase data layer (#1556)", () => {
+    const tmpDirs: string[] = [];
+    afterEach(() => {
+      for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    });
+
+    const withOrm = (orm: TargetOrm, pass: string, ...prior: string[]) =>
+      withPass(
+        "M1",
+        { pass, priorPasses: prior.map((p) => ({ module: "M1", target: "/target", pass: p, generatedAt: iso(DAY) })) },
+        { detectOrm: () => orm },
+      );
+
+    it("a Supabase target with no connected pass still reads partial and names that tier", () => {
+      const m1 = status(AUDIT_RUNNERS, withOrm("supabase", "live", "semantic"), "M1");
+      expect(m1?.status).toBe("partial");
+      expect(m1?.reason).toMatch(/connected Supabase/);
+      expect(m1?.detail).not.toMatch(/Not applicable to this target's architecture/);
+    });
+
+    it("a Prisma target with no connected pass does not name it as missing, and reads ran", () => {
+      const m1 = status(AUDIT_RUNNERS, withOrm("prisma", "live", "semantic"), "M1");
+      expect(m1?.status).toBe("ran");
+      expect(m1?.reason).toBeUndefined();
+      // Disclosed, not dropped: the row still says the tier exists and why it does not apply here.
+      expect(m1?.detail).toMatch(/Not applicable to this target's architecture/);
+      expect(m1?.detail).toMatch(/connected Supabase/);
+      expect(m1?.detail).toMatch(/M1-ARCH-PRISMA/);
+    });
+
+    it("an un-run APPLICABLE tier is still named on a Prisma target — the N/A path silences nothing else", () => {
+      const m1 = status(AUDIT_RUNNERS, withOrm("drizzle", "semantic"), "M1");
+      expect(m1?.status).toBe("partial");
+      expect(m1?.reason).toMatch(/live \(`pnpm detect-deeper`\)/);
+      expect(m1?.reason).toMatch(/1 of M1's 2 applicable out-of-orchestrator tiers/);
+      expect(m1?.reason).not.toMatch(/connected Supabase/);
+      expect(m1?.detail).toMatch(/M1-ARCH-DRIZZLE/);
+    });
+
+    // detectOrm returns "unknown" when NO data layer is recognised. The Supabase RLS detectors still
+    // run on such a target, so the connected tier is genuinely un-run there, not N/A.
+    it("an unrecognised data layer keeps the connected tier applicable", () => {
+      const m1 = status(AUDIT_RUNNERS, withOrm("unknown", "live", "semantic"), "M1");
+      expect(m1?.status).toBe("partial");
+      expect(m1?.reason).toMatch(/connected Supabase/);
+    });
+
+    // The no-pass-at-all branch takes the same split, and it is the one a real Prisma engagement hits.
+    it("states the N/A tier on the mechanical-tier-only row too", () => {
+      const m1 = status(AUDIT_RUNNERS, ctx({ detectOrm: () => "prisma" }), "M1");
+      expect(m1?.status).toBe("partial");
+      expect(m1?.reason).toMatch(/applicable out-of-orchestrator tiers/);
+      expect(m1?.reason).not.toMatch(/connected Supabase/);
+      expect(m1?.detail).toMatch(/connected Supabase.*N\/A by architecture/);
+    });
+
+    // Every test above injects the architecture, which proves the SPLIT and nothing about the wiring
+    // that reads it — the #1407 shape, where a round-trip was library-proven and the flag that feeds
+    // it was unguarded. This one plants a real schema.prisma and lets the probe call the real
+    // detectOrm on a real directory, so the `ctx.detectOrm ?? detectOrm` fallback is exercised.
+    it("reads the architecture off the real target directory when nothing is injected", () => {
+      const dir = mkdtempSync(join(tmpdir(), "harvey-m1-orm-"));
+      tmpDirs.push(dir);
+      writeFileSync(join(dir, "schema.prisma"), "datasource db { provider = \"postgresql\" }\n");
+      // detectOrm: undefined DROPS the helper's double, so the probe takes its real-function branch.
+      const m1 = status(AUDIT_RUNNERS, { targetDir: dir, detectOrm: undefined }, "M1");
+      expect(m1?.detail).toMatch(/M1-ARCH-PRISMA/);
+      expect(m1?.reason).not.toMatch(/connected Supabase/);
+    });
   });
 
   it("a connected pass recorded after a semantic one keeps BOTH tiers' findings (#1522)", () => {
