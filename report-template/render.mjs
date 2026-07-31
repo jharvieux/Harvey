@@ -341,6 +341,13 @@ const MODULE_LIMITATIONS = {
   // silence the false rows would silence a real one too. This is therefore a RE-GRADING of the
   // same emitted rows, unlike the 72%->96% before/after above: 3 rows move from held to false in
   // the 50-row residual, 45/50 (90%), not 48/50 (96%).
+  //
+  // RE-CHECKED 2026-07-31 (#1479's ghostfolio residual) and DELIBERATELY NOT MOVED. Two of the six
+  // clones the 90% is drawn from were re-scanned at their pins — carbon reprints 536/718 and
+  // ghostfolio 78/78, both byte-identical to the recorded baselines — and the only change that
+  // session was to corpus NOTES, not to a detector, so no graded row moved in either direction.
+  // Recorded because "re-measure the hedge" has to have a visible negative outcome too: a
+  // re-measurement that found no movement is a different fact from one that was never run.
   M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a share of them do not survive review. Read against source on six pinned open-source codebases: 47 of 65 graded findings held (2026-07-28, 72%); after six named false-positive families were fixed, 45 of the 50 findings that still emit hold (2026-07-30, 90%) — a residual of only 50 rows. One class, nested-loop join, carried a recorded disagreement about its true rate (2 vs. 5 of its 7 field rows false); a third independent read settled it at 5 false, and this figure reflects that reading. A 40-row random sample drawn from 858 graded findings on four larger codebases held 78% before those fixes and has not been re-sampled since. Treat the code-tier list as a strong lead list that still needs reading, not as a verified defect list. Per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity notes (hook dependencies, and since 2026-07-28 the state-sprawl maintainability observation) are excluded from these counts and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
   M8: { name: "Test quality", note: "A mutation score is only as good as its stated scope — a scoped run is not a whole-repo coverage claim (see Test quality below when present)." },
   M9: { name: "App Router boundary/rendering", note: "AST pattern coverage of App Router conventions, not full framework-semantics execution." },
