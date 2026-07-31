@@ -216,6 +216,19 @@ lighter model for the high-recall scan pass and a stronger model for triage (pre
 more once volume is filtered) — pick per engagement based on repo size and budget, and record the
 actual choice and cost against the estimate for future pricing calibration.
 
+**Nothing has been recorded here yet, and #10 is the tracker.** MEASURED 2026-07-31:
+`git grep -niE "cogs|cost per|token/\$" -- docs/free-tier-scope.md docs/tier1-runbook.md
+docs/design/model-routing.md` returns four lines, every one of them the *instruction* to record a
+cost — never a recorded number. `docs/design/model-routing.md` prices the models but is a rate card,
+not a measured cost-per-engagement. **#10** ("deliver 3 free audits") carries *"Captured per audit:
+time spent, token/$ COGS…"* in its own acceptance, so this is where the numbers are owed, not a
+loose follow-up.
+
+**Where the number lands when it exists:** add a per-stage table to this section headed
+`COGS RECORDED <YYYY-MM-DD>`. That exact string is the falsifier for the recorded reason below — the
+daily `reasons-drift` job greps for it and fails loud the day it appears, so the deferral fails loud
+instead of quietly outliving itself.
+
 ## 8. Client-data handling
 
 - Read-only access only, scoped to the engagement.
@@ -235,7 +248,43 @@ real against `targets/calibration` and cross-checked against its `GROUND-TRUTH.m
 1 excluded by the pipeline's own built-in rules, not a coverage miss). The install-path correction
 and known-blind-spot notes above come directly from that run.
 
-Still deferred: this runbook has **not** been executed fully end-to-end producing a real client-shaped
-report from the skeleton (`docs/audit-report-skeleton.md`) against a throwaway Supabase/Next.js repo
-outside the calibration fixture, and per-stage token/$ cost (§7) has not yet been recorded from a real
-engagement-shaped run. Those remain a manual follow-up.
+**Update 2026-07-31 (#1367).** The paragraph that stood here said the end-to-end report half and the
+per-stage COGS half both "remain a manual follow-up" — one unowned sentence covering two items in
+very different states, tracked by nothing. They are now split, and each carries a recorded reason
+below.
+
+**1. The client-shaped report — awaiting an operator ruling, not work.** Two complete ten-module
+engagements outside the calibration fixture were run and documented
+(`docs/design/atc-engagement-2026-07-18.md`, `docs/design/aop-audit-2026-07-18.md`), their findings
+committed as `report-template/findings.atc.json` / `findings.aop.json`, and the renderer path is
+live: MEASURED 2026-07-31, `node report-template/render.mjs report-template/findings.atc.json`
+printed `wrote report-template/out/report.pdf` and produced a 275 KB `report.pdf` plus `report.html`
+and `page1.png`. So a client-shaped PDF demonstrably comes out of a real engagement's findings.
+
+What is NOT settled, and is not a sweep's call: **#3's criterion says "a public template or a
+throwaway", and both engagements are operator-owned real applications.** The criterion also says
+"from the skeleton" — MEASURED 2026-07-31, `git grep -c skeleton` over both engagement docs exits 1
+(neither mentions `docs/audit-report-skeleton.md`), because `report-template/render.mjs` has since
+superseded the markdown skeleton as the deliverable path. Whether that combination satisfies #3 is a
+scope judgement for the operator. **#1367** is the venue; the question is recorded there verbatim.
+
+<!--
+REASON: whether the ATC/AoP engagements plus the render.mjs PDF path satisfy #3's "dry run against a public template or a throwaway, producing a real report from the skeleton" is an open operator ruling — the engagements are operator-owned real apps rather than throwaways, and the markdown skeleton has been superseded by report-template/render.mjs
+KIND: decisional
+PROVENANCE: MEASURED 2026-07-31 (`node report-template/render.mjs report-template/findings.atc.json` wrote report-template/out/report.pdf; `git grep -c skeleton -- docs/design/atc-engagement-2026-07-18.md docs/design/aop-audit-2026-07-18.md` exits 1)
+OWNER: operator
+DECISION: #1367 (question recorded on the issue with proposed wording); #3 is the criterion's origin
+-->
+
+**2. Per-stage token/$ COGS — genuinely still open, and now owned by #10.** No number has been
+recorded; see §7 for the measurement and for where a recorded figure must land.
+
+<!--
+REASON: no per-stage token/$ COGS figure has been recorded from a real engagement-shaped run, so §7 prices nothing
+KIND: empirical
+PROVENANCE: MEASURED 2026-07-31 (`git grep -niE "cogs|cost per|token/\$" -- docs/free-tier-scope.md docs/tier1-runbook.md docs/design/model-routing.md` returns only the instruction to record a cost, never a recorded number)
+FALSIFIER: test -f docs/tier1-runbook.md || exit 127; grep -qE 'COGS RECORDED [0-9]{4}-[0-9]{2}-[0-9]{2}' docs/tier1-runbook.md
+TOUCHES: docs/tier1-runbook.md
+-->
+
+Tracked by **#10**, whose acceptance already carries the per-audit capture.
