@@ -17,6 +17,7 @@ import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
 import { collectServiceClientNames, isServiceRooted, OWNERSHIP_COLUMN } from "../detectors/owner-id.js";
+import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
 import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 // Background-job paths, by conventional location. `src/inngest`, `src/jobs`, and the bare
@@ -24,6 +25,18 @@ import { mechanicalFinding, walkSourceFiles } from "./common.js";
 // `app/api/cron` is the Next.js App Router cron surface. A named const so the scope is
 // discoverable and extendable in one place.
 const JOB_PATH = /(^|\/)(inngest|jobs|queues|workers)\/|(^|\/)app\/api\/cron\//;
+
+// #1281 — the coverage-disclosure half. JOB_PATH is a CONVENTION, and a target whose jobs live in
+// `src/tasks/`, `functions/` or `workers-v2/` was previously scanned by nothing and told nothing:
+// MEASURED 2026-07-31, `scanJobTenantScope` over a fixture with an unscoped service-role read in
+// `src/tasks/import-inbound.ts` returned 0 findings and 0 rows. Silence is the one answer the
+// coverage doctrine forbids, so the unmatched directories are now COUNTED and named.
+//
+// The candidate set is derived, not guessed: a file is job-like when it imports a background-job
+// runtime. Naming a directory "tasks" is a hunch; importing `inngest`/`bullmq`/`node-cron` is
+// evidence, and it is the same evidence a human triager would use.
+const JOB_RUNTIME_IMPORT =
+  /\b(?:from|require\()\s*["'](inngest|bullmq|bull|bee-queue|kue|agenda|agenda-rest|bree|node-cron|croner|cron|pg-boss|graphile-worker|quirrel|@upstash\/qstash|@trigger\.dev\/[^"']+)["']/;
 
 // Mirrors the target's D-091 allow convention: a leading or trailing comment on the query's
 // enclosing statement suppresses the finding (tenancy enforced by a wrapper/RPC the AST can't see).
@@ -156,8 +169,60 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   return findings;
 }
 
+const dirOf = (path: string): string => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "(repo root)");
+
+// #1281: which directories hold background-job code, and which of those JOB_PATH reaches. Returns
+// the unmatched ones so the caller can disclose them rather than silently skipping them.
+function jobDirectories(files: SourceInput[]): { matched: Map<string, number>; unmatched: Map<string, number> } {
+  const matched = new Map<string, number>();
+  const unmatched = new Map<string, number>();
+  for (const f of files) {
+    if (!SOURCE_EXT.test(f.path) || NON_SHIPPING_PATH.test(f.path) || NON_SHIPPING_FILE.test(f.path)) continue;
+    const inScope = JOB_PATH.test(f.path);
+    if (!inScope && !JOB_RUNTIME_IMPORT.test(f.text)) continue;
+    const bucket = inScope ? matched : unmatched;
+    bucket.set(dirOf(f.path), (bucket.get(dirOf(f.path)) ?? 0) + 1);
+  }
+  return { matched, unmatched };
+}
+
+const dirSummary = (dirs: Map<string, number>): string =>
+  [...dirs.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([d, n]) => `${d}/ (${n} file${n === 1 ? "" : "s"})`).join("; ");
+
+function jobPathScopeRow(files: SourceInput[]): Finding[] {
+  const { matched, unmatched } = jobDirectories(files);
+  if (unmatched.size === 0) return [];
+  const unmatchedFiles = [...unmatched.values()].reduce((a, b) => a + b, 0);
+  return [
+    {
+      id: "M1-JOBPATH-00",
+      title: `Background-job code outside the scanned job paths: ${unmatchedFiles} file(s) in ${unmatched.size} director${unmatched.size === 1 ? "y" : "ies"}`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — background-job directories outside the job-tenant-scope path convention",
+      location: "(repo-wide)",
+      status: "Open",
+      evidence: `The job-tenant-scope check reads only conventional background-job locations (\`inngest/\`, \`jobs/\`, \`queues/\`, \`workers/\`, \`app/api/cron/\`). Matched and assessed: ${matched.size ? dirSummary(matched) : "none"}. NOT assessed — these directories import a background-job runtime but do not match that convention: ${dirSummary(unmatched)}.`,
+      impact:
+        "A service-role query with no tenant predicate in one of the unassessed directories reads or writes rows across every tenant, and this check did not look at it. Recorded so that the absence of a JOB-TENANT-SCOPE finding for those files reads as 'not assessed', not 'assessed and clean'.",
+      fix: "Review the listed files by hand for service-role queries with no tenant-scoping predicate, or move them under a conventional job directory (`jobs/`, `queues/`, `workers/`, `inngest/`) so the check reaches them on the next run.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
 export function detectJobTenantScopeFindings(files: SourceInput[]): Finding[] {
-  return files.filter((f) => JOB_PATH.test(f.path) && SOURCE_EXT.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  // #1269: the non-shipping exclusion prisma-tenant-scope carries since #896. `tests/jobs/…` and
+  // `examples/inngest/…` both match JOB_PATH, and MEASURED 2026-07-31 the detector fired on the
+  // planted shape at each of them exactly as it does in `src/inngest/`.
+  const scanned = files.filter(
+    (f) => JOB_PATH.test(f.path) && SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path),
+  );
+  return [...scanned.flatMap((f) => detectFile(f.path, parse(f.path, f.text))), ...jobPathScopeRow(files)];
 }
 
 export function scanJobTenantScope(projectDir: string): Finding[] {

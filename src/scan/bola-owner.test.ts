@@ -47,4 +47,21 @@ describe("bola-owner (#433 — authenticated pages/api handler, service-role que
   it("stays silent outside pages/api — the Server Action surface is detectClientSuppliedOwnerId's", () => {
     expect(detectBolaOwnerFindings(file(positive, "lib/billing.js"))).toHaveLength(0);
   });
+
+  // #1269. The `pages/api/` segment is not itself a shipping guarantee: a vendored Next.js example
+  // app or an e2e fixture tree carries it too, and measured 2026-07-31 this detector fired on the
+  // planted shape at every path below exactly as it does at `pages/api/billing/invoice.js`.
+  it.each([
+    "e2e/pages/api/invoice.js",
+    "examples/next-app/pages/api/invoice.js",
+    "__tests__/pages/api/invoice.js",
+    "docs/demo/pages/api/invoice.js",
+    "pages/api/invoice.test.js",
+  ])("stays silent for the same shape in the non-shipping path %s", (path) => {
+    expect(detectBolaOwnerFindings(file(positive, path))).toHaveLength(0);
+  });
+
+  it("still flags the shape in a shipping pages/api route (scope control for the non-shipping exclusion)", () => {
+    expect(detectBolaOwnerFindings(file(positive, "src/pages/api/billing/invoice.js"))).toHaveLength(1);
+  });
 });
