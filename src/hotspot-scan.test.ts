@@ -346,13 +346,24 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
   // #1448: a REAL vitals run — vitals_cli.py:238-245 only ever puts truck_factor<=1 rows into
   // `knowledge_risk`, so once the early return above has passed (no truck-factor-1 file), that
   // array is NECESSARILY empty on every real capture, clean or not. `cleanRun` is that real shape:
-  // the population (file_health, same 7 files as the captured fixture) is non-empty, knowledge_risk
-  // is empty — this is what "the signal ran and genuinely found nothing" looks like on real vitals
-  // output, and per #1448's acceptance it must reach the MEASURED branch. `starved` is the other
-  // real shape: no population at all (reduced tier / no git history / a fully-decayed authorship
-  // window), which must still reach the NOT-assessed branch.
+  // the scored population (file_health, same 7 files as the captured fixture) is non-empty and git
+  // was present — this is what "the signal ran and genuinely found nothing" looks like on real
+  // vitals output, and per #1448's acceptance it must reach the MEASURED branch.
   const cleanRun: VitalsReport = { ...report, knowledge_risk: [] };
+  // Three shapes that must all stay NOT-assessed, because none of them proves authorship was read:
+  //   `starved`  — nothing at all to go on (reduced tier / hand-built pre-#1290 capture).
+  //   `decayed`  — the 800-day repo MEASURED in hotspot-scan.ts's own header comment: the churn gate
+  //                is exhausted (file_health {}) so vitals' knowledge population fell back to
+  //                source_files[:50], while `files_analyzed` still counts every TRACKED file. That
+  //                count is a `git ls-files` census, independent of the two-year authorship window,
+  //                so it can be large while zero authorship rows came back.
+  //   `noGit`    — complexity-only mode: get_knowledge_distribution is never called (it lives inside
+  //                vitals_cli.py's has_git branch) yet file_health is still populated, so a bare
+  //                population count would read "measured clean" off a run that computed no
+  //                authorship whatsoever.
   const starved: VitalsReport = { ...report, knowledge_risk: [], file_health: {}, files_analyzed: undefined };
+  const decayed: VitalsReport = { ...report, knowledge_risk: [], file_health: {}, files_analyzed: 1792 };
+  const noGit: VitalsReport = { ...report, knowledge_risk: [], mode: "complexity-only" };
 
   it("stays silent while a truck-factor-1 file exists — no row alongside the finding it would explain", () => {
     expect(truckFactorOneFiles(report).length).toBeGreaterThan(0);
@@ -365,11 +376,49 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
     expect(measured?.title).toContain("analysed across 7");
     expect(measured?.confidence).toBe("Confirmed");
     expect(measured?.impact).toContain("None");
+    expect(measured?.evidence).toContain("7 of the 7 file(s) it scored");
 
     const unmeasured = knowledgeRiskNotAssessed(starved)[0];
     expect(unmeasured?.title).toContain("NOT assessed");
     expect(unmeasured?.confidence).toBe("N/A");
     expect(unmeasured?.impact).toContain("NOT evidence the knowledge is well distributed");
+  });
+
+  // The regression control for #1448's own fix. Keying the split off a population that FALLS BACK to
+  // `files_analyzed` made the 800-day repo — the one this row exists for — report "authorship
+  // analysed across 50 files / Confirmed" off a tracked-file census that never touched git history.
+  // Both shapes below have a nonzero file count and zero read authorship.
+  it("stays NOT-assessed when the file count survives an exhausted churn gate or a git-less run", () => {
+    for (const [name, shape] of [
+      ["decayed (churn gate exhausted, 1792 files still tracked)", decayed],
+      ["complexity-only (no git, so authorship never ran)", noGit],
+    ] as const) {
+      const row = knowledgeRiskNotAssessed(shape)[0];
+      expect(row, name).toBeDefined();
+      expect(row?.title, name).toContain("NOT assessed");
+      expect(row?.confidence, name).toBe("N/A");
+      expect(row?.evidence, name).toContain("cannot confirm the authorship analysis had anything to read");
+    }
+    // ...while the scored population it is derived from is genuinely large, so the row is not
+    // passing by accident on an empty report.
+    expect(decayed.files_analyzed).toBe(1792);
+    expect(Object.keys(noGit.file_health ?? {})).toHaveLength(7);
+  });
+
+  it("names what vitals actually READ when its 50-file knowledge slice binds, not the scored total", () => {
+    // vitals_cli.py:132 slices code_files[:50], so on the 314-scored-file shape MEASURED against this
+    // repo the row may claim 50 — never 314. A capped population stated as a census is the same
+    // over-claim in miniature as the one this whole row exists to prevent.
+    const wide: VitalsReport = {
+      ...report,
+      knowledge_risk: [],
+      file_health: Object.fromEntries(Array.from({ length: 314 }, (_, i) => [`src/f${i}.ts`, 5])),
+    };
+    const row = knowledgeRiskNotAssessed(wide)[0];
+    expect(row?.confidence).toBe("Confirmed");
+    expect(row?.title).toContain("analysed across 50 files");
+    expect(row?.evidence).toContain("50 of the 314 file(s) it scored");
+    expect(row?.evidence).toContain("first 50 scored files");
   });
 
   it("names the TWO-YEAR authorship horizon, not the 90-day churn window", () => {
@@ -388,6 +437,7 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
     // discloses. Checked on both branches since #1448 made both reachable.
     expect(knowledgeRiskNotAssessed(cleanRun)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
     expect(knowledgeRiskNotAssessed(starved)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
+    expect(knowledgeRiskNotAssessed(decayed)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
   });
 
   it("does not disturb the M3 corpus scoring", () => {
