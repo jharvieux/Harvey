@@ -50,8 +50,15 @@ actual:   status 200, payload with a bogus signature accepted and processed
 
 **Control isolation:** in a single whole-fixture run each seam probe short-circuits on the first
 proven endpoint, so the vulnerable route is what produces the verdict and the control is not
-independently re-reported — no control was flagged. The controls are scored **not-vulnerable in
-isolation** by the standing offline check below (a control-only profile → every probe `unproven`).
+independently re-reported in that same pass. Since #1369 (2026-07-31) this is no longer offline-only:
+`targets/vuln-seam-app/harvey-controls.json` names each class's control route, and
+`createLiveStandUp`'s `pentest` step runs a SECOND, LIVE `--mode=verify … --control-routes` pass over
+a profile narrowed to ONLY those four routes (`applyControlRoutes`, `src/pentest/verify.ts`) against
+the SAME booted stack — so each control is genuinely REQUESTED and cleared, recorded as its own
+`M2-CONTROL-PROBED-00` finding (4 probed, 4 cleared, per-control evidence). The offline check below
+(`src/pentest/vuln-seam-app.test.ts`) remains the CI regression guard for the same isolation
+property; the live half of the "4/4 recall, zero controls flagged" headline is no longer a
+substitution for an offline result.
 
 **Other findings in the run (not controls, not false positives):**
 

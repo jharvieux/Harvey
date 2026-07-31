@@ -22,8 +22,11 @@
 //               allow-list in the `hint` ("Only the following schemas are exposed: public,
 //               graphql_public, internal_ops"). MEASURED 2026-07-28 against the calibration stack —
 //               and it needs NO credential: the same reply comes back with no apikey header and with
-//               a bogus one, which is itself worth knowing and is filed as #1494. The two live checks
-//               that consume it are then called directly, so gutting either one turns this gate red.
+//               a bogus one, which is itself worth knowing (#1494, which also wired this same probe
+//               into the product's own local-mode scan — probeExposedSchemas now lives in
+//               src/scan/supabase.ts and this file imports it rather than keeping a second copy).
+//               The two live checks that consume it are then called directly, so gutting either one
+//               turns this gate red.
 //   hosted    — the Management API's GoTrue auth config. No fixture project exists for it, so its
 //               four rows report NOT SCORED here rather than being quietly counted (#1098).
 //
@@ -42,7 +45,7 @@
 
 import { arg, assertKnownFlags } from "./args.js";
 import { buildCoverageMatrix, CORPUS, isLiveTier, LIVE_TIERS, type LiveTier, type MatrixRow } from "../scan/calibration.js";
-import { hasPgGraphql, runSupabaseScan } from "../scan/supabase.js";
+import { hasPgGraphql, LOCAL_REST_URL, probeExposedSchemas, runSupabaseScan } from "../scan/supabase.js";
 import { checkExposedSchemas, checkGraphqlIntrospection, type ExtensionInfo } from "../scan/supabase-config.js";
 import type { Finding } from "../findings.js";
 
@@ -50,31 +53,10 @@ const FLAGS = ["--db", "--rest-url"] as const;
 assertKnownFlags(FLAGS);
 
 const DEFAULT_DB = "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
-const DEFAULT_REST = "http://127.0.0.1:54321/rest/v1";
 const dbUrl = arg("--db") ?? DEFAULT_DB;
-const restUrl = (arg("--rest-url") ?? DEFAULT_REST).replace(/\/$/, "");
-
-// A schema name no target will ever define, so the reply is always PGRST106 and its hint always
-// carries the full allow-list. If a target somehow exposes this, the parse below finds it in the
-// list and the answer is still correct.
-const PROBE_SCHEMA = "harvey_probe_no_such_schema";
-const PGRST_SCHEMA_HINT = /Only the following schemas are exposed:\s*(.+)$/;
+const restUrl = (arg("--rest-url") ?? LOCAL_REST_URL).replace(/\/$/, "");
 
 const EXTENSIONS_SQL = `select extname as name, extnamespace::regnamespace::text as schema, extversion as installed_version from pg_extension;`;
-
-/** The allow-list PostgREST is actually serving, or the reason it could not be read. */
-async function probeExposedSchemas(): Promise<{ schemas: string[] } | { unavailable: string }> {
-  let body: string;
-  try {
-    const res = await fetch(`${restUrl}/${PROBE_SCHEMA}_table`, { headers: { "Accept-Profile": PROBE_SCHEMA } });
-    body = await res.text();
-  } catch (e) {
-    return { unavailable: `no REST surface at ${restUrl} (${e instanceof Error ? e.message : String(e)})` };
-  }
-  const hint = PGRST_SCHEMA_HINT.exec((JSON.parse(body) as { hint?: string }).hint ?? "");
-  if (!hint?.[1]) return { unavailable: `${restUrl} answered without a PGRST106 schema hint: ${body.slice(0, 200)}` };
-  return { schemas: hint[1].split(",").map((s) => s.trim()).filter(Boolean) };
-}
 
 async function readExtensions(): Promise<ExtensionInfo[]> {
   const { default: postgres } = await import("postgres");
@@ -102,7 +84,7 @@ try {
   unavailable.push({ venue: "local", why: `${dbUrl} unreachable — ${e instanceof Error ? e.message : String(e)}. Bring the stack up: \`cd targets/calibration && supabase start\`` });
 }
 
-const probe = await probeExposedSchemas();
+const probe = await probeExposedSchemas(restUrl);
 if ("schemas" in probe) {
   const pgGraphql = hasPgGraphql(extensions);
   findings.push(...checkExposedSchemas(probe.schemas), ...checkGraphqlIntrospection(pgGraphql, probe.schemas));

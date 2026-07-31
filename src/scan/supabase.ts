@@ -98,6 +98,9 @@ import {
 
 const MANAGEMENT_API = "https://api.supabase.com/v1";
 const LOCAL_CONNECTION = "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+// #1494 — `supabase start`'s default REST URL. Exported so a CLI caller can default `--rest-url`
+// to it without hardcoding the port twice.
+export const LOCAL_REST_URL = "http://127.0.0.1:54321/rest/v1";
 
 const TABLES_SQL = `select schemaname as schema, tablename as name, rowsecurity as "rlsEnabled" from pg_tables where schemaname = 'public';`;
 const EXTENSIONS_SQL = `select extname as name, extnamespace::regnamespace::text as schema, extversion as installed_version from pg_extension;`;
@@ -149,10 +152,38 @@ interface SupabaseScanOptions {
   // turns on the prod-vs-migration drift comparison; omitting it emits SB-DRIFT-00 as not-assessed
   // rather than leaving the topic out of the report.
   migrationsDir?: string;
+  // #1494 — local mode only. The project's OWN PostgREST surface (default local: LOCAL_REST_URL),
+  // probed for its exposed-schema allow-list with no Management API credential needed. Omitting it
+  // keeps the pre-#1494 behaviour (SB-SCOPE-00 names all three hosted-only checks); supplying it
+  // answers two of the three from local mode and narrows SB-SCOPE-00 down to the one still held only
+  // by the Management API (GoTrue auth config).
+  restUrl?: string;
 }
 
 export function parseExposedSchemas(config: PostgrestConfig): string[] {
   return (config.db_schema ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// #1494 — a schema name no target will ever define, so PostgREST always answers PGRST106 with the
+// full exposed-schema allow-list in its `hint`. MEASURED 2026-07-28 against the calibration stack:
+// no credential is required — the identical reply comes back with no `apikey` header and with a
+// bogus one — so local mode can read this from its own REST surface without the Management API
+// token hosted mode needs for the same question. (#1428's validate-connected.ts scores this same
+// probe against the live corpus; this is the product scan path it exists to score.)
+const REST_PROBE_SCHEMA = "harvey_probe_no_such_schema";
+const PGRST_SCHEMA_HINT = /Only the following schemas are exposed:\s*(.+)$/;
+
+export async function probeExposedSchemas(restUrl: string, fetchImpl: typeof fetch = fetch): Promise<{ schemas: string[] } | { unavailable: string }> {
+  let body: string;
+  try {
+    const res = await fetchImpl(`${restUrl.replace(/\/$/, "")}/${REST_PROBE_SCHEMA}_table`, { headers: { "Accept-Profile": REST_PROBE_SCHEMA } });
+    body = await res.text();
+  } catch (e) {
+    return { unavailable: `no REST surface at ${restUrl} (${e instanceof Error ? e.message : String(e)})` };
+  }
+  const hint = PGRST_SCHEMA_HINT.exec((JSON.parse(body) as { hint?: string }).hint ?? "");
+  if (!hint?.[1]) return { unavailable: `${restUrl} answered without a PGRST106 schema hint: ${body.slice(0, 200)}` };
+  return { schemas: hint[1].split(",").map((s) => s.trim()).filter(Boolean) };
 }
 
 // The authoritative pg_graphql signal: it's in `pg_extension` (installed extensions only) WITH a
@@ -287,35 +318,62 @@ export function dedupeAutoExposed(splinterFindings: Finding[], autoExposedFindin
 // hosted platform's own configuration (PostgREST's `db-schema` setting and the Management API's
 // auth config), which is not held in Postgres, so a local connection cannot answer their question.
 // Returning the shorter list in silence made a locally-scanned project indistinguishable from one
-// whose schema exposure and auth config were checked and found clean. The omissions are enumerated
-// in CONDITIONAL_SCANS (src/conditional-scan.ts), which fails loud if a fourth one appears or if
-// this row stops naming one of them.
-function localScopeFinding(): Finding[] {
+// whose schema exposure and auth config were checked and found clean.
+//
+// #1494 — that sentence was true of a Postgres connection, not of a local-mode SCAN, which also has
+// the project's REST URL: two of the three (PostgREST-exposed schemas, GraphQL introspection) are
+// answerable there with no credential (probeExposedSchemas above). Only GoTrue's auth config
+// genuinely needs the Management API. `restProbe` carries that result — undefined when no restUrl
+// was supplied (the pre-#1494 3-omission row, unchanged) or when it was supplied but the REST
+// surface didn't answer (same 3-omission row, with the reason folded in rather than a silent
+// downgrade to the narrower row). The omissions are enumerated in CONDITIONAL_SCANS
+// (src/conditional-scan.ts), which fails loud if a fourth one appears or if this row stops naming
+// one of the classes it declares.
+function localScopeFinding(restProbe?: { schemas: string[] } | { unavailable: string }): Finding[] {
+  const probed = restProbe !== undefined && "schemas" in restProbe;
+  const unavailableWhy = restProbe && "unavailable" in restProbe ? restProbe.unavailable : undefined;
   return [
     {
       id: "SB-SCOPE-00",
-      title: "3 Supabase project-config checks a local-mode scan could not run",
+      title: probed
+        ? "1 Supabase project-config check a local-mode scan could not run"
+        : "3 Supabase project-config checks a local-mode scan could not run",
       severity: "Info",
       confidence: "N/A",
       category: "Coverage",
       taxonomy: "Coverage — Supabase checks local mode could not run",
       location: "(supabase project config)",
       status: "Open",
-      evidence:
-        "This scan ran against a local `supabase start` stack over Postgres. Three checks the hosted-mode scan " +
-        "runs did not run here: PostgREST-exposed schemas (which non-public schemas the REST API serves to " +
-        "clients), GraphQL introspection (whether pg_graphql exposes a queryable schema over that same REST " +
-        "surface), and GoTrue auth configuration (auto-confirm, leaked-password protection, OTP expiry, redirect " +
-        "allow-list). The first two read PostgREST's `db-schema` setting and the third reads the Management API's " +
-        "auth config — both are held by the hosted platform, not in the database, so a local Postgres connection " +
-        "cannot read either.",
-      impact:
-        "The absence of a schema-exposure, GraphQL-introspection or auth-configuration finding in this report " +
-        "means those questions were never asked — not that the answers are safe. Counted and named here so the " +
-        "gap cannot be read as a clean result.",
-      fix:
-        "Re-run the Supabase pass in hosted mode against the deployed project (`pnpm exec tsx src/cli/scan.ts " +
-        "--supabase <project-ref>`, with a read-only Management API token) to cover these three classes.",
+      evidence: probed
+        ? "This scan ran against a local `supabase start` stack over Postgres, and also probed the project's own " +
+          "PostgREST surface (#1494): asking for a schema no target defines gets PGRST106 back with the whole " +
+          "exposed-schema allow-list in its `hint`, no credential required. That answers two of the three checks " +
+          "the hosted-mode scan runs that a bare Postgres connection cannot — PostgREST-exposed schemas and " +
+          "GraphQL introspection, both scored below. One check still did not run here: GoTrue auth configuration " +
+          "(auto-confirm, leaked-password protection, OTP expiry, redirect allow-list) — that is read from the " +
+          "Management API, which neither Postgres nor PostgREST expose."
+        : "This scan ran against a local `supabase start` stack over Postgres" +
+          (unavailableWhy ? `, and its REST probe could not read a schema allow-list (${unavailableWhy})` : "") +
+          ". Three checks the hosted-mode scan runs did not run here: PostgREST-exposed schemas (which " +
+          "non-public schemas the REST API serves to clients), GraphQL introspection (whether pg_graphql " +
+          "exposes a queryable schema over that same REST surface), and GoTrue auth configuration " +
+          "(auto-confirm, leaked-password protection, OTP expiry, redirect allow-list). The first two are " +
+          "answerable from the project's own REST surface when it is reachable (#1494); the third reads the " +
+          "Management API's auth config — held by the hosted platform, not in the database, so no local " +
+          "connection can read it.",
+      impact: probed
+        ? "The absence of an auth-configuration finding in this report means that question was never asked — " +
+          "not that the answer is safe. Counted and named here so the gap cannot be read as a clean result."
+        : "The absence of a schema-exposure, GraphQL-introspection or auth-configuration finding in this report " +
+          "means those questions were never asked — not that the answers are safe. Counted and named here so the " +
+          "gap cannot be read as a clean result.",
+      fix: probed
+        ? "Re-run the Supabase pass in hosted mode against the deployed project (`pnpm exec tsx src/cli/scan.ts " +
+          "--supabase <project-ref>`, with a read-only Management API token), or read the auth config directly " +
+          "(`GET /v1/projects/<ref>/config/auth`), to cover GoTrue auth config."
+        : "Supply a reachable REST URL to the local scan (`--rest-url`, defaulting to the local stack's) to cover " +
+          "PostgREST-exposed schemas and GraphQL introspection with no credential, or re-run in hosted mode to " +
+          "cover all three (`pnpm exec tsx src/cli/scan.ts --supabase <project-ref>`).",
       value: 1,
       ease: 4,
       safety: 5,
@@ -371,7 +429,14 @@ function unparsedSplinterFinding(unparsedRows: number): Finding[] {
   ];
 }
 
-async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter, migrations: MigrationFile[] = [], driftReason?: string): Promise<Finding[]> {
+async function scanLocal(
+  connectionString: string = LOCAL_CONNECTION,
+  splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter,
+  migrations: MigrationFile[] = [],
+  driftReason?: string,
+  restUrl?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
   try {
@@ -398,9 +463,18 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const splinterResponse = splinterImpl(connectionString);
     const splinterFindings = parseAdvisorFindings(splinterResponse);
 
+    // #1494 — only attempted when a restUrl was supplied; a caller (or a unit test) that doesn't
+    // pass one keeps the pre-#1494 behaviour with no network call.
+    const restProbe = restUrl ? await probeExposedSchemas(restUrl, fetchImpl) : undefined;
+    const restScopeFindings =
+      restProbe && "schemas" in restProbe
+        ? [...checkExposedSchemas(restProbe.schemas), ...checkGraphqlIntrospection(hasPgGraphql(extensions), restProbe.schemas)]
+        : [];
+
     return [
       ...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason),
-      ...localScopeFinding(),
+      ...localScopeFinding(restProbe),
+      ...restScopeFindings,
       ...unparsedSplinterFinding(splinterResponse.unparsedRows ?? 0),
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
@@ -430,7 +504,7 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
 
   let findings: Finding[];
   if (opts.local) {
-    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason);
+    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason, opts.restUrl, opts.fetchImpl ?? fetch);
   } else {
     if (!opts.projectRef) throw new Error("runSupabaseScan requires projectRef unless local is set");
     const token = opts.managementApiToken ?? process.env.SUPABASE_ACCESS_TOKEN;
