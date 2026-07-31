@@ -254,17 +254,57 @@ jobs:
         if: matrix.shard == 2
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
-      # #1509: the two scored gates above ride inside `if: matrix.shard == N`, and a condition that
+      # #1491 (operator ruling 2026-07-31, granting .github/workflows edits). `validate-connected`
+      # is the ONLY consumer that scores the corpus's LIVE-tier rows: before #1428 `scoreEntry`
+      # returned pass unconditionally for them, and a verifier gutted all three B24 detector bodies
+      # with `validate-calibration` still exiting 0 on byte-identical output. It then shipped with a
+      # cadence of NONE, so the rows it scores were measured by nothing on any schedule.
+      #
+      # Shard 2 for the same reason source-recall is here: shard 1 already carries the calibration
+      # gate, and this keeps the two live-stack costs off the same runner. GitHub's ubuntu runners
+      # ship Docker; the Supabase CLI does not, hence setup-cli.
+      #
+      # `-x vector,logflare` drops the two containers this gate never reads (log aggregation), which
+      # is the documented way to trim a local stack's start-up. The gate needs Postgres + PostgREST.
+      - name: Install the Supabase CLI
+        if: matrix.shard == 2
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Stand up the calibration Supabase stack
+        if: matrix.shard == 2
+        working-directory: targets/calibration
+        run: supabase start -x vector,logflare
+
+      - name: Live-tier corpus gate (running Supabase stack, local + connected venues)
+        if: matrix.shard == 2
+        run: pnpm exec tsx src/cli/validate-connected.ts
+
+      # `always()` so the containers go away even when the gate above fails — a leaked stack would
+      # hold ports 54321/54322 against anything else scheduled on this runner.
+      - name: Tear the calibration stack down
+        if: always() && matrix.shard == 2
+        working-directory: targets/calibration
+        run: supabase stop --no-backup || true
+
+      # #1509: the scored gates above ride inside `if: matrix.shard == N`, and a condition that
       # stopped matching would retire them in complete silence — the shape #1301/#1288 found when each
       # ran in no workflow at all. `expect` is matrix-dependent for the same reason: shard 1 must
-      # prove the calibration gate ran, shard 2 the source-recall gate, and neither can be satisfied
-      # by the other's record. `always()` so a shard that died in setup names the phase.
+      # prove the calibration gate ran, shard 2 the source-recall AND live-tier gates, and neither
+      # shard can be satisfied by the other's record. `always()` so a shard that died in setup names
+      # the phase.
+      #
+      # #1491 added `connected-gate` here rather than only adding the step: a live-stack gate is the
+      # one most likely to be quietly skipped — a `supabase start` that fails, a runner without
+      # Docker, a shard condition edited — and each of those leaves a green shard that measured none
+      # of the corpus's live-tier rows.
       - name: Gate liveness — did this shard actually measure anything?
         if: always() && !(inputs.alert_drill && matrix.shard == 1)
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
-          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }}
+          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate connected-gate' || '' }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker

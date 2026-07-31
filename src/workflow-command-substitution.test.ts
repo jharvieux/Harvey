@@ -68,7 +68,7 @@ function runBlocks(): { file: string; line: number; script: string }[] {
         const l = lines[j] as string;
         if (l.trim() !== "" && (l.length - l.trimStart().length) < indent) break;
         // Comments are not code. The fix for #1402 documents the bad shape in a comment directly
-        // above the good one, and a check that cannot tell those apart flags its own remediation.
+        // above the good one, so a check blind to that difference flags its own remediation.
         body.push(/^\s*#/.test(l) ? "" : l);
       }
       out.push({ file: file.replace(process.cwd() + "/", ""), line: i + 1, script: body.join("\n") });
@@ -122,7 +122,8 @@ export function commandSubstitutions(script: string): string[] {
 const COMPOUND = /(^|\s)(do|done|then|fi|case|esac|elif)(\s|$)/;
 
 /**
- * True when a substitution body runs more than one command, so `set -e` cannot see the first fail.
+ * True when a substitution body runs more than one command, which is the shape `set -e` looks past:
+ * the substitution reports its LAST command's status, so an earlier failure reaches nothing.
  *
  * A PIPELINE is one command for this purpose and is deliberately not split on: its exit status is
  * governed by `pipefail`, which is #1422's check, not this one. A BACKSLASH-CONTINUED NEWLINE is not

@@ -28,19 +28,15 @@
 // registry's definition of STALE. A reason kept past the day its blocker dissolved is the decay this
 // repo names as its signature defect, so the row is gone rather than reworded.
 //
-// validate-connected has no cadence for a DIFFERENT reason, and it is not an empirical one: the gate
-// runs fine (measured 2026-07-28 against a live `supabase start` stack — 16 of 20 live rows scored,
-// all held, and each of its three B24 detectors gutted in turn exits it 1). What is missing is a CI
-// venue, and adding one means editing .github/workflows/, which CLAUDE.md lists as supervised. The
-// operator question, with the wording proposed, is recorded on #1491 — a supervised path stops the
-// EDIT, never the CRITERION (#1319).
-//
-// REASON: validate-connected has no CI cadence because standing a Supabase stack up in a workflow is a change to .github/workflows/, which is a supervised path, and no command re-tests whether the operator has approved it
-// KIND: decisional
-// PROVENANCE: MEASURED 2026-07-28 — the gate itself runs and fails correctly against a live stack; the missing piece is only the venue. `grep -rl "supabase start" .github/workflows/` returns nothing today.
-// OWNER: operator (jharvieux)
-// DECISION: #1491 — carries the proposed workflow step verbatim for the operator to approve or decline
-// TOUCHES: src/cli/validate-connected.ts .github/workflows
+// validate-connected's "no cadence" reason block used to live here too, and it is RETIRED rather
+// than reworded for exactly the reason stated above. It was KIND: decisional — the gate itself ran
+// fine (measured 2026-07-28 against a live `supabase start` stack: 16 of 20 live rows scored, all
+// held, each of its three B24 detectors gutted in turn exiting it 1); what was missing was a CI
+// venue, and adding one meant editing `.github/workflows/`. Its `DECISION:` pointed at #1491, which
+// carried the proposed step verbatim for the operator to approve or decline. The operator granted
+// workflow edits on 2026-07-31 and the step landed in ci.yml's heavy-cli shard 2. A decisional
+// reason whose decision has been TAKEN is not a blocker any more, and keeping it would re-authorise
+// the deferral it was opened for.
 
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
@@ -140,7 +136,12 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-connected",
     script: "validate:connected",
     measures: "live-tier corpus recall against a running Supabase stack (local / connected / hosted venues)",
-    cadence: { kind: "none", issue: 1491 },
+    // #1491. The `hosted` venue still needs a hosted project + PAT, so its 4 GoTrue auth-config rows
+    // report NOT SCORED here and the gate says so per run — a stated limit of that run, not a
+    // result. MEASURED 2026-07-31 with the stack stopped: 0/20 scored, exit 2 (UNVERIFIABLE), and no
+    // gate-liveness receipt written — so shard 2 goes red twice over, at the step and at its
+    // liveness assert.
+    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli", when: "every code PR + daily schedule (shard 2 of 3)" },
   },
   {
     id: "validate-semantic",
