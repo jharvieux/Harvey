@@ -297,13 +297,22 @@ async function vitalsDrift(): Promise<never> {
       const outFile = join(mkdtempSync(join(tmpdir(), "harvey-vitals-drift-")), "vitals-report.json");
       try {
         try {
-          execFileSync("python3", [seed, "--out", outFile], { encoding: "utf8", stdio: ["ignore", "ignore", "inherit"] });
+          // stderr INHERITED so the seed's diagnostics stream into the job log as they happen;
+          // stdout PIPED so nothing it writes there is discarded. seed.py routes everything —
+          // including its `sys.exit(msg)` failures — to stderr today, so the pipe is usually empty;
+          // it exists because "the harness discarded the evidence" is the half of #1206 that made
+          // the other half undiagnosable, and `stdio: ignore` is how that happens silently.
+          execFileSync("python3", [seed, "--out", outFile], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
         } catch (err) {
-          // The seed's stderr is inherited, so its own failure message is already in the log
-          // directly above. What the bare throw added was a Node stack plus `stdout: null,
-          // stderr: null` on the error object — which reads as "python3 itself blew up", and
-          // #1206 was filed on exactly that misreading. Point at the real output instead.
-          fail("vitals", `the re-capture seed ${relative(repoRoot, seed)} exited non-zero — ITS OWN OUTPUT IS IMMEDIATELY ABOVE THIS LINE and is the evidence to read. (${(err as Error).message})`);
+          // What the bare throw added was a Node stack plus `stdout: null, stderr: null` on the
+          // error object — which reads as "python3 itself blew up", and #1206 was filed on exactly
+          // that misreading. Point at the real output instead, and replay any captured stdout.
+          const captured = String((err as { stdout?: string }).stdout ?? "").trim();
+          fail(
+            "vitals",
+            `the re-capture seed ${relative(repoRoot, seed)} exited non-zero — ITS OWN STDERR IS IMMEDIATELY ABOVE THIS LINE and is the evidence to read. (${(err as Error).message})` +
+              (captured ? `\n--- seed stdout ---\n${captured}` : "\n(the seed wrote nothing to stdout; everything it says goes to stderr)"),
+          );
         }
         const parsed = JSON.parse(readFileSync(outFile, "utf8")) as VitalsReport & { _note?: string; _gitScopeSanity?: GitScopeSanity };
         delete parsed._note;

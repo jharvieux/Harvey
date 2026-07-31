@@ -117,3 +117,40 @@ it `NOT SCORED`, which is honest.
 
 Standing gap now closed: all four corpus targets have been scored by this gate at least once. What
 remains is routine re-scoring (each pass artifact is stale after 30 days by design).
+
+## The staleness alarm — 2026-07-31 (#1270)
+
+"Routine re-scoring" was, for three months, a sentence rather than a mechanism. #1288 gave every
+other scored gate a cadence and this one none, for a reason that holds: the input is an interactive
+LLM pass, so no workflow can produce it. The consequence was that the sentence above had no failing
+direction — the recorded tallies would age out of their own 30-day window and the only thing that
+would happen is that the next hand-run of `validate-semantic` would print `NOT SCORED`, in a session
+nobody was scheduled to have.
+
+`.github/workflows/semantic-freshness.yml` (daily 09:00 UTC, plus a PR trigger on the corpus and the
+rule itself) runs:
+
+```bash
+pnpm validate:semantic-freshness            # or --artifacts-dir <dir>, --now <iso>, --json
+```
+
+It does not score anything. It asks whether each corpus target's recorded measurement is still
+inside `MAX_PASS_AGE_MS` (`src/audit-pass-artifact.ts`), and fails loud into a `ci-semantic-freshness-alert`
+tracking issue when it is not.
+
+Two sources per target, and the row says which one it used, because they are not the same evidence:
+
+| source | what it is |
+|---|---|
+| `pass-artifact` | `reports/semantic-recall/<slug>/M1.pass.json` — a pass someone actually ran and recorded |
+| `corpus-record` | the target's `recordedOn` in `src/scan/semantic-corpus.ts` — the date a measurement doc was written |
+
+MEASURED 2026-07-31: **4 of 4 targets are on `corpus-record`** — no `M1.pass.json` is committed
+anywhere in this repo — and the first one goes stale on **2026-08-18** (`nocode-rescue`,
+`recordedOn: 2026-07-18`). Do not quote either figure; run the tool.
+
+`reports/semantic-recall/<slug>` is the standing home for a recorded pass, so `record-pass --out`
+and `validate-semantic --artifacts-dir` agree without anyone picking a directory per session.
+
+**Moving a `recordedOn` without re-measuring silences the alarm by falsifying the corpus.** The
+alarm's remedy is the run loop above, not the date field.
