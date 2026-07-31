@@ -35,6 +35,11 @@ on:
   schedule:
     - cron: "0 8 1 * *" # 1st of the month, 08:00 UTC — an hour after corpus-drift's weekly slot
   workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-corpus-m8-alert path fires end-to-end (#1287/#1333). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "src/scan/m8-corpus.ts"
@@ -52,6 +57,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write # #1333: the alert path below find-or-updates ONE tracking issue on a scheduled failure.
 
 jobs:
   mutation:
@@ -66,7 +72,19 @@ jobs:
     # here rather than burn an hour.
     timeout-minutes: 45
     steps:
+      # Checkout first — the alert step at the end is a LOCAL composite action, so a drill that
+      # fails before the checkout leaves `./.github/actions/alert-issue` unresolvable and proves
+      # nothing. Everything expensive still comes after the drill.
       - uses: actions/checkout@v4
+
+      # Before the four target installs and the Stryker runs on purpose: the drill proves the ALERT
+      # path, not the mutation baselines, so it must not pay ~20 minutes to reach it.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an M8 baseline drift."
+          exit 1
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -107,3 +125,19 @@ jobs:
           name: corpus-m8-scorecard
           path: corpus-m8-*.json
           if-no-files-found: warn
+
+      # #1333: this job runs MONTHLY, so before this step a failure could sit unseen for up to 31
+      # days on a branch nobody watches — the longest blind window of any gate in the repo. Never
+      # fires on PR/push; workflow_dispatch is permanently in the condition (#1287) because a
+      # cron-only alert path cannot be proven to work.
+      - name: Open or update the corpus-m8 tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-corpus-m8-alert
+          label-description: Auto-opened when the monthly corpus-m8 mutation run fails
+          title: corpus-m8 scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The monthly `corpus-m8` mutation run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A target's mutation score moved off its baseline, or a target install/Stryker run errored — see the corpus-m8-scorecard artifact for the per-target table. That is EITHER the target's suite changing under its pin (rebaseline in src/scan/external-corpus.ts with the measured note) OR our wrapper mis-reading Stryker's report (a scanner bug). Never something to silence. Close this issue once green."
