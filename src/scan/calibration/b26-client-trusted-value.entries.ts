@@ -37,6 +37,14 @@ export const b26ClientTrustedValueEntries: CorpusEntry[] = [
   // how the body is read: `req.body.role` fired, `const body = await req.json(); body.role` was
   // silent. Filed here rather than in base.entries.ts because it is the same class as the price
   // rows above and shares their App Router arm verbatim.
+  //
+  // WHICH GATE ACTUALLY FAILS IF THE ARM IS REVERTED, because these rows on their own do NOT.
+  // `validate-calibration` treats a REVIEW-tier recall gap as non-fatal by design (see its header),
+  // so deleting the arm leaves it at exit 0 printing 'Review-tier recall gaps (non-fatal, tracked):
+  // P-CLIENT-TRUSTED-ROLE-AR, P-CLIENT-TRUSTED-ROLE-AR-LET'. MEASURED 2026-07-31, both directions:
+  // the guard that goes red is the REQUIRED `dry-run-drift` check — regenerating `dry-run/
+  // findings.json` with the arm reverted drops exactly these two rows (720 -> 718, `diff` exit 1),
+  // which is also why the artifact regeneration is part of this change rather than a follow-up.
   {
     id: "P-CLIENT-TRUSTED-ROLE-AR",
     kind: "positive",
