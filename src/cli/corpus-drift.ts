@@ -437,7 +437,18 @@ for (const target of targets) {
 // the free-tier check ran. --m8 is exempt because it is an M8-only pass that never claims to score
 // the invariant; the weekly corpus-drift.yml is what holds that promise.
 const freeTierScored = new Set(rows.filter((r) => r.check.startsWith("free tier: ")).map((r) => r.slug));
-const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.has(e.slug) && (!onlySlug || onlySlug === e.slug));
+// #1586: scoped to the targets THIS run was asked to score, rather than to `--target` specifically.
+// A `--shard` run owns a subset, and the targets it does not own are another shard's responsibility,
+// not an unrun check — MEASURED on run 30591262412, where shards 2 and 3 correctly scored their own
+// slices and then failed on the free-tier expectations belonging to shard 1. The guard is not
+// weakened: the partition is asserted exhaustive, so every expectation is still checked by exactly
+// one shard, and a target this run DID own but failed to score is still caught below.
+// Scoping by slug is only safe because every free-tier expectation is guaranteed to name a real
+// corpus target — one that did not would silently vanish under this rule instead of being flagged
+// forever as unscored. external-corpus.ts throws at module load if that ever stops holding, so an
+// orphaned expectation fails at import, before this line runs and before anything is cloned.
+const scopedSlugs = new Set(targets.map((t) => t.slug));
+const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.has(e.slug) && scopedSlugs.has(e.slug));
 
 console.error("\n──── corpus drift ────");
 for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd(23)} ${r.check.padEnd(46)} ${r.detail}`);
