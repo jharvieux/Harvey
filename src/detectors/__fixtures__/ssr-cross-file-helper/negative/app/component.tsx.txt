@@ -1,0 +1,11 @@
+// The only caller is HERE, in a different module, and it's off the render path — deferred to a
+// useEffect (browser-only, runs after mount).
+import { handleCommandNavigation } from "../lib/helper";
+import { useEffect } from "react";
+
+export function SlashCommand() {
+  useEffect(() => {
+    handleCommandNavigation(null);
+  }, []);
+  return <div />;
+}

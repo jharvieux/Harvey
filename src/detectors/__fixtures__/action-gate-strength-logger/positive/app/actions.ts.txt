@@ -1,0 +1,18 @@
+// #1439 — the LOGGER half (#1484 split this out of a bundled fixture that used to hold both the
+// logger and discarded-boolean shapes together). `auditLog`'s body matches the auth pattern
+// (calls `getCurrentUser()`-shaped `supabase.auth.getUser()`) but does not deny — no throw, no
+// redirect — and the action never reads a value from it. Must still be flagged.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { auditLog } from "../lib/audit";
+
+const RenameSchema = z.object({ id: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameLogged(input: unknown) {
+  const { id, name } = RenameSchema.parse(input);
+  await auditLog("rename", id);
+
+  await supabase.from("projects").update({ name }).eq("id", id);
+}

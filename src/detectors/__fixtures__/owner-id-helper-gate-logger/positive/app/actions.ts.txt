@@ -1,0 +1,18 @@
+"use server";
+
+// #1434 — the LOGGER half (#1484 split this out of a bundled fixture that used to hold both the
+// logger and TODO-comment shapes together). This action's only helper also reads the session, so
+// a rule that merely re-tested AUTH_PATTERN against the callee's body would suppress this too.
+// `auditLog` writes a log line and returns nothing it can deny with, and the action does not
+// consume its result — it enforces nothing (#1439's a1 shape).
+//
+// The finding must still fire, and its evidence must not claim a helper was checked and cleared.
+import { createServiceClient } from "../lib/supabase";
+import { auditLog } from "../lib/audit";
+
+export async function updateUserProfile(userId: string, displayName: string) {
+  await auditLog("profile.rename", userId);
+
+  const supabaseService = createServiceClient();
+  await supabaseService.from("users").update({ display_name: displayName }).eq("id", userId);
+}

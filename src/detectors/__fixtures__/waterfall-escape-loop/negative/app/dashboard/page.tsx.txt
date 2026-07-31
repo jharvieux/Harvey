@@ -1,0 +1,18 @@
+// The precision boundary for the LOOP half of #1438: the escape rule was narrowed for
+// `break`/`continue`, NOT switched off. A `return` inside the `for` loop still leaves the
+// function, so the second query does not run on that path and the pair stays a dependency —
+// nothing must fire.
+import { supabase } from "../../lib/db";
+
+export async function loopReturnBetweenQueries() {
+  const { data: members } = await supabase.from("members").select("id, active");
+
+  for (const m of members ?? []) {
+    if (m.active) {
+      return { members, invoices: null };
+    }
+  }
+
+  const { data: invoices } = await supabase.from("invoices").select("id, total");
+  return { members, invoices };
+}

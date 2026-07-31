@@ -1,0 +1,14 @@
+"use server";
+
+// #1434 — the TODO-COMMENT half (#1484 split this out of a bundled fixture that used to hold both
+// the logger and TODO-comment shapes together). This detector tested AUTH_PATTERN against the
+// action's RAW text, so the word in a comment vouched for the action and silenced it — a FALSE
+// NEGATIVE rather than false evidence. #845 blanked literals and comments for the sibling
+// detector; this one never got it. Nothing here authenticates anybody.
+import { createServiceClient } from "../lib/supabase";
+
+export async function updateUserEmail(userId: string, email: string) {
+  // TODO: requireUser() before shipping
+  const supabaseService = createServiceClient();
+  await supabaseService.from("users").update({ email }).eq("id", userId);
+}

@@ -1,0 +1,6 @@
+// hop 1 from the action. Matches no name on AUTH_PATTERN itself — the real check is further in.
+import { requireCapability } from "./auth";
+
+export async function requireModerate() {
+  return await requireCapability({ capability: "moderate" });
+}

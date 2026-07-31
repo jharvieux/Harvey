@@ -805,7 +805,24 @@ function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
 // #857's false-negative half (literal/comment blanking) is untouched and no true positive is lost
 // by narrowing. The helper's body is blanked the same way before matching, so a `// TODO: add auth`
 // inside the HELPER does not vouch for it either.
-const GATE_DEPTH = 2;
+//
+// #1500: raised 2 -> 4, MEASURED against tanstack-com's real chain, not guessed. TanStack's
+// `showcase`/`docFeedback` server functions gate through `requireModerateShowcases() ->
+// requireCapability() -> getAuthGuards() -> createAuthGuards()`, and the real check
+// (`authService.getCurrentUser(request)`) lives inside `createAuthGuards`'s body — 4 resolvable
+// hops from the action, not 2. `getAuthGuards` itself only resolves at all because of the
+// dynamic-import-wrapper and re-export fixes above; depth alone would not have been enough. Kept
+// as ONE constant shared by gateIn (auth/validation) and throwingCallee (the waterfall guard,
+// #1461) deliberately — re-measured together below rather than assumed independent, because they
+// walk the same call graph and a regression in one would plausibly show in the other.
+//
+// The #1240 -> #1358 lesson (a NAME-keyed widening regressed silently) does not apply to raising
+// this number the same way: this pass can only ever SUPPRESS a finding, never invent one, so the
+// only failure mode is a real gate/exit reached one hop further out getting suppressed when it
+// should not be — i.e. a FALSE NEGATIVE, not a false positive. `M9C-GATE-DEPTH-NEG` plants exactly
+// that: a 4-hop chain of NON-gates (no helper anywhere in it denies or is consumed) that must still
+// fire at depth 4, so a future widening that stops resolving real chains would go red here first.
+const GATE_DEPTH = 4;
 
 // Every function declared in a module, by the name a caller would use: `function f(){}`,
 // `const f = () => {}`, `const f = function(){}`, and the `export default` form.
@@ -855,6 +872,25 @@ function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<stri
   return out;
 }
 
+// Local name -> (module, exported name) for every value re-exported through a BARREL:
+// `export { x [as y] } from "./m"`. #1500's real chain resolves `getAuthGuards` through
+// `~/auth/index.server`, which does not declare it — it re-exports it from `./context.server`. A
+// wildcard (`export * from`) or a re-export with no module specifier is out of scope: this can only
+// ever SUPPRESS, so an unevaluated form leaves the finding standing rather than guessing.
+function collectReExports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): Map<string, ImportedBinding> {
+  const out = new Map<string, ImportedBinding>();
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    if (!stmt.exportClause || !ts.isNamedExports(stmt.exportClause)) continue;
+    const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
+    if (!resolved) continue;
+    for (const el of stmt.exportClause.elements) {
+      if (!el.isTypeOnly) out.set(el.name.text, { path: resolved, name: (el.propertyName ?? el.name).text });
+    }
+  }
+  return out;
+}
+
 // #1462: a gate is also reachable through a DYNAMIC import. TanStack/tanstack.com's `requireAdmin`
 // reaches its real check through `const { getAuthenticatedUser } = await import('./auth.server-
 // helpers')`; neither collectDeclaredFunctions nor collectValueImports (top-level
@@ -880,6 +916,46 @@ function dynamicImportSpecifier(expr: ts.Expression): string | undefined {
   return arg && ts.isStringLiteral(arg) ? arg.text : undefined;
 }
 
+// #1500: TanStack/tanstack.com's real gate is not a direct `await import("literal")` at the call
+// site — it's a HELPER that wraps one: `async function loadAuthServer() { return import('~/auth/
+// index.server') }`, then `const { getAuthGuards } = await loadAuthServer()`. Neither the direct
+// form above nor collectDeclaredFunctions sees that binding, so `getAuthGuards` (and everything
+// reached through it) was unresolvable — one of the two independent causes of all 6 residual
+// `M1 — server function missing authorization check` rows (MEASURED 2026-07-28/31, #1500).
+//
+// NARROW ON PURPOSE: the wrapper's body must be A THIN PASSTHROUGH — nothing but
+// `return [await] import("literal")` (an arrow's expression body counts the same way). A wrapper
+// that does anything else (env-gates the specifier, memoizes, wraps two imports) is not evaluated,
+// and the finding it would have suppressed stays standing — this can only ever SUPPRESS, so an
+// unevaluable wrapper shape must fail safe exactly like a computed `import(spec)` does above.
+function dynamicImportWrapperSpecifier(fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): string | undefined {
+  const body = fn.body;
+  if (!body) return undefined;
+  if (!ts.isBlock(body)) return dynamicImportSpecifier(body); // arrow expression body: `() => import("m")`
+  const real = body.statements.filter((s) => !ts.isEmptyStatement(s));
+  const only = real.length === 1 ? real[0] : undefined;
+  return only && ts.isReturnStatement(only) && only.expression ? dynamicImportSpecifier(only.expression) : undefined;
+}
+
+// Local function name -> the literal specifier it wraps, for every dynamic-import-wrapper function
+// DECLARED IN THIS FILE. A wrapper imported from elsewhere is out of scope (one more hop this pass
+// does not take) and leaves any finding it would suppress standing.
+function collectDynamicImportWrapperSpecifiers(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      const spec = dynamicImportWrapperSpecifier(node);
+      if (spec) out.set(node.name.text, spec);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+      const spec = dynamicImportWrapperSpecifier(node.initializer);
+      if (spec) out.set(node.name.text, spec);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 interface DynamicImports {
   /** `const { x: y } = await import("./m")` — local name -> (module, exported name). */
   named: Map<string, ImportedBinding>;
@@ -890,9 +966,15 @@ interface DynamicImports {
 function collectDynamicImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): DynamicImports {
   const named = new Map<string, ImportedBinding>();
   const namespaces = new Map<string, string>();
+  const wrappers = collectDynamicImportWrapperSpecifiers(sf);
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const specifier = dynamicImportSpecifier(node.initializer);
+      let specifier = dynamicImportSpecifier(node.initializer);
+      if (specifier === undefined) {
+        // #1500: `const { x } = await loadY()` where `loadY` is a wrapper collected above.
+        const call = ts.isAwaitExpression(node.initializer) ? node.initializer.expression : node.initializer;
+        if (ts.isCallExpression(call) && ts.isIdentifier(call.expression)) specifier = wrappers.get(call.expression.text);
+      }
       const resolved = specifier === undefined ? undefined : resolveImport(path, specifier, allPaths, aliases);
       if (resolved) {
         if (ts.isIdentifier(node.name)) {
@@ -985,6 +1067,7 @@ class GateResolver {
   private readonly declared = new Map<string, Map<string, ts.Node>>();
   private readonly imports = new Map<string, Map<string, ImportedBinding>>();
   private readonly dynamic = new Map<string, DynamicImports>();
+  private readonly reExports = new Map<string, Map<string, ImportedBinding>>();
 
   constructor(
     private readonly sources: Map<string, ts.SourceFile>,
@@ -1023,28 +1106,46 @@ class GateResolver {
     return hit;
   }
 
+  private reExportsIn(path: string): Map<string, ImportedBinding> {
+    let hit = this.reExports.get(path);
+    if (!hit) {
+      const sf = this.sources.get(path);
+      hit = sf ? collectReExports(sf, path, new Set(this.sources.keys()), this.aliases) : new Map();
+      this.reExports.set(path, hit);
+    }
+    return hit;
+  }
+
+  // A name declared in `path` directly, or reached by exactly one hop of `export { name } from
+  // "./barrel"` (#1500: `~/auth/index.server` re-exports `getAuthGuards` rather than declaring it).
+  // Bounded to one hop on purpose — a barrel re-exporting from another barrel is a shape this pass
+  // does not evaluate, and stays unresolvable rather than chasing an unbounded chain.
+  private declaredOrReExported(path: string, name: string): { path: string; node: ts.Node } | undefined {
+    const direct = this.declaredIn(path).get(name);
+    if (direct) return { path, node: direct };
+    const reExported = this.reExportsIn(path).get(name);
+    if (!reExported) return undefined;
+    const target = this.declaredIn(reExported.path).get(reExported.name);
+    return target ? { path: reExported.path, node: target } : undefined;
+  }
+
   private resolve(path: string, site: CallSite): { path: string; node: ts.Node } | undefined {
     if (site.qualifier !== undefined) {
       // #1462: a namespace bound by a dynamic import — `const m = await import("./auth")` — resolves
       // against THAT module, exactly like the static namespace form below.
       const dynamic = this.dynamicIn(path).namespaces.get(site.qualifier);
-      if (dynamic !== undefined) {
-        const viaDynamic = this.declaredIn(dynamic).get(site.name);
-        return viaDynamic ? { path: dynamic, node: viaDynamic } : undefined;
-      }
+      if (dynamic !== undefined) return this.declaredOrReExported(dynamic, site.name);
       // `guards.ensureMember(…)` — only a namespace import resolves; a method on a runtime object
       // (`supabase.auth.getUser()`) has no declaration in this tree and stays unresolvable.
       const ns = this.importsIn(path).get(site.qualifier);
       if (ns?.name !== NAMESPACE_IMPORT) return undefined;
-      const target = this.declaredIn(ns.path).get(site.name);
-      return target ? { path: ns.path, node: target } : undefined;
+      return this.declaredOrReExported(ns.path, site.name);
     }
     const local = this.declaredIn(path).get(site.name);
     if (local) return { path, node: local };
     const imported = this.importsIn(path).get(site.name);
     if (!imported || imported.name === NAMESPACE_IMPORT) return undefined;
-    const target = this.declaredIn(imported.path).get(imported.name);
-    return target ? { path: imported.path, node: target } : undefined;
+    return this.declaredOrReExported(imported.path, imported.name);
   }
 
   // The first callee, within GATE_DEPTH hops, whose own declaration satisfies `matches`.
@@ -1061,7 +1162,7 @@ class GateResolver {
       if (seen.has(key)) continue;
       seen.add(key);
       const hit = this.resolve(path, site);
-      if (!hit) continue;
+      if (!hit || hit.node === fn) continue; // a same-named self-call resolves to the frame already open one level up — re-testing it can never match (we only got here because it didn't) and would burn a depth level and pre-seed `seen` with names the OUTER loop has not reached yet, starving a real hop further out. #1500's tanstack chain hits this exactly: `requireCapability` calls `getAuthGuards().requireCapability(...)`, an unrelated method that happens to share its enclosing function's own name.
       const sf = this.sources.get(hit.path);
       if (sf && matches(sf, hit.node, site, fn)) return site.name;
       if (this.firstCallee(hit.path, hit.node, matches, depth - 1, seen)) return site.name;
@@ -1498,6 +1599,17 @@ function mutatingChain(decl: AwaitedDbDeclaration): boolean {
 /** Why a pair is not reported, or undefined when it is independent and fires. */
 type PairDependency = "dataflow" | "guard-diverts" | "guard-aborts-over-write";
 
+interface PairVerdict {
+  reason: PairDependency | undefined;
+  // #1484: an aborting guard was seen and excused ONLY because both statements are reads (#1441's
+  // relaxation) — true even though the pair still fires as independent. Lets the caller disclose
+  // the error-PRECEDENCE change the relaxation makes: sequentially the guard's own throw always
+  // wins (the second query never runs); under Promise.all a rejection from the second query can
+  // surface first, and on a data layer that REJECTS on error (Prisma, a raw driver) rather than
+  // returning an error object (Supabase's `.error`), the caller can see a different error.
+  abortRelaxedForReads: boolean;
+}
+
 function dependsOnPriorQuery(
   block: ts.Block,
   sf: ts.SourceFile,
@@ -1505,15 +1617,16 @@ function dependsOnPriorQuery(
   next: AwaitedDbDeclaration,
   path: string,
   gates: GateResolver,
-): PairDependency | undefined {
+): PairVerdict {
   // The direct test keeps its original substring form so this change can only ever SUPPRESS a pair,
   // never make a previously-suppressed one fire; the names reached by propagation are matched as
   // whole identifiers, so a short intermediate binding cannot swallow the class.
-  if (cur.boundNames.some((n) => next.text.includes(n))) return "dataflow";
+  if (cur.boundNames.some((n) => next.text.includes(n))) return { reason: "dataflow", abortRelaxedForReads: false };
   const eitherWrites = mutatingChain(cur) || mutatingChain(next);
   const tainted = new Set(cur.boundNames);
   const reads = (text: string): boolean => [...tainted].some((n) => mentionsIdentifier(text, n));
   let abortedOverWrite = false;
+  let abortRelaxedForReads = false;
   for (let i = cur.index + 1; i < next.index; i++) {
     const stmt = block.statements[i];
     if (stmt === undefined || !reads(stmt.getText(sf))) continue;
@@ -1526,18 +1639,21 @@ function dependsOnPriorQuery(
     // object and its callers write `if (lockedError) return lockedError;`, which guardEffect
     // already sees inline.
     const effect = guardEffect(stmt) === "none" && gates.throwingCallee(path, stmt) !== undefined ? "aborts" : guardEffect(stmt);
-    if (effect === "diverts") return "guard-diverts"; // a guard on the first result — reordering changes behaviour
+    if (effect === "diverts") return { reason: "guard-diverts", abortRelaxedForReads: false }; // a guard on the first result — reordering changes behaviour
     // An aborting guard over a write stays a dependency, but the walk continues: a LATER statement
     // may divert, or launder the first result into a binding the second query reads, and either of
     // those is the stronger reason to suppress. Returning here would hide it (MEASURED 2026-07-28:
     // 3 of the 13 abort-guarded pairs on the pinned corpus are caught by a later statement).
-    if (effect === "aborts" && eitherWrites) abortedOverWrite = true;
+    if (effect === "aborts") {
+      if (eitherWrites) abortedOverWrite = true;
+      else abortRelaxedForReads = true;
+    }
     if (ts.isVariableStatement(stmt)) {
       for (const d of stmt.declarationList.declarations) for (const n of boundNames(d.name)) tainted.add(n);
     }
   }
-  if (reads(next.text)) return "dataflow";
-  return abortedOverWrite ? "guard-aborts-over-write" : undefined;
+  if (reads(next.text)) return { reason: "dataflow", abortRelaxedForReads: false };
+  return { reason: abortedOverWrite ? "guard-aborts-over-write" : undefined, abortRelaxedForReads };
 }
 
 // #1081: how many additional independent-pair locations a waterfall finding cites by name — the
@@ -1565,18 +1681,18 @@ function detectDataFetchingWaterfalls(
         // one finding per function is still the right amount of signal (the fix, "wrap the whole
         // function's queries in Promise.all", already covers every pair), but the dropped pairs need
         // to survive into the evidence rather than vanish with no count.
-        const independentPairs: { cur: AwaitedDbDeclaration; next: AwaitedDbDeclaration }[] = [];
+        const independentPairs: { cur: AwaitedDbDeclaration; next: AwaitedDbDeclaration; abortRelaxedForReads: boolean }[] = [];
         for (let i = 0; i < decls.length - 1; i++) {
           const cur = decls[i];
           const next = decls[i + 1];
           if (!cur || !next) continue;
           pairsExamined += 1;
           // depends on the prior result, directly or through an intermediate — legitimately sequential
-          const dependency = dependsOnPriorQuery(node.body, sf, cur, next, path, gates);
-          if (dependency === "guard-diverts") excludedByDivertingGuard += 1;
-          if (dependency === "guard-aborts-over-write") excludedByAbortOverWrite += 1;
-          if (dependency !== undefined) continue;
-          independentPairs.push({ cur, next });
+          const verdict = dependsOnPriorQuery(node.body, sf, cur, next, path, gates);
+          if (verdict.reason === "guard-diverts") excludedByDivertingGuard += 1;
+          if (verdict.reason === "guard-aborts-over-write") excludedByAbortOverWrite += 1;
+          if (verdict.reason !== undefined) continue;
+          independentPairs.push({ cur, next, abortRelaxedForReads: verdict.abortRelaxedForReads });
         }
         if (independentPairs.length > 0) {
           const first = independentPairs[0]!;
@@ -1586,6 +1702,12 @@ function detectDataFetchingWaterfalls(
             independentPairs.length > 1
               ? ` (first of ${independentPairs.length} such pairs in this function; the rest: ${extraPairs.join(", ")}${overflow})`
               : "";
+          // #1484: the FIRST pair's own status decides whether the error-precedence caveat is owed
+          // — it is the pair this finding's own location/evidence names, so a caveat about the OTHER
+          // pairs in countNote would be citing evidence not present in the finding's own text.
+          const errorPrecedenceCaveat = first.abortRelaxedForReads
+            ? " An error-only guard between them was excused here because both statements read (#1441) — sequentially that guard's own error always surfaces first; under `Promise.all` a rejection from the second query can surface instead, which matters on a data layer that REJECTS on error (Prisma, a raw driver) rather than returning an error object (Supabase's `.error`)."
+            : "";
           findings.push(
             makeFinding(nextId, {
               title: `Sequential DB queries with no visible dependency could run in parallel`,
@@ -1600,9 +1722,11 @@ function detectDataFetchingWaterfalls(
               // is read by the second, and nothing between them guards on the first. Say that, plus
               // the bound on what the check reads, rather than asserting independence and then
               // recommending a reorder that would break the code if the assertion is wrong.
-              evidence: `\`${first.cur.displayName}\` (${loc(path, sf, first.cur.node)}) and \`${first.next.displayName}\` (${loc(path, sf, first.next.node)}) are awaited one after the other, and no dataflow from the first into the second was found — the second's query does not read the first's binding or anything derived from it in this block, and no guard between them exits on the first's result. A dependency carried outside this block (through shared mutable state, a side effect, or a helper call) would not be visible to this check.${countNote}`,
+              evidence: `\`${first.cur.displayName}\` (${loc(path, sf, first.cur.node)}) and \`${first.next.displayName}\` (${loc(path, sf, first.next.node)}) are awaited one after the other, and no dataflow from the first into the second was found — the second's query does not read the first's binding or anything derived from it in this block, and no guard between them exits on the first's result. A dependency carried outside this block (through shared mutable state, a side effect, or a helper call) would not be visible to this check.${countNote}${errorPrecedenceCaveat}`,
               impact: "Each await that does not need the previous result serializes a network round-trip that could run concurrently, adding latency (and, compounded across requests, DB load) on every render.",
-              fix: `Confirm the two are order-independent, then combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap.`,
+              fix: first.abortRelaxedForReads
+                ? `Confirm the two are order-independent, then combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap. On a rejecting data layer, also confirm the guard's own error is still what the caller sees — e.g. use \`Promise.allSettled\` and surface the guard's error explicitly rather than whichever promise rejects first.`
+                : `Confirm the two are order-independent, then combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap.`,
               value: 3,
               ease: 4,
               safety: 4,
@@ -1935,19 +2059,115 @@ function containsJsx(fn: ts.Node): boolean {
   return found;
 }
 
-function isOffPathModuleHelper(fn: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node>): boolean {
+// #1502: the population #1460's OWN rule deliberately leaves flagged. A helper's in-file call
+// sites can only ever CLEAR it (the #1263 property) — a helper whose callers are outside what this
+// pass reads must stay flagged, because silence there would be a guess, not a measurement. That
+// "must stay flagged" case has two shapes:
+//   - an EXPORTED helper whose callers live in OTHER modules — resolved below via the import
+//     graph, DIRECTLY or through ONE hop of re-export barrel (`export { x } from "./barrel"`,
+//     #1500's shape reused here). Bounded to one hop on the same reasoning #1500's
+//     `declaredOrReExported` states: a barrel re-exporting from another barrel is a shape this pass
+//     does not evaluate, and an unresolved chain stays flagged rather than guessed at.
+//     MEASURED, RE-MEASURED 2026-07-31 on the pinned carbon/tanstack-com trees: the mechanism is
+//     real and corpus-proven (`M9C-SSRXFILE-POS`/`-NEG`), but it clears NEITHER target's own
+//     residual row. carbon's `slash-command.tsx:106` (`handleCommandNavigation`) needs TWO barrel
+//     hops, not one — `packages/tiptap/src/index.ts` re-exports it from `./extensions`, which
+//     re-exports it from `./slash-command` — one hop past this bound, so it correctly stays
+//     flagged rather than the mechanism silently widening to reach it. tanstack-com's 4 residual
+//     rows are the untriaged component-render-body family #1460's own baseline note names, not
+//     this shape, and are unaffected either way.
+//   - a helper passed as a VALUE, never called at all (`useSyncExternalStore(subscribe, …)`,
+//     `addEventListener("x", handler)`) — a DIFFERENT question (is a *reference* site the same
+//     evidence as a *call* site?) that this pass does NOT attempt. Conflating the two is how a rule
+//     starts accepting a discarded value as evidence of anything, so a bare reference stays outside
+//     `callSitesIn`'s vocabulary and such a helper stays flagged. MEASURED population: 2 of carbon's
+//     20 residual rows (`useCustomerPreview.tsx:18/19`, both the same `subscribe` helper).
+function isExportedModuleHelper(fn: ts.Node): boolean {
+  if (ts.isFunctionDeclaration(fn)) return fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+  const decl = fn.parent;
+  if (!ts.isVariableDeclaration(decl)) return false;
+  const stmt = ts.findAncestor(decl, ts.isVariableStatement);
+  return stmt?.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+}
+
+// Precomputed once per `detectSsrBrowserApiMisuse` run (not per helper): which files import a
+// given path, so a call-site search never re-walks the whole graph per candidate. `undefined`
+// (the default everywhere except that one entry point) keeps every OTHER caller of
+// `isOnSsrRenderPath`/`isOffPathModuleHelper` — including the unit-fixture-driven tests — on the
+// pre-#1502 in-file-only behaviour with zero risk of the cross-file path changing their answer.
+interface SsrCrossFileContext {
+  sources: ReadonlyMap<string, ts.SourceFile>;
+  allPaths: ReadonlySet<string>;
+  aliases: PathAlias[];
+  importedBy: ReadonlyMap<string, string[]>;
+  // `${declaringPath}#${exportedName}` -> every barrel path that re-exports it (#1500's `export
+  // { x } from "./barrel"` shape, one hop) — precomputed ONCE per run, not per candidate helper, so
+  // a target with thousands of files doesn't re-scan them per unresolved-in-file helper.
+  barrelsFor: ReadonlyMap<string, string[]>;
+}
+
+function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, allPaths: ReadonlySet<string>, aliases: PathAlias[]): SsrCrossFileContext {
+  const allPathsSet = new Set(allPaths);
+  const graph = buildImportGraph(new Map(sources), allPathsSet, aliases);
+  const importedBy = new Map<string, string[]>();
+  for (const [importer, edges] of graph) {
+    for (const target of edges) {
+      const list = importedBy.get(target);
+      if (list) list.push(importer);
+      else importedBy.set(target, [importer]);
+    }
+  }
+  const barrelsFor = new Map<string, string[]>();
+  for (const [barrelPath, barrelSf] of sources) {
+    for (const [, binding] of collectReExports(barrelSf, barrelPath, allPathsSet, aliases)) {
+      const key = `${binding.path}#${binding.name}`;
+      const list = barrelsFor.get(key);
+      if (list) list.push(barrelPath);
+      else barrelsFor.set(key, [barrelPath]);
+    }
+  }
+  return { sources, allPaths, aliases, importedBy, barrelsFor };
+}
+
+// Every call site, in every OTHER module that imports `path` (directly, or through a re-export
+// barrel) and binds `exportedName` by value, to the LOCAL name that import uses (so a renamed
+// import — `import { foo as bar }` — still resolves). A module that imports but never calls the
+// name contributes nothing, which is the same "no evidence either way" outcome as an in-file zero.
+function crossFileCallSites(path: string, exportedName: string, ctx: SsrCrossFileContext): { node: ts.CallExpression; sf: ts.SourceFile }[] {
+  const out: { node: ts.CallExpression; sf: ts.SourceFile }[] = [];
+  const viaPaths = [path, ...(ctx.barrelsFor.get(`${path}#${exportedName}`) ?? [])];
+  for (const viaPath of viaPaths) {
+    for (const importerPath of ctx.importedBy.get(viaPath) ?? []) {
+      const importerSf = ctx.sources.get(importerPath);
+      if (!importerSf) continue;
+      const imports = collectValueImports(importerSf, importerPath, new Set(ctx.allPaths), ctx.aliases);
+      for (const [localName, binding] of imports) {
+        if (binding.path !== viaPath || binding.name !== exportedName) continue;
+        for (const node of callSitesIn(importerSf).get(localName) ?? []) out.push({ node, sf: importerSf });
+      }
+    }
+  }
+  return out;
+}
+
+function isOffPathModuleHelper(fn: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node>, ctx: SsrCrossFileContext | undefined, path: string | undefined): boolean {
   if (seen.has(fn)) return false;
   const name = moduleHelperName(fn);
   if (name === undefined || !/^[_a-z]/.test(name)) return false; // a component is capitalised
   if (containsJsx(fn)) return false; // it renders — a component whatever it is called
   // A recursive self-call says nothing about who reaches the helper from outside.
-  const sites = (callSitesIn(sf).get(name) ?? []).filter((site) => !ts.findAncestor(site, (a) => a === fn));
-  if (sites.length === 0) return false;
+  const inFileSites = (callSitesIn(sf).get(name) ?? []).filter((site) => !ts.findAncestor(site, (a) => a === fn));
   const next = new Set(seen).add(fn);
-  return sites.every((site) => !isOnSsrRenderPath(site, sf, next));
+  if (inFileSites.length > 0) return inFileSites.every((site) => !isOnSsrRenderPath(site, sf, ctx, next));
+  // No in-file caller. Unresolvable (no cross-file context, or the helper isn't exported) stays
+  // flagged — the #1263 property this whole rule already relies on.
+  if (!ctx || path === undefined || !isExportedModuleHelper(fn)) return false;
+  const crossSites = crossFileCallSites(path, name, ctx);
+  if (crossSites.length === 0) return false; // no consumer found anywhere in the scanned tree
+  return crossSites.every(({ node, sf: callerSf }) => !isOnSsrRenderPath(node, callerSf, ctx, next));
 }
 
-function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node> = new Set()): boolean {
+function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, ctx: SsrCrossFileContext | undefined = undefined, seen: Set<ts.Node> = new Set()): boolean {
   if (/(^|\/)entry\.client\.[jt]sx?$/.test(sf.fileName)) return false;
   const fns: ts.Node[] = [];
   for (let cur = node.parent; cur; cur = cur.parent) {
@@ -1961,9 +2181,15 @@ function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node> 
       return false;
     }
     if (!/\.[jt]sx$/.test(sf.fileName)) return false;
-    if (isOffPathModuleHelper(nearest, sf, seen)) return false;
+    if (isOffPathModuleHelper(nearest, sf, seen, ctx, findSourcePath(sf, ctx))) return false;
   }
   return true;
+}
+
+// `sf.fileName` is the loaded path (see `parse` in common.ts) — a thin lookup, kept as its own
+// function only so `isOnSsrRenderPath` reads as "the path", not an inline reverse-map dance.
+function findSourcePath(sf: ts.SourceFile, ctx: SsrCrossFileContext | undefined): string | undefined {
+  return ctx?.sources.has(sf.fileName) ? sf.fileName : undefined;
 }
 
 // Where the read sits, for the finding's own evidence. #1460: a module-level helper that survives
@@ -2020,8 +2246,9 @@ function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
   return false;
 }
 
-function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[] = []): Finding[] {
   const findings: Finding[] = [];
+  const ctx = buildSsrCrossFileContext(sources, new Set(sources.keys()), aliases);
   for (const [path, sf] of sources) {
     const declared = fileDeclaredNames(sf);
     const visit = (node: ts.Node) => {
@@ -2035,7 +2262,7 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         // An optional-chained access (`window?.x`) is itself a guard — the author signalled the
         // global may be absent, so it never throws a bare ReferenceError shape we flag (#964).
         const optionalChained = (node as ts.PropertyAccessExpression | ts.ElementAccessExpression).questionDotToken !== undefined;
-        if (!optionalChained && isOnSsrRenderPath(node, sf) && !isSsrGuarded(node, sf)) {
+        if (!optionalChained && isOnSsrRenderPath(node, sf, ctx) && !isSsrGuarded(node, sf)) {
           const readSite = ssrReadSite(node);
           findings.push(
             makeFinding(nextId, {
@@ -2923,7 +3150,7 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     // not on Supabase call shapes, so it stays live on a Prisma/Drizzle/raw-SQL target.
     ...(S.has("cache-bleed") ? detectCrossUserCacheBleed(sources, nextId) : []),
     ...(S.has("accidental-dynamic") ? detectAccidentalDynamicRendering(sources, nextId) : []),
-    ...(S.has("ssr-browser-api") ? detectSsrBrowserApiMisuse(sources, nextId) : []),
+    ...(S.has("ssr-browser-api") ? detectSsrBrowserApiMisuse(sources, nextId, collectPathAliases(files)) : []),
     ...(S.has("unbounded-route") ? detectUnboundedRouteOrEdge(sources, nextId) : []),
     ...(S.has("uncapped-retry") ? [...detectUncappedRetryFanOut(sources, nextId), ...uncappedRetryScopeNote(sources, nextId)] : []),
     ...(S.has("route-segment-config") ? detectRouteSegmentConfig(sources, nextId) : []),

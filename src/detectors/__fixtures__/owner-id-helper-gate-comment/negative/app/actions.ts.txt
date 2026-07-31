@@ -1,0 +1,14 @@
+"use server";
+
+// The precision boundary for the TODO-COMMENT half: the identical shape, but `requireUser()` is a
+// REAL call in the action's own body, not a word inside a comment. Nothing must fire — "auth was
+// called and bound nothing" is the same silent verdict an inline `await requireUser()` already
+// gets.
+import { createServiceClient } from "../lib/supabase";
+import { requireUser } from "../lib/guards";
+
+export async function updateUserEmail(userId: string, email: string) {
+  await requireUser();
+  const supabaseService = createServiceClient();
+  await supabaseService.from("users").update({ email }).eq("id", userId);
+}

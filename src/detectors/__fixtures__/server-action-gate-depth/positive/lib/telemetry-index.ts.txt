@@ -1,0 +1,2 @@
+// A re-export barrel, same shape as the negative's `auth-index.ts` — declares nothing itself.
+export { getTelemetry } from "./telemetry-context";

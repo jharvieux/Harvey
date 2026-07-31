@@ -1261,14 +1261,19 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "segment-conflict", dir: "route-segment-conflict", neg: "negative" },
     { check: "suspense", dir: "missing-suspense", neg: "negative" },
     { check: "unbounded", dir: "unbounded-route", neg: "negative" },
-    { check: "cache-bleed", dir: "cache-bleed", neg: "negative" },
+    // #1484 split the bundled cache-bleed pair (three shapes, one match key) into one dir per shape.
+    { check: "cache-bleed-unstable-cache", dir: "cache-bleed-unstable-cache", neg: "negative" },
+    { check: "cache-bleed-use-cache", dir: "cache-bleed-use-cache", neg: "negative" },
+    { check: "cache-bleed-cache-control", dir: "cache-bleed-cache-control", neg: "negative" },
     // #1263/#1292/#1262. The first three pairs are scored the opposite way round from their #848
     // siblings: the NEGATIVE carries the shape that used to false-fire, the POSITIVE the
     // near-identical shape that must still fire, so a fix that over-suppresses fails here.
     { check: "action-auth-helper", dir: "server-action-helper-gate", neg: "negative" },
     { check: "action-validation-helper", dir: "server-action-helper-validator", neg: "negative" },
     { check: "waterfall-guard", dir: "waterfall-guard", neg: "negative" },
-    { check: "uncapped-retry", dir: "uncapped-retry", neg: "negative" },
+    // #1484 split the bundled uncapped-retry pair (retry loop + fan-out, one match key) in two.
+    { check: "uncapped-retry-loop", dir: "uncapped-retry-loop", neg: "negative" },
+    { check: "uncapped-fanout", dir: "uncapped-fanout", neg: "negative" },
     // #1293, same inverted scoring: each negative is an FP shape MEASURED on carbon's pinned tree.
     { check: "ssr-client-route", dir: "ssr-client-route", neg: "negative" },
     { check: "ssr-shadowed-global", dir: "ssr-shadowed-global", neg: "negative" },
@@ -1279,16 +1284,25 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     // #1438/#1441/#1439/#1440 — the four residuals of the PR that landed the three above. Scored
     // the same way round: each POSITIVE is a shape the fix must keep (or start) firing on, each
     // NEGATIVE the neighbouring shape it must not reach.
-    { check: "waterfall-escape", dir: "waterfall-escape", neg: "negative" },
+    // #1484 split the bundled waterfall-escape/action-gate-strength pairs into one dir per shape.
+    { check: "waterfall-escape-switch", dir: "waterfall-escape-switch", neg: "negative" },
+    { check: "waterfall-escape-loop", dir: "waterfall-escape-loop", neg: "negative" },
     { check: "waterfall-abort", dir: "waterfall-abort", neg: "negative" },
-    { check: "action-gate-strength", dir: "action-gate-strength", neg: "negative" },
+    { check: "action-gate-strength-logger", dir: "action-gate-strength-logger", neg: "negative" },
+    { check: "action-gate-strength-discarded", dir: "action-gate-strength-discarded", neg: "negative" },
     { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
     // #1462/#1460/#1461, same inverted scoring — the three residual FP families #1293/#1276 left open.
     { check: "action-dynamic-gate", dir: "server-action-dynamic-gate", neg: "negative" },
     { check: "ssr-module-helper", dir: "ssr-module-helper", neg: "negative" },
     { check: "waterfall-helper-exit", dir: "waterfall-helper-exit", neg: "negative" },
     // #1434, the last raw-text AUTH_PATTERN test in the pass. Same inverted scoring.
-    { check: "owner-id-helper-gate", dir: "owner-id-helper-gate", neg: "negative" },
+    // #1484 split the bundled owner-id-helper-gate pair (logger + comment shapes) into one dir each.
+    { check: "owner-id-helper-gate-logger", dir: "owner-id-helper-gate-logger", neg: "negative" },
+    { check: "owner-id-helper-gate-comment", dir: "owner-id-helper-gate-comment", neg: "negative" },
+    // #1500, #1462's own residual — same inverted scoring.
+    { check: "action-gate-depth", dir: "server-action-gate-depth", neg: "negative" },
+    // #1502, #1460's own residual — same inverted scoring.
+    { check: "ssr-cross-file-helper", dir: "ssr-cross-file-helper", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {

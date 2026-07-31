@@ -1,0 +1,13 @@
+// hop 4 — the real check. `requireCapability` here reads the session and throws when the caller
+// fails it, matching AUTH_PATTERN (`getCurrentUser`) and `canDeny` (`throw`) at once.
+import { authService } from "./db";
+
+export function createGuards() {
+  return {
+    async requireCapability(capability: string) {
+      const user = await authService.getCurrentUser();
+      if (!user?.capabilities.includes(capability)) throw new Error("forbidden");
+      return user;
+    },
+  };
+}

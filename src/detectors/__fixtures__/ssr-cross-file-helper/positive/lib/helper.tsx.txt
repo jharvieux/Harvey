@@ -1,0 +1,6 @@
+// #1502 — an EXPORTED module-level helper with NO in-file call site. #1460's own rule alone leaves
+// this flagged (its caller sits outside what an in-file-only rule reads); the caller lives in
+// another module and is resolved through the import graph below.
+export function handleCommandNavigation(event: unknown) {
+  return document.activeElement;
+}

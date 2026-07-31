@@ -1,0 +1,21 @@
+// #1438 — the true-positive control for the SWITCH half of the escape rule (#1484 split this out
+// of a bundled fixture that used to hold both the switch and loop shapes together). The
+// intervening statement reads the first result and contains a `break`, but the break belongs to
+// the `switch` itself, not to the function — control reaches the second query either way, so the
+// pair is a genuine waterfall and `Promise.all` is safe.
+import { supabase } from "../../lib/db";
+
+export async function switchBreakBetweenQueries() {
+  const { data: rows } = await supabase.from("rows").select("id, status");
+
+  switch (rows?.[0]?.status) {
+    case "open":
+      console.log("open");
+      break;
+    default:
+      break;
+  }
+
+  const { data: projects } = await supabase.from("projects").select("id, name");
+  return { rows, projects };
+}

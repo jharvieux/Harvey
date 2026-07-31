@@ -277,24 +277,68 @@ export const m9CheckEntries: CorpusEntry[] = [
 
   // #1051 — the second cache failure mode briefs/audit-modules.md requires (a present-but-shared
   // cache directive over per-user data), which the missing-config check above actively suppressed.
+  //
+  // #1484: this used to be ONE bundled `cache-bleed` pair carrying all THREE shapes in its
+  // positive (its own note said so: "three shapes"), sharing one `match` key — so the corpus row
+  // stayed green with two of the three shapes reverted, mitigated only by a `toHaveLength(3)`
+  // assertion in the DETECTOR suite (app-router.test.ts), not the corpus row that names each
+  // shape. Split into three independent pairs, each with its own dedicated negative.
   {
-    id: "M9C-CACHE-BLEED-POS",
+    id: "M9C-CACHE-BLEED-UNSTABLE-POS",
     kind: "positive",
-    cls: "per-user data served from a shared cache entry (cross-user cache bleed)",
+    cls: "unstable_cache over a per-user read with a global (non-per-user) key",
     module: "M9",
-    location: "m9-corpus/cache-bleed/positive",
+    location: "m9-corpus/cache-bleed-unstable-cache/positive",
     match: ["Cross-user cache bleed"],
     expectedTier: "review",
-    note: "cache-bleed/positive: three shapes — unstable_cache over a per-user read with a global key, a `use cache` scope that resolves the session inside itself, and an authenticated route handler returning `Cache-Control: public, s-maxage`. Detected by detectCrossUserCacheBleed.",
+    note: "cache-bleed-unstable-cache/positive: `unstable_cache(async (userId) => …, [\"orders\"], …)` — the key carries no per-user component, so the first caller's orders are served to everyone. Detected by detectCrossUserCacheBleed.",
   },
   {
-    id: "M9C-CACHE-BLEED-NEG",
+    id: "M9C-CACHE-BLEED-UNSTABLE-NEG",
     kind: "negative",
-    cls: "per-user caching done correctly (identity in the key) plus a genuinely public cached read",
+    cls: "unstable_cache over a genuinely anonymous read (no session, nothing per-user)",
     module: "M9",
-    location: "m9-corpus/cache-bleed/negative",
+    location: "m9-corpus/cache-bleed-unstable-cache/negative",
     match: ["Cross-user cache bleed"],
-    note: "cache-bleed/negative: the identity in both the key parts and the tag, a `use cache` function taking the identity as an argument, a `private, no-store` authenticated response, and an anonymous public endpoint — the precision boundary for this check.",
+    note: "cache-bleed-unstable-cache/negative: a public plans list with no session read anywhere — a shared cache key and a public Cache-Control are both correct here. Nothing must fire.",
+  },
+  {
+    id: "M9C-CACHE-BLEED-USECACHE-POS",
+    kind: "positive",
+    cls: "`\"use cache\"` scope that resolves the caller's session INSIDE itself",
+    module: "M9",
+    location: "m9-corpus/cache-bleed-use-cache/positive",
+    match: ["Cross-user cache bleed"],
+    expectedTier: "review",
+    note: "cache-bleed-use-cache/positive: a `\"use cache\"` function is keyed on its ARGUMENTS — reading the session inside it is invisible to that key, so one cache entry is shared across every user. Detected by detectCrossUserCacheBleed.",
+  },
+  {
+    id: "M9C-CACHE-BLEED-USECACHE-NEG",
+    kind: "negative",
+    cls: "`\"use cache\"` scope whose identity arrives as an ARGUMENT (the correct shape)",
+    module: "M9",
+    location: "m9-corpus/cache-bleed-use-cache/negative",
+    match: ["Cross-user cache bleed"],
+    note: "cache-bleed-use-cache/negative: the identical `\"use cache\"` shape, but the caller passes the user id in and no session read happens inside the cached function. Nothing must fire.",
+  },
+  {
+    id: "M9C-CACHE-BLEED-CACHECONTROL-POS",
+    kind: "positive",
+    cls: "authenticated route handler returning a shared `Cache-Control: public, s-maxage`",
+    module: "M9",
+    location: "m9-corpus/cache-bleed-cache-control/positive",
+    match: ["Cross-user cache bleed"],
+    expectedTier: "review",
+    note: "cache-bleed-cache-control/positive: an authenticated response handed to the shared CDN cache — the next requester of this URL gets the previous user's invoices. Detected by detectCrossUserCacheBleed.",
+  },
+  {
+    id: "M9C-CACHE-BLEED-CACHECONTROL-NEG",
+    kind: "negative",
+    cls: "the identical authenticated response marked `private, no-store`",
+    module: "M9",
+    location: "m9-corpus/cache-bleed-cache-control/negative",
+    match: ["Cross-user cache bleed"],
+    note: "cache-bleed-cache-control/negative: the same authenticated response, correctly marked uncacheable by any shared cache. Nothing must fire.",
   },
 
   // #1263 — the auth/validation gates were matched by a closed NAME list, so a real gate called
@@ -372,24 +416,50 @@ export const m9CheckEntries: CorpusEntry[] = [
   // second query — suppressed a genuinely parallelisable pair. Scored the same way round as the
   // #1292 pair above: the POSITIVE is the shape that must fire again, the NEGATIVE the escape that
   // must still suppress, so a fix that switches the rule off rather than narrowing it goes red.
+  //
+  // #1484: this pair used to be ONE bundled `waterfall-escape` fixture carrying both the switch and
+  // loop shapes in one positive, so its `match` key (satisfied by any one finding) would stay green
+  // with half the fix reverted — mitigated only by an assertion in the DETECTOR suite
+  // (app-router.test.ts), not by the corpus row that names the shape. Split into two independent
+  // pairs, each proven by reverting ONE shape and watching its OWN row (not the detector suite) go
+  // red — see the calibration.test.ts "catches each check" reversion in the PR that landed this.
   {
-    id: "M9C-WATERFALL-ESCAPE-POS",
+    id: "M9C-WATERFALL-ESCAPE-SWITCH-POS",
     kind: "positive",
-    cls: "sequential queries with an intervening switch/inner-loop `break` that leaves neither the function nor the path to the second query",
+    cls: "sequential queries with an intervening switch `break` that belongs to the switch, not the function",
     module: "M9",
-    location: "m9-corpus/waterfall-escape/positive",
+    location: "m9-corpus/waterfall-escape-switch/positive",
     match: ["Data-fetching waterfall"],
     expectedTier: "review",
-    note: "waterfall-escape/positive: two functions — a `switch` whose case `break` belongs to the switch, and a `for` whose `break` belongs to that loop. Both intervening statements read the first result; neither skips the second query, so both pairs are real waterfalls. A `match` key is satisfied by ONE finding, so this entry alone would stay green with half the fix reverted: the per-shape lock is app-router.test.ts asserting this fixture yields exactly 2 findings, one per function.",
+    note: "waterfall-escape-switch/positive: a `switch` whose case `break` belongs to the switch. The intervening statement reads the first result; it does not skip the second query, so the pair is a real waterfall.",
   },
   {
-    id: "M9C-WATERFALL-ESCAPE-NEG",
+    id: "M9C-WATERFALL-ESCAPE-SWITCH-NEG",
     kind: "negative",
     cls: "sequential queries with a `return` inside an intervening switch case",
     module: "M9",
-    location: "m9-corpus/waterfall-escape/negative",
+    location: "m9-corpus/waterfall-escape-switch/negative",
     match: ["Data-fetching waterfall"],
-    note: "waterfall-escape/negative: `case \"archived\": return null` inside the same switch shape. #1438 narrowed the rule for break/continue, it did not switch escapes off — a `return` still leaves the function, so this pair stays a dependency.",
+    note: "waterfall-escape-switch/negative: `case \"archived\": return null` inside the same switch shape. #1438 narrowed the rule for break/continue, it did not switch escapes off — a `return` still leaves the function, so this pair stays a dependency.",
+  },
+  {
+    id: "M9C-WATERFALL-ESCAPE-LOOP-POS",
+    kind: "positive",
+    cls: "sequential queries with an intervening inner-loop `break` that belongs to the loop, not the function",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape-loop/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-escape-loop/positive: a `for` whose `break` belongs to that loop. The intervening statement reads the first result; it does not skip the second query, so the pair is a real waterfall.",
+  },
+  {
+    id: "M9C-WATERFALL-ESCAPE-LOOP-NEG",
+    kind: "negative",
+    cls: "sequential queries with a `return` inside an intervening for loop",
+    module: "M9",
+    location: "m9-corpus/waterfall-escape-loop/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-escape-loop/negative: a `return` inside the `for` loop. #1438 narrowed the rule for break/continue, it did not switch escapes off — a `return` still leaves the function, so this pair stays a dependency.",
   },
 
   // #1441 — the #1292 suppression is one rule covering two different control-flow facts. A guard
@@ -421,45 +491,95 @@ export const m9CheckEntries: CorpusEntry[] = [
   // pattern. Matching the pattern says the helper looks at the session; it does not say the helper
   // can stop the mutation. Same inversion again: the positives are helpers that enforce nothing and
   // must still fire, the negative the real gate reached through the import idiom #1263 missed.
+  //
+  // #1484: this pair used to be ONE bundled `action-gate-strength` fixture carrying both the
+  // logger and discarded-boolean shapes in one positive, so its `match` key would stay green with
+  // half the fix reverted — mitigated only by an assertion in the DETECTOR suite, not the corpus
+  // row that names the shape. Split into two independent pairs, each with its own negative.
   {
-    id: "M9C-GATE-STRENGTH-POS",
+    id: "M9C-GATE-STRENGTH-LOGGER-POS",
     kind: "positive",
-    cls: "Server Action vouched for by a logger that reads the session, and by a boolean gate whose result is discarded",
+    cls: "Server Action vouched for by a logger that reads the session but cannot deny",
     module: "M9",
-    location: "m9-corpus/action-gate-strength/positive",
+    location: "m9-corpus/action-gate-strength-logger/positive",
     match: ["Server Action missing authorization"],
     expectedTier: "review",
-    note: "action-gate-strength/positive: `auditLog(...)` calls getCurrentUser() for a log line and cannot deny; `const allowed = await canAccess(id)` is never read. Neither is a gate — both actions must still be flagged.",
+    note: "action-gate-strength-logger/positive: `auditLog(...)` calls getCurrentUser() for a log line and cannot deny. Not a gate — the action must still be flagged.",
   },
   {
-    id: "M9C-GATE-STRENGTH-NEG",
+    id: "M9C-GATE-STRENGTH-LOGGER-NEG",
     kind: "negative",
     cls: "Server Action gated through a NAMESPACE import (`import * as guards; await guards.ensureMember(id)`)",
     module: "M9",
-    location: "m9-corpus/action-gate-strength/negative",
+    location: "m9-corpus/action-gate-strength-logger/negative",
     match: ["Server Action missing authorization"],
-    note: "action-gate-strength/negative: the same real `ensureMember` gate as server-action-helper-gate, imported as a namespace — the idiom #1263's collectValueImports did not model, so its own false positive survived for it. Nothing must fire.",
+    note: "action-gate-strength-logger/negative: the same real `ensureMember` gate as server-action-helper-gate, imported as a namespace — the idiom #1263's collectValueImports did not model, so its own false positive survived for it. Nothing must fire.",
+  },
+  {
+    id: "M9C-GATE-STRENGTH-DISCARDED-POS",
+    kind: "positive",
+    cls: "Server Action vouched for by a boolean gate whose result is discarded",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength-discarded/positive",
+    match: ["Server Action missing authorization"],
+    expectedTier: "review",
+    note: "action-gate-strength-discarded/positive: `const allowed = await canAccess(id)` is never read. Not a gate — the action must still be flagged.",
+  },
+  {
+    id: "M9C-GATE-STRENGTH-DISCARDED-NEG",
+    kind: "negative",
+    cls: "Server Action gated through a NAMESPACE import, same real gate as the logger family's negative",
+    module: "M9",
+    location: "m9-corpus/action-gate-strength-discarded/negative",
+    match: ["Server Action missing authorization"],
+    note: "action-gate-strength-discarded/negative: the same real `ensureMember` gate, imported as a namespace. Nothing must fire.",
   },
 
   // #1262 — the brief's third unbounded-route shape, which #857 left undetected AND undisclosed.
+  //
+  // #1484: this used to be ONE bundled `uncapped-retry` pair carrying BOTH the retry-loop and
+  // fan-out shapes in its positive, sharing one taxonomy ("M9 — Uncapped retry/fan-out") and one
+  // `match` key — with NO per-shape lock anywhere, not even in the detector suite. MEASURED
+  // 2026-07-31: gutting `asFanOut` entirely (`return undefined` unconditionally) left this entry
+  // GREEN, because the retry-loop finding alone satisfied the key. Split into two independent
+  // pairs so a regression in either shape fails the row that names it.
   {
-    id: "M9C-RETRY-POS",
+    id: "M9C-RETRY-LOOP-POS",
     kind: "positive",
-    cls: "route handler with a request-sized retry count and a request-sized outbound fan-out",
+    cls: "route handler with a request-sized retry count",
     module: "M9",
-    location: "m9-corpus/uncapped-retry/positive",
+    location: "m9-corpus/uncapped-retry-loop/positive",
     match: ["Uncapped retry/fan-out"],
     expectedTier: "review",
-    note: "uncapped-retry/positive: `for (let i = 0; i < attempts; i++)` around a caught `fetch`, plus `Promise.all(ids.map(… fetch …))` over an array from the request body. Detected by detectUncappedRetryFanOut.",
+    note: "uncapped-retry-loop/positive: `for (let i = 0; i < attempts; i++)` around a caught `fetch`, where `attempts` comes from the request body. Detected by detectUncappedRetryFanOut.",
   },
   {
-    id: "M9C-RETRY-NEG",
+    id: "M9C-RETRY-LOOP-NEG",
     kind: "negative",
-    cls: "the same two shapes with a constant attempt cap and a sliced fan-out",
+    cls: "the same retry loop with a constant attempt cap",
     module: "M9",
-    location: "m9-corpus/uncapped-retry/negative",
+    location: "m9-corpus/uncapped-retry-loop/negative",
     match: ["Uncapped retry/fan-out"],
-    note: "uncapped-retry/negative: `i < MAX_ATTEMPTS` (a numeric const this pass resolves) and `ids.slice(0, MAX_FANOUT).map(…)` — the precision boundary, nothing fires.",
+    note: "uncapped-retry-loop/negative: `i < MAX_ATTEMPTS` — a numeric const this pass resolves. Nothing fires.",
+  },
+  {
+    id: "M9C-FANOUT-POS",
+    kind: "positive",
+    cls: "route handler with a request-sized outbound fan-out",
+    module: "M9",
+    location: "m9-corpus/uncapped-fanout/positive",
+    match: ["Uncapped retry/fan-out"],
+    expectedTier: "review",
+    note: "uncapped-fanout/positive: `Promise.all(ids.map(… fetch …))` over an array from the request body, with no `.slice(…)` bound. Detected by detectUncappedRetryFanOut.",
+  },
+  {
+    id: "M9C-FANOUT-NEG",
+    kind: "negative",
+    cls: "the same fan-out sliced to a fixed window before the map",
+    module: "M9",
+    location: "m9-corpus/uncapped-fanout/negative",
+    match: ["Uncapped retry/fan-out"],
+    note: "uncapped-fanout/negative: `ids.slice(0, MAX_FANOUT).map(…)` — the precision boundary, nothing fires.",
   },
 
   // #1293 — four FP shapes MEASURED on carbon's pinned tree, not imagined: 82 of that target's 108
@@ -611,6 +731,29 @@ export const m9CheckEntries: CorpusEntry[] = [
     match: ["missing authorization"],
     note: "server-action-dynamic-gate/negative: `requireAdmin()` binds its real check with `const { getAuthenticatedUser } = await import('./auth-helpers')`. All 12 of TanStack/tanstack.com's High rows in this class were read against source and 6 are exactly this shape (MEASURED 2026-07-28) — the other 6 are a longer gate chain, tracked separately.",
   },
+  // #1500 — #1462's own residual: the OTHER 6 of TanStack/tanstack.com's 12 missing-auth rows,
+  // whose real check sits 4 resolvable hops out (not 2) and one hop is bound only through a
+  // helper-wrapped dynamic import PLUS a re-export barrel, neither of which #1462's resolver
+  // followed. Scored the same #1263 way round as the pair above.
+  {
+    id: "M9C-GATEDEPTH-POS",
+    kind: "positive",
+    cls: "server mutation behind a 4-hop chain (wrapper + barrel, both resolvable) in which no hop checks or denies anything",
+    module: "M9",
+    location: "m9-corpus/action-gate-depth/positive",
+    match: ["missing authorization"],
+    expectedTier: "review",
+    note: "action-gate-depth/positive: the adversarial control — every hop resolves (same wrapper/barrel shapes as the negative) but the chain bottoms out in a `console.log`, so raising GATE_DEPTH and following the wrapper/barrel must not manufacture a suppression where nothing actually gates.",
+  },
+  {
+    id: "M9C-GATEDEPTH-NEG",
+    kind: "negative",
+    cls: "server mutation gated 4 hops out through a helper-wrapped dynamic import and a re-export barrel",
+    module: "M9",
+    location: "m9-corpus/action-gate-depth/negative",
+    match: ["missing authorization"],
+    note: "action-gate-depth/negative: mirrors TanStack/tanstack.com's real chain — action -> requireModerate -> requireCapability -> (wrapper) getAuthGuards -> (barrel re-export) -> createGuards, where the real check lives. requireCapability also calls a method of the same name on the object `getAuthGuards()` returns — a same-named self-call that, unresolved, burns a depth level chasing itself. MEASURED 2026-07-31 by `pnpm exec tsx src/cli/static-detect.ts <clone-of-6b61f4d>`: 6 of tanstack-com's 6 residual `M1 — server function missing authorization check` rows cleared, 0 rows moved anywhere else in the 687-finding baseline (before/after diff exact).",
+  },
   {
     id: "M9C-SSRHELPER-POS",
     kind: "positive",
@@ -629,6 +772,28 @@ export const m9CheckEntries: CorpusEntry[] = [
     location: "m9-corpus/ssr-module-helper/negative",
     match: ["SSR-only API misuse"],
     note: "ssr-module-helper/negative: `triggerDownload` in a `.tsx` file, called once, from inside a useEffect. #964 already suppresses the identical helper in a `.ts` module. MEASURED 2026-07-28: 6 of carbon's 26 residual rows and 8 of tanstack.com's 12.",
+  },
+  // #1502 — #1460's own residual: an EXPORTED helper with NO in-file call site. #1460's rule alone
+  // leaves it flagged (its callers sit outside what that in-file-only rule reads); the caller is
+  // resolved cross-file through the import graph here. Scored the #1263 way round.
+  {
+    id: "M9C-SSRXFILE-POS",
+    kind: "positive",
+    cls: "exported module-level helper, no in-file caller, called from ANOTHER module's render body",
+    module: "M9",
+    location: "m9-corpus/ssr-cross-file-helper/positive",
+    match: ["SSR-only API misuse"],
+    expectedTier: "review",
+    note: "ssr-cross-file-helper/positive: `handleCommandNavigation`, exported from lib/helper.tsx with zero in-file call sites — the real shape MEASURED on carbon's `slash-command.tsx:106` (#1502). Its only caller lives in app/component.tsx, a bare call in the component's own render body. Cross-file resolution must still find it and still flag it.",
+  },
+  {
+    id: "M9C-SSRXFILE-NEG",
+    kind: "negative",
+    cls: "exported module-level helper, no in-file caller, called from ANOTHER module's useEffect only",
+    module: "M9",
+    location: "m9-corpus/ssr-cross-file-helper/negative",
+    match: ["SSR-only API misuse"],
+    note: "ssr-cross-file-helper/negative: the identical no-in-file-caller helper, but its sole cross-file caller (app/component.tsx) is deferred behind a useEffect. Proves the cross-file resolution does not just clear every unreachable-in-file helper — it re-tests the SAME render-path rule at the caller's own site.",
   },
   {
     id: "M9C-WATERFALL-HELPER-POS",
@@ -655,23 +820,47 @@ export const m9CheckEntries: CorpusEntry[] = [
   // action "makes no auth/session call at all" — on the higher-severity of the two findings. Same
   // inversion as the pairs above: the NEGATIVE is the gated action that must now clear, the
   // POSITIVE the near-identical action whose helper enforces nothing.
+  //
+  // #1484: this used to be ONE bundled `owner-id-helper-gate` pair carrying BOTH #1434 shapes in
+  // its positive, so its `match` key would stay green with half the fix reverted — mitigated only
+  // by a `toHaveLength(2)` assertion in the DETECTOR suite, not the corpus row that names each
+  // shape (the fixture's own old note said so explicitly). Split into two independent pairs.
   {
-    id: "M9C-OWNER-GATE-POS",
+    id: "M9C-OWNER-GATE-LOGGER-POS",
     kind: "positive",
-    cls: "service-role action writing a client-supplied owner id, vouched for only by a logger — and by a comment",
+    cls: "service-role action writing a client-supplied owner id, vouched for only by a logger",
     module: "M9",
-    location: "m9-corpus/owner-id-helper-gate/positive",
+    location: "m9-corpus/owner-id-helper-gate-logger/positive",
     match: ["Client-supplied owner id"],
     expectedTier: "review",
-    note: "owner-id-helper-gate/positive carries BOTH #1434 shapes and a `match` key is satisfied by one finding, so this entry alone would stay green with half the fix reverted — the per-shape lock is app-router.test.ts's assertion that the dir yields exactly 2 owner-id findings, one per action. `updateUserProfile`'s only helper is `auditLog`, which reads the session for a log line, cannot deny and whose result is discarded (#1439's strength test, reused here). `updateUserEmail` carries `// TODO: requireUser() before shipping`, which the raw-text test read as a real auth call and silenced — a false negative, not just false evidence.",
+    note: "owner-id-helper-gate-logger/positive: `updateUserProfile`'s only helper is `auditLog`, which reads the session for a log line, cannot deny and whose result is discarded (#1439's strength test, reused here). Must still fire.",
   },
   {
-    id: "M9C-OWNER-GATE-NEG",
+    id: "M9C-OWNER-GATE-LOGGER-NEG",
     kind: "negative",
     cls: "service-role action writing a client-supplied owner id behind a house-style gate that throws",
     module: "M9",
-    location: "m9-corpus/owner-id-helper-gate/negative",
+    location: "m9-corpus/owner-id-helper-gate-logger/negative",
     match: ["Client-supplied owner id"],
-    note: "owner-id-helper-gate/negative: P-SVC-NOAUTH-BARE-ID's exact shape plus `await ensureMember(userId)`, which resolves to a helper that reads the session and throws. Silence here is the same answer an inline `await requireUser()` already gets — auth called, nothing bound — so resolving the callee adds no policy, it applies the existing one to a form the raw-text test could not see. The dir's own `Server Action missing input validation` row is the scope control: it proves the fixture was scanned, and it does not carry this entry's match key.",
+    note: "owner-id-helper-gate-logger/negative: P-SVC-NOAUTH-BARE-ID's exact shape plus `await ensureMember(userId)`, which resolves to a helper that reads the session and throws. Silence here is the same answer an inline `await requireUser()` already gets — auth called, nothing bound — so resolving the callee adds no policy, it applies the existing one to a form the raw-text test could not see.",
+  },
+  {
+    id: "M9C-OWNER-GATE-COMMENT-POS",
+    kind: "positive",
+    cls: "service-role action writing a client-supplied owner id, vouched for only by a comment",
+    module: "M9",
+    location: "m9-corpus/owner-id-helper-gate-comment/positive",
+    match: ["Client-supplied owner id"],
+    expectedTier: "review",
+    note: "owner-id-helper-gate-comment/positive: `updateUserEmail` carries `// TODO: requireUser() before shipping`, which the raw-text test read as a real auth call and silenced — a false negative, not just false evidence. Must still fire.",
+  },
+  {
+    id: "M9C-OWNER-GATE-COMMENT-NEG",
+    kind: "negative",
+    cls: "the identical shape with a REAL inline `await requireUser()` call, not a comment",
+    module: "M9",
+    location: "m9-corpus/owner-id-helper-gate-comment/negative",
+    match: ["Client-supplied owner id"],
+    note: "owner-id-helper-gate-comment/negative: `requireUser()` is a real call in the body, not a word inside a comment. Silence here is the same 'auth called, nothing bound' verdict an inline call already gets — proves the literal/comment blanking (#845's fix, applied here) is what separates this from the positive, not a coincidence of wording.",
   },
 ];

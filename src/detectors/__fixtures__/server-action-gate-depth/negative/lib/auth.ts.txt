@@ -1,0 +1,13 @@
+// hop 2. `loadAuthServer` is a THIN-PASSTHROUGH dynamic-import wrapper (`return import("literal")`,
+// nothing else) — the shape #1500's fix resolves. Note `requireCapability` here calls
+// `getAuthGuards().requireCapability(...)`, an unrelated METHOD that happens to share this
+// function's own name: a same-named self-call that, unguarded, resolves back to this very
+// declaration and burns a depth level chasing itself instead of reaching `getAuthGuards`.
+async function loadAuthServer() {
+  return import("./auth-index");
+}
+
+export async function requireCapability(input: { capability: string }) {
+  const { getAuthGuards } = await loadAuthServer();
+  return getAuthGuards().requireCapability(input.capability);
+}
