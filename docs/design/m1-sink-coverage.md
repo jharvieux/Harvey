@@ -86,7 +86,20 @@ in the repo, exactly as #1273 recorded.
 
 ## Result — AFTER
 
-Every shape above now fires except the two declined below. The changes:
+Every shape above now fires except the two declined below — 17 of the 19 rows, MEASURED 2026-07-31
+by rebuilding the whole probe as described under "Reproducing" and running the real rule directory
+over it, not asserted. **The first time this sentence was written it was FALSE, and the falsifying
+row was one of the two declines.** `new expat.Parser().parse(data)` drew
+`harvey-csv-formula-injection` — a CWE-1236 Medium on an XML parse — because that rule's json2csv
+arm was `new $P($OPTS).parse($X, ...)` with an unconstrained constructor metavariable, so the shape
+this document DECLINES as an XXE sink was being reported under a different weakness instead. The
+same unconstrained arm matched `new XMLParser({…}).parse(…)` from fast-xml-parser, and the rule's
+bare `stringify($X, ...)` arm matched a locally-defined `function stringify(o) { return String(o) }`
+that touches no CSV at all. All three now carry calibration NEGATIVES
+(`N-XML-PARSER-NOT-CSV`, `N-FASTXML-NOT-CSV`, `N-LOCAL-STRINGIFY-NOT-CSV`), each exercised in both
+directions: fires against the pre-fix rule, silent against the current one.
+
+The changes:
 
 - `harvey-open-redirect` (base.yml) gains `$RES.location($URL)` — express's `res.location` sets the
   same `Location` header `res.redirect` sets.
@@ -97,6 +110,21 @@ Every shape above now fires except the two declined below. The changes:
   template source, so a tainted name is a path question rather than SSTI.
 - **New:** `harvey-xpath-injection` (CWE-643, A03), `harvey-ldap-injection` (CWE-90, A03),
   `harvey-csv-formula-injection` (CWE-1236, no OWASP category — see below).
+- `harvey-csv-formula-injection`'s three sink shapes are each BOUND to a CSV/spreadsheet module or
+  binding, not matched on call shape alone: the bare `stringify`/`stringifySync`/`writeToString`/
+  `writeToBuffer` arms require the file to import (ESM) or require (CJS) `csv-stringify`/`csv`/
+  `fast-csv`; the `unparse`/`json_to_sheet`/`aoa_to_sheet` arms are bound to the papaparse/SheetJS
+  receivers the way the SSTI arms are bound to `ejs.`/`pug.`/`nunjucks.`; and the
+  `new Parser(opts).parse(records)` arm requires BOTH a json2csv import and one of json2csv's own
+  exported constructor names, because the name alone is not a discriminator — `node-expat` also
+  exports a `Parser`.
+- `harvey-ldap-injection` binds on `import` OR `require` of `ldapjs`/`ldapts`. As first written its
+  `pattern-inside` was `require("ldapjs")` alone, and MEASURED 2026-07-31 that produced **nothing**
+  for `import ldap from "ldapjs"` and nothing for `ldapts` — the second client its own remediation
+  text names. Since ESM is the dominant form in the Next.js/TS targets this product audits, and the
+  only calibration fixture used `require`, "LDAP injection is covered" was true of the form these
+  targets least often use and no gate could see the difference. `P-LDAP-INJECTION-ESM`
+  (`pages/api/ldap-lookup-esm.js`, `import { Client } from "ldapts"`) now pins the other half.
 
 Each new rule ships a paired positive/negative in `targets/calibration/pages/api/` and its answer-key
 row in `src/scan/calibration/b3-injection.entries.ts`. The negatives are the taint gate's boundary:

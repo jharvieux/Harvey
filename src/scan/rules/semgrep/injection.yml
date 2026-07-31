@@ -1192,9 +1192,9 @@ rules:
   # concatenated into a search FILTER lets an attacker rewrite it (`*)(uid=*`), turning a
   # single-account lookup into a directory dump or an auth bypass.
   #
-  # LIMITATION: scoped to the search/bind/compare/modify call sites of the conventional Node LDAP
-  # clients. A filter assembled in a helper module and passed in, or an LDAP client reached through
-  # some other API, is not matched.
+  # LIMITATION: scoped to the search/bind/compare/modify call sites of files that import or require
+  # ldapjs/ldapts. A filter assembled in a helper module and passed in, an LDAP client re-exported
+  # through a project wrapper, or any client outside that module set is not matched.
   - id: harvey-ldap-injection
     languages: [javascript, typescript]
     mode: taint
@@ -1211,8 +1211,10 @@ rules:
       authentication bypass. Escape with the client's filter-escaping helper (ldapjs
       `filter.escape`, ldapts `EqualityFilter`) or build the filter from typed objects.
       SCOPE OF THIS CHECK: the `search`/`bind`/`compare`/`modify` call sites of the conventional
-      Node LDAP clients, taint-gated on a request source. A filter assembled in a helper module and
-      passed in, or an LDAP client reached through some other API, is not matched.
+      Node LDAP clients, taint-gated on a request source. It requires the file itself to pull in
+      `ldapjs` or `ldapts` — by `import` or by `require`, both MEASURED 2026-07-31 — so a filter
+      assembled in a helper module and passed in, an LDAP client re-exported through a project
+      wrapper, or any client outside that module set is NOT matched.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -1224,9 +1226,21 @@ rules:
               - pattern: $C.compare($DN, $ATTR, $X, ...)
               - pattern: $C.modify($DN, $CHANGE, ...)
               - pattern: $C.searchAsync($BASE, $OPTS, ...)
-          - pattern-inside: |
-              require("ldapjs")
-              ...
+          # MEASURED 2026-07-31: a `require("ldapjs")`-only binding produced NOTHING for
+          # `import ldap from "ldapjs"` — the dominant form in the Next.js/TS apps this product
+          # audits — and nothing for `ldapts`, which this rule's own remediation text names. Both
+          # module forms and both clients are bound here; the calibration pair carries a CommonJS
+          # positive and an ESM/ldapts positive so neither form can silently regress.
+          - pattern-either:
+              - pattern-inside: |
+                  import "$MOD"
+                  ...
+              - pattern-inside: |
+                  require("$MOD")
+                  ...
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(ldapjs|ldapts)$
           - focus-metavariable: $OPTS
 
   # #1273 — CSV formula injection. #985's expansion comment listed it as a new class; MEASURED
@@ -1237,8 +1251,9 @@ rules:
   #
   # LIMITATION: both halves measured against planted shapes — it is taint-gated on a REQUEST source,
   # so the commoner STORED variant (written in one request, exported in another) is not covered;
-  # and it matches the CSV/spreadsheet SERIALIZERS, so a CSV assembled by string concatenation and
-  # handed to `res.send` is not matched.
+  # and it matches the CSV/spreadsheet SERIALIZERS at their conventional module bindings, so a CSV
+  # assembled by string concatenation and handed to `res.send`, or a serializer reached through a
+  # re-export or an unconventional alias, is not matched.
   - id: harvey-csv-formula-injection
     languages: [javascript, typescript]
     mode: taint
@@ -1264,21 +1279,71 @@ rules:
       exporter in the same request. The commoner STORED variant, where a value is written to the
       database in one request and exported in another, crosses a persistence boundary this rule
       does not follow and is NOT reported by it. (2) It matches the CSV/spreadsheet SERIALIZERS
-      (csv-stringify, fast-csv, papaparse, json2csv, SheetJS); a CSV assembled by string
-      concatenation and handed to `res.send` is not matched. Read its silence accordingly.
+      (csv-stringify, fast-csv, papaparse, json2csv, SheetJS) AT THEIR CONVENTIONAL MODULE
+      BINDINGS — the bare `stringify`/`writeToString` arms require the file to import one of those
+      modules (either `import` or `require`), and the json2csv arm requires both a json2csv import
+      and its own exported constructor name. A serializer reached through a re-export, an export
+      wrapper or an unconventional alias is NOT matched, and neither is a CSV assembled by string
+      concatenation and handed to `res.send`. Read its silence accordingly.
     pattern-sources:
       - *request_source
     pattern-sinks:
       - patterns:
           - pattern-either:
-              - pattern: stringify($X, ...)
-              - pattern: stringifySync($X, ...)
-              - pattern: writeToString($X, ...)
-              - pattern: writeToBuffer($X, ...)
-              - pattern: $P.unparse($X, ...)
-              - pattern: $P.json_to_sheet($X, ...)
-              - pattern: $P.aoa_to_sheet($X, ...)
-              - pattern: new $P($OPTS).parse($X, ...)
+              # csv-stringify / fast-csv export BARE named functions, so the call alone says
+              # nothing about the callee. MEASURED 2026-07-31: an unbound `stringify($X, ...)`
+              # fires on a locally-defined `function stringify(o) { return String(o) }`. Bind the
+              # arm to a CSV module the file actually imports — both the ESM and the CommonJS
+              # form, because a `require`-only binding is blind to the dominant Next.js/TS shape.
+              - patterns:
+                  - pattern-either:
+                      - pattern: stringify($X, ...)
+                      - pattern: stringifySync($X, ...)
+                      - pattern: writeToString($X, ...)
+                      - pattern: writeToBuffer($X, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          import "$MOD"
+                          ...
+                      - pattern-inside: |
+                          require("$MOD")
+                          ...
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(csv-stringify(/sync)?|csv(/sync)?|fast-csv|@fast-csv/format)$
+              # papaparse / SheetJS, bound to their conventional module bindings the way the SSTI
+              # arms are bound to `ejs.`/`pug.`/`nunjucks.`. `$P` binds the dotted receiver, so
+              # `XLSX.utils.json_to_sheet` matches on the `XLSX\.utils` alternative.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $P.unparse($X, ...)
+                      - pattern: $P.json_to_sheet($X, ...)
+                      - pattern: $P.aoa_to_sheet($X, ...)
+                  - metavariable-regex:
+                      metavariable: $P
+                      regex: ^([Pp]apa([Pp]arse)?|(XLSX|xlsx)(\.utils)?|utils)$
+              # json2csv's `new Parser(opts).parse(records)`. MEASURED 2026-07-31: an unbound `$P`
+              # here fires on ANY constructor with a `.parse` method — `new expat.Parser('UTF-8')
+              # .parse(req.body.xml)` (the very shape this file DECLINES as an XXE sink, so it
+              # drew a CWE-1236 Medium instead of nothing) and `new XMLParser({…}).parse(…)` from
+              # fast-xml-parser. Bound to json2csv's own exported constructor names AND to a
+              # json2csv import — the name alone is not enough, since node-expat also exports a
+              # `Parser` that can be destructured out of its require.
+              - patterns:
+                  - pattern: new $P($OPTS).parse($X, ...)
+                  - metavariable-regex:
+                      metavariable: $P
+                      regex: ^(Parser|AsyncParser|Json2csvParser|json2csv\.Parser|json2csv\.AsyncParser)$
+                  - pattern-either:
+                      - pattern-inside: |
+                          import "$CSVMOD"
+                          ...
+                      - pattern-inside: |
+                          require("$CSVMOD")
+                          ...
+                  - metavariable-regex:
+                      metavariable: $CSVMOD
+                      regex: ^(json2csv|@json2csv/plainjs|@json2csv/node)$
           - focus-metavariable: $X
 
   # ReDoS: a regex literal with a nested quantifier ((a+)+ style) — catastrophic backtracking on a
