@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -178,7 +179,7 @@ export default function Checklist() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Supabase security checklist
+              <Link href="/">Harvey</Link> / Supabase security checklist
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Interactive checklist
@@ -249,9 +250,9 @@ export default function Checklist() {
                 </p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/supabase-security-checker" className="btn btn-ghost">
                   Try the RLS checker
                 </a>

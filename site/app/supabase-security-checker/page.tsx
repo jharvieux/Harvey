@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 import { canProbeWrite, classifyWriteResponse, pgCodeOf } from "./write-probe";
@@ -398,7 +399,7 @@ export default function Checker() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Free RLS checker
+              <Link href="/">Harvey</Link> / Free RLS checker
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Free tool
@@ -627,9 +628,9 @@ export default function Checker() {
                 </p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/multi-tenant-security-supabase" className="btn btn-ghost">
                   How tenant data leaks
                 </a>

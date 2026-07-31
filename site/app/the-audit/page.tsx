@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -87,7 +88,7 @@ export default function TheAudit() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / The audit
+              <Link href="/">Harvey</Link> / The audit
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Methodology
@@ -99,9 +100,9 @@ export default function TheAudit() {
               check.
             </p>
             <div className="hero-cta">
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Run the free scan →
-              </a>
+              </Link>
               <a href="/pricing" className="btn btn-ghost">
                 See pricing
               </a>
@@ -230,9 +231,9 @@ export default function TheAudit() {
             </span>
             <h2 style={{ marginTop: "16px" }}>See the real state of your codebase.</h2>
             <div className="hero-cta">
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Run the free scan →
-              </a>
+              </Link>
               <a href="/sample-report" className="btn btn-ghost">
                 See a sample report
               </a>

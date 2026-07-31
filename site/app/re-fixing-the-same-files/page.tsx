@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -42,7 +43,7 @@ export default function ReFixingPillar() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Re-fixing the same files
+              <Link href="/">Harvey</Link> / Re-fixing the same files
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               The re-fixing trap
@@ -123,9 +124,9 @@ export default function ReFixingPillar() {
                 <p>The free scan ranks your codebase by churn × complexity and flags the duplication and fragile code sitting in the same files — no database access needed.</p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/the-audit" className="btn btn-ghost">
                   How the audit works
                 </a>

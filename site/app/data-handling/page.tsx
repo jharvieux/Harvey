@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -23,7 +24,7 @@ export default function DataHandling() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Data handling
+              <Link href="/">Harvey</Link> / Data handling
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Trust &amp; ethics
@@ -163,9 +164,9 @@ export default function DataHandling() {
                 <p>Start with the free scan — it needs nothing but read access to your code, so you can see the work before deciding on anything deeper.</p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan
-                </a>
+                </Link>
                 <a href="/responsible-disclosure" className="btn btn-ghost">
                   Responsible disclosure
                 </a>

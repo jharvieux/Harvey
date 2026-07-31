@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 export default function SiteHeader() {
   const [theme, setTheme] = useState<"light" | "dark" | null>(null);
@@ -24,10 +25,10 @@ export default function SiteHeader() {
   return (
     <header className="nav">
       <div className="wrap nav-in">
-        <a href="/" className="brand">
+        <Link href="/" className="brand">
           <span className="dot" />
           harvey<span className="tld">-qa</span>
-        </a>
+        </Link>
         <nav className="nav-links">
           <a href="/the-audit">The audit</a>
           <a href="/pricing">Pricing</a>
@@ -35,9 +36,9 @@ export default function SiteHeader() {
           <button className="theme-toggle" aria-label="Toggle light or dark theme" onClick={toggleTheme}>
             ◐
           </button>
-          <a href="/#scan" className="btn btn-primary">
+          <Link href="/#scan" className="btn btn-primary">
             Run the free scan
-          </a>
+          </Link>
         </nav>
       </div>
     </header>

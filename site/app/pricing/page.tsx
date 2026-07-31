@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -72,7 +73,7 @@ export default function Pricing() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Pricing
+              <Link href="/">Harvey</Link> / Pricing
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Transparent pricing
@@ -104,9 +105,9 @@ export default function Pricing() {
                   Same-day, yours to keep
                 </li>
               </ul>
-              <a href="/#scan" className="btn btn-ghost">
+              <Link href="/#scan" className="btn btn-ghost">
                 Run the free scan
-              </a>
+              </Link>
             </div>
             <div className="tier">
               <span className="tname">CONNECTED AUDIT</span>
@@ -131,9 +132,9 @@ export default function Pricing() {
                   Read-only access — nothing stood up
                 </li>
               </ul>
-              <a href="/#scan" className="btn btn-ghost">
+              <Link href="/#scan" className="btn btn-ghost">
                 Start with a free scan
-              </a>
+              </Link>
             </div>
             <div className="tier feature">
               <span className="tname">FULL AUDIT</span>
@@ -158,9 +159,9 @@ export default function Pricing() {
                   Mutation-tested tests + investor-ready summary
                 </li>
               </ul>
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Start with a free scan
-              </a>
+              </Link>
             </div>
           </div>
 
@@ -397,9 +398,9 @@ export default function Pricing() {
             </span>
             <h2 style={{ marginTop: "16px" }}>The free scan is also your quote.</h2>
             <div className="hero-cta">
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Run the free scan →
-              </a>
+              </Link>
               <a href="/the-audit" className="btn btn-ghost">
                 How the audit works
               </a>
