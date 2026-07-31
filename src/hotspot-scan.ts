@@ -473,8 +473,30 @@ export function toFactFindings(report: VitalsReport): Finding[] {
 // is the window that actually empties it.
 export function knowledgeRiskNotAssessed(report: VitalsReport): Finding[] {
   if (truckFactorOneFiles(report).length > 0) return [];
-  const analysed = report.knowledge_risk.length;
-  const measured = analysed > 0;
+  // #1448: `knowledge_risk` does not answer this question — vitals_cli.py:238-245 admits only
+  // truck_factor<=1 rows, so once the early return above has passed the array is empty on EVERY real
+  // capture, clean or not. Its length was never the signal.
+  //
+  // Nor is any file COUNT that survives an exhausted churn gate. `files_analyzed` is
+  // len(source_files), a `git ls-files` census (vitals_cli.py:118-119) wholly independent of the
+  // authorship window — a repo whose entire history predates that window still reports thousands of
+  // tracked files with zero authorship read, which is exactly the 800-day state MEASURED above. So
+  // the split keys off whether authorship analysis DEMONSTRABLY had inputs, which needs BOTH:
+  //   (1) vitals had git at all. `get_knowledge_distribution` is only called inside the has_git
+  //       branch (vitals_cli.py:99/133); complexity-only mode never invokes it yet still populates
+  //       `file_health` (vitals_cli.py:136-139), so a population count alone would read a run that
+  //       computed no authorship whatsoever as "measured clean".
+  //   (2) the knowledge population was the SCORED set — `code_files`, i.e. file_health's keys — every
+  //       member of which cleared a >=2-changes-in-90-days churn gate (vitals_cli.py:106-115) and so
+  //       is guaranteed a commit inside the two-year authorship log. When `code_files` is empty
+  //       vitals falls back to `source_files[:50]` (vitals_cli.py:132), which carries no recency
+  //       guarantee at all, and nothing in the report distinguishes a fallback that read authorship
+  //       from one that read none. That case is DISCLOSED, never claimed.
+  const scored = vitalsScope(report).scored ?? 0;
+  const measured = report.mode === "full" && scored > 0;
+  // vitals slices the knowledge population to the first 50 (vitals_cli.py:132), so the row may never
+  // name more files than were actually read.
+  const analysed = Math.min(VITALS_KNOWLEDGE_CAP, scored);
   return [
     {
       id: "M3-KNOWLEDGE-00",
@@ -488,14 +510,14 @@ export function knowledgeRiskNotAssessed(report: VitalsReport): Finding[] {
       location: "(repository-wide)",
       status: "Open",
       evidence: measured
-        ? `vitals returned authorship for ${analysed} file(s) and every one has more than one substantive author, so no truck-factor-1 row was emitted. The signal ran; this is a measured result, not a gap.`
-        : "vitals returned NO authorship rows at all, so no file could be judged sole-authored. Causes, in the order worth checking: (a) no commit in the trailing TWO YEARS touches an analysed source file — vitals scopes the authorship log to `--since=2.years.ago` (git_analysis.py:260), which is what empties this list, NOT the 90-day churn window (vitals_cli.py:131 falls back to all tracked source files when nothing clears the churn gate); (b) the target has no git history, so vitals ran complexity-only; (c) the `vitals` plugin is absent and this is the reduced M3 tier, which computes no knowledge-risk signal at all (#807).",
+        ? `vitals read authorship for ${analysed} of the ${scored} file(s) it scored${scored > VITALS_KNOWLEDGE_CAP ? ` — its knowledge population is the first ${VITALS_KNOWLEDGE_CAP} scored files (vitals_cli.py:132)` : ""} and returned no truck-factor-1 (sole-author) row among them, so no truck-factor-1 finding was emitted. Every one of those files changed at least twice in the trailing 90 days, so each had commits inside vitals' two-year authorship log. The signal ran; this is a measured result, not a gap.`
+        : "This run cannot confirm the authorship analysis had anything to read, so the empty truck-factor list is NOT a measured clean result. Causes, in the order worth checking: (a) no file cleared vitals' 90-day churn+complexity gate, so the knowledge population fell back to tracked source files (vitals_cli.py:132) whose authorship log is scoped to the trailing TWO YEARS (`--since=2.years.ago`, git_analysis.py:260) — that window, NOT the 90-day churn window, is what actually empties this list, and the report does not say whether it returned anything; (b) the target has no git history, so vitals ran complexity-only and computed no authorship at all (vitals_cli.py:134-139); (c) the `vitals` plugin is absent and this is the reduced M3 tier, which computes no knowledge-risk signal at all (#807); (d) the capture predates vitals' file_health map, so the scored population is not derivable from it.",
       impact: measured
         ? "None — recorded so an empty truck-factor list is never read as an unrun signal."
         : "Truck-factor is unassessed for this target: no file is named as a single point of knowledge failure, and that silence is NOT evidence the knowledge is well distributed. A conservation run reading `GONE M3` off this state is looking at an input gap, not a detector regression.",
       fix: measured
         ? "No action."
-        : "Confirm which cause applies before treating an absent truck-factor row as a defect: `git -C <target> log --since=2.years.ago --oneline | head` distinguishes (a) from (b), and the M3 tier line in the coverage ledger distinguishes (c).",
+        : "Confirm which cause applies before treating an absent truck-factor row as a defect: `git -C <target> log --since=2.years.ago --oneline | head` distinguishes (a) from (b), the M3 tier line in the coverage ledger distinguishes (c), and a capture with no `file_health` key is (d).",
       value: 1,
       ease: 5,
       safety: 5,
