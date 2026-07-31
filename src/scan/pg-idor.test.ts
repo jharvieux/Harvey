@@ -50,4 +50,19 @@ export function process(req) {
 `;
     expect(detectPgIdorFindings(file(noHandler))).toHaveLength(0);
   });
+
+  // #1269. Before this gate the SAME shape fired identically at `tests/orders.test.js` and
+  // `src/lib/orders.js` (measured 2026-07-31), and this detector reads the WHOLE source tree —
+  // 631 of the 977 files it read across the three pinned M1-precision clones are non-shipping.
+  // The shipping control below is what keeps the exclusion from reading as "detector gone dark".
+  it.each(["tests/orders.test.js", "e2e/orders.js", "examples/basic/orders.js", "docs/samples/orders.js", "src/orders.test.js"])(
+    "stays silent for the same shape in the non-shipping path %s",
+    (path) => {
+      expect(detectPgIdorFindings(file(positive, path))).toHaveLength(0);
+    },
+  );
+
+  it("still flags the shape in shipping source (scope control for the non-shipping exclusion)", () => {
+    expect(detectPgIdorFindings(file(positive, "src/routes/orders.js"))).toHaveLength(1);
+  });
 });

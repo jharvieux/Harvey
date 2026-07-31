@@ -155,8 +155,16 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
-      cwe: ["CWE-329: Generation of Predictable IV with CBC Mode"]
-      owasp: ["A02:2021 - Cryptographic Failures"]
+      # #1294, corrected 2026-07-31: this over-claimed in the other direction. CWE-329 is
+      # CBC-RESTRICTED per MITRE ("Not Using a Random IV with CBC Mode"), but `$ALGO` below is an
+      # unconstrained metavariable and the rule's own message says "CBC/CTR/GCM" — the pattern does
+      # not determine the mode, so CWE-329 is not determined by it. CWE-1204 ("Generation of Weak
+      # Initialization Vector (IV)") is what a predictable IV at an unknown mode actually is.
+      # It carries NO owasp field: VERIFIED 2026-07-31 against OWASP's published A02:2021 mapped-CWE
+      # list (CWE-259, 261, 296, 310, 319, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331,
+      # 335, 336, 337, 338, 340, 347, 523, 720, 757, 759, 760, 780, 818, 916) — 1204 is absent, and
+      # MITRE's own CWE-1204 page lists no OWASP Top Ten membership of any year.
+      cwe: ["CWE-1204: Generation of Weak Initialization Vector (IV)"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -185,13 +193,19 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
-      cwe: ["CWE-330: Use of Insufficiently Random Values"]
+      # #1294, corrected 2026-07-31: this carried the PARENT CWE-330 ("Use of Insufficiently Random
+      # Values") while its file-neighbour harvey-crypto-pseudorandombytes carried the CHILD CWE-338
+      # for the same weakness — two specificity levels for one determinacy. What the pattern proves
+      # is that a NON-CRYPTOGRAPHIC PRNG produces a security-sensitive value, which is CWE-338
+      # exactly. CWE-338 is in OWASP's own A02:2021 mapped-CWE list (verified 2026-07-31), so the
+      # owasp field is unchanged.
+      cwe: ["CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"]
       owasp: ["A02:2021 - Cryptographic Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
     message: >
-      Math.random() is not cryptographically secure (its internal state is predictable/seedable)
+      Math.random() is a non-cryptographic PRNG — its internal state is predictable and seedable —
       and this function's name signals a security-sensitive value (token/secret/session/otp).
       Use crypto.randomBytes()/crypto.randomUUID() for anything security-relevant.
     patterns:

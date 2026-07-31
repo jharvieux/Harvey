@@ -540,8 +540,15 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
-      cwe: ["CWE-285: Improper Authorization"]
-      owasp: ["A01:2021 - Broken Access Control"]
+      # #1294, corrected 2026-07-31: this carried CWE-285 (Improper Authorization) for a shape that
+      # is not specifically an authorization weakness — the repo's own planted fixture for it is a
+      # RATE LIMITER. What the pattern determines is that a check defaults to its PERMISSIVE answer
+      # when its backing store errors, which is CWE-636 ("Not Failing Securely ('Failing Open')")
+      # whether the check gates authorization, a quota or a feature flag.
+      # No owasp field: VERIFIED 2026-07-31 against OWASP's published mapped-CWE lists, CWE-636 is
+      # in neither A01:2021's nor A04:2021's, and MITRE's own CWE-636 page places it under OWASP
+      # Top Ten 2004 A7 and 2025 A10 — no 2021 category. Same posture as CWE-252 (#1021).
+      cwe: ["CWE-636: Not Failing Securely ('Failing Open')"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium

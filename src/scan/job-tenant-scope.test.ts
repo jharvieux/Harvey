@@ -141,4 +141,62 @@ export const importInbound = inngest.createFunction({ id: "import-inbound" }, { 
     );
     expect(run(trailingAnnotated)).toHaveLength(0);
   });
+
+  // #1269 — `tests/jobs/…` and `examples/inngest/…` both match JOB_PATH, and measured 2026-07-31
+  // the detector fired on the planted shape at each of them exactly as at `src/inngest/`.
+  it.each(["tests/jobs/import.test.ts", "e2e/jobs/import.ts", "examples/inngest/import.ts", "docs/samples/workers/sync.ts"])(
+    "stays silent for the same shape in the non-shipping path %s",
+    (path) => {
+      expect(run(positive, path)).toHaveLength(0);
+    },
+  );
+});
+
+// #1281 — the detector reads only conventional job locations, so a target whose jobs live under
+// `src/tasks/` got no finding AND no row. The row's candidate set is derived from a background-job
+// runtime IMPORT, not from a directory name, so "we didn't look here" is evidence, not a hunch.
+describe("job-tenant-scope M1-JOBPATH-00 (#1281 — job code outside the path convention)", () => {
+  const unconventional = `import { Inngest } from "inngest";
+import { admin } from "../lib/supabaseAdmin";
+const inngest = new Inngest({ id: "app" });
+export const importInbound = inngest.createFunction({ id: "import-inbound" }, { event: "gmail/received" }, async () => {
+  const { data } = await admin.from("gmail_inbound_messages").select("*");
+  return data;
+});
+`;
+
+  it("emits a counted not-assessed row naming the unmatched directory", () => {
+    const findings = detectJobTenantScopeFindings([{ path: "src/tasks/import-inbound.ts", text: unconventional }]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: "M1-JOBPATH-00", severity: "Info", confidence: "N/A", category: "Coverage" });
+    expect(findings[0]?.title).toContain("1 file(s) in 1 directory");
+    expect(findings[0]?.evidence).toContain("src/tasks/ (1 file)");
+    expect(findings[0]?.evidence).toContain("Matched and assessed: none");
+  });
+
+  it("names the matched directories alongside the unmatched ones", () => {
+    const findings = detectJobTenantScopeFindings([
+      { path: "src/tasks/import-inbound.ts", text: unconventional },
+      { path: "src/jobs/reconcile.ts", text: positive },
+    ]);
+    const row = findings.find((f) => f.id === "M1-JOBPATH-00");
+    expect(row?.evidence).toContain("Matched and assessed: src/jobs/ (1 file)");
+    expect(row?.evidence).toContain("NOT assessed");
+    expect(row?.evidence).toContain("src/tasks/ (1 file)");
+  });
+
+  it("emits NO row when every job-runtime file is already inside a conventional job path", () => {
+    const findings = detectJobTenantScopeFindings([{ path: "src/inngest/import-inbound.ts", text: unconventional }]);
+    expect(findings.filter((f) => f.id === "M1-JOBPATH-00")).toHaveLength(0);
+    expect(findings).toHaveLength(1); // the real JOB-TENANT-SCOPE finding, not the row
+  });
+
+  it("emits NO row for an app file that merely happens to sit outside a job path", () => {
+    const plain = `import { admin } from "../lib/supabaseAdmin";\nexport const load = async () => admin.from("invoices").select("*");\n`;
+    expect(detectJobTenantScopeFindings([{ path: "src/tasks/report.ts", text: plain }])).toHaveLength(0);
+  });
+
+  it("does not count a non-shipping copy of job code as an unassessed directory", () => {
+    expect(detectJobTenantScopeFindings([{ path: "tests/tasks/import.test.ts", text: unconventional }])).toHaveLength(0);
+  });
 });

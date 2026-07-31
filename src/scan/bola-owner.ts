@@ -36,6 +36,7 @@ import {
   OWNERSHIP_COLUMN,
   rootIdentifier,
 } from "../detectors/owner-id.js";
+import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
 import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 const PAGES_API_FILE = /(^|\/)pages\/api\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -129,8 +130,13 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   ];
 }
 
+// #1269: the `pages/api/` prefix is not itself a shipping guarantee — a Next.js example app or an
+// e2e fixture tree carries the same segment (`examples/next-app/pages/api/…`, `e2e/pages/api/…`),
+// and MEASURED 2026-07-31 this detector fires identically there and at `pages/api/invoice.js`.
 export function detectBolaOwnerFindings(files: SourceInput[]): Finding[] {
-  return files.filter((f) => PAGES_API_FILE.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  return files
+    .filter((f) => PAGES_API_FILE.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
+    .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
 export function scanBolaOwner(projectDir: string): Finding[] {

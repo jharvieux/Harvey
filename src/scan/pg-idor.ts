@@ -27,6 +27,7 @@ import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
+import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
 import { mechanicalFinding } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -151,8 +152,15 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   return findings;
 }
 
+// #1269: same non-shipping exclusion prisma-tenant-scope carries since #896. A route-handler shape
+// in a `tests/`, `e2e/`, `examples/` or `docs/` path is a fixture setting up a case, not an
+// authorization gap, and briefs/fp-rules.txt already rules that code out of scope. MEASURED
+// 2026-07-31: this detector read 631 non-shipping files across the three pinned clones and, with
+// the shape planted, fires identically at `tests/orders.test.js` and `src/lib/orders.js`.
 export function detectPgIdorFindings(files: SourceInput[]): Finding[] {
-  return files.filter((f) => SOURCE_EXT.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  return files
+    .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
+    .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
 function walk(dir: string, root: string, out: SourceInput[]): void {
