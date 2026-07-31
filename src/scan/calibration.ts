@@ -600,6 +600,11 @@ function cadenceErrors(gate: SubstituteGate, venues: CadenceVenues): string[] {
       : [`substituteGates: "${gate.what.slice(0, 60)}…" declares the \`verify\` cadence, but the verify chain (\`${chain}\`) never reaches \`${gate.invokes}\``];
   }
   if (cadence.kind === "workflow") {
+    // KNOWN WEAKNESS, #1702: this matches `gate.invokes` against the workflow's RAW text, so a bare
+    // `#` comment mention satisfies it — and every gate step in ci.yml carries a long comment above
+    // it. Deleting the `run:` line while leaving the comment would keep this green. Not currently
+    // false (the step really does run, both directions exercised 2026-07-31); a bound on what the
+    // check can prove, stated where the check is.
     const text = venues.workflows[cadence.file];
     if (text === undefined) return [`substituteGates: declares a cadence in ${cadence.file}, which does not exist — the venue was renamed or deleted and this module now stands on nothing`];
     return text.includes(gate.invokes)
