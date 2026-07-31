@@ -118,10 +118,20 @@ control). A live `dynamic-validate --execute` run is scored: 4/4 proven and 0 co
 
 **Scoring note on control isolation.** Each seam probe short-circuits on the first proven endpoint, so
 in a single run against the whole fixture the vulnerable route is what produces the verdict; the
-control is not independently re-reported. To score a control as not-vulnerable in isolation, run the
-probe against a profile containing only the control endpoint (the classification/runtime harness below
-does exactly this per-route). The controls also guard **classification-level** FPs — e.g. an outbound
-fetcher must not be classified a webhook — which `discoverProfile` over the fixture confirms.
+control is not independently re-reported IN THAT SAME PASS. Since #1369 (2026-07-31) this is no longer
+offline-only: `targets/vuln-seam-app/harvey-controls.json` names each class's control route, and
+`createLiveStandUp`'s `pentest` step runs a SECOND, LIVE `--mode=verify … --control-routes` pass over a
+profile narrowed to ONLY those four routes (`applyControlRoutes`, `src/pentest/verify.ts`) against the
+SAME booted stack — so each control is genuinely REQUESTED and cleared, not merely assumed
+not-vulnerable by never being reached. That pass's results are recorded as their own `M2-CONTROL-
+PROBED-00` finding (severity Info, one line per control with its own probed evidence), which is how
+"4/4 proven, 0 controls flagged" now distinguishes a control that was probed-and-cleared from one that
+was simply never reached — the two used to produce an identical artifact. The offline
+classification/runtime harness below still exists as the CI regression guard for the same isolation
+property; the controls also guard **classification-level** FPs — e.g. an outbound fetcher must not be
+classified a webhook, and (found by this same #1369 work) a webhook receiver's own path must not ALSO
+classify as a high-value NO-RATE-LIMIT candidate merely for carrying a vendor-name segment like
+"stripe" — which `discoverProfile` over the fixture confirms.
 
 ## Classification verification (2026-07-22, offline, no Docker)
 
@@ -152,3 +162,11 @@ scored **4/4 proven, zero controls flagged** — each seam probe and the NO-RATE
 `docs/design/vuln-seam-app-live-validation.md`; raw artifact: `reports/vuln-seam-app/M2.pass.json`.
 The standing offline regression guard is `src/pentest/vuln-seam-app.test.ts` (runs in `pnpm verify`).
 This closed the live proven-branch step for #717 and #159 and the "run it live" half of #738.
+
+**#1369 (2026-07-31, Docker + Supabase CLI, re-run for real):** the same live command now ALSO scores
+the four negative controls live, not just offline. `M2.pass.json` carries `M2-CONTROL-PROBED-00`:
+"Negative-control routes: 4 probed in isolation, 4 cleared", each with its own probed evidence (e.g.
+`NO-RATE-LIMIT — Probed 1 high-value route(s); each throttled before 5 repeats.`). The zero-FP half of
+the answer key's headline number is therefore now a LIVE result, not an offline substitution for one —
+see the "Scoring note on control isolation" above. Clean teardown re-confirmed (no `harvey-dv-*`
+container or volume after the run).

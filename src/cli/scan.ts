@@ -14,6 +14,10 @@
 // --migrations <dir> points at the client repo's supabase/migrations (or the repo root above it) and
 // turns on the prod-vs-migration drift comparison (#1280). Without it the scan still reports the
 // topic, as an SB-DRIFT-00 not-assessed row — never as silence.
+// --rest-url <url> (local mode only, #1494) probes the project's own PostgREST surface for its
+// exposed-schema allow-list — no Management API credential needed. Defaults to the local stack's
+// own REST URL (http://127.0.0.1:54321/rest/v1); pass an unreachable value to force the pre-#1494
+// 3-omission SB-SCOPE-00 disclosure instead.
 //
 // Record the run into the engagement's artifacts dir so M2's scope statement can say drift WAS
 // observed on this engagement rather than pointing at a row elsewhere in the report (#1280):
@@ -28,7 +32,7 @@ import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
-import { runSupabaseScan } from "../scan/supabase.js";
+import { LOCAL_REST_URL, runSupabaseScan } from "../scan/supabase.js";
 
 const FLAGS = [
   "--bundle",
@@ -40,6 +44,7 @@ const FLAGS = [
   "--mechanical",
   "--migrations",
   "--out",
+  "--rest-url",
   "--supabase",
   "--tenant-key",
   "--tenant-mode",
@@ -90,9 +95,12 @@ async function main(): Promise<void> {
     const functionsDir = arg("--functions");
     const migrationsDir = arg("--migrations");
     const gotrueProbe = gotrueProbeArg();
+    // #1494 — local mode defaults to probing the local stack's own REST surface unless overridden;
+    // hosted mode already answers these two checks through the Management API and ignores it.
+    const restUrl = arg("--rest-url") ?? LOCAL_REST_URL;
     const findings =
       supabaseTarget === "local"
-        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, gotrueProbe })
+        ? await runSupabaseScan({ local: true, functionsDir, migrationsDir, gotrueProbe, restUrl })
         : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir, migrationsDir, gotrueProbe });
     emit(findings);
     return;
@@ -100,7 +108,7 @@ async function main(): Promise<void> {
 
   console.error("usage: scan --mechanical --dir <path> [--bundle <path>] [--out <file>]");
   console.error(
-    "       scan --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]",
+    "       scan --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>] [--gotrue-url <url> --gotrue-anon-key <key>] [--rest-url <url>] [--out <file>]",
   );
   process.exit(2);
 }

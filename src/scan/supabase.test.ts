@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildHtml } from "../../report-template/render.mjs";
 import { esc } from "../../report-template/sections.mjs";
 import { renderFidelityBreaches } from "../render-fidelity.js";
-import { dedupeAutoExposed, hasPgGraphql, parseExposedSchemas, runSupabaseScan } from "./supabase.js";
+import { dedupeAutoExposed, hasPgGraphql, parseExposedSchemas, probeExposedSchemas, runSupabaseScan } from "./supabase.js";
 import { checkGraphqlIntrospection } from "./supabase-config.js";
 import { mechanicalFinding } from "./common.js";
 import type { FindingsDocument, ReportMeta } from "../findings.js";
@@ -16,6 +16,12 @@ const RENDER_META: ReportMeta = {
   headline: "Supabase local scan", scope: "the local stack", methodology: "M1", outOfScope: "infrastructure",
 };
 
+// #1494 — mutable per-test so the graphql-introspection wiring (which depends on pg_graphql being
+// in pg_extension) can be exercised without a second postgres mock; reset in afterEach below.
+const { mockExtensions } = vi.hoisted(() => ({
+  mockExtensions: { value: [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }] as unknown[] },
+}));
+
 vi.mock("postgres", () => ({
   default: vi.fn(() => ({
     unsafe: vi.fn(async (query: string) => {
@@ -23,7 +29,7 @@ vi.mock("postgres", () => ({
       if (query.includes("extensionOwned")) return [];
       if (query.includes("policyname")) return [];
       if (query.includes("pg_tables")) return [{ schema: "public", name: "widgets", rlsEnabled: false }];
-      if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
+      if (query.includes("pg_extension")) return mockExtensions.value;
       if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
       if (query.includes("pg_policies")) return [];
       if (query.includes("pg_default_acl")) return [];
@@ -77,6 +83,17 @@ function mockFetch(responses: {
     return new Response("not found", { status: 404 });
   }) as unknown as typeof fetch;
 }
+
+// #1494 — the shape PostgREST answers with for a schema no target defines: PGRST106, with the full
+// exposed-schema allow-list in `hint`. Real shape captured live 2026-07-28 against the calibration
+// stack (src/cli/validate-connected.ts).
+function restProbeFetch(schemas: string): typeof fetch {
+  return vi.fn(async () => new Response(JSON.stringify({ code: "PGRST106", hint: `Only the following schemas are exposed: ${schemas}` }), { status: 406 })) as unknown as typeof fetch;
+}
+
+afterEach(() => {
+  mockExtensions.value = [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
+});
 
 describe("runSupabaseScan", () => {
   it("throws when neither projectRef nor local is given", async () => {
@@ -287,6 +304,75 @@ describe("runSupabaseScan", () => {
       // must NOT be present: hosted mode asked the questions.
       expect(findings.some((f) => f.taxonomy === "PostgREST schema exposure wider than intended")).toBe(true);
       expect(findings.some((f) => f.taxonomy === "Auth config: email confirmation disabled")).toBe(true);
+    });
+  });
+
+  // #1494 — local mode has the project's own REST URL even with no Management API credential;
+  // probing PostgREST's schema allow-list answers two of SB-SCOPE-00's three omissions, narrowing
+  // the disclosure to the one that genuinely needs the Management API.
+  describe("local mode — a REST probe answers two of the three local-mode omissions (#1494)", () => {
+    const splinterImpl = () => ({ lints: [] });
+
+    it("emits the exposed-schema and graphql-introspection findings, and narrows SB-SCOPE-00 to just auth config", async () => {
+      mockExtensions.value = [{ name: "pg_graphql", schema: "extensions", installed_version: "1.5.9" }];
+      const fetchImpl = restProbeFetch("public, graphql_public, internal_ops");
+
+      const findings = await runSupabaseScan({ local: true, splinterImpl, restUrl: "http://127.0.0.1:54321/rest/v1", fetchImpl });
+
+      expect(findings.some((f) => f.id === "SB-API-SCHEMA-internal_ops")).toBe(true);
+      expect(findings.some((f) => f.id === "SB-GRAPHQL-INTROSPECTION")).toBe(true);
+
+      const row = findings.find((f) => f.id === "SB-SCOPE-00");
+      expect(row).toBeDefined();
+      expect(row?.title).toContain("1 Supabase project-config check");
+      expect(row?.evidence).toContain("GoTrue auth configuration");
+      // The two now-answered classes moved to real findings above, not to a narrower version of the
+      // same silence — the row's own text must say so, not just its title's count.
+      expect(row?.evidence).not.toContain("Three checks the hosted-mode scan runs did not run here");
+    });
+
+    it("falls back to the full 3-omission SB-SCOPE-00 when the REST probe is unreachable, even with a restUrl supplied", async () => {
+      const fetchImpl = vi.fn(() => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+
+      const findings = await runSupabaseScan({ local: true, splinterImpl, restUrl: "http://127.0.0.1:1/rest/v1", fetchImpl });
+
+      const row = findings.find((f) => f.id === "SB-SCOPE-00");
+      expect(row?.title).toContain("3 Supabase project-config checks");
+      expect(row?.evidence).toContain("PostgREST-exposed schemas");
+      expect(row?.evidence).toContain("GraphQL introspection");
+      expect(row?.evidence).toContain("GoTrue auth configuration");
+      expect(row?.evidence).toContain("ECONNREFUSED");
+      expect(findings.some((f) => f.id.startsWith("SB-API-SCHEMA-"))).toBe(false);
+      expect(findings.some((f) => f.id === "SB-GRAPHQL-INTROSPECTION")).toBe(false);
+    });
+
+    it("keeps the pre-#1494 3-omission SB-SCOPE-00 with no network call when no restUrl is supplied", async () => {
+      const fetchImpl = vi.fn(() => { throw new Error("must not be called"); }) as unknown as typeof fetch;
+      const findings = await runSupabaseScan({ local: true, splinterImpl, fetchImpl });
+
+      expect(fetchImpl).not.toHaveBeenCalled();
+      const row = findings.find((f) => f.id === "SB-SCOPE-00");
+      expect(row?.title).toContain("3 Supabase project-config checks");
+    });
+  });
+
+  describe("probeExposedSchemas (#1494)", () => {
+    it("parses PostgREST's PGRST106 hint into the exposed-schema allow-list", async () => {
+      const fetchImpl = restProbeFetch("public, graphql_public, internal_ops");
+      const probe = await probeExposedSchemas("http://127.0.0.1:54321/rest/v1", fetchImpl);
+      expect(probe).toEqual({ schemas: ["public", "graphql_public", "internal_ops"] });
+    });
+
+    it("reports unavailable when the REST surface cannot be reached", async () => {
+      const fetchImpl = vi.fn(() => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+      const probe = await probeExposedSchemas("http://127.0.0.1:1/rest/v1", fetchImpl);
+      expect(probe).toEqual({ unavailable: expect.stringContaining("ECONNREFUSED") });
+    });
+
+    it("reports unavailable when the response carries no PGRST106 hint", async () => {
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: "ok" }))) as unknown as typeof fetch;
+      const probe = await probeExposedSchemas("http://127.0.0.1:54321/rest/v1", fetchImpl);
+      expect(probe).toEqual({ unavailable: expect.stringContaining("without a PGRST106 schema hint") });
     });
   });
 
