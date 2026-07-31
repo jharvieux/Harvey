@@ -144,9 +144,30 @@ jobs:
           existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
           last=""
           if [ -n "$existing" ]; then
-            last=$( { gh issue view "$existing" --json body --jq '.body'
-                      gh issue view "$existing" --json comments --jq '.comments[].body'; } \
-                    | sed -n 's/.*owasp-ack-state: \([^ ]*\) -->.*/\1/p' | tail -1 )
+            # #1402: each read is captured on its OWN line, as a plain top-level assignment, because
+            # that is the only form `set -e` actually watches. The previous shape put both reads in a
+            # brace group at the head of a pipeline:
+            #
+            #   last=$( { gh issue view … --json body; gh issue view … --json comments; } | sed | tail -1 )
+            #
+            # A pipeline's components are exempt from `set -e` — the shell evaluates -e against the
+            # PIPELINE, not against each command inside it — so a failed first read did not abort the
+            # group, `echo`/the second read still ran, the group exited with the SECOND command's
+            # status, `pipefail` saw a clean pipeline, and the assignment succeeded. MEASURED
+            # 2026-07-31 with a stub `gh` whose first call exits 1: the old form reached the end of
+            # the step with exit 0 and `last` carrying only the comment-stamped state, having
+            # silently dropped the BODY — which is where the first report stamps it. The step then
+            # re-announced a change it had already reported, defeating the idempotence this whole
+            # block exists to provide.
+            #
+            # Failing loud is the right trade here rather than defaulting `last` to "": a lookup that
+            # FAILED and an issue with NO PRIOR STATE are different facts, and collapsing them is
+            # precisely what produces the duplicate comment. An empty `last` now means "read both,
+            # found no stamp"; a failed read turns the job red, where this workflow's own
+            # ci-owasp-watch-alert path picks it up.
+            body=$(gh issue view "$existing" --json body --jq '.body')
+            comments=$(gh issue view "$existing" --json comments --jq '.comments[].body')
+            last=$(printf '%s\n%s\n' "$body" "$comments" | sed -n 's/.*owasp-ack-state: \([^ ]*\) -->.*/\1/p' | tail -1)
           fi
 
           if [ "$state" = "$last" ]; then

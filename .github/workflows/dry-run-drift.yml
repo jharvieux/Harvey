@@ -41,6 +41,10 @@ on:
         description: "Prove the gate-liveness guard fires (#1509). SKIPS the regenerate + diff steps, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
         type: boolean
         default: false
+      alert_drill:
+        description: "Prove the ci-dry-run-drift-alert path fires end-to-end (#1287/#1333). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
   pull_request:
   # #1498: merge queue. Without this the required `regenerate dry-run findings + diff committed
   # artifact` context never reports on a queue entry and the queue deadlocks. The relevance filter
@@ -60,6 +64,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write # #1333: the alert path below find-or-updates ONE tracking issue on a scheduled failure.
 
 jobs:
   drift:
@@ -77,6 +82,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Before the install and the mechanical-binary provisioning on purpose: the drill proves the
+      # ALERT path, not the artifact, so it must not pay for a regeneration to reach it.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an artifact drift."
+          exit 1
 
       - id: filter
         name: Does this change set touch the artifact or anything that produces it?
@@ -168,9 +181,27 @@ jobs:
 
       # #1509: this is a REQUIRED context, so "green" here is a merge decision. `always()` so a job
       # that died in setup says which phase never ran instead of leaving a reader to infer it.
+      # Excluded on an alert drill, which fails on purpose before any phase runs — otherwise the
+      # drill's red would be attributed to the liveness guard rather than to the deliberate failure.
       - name: Gate liveness — did this job actually regenerate and diff?
-        if: always()
+        if: always() && !inputs.alert_drill
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
           expect: dry-run-regen, dry-run-diff
+
+      # #1333: until now this scheduled job went red on a branch nobody watches and raised nothing.
+      # Never fires on PR/push/merge_group — those failures are already visible on the PR — but
+      # workflow_dispatch is permanently in the condition (#1287) because a cron-only alert path
+      # cannot be proven to work.
+      - name: Open or update the dry-run-drift tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-dry-run-drift-alert
+          label-description: Auto-opened when the scheduled dry-run-drift CI run fails
+          title: dry-run-drift scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `dry-run-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either the committed dry-run artifacts have drifted from the scanner's real output — regenerate with `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` and commit BOTH dry-run/findings.json and dry-run/pii-data-map.json — or the job errored before it could diff, in which case the gate-liveness step names the phase that never ran. Close this issue once green."
