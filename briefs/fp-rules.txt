@@ -171,3 +171,5 @@
   tools (webpack, babel, eslint plugins) in `devDependencies` don't run in prod;
   downgrade to informational. Only an exact known-critical CVE on a runtime dep with
   a confirmed version range is trustworthy for the count.
+
+# scratch probe for #1025 — this branch is never merged; see the PR body.
