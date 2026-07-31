@@ -77,6 +77,7 @@ jobs:
       # header note on why no separate `tsc` step is added.
       - run: npm run build
 
-      # `next lint`, backed by `site/.eslintrc.json` (`next/core-web-vitals`). See the header note:
-      # without an eslint dependency present this was a silent no-op that could never fail.
+      # `next lint`, backed by `site/eslint.config.mjs` (flat config, `next/core-web-vitals` via
+      # `FlatCompat`). See the header note: without an eslint dependency present this was a silent
+      # no-op that could never fail.
       - run: npm run lint
