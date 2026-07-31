@@ -417,6 +417,28 @@ describe("scoreMutationBaseline (#300)", () => {
       .toMatchObject({ pass: false });
   });
 
+  // #1419: the inbox-zero case, verbatim. It MEASURED 75.2% (94 detected of 125) in CI while its
+  // baseline stores 76% (80/125 killed) — the two move independently because Stryker counts a
+  // TIMEOUT as detected but not as killed, which is exactly what `tolerance` is there to absorb.
+  // The row printed the BASELINE's 76%, a number that run did not produce.
+  it("prints the MEASURED score on a pass, not the baseline's, when the two differ (#1419)", () => {
+    const inboxZero = (): MutationBaseline => ({ mutationScore: 76, killed: 80, valid: 125, tolerance: 2, coveredScope: ["apps/web/utils"], note: "inbox-zero's measured baseline" });
+    const row = scoreMutationBaseline("inbox-zero", inboxZero(), { mutationScore: 75.2, killed: 80, valid: 125 });
+    expect(row.pass).toBe(true);
+    expect(row.detail).toContain("MEASURED 75.2%");
+    // Both, labelled — the baseline is the thing the run was scored against and must stay legible.
+    expect(row.detail).toContain("RECORDED baseline is 76%");
+    // The old string is the regression marker: a passing row asserting a percentage as the
+    // measurement when it is the baseline's.
+    expect(row.detail).not.toContain("matches baseline: 76%");
+  });
+
+  it("says `exactly` only when the run reproduced every number, so the two cases are distinguishable", () => {
+    const row = scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 7, valid: 35 });
+    expect(row.detail).toContain("matches baseline exactly: 20% (7/35 killed)");
+    expect(row.detail).not.toContain("RECORDED baseline");
+  });
+
   it("names the measured tolerance in the printed claim so a reader doesn't read the number as exact", () => {
     const flaky = (): MutationBaseline => ({ ...baseline(), tolerance: 1 });
     const row = scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 20, killed: 7, valid: 35 });

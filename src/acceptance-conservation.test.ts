@@ -23,14 +23,17 @@ import {
   closeSelftestCases,
   formatClosedIssue,
   type IssueLookup,
+  type IssueComment,
   type IssueRecord,
 } from "./acceptance-conservation.js";
 
-const issue = (over: Partial<IssueRecord> & { number: number }): IssueRecord => ({
+// `comments` takes plain strings here and is normalised, so the ~16 fixtures below stay readable
+// after #1603 gave every comment a permalink for the superseding-bar flag to name.
+const issue = (over: Partial<Omit<IssueRecord, "comments">> & { number: number; comments?: (string | IssueComment)[] }): IssueRecord => ({
   state: "OPEN",
   body: "## Acceptance\n- first\n- second\n",
-  comments: [],
   ...over,
+  comments: (over.comments ?? []).map((c) => (typeof c === "string" ? { body: c, url: `https://example.invalid/#c${c.length}` } : c)),
 });
 
 /** Same-repo records only; the `crossRepo` lookup in "holds a cross-repo issue to its own acceptance criteria" is the one that distinguishes the repo. */
@@ -757,6 +760,71 @@ describe("an out-of-range criterion number prints the criteria the gate parsed (
     expect(first).toContain("but #10 states 2");
     expect(first).toContain("1. the first bar  |  2. the second bar");
     expect(first).toContain("POSITIONAL");
+  });
+});
+
+// #1603. The bar #1595 was graded against had been replaced in a comment, and the gate reported
+// `3/3 criteria dispositioned` against the body's superseded list. Every case below is drawn from
+// the whole-population census (893 closed issues, 707 comments, 2026-07-31) rather than invented:
+// the positives are two of the twelve real hits, the negatives are the shapes the filters had to
+// learn to spare.
+describe("a comment that moves the bar is FLAGGED, not graded (#1603)", () => {
+  const REVISED = [
+    "## Revised acceptance — collapse on EVIDENCE, not position",
+    "",
+    "Supersedes the acceptance in the body above.",
+    "",
+    "- [ ] `reconcile_duplicates` closes a sibling only on positive evidence.",
+    "- [ ] The redirect comment must not assert more than was verified.",
+    "- [ ] Prove it in both directions in `src/alert-issue-race.test.ts`.",
+  ].join("\n");
+  const flags = (...comments: string[]): string[] =>
+    checkAcceptance(BOTH_MET, lookupOf(issue({ number: 10, comments })))
+      .issues[0]!.supersedingComments.map((s) => s.heading);
+
+  it("fires on the #1595 shape — an acceptance list under a prose-tailed heading", () => {
+    expect(flags(REVISED)).toEqual(["Revised acceptance — collapse on EVIDENCE, not position"]);
+  });
+
+  it("fires on a bare unchecked checklist, the other convention this repo writes criteria in", () => {
+    expect(flags("## Remaining acceptance\n\n- [ ] remove the line from llms.txt\n- [ ] remove the matrix row\n")).toHaveLength(1);
+  });
+
+  it("names the comment URL, which is the whole point — a label the reader cannot open is not a flag", () => {
+    const r = checkAcceptance(BOTH_MET, lookupOf(issue({ number: 10, comments: [{ body: REVISED, url: "https://github.com/o/r/issues/10#issuecomment-5" }] })));
+    expect(formatAcceptance(r)).toContain("https://github.com/o/r/issues/10#issuecomment-5");
+    expect(formatAcceptance(r)).toContain("THE BAR MAY HAVE MOVED");
+  });
+
+  it("does NOT fail the gate — grading a heuristic read of prose is the decision #1603 declined", () => {
+    expect(checkAcceptance(BOTH_MET, lookupOf(issue({ number: 10, comments: [REVISED] }))).ok).toBe(true);
+  });
+
+  // Bulleted on purpose. The unbulleted form of this comment is spared by the bullet count alone,
+  // so a test using it passes with the disposition exclusion DELETED — measured 2026-07-31, that
+  // exact mutation survived the first draft of this suite.
+  it("NEGATIVE: spares a disposition record, which is every executor's closing comment", () => {
+    expect(flags("## Acceptance, dispositioned\n\n- ACCEPTANCE #10.1 met: src/foo.ts:12 now throws\n- ACCEPTANCE #10.2 met: src/bar.ts:4 covers it\n")).toEqual([]);
+  });
+
+  it("NEGATIVE: spares a whole-issue `no-stated-criteria` declaration for the same reason", () => {
+    expect(flags("## Acceptance\n\n- ACCEPTANCE #10 no-stated-criteria: the bar was a green corpus-drift run\n- and the run that proved it\n")).toEqual([]);
+  });
+
+  it("NEGATIVE: spares the close gate's own failure comment, which is posted under a HUMAN token here", () => {
+    expect(flags(closeFailureComment(checkClosedIssue({ issue: 700, authorIsBot: false }, () => undefined)))).toEqual([]);
+  });
+
+  it("NEGATIVE: spares a completion report — an `## Acceptance` heading over bullets that already carry verdicts", () => {
+    expect(flags("## Acceptance\n\n- [x] all six re-scanned, dated\n- [x] nothing unscannable was skipped\n")).toEqual([]);
+  });
+
+  it("NEGATIVE: spares a single bullet under an acceptance heading, which is prose about the existing bar", () => {
+    expect(flags("### Acceptance criterion 2 is met independently of the ruling\n\n- `SB-DRIFT-00` is emitted once per connected run.\n")).toEqual([]);
+  });
+
+  it("NEGATIVE: does not let a LATER section's bullets rescue a report — the #1174 dilution", () => {
+    expect(flags("## Acceptance\n\n- [x] all six re-scanned\n- [x] nothing skipped\n\n## Defects found\n\n- #1470\n- #1471\n- #1473\n")).toEqual([]);
   });
 });
 

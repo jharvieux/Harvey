@@ -346,6 +346,40 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
   };
 }
 
+/**
+ * The three numbers corpus-drift scores a target's M8 baseline on, read out of mutation-scan's
+ * `--out` artifact.
+ *
+ * #1419: corpus-drift read `summary.overall` UNGUARDED, so an artifact from any of the degraded
+ * rungs — no test suite (#503), root-workspace-unreachable (#623), workspace-suites-not-reachable
+ * (#932) — all of which write `{ finding, moduleRecord }` and no `summary`, surfaced as
+ * a `TypeError` reading `overall` off `undefined`. mutation-scan prints its own
+ * diagnosis immediately above, so nothing was lost; what a reader saw first was a crash in the
+ * harness rather than a handled degradation of ONE target, which is a different triage.
+ *
+ * It still THROWS — a degraded target has no partial M8 score to salvage, and swallowing it would be
+ * the silent skip the coverage guard forbids. What changes is that the throw names the target and
+ * says why.
+ */
+export function mutationRunFromArtifact(slug: string, artifact: unknown): { mutationScore: number; killed: number; valid: number } {
+  const a = (typeof artifact === "object" && artifact !== null ? artifact : {}) as {
+    summary?: MutationSummary;
+    moduleRecord?: { status?: string; note?: string };
+    finding?: { title?: string };
+  };
+  const o = a.summary?.overall;
+  if (!o) {
+    const why = a.moduleRecord?.note ?? a.finding?.title ?? "the artifact carries neither a `summary` nor a `moduleRecord` explaining why";
+    throw new Error(
+      `${slug}: mutation-scan degraded and wrote no mutation score — ${why} `
+      + `(mutation-scan's own diagnosis is in this job's log immediately above). This target cannot be scored against its M8 baseline; `
+      + `either provision what the degradation names, or move it off the m8-scoreable list with that reason recorded.`,
+    );
+  }
+  // "valid" is Stryker's own denominator for the score: everything it could actually judge.
+  return { mutationScore: o.mutationScore, killed: o.killed, valid: o.totalMutants - o.ignored - o.compileErrors };
+}
+
 // #819: the Istanbul `coverage-summary.json` shape (the json-summary reporter, produced by both
 // @vitest/coverage-v8 and Jest's built-in istanbul coverage) — the one machine-readable coverage
 // format both of Harvey's scaffoldable runners can be made to emit, so this reads one schema

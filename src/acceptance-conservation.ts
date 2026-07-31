@@ -59,11 +59,17 @@ interface Criterion {
   text: string;
 }
 
+/** `url` is the comment permalink, so #1603's flag can name a surface a human can open. */
+export interface IssueComment {
+  body: string;
+  url?: string;
+}
+
 export interface IssueRecord {
   number: number;
   state: "OPEN" | "CLOSED";
   body: string;
-  comments: string[];
+  comments: IssueComment[];
   /**
    * The PRs GitHub links to this issue as closing it (`closedByPullRequestsReferences`, which the
    * Development sidebar populates too). It lives HERE and not on a caller-supplied input because
@@ -293,6 +299,97 @@ export function parseAcceptanceCriteria(body: string): ParsedCriteria {
   const top = Math.min(...bullets.map((b) => b.indent));
   const criteria = bullets.filter((b) => b.indent === top).map((b, i) => ({ index: i + 1, text: b.text }));
   return { criteria, nestedFolded: bullets.length - criteria.length, source: "acceptance-section" };
+}
+
+/**
+ * #1603 — the bar a comment MOVED. Every criterion this gate grades comes out of the issue BODY, and
+ * a later comment that replaces the bar is invisible to it: #1595's body carried 3 bullets, a comment
+ * carried 4 that said "Supersedes the acceptance in the body above", the operator directed the work
+ * against the revised list, and the gate logged `✓ #1595: 3/3 criteria dispositioned` — three for
+ * three against a bar that no longer applied (run 30598147578).
+ *
+ * The gate does NOT grade against the comment; see SUPERSEDING_CONVENTION for why that decision went
+ * the way it did. It reports the comment so a human reads it.
+ *
+ * Two shapes fire, drawn from the whole population rather than from intuition (see the census in
+ * `src/cli/superseded-acceptance-census.ts`): a heading that ANNOUNCES an acceptance list followed by
+ * bullets — `## Acceptance`, `## Acceptance criteria (revised)`, `## Revised acceptance — collapse on
+ * EVIDENCE, not position` — or an unchecked `- [ ]` checklist, which is the other convention this
+ * repo writes criteria in and is what #1595's own comment used under a heading no bare-word pattern
+ * would have matched.
+ *
+ * REPORTING against a bar looks identical to SETTING one until you read the bullets, and the repo
+ * writes far more of the former. Three exclusions guard against that: a comment carrying
+ * `ACCEPTANCE #n.m <verdict>:` lines (every executor's disposition record); the close gate's own
+ * banner, which is posted under a HUMAN token on this repo — measured on #1384 — so an author check
+ * does not see it; and a bullet list whose own items already carry verdicts (`[x]`, ✅/❌,
+ * "**done**", "— MET"), which is a status report wearing an `## Acceptance` heading. MEASURED
+ * 2026-07-31 against the whole population (893 closed issues, 707 comments): with none of the three
+ * applied the flag count is 66; the committed state (all three) is 12. Only two of the three are
+ * earned by a census false positive — the banner exclusion alone takes 12 back up to 63 if dropped,
+ * the verdict-ratio exclusion alone to 15. The disposition-record exclusion has a MEASURED
+ * population of zero in this census (dropping it alone leaves the count at 12) — it is defensible
+ * defensive code, not something this census demonstrates a need for.
+ */
+const ACCEPTANCE_ANNOUNCE = /^\**\s*(?:revised|updated|corrected|amended|new|replacement|final|restated)?\s*acceptance\b/i;
+const UNCHECKED_BOX = /^\s*[-*+]\s+\[ \]\s+\S/;
+const CLOSE_GATE_BANNER = /^\**\s*Acceptance conservation \(#\d+\)/im;
+const BULLET_VERDICT = /\[[xX]\]|✅|❌|\*\*\s*(?:done|met|not met|shipped|held)\b|\b(?:MET|DONE)\b/;
+
+/**
+ * #1603's third and fourth criteria: the DECISION, and the convention that follows from it, recorded
+ * where an executor reads — this gate's own output, which every executor runs pre-flight.
+ *
+ * FLAGGED, NOT AUTHORITATIVE. The gate keeps grading the body. Grading the comment instead would
+ * mean swapping the bar on a heuristic read of prose, and the census that sized this measured 1
+ * false positive in 12 (#1435's status report). In that direction the gate would grade against a
+ * COMPLETION REPORT — every bullet already "met" — which is strictly worse than grading a stale bar,
+ * and it is the self-serving narrowing the whole mechanism exists to catch. A warning costs one
+ * human read when it misfires.
+ */
+const SUPERSEDING_CONVENTION =
+  "The convention (#1603): a revision belongs in the issue BODY, which is the graded surface — edit it there. "
+  + "If you cannot, disposition against the revised list and say in the PR body which list you graded. "
+  + "Falsifier for the convention: `pnpm exec tsx src/cli/superseded-acceptance-census.ts` — any NEW flagged comment on an issue closed after 2026-07-31 is the convention not being followed.";
+
+interface SupersedingComment {
+  url: string;
+  /** The heading that announced the list, or `a checklist` when the checkbox shape fired. */
+  heading: string;
+  bullets: number;
+}
+
+export function supersedingAcceptanceComments(comments: readonly { body: string; url?: string }[]): SupersedingComment[] {
+  const found: SupersedingComment[] = [];
+  for (const [i, c] of comments.entries()) {
+    const all = lines(c.body);
+    if (all.some((l) => DISPOSITION_LINE.test(strip(l)) || NO_CRITERIA_LINE.test(strip(l)))) continue;
+    if (CLOSE_GATE_BANNER.test(c.body)) continue;
+    const url = c.url ?? `comment ${i + 1}`;
+    const boxes = all.filter((l) => UNCHECKED_BOX.test(l)).length;
+    let hit: SupersedingComment | undefined;
+    for (let j = 0; j < all.length && hit === undefined; j++) {
+      const h = heading(all[j]!);
+      if (h === undefined || !ACCEPTANCE_ANNOUNCE.test(h.text)) continue;
+      // Bounded at the next heading AT OR ABOVE this one's level, exactly as parseAcceptanceCriteria
+      // bounds the body's section. Counting to the end of the comment instead let a LATER section's
+      // bullets dilute the verdict ratio below, which is how #1174's `- [x]`-only acceptance report
+      // survived the filter on the strength of three unrelated bullets under a different heading.
+      let close = all.length;
+      for (let k = j + 1; k < all.length; k++) {
+        const next = heading(all[k]!);
+        if (next !== undefined && next.level <= h.level) { close = k; break; }
+      }
+      const bullets = all.slice(j + 1, close).filter((l) => BULLET.test(l));
+      const verdicts = bullets.filter((l) => BULLET_VERDICT.test(l)).length;
+      // Two, not one: a single bullet under an "Acceptance…" heading is prose about the existing
+      // bar far more often than it is a new one, and the whole-population census says so.
+      if (bullets.length >= 2 && verdicts * 2 < bullets.length) hit = { url, heading: h.text, bullets: bullets.length };
+    }
+    if (hit === undefined && boxes >= 2) hit = { url, heading: "a checklist (no acceptance heading)", bullets: boxes };
+    if (hit !== undefined) found.push(hit);
+  }
+  return found;
 }
 
 /**
@@ -568,6 +665,12 @@ interface IssueVerdict {
   source: ParsedCriteria["source"];
   noStatedCriteria?: string;
   problems: string[];
+  /**
+   * #1603 — comments on this issue that carry their own acceptance list. NOT graded (see
+   * SUPERSEDING_CONVENTION); reported so the reader knows the bar may have moved. Deliberately not
+   * folded into `problems`: `ok` must not turn on a heuristic read of prose.
+   */
+  supersedingComments: SupersedingComment[];
   ok: boolean;
 }
 
@@ -638,7 +741,7 @@ function checkRemainder(ref: RemainderRef, lookup: IssueLookup, closes: ClosingR
     // TOUCHES: src/acceptance-conservation.ts
     const linked = originals.filter((o) => {
       const orig = lookup(o.number, o.repo);
-      return orig !== undefined && new RegExp(`#${ref.remainder}\\b`).test([orig.body, ...orig.comments].join("\n"));
+      return orig !== undefined && new RegExp(`#${ref.remainder}\\b`).test([orig.body, ...orig.comments.map((c) => c.body)].join("\n"));
     });
     conditions.push(linked.length > 0
       ? { name: "cross-linked", status: "pass", detail: `${linked.map((o) => o.ref).join(", ")} references #${ref.remainder}` }
@@ -652,12 +755,13 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
   const issue = target.number;
   const record = lookup(issue, target.repo);
   if (!record) {
-    return { issue, ref: target.ref, exists: false, criteria: [], nestedFolded: 0, source: "none", problems: [`${target.ref} does not exist — a closing keyword pointing at nothing`], ok: false };
+    return { issue, ref: target.ref, exists: false, criteria: [], nestedFolded: 0, source: "none", problems: [`${target.ref} does not exist — a closing keyword pointing at nothing`], supersedingComments: [], ok: false };
   }
 
   const { criteria, nestedFolded, source } = parseAcceptanceCriteria(record.body);
   const declaredNone = parsed.noCriteria.find((n) => n.issue === issue);
   const problems: string[] = [];
+  const supersedingComments = supersedingAcceptanceComments(record.comments);
 
   if (criteria.length === 0) {
     if (!declaredNone) {
@@ -665,7 +769,7 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     } else if (declaredNone.bar.trim().length < 12) {
       problems.push(`#${issue} no-stated-criteria names a bar of ${declaredNone.bar.trim().length} characters — say what the bar actually was`);
     }
-    return { issue, ref: target.ref, exists: true, criteria: [], nestedFolded, source, noStatedCriteria: declaredNone?.bar, problems, ok: problems.length === 0 };
+    return { issue, ref: target.ref, exists: true, criteria: [], nestedFolded, source, noStatedCriteria: declaredNone?.bar, problems, supersedingComments, ok: problems.length === 0 };
   }
 
   if (declaredNone) {
@@ -710,14 +814,14 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
       // The question has to be ON THE ISSUE, not in the PR body: a PR body is archived at merge and
       // the operator does not read it, so a question recorded only there is a question nobody was
       // asked. Mechanically this proves a question was recorded, not that it is the RIGHT one.
-      const asked = record.comments.some((c) => c.includes("?"));
+      const asked = record.comments.some((c) => c.body.includes("?"));
       if (!asked) verdict.problems.push(`\`relayed\` but #${issue} carries no comment containing a question — record the question ON THE ISSUE, where the operator reads it, not in this PR body`);
     }
     return verdict;
   });
 
   const ok = problems.length === 0 && verdicts.every((v) => v.problems.length === 0);
-  return { issue, ref: target.ref, exists: true, criteria: verdicts, nestedFolded, source, problems, ok };
+  return { issue, ref: target.ref, exists: true, criteria: verdicts, nestedFolded, source, problems, supersedingComments, ok };
 }
 
 interface AcceptanceExtras {
@@ -748,7 +852,7 @@ function venuesOf(c: ClosingRef, lookup: IssueLookup, selfPr?: string): Venue[] 
     ...(record.linkedPrs ?? [])
       .filter((pr) => pr.ref !== selfPr)
       .map((pr) => ({ label: `linked PR ${pr.ref}`, text: pr.body })),
-    ...record.comments.map((text, i) => ({ label: `${c.ref} comment ${i + 1}`, text })),
+    ...record.comments.map((cm, i) => ({ label: `${c.ref} comment ${i + 1}`, text: cm.body })),
   ];
 }
 
@@ -850,6 +954,10 @@ export function formatAcceptance(report: AcceptanceReport): string {
       out.push(`    ℹ ${issue.nestedFolded} nested bullet(s) folded into their parent criterion — read as elaboration, not separately dispositioned`);
     }
     if (issue.noStatedCriteria) out.push(`    no-stated-criteria: ${issue.noStatedCriteria}`);
+    for (const s of issue.supersedingComments) {
+      out.push(`    ⚠ THE BAR MAY HAVE MOVED (#1603): ${issue.ref} carries a comment with its own acceptance list — ${s.bullets} bullet(s) under "${s.heading}" — at ${s.url}`);
+      out.push(`        The ${issue.criteria.length} criteria graded above come from the issue BODY and nothing else. ${SUPERSEDING_CONVENTION}`);
+    }
     for (const p of issue.problems) out.push(`    ✗ ${p}`);
     for (const c of issue.criteria) {
       const label = c.disposition ? `${c.disposition}` : "—";
@@ -1000,6 +1108,8 @@ export function seedRemainder(body: string, issue: number): string {
  * that the gate can fail does not depend on the PR that happens to be under test. The vitest suite
  * scores the same scenario, so there is one fixture rather than two that can drift apart.
  */
+const said = (...bodies: string[]): IssueComment[] => bodies.map((body, i) => ({ body, url: `https://example.invalid/selftest#comment-${i + 1}` }));
+
 const SELFTEST_ISSUES: IssueRecord[] = [
   {
     number: 9001,
@@ -1013,7 +1123,7 @@ const SELFTEST_ISSUES: IssueRecord[] = [
       "- A remainder reference is checked on all three conditions.",
       "- The operator is asked rather than the issue being closed on a blocker.",
     ].join("\n"),
-    comments: ["Split the second criterion out to #9002.", "Operator: should the gate read commit messages as well as the PR body?"],
+    comments: said("Split the second criterion out to #9002.", "Operator: should the gate read commit messages as well as the PR body?"),
   },
   { number: 9002, state: "OPEN", body: "Remainder of #9001.", comments: [] },
   { number: 9003, state: "CLOSED", body: "A closed issue, for the Gate 2 control.", comments: [] },
@@ -1033,10 +1143,10 @@ const SELFTEST_ISSUES: IssueRecord[] = [
     number: 9005,
     state: "OPEN",
     body: ["## Acceptance", "- the gate reads the same venues on both paths", "- a duplicate disposition names both venues"].join("\n"),
-    comments: [
+    comments: said(
       "ACCEPTANCE #9005.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
       "ACCEPTANCE #9005.2 met: src/acceptance-conservation.ts now names both venues",
-    ],
+    ),
   },
   {
     // The TWO-LINKED-PR control (#1581): the same venue divergence one field over. The close path
@@ -1152,7 +1262,7 @@ export function closeSelftestCases(): CloseSelftestCase[] {
   // linked PRs go on the LOOKUP too (#1581): the input carries the issue, never the venue set.
   const venues = (extra: string[], linkedPrs?: { ref: string; body: string }[]): IssueLookup => (n, repo) => {
     const record = SELFTEST_LOOKUP(n, repo);
-    return record !== undefined && n === 9001 ? { ...record, comments: [...record.comments, ...extra], linkedPrs } : record;
+    return record !== undefined && n === 9001 ? { ...record, comments: [...record.comments, ...said(...extra)], linkedPrs } : record;
   };
   const commented = (extra: string[]): IssueLookup => venues(extra);
   return [

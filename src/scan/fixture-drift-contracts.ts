@@ -234,6 +234,46 @@ export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScope
   );
 }
 
+/**
+ * What a fresh tool run means, given the tool's contract and its optional known-non-drift
+ * classifier. Lives here rather than inline in `runDrift` because #1416.4 measured that the wiring
+ * had NO test at all: deleting the `notRunIf` call from the CLI broke nothing in the suite, so the
+ * one thing `classifyVitalsGitScopeFailure` exists to do — pre-empt the contract check — was
+ * unguarded while the classifier itself had eight.
+ *
+ * The ORDER is the whole point. A run in the #1206 shape violates the contract too (three empty
+ * arrays), so a contract check that ran first would report a schema drift for a git failure, and
+ * `notRunIf` would never be consulted.
+ */
+type FreshRunVerdict =
+  | { kind: "not-run"; reason: string }
+  | { kind: "drift"; violations: string[] }
+  | { kind: "ok" };
+
+export function classifyFreshRun<T>(o: { contract: (p: T) => string[]; notRunIf?: (p: T) => string | undefined }, parsed: T): FreshRunVerdict {
+  const reason = o.notRunIf?.(parsed);
+  if (reason !== undefined) return { kind: "not-run", reason };
+  const violations = o.contract(parsed);
+  return violations.length > 0 ? { kind: "drift", violations } : { kind: "ok" };
+}
+
+/**
+ * Vitals' drift options minus the version/rerun half, which needs the plugin binary. It lives HERE
+ * rather than beside `vitalsDrift()` for one reason: `src/cli/fixture-drift.ts` runs its argv
+ * dispatch at import and calls `process.exit(2)`, so a test importing it from there kills the
+ * runner. Splitting it out is what makes the notRunIf registration reachable at all (#1416.4).
+ */
+export const VITALS_DRIFT_CONTRACT = {
+  fixturePaths: ["src/__fixtures__/vitals-report.json"],
+  parse: (raw: string): VitalsReport & { _gitScopeSanity?: GitScopeSanity } => {
+    const parsed = JSON.parse(raw) as VitalsReport & { _note?: string; _gitScopeSanity?: GitScopeSanity };
+    delete parsed._note;
+    return parsed;
+  },
+  contract: checkVitalsContract,
+  notRunIf: classifyVitalsGitScopeFailure,
+};
+
 // Stryker 9.6.1 `run` JSON report → summarizeMutationReport / vacuousTestFiles (src/mutation-scan.ts).
 // Reads: files{}.mutants[].{id,mutatorName,status,location,coveredBy,killedBy,static}, testFiles (the
 // #1100 join), thresholds, schemaVersion. The seed is targets/calibration/test-quality/.
