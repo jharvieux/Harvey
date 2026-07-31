@@ -146,20 +146,47 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/mechanical-binaries
 
-      - name: Regenerate dry-run findings
+      # #1706, the shape #1705 fixed in conservation.yml: the two diffs below are INDEPENDENT claims
+      # about two separately-committed artifacts, and GitHub's default step condition is `success()`
+      # — "no earlier step in this job failed". So a findings.json drift skipped the pii-data-map.json
+      # diff AND the liveness record, and the run became evidence about one artifact and SILENCE
+      # about the other, while reporting red for a reason a reader naturally attributes to "the
+      # artifact drifted". No false green was reachable (the job reds either way), but "which of the
+      # two drifted" is exactly what this required context exists to answer.
+      #
+      # The boundary below is the tier split. Setup steps keep GitHub's default `success()`, so a
+      # broken toolchain still aborts the job; everything past it runs on `!cancelled()` and its own
+      # `ready` gate, so the two diffs can no longer skip each other.
+      #   • Not `always()`: this workflow sets `cancel-in-progress: true`, so `always()` would spend
+      #     the full budget on superseded runs.
+      #   • Not `continue-on-error`: that makes a real drift GREEN, which is the opposite defect.
+      #   • Not separate jobs: the required context IS this job's name, so splitting would move a
+      #     diff into a new, unregistered context — silently demoting a required gate to advisory.
+      - id: toolchain
+        name: Toolchain ready — the tier boundary (#1706)
         if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        run: echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - id: regen
+        name: Regenerate dry-run findings
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' }}
         run: pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out /tmp/dry-run-regen
 
-      - name: Diff regenerated findings.json against the committed artifact
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+      # Both diffs additionally require the REGENERATION to have succeeded — without fresh output
+      # there is nothing to compare, and a diff against a missing file is a failure about the wrong
+      # thing. That is a real dependency, not the incidental shared fate `success()` imposed.
+      - id: diff_findings
+        name: Diff regenerated findings.json against the committed artifact
+        if: ${{ !cancelled() && steps.regen.outcome == 'success' }}
         run: |
           if ! diff -u dry-run/findings.json /tmp/dry-run-regen/findings.json; then
             echo "::error::dry-run/findings.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
             exit 1
           fi
 
-      - name: Diff regenerated pii-data-map.json against the committed artifact
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+      - id: diff_pii
+        name: Diff regenerated pii-data-map.json against the committed artifact
+        if: ${{ !cancelled() && steps.regen.outcome == 'success' }}
         run: |
           if ! diff -u dry-run/pii-data-map.json /tmp/dry-run-regen/pii-data-map.json; then
             echo "::error::dry-run/pii-data-map.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
@@ -170,8 +197,13 @@ jobs:
       # job's product. A regeneration that produced findings and then never got diffed reads exactly
       # like a clean diff — the produce-vs-deliver gap CLAUDE.md's conservation rule is about. dry-run.ts
       # records the regeneration; this records the comparison.
+      #
+      # #1706: conditioned on the two diff steps BY ID, not on `success()`. It records `units: 2`, so
+      # it may only fire when BOTH comparisons actually happened — under `success()` a drift in the
+      # first one retired the record along with the second diff, and the receipt would have claimed
+      # two comparisons on a run that performed one.
       - name: Record that both committed artifacts were actually diffed
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: ${{ !cancelled() && steps.diff_findings.outcome == 'success' && steps.diff_pii.outcome == 'success' }}
         uses: ./.github/actions/gate-liveness
         with:
           mode: record

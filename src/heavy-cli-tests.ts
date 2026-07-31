@@ -1,9 +1,9 @@
-// The seven heavy child-process test files, and how they are split across CI runners.
+// The heavy child-process test files, and how they are split across CI runners.
 //
 // The list lives here rather than in vitest.config.ts so that BOTH consumers read the same array:
 // the vitest config (which excludes them from `pnpm verify` and includes them in the heavy run) and
 // src/cli/heavy-shard.ts (which tells each CI shard what to run). The alternative — writing the
-// file names into .github/workflows/ci.yml — would mean an eighth heavy file could be added to the
+// file names into .github/workflows/ci.yml — would mean another heavy file could be added to the
 // config and run in NO shard, passing CI by being invisible. That is the silent-omission shape
 // CLAUDE.md ranks as worse than a wrong status, so the shard assignment is DERIVED, never declared.
 //
@@ -20,6 +20,7 @@ export const HEAVY_CLI_TESTS = [
   "src/cli/mutation-scan.test.ts",
   "src/cli/quality-scan.test.ts",
   "src/cli/lighthouse-scan.test.ts",
+  "src/cli/validate-calibration.test.ts",
 ];
 
 // Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
@@ -42,6 +43,7 @@ const WEIGHT_HINT_SECONDS: Record<string, number> = {
   "src/cli/mutation-scan.test.ts": 21.1,
   "src/cli/quality-scan.test.ts": 18.9,
   "src/cli/lighthouse-scan.test.ts": 15.0,
+  "src/cli/validate-calibration.test.ts": 40.0,
 };
 
 /**
