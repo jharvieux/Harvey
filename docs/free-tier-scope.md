@@ -33,6 +33,16 @@ The free (mechanical) tier produces **indicators, not verdicts.** It reads sourc
 | **M9 Server→client boundary / cache correctness** | Static — and no longer Next-only (#916–#918): a framework-agnostic boundary model routes **Remix**, **React Router 7** and **TanStack Start** to their own adapters alongside Next App Router. Astro/SvelteKit/Nuxt get a named not-assessed row rather than a silent Next-premise run. |
 | **M10 PII/PHI/PCI** | Detection: classify sensitive columns from the schema in migrations — "here's every sensitive column and where it lives." |
 
+**Which modules appear in this table is a one-field product lever (#1415, operator ruling
+2026-07-28).** `MODULES[<id>].freeTier` in `src/audit-coverage.ts` is the authoritative commercial
+flag and is read by `selectFreeFindings` (`src/quick-scan.ts`) — the function that decides what a
+free-tier client actually receives. `needs` in the same table is a purely TECHNICAL statement (what
+a module requires to execute) and the two are deliberately allowed to disagree: a paid-LLM module
+can be given away as an acquisition hook, and a source-only module can be moved behind the paywall,
+without touching any other code. `src/audit-coverage.test.ts` reads THIS table and fails if a value
+here and the code disagree, so changing the free tier means editing both together — which is the
+intended friction, because this table is what a client was promised.
+
 ### Machine-readable exports (#867/#887)
 
 The free source scan can also emit the two artifacts a buyer's own tooling ingests:

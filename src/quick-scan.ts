@@ -16,6 +16,7 @@
 //      explicit risk disclosure naming what was NOT assessed. Source-tier RLS/authz signals ride
 //      alongside as non-grading INDICATORS (#220) — the honest teaser, never a verdict.
 
+import { MODULES, moduleOfFinding } from "./audit-coverage.js";
 import type { CodebaseSize } from "./scan/codebase-size.js";
 import type { DependencyReachability, Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
@@ -156,8 +157,16 @@ const isNonGrading = (f: Finding): boolean =>
 // no fixture for, and dropping those findings would trade a precision risk for a silent omission —
 // the worse of the two. Whether the tag is the intended contract for the free count remains an open
 // product ruling (#1301), and this comment is not that ruling.
+//
+// #1415: the second filter is the COMMERCIAL one. `precisionTier` answers "is this row exact enough
+// to show for free"; `MODULES[...].freeTier` answers "is this module's output part of the free
+// product at all" — an operator ruling (2026-07-28, recorded on MODULES in src/audit-coverage.ts),
+// not an engineering fact, which is why it reads a field rather than re-deriving one from `needs`.
+// This is the path that gates what a free-tier client actually receives, so flipping one module's
+// `freeTier` changes the free output with no other code change. Verified in quick-scan.test.ts by
+// flipping M4 and watching an M4 finding leave the free set.
 export function selectFreeFindings(findings: Finding[]): Finding[] {
-  return findings.filter((f) => f.precisionTier === "high");
+  return findings.filter((f) => f.precisionTier === "high" && MODULES[moduleOfFinding(f.taxonomy)].freeTier);
 }
 
 // Of the free (high-precision) findings, the subset the grade is computed from: the classes that
