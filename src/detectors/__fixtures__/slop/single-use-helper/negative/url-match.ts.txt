@@ -1,0 +1,18 @@
+// #1532 precision fix, MEASURED 2026-07-31: `doesOwnIo` matched the spawner names on a METHOD call
+// too, so `RE.exec(s)` — a regex match, the most ordinary string operation there is — read as
+// spawning a process. It cost three real rows on the pinned corpus, one of them
+// (saas-lite apps/web/middleware.ts:160 `matchUrlPattern`) a row #1532's OWN baseline note graded a
+// genuine seam while the shipped fix was firing on it. The spawner names now match a bare
+// identifier only; `execSync` is still caught by the `Sync` suffix rule.
+const TEAM_ROUTE = /^\/team\/([^/]+)\/settings$/;
+
+function matchTeamRoute(pathname: string): string | null {
+  const matched = TEAM_ROUTE.exec(pathname);
+  return matched?.[1] ?? null;
+}
+
+export async function loadTeamSettings(pathname: string, client: { get: (id: string) => Promise<unknown> }): Promise<unknown> {
+  const teamId = matchTeamRoute(pathname);
+  if (!teamId) return null;
+  return await client.get(teamId);
+}

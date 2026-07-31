@@ -1,0 +1,14 @@
+// #1533's cross-file half, and the only fixture in this suite that fails if the import hop stops
+// resolving: deciding whether `resolveStarter` does any I/O means reading what
+// `composeStarterResult` returns, and that lives in another module. Read at source 2026-07-31 —
+// tanstack-com src/utils/application-starter.ts:525 is this shape five times over.
+import { composeStarterResult } from "./starter-compose";
+
+function detectIntent(brief: string): string {
+  const normalized = brief.toLowerCase().trim();
+  return normalized.includes("migrate") ? "migration" : "prompt";
+}
+
+export async function resolveStarter(brief: string, recipe: string) {
+  return composeStarterResult({ intent: detectIntent(brief), recipe });
+}

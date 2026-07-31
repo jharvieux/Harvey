@@ -19,6 +19,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import { collectPathAliases, resolveImport } from "./app-router.js";
 import { parse, type NextId, type SourceInput } from "./common.js";
 import { SOURCE_FILE } from "./load-sources.js";
 
@@ -694,8 +695,14 @@ function containsAwait(node: ts.Node): boolean {
 // every `fs`/`child_process` sync API without naming them); `new Promise` covers callback and
 // event I/O; the bare `child_process` spawners and `process.exit` are named because neither
 // pattern reaches them.
+//
+// The spawner names match a BARE IDENTIFIER only — `import { spawn } from "child_process"` is how
+// all three sampled rows called it (tanstack-com scripts/auth-login.ts:37 among them). Matching the
+// method half as well made `/re/.exec(text)` and `regex.exec(s)` read as spawning a process:
+// MEASURED 2026-07-31, that is the whole reason tanstack-com scripts/check-docs-menu-links.ts:554
+// was disqualified, a helper whose deepest side effect is a string split.
 const SYNC_IO_CALLEE = /^(spawn|exec|execFile|fork)$/;
-function doesOwnIo(node: ts.Node): boolean {
+function doesOwnIo(node: ts.Node, hop?: { path: string; sf: ts.SourceFile; resolve: CalleeResolver }): boolean {
   let found = false;
   const visit = (n: ts.Node) => {
     if (found) return;
@@ -703,7 +710,22 @@ function doesOwnIo(node: ts.Node): boolean {
     if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "Promise") found = true;
     if (ts.isCallExpression(n)) {
       const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : ts.isIdentifier(n.expression) ? n.expression.text : "";
-      if (callee.endsWith("Sync") || SYNC_IO_CALLEE.test(callee) || (ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === "process" && callee === "exit")) found = true;
+      if (
+        callee.endsWith("Sync") ||
+        (ts.isIdentifier(n.expression) && SYNC_IO_CALLEE.test(callee)) ||
+        (ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === "process" && callee === "exit")
+      ) {
+        found = true;
+      }
+      // One hop, and only where the callee RESOLVES (#1532 residual, MEASURED 2026-07-31): carbon
+      // `packages/dev/src/services/apps.ts:367` was drawn in the 30-row re-check and graded wrongly
+      // spared — `depsInSync` does `existsSync`/`statSync` through `isAtLeastAsNew`, one call away,
+      // and a body-only scan reads it as pure. Same cross-file resolver as #1533; an unresolvable
+      // callee still reads as pure, so this only ever finds I/O that is present in the source.
+      if (!found && hop && ts.isIdentifier(n.expression)) {
+        const target = hop.resolve(hop.path, hop.sf, n.expression.text);
+        if (target && doesOwnIo((target.fn as ts.FunctionLikeDeclaration).body ?? target.fn)) found = true;
+      }
     }
     if (found) return;
     ts.forEachChild(n, visit);
@@ -714,6 +736,174 @@ function doesOwnIo(node: ts.Node): boolean {
 
 function isAsync(node: ts.Node): boolean {
   return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false);
+}
+
+// #1533's cross-file half. `buildImportGraph`'s own resolver (`resolveImport` + `collectPathAliases`,
+// exported from app-router.ts for exactly this) turns a callee NAME into the declaration it refers
+// to, one repo-local import hop away. Built lazily per `detectSlopFindings` call and only consulted
+// for the rare async-caller-with-no-await shape, so the common path pays nothing.
+interface CalleeResolver {
+  (fromPath: string, fromFile: ts.SourceFile, name: string): { sf: ts.SourceFile; fn: ts.FunctionLikeDeclaration } | undefined;
+}
+
+function functionNamed(sf: ts.SourceFile, name: string): ts.FunctionLikeDeclaration | undefined {
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name && stmt.body) return stmt;
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) return d.initializer;
+    }
+  }
+  return undefined;
+}
+
+function importSpecifierFor(sf: ts.SourceFile, name: string): string | undefined {
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || stmt.importClause?.isTypeOnly) continue;
+    const bindings = stmt.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings) && bindings.elements.some((e) => !e.isTypeOnly && e.name.text === name)) return stmt.moduleSpecifier.text;
+  }
+  return undefined;
+}
+
+function makeCalleeResolver(files: SourceInput[]): CalleeResolver {
+  let allPaths: Set<string> | undefined;
+  let textByPath: Map<string, string> | undefined;
+  let aliases: ReturnType<typeof collectPathAliases> | undefined;
+  const parsed = new Map<string, ts.SourceFile | undefined>();
+  const sourceAt = (p: string): ts.SourceFile | undefined => {
+    if (!parsed.has(p)) {
+      const text = textByPath?.get(p);
+      parsed.set(p, text !== undefined && SOURCE_FILE.test(p) ? parse(p, text) : undefined);
+    }
+    return parsed.get(p);
+  };
+  return (fromPath, fromFile, name) => {
+    const local = functionNamed(fromFile, name);
+    if (local) return { sf: fromFile, fn: local };
+    const specifier = importSpecifierFor(fromFile, name);
+    if (specifier === undefined) return undefined;
+    // Deferred to the first cross-file question: parsing every tsconfig and workspace manifest is
+    // wasted on the overwhelming majority of source sets, where no candidate ever reaches here.
+    allPaths ??= new Set(files.map((f) => f.path));
+    textByPath ??= new Map(files.map((f) => [f.path, f.text] as const));
+    aliases ??= collectPathAliases(files);
+    // `resolveImport` appends extensions to the specifier verbatim, so the ESM-TS convention of
+    // importing `../helpers.js` from `helpers.ts` resolves to nothing. MEASURED 2026-07-31: that is
+    // why the very row this hop was built for — carbon `packages/dev/src/services/apps.ts:367`,
+    // whose `isAtLeastAsNew` comes `from "../helpers.js"` — was still spared with the hop in place.
+    // Stripped here rather than in `resolveImport` itself: that function also backs M9's import
+    // graph and #1344's reachability gate, so widening it moves baselines this change has not
+    // measured. Tracked for the shared resolver as #1659, whose first acceptance criterion is to
+    // measure that corpus-wide M9 movement BEFORE the fallback moves into `resolveImport`.
+    const target = resolveImport(fromPath, specifier, allPaths, aliases) ?? resolveImport(fromPath, specifier.replace(/\.(m|c)?js$/, ""), allPaths, aliases);
+    const sf = target === undefined ? undefined : sourceAt(target);
+    const fn = sf && functionNamed(sf, name);
+    return fn ? { sf, fn } : undefined;
+  };
+}
+
+function bodyOf(fn: ts.Node): ts.Node {
+  return (fn as ts.FunctionLikeDeclaration).body ?? fn;
+}
+
+function returnedExpressions(fn: ts.Node): ts.Expression[] {
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+  if (!body) return [];
+  if (!ts.isBlock(body)) return [body];
+  const out: ts.Expression[] = [];
+  const visit = (n: ts.Node) => {
+    if (n !== body && ts.isFunctionLike(n)) return; // a nested function's returns are its own
+    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    ts.forEachChild(n, visit);
+  };
+  visit(body);
+  return out;
+}
+
+/** The `const x = <init>` / `let x = <init>` that binds `name` inside `scope`, if there is exactly one. */
+function soleBindingIn(scope: ts.Node, name: string): ts.Expression | undefined {
+  const hits: ts.Expression[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name && n.initializer) hits.push(n.initializer);
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
+// Can this expression be PROVEN never to be a promise, reading only source? Deliberately one-sided:
+// anything it does not resolve — a method call, a parameter, a package outside the repo — answers
+// `false`, which keeps the exemption. It is the FIRING direction that has to be earned.
+function isProvablySynchronous(expr: ts.Expression, scope: ts.Node, path: string, sf: ts.SourceFile, resolve: CalleeResolver, depth: number): boolean {
+  if (
+    ts.isObjectLiteralExpression(expr) ||
+    ts.isArrayLiteralExpression(expr) ||
+    ts.isStringLiteral(expr) ||
+    ts.isNoSubstitutionTemplateLiteral(expr) ||
+    ts.isTemplateExpression(expr) ||
+    ts.isNumericLiteral(expr) ||
+    ts.isRegularExpressionLiteral(expr) ||
+    ts.isJsxElement(expr) ||
+    ts.isJsxSelfClosingElement(expr) ||
+    ts.isJsxFragment(expr) ||
+    expr.kind === ts.SyntaxKind.TrueKeyword ||
+    expr.kind === ts.SyntaxKind.FalseKeyword ||
+    expr.kind === ts.SyntaxKind.NullKeyword
+  ) {
+    return true;
+  }
+  // A constructor call yields the constructed object, never a promise — except `new Promise`, which
+  // is the hand-rolled-async shape #1532's `doesOwnIo` already names.
+  if (ts.isNewExpression(expr)) return !(ts.isIdentifier(expr.expression) && expr.expression.text === "Promise");
+  if (depth <= 0) return false;
+  if (ts.isPropertyAccessExpression(expr)) return isProvablySynchronous(expr.expression, scope, path, sf, resolve, depth);
+  if (ts.isIdentifier(expr)) {
+    const bound = soleBindingIn(scope, expr.text);
+    return bound !== undefined && isProvablySynchronous(bound, scope, path, sf, resolve, depth - 1);
+  }
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+    const target = resolve(path, sf, expr.expression.text);
+    if (!target) return false;
+    const body = bodyOf(target.fn);
+    if (isAsync(target.fn) || containsAwait(body) || doesOwnIo(body)) return false;
+    const rets = returnedExpressions(target.fn);
+    // A void callee returns `undefined`; a callee whose returns are all provably synchronous is too.
+    return rets.every((r) => isProvablySynchronous(r, body, path, target.sf, resolve, depth - 1));
+  }
+  return false;
+}
+
+// An `await`, or an `async` function, ANYWHERE under this node — nested functions included, which
+// is exactly where `containsAwait` stops. A caller that hands an async callback to something is
+// orchestrating I/O even though its own body awaits nothing. MEASURED 2026-07-31: without this,
+// inbox-zero `apps/worker/src/runtime.mjs:13` fired twice — `startWorkerRuntime` opens a Redis
+// connection and starts BullMQ workers whose job handler is `async (job) => { await forwardJob(…) }`,
+// and its own `return` is a plain object literal, so reading returns alone declared it synchronous.
+function schedulesAsyncWork(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isAwaitExpression(n) || (ts.isFunctionLike(n) && isAsync(n))) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(node, visit);
+  return found;
+}
+
+// #1533 — is a caller declared `async` that contains ZERO awaits actually doing the I/O the
+// exemption credits it with? It can only be doing it by RETURNING a promise or by scheduling one,
+// so read the returns and look for nested async work. Spare unless neither is present.
+function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.SourceFile, resolve: CalleeResolver): boolean {
+  if (doesOwnIo(bodyOf(caller)) || schedulesAsyncWork(bodyOf(caller))) return false;
+  const rets = returnedExpressions(caller);
+  // No return at all says nothing: inbox-zero's `analyzeSenderPatternIfAiMatch` does its I/O inside
+  // a fire-and-forget `after(async () => …)` callback, which is a genuine seam.
+  if (rets.length === 0) return false;
+  return rets.every((r) => isProvablySynchronous(r, bodyOf(caller), path, sf, resolve, 2));
 }
 
 // #370 acceptance criterion 3 — the "kept as a test seam" FP class briefs/quality-extras.txt names,
@@ -728,8 +918,17 @@ function isAsync(node: ts.Node): boolean {
 // so inlining it is the wrong advice whether or not the module chose to export it.
 //
 // #1532 — the POPULATION #1447 shipped without. MEASURED 2026-07-30 by running detect-static over
-// the ten pinned corpus targets at their pinned commits with and without this exemption: it spares
-// 653 candidates, 26% of inbox-zero's whole M5-slop reading and 20% of tanstack-com's. A seeded
+// pinned corpus targets at their pinned commits with and without this exemption: it spares
+// 653 candidates, 26% of inbox-zero's whole M5-slop reading and 20% of tanstack-com's.
+// The pin count this paragraph originally gave ("ten") is NOT reproducible and has been removed
+// rather than corrected: `src/scan/external-corpus.ts` carried FOURTEEN M5-slop baselines at
+// dfff5a8/5c983ea when the 653 was drawn and carries SEVENTEEN now (#1524 added cravab, flori-web
+// and effective on 2026-07-30), so "ten" describes neither, and the measuring script was not
+// committed, so the repo does not record which subset the 653 / 592 / 380 actually cover.
+// Re-deriving them is a re-run, not a recovery: clone the pins and diff the detector with and
+// without the exemption, which is how the async-caller figures below were re-measured.
+// Pinning those three totals to a stated population is part of #1660. The async-caller figures
+// below ARE re-derived here and carry their own scope. A seeded
 // random sample of 50 (mulberry32, seed 20260730, over the population sorted by
 // target|file|line|helper) was read at source and graded against the exemption's own premise —
 // "a pure helper whose sole caller does the I/O". 45 held. 5 did not, and all 5 failed the SAME
@@ -740,29 +939,55 @@ function isAsync(node: ts.Node): boolean {
 //
 // Two sub-populations are COUNTED AND LEFT, not silently accepted — the sample says neither is
 // reliably a defect, and disclosing a measured number beats narrowing on a hunch:
-//   * 401 of 653 have a caller whose awaits never touch the helper's result. The sample drew 36 of
+//   * 401 of 653 have a caller whose awaits never touch the helper's result. THE PREDICATE BEHIND
+//     THIS FIGURE IS NOT STATED ANYWHERE and it is inherited from #1532 rather than re-derived: an
+//     independently written predicate measures 411 on the same 653 rows, and the one this file's
+//     `evidence` string ships measures 380 on the narrowed population. Which definition the sentence
+//     means is UNDECIDED — tracked as #1660, which also has to make the two sites agree. Do not
+//     treat any of the three as settled. The sample drew 36 of
 //     them; 3 were among the 5 defects above and now fire, and every one of the 33 that REMAIN
 //     spared was a genuine seam. So this shape is not itself the error — the caller is entangled
 //     with I/O either way, so extracting the pure half still buys what the brief asks for. This is
 //     the exemption's deliberate conservatism, now with a number on it.
-//   * 39 of 653 have a caller declared `async` with ZERO awaits. This one is MIXED, which is
-//     exactly why it is not narrowed: inbox-zero utils/outlook/mail.ts:408 is a genuine seam whose
-//     caller does its I/O by RETURNING a promise, while saas-lite app/sitemap.xml/route.ts:24 and
-//     mvp-boilerplate app/api/og/route.tsx:15 have callers that do nothing asynchronous at all.
-//     Separating them means knowing what the returned call does — a cross-file question. ONE
-//     mechanism was tried (require a real `await` in the caller) and it turns the inbox-zero row
-//     into a false positive, so it was not shipped. `buildImportGraph` is the untried candidate
-//     and is the first thing to reach for. Tracked as #1533; do not read "not narrowed" as
-//     "not narrowable" — one failed attempt is not a proof.
-function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression): boolean {
-  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody)) return false; // the helper does the I/O — not a pure seam
+//   * 39 of 653 have a caller declared `async` with ZERO awaits. #1533 NARROWED this one rather
+//     than leaving it disclosed, using the cross-file resolver `buildImportGraph` is built on. An
+//     async caller that awaits nothing can only be doing I/O by RETURNING a promise, so the returns
+//     are read and the row fires only when EVERY one of them is provably synchronous — a `new`
+//     expression, a literal, or a call whose callee resolves (same file, or one repo-local import
+//     hop) to a function that is itself not async, awaits nothing, and returns only such values.
+//     Everything it does not resolve — a method call, a parameter, a package outside the repo —
+//     stays spared, so the firing direction is the one that has to be earned.
+//     RE-MEASURED 2026-07-31, by running the detector over each pinned clone three times — as
+//     shipped, with this class forced to spare, and with it forced to fire — so the class is sized
+//     by difference rather than by inspection. Over the fourteen pins this bullet's siblings were
+//     measured on: the class is 38, of which 14 now fire and 24 stay spared. An earlier draft of
+//     this line said "14 of the 39 … 25 stay spared": 39 was the population BEFORE #1532's
+//     `doesOwnIo`, which had already recovered one of those rows on its own (inbox-zero
+//     apps/web/scripts/eval-report/generate-eval-report.ts:78 `findWorkspaceRoot` calls
+//     `fs.existsSync` in its own body at :83), so the subtraction was stale by one and disagreed
+//     with the 24 the `evidence` string below correctly ships.
+//     SCOPE, stated rather than assumed: `src/scan/external-corpus.ts` carries SEVENTEEN M5-slop
+//     baselines today, not fourteen — #1524 added cravab, flori-web and effective on 2026-07-30,
+//     after this population was drawn. They are deliberately NOT folded into the figures above,
+//     which would mix two populations across one bullet list; measured separately, they add 10 to
+//     the class (cravab 9, flori-web 1) of which 9 fire, for 48 / 23 / 25 across all seventeen.
+//     Every one of the 14 was read at source. The three rows the class was named for come out right:
+//     mvp-boilerplate app/api/og/route.tsx:15 fires (`return new ImageResponse(…)`), inbox-zero
+//     utils/outlook/mail.ts:408 stays spared (`return sendEmailWithHtml(…)`, a local async), and
+//     saas-lite app/sitemap.xml/route.ts:24 stays spared — that third one CORRECTS #1533's body,
+//     which called its caller synchronous: it returns `getServerSideSitemap(…)` from `next-sitemap`,
+//     outside the repo and unreadable here, so it is a disclosed miss, not a proven seam.
+function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression, path: string, sf: ts.SourceFile, resolve: CalleeResolver): boolean {
+  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody, { path, sf, resolve })) return false; // the helper does the I/O — not a pure seam
   let enclosing: ts.Node | undefined = callSite.parent;
   while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
   if (!enclosing) return false;
-  return isAsync(enclosing) || containsAwait(enclosing);
+  if (containsAwait(enclosing)) return true;
+  if (!isAsync(enclosing)) return false;
+  return !asyncCallerDoesNoAsyncWork(enclosing, path, sf, resolve);
 }
 
-function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, resolve: CalleeResolver): Finding[] {
   const findings: Finding[] = [];
   interface Candidate {
     name: string;
@@ -794,7 +1019,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
   for (const c of candidates) {
     const sites = callSites(sf, c.name, c.declNode);
     if (sites.length !== 1) continue;
-    if (isTestabilitySeam(c.body, c.async, sites[0]!)) continue;
+    if (isTestabilitySeam(c.body, c.async, sites[0]!, path, sf, resolve)) continue;
     findings.push(
       makeFinding(nextId, {
         title: `Single-use helper \`${c.name}\` is only called from one site`,
@@ -802,7 +1027,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (2026-07-30, ten pinned corpus repos): it spares 653 helpers, of which 401 have a caller whose awaits never touch the helper's result and 39 have a caller that awaits nothing at all, so a genuinely single-use helper sitting next to unrelated I/O is spared with them. A 50-row seeded sample read at source put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31 against pinned commits of real open-source repositories; the subset these totals cover is stated in this file's source comment, and reconciling it against the full pinned corpus is tracked as #1660): it spares 592 helpers, down from 653 before the purity test was widened. Of those 592, 380 have a caller whose awaits never touch the helper's result — a count produced by this pass's own predicate, which is NOT the (unstated) predicate behind the 401 previously recorded for the same quantity, so read it as one reading of that phrase rather than a settled figure; reconciling the two is tracked as #1660 — and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous, so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,
@@ -893,6 +1118,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
   let n = 0;
   const nextId: NextId = () => `SLOP-${String(++n).padStart(2, "0")}`;
   const findings: Finding[] = [];
+  const resolve = makeCalleeResolver(files);
   for (const f of files) {
     if (!SOURCE_FILE.test(f.path)) continue; // #1065: the loader's own filter, imported so the two can never drift apart
     const sf = parse(f.path, f.text);
@@ -911,7 +1137,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectRedundantJsdoc(sf, f.path, nextId),
       ...detectUnusedParameter(sf, f.path, nextId),
       ...detectUnusedImport(sf, f.path, nextId),
-      ...detectSingleUseHelper(sf, f.path, nextId),
+      ...detectSingleUseHelper(sf, f.path, nextId, resolve),
       ...detectUnreachableBranch(sf, f.path, nextId),
     );
   }
