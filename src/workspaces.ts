@@ -87,11 +87,14 @@ export function workspacePackages(manifests: { path: string; text: string }[]): 
       // #1501: EXACT (non-wildcard) exports subpaths. #1353 shipped the wildcard form because that
       // is what rallly declares; an exports map made of literal keys is at least as common and was
       // skipped entirely. MEASURED 2026-07-31 on crbnos/carbon @92e19c04, whose `packages/auth`
-      // declares `"./auth.server": "./src/services/auth.server.ts"` and ten more like it:
+      // declares eleven `exports` entries — TEN literal subpaths such as
+      // `"./auth.server": "./src/services/auth.server.ts"`, plus `"."`, which exportsExact skips
+      // because entryBasesFor already handles the package entry:
       // `resolveImport(…, "@carbon/auth/auth.server")` returned UNRESOLVED while
       // packages/auth/src/services/auth.server.ts was present in the loaded tree, so every route
       // action gated by `requirePermissions` imported from there read as ungated — 113 High
-      // `route action missing authorization check` rows, 111 of which are gated (#1501's triage).
+      // `route action missing authorization check` rows, of which #1501's triage records 107 false
+      // for this cause and 4 true-to-shape (see carbon's M1-boundary note in external-corpus.ts).
       ...exportsExact(pkg.exports).map((e) => ({ prefix: `${pkg.name}/${e.from}`, baseDir: joinRepoPath(dir, e.to) })),
     ]
       // Longest specifier prefix first, so `./server-only/*` beats a catch-all `./*`, and an exact

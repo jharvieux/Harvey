@@ -543,5 +543,75 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "device_pings": {
+    "columns": [
+      {
+        "column": "payload",
+        "infotype": "OPAQUE_JSON_BLOB",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "OPAQUE_JSON_BLOB"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "billing_products": {
+    "columns": [
+      {
+        "column": "name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      },
+      {
+        "column": "description",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?",
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.6,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "billing_profiles": {
+    "columns": [
+      {
+        "column": "display_name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

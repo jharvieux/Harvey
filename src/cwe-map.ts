@@ -104,11 +104,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Role with BYPASSRLS defeats row-level security (static)": ["269", "A01"],
   "RLS enabled without FORCE — owner bypasses policies (static)": ["269", "A01"],
   // #1370: a command with no policy is DENIED, so this is not a missing check (862) — the finding is
-  // that the write must therefore reach the table through a path the policies do not govern (service
+  // that the read must therefore reach the table through a path the policies do not govern (service
   // role, SECURITY DEFINER, the owner), i.e. an enforcement mechanism that is not the documented one.
   // CWE-1220 (Insufficient Granularity of Access Control) names exactly that: the policy set does not
   // cover the operations the application performs.
-  "RLS policy set leaves a command uncovered (static permission matrix)": ["1220", "A01"],
+  "RLS policy set grants a write with no read policy (static permission matrix)": ["1220", "A01"],
   rls_disabled_in_public: ["862", "A01"],
   "Middleware matcher excludes /api routes": ["862", "A01"],
   "Unauthenticated debug/admin route": ["862", "A01"],
