@@ -101,6 +101,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "- **`typescript.react.security.audit.react-dangerouslySetInnerHTML`** — an `.audit.` rule (for human auditors, inherently noisy — `mechanical-toolchain.md` §2 says exclude `.audit.*` from the count). It flags `dangerouslySetInnerHTML` even when fed a **constant** or an already-`DOMPurify.sanitize()`-ed value, because single-file analysis can't see the sanitizer. *Harvey:* use the custom `harvey-dangerously-set-inner-html` rule instead, and gate it — a constant literal `__html` or a value returning from a known sanitizer (`DOMPurify.sanitize`, `sanitizeHtml`) is benign; only a taint-reachable non-constant is a finding. [ [semgrep-rules #2168](https://github.com/semgrep/semgrep-rules/issues/2168), [rule](https://semgrep.dev/r?q=typescript.react.security.audit.react-dangerouslysetinnerhtml) ]",
     "| POSITIVE | P-HARDCODED-KEY | Hardcoded provider secret in source | new `lib/ai.js` — `const key = \"sk-ant-api03-…\"` (fake but valid-shape) | TruffleHog (verify), gitleaks provider patterns | high (verified) / review (unverified) | [scan-gaps §1.3](https://github.com/gitleaks/gitleaks) |",
   ],
+  "docs/design/ci-gate-liveness.md": [
+    "name (`semantic-freshness`, `site-ci`). A proxy cannot be widened into exhaustiveness; it has to be",
+    "the required context failed with it, so a shard that scored nothing cannot pass the aggregate.",
+  ],
   "docs/design/conservation-of-findings.md": [
     "(4) and (5) watch **ten rows**: the one finding planted per module. They cannot see the other 595.",
     "3. **The #1033 reason contract is structural.** A `NotAssessed` cannot be written without a",
@@ -455,6 +459,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "* something the lookup cannot know — the exact conflation the invariant above forbids — so it is",
     "* quoted sentence are all mechanically separable from the real thing, and \"it cannot tell a real",
     "// checkout's root `scripts` set cannot answer, so the reference is left unchecked rather than",
+    "* closing reference. Both gates call this and nothing else, so the venue sets cannot drift apart.",
     "// indistinguishable from one that cannot fail — this repo has shipped exactly that twice. Each",
     "// seeder THROWS when it cannot plant its violation, because a seed that silently plants nothing",
   ],
@@ -524,6 +529,12 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// node_modules, on the recorded reason that \"knip cannot resolve config imports without the",
     "// target's installed deps\". #810 (2026-07-23) built the very fallback that reason calls impossible",
     "// whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).",
+  ],
+  "src/ci-liveness.test.ts": [
+    "// own list of nine did not think to name. A proxy cannot be widened into exhaustiveness; it has",
+  ],
+  "src/ci-liveness.ts": [
+    "* cannot mistake it for a scoring run. Omitting it instead would be the silent omission — a run",
   ],
   "src/cli/corpus-drift.ts": [
     "// Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by",
@@ -647,6 +658,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/cli/validate-conditional-scan.ts": [
     "//                  cannot fail (#350/#1065).",
+    "// no-op. Its own receipt, so \"the job was green\" cannot stand in for \"4b scored anything\".",
   ],
   "src/cli/validate-conservation.test.ts": [
     "// worker cannot service the birpc ack for the task update it already sent — that ack has the",
@@ -662,6 +674,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// \"cannot\", \"impossible\", \"no way to\", \"unable to\" and friends, which nothing re-tests because",
     "// cannot be confused (#1246).",
     "// the number so it cannot be quietly ignored the way the advisory census was for months.",
+  ],
+  "src/cli/validate-supervised-declines.ts": [
+    "// path\", written in the same grammar as \"X is impossible\" — and reports every instance carrying no",
+    "// last run, so a standing backlog of historical instances cannot make it permanently red. The",
+    "// rather than 0, which is the three-valued design doing its job — but a scan that cannot read is",
   ],
   "src/cli/validate-test-only-exports.test.ts": [
     "// is indistinguishable from a gate that cannot fail (#1320).",
@@ -1571,6 +1588,13 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/supabase-write-probe.ts": [
     "// ever writing. If the table has NO required column we CANNOT guarantee non-persistence, so the probe",
+  ],
+  "src/supervised-declines.ts": [
+    "// is written in the same grammar as \"this is impossible\", so a reader cannot tell a permission ask",
+    "/** The paths whose grant is routine, with what the record says about each. Named in the report, because \"supervised\" is being used as a synonym for \"impossible\" and the antidote is the counter-example. */",
+    "/** A check that ran and came back empty is not a decline. Kept as its own verdict so \"we looked and there was nothing\" cannot be read as \"we declined\". */",
+    "* indistinguishable from one that cannot report anything — and this one scans real history, where",
+    "* cannot go green because GitHub was slow.",
   ],
   "src/test-only-exports.test.ts": [
     "// that only ever removes them cannot catch a regression; both directions have to fail.",

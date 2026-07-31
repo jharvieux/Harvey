@@ -89,7 +89,7 @@ const NOTHING_OWED = /\bno sentence\b[^\n]{0,80}\bfalsif/i;
 const OPERATOR_ASK = /\?/;
 const OPERATOR_ADDRESS = /\boperator\b|\bapprov|\bgrant|\bpermission\b|\bruling\b|\bmay I\b|\bgo-ahead\b|\bauthoris|\bauthoriz/i;
 
-export interface DeclineHit {
+interface DeclineHit {
   /** 1-based line number in the PR body. */
   line: number;
   text: string;
@@ -105,7 +105,7 @@ export interface IssueLike {
   comments: string[];
 }
 
-export interface DeclineVerdict {
+interface DeclineVerdict {
   hit: DeclineHit;
   relay: "quoted-grant" | "operator-ask" | "orchestrator-report" | "nothing-owed" | "none";
   detail: string;

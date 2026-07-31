@@ -62,45 +62,94 @@ all".
 ## Coverage, and why a new gate does not quietly skip it
 
 `.github/gate-liveness.json` is the registry. `src/ci-liveness.test.ts` (under `pnpm verify`)
-enforces three things against it:
+enforces these against it:
 
-1. every workflow that installs the mechanical binaries — the marker of a job heavy enough to die in
-   setup — is registered or exempt **with a reason**;
+1. **exhaustively over `.github/workflows/*.yml`**, every workflow is a registered gate or an
+   `exempt` row — so a new workflow can only be CLASSIFIED, never omitted;
 2. every registered gate id is both **asserted** by its workflow and **produced** by something (a
-   `gate:` record step, or a `recordMeasured` call in a gate CLI) — a producer/asserter mismatch is a
-   test failure, not a silently vacuous check;
-3. every assert step is gated on `always()`.
+   `gate:` record step, or a `recordMeasured`/`recordDeclaredNoOp` call in a gate CLI) — a
+   producer/asserter mismatch is a test failure, not a silently vacuous check;
+3. every assert step is gated on `always()`;
+4. every registered gate declares a `liveness_drill` dispatch input and carries a `provenBy` run or
+   a `pendingProof` hatch (see the next section);
+5. no alert step in a registered gate's workflow is reachable on a liveness drill — otherwise
+   proving the guard raises a false alarm.
 
-Registered today: `corpus-drift`, `conservation` (gate + negative controls), `dry-run-drift`
-(regenerate + diff, as separate phases), `ci.yml`'s `heavy-cli` shards (tests + the shard-conditional
-`calibration-gate` and `source-recall-gate`), `secbench`, and `free-recall`.
+**#1568 replaced the discovery rule, and the replacement is the point.** It used to read "every
+workflow that installs the mechanical binaries", a PROXY for "heavy enough to die in setup", chosen
+because that is literally what #1509 broke. It left NINE workflows outside the registry by
+construction — and, measured on adoption, two more that #1568's own list of nine did not think to
+name (`semantic-freshness`, `site-ci`). A proxy cannot be widened into exhaustiveness; it has to be
+replaced by it.
 
-`free-recall` is on that list because check (1) **fired for real** during this work: #1185 landed the
-workflow on `main` mid-branch, the rebase brought it in, and `pnpm verify` went red naming an
-unregistered gate job. Wiring it took four lines — which is the point of preferring a working guard
-over a disclosure row.
+Registered as gates: `corpus-drift`; `conservation` (gate + negative controls); `dry-run-drift`
+(regenerate + diff, as separate phases); `ci.yml`'s `heavy-cli` shards (tests + the
+shard-conditional `calibration-gate`, `source-recall-gate` and `m2-coverage-gate`); `secbench`;
+`free-recall`; `disclosure-venue` (gate 4 + gate 4b); `alert-paths` (label pass + its three seeded
+controls); `acceptance`; `acceptance-close`; and `supervised-declines`.
 
-Two of those deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because the calibration
-gate rides inside `if: matrix.shard == 1` and the source-recall gate inside `if: matrix.shard == 2` —
-a condition that stopped matching would retire the repo's scored recall gates in complete silence,
-which is the shape #1301 and #1288 each found when those gates ran in no workflow at all. And
-**conservation's negative controls get their own gate id**, because "the controls ran" is a separate
-claim from "the gate ran": a gate nobody has watched fail is indistinguishable from a gate with no
-failing direction at all.
+`acceptance-close` is the sharpest of them. It runs on `issues: [closed]` — it answers to no PR, it
+is on no schedule, and it raises no alarm. A run that dies in setup posts no comment, re-opens
+nothing, and is indistinguishable from a close nobody had to object to. Nothing else in this repo
+watches it.
+
+`free-recall` is on the list because check (1) **fired for real** during the original work: #1185
+landed the workflow on `main` mid-branch, the rebase brought it in, and `pnpm verify` went red naming
+an unregistered gate job.
+
+**An exemption is a claim, and it is machine-checked.** An `exempt` row asserts that a run which died
+before scoring is DISTINGUISHABLE without a receipt. The test refuses that claim for any workflow
+carrying a step gated on an in-job filter output or a matrix conditional — the #1107
+filter-moved-in-job shape, which is exactly what turns a dead scoring phase green — and, for a
+SCHEDULED exempt workflow, checks that the alert path its reason rests on actually exists in the
+file. Each row states `measures` and `whyDistinguishable` separately, because "what it does" and
+"why its silence is loud" are two claims and a single blob lets one carry the other.
+
+Exempt today: `reasons-drift`, `corpus-m8`, `osv-staleness`, `owasp-ack-watch`,
+`semantic-freshness`, `site-smoke` (each unconditional and alarmed on a scheduled failure) and
+`site-ci` (reports on the PR that caused it).
+
+Two gates deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because three scored gates
+ride inside `if: matrix.shard == N` — a condition that stopped matching would retire them in complete
+silence, which is the shape #1301, #1288 and #1483 each found when those gates ran in no workflow at
+all. And **conservation's negative controls get their own gate id**, because "the controls ran" is a
+separate claim from "the gate ran": a gate nobody has watched fail is indistinguishable from a gate
+with no failing direction at all.
 
 ## Proving it in both directions
 
-Each wired workflow with a `workflow_dispatch` trigger carries a `liveness_drill` input. It does not
-break anything — it **skips the scoring step**, leaving a job every one of whose steps succeeds. The
-guard is then the only thing that can turn it red, which is the strongest available demonstration:
-without it, that job is green having measured nothing.
+Every registered gate carries a `liveness_drill` dispatch input. It breaks nothing — it **skips the
+scoring step**, leaving a job every one of whose steps succeeds. The guard is then the only thing
+that can turn it red, which is the strongest available demonstration: without it, that job is green
+having measured nothing.
 
-    gh workflow run corpus-drift -f liveness_drill=true
-    gh workflow run dry-run-drift -f liveness_drill=true
-    gh workflow run conservation -f liveness_drill=true
+    gh workflow run "<workflow name>" -f liveness_drill=true
 
-As with `alert_drill` (#1287), a drill can only be dispatched against a workflow already on the
-default branch, so the first proof of a newly-wired job happens on its PR instead.
+**The two drills are mutually exclusive by construction, and #1586's criterion 4 is why.** The alert
+step fires on `failure() && workflow_dispatch`, so a liveness drill would have opened a REAL tracking
+issue — a false alarm indistinguishable from a genuine failure. Each drill now switches the other's
+machinery off: `alert_drill` skips the liveness assert (it fails on purpose before anything is
+scored), `liveness_drill` skips the alert step. `src/ci-liveness.test.ts` enforces the second half.
+
+**#1569 — every gate now records the run that proved it**, in a `provenBy` block mirroring
+`.github/alert-paths.json`, because a path that has never fired reads exactly like one with no
+failing direction (#1287's own finding). Eleven drills were dispatched on 2026-07-31; in every one
+the gate-liveness assert was the ONLY failing step, with `GATE LIVENESS: FAILED` naming the gate ids
+that never reached their measuring phase. `corpus-drift`'s drill additionally proved #1586's
+criterion 4 in the other direction: shard 1 failed on the assert alone and the aggregate job carrying
+the required context failed with it, so a shard that scored nothing cannot pass the aggregate.
+
+`pendingProof` is the one disclosed way a gate may sit here unproven, and it is built to fail loud:
+`why`, an OPEN `tracking` issue and `since` are all required, and it is mutually exclusive with
+`provenBy` so a recorded proof REPLACES the hatch rather than sitting beside it.
+
+The rule the hatch exists for was narrowed by measurement, twice. A `workflow_dispatch` INPUT need
+only exist on the branch being dispatched (#1333, 2026-07-31) — but the workflow FILE must be on the
+default branch, and that half reproduces: `gh api
+repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f
+ref=feature/sweep-ci-1545` returned **HTTP 404** on 2026-07-31 while ten sibling drills dispatched
+from that same branch the same hour all ran. `supervised-declines` therefore lands with a
+`pendingProof` tracked by #1688; every other gate is proven.
 
 ## What this deliberately does not do
 
@@ -113,25 +162,17 @@ default branch, so the first proof of a newly-wired job happens on its PR instea
   which is correct, and is why the conservation negative controls (which are *supposed* to exit
   non-zero) can be covered at all.
 
-## What it does not yet cover — two tracked bounds
+## What it does not yet cover
 
-**#1568 — nine gate workflows are outside the registry.** The registration trigger is "this workflow
-installs the mechanical binaries", which is a proxy chosen because that is literally what #1509 broke,
-not a statement that the rest are safe. `disclosure-venue`, `reasons-drift`, `acceptance`,
-`acceptance-close`, `alert-paths`, `corpus-m8`, `osv-staleness`, `owasp-ack-watch` and `site-smoke`
-are outside it, and several of them score something real — `reasons-drift` re-runs every empirical
-falsifier, `corpus-m8` runs Stryker per target. #1568 replaces the proxy with a trigger that leaves
-no gate out by construction.
-
-**#1569 — no `liveness_drill` has been dispatched.** The guard is proven live in both directions on
-`dry-run-drift` (run 30569627289 failing, run 30569498565 passing), but that failing proof lives in a
-closed PR and a deleted branch rather than in a re-runnable command, and the `corpus-drift` /
-`conservation` drills have never executed — a `workflow_dispatch` input does not exist until the
-workflow is on the default branch. #1569 dispatches each one and records the proof run in
-`.github/gate-liveness.json`, the way `.github/alert-paths.json` records `provenBy`, because a path
-that has never fired reads exactly like one with no failing direction (#1287's own finding).
-
-The **DECLARED NO-OP** verdict is likewise proven by `src/ci-liveness.test.ts` against the real
-script, but has not yet been observed on a live short-circuited job: every PR that touches this
-mechanism also touches the paths those jobs filter on, so their in-job filters correctly report
+**The DECLARED NO-OP verdict has still not been observed on a live short-circuited job.** It is
+proven by `src/ci-liveness.test.ts` against the real script, but every PR that touches this mechanism
+also touches the paths those jobs filter on, so their in-job filters correctly report
 `relevant=true`. The first docs-only PR after this lands will exercise it.
+
+**`supervised-declines` is unproven in both of its paths** until its workflow file is on `main` —
+see #1688, which carries the 404 that makes it unprovable before the merge.
+
+**The exemption check is a floor, not a proof.** It refuses the one shape it can recognise — a
+conditional scoring step — and takes the rest of `whyDistinguishable` on the prose. A workflow that
+swallowed a failure some other way (`|| true` inside a multi-line `run:`, a `continue-on-error` on a
+step the reason does not mention) would pass the check while its exemption was false.

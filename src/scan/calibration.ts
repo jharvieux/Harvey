@@ -486,11 +486,13 @@ const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
       {
         what: "`src/cli/pentest.ts --mode=coverage` reaches assertComplete (src/pentest/targets.ts) and fails loud on any enumerated target `--tested` did not list (#352)",
         invokes: "src/cli/pentest.ts",
-        // MEASURED 2026-07-28: `grep -rn "mode=coverage" .github/workflows/ package.json` returns
-        // nothing, and no workflow names pentest at all. The check works in both directions; it just
-        // runs only when a human remembers. Wiring it into a venue is a supervised
-        // .github/workflows/ edit, so it is DISCLOSED here and relayed on #1483 rather than done.
-        cadence: { kind: "none", issue: 1483 },
+        // WIRED 2026-07-31 (#1483). The disclosure that used to sit here — "wiring it into a venue is
+        // a supervised .github/workflows/ edit, so it is DISCLOSED here and relayed on #1483 rather
+        // than done" — was the #1545 family: true about an executor's edit permission, false about
+        // whether the work could be done. The operator granted workflow edits, the step landed, and
+        // the exemption now names a venue that runs rather than an issue that waits. Both directions
+        // MEASURED the same day: exit 0 on `--tested app:root`, exit 1 on `--tested bogus-id`.
+        cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 3", when: "every code PR + daily schedule" },
       },
       {
         what: "the M2 conservation plant in src/audit-conservation.ts, asserted by src/cli/validate-conservation.ts (#1155)",
