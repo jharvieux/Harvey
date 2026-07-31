@@ -146,7 +146,31 @@ describe("#1483 a substitute gate declares a cadence, and the cadence is checked
       invokes: "src/cli/dry-run.ts",
       cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "ci", when: "every PR" },
     });
-    expect(errors).toMatch(/never invokes `src\/cli\/dry-run\.ts` — the cadence was removed, or never landed/);
+    expect(errors).toMatch(/there invokes `src\/cli\/dry-run\.ts` — the cadence was removed, or never landed/);
+  });
+
+  // #1702 — the check used to score `gate.invokes` against the workflow's RAW text, so any mention
+  // anywhere satisfied it. Found by the acceptance verifier on PR #1701: the control above passed by
+  // an accident of wording (`dry-run.ts` happens not to appear in the fixture at all), so it proved
+  // nothing about a workflow that DOES name the CLI in a dead position. These three do.
+  it("CONTROL — a mention only a reader executes (comment, step name, paths: filter) is refused", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const cases = {
+      comment: ["jobs:", "  x:", "    steps:", "      # M2 coverage gate — src/cli/pentest.ts --mode=coverage; disabled while the stack is flaky", "      - run: echo hi"],
+      "step name": ["jobs:", "  x:", "    steps:", "      - name: M2 target-coverage gate (src/cli/pentest.ts)", "        run: echo hi"],
+      "paths filter": ["on:", "  pull_request:", "    paths:", '      - "src/cli/pentest.ts"', "jobs:", "  x:", "    steps:", "      - run: echo hi"],
+    };
+    for (const [label, lines] of Object.entries(cases)) {
+      const errors = (validateParityExemptions([withGate({ what: "src/cli/pentest.ts --mode=coverage", invokes: "src/cli/pentest.ts", cadence })], inRepo, { scripts: {}, workflows: { ".github/workflows/x.yml": lines.join("\n") } })[0]?.errors ?? []).join(" ");
+      expect(errors, label).toMatch(/there invokes `src\/cli\/pentest\.ts`/);
+    }
+  });
+
+  it("CONTROL — the same file with a live `run:` step passes, so the check above is not always-on", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const lines = ["jobs:", "  x:", "    steps:", "      # M2 coverage gate", "      - run: pnpm exec tsx src/cli/pentest.ts --mode=coverage"];
+    const errors = (validateParityExemptions([withGate({ what: "src/cli/pentest.ts --mode=coverage", invokes: "src/cli/pentest.ts", cadence })], inRepo, { scripts: {}, workflows: { ".github/workflows/x.yml": lines.join("\n") } })[0]?.errors ?? []).join(" ");
+    expect(errors).toBe("");
   });
 
   it("CONTROL — a gate declaring a workflow that does not exist is refused", () => {

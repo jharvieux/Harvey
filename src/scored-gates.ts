@@ -69,6 +69,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import { readNamesSafe } from "./fs-walk.js";
 
 /** Where a gate runs, and the evidence that proves it still does. */
@@ -231,32 +232,63 @@ export interface GateInputs {
   readonly workflows: Readonly<Record<string, string>>;
 }
 
-/**
- * The workflow text with its `paths:`/`paths-ignore:` trigger lists removed.
- *
- * MEASURED 2026-07-31 (#1691): a workflow that named `src/cli/<gate>.ts` ONLY in its PR-trigger
- * filter satisfied the cadence check. A path filter says which diffs start the job, never that the
- * job runs the tool — so deleting the actual invocation left this gate green, which is the same
- * false pass the gate exists to remove one level up.
- */
-function withoutTriggerFilters(yml: string): string {
-  const out: string[] = [];
-  let skipIndent: number | undefined;
-  for (const line of yml.split("\n")) {
-    const indent = line.length - line.trimStart().length;
-    if (skipIndent !== undefined && (line.trim() === "" || indent > skipIndent)) continue;
-    skipIndent = /^\s*paths(-ignore)?:\s*$/.test(line) ? indent : undefined;
-    if (skipIndent === undefined) out.push(line);
+const EXECUTABLE_KEYS = new Set(["run", "uses"]);
+
+function collectExecutable(node: unknown, out: string[], underWith: boolean): void {
+  if (typeof node === "string") {
+    if (underWith) out.push(node);
+    return;
   }
+  if (Array.isArray(node)) {
+    for (const item of node) collectExecutable(item, out, underWith);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node)) {
+    if (EXECUTABLE_KEYS.has(key) && typeof value === "string") out.push(value);
+    else collectExecutable(value, out, underWith || key === "with");
+  }
+}
+
+/**
+ * The parts of a workflow that can actually EXECUTE: every `run:` and `uses:` value anywhere in the
+ * document, plus the `with:` inputs handed to a `uses:`. `undefined` when the YAML will not parse —
+ * an unreadable workflow must fail loud at the caller, never fall back to a text match.
+ *
+ * Two false passes it removes, both MEASURED on real files rather than imagined:
+ *   • #1691, 2026-07-31 — a workflow naming `src/cli/<gate>.ts` ONLY in its PR `paths:` trigger
+ *     filter satisfied the cadence check. A path filter says which diffs START the job, never that
+ *     the job runs the tool. (The old fix stripped `paths:` blocks by indentation; a `paths:` entry
+ *     is not a `run:` value, so this subsumes it.)
+ *   • #1702, 2026-07-31 — a bare `#` COMMENT mention satisfied it too, and every gate step in this
+ *     repo's workflows carries a long explanatory comment above it. Deleting the `run:` line while
+ *     leaving the comment kept both cadence checks green while the gate stopped running. A step
+ *     `name:` had the same effect.
+ *
+ * STATED BOUND: it reads the workflow file only. A gate invoked from inside a composite action
+ * (`uses: ./.github/actions/...`) is not visible here — none is today, and the `uses:` value itself
+ * is collected, so such a cadence would fail rather than pass silently.
+ */
+export function executableWorkflowText(yml: string): string | undefined {
+  let doc: unknown;
+  try {
+    doc = parse(yml);
+  } catch {
+    return undefined;
+  }
+  const out: string[] = [];
+  collectExecutable(doc, out, false);
   return out.join("\n");
 }
 
 /**
- * Whether `yml` (already stripped of trigger filters) invokes the gate — by CLI path, or through the
- * package script, which is how secbench.yml and free-recall.yml do it.
+ * Whether the workflow invokes the gate — by CLI path, or through the package script, which is how
+ * secbench.yml and free-recall.yml do it.
  */
-function invokes(yml: string, gate: ScoredGate): boolean {
-  return yml.includes(`src/cli/${gate.id}.ts`) || yml.includes(`pnpm ${gate.script}`);
+function invokes(yml: string, gate: ScoredGate): boolean | undefined {
+  const executable = executableWorkflowText(yml);
+  if (executable === undefined) return undefined;
+  return executable.includes(`src/cli/${gate.id}.ts`) || executable.includes(`pnpm ${gate.script}`);
 }
 
 export function checkScoredGates(
@@ -299,10 +331,15 @@ export function checkScoredGates(
       const text = inputs.workflows[gate.cadence.file];
       if (text === undefined) {
         violations.push(`${gate.id}: declares cadence in ${gate.cadence.file}, which does not exist.`);
-      } else if (!invokes(withoutTriggerFilters(text), gate)) {
-        violations.push(
-          `${gate.id}: declares cadence in ${gate.cadence.file} (${gate.cadence.job}) but that workflow never invokes src/cli/${gate.id}.ts — the cadence was removed, or never landed.`,
-        );
+      } else {
+        const reached = invokes(text, gate);
+        if (reached === undefined) {
+          violations.push(`${gate.id}: ${gate.cadence.file} does not parse as YAML, so whether it invokes src/cli/${gate.id}.ts cannot be read. An unreadable venue is not a passing one.`);
+        } else if (!reached) {
+          violations.push(
+            `${gate.id}: declares cadence in ${gate.cadence.file} (${gate.cadence.job}) but no \`run:\`/\`uses:\` there invokes src/cli/${gate.id}.ts — the cadence was removed, or never landed. A comment, a step \`name:\` or a \`paths:\` filter naming it does not count (#1691/#1702).`,
+          );
+        }
       }
     } else if (!(gate.cadence.issue > 0)) {
       violations.push(`${gate.id}: has no cadence and names no tracking issue. An undisclosed gap never appears in a tally.`);

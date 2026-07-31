@@ -32,7 +32,7 @@ const BASE_EXCLUDE = [
   ".claude/**",
 ];
 
-// #1120/#1125 — the heavy tail. These seven files drive real child processes (the tsx CLIs,
+// #1120/#1125 — the heavy tail. These files drive real child processes (the tsx CLIs,
 // semgrep, the Stryker scaffolding) through SYNCHRONOUS execFileSync, which blocks their vitest
 // worker's event loop for the duration of each call. MEASURED 2026-07-26 they are the entire tail
 // of the suite: 6s-70s per file depending on machine load, against 1.7s for the next file down.
@@ -46,7 +46,9 @@ const BASE_EXCLUDE = [
 // `[vitest-worker]: Timeout calling "onTaskUpdate"` as an Unhandled Error and exits 1 with ZERO
 // failing tests — a red `pnpm verify` that names nothing.
 //
-// MEASURED 2026-07-26, `pnpm test`, 10-core machine also carrying other agent worktrees:
+// MEASURED 2026-07-26, `pnpm test`, 10-core machine also carrying other agent worktrees. The list
+// held SEVEN files that day; #1628 added an eighth, so read the bullets as the measurement that
+// settled the split, not as a current census:
 //   • unchanged                   — 3 of 5 green (2 RPC-timeout failures, 0 failing tests)
 //   • poolOptions.forks.maxForks 4 — 1 of 5 green. TRIED and REJECTED: throttling the pool does not
 //     help, because the contention is not only this suite's own — the heavy files still overlap
@@ -93,7 +95,7 @@ const heavyRun = process.env.HARVEY_HEAVY_CLI_TESTS === "1";
 
 // Say what was left out, in the output, every run — an excluded file produces no row at all, and an
 // absent row cannot be argued with (CLAUDE.md's coverage guard). #1105's opt-in block prints the
-// same kind of line from inside the test file; these seven are excluded before collection, so the
+// same kind of line from inside the test file; these files are excluded before collection, so the
 // disclosure has to come from here.
 if (!heavyRun) {
   console.warn(

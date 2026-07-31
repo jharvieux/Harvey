@@ -23,8 +23,10 @@
 // #1366 is CLOSED; #1679 inherits both rows explicitly (each row's plant, its measured reason, and
 // what a detector would have to see), because a comment on a closed issue is not a tracker.
 // The two "none" rows leave the recall denominator and gain the fail-loud-on-graduation guard, which
-// review tier does not have: a review-tier miss is absorbed as a tracked non-fatal gap in EITHER
-// direction, so nothing would have noticed a rule starting to fire on them.
+// review tier does not have: a rule STARTING to fire on a review-tier row is not a failure in either
+// direction, so nothing would have noticed the gap closing. (The other half of that sentence — that
+// a review-tier MISS was absorbed as a tracked non-fatal gap — stopped being true on 2026-07-31,
+// #1628.)
 //
 // The acceptance bar for THIS batch is precision, not recall: zero free-count (high-tier) false
 // positives on the negatives. See GROUND-TRUTH.md §B15.

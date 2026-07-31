@@ -13,7 +13,7 @@
 
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
 import { validateRecordedReason, type ParsedReason } from "../recorded-reasons.js";
-import type { Cadence } from "../scored-gates.js";
+import { executableWorkflowText, type Cadence } from "../scored-gates.js";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
@@ -251,8 +251,9 @@ export interface MatrixRow {
   kind: CorpusEntry["kind"];
   cls: string;
   expectedTier?: CorpusEntry["expectedTier"];
-  // #1248: echoes the entry's soundness flag so validate-calibration can make this row's miss fatal
-  // even though review-tier misses are non-fatal in general.
+  // #1248: echoes the entry's soundness flag. Since #1628 every review-tier miss is fatal, so this
+  // no longer decides the verdict — it decides the WORDING, keeping a soundness miss from being
+  // narrated as a recall aspiration.
   mustCatch?: true;
   caughtTier?: PrecisionTier; // best tier a relevant finding landed at (positives)
   highFlagged: boolean; // a relevant finding at HIGH (free-count) tier exists
@@ -355,6 +356,50 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[], scoredVenues
         ? `cleared from the count (recorded review-tier hit only, triaged out: ${[...new Set(relevant.filter((f) => f.precisionTier === "review").map((f) => f.taxonomy))].join(", ")})`
         : "cleared — not flagged";
   return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, ...noSev };
+}
+
+/**
+ * The positives whose miss FAILS the calibration gate — one implementation, shared by the verdict
+ * and by the negative control that proves the verdict can fail, so weakening it weakens the control
+ * too (reverting the `review` clause makes the control print DID NOT FIRE and reds the gate).
+ *
+ * #1628 — REVIEW-TIER MISSES ARE FATAL, decided 2026-07-31. They used to print as "Review-tier
+ * recall gaps (non-fatal, tracked)" and exit 0, which made a corpus row for a review-tier detector
+ * bookkeeping rather than a guard: reverting `readMigrations` (#1323) left five rows dark and the
+ * gate green; dropping the prop-spread sanitizer's identifier constraint (#1237) left two. Both
+ * fixes had to ship a SEPARATE blocking test to get a failing direction at all. Two measurements
+ * decided it rather than an argument:
+ *   • POPULATION — 229 of the 384 mechanical positives this gate scores are review-tier and only 6
+ *     carried #1248's opt-in `mustCatch`, so 223 rows (58%) could go dark without failing anything.
+ *   • COST — zero. 0 review-tier misses locally AND in CI (run 30664500931, heavy-cli shard 1,
+ *     2026-07-31: `positives caught: 359/359 static`). Making them fatal changed no verdict.
+ * The corpus already has a tier for a gap we accept: `expectedTier: "none"`, whose `gapKind`
+ * separates a settled boundary from outstanding work and which fails loud in the OTHER direction if
+ * a rule starts firing. So `review` never meant "might not be caught" — a review row that catches
+ * nothing at all is a regression, and is now scored as one.
+ *
+ * `mustCatch` survives as the LOUDER message (#1248): both are fatal, and a soundness fixture's miss
+ * must not read as a recall aspiration in the output.
+ */
+export function fatalRecallMisses(rows: readonly MatrixRow[]): MatrixRow[] {
+  return rows.filter(
+    (r) =>
+      r.kind === "positive" &&
+      // A live row this run had no venue for is excluded from every count, never passed (#1428).
+      !r.notScored &&
+      // "none" is the accepted-gap tier and is scored by its own inverted rule above.
+      r.expectedTier !== "none" &&
+      (!r.pass || (r.expectedTier === "high" && !r.highFlagged)),
+  );
+}
+
+/**
+ * `findings` with everything that scores `entry` removed — the plant for #1628's negative control.
+ * A gate nobody has watched go red reads exactly like one with no failing direction at all.
+ */
+export function darkenEntry(entry: CorpusEntry, findings: Finding[]): Finding[] {
+  const relevant = new Set(relevantFindings(entry, findings));
+  return findings.filter((f) => !relevant.has(f));
 }
 
 export interface CoverageMatrix {
@@ -603,16 +648,17 @@ function cadenceErrors(gate: SubstituteGate, venues: CadenceVenues): string[] {
       : [`substituteGates: "${gate.what.slice(0, 60)}…" declares the \`verify\` cadence, but the verify chain (\`${chain}\`) never reaches \`${gate.invokes}\``];
   }
   if (cadence.kind === "workflow") {
-    // KNOWN WEAKNESS, #1702: this matches `gate.invokes` against the workflow's RAW text, so a bare
-    // `#` comment mention satisfies it — and every gate step in ci.yml carries a long comment above
-    // it. Deleting the `run:` line while leaving the comment would keep this green. Not currently
-    // false (the step really does run, both directions exercised 2026-07-31); a bound on what the
-    // check can prove, stated where the check is.
     const text = venues.workflows[cadence.file];
     if (text === undefined) return [`substituteGates: declares a cadence in ${cadence.file}, which does not exist — the venue was renamed or deleted and this module now stands on nothing`];
-    return text.includes(gate.invokes)
+    // #1702: scored against the workflow's EXECUTABLE positions, not its raw text. Raw text was
+    // satisfied by a bare `#` comment mention, and every gate step in ci.yml carries a long comment
+    // above it — deleting the `run:` line while leaving the comment kept this green while the gate
+    // stopped running.
+    const executable = executableWorkflowText(text);
+    if (executable === undefined) return [`substituteGates: ${cadence.file} does not parse as YAML, so whether it invokes \`${gate.invokes}\` cannot be read — an unreadable venue is not a passing one`];
+    return executable.includes(gate.invokes)
       ? []
-      : [`substituteGates: declares a cadence in ${cadence.file} (${cadence.job}) but that workflow never invokes \`${gate.invokes}\` — the cadence was removed, or never landed`];
+      : [`substituteGates: declares a cadence in ${cadence.file} (${cadence.job}) but no \`run:\`/\`uses:\` there invokes \`${gate.invokes}\` — the cadence was removed, or never landed. A comment, a step \`name:\` or a \`paths:\` filter naming it does not count (#1702)`];
   }
   return cadence.issue > 0
     ? []

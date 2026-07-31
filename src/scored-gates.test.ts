@@ -58,7 +58,7 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
       inputs({ workflows: { ".github/workflows/ci.yml": "run: pnpm test" } }),
       gate({ cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1", when: "every PR + daily schedule" } }),
     );
-    expect(v.join("\n")).toContain("never invokes src/cli/validate-x.ts");
+    expect(v.join("\n")).toContain("there invokes src/cli/validate-x.ts");
   });
 
   it("fails when a new validate-* CLI is classified nowhere", () => {
@@ -97,7 +97,7 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
   it("REFUSES a cadence evidenced only by a PR-trigger paths: filter", () => {
     const yml = ['on:', '  pull_request:', '    paths:', '      - "src/cli/validate-x.ts"', 'jobs:', '  x:', '    steps:', '      - run: echo hi'].join("\n");
     const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence: { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } }));
-    expect(v.join("\n")).toContain("never invokes src/cli/validate-x.ts");
+    expect(v.join("\n")).toContain("there invokes src/cli/validate-x.ts");
   });
 
   it("accepts an invocation by CLI path or by package script, so the check above is not always-on", () => {
@@ -105,8 +105,47 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
     const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
     for (const step of ["      - run: pnpm exec tsx src/cli/validate-x.ts", "      - run: pnpm validate:x"]) {
       const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }));
-      expect(v.join("\n"), step).not.toContain("never invokes");
+      expect(v.join("\n"), step).not.toContain("there invokes src/cli/validate-x.ts");
     }
+  });
+
+  // #1702 — the same false pass the `paths:` control above removes, reached through a COMMENT. Every
+  // gate step in this repo's workflows carries a long explanatory comment above it, so deleting the
+  // `run:` line and leaving the comment was the cheapest way to retire a gate silently. A step
+  // `name:` is the same shape: the workflow "mentions" the CLI in a position that never executes.
+  it("REFUSES a cadence evidenced only by a YAML comment or a step name", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const cases = {
+      comment: ["jobs:", "  x:", "    steps:", "      # was: pnpm exec tsx src/cli/validate-x.ts — removed while we chase a flake", "      - run: echo hi"],
+      "step name": ["jobs:", "  x:", "    steps:", "      - name: run src/cli/validate-x.ts", "        run: echo hi"],
+      "trailing comment on a live step": ["jobs:", "  x:", "    steps:", "      - run: echo hi # replaces pnpm validate:x"],
+    };
+    for (const [label, lines] of Object.entries(cases)) {
+      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
+      expect(v.join("\n"), label).toContain("there invokes src/cli/validate-x.ts");
+    }
+  });
+
+  // The other direction for the same extraction: a `uses:` value and a `with:` input are executable
+  // positions too, so narrowing to `run:` alone would have made this check fail on a live cadence.
+  it("accepts an invocation in a uses: value or a with: input", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    for (const lines of [
+      ["jobs:", "  x:", "    steps:", "      - uses: ./.github/actions/run-cli", "        with:", "          cmd: pnpm exec tsx src/cli/validate-x.ts"],
+      ["jobs:", "  x:", "    steps:", "      - run: |", "          set -e", "          pnpm validate:x"],
+    ]) {
+      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": lines.join("\n") } }), gate({ cadence }));
+      expect(v.join("\n"), lines.join("\n")).not.toContain("there invokes src/cli/validate-x.ts");
+    }
+  });
+
+  // A venue that fails to parse is not a venue that passed. Falling back to a raw text match here
+  // would reintroduce exactly the hole above on any workflow with a YAML error.
+  it("refuses a workflow that does not parse rather than falling back to a text match", () => {
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    const broken = "jobs:\n  x:\n    steps:\n      - run: pnpm exec tsx src/cli/validate-x.ts\n  : : :\n";
+    const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": broken } }), gate({ cadence }));
+    expect(v.join("\n")).toContain("does not parse as YAML");
   });
 
   // #1691's disclosure row: a measured-number CLI outside the `validate-*` discovery predicate is

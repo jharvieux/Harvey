@@ -88,11 +88,13 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
 // #1237(a) — the loop-copy allowlist sanitizer, driven through the REAL semgrep run rather than a
 // recorded fixture, because what it has to prove is the sanitizer's behaviour and a recording
 // does not. It lives here rather than in the calibration entries alone for a measured reason:
-// `validate-calibration` scores all three rows correctly, but `harvey-jsx-prop-spread-injection` is
-// review-tier and that gate prints a review-tier miss as a tracked NON-FATAL gap and still exits 0.
-// MEASURED 2026-07-31 — with the sanitizer's identifier constraint deleted, both adversarial
-// positives went silent, both rows read FAIL, and the gate still printed GATE PASS and exited 0.
-// So the corpus makes a regression visible; this makes it fail.
+// `validate-calibration` scores all three rows correctly, but at the time this landed that gate
+// printed a review-tier miss as a tracked NON-FATAL gap and still exited 0. MEASURED 2026-07-31 —
+// with the sanitizer's identifier constraint deleted, both adversarial positives went silent, both
+// rows read FAIL, and the gate still printed GATE PASS and exited 0. #1628 closed that hole the
+// same day: a review-tier miss is a GATE FAIL now, so the corpus rows would bite on their own. This
+// block stays because it is not the same test — it drives the sanitizer through a real semgrep run
+// and asserts WHICH fixtures it spares, which a recall count leaves unsaid.
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("harvey-jsx-prop-spread-injection: the loop-copy allowlist (#1237)", () => {
   const FIXTURES = join(CALIBRATION, "src", "owasp-react");
 
