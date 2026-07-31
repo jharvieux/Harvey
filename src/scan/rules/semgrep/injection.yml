@@ -1353,22 +1353,39 @@ rules:
       rewrites the filter into one that matches every entry, and in an LDAP-backed login that is an
       authentication bypass. Escape with the client's filter-escaping helper (ldapjs
       `filter.escape`, ldapts `EqualityFilter`) or build the filter from typed objects.
-      SCOPE OF THIS CHECK: the `search`/`bind`/`compare`/`modify` call sites of the conventional
-      Node LDAP clients, taint-gated on a request source. It requires the file itself to pull in
-      `ldapjs` or `ldapts` — by `import` or by `require`, both MEASURED 2026-07-31 — so a filter
-      assembled in a helper module and passed in, an LDAP client re-exported through a project
-      wrapper, or any client outside that module set is NOT matched.
+      SCOPE OF THIS CHECK: the `search`/`searchAsync` options object, the `bind` DN, the `compare`
+      value and the `modify` Change — each taint-gated on its own argument, all four MEASURED
+      2026-07-31 as firing. It requires the file itself to pull in `ldapjs` or `ldapts` — by
+      `import` or by `require`, both also MEASURED — so a filter assembled in a helper module and
+      passed in, an LDAP client re-exported through a project wrapper, or any client outside that
+      module set is NOT matched.
     pattern-sources:
       - *request_source
     pattern-sinks:
       - patterns:
+          # Each arm focuses its OWN tainted argument. MEASURED 2026-07-31: with a single
+          # `focus-metavariable: $OPTS` covering the whole block, the bind/compare/modify arms were
+          # DEAD — they never bind `$OPTS`, so a planted tainted bind DN, compare value and modify
+          # Change all produced nothing while the message advertised all four call sites. That is a
+          # bound stated backwards: it claimed MORE coverage than the rule had.
           - pattern-either:
-              - pattern: $C.search($BASE, $OPTS, ...)
-              - pattern: $C.search($BASE, ...)
-              - pattern: $C.bind($X, ...)
-              - pattern: $C.compare($DN, $ATTR, $X, ...)
-              - pattern: $C.modify($DN, $CHANGE, ...)
-              - pattern: $C.searchAsync($BASE, $OPTS, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern: $C.search($BASE, $OPTS, ...)
+                      - pattern: $C.searchAsync($BASE, $OPTS, ...)
+                  - focus-metavariable: $OPTS
+              # The bind DN. `log.bind(null, req.query.x)` — Function.prototype.bind inside a file
+              # that also imports an LDAP client — does NOT fire: the focus is the FIRST argument,
+              # which in that idiom is the `this` value, not the tainted one (MEASURED).
+              - patterns:
+                  - pattern: $C.bind($DN, ...)
+                  - focus-metavariable: $DN
+              - patterns:
+                  - pattern: $C.compare($DN, $ATTR, $X, ...)
+                  - focus-metavariable: $X
+              - patterns:
+                  - pattern: $C.modify($DN, $CHANGE, ...)
+                  - focus-metavariable: $CHANGE
           # MEASURED 2026-07-31: a `require("ldapjs")`-only binding produced NOTHING for
           # `import ldap from "ldapjs"` — the dominant form in the Next.js/TS apps this product
           # audits — and nothing for `ldapts`, which this rule's own remediation text names. Both
@@ -1384,7 +1401,6 @@ rules:
           - metavariable-regex:
               metavariable: $MOD
               regex: ^(ldapjs|ldapts)$
-          - focus-metavariable: $OPTS
 
   # #1273 — CSV formula injection. #985's expansion comment listed it as a new class; MEASURED
   # 2026-07-31 it was matched by no harvey-* rule. A cell beginning `=`/`+`/`-`/`@`/tab/CR is

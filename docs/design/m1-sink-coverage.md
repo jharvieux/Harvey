@@ -125,6 +125,16 @@ The changes:
   only calibration fixture used `require`, "LDAP injection is covered" was true of the form these
   targets least often use and no gate could see the difference. `P-LDAP-INJECTION-ESM`
   (`pages/api/ldap-lookup-esm.js`, `import { Client } from "ldapts"`) now pins the other half.
+- `harvey-ldap-injection`'s `bind`/`compare`/`modify` arms were **DEAD as first written**, which is
+  a worse defect than the ESM one because the message stated the bound BACKWARDS — it advertised
+  all four call sites while only `search` could fire. A single block-level
+  `focus-metavariable: $OPTS` covered every arm, and none of those three binds `$OPTS`. MEASURED
+  2026-07-31: a planted tainted bind DN, compare value and modify `Change` produced **nothing**.
+  Each arm now focuses its own argument, all four verified firing. The bind arm is deliberately the
+  generic method name `bind`, so it ships a boundary negative: `N-LDAP-BIND-FN-PROTOTYPE` proves
+  `tag.bind(null, req.query.uid)` — `Function.prototype.bind` inside a file that also imports an
+  LDAP client — stays dark, because the focus is the first argument and in that idiom the first
+  argument is the `this` value.
 
 Each new rule ships a paired positive/negative in `targets/calibration/pages/api/` and its answer-key
 row in `src/scan/calibration/b3-injection.entries.ts`. The negatives are the taint gate's boundary:
