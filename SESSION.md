@@ -2,7 +2,110 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-30 — **SWEEP IN ROUND 2.** 6 PRs merged, 10 issues closed, 2 PRs open awaiting verification. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`. Newest block first._
+_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** Rounds 1–2 are closed out (8 PRs merged, net −5 on the tracker). Round 3 opened the 177-issue tiered backlog. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
+
+## 2026-07-31 (sweep, round 3) — the backlog is triaged; operator asleep, sweep running
+
+**IF YOU ARE PICKING THIS UP COLD, READ THIS FIRST.** The operator is asleep and asked for the sweep
+to power through overnight, **holding all questions and status updates until they say they are back**.
+Anything needing a ruling gets filed + labelled `awaiting-decision` and carried to the wake-up report —
+it does not stop the sweep and it does not get guessed at.
+
+### Standing grants this round (operator, verbatim: *"you have permission to edit workflows, docs, and claude.md, and to deploy to prod"*)
+
+| path | status |
+|---|---|
+| `.github/workflows/**` | **GRANTED** |
+| `docs/**` (incl. `runbooks/`, `design/`) | **GRANTED** |
+| `CLAUDE.md` | **GRANTED — to the SUPERVISOR ONLY.** CLAUDE.md's own rule stands: a dispatched agent never edits it even under an operator grant. Executors report proposed wording; the supervisor applies everything in one pass at wrap-up. |
+| production deploys | **GRANTED** |
+| `report-template/findings.*.json`, `.env*` | still NOT granted — client data |
+| registering a new **required status check** on `main` | still NOT granted — branch protection was never asked about. Executors recommend; they do not self-grant. |
+
+### Concurrency
+
+**4 concurrent executors for coding-only batches; 2 when a batch drives Stryker or Docker** (m2 live
+stand-ups, m8 mutation runs). Operator ruling this session — supersedes the skill's default of 3.
+
+### Round 3 scope and how it was triaged
+
+The 177 issues **explicitly excluded from rounds 1–2** ("new/untriaged only"). Every one of the 177
+already carried a model-tier label, so none was untriaged in the label sense; they were re-triaged
+anyway because **a tier label is not a triage record** — grouping needs category/priority/
+predicted_files/subsystem/blockers and none of them had those recorded anywhere.
+
+Fetch integrity: `gh api --paginate` returned 184 open issues, matching the live search total exactly
+(no `--limit` truncation). 184 − 7 never-triage = 177, all returned, zero missing, zero duplicates.
+
+**The grouping finding worth keeping:** union-find on the deterministic rule (same subsystem OR shared
+`predicted_files`) collapsed **162 of 177 into ONE component** — `src/detectors/app-router.ts`,
+`src/scan/external-corpus.ts` and `src/scan/calibration/**` are touched by nearly every subsystem. That
+is useless as a grouping key but it is the real concurrency constraint, so batches are subsystem-coherent
+chunks of ≤6 and the overlap graph is kept as a per-batch `conflicts_with`. **Check `conflicts_with`
+before dispatching anything** — `calibration-1454` conflicts with 18 other batches, `m1-1264` with 14.
+
+3 epics (#2, #632, #1320) are excluded from execution: trackers that close when their children close.
+
+### Do NOT dispatch executors at these
+
+`gtm-*`, `disclosure-*` and most of `site-*` are dominated by **operator-only actions** — form an LLC,
+create accounts, contact maintainers, obtain legal review. An agent produces nothing there. They are
+parked and carried to the wake-up report, not worked.
+
+### `SESSION.md` short-circuits every heavy gate — MEASURED, do not "fix" this again
+
+Asked this session whether SESSION.md short-circuits the heavy CI tests. **It already does.** Measured
+on PR #1608, a real SESSION.md-only PR: corpus-drift whole run **22s** (shards 5–6s each, the required
+`clone pinned commits + score baselines` context 3s), CI run 20s with the `verify` **job at 2s**,
+conservation 16s, dry-run-drift 19s, and heavy CLI tests + build + actionlint all **SKIPPED**.
+`SESSION.md` is on the in-job deny-list at `.github/workflows/corpus-drift.yml:202` beside
+`AGENTS.md|CLAUDE.md|README.md`. **No fix was made because none was needed.**
+
+This corrects a supervisor claim made earlier the same day that a SESSION.md checkpoint costs "~22
+minutes of corpus-drift" — that quoted CLAUDE.md's stored **22m12s** figure, which was measured on PR
+#1578, a *real corpus change*. Quoting a stored number instead of measuring the case in hand is the
+exact failure the "measure, don't recall" rule names. 22 minutes vs 22 seconds.
+
+### Resend is live — the lead-capture funnel works
+
+Operator set the Resend env vars. Closed on **measurement, not on the report**:
+
+```
+GET  https://harvey-qa.com/api/scan  -> 200 {"configured":true,"sandboxSender":false}
+POST https://harvey-qa.com/api/scan  -> 200 {"ok":true}
+GET  https://harvey-qa.com/intake    -> 307 -> /#scan -> 200
+pnpm exec tsx src/cli/site-smoke.ts  -> all 6 checks pass, exit 0
+```
+
+- **#721 closed** — held open by ONE stated unknown (requester confirmation unmeasured, needing a
+  deploy + a Resend check). `sandboxSender:false` answers it: confirmations send from a verified
+  domain, not the sandbox.
+- **#1308 closed** — both dead paths alive. Its `intake-site` criterion was already split to **#1515**,
+  which stays **OPEN** `awaiting-decision`. The 307 to `/#scan` is a **self-declared stopgap**, not the
+  answer — see the comment in `site/next.config.mjs`.
+- **#1520 closed** — already fixed. Verified by running the issue's *own* committed falsifier, which
+  now exits **0** (it exited 1 on 2026-07-30). Live `/llms.txt` is byte-identical to `main`. The
+  redeploy happened as a side effect of #1597/PR #1605 repointing Vercel's Root Directory to `site`.
+  **No deploy was performed** — the grant existed, the state was simply already correct.
+- **#1609 filed** — the one genuinely open piece, split out of #721 so it was not lost on close: every
+  `/api/scan` error path says *"please email us directly"* and the site publishes **no address
+  anywhere**. Needs one operator decision: which address. Labelled `awaiting-decision`.
+
+### Two bookkeeping defects found closing out rounds 1–2
+
+1. PR #1606 carried **no labels at all** — missing `auto-triaged`, so `gh pr list --label auto-triaged
+   --state open` returned an empty list while a sweep PR was open. The reconciliation query was
+   silently under-reporting. Fixed.
+2. The ledger asserted #1603/#1604 were *"filed, labelled, cross-linked"*. Filed and labelled were
+   true; **cross-linked was false** — neither #1595 nor PR #1602 referenced them, and #1607 had zero
+   back-references anywhere. Fixed on #1595 and #1592. Classic accounted-for-is-not-delivered.
+
+### Rounds 1–2 final reconciliation (forge-queried, one basis on both sides)
+
+189 open at start → **184** after round 2. 12 closed, 7 filed, with #1592/#1595/#1597/#1600 counted in
+**both** totals. `189 − 12 + 7 = 184`, matching the live count exactly. **Net −5 — the tracker shrank
+by 5.** (Do not quote the forge's same-day totals as this sweep's result: a prior sweep ran earlier the
+same day.)
 
 ## 2026-07-30 (sweep, round 2) — the site is a workspace member and DEPLOYED; a density claim withdrawn
 

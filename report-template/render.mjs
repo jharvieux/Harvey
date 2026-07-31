@@ -267,7 +267,15 @@ export function coverageSection(rows, m) {
     const s = blocked
       ? { label: "Partial — sub-step blocked", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" }
       : COV[r.status] ?? COV["requires-live-run"];
-    const note = r.status === "ran" ? esc(r.detail ?? "") : esc(r.reason ?? "");
+    // #1555: the column header promises "What ran / why not", and this branch used to deliver only
+    // ONE of them — `detail` on a `ran` row, `reason` otherwise. So a `partial` row's `detail`, which
+    // is what the module DID run, never reached the client. That silently dropped the #502 warning
+    // ("no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized") the moment #1553 made
+    // M1 correctly read `partial` in a realistic engagement: still in findings.json, gone from the
+    // report a person reads. Render both — detail first (what ran), then the reason it fell short —
+    // rather than merging them, because they answer different questions and a reader must be able to
+    // tell "we ran the mechanical tier but not the semantic one" from "we ran nothing".
+    const note = [r.detail, r.reason].filter((t) => t && t.trim()).map(esc).join("<br>");
     // #506: a per-app/per-DB row names its instance so a monorepo's second app/DB is a visible row,
     // never folded into the module's headline.
     const area = r.instance ? `${esc(r.name)} <span style="color:var(--muted)">· ${esc(r.instance)}</span>` : esc(r.name);

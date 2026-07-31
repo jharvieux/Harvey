@@ -220,9 +220,11 @@ describe("#493/#975: harvey-* rule metadata.owasp matches OWASP's official 2021 
 //     which words stand for a CWE is our judgement, so check 2 is corroboration between two
 //     artefacts we control, not independent measurement. CLAUDE.md's rule about an answer key we
 //     wrote applies: it shows a label INCONSISTENT with its rule; it does not certify one correct.
-//   - It reads the rule's SELF-DESCRIPTION. A rule whose message is wrong in the same direction as
-//     its CWE passes. The counted mitigation is PROSE_ONLY below — the rules for which the evidence
-//     lands only in the prose and not in the id/patterns.
+//   - It reads the rule's SELF-DESCRIPTION as well as its machinery. A rule whose message is wrong
+//     in the same direction as its CWE would pass on prose alone; the counted mitigation is
+//     PROSE_ONLY below — the rules for which the evidence lands ONLY in the message. #1540 drove
+//     that population from 41 to 0 by adding CWE_MACHINE_EVIDENCE, a second table keyed on the
+//     SINK/IDIOM each weakness occurs on, checked against the machine half alone.
 //   - Its discrimination is BOUNDED and MEASURED, not assumed: UNDISCRIMINATED names every rule for
 //     which some same-category sibling CWE's vocabulary ALSO matches, so a swap to that specific
 //     sibling would stay green. SINGLETON_CATEGORY names every rule whose CWE is the only one its
@@ -387,6 +389,84 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
 
 const NO_CATEGORY = "(no OWASP Top-10-2021 category)";
 
+// #1540 — the MACHINE half's own vocabulary. CWE_EVIDENCE above is drawn from each CWE's MITRE
+// NAME, and a rule's patterns are written in API idioms that name never uses: harvey-void-async
+// matches `void $F(...)` for "Unchecked Return Value", harvey-mass-assignment matches a spread into
+// `.insert()` for CWE-915. So 41 of 110 rules carried their CWE's vocabulary ONLY in the
+// client-facing `message:` prose, and for those the label rested entirely on the rule's
+// self-description — a message wrong in the same direction as the label passed green.
+//
+// This table is the second one #1540 asked for: per CWE, the SINK OR IDIOM a rule for that weakness
+// executes. It is checked against `rule.machine` ONLY (id + match machinery, never the message), so
+// a rule it corroborates is corroborated by what it RUNS, and machinery resists being written to
+// flatter a label in the way prose does not.
+//
+// WRITING RULE, and it is what keeps this from being a rubber stamp: each entry is derived from the
+// WEAKNESS — the API surface on which that weakness occurs — never from "whatever these rules
+// happen to contain". `exec`/`child_process` is where OS command injection lives whoever wrote the
+// rule; `focus-metavariable: $ARGS` is the argv-array half CWE-88 is about and CWE-78 is not;
+// `ejs`/`Handlebars`/`pug` are template engines whether or not Harvey ever ships another SSTI rule.
+// A CWE with no such surface gets NO row here and its rules stay in PROSE_ONLY with a reason.
+//
+// It feeds BOTH computations in the census below — the PROSE_ONLY population and the
+// UNDISCRIMINATED one — because a signature that corroborates a label must also be able to
+// MIScorroborate a sibling's, and hiding it from the second computation would understate the
+// ambiguity it introduces.
+const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
+  // Exposure: the process-global reads that ARE the exposed thing, plus the server-only boundary
+  // marker whose absence is the defect.
+  "CWE-200": /process\.env|process\.cwd\(|"server-only"/,
+  // The caught error object serialised straight into a response body.
+  "CWE-209": /\bjson\(\{? ?error\b/,
+  // A repeated query parameter arrives as an ARRAY; the cast back to `string` is the tell.
+  "CWE-235": /query\.\$\w+ as string/,
+  // A return value that goes nowhere: `void` discards it, and the not-insides on assignment /
+  // `return` / a chained `.select()` are the three places it would otherwise have been read.
+  "CWE-252": /\bvoid \$\w+\(|pattern-not-inside: (return \.\.\.|\$A = \$B|\$Z\.select)/,
+  // Transport security turned off at the client.
+  "CWE-319": /ssl: ?false|rejectUnauthorized/,
+  // The IV argument position of createCipheriv, which is where predictability is decided.
+  "CWE-329": /Buffer\.from\(\$IV/,
+  // postMessage's second argument IS the target-origin check.
+  "CWE-346": /postMessage\(/,
+  // The verify/decode API surface, and the AEAD tag check that is the symmetric-crypto equivalent.
+  "CWE-347": /jwt\.(decode|verify)\(|jsonwebtoken\.|jwtDecode|jwt_decode|return \$\w+\.update\(/i,
+  // The Origin header read that a CSRF defence performs.
+  "CWE-352": /\.get\("origin"\)|["']csrf/i,
+  // Reflection: a member looked up by a computed key and immediately called.
+  "CWE-470": /\$\w+\[\$\w+\]\(/,
+  // Credential-looking names in a URL QUERY STRING, which is CWE-598's whole subject.
+  "CWE-598": /\[\?&\]/,
+  // Privilege flags taken from the client rather than decided on the server.
+  "CWE-602": /is_\?(admin|superuser|root|owner)/i,
+  // A shell-spawning API, or an argv API explicitly opted into a shell.
+  "CWE-78": /\bexecS?y?n?c?\(|child_process\.exec(Sync)?\(|shell: ?true/,
+  // The HTML/DOM write surfaces and the escaping APIs whose absence is the defect.
+  "CWE-79": /DOMPurify|escapeHtml|sanitizeHtml|<a href=|<\$EL \{\.\.\.|window\.location|location\.href/,
+  // The argv-ARRAY position, which is what separates CWE-88 from CWE-78's shell string.
+  "CWE-88": /focus-metavariable: \$ARGS/,
+  // A hard-coded literal standing in for a missing environment secret, or an admin/service client.
+  "CWE-798": /env\.(get\(\.\.\.\)|\$\w+) *(\?\?|\|\|) *"|auth\.admin\.|service[-_ ]?role/i,
+  // The authority calls a handler is missing: named in the pattern-not-inside that lets one pass.
+  "CWE-862": /getServerSession|assertPermission|requirePermission|requireRole|query\.secret|supabaseAdmin\./,
+  // The privileged surface, and the auth calls that establish identity but not ROLE.
+  "CWE-863": /\*admin\*|\*privileged\*|requireAuth|verifyAccessToken|verifySession/,
+  // A whole request body spread into a write.
+  "CWE-915": /\$BODY|req\.body\)/,
+  // The template engines on which server-side template injection occurs.
+  "CWE-917": /(ejs|pug)\.(render|compile)\(|Handlebars\.compile\(\$\w+, \.\.\.\)|nunjucks\.renderString/i,
+  // Next's image remotePatterns, the config surface whose wildcard host is the SSRF.
+  "CWE-918": /remotePatterns|hostname: \$/,
+  // The recursive-merge helpers through which a `__proto__` key reaches Object.prototype.
+  "CWE-1321": /defaultsDeep|mergeWith\(|merge\(\$TARGET/,
+};
+
+/** True when the rule's own machine half — never its prose — corroborates `cwe`. */
+function machineCorroborates(cwe: string, machine: string): boolean {
+  return CWE_EVIDENCE[cwe]!.test(machine) || (CWE_MACHINE_EVIDENCE[cwe]?.test(machine) ?? false);
+}
+
+
 /**
  * #1521 disclosure, measured by the census test below and asserted exactly in both directions.
  * These rules are inside the check but NOT protected against every same-category swap: at least one
@@ -413,54 +493,21 @@ const SINGLETON_CATEGORY: string[] = [
 ];
 
 /**
- * #1521 disclosure. Rules whose declared CWE's vocabulary is found ONLY in the client-facing
- * `message:` prose, never in the id or the match machinery. For these the binding rests entirely on
- * the rule's self-description, so a message written wrong in the same direction as the label passes.
- * Everything NOT listed here is corroborated by the id/patterns as well.
+ * #1521 disclosure, CLOSED by #1540 and kept as a ratchet. Rules whose declared CWE is corroborated
+ * ONLY by the client-facing `message:` prose, never by the id or the match machinery — for those the
+ * label rests on the rule's self-description, so a message written wrong in the same direction as
+ * the label passes green.
+ *
+ * MEASURED: 41 of 110 rules on 2026-07-30, **0 of 110** on 2026-07-31, after CWE_MACHINE_EVIDENCE
+ * gave each CWE the sink/idiom its rules actually execute. The list is asserted in BOTH directions,
+ * so this is a ratchet rather than a milestone: a new rule whose patterns say nothing about its
+ * label fails here and has to be added deliberately.
+ *
+ * A row added here must carry, in its own comment, the reason the machine half of that rule fails to
+ * corroborate its label — the population is the disclosure, and an unexplained row is the thing this
+ * count exists to prevent.
  */
-const PROSE_ONLY: string[] = [
-  "harvey-aead-decipher-no-final",
-  "harvey-argument-injection",
-  "harvey-auth-admin-in-client",
-  "harvey-authed-no-role-check",
-  "harvey-client-trusted-role",
-  "harvey-command-injection",
-  "harvey-cron-no-secret",
-  "harvey-csrf-missing",
-  "harvey-db-error-disclosure",
-  "harvey-dynamic-dispatch",
-  "harvey-edgefn-secret-fallback",
-  "harvey-hpp-query-cast",
-  "harvey-href-js-url",
-  "harvey-html-template-literal",
-  "harvey-img-remotepatterns-wild",
-  "harvey-internal-state-response",
-  "harvey-isr-revalidate-nosecret",
-  "harvey-jsx-prop-spread-injection",
-  "harvey-jwt-decode-noverify",
-  "harvey-jwt-decode-render",
-  "harvey-jwt-verify-noalg",
-  "harvey-lib-command-injection",
-  "harvey-mass-assignment",
-  "harvey-mass-assignment-bare",
-  "harvey-missing-server-only",
-  "harvey-nextconfig-env-secret",
-  "harvey-node-secret-fallback",
-  "harvey-open-url-sink",
-  "harvey-pg-mass-assignment",
-  "harvey-pg-ssl-disabled",
-  "harvey-postmessage-wildcard",
-  "harvey-prototype-pollution",
-  "harvey-route-noauth",
-  "harvey-secret-in-url-param",
-  "harvey-server-action-noauth",
-  "harvey-spawn-shell-true",
-  "harvey-static-iv",
-  "harvey-template-injection",
-  "harvey-unchecked-mutation",
-  "harvey-void-async",
-  "harvey-zero-row-update",
-];
+const PROSE_ONLY: string[] = [];
 
 describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns and message", () => {
   const files = readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
@@ -504,9 +551,11 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
       const cweId = cweOf(rule);
       const siblings = inUse.filter((c) => c !== cweId && categoryOf(c) === categoryOf(cweId));
       if (siblings.length === 0) singleton.push(rule.id);
-      const confusable = siblings.filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`));
+      // #1540: a sibling counts as confusable if EITHER vocabulary reaches this rule — the machine
+      // signature is folded in here too, so the ambiguity it adds is disclosed rather than hidden.
+      const confusable = siblings.filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`) || (CWE_MACHINE_EVIDENCE[c]?.test(rule.machine) ?? false));
       if (confusable.length > 0) undiscriminated.set(rule.id, confusable);
-      if (!CWE_EVIDENCE[cweId]!.test(rule.machine)) proseOnly.push(rule.id);
+      if (!machineCorroborates(cweId, rule.machine)) proseOnly.push(rule.id);
     }
 
     // Printed on every run: these populations ARE the disclosure, and a disclosure nobody reads is

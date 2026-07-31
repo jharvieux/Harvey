@@ -37,7 +37,7 @@ import { scanExpressPoweredBy } from "./express-powered-by.js";
 import { scanExpressSecurityHeaders } from "./express-security-headers.js";
 import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { checkWorkflowPermissions } from "./gha-permissions.js";
@@ -260,8 +260,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     const osv = runOsvScanner(scanDir);
     findings.push(...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result)));
     const pkg = readPackageJson(scanDir);
+    // #1471 — the lockfile's RESOLVED version, when there is one. Passing the manifest's range
+    // floor as if it were installed made "Installed next@14.2.5" a false claim on this repo's own
+    // calibration target, whose lockfile resolves the patched 14.2.35.
+    const resolved = resolvedTree(scanDir);
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
-    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
+    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion, "package.json", resolved));
 
     // Semgrep footguns + missing-CSP config check. #950 — a missing/crashing binary degrades to
     // the SEM-00 disclosure instead of an uncaught ENOENT (mirrors osv-scanner, #512).
@@ -382,12 +386,13 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       // The curated CVE table is the OFFLINE FALLBACK for the tier osv-scanner owns. When
       // osv-scanner ran it already walked the whole lockfile, so widening this to the tree would
       // double-report its rows against a second id; when it did not, the tree is otherwise
-      // unassessed for CVEs and the curated table is all there is. A declared range wins over the
-      // resolved version for a name that has both, so a manifest-scoped row is unchanged.
+      // unassessed for CVEs and the curated table is all there is. #1471: the DECLARED range used
+      // to win over the resolved version for a name that has both — a range floor is not a version
+      // match, so the resolved one now wins inside checkKnownDependencyCVEs via `resolved`.
       const curatedCveDeps: DependencyMap = {};
       if (osv.failure) for (const c of license.candidates) if (c.version) curatedCveDeps[c.name] ??= c.version;
       for (const d of declared) curatedCveDeps[d.name] = d.range;
-      findings.push(...checkKnownDependencyCVEs(curatedCveDeps));
+      findings.push(...checkKnownDependencyCVEs(curatedCveDeps, "package.json", resolved));
       findings.push(...checkUnpinnedDependencies(declared));
       findings.push(...checkNonRegistryDependencies(declared));
       findings.push(...checkInstallScripts(workspace.manifests));

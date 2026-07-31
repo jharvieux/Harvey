@@ -94,6 +94,24 @@
         "tracking": 1536,
         "since": "2026-07-30"
       }
+    },
+    {
+      "workflow": ".github/workflows/semantic-freshness.yml",
+      "marker": "ci-semantic-freshness-alert",
+      "pendingProof": {
+        "why": "semantic-freshness.yml is new in #1270 and a drill can only be dispatched against a workflow already on the default branch, so this path cannot be proven before it merges.",
+        "tracking": 1611,
+        "since": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "marker": "ci-main-red-alert",
+      "pendingProof": {
+        "why": "ci.yml's main-red job is new in #1507. The workflow FILE is already on the default branch, but a drill dispatched today runs main's copy of it, which has no main-red job — so this path still cannot be proven before it merges. One dispatch will prove it alongside ci-heavy-cli-alert.",
+        "tracking": 1612,
+        "since": "2026-07-31"
+      }
     }
   ],
   "unconverted": [

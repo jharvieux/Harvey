@@ -1,0 +1,9 @@
+{
+  "name": "b25-next-declared-range-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#1471). A standalone project root that DECLARES a range whose floor is vulnerable (next@^14.2.0, floor below the 14.2.25 middleware-bypass fix) and ships NO lockfile, so nothing resolves it: `npm install` today lands on a patched 14.2.x, but the manifest permits a vulnerable one. Harvey must still raise it — and must raise it as a CONDITIONAL claim about the declared range at review tier, never as an 'Installed next@14.2.0' free-count row. Declared as DATA ONLY — NEVER installed.",
+  "dependencies": {
+    "next": "^14.2.0"
+  }
+}

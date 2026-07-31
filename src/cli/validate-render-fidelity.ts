@@ -26,11 +26,11 @@ if (!path) {
 const doc = JSON.parse(readFileSync(path, "utf8")) as FindingsDocument;
 const breaches = renderFidelityBreaches(doc, buildHtml(doc));
 
-console.log(`Render-seam fidelity (#1435) over ${path}: ${doc.findings.length} finding(s), ${doc.findings.filter((f) => f.confidence === "N/A").length} of them not-assessed rows.`);
+console.log(`Render-seam fidelity (#1435) over ${path}: ${doc.findings.length} finding(s), ${doc.findings.filter((f) => f.confidence === "N/A").length} of them not-assessed rows, and ${doc.coverage?.length ?? 0} coverage-ledger row(s) (#1555).`);
 if (breaches.length === 0) {
-  console.log("GATE PASS — every finding's own words reach the rendered report, or its omission is disclosed with the right count.");
+  console.log("GATE PASS — every finding's and coverage row's own words reach the rendered report, or the omission is disclosed with the right count.");
   process.exit(0);
 }
-console.error(`\nGATE FAIL — ${breaches.length} finding(s) lost content at the render seam:`);
+console.error(`\nGATE FAIL — ${breaches.length} row(s) lost content at the render seam:`);
 for (const b of breaches) console.error(`  ${b.kind.toUpperCase()}  ${b.id} — ${b.detail}`);
 process.exit(1);

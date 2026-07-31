@@ -34,6 +34,10 @@
 //                       have no Evidence line, so the check demands instead that each one's LOCATION
 //                       is listed and that the disclosed withheld number EQUALS how many this
 //                       function found missing. A renderer that dropped ten and said three fails.
+//   4. the coverage ledger (coverageSection, #1555) — not a finding, and the only place the report
+//                       states what each module reached. It has no rollup to fall back on, so BOTH
+//                       free-text fields a row carries (`detail` = what ran, `reason` = why it fell
+//                       short) must appear; the branch that chose one by status dropped the other.
 //
 // WHAT THIS DOES NOT COVER, said out loud rather than left to read as coverage: `resolvedSection`
 // (prior-audit rows, which are not in `findings`), `fixSection` (the fix-handoff artifact), and the
@@ -46,7 +50,7 @@ import type { Finding, FindingsDocument } from "./findings.js";
 
 interface FidelityBreach {
   id: string;
-  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup" | "fix-diff-dropped";
+  kind: "reason-dropped" | "undisclosed-omission" | "miscounted-rollup" | "fix-diff-dropped" | "coverage-text-dropped";
   detail: string;
 }
 
@@ -65,6 +69,33 @@ function rendered(html: string, text: string): boolean {
  */
 export function renderFidelityBreaches(doc: FindingsDocument, html: string): FidelityBreach[] {
   const breaches: FidelityBreach[] = [];
+
+  // #1555 — the same invariant one table over. The COVERAGE LEDGER is not a finding, and it is the
+  // one place in the report that states what each module did and did not reach; `coverageSection`
+  // rendered exactly one of a row's two free-text fields, chosen by status, so a `partial` row's
+  // `detail` (the #502 "no M3 hotspot focus" warning among it) was in findings.json and absent from
+  // the report. A ledger row has no rollup and no withheld count to fall back on: either its words
+  // are in that table or the client never sees them.
+  //
+  // Scoped to the table on purpose, not to the whole document. The draft legal block re-states every
+  // non-`ran` row's REASON, so a whole-document check would have been satisfied by that copy while
+  // the coverage table said nothing — and it would still have measured `detail` at zero coverage,
+  // because nothing else in the report carries it. A missing section is itself the loudest breach:
+  // no table ⇒ every row reports its text dropped.
+  const coverage = doc.coverage ?? [];
+  if (coverage.length > 0) {
+    const table = /<h2>Module coverage<\/h2>[\s\S]*?<\/table>/.exec(html)?.[0] ?? "";
+    for (const r of coverage) {
+      const dropped = ([["detail", r.detail], ["reason", r.reason]] as const).filter(([, t]) => t && t.trim() && !rendered(table, t));
+      if (dropped.length > 0) {
+        breaches.push({
+          id: `${r.module}${r.instance ? ` (${r.instance})` : ""}`,
+          kind: "coverage-text-dropped",
+          detail: `coverage row rendered without its ${dropped.map(([field]) => field).join(" and ")}${table ? "" : " (no Module coverage table in the report at all)"}. The ledger is where the report says what a module did and did not reach; text dropped here reads as a fuller run than happened. Expected in the coverage table: ${dropped.map(([field, t]) => `${field}="${(t as string).slice(0, 120)}"`).join(", ")}`,
+        });
+      }
+    }
+  }
 
   for (const f of doc.findings.filter((x) => x.confidence === "N/A")) {
     const reason = f.note ?? f.evidence;

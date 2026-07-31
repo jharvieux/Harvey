@@ -39,6 +39,7 @@ import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entrie
 import { b22GhaPermissionsEntries } from "./calibration/b22-gha-permissions.entries.js";
 import { b23D091GapEntries } from "./calibration/b23-d091-gaps.entries.js";
 import { b24ConnectedPostgrestRealtimeEntries } from "./calibration/b24-connected-postgrest-realtime.entries.js";
+import { b25DepProvenanceEntries } from "./calibration/b25-dep-provenance.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
@@ -90,6 +91,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b22GhaPermissionsEntries,
   ...b23D091GapEntries,
   ...b24ConnectedPostgrestRealtimeEntries,
+  ...b25DepProvenanceEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,

@@ -22,7 +22,7 @@ import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
 import { scoreM6IndicatorCorpus } from "../scan/m6-indicator-corpus.js";
 import { SEVERITIES, type Finding, type Severity } from "../findings.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, resolvedTree } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
@@ -61,9 +61,12 @@ function scanManifestFixtures(targetDir: string): Finding[] {
         devDependencies?: Record<string, string>;
       };
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+      // #1471 — same provenance the real scan uses: a fixture root that resolves its own lockfile
+      // gets the resolved version, one that only declares a range gets a review-tier conditional.
+      const resolved = resolvedTree(appDir);
       const nextVersion = allDeps.next;
-      if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, ""), label));
-      findings.push(...checkKnownDependencyCVEs(allDeps, label));
+      if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion, label, resolved));
+      findings.push(...checkKnownDependencyCVEs(allDeps, label, resolved));
       findings.push(...checkKnownIoc(Object.keys(allDeps), label));
     }
     findings.push(...checkLockfilePresence(appDir, `fixtures/${entry.name}`));

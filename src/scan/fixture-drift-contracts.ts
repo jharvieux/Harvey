@@ -193,15 +193,25 @@ export function checkVitalsContract(report: VitalsReport): string[] {
 // window." seed.py independently re-runs `git log --since=90.days.ago` (stderr NOT suppressed) right
 // after building the seeded repo and records the result as `_gitScopeSanity`. When vitals' three
 // git-derived sections come back simultaneously empty despite that independent check finding commits
-// with no git error, the failure matches that known swallow class rather than a schema/behavior drift
-// in vitals' output — so the drift CLI reports NOT RUN with this reason instead of a generic
-// contract-violation FAIL. This does NOT name why git itself failed in a given CI occurrence (no
-// stderr was preserved from the one observed case, 2026-07-27, run 30273745542) — only that vitals'
-// own error-swallowing is the confirmed mechanism by which such a failure would look exactly like this.
+// with no git error, the failure is CONSISTENT WITH that known swallow class rather than with a
+// schema/behavior drift in vitals' output — so the drift CLI reports NOT RUN with this reason instead
+// of a generic contract-violation FAIL. This does NOT name why git itself failed in a given CI
+// occurrence (no stderr was preserved from the one observed case, 2026-07-27, run 30273745542) — only
+// that vitals' own error-swallowing is a confirmed mechanism by which such a failure would look
+// exactly like this. It used to assert it IS that class, which the evidence does not support: seed.py's
+// own header documents a scope/toplevel mismatch producing the identical signature with git working,
+// and absorbing THAT as a disclosed flake would let a real regression in seed.py's realpath() pass as
+// NOT RUN. `scopeMatchesToplevel` is what separates the two, so the claim is now bounded by a check
+// rather than by wording (raised by PR #1398's acceptance verifier, #1206).
 export interface GitScopeSanity {
   commits: number;
   returncode: number;
   stderr: string | null;
+  // Whether the path seed.py handed vitals is ALREADY the resolved `git rev-parse --show-toplevel`.
+  // The competing cause of the identical all-empty signature: vitals resolves symlinks to find the
+  // repo root but scopes against the handed path, so a mismatch empties the file scope with git
+  // working perfectly. Absent on a capture taken before this field existed.
+  scopeMatchesToplevel?: boolean;
 }
 
 export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScopeSanity?: GitScopeSanity }): string | undefined {
@@ -209,11 +219,18 @@ export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScope
   if (!allGitSectionsEmpty) return undefined;
   const sanity = report._gitScopeSanity;
   if (!sanity || sanity.returncode !== 0 || sanity.commits === 0) return undefined;
+  // A NOT-RUN verdict excuses the run, so it must not be reachable by the one other cause known to
+  // produce this exact shape: a scope/toplevel mismatch is a regression in seed.py's own realpath()
+  // and has to stay a loud FAIL. `!== true` and not `=== false` on purpose — a capture that leaves
+  // the question unanswered does not get the benefit of the doubt either.
+  if (sanity.scopeMatchesToplevel !== true) return undefined;
   return (
     `vitals returned empty hotspots/coupling/knowledge_risk while an independent ` +
     `\`git log --since=90.days.ago\` in the same seeded repo found ${sanity.commits} commit(s) with no ` +
-    `git error (returncode 0) — the known git-scope silent-failure class in vitals 0.2.0's ` +
-    `git_analysis._run_git, which discards stderr and returns [] on any non-zero exit or timeout (#1206).`
+    `git error (returncode 0), and the seeded path is the resolved git toplevel so the scope-mismatch ` +
+    `cause is ruled out — CONSISTENT WITH the git-scope silent-failure class in vitals 0.2.0's ` +
+    `git_analysis._run_git, which discards stderr and returns [] on any non-zero exit or timeout. ` +
+    `The mechanism matches; which git invocation failed is not recoverable from this output (#1206).`
   );
 }
 
