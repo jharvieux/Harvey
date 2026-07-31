@@ -22,26 +22,42 @@ runs:
     - id: versions
       shell: bash
       run: |
-        echo "osv=2.3.8" >> "$GITHUB_OUTPUT"
-        echo "gitleaks=8.30.1" >> "$GITHUB_OUTPUT"
-        echo "trufflehog=head" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        OSV=2.3.8
+        GITLEAKS=8.30.1
+        TRUFFLEHOG=head
         # #1266: semgrep was the one tool `pipx install semgrep` left UNPINNED, contradicting this
         # action's own "pins EVERY version" comment above. MEASURED 2026-07-30: a runner resolved
         # 1.172.0 while the committed fixture (src/scan/__fixtures__/semgrep/) and
         # SEMGREP_PINNED_VERSION (src/scan/fixture-drift-contracts.ts) are both 1.164.0 — the new
         # semgrep-fixture-drift check correctly failed loud on that mismatch (its whole job), which
         # is what surfaced the gap. Pinned here to match.
-        echo "semgrep=1.164.0" >> "$GITHUB_OUTPUT"
+        SEMGREP=1.164.0
+        # The KEY is emitted here too, so restore and save read ONE string. Since #1516 they are two
+        # separate steps, and two hand-written copies of a key is a silent way to save under a key
+        # nothing will ever restore. Suffix bumped v3 -> v4: v3 entries were written before anything
+        # asserted completeness, so they carry no guarantee this action now makes.
+        {
+          echo "osv=$OSV"
+          echo "gitleaks=$GITLEAKS"
+          echo "trufflehog=$TRUFFLEHOG"
+          echo "semgrep=$SEMGREP"
+          echo "key=mech-bins-${{ runner.os }}-osv$OSV-gl$GITLEAKS-th$TRUFFLEHOG-sg$SEMGREP-v4"
+        } >> "$GITHUB_OUTPUT"
 
+    # #1516: RESTORE, not the combined cache action. actions/cache saves in a post step at the end of
+    # the job, which is after every assertion this action makes and outside its control — so the only
+    # way to guarantee an incomplete tree is never written is to own the save. Split restore/save
+    # puts the completeness assertion BETWEEN them.
     - id: cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         # pipx shims in ~/.local/bin point INTO ~/.local/pipx/venvs — caching bin alone yields a
         # dangling semgrep shim that resolves and then fails at exec. Both paths or neither.
         path: |
           ~/.local/bin
           ~/.local/pipx
-        key: mech-bins-${{ runner.os }}-osv${{ steps.versions.outputs.osv }}-gl${{ steps.versions.outputs.gitleaks }}-th${{ steps.versions.outputs.trufflehog }}-sg${{ steps.versions.outputs.semgrep }}-v3
+        key: ${{ steps.versions.outputs.key }}
 
     - name: Install (cache miss only)
       if: steps.cache.outputs.cache-hit != 'true'
@@ -71,17 +87,35 @@ runs:
         curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v${{ steps.versions.outputs.gitleaks }}/gitleaks_${{ steps.versions.outputs.gitleaks }}_linux_x64.tar.gz \
           | tar -xz -C "$HOME/.local/bin" gitleaks
 
+    # THE PRE-SAVE GATE (#1516). Runs on both paths — a restored cache is checked as strictly as a
+    # freshly installed one, because the tree that gets restored is the tree the next job inherits.
+    - name: Every binary resolves INSIDE the cached tree
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/assert-complete.sh"
+
+    # Only now. Skipped on a cache hit (nothing changed to save) and unreachable on an incomplete
+    # tree, because the step above exits 1 and this one carries no `always()`.
+    - name: Save the cache, now that the tree is proven complete
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.local/bin
+          ~/.local/pipx
+        key: ${{ steps.versions.outputs.key }}
+
     - name: Put them on PATH and PROVE they run
       shell: bash
       run: |
         set -euo pipefail
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         export PATH="$HOME/.local/bin:$PATH"
-        # A restored cache that cannot execute is worse than no cache: every consumer would either
-        # throw ENOENT mid-scan or emit a not-assessed row. Fail HERE, where the cause is obvious.
+        # Presence is the step above's job; this one is EXECUTABILITY. A restored cache that cannot
+        # execute is worse than no cache: every consumer would either throw ENOENT mid-scan or emit a
+        # not-assessed row. Invoked by absolute path so a system copy earlier on PATH cannot answer
+        # for a cached one that is broken — the same confusion #1516 removed from the presence check.
         for b in semgrep trufflehog osv-scanner gitleaks; do
-          command -v "$b" >/dev/null || { echo "::error::$b missing after install/restore"; exit 1; }
-          "$b" --version >/dev/null 2>&1 || "$b" version >/dev/null 2>&1 || {
-            echo "::error::$b present but not executable — cache is poisoned; bump the key suffix"; exit 1; }
+          "$HOME/.local/bin/$b" --version >/dev/null 2>&1 || "$HOME/.local/bin/$b" version >/dev/null 2>&1 || {
+            echo "::error::$b present in ~/.local/bin but not runnable — cache is poisoned; bump the key suffix in the versions step"; exit 1; }
         done
         echo "mechanical binaries OK: $(semgrep --version) | osv-scanner $(osv-scanner --version 2>&1 | head -1)"

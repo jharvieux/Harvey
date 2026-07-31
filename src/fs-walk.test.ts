@@ -29,7 +29,7 @@ import { checkUnanalysedLanguages } from "./scan/language-coverage.js";
 import { checkUnassessedSfcFiles } from "./scan/sfc-coverage.js";
 import { resolveScanScope } from "./scan/scan-scope.js";
 import { isGitRepoRoot } from "./scan/secrets.js";
-import { checkMigrationPolicySemantics, checkMigrationRlsStatic, checkMigrationStorageBuckets, inferAuthMethodsFromSource } from "./scan/supabase-static.js";
+import { checkMigrationPolicySemantics, checkMigrationRlsStatic, checkMigrationStorageBuckets, checkUnreadSqlSurfaces, inferAuthMethodsFromSource } from "./scan/supabase-static.js";
 import { checkWorkflowPermissions } from "./scan/gha-permissions.js";
 import { parseViteBundleStats } from "./detectors/bundle-stats.js";
 import { loadSources } from "./detectors/load-sources.js";
@@ -146,6 +146,7 @@ const WALKERS: [name: string, run: (dir: string) => unknown][] = [
   ["scan/supabase-static.ts checkMigrationRlsStatic — M1 (names-only shape)", (d) => checkMigrationRlsStatic(d)],
   ["scan/supabase-static.ts checkMigrationPolicySemantics — M1 (names-only shape)", (d) => checkMigrationPolicySemantics(d)],
   ["scan/supabase-static.ts checkMigrationStorageBuckets — M1 (names-only shape)", (d) => checkMigrationStorageBuckets(d)],
+  ["scan/supabase-static.ts checkUnreadSqlSurfaces — M1-SQL-SCOPE-00 (#1323)", (d) => checkUnreadSqlSurfaces(d)],
   ["scan/gha-permissions.ts checkWorkflowPermissions — M1 GITHUB_TOKEN scope (names-only shape)", (d) => checkWorkflowPermissions(d)],
   ["detectors/bundle-stats.ts parseViteBundleStats — M7 (names-only shape)", (d) => parseViteBundleStats(join(d, "dist"))],
   ["scan/secrets.ts isGitRepoRoot — M1 git-history secret pass (already safe via its own catch; routed through the guard so the ban has no exception)", (d) => isGitRepoRoot(d)],

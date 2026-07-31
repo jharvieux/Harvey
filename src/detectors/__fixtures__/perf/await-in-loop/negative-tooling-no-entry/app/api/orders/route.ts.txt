@@ -1,0 +1,14 @@
+import { supabase } from "../../../../lib/db";
+import { NextResponse } from "next/server";
+
+// The scope control: a genuine request-path N+1 that MUST still fire — proves the fixture is
+// read at all, so 0 findings from src/index.ts isn't indistinguishable from an unread fixture.
+export async function POST(req: Request) {
+  const { orderIds } = (await req.json()) as { orderIds: string[] };
+  const rows = [];
+  for (const id of orderIds) {
+    const { data } = await supabase.from("orders").select("id, total").eq("id", id).limit(1);
+    rows.push(data);
+  }
+  return NextResponse.json(rows);
+}

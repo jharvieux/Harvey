@@ -170,3 +170,41 @@ describe("the M9 waterfall scope row reaches the RENDERED report, population int
     expect(html).not.toContain("Not applicable in context.");
   });
 });
+
+// #1262 criterion 2, the sibling of the block above. That criterion — "confirm it appears in a
+// rendered report" — was met once, by hand, through a real render and `pdftotext`. A one-time proof
+// is not a gate: the row's reason could go back to "Not applicable in context." tomorrow and the
+// whole suite would stay green, which is the #1435 shape the block above exists to stop for the
+// waterfall row. Same three assertions, this time over the retry row.
+describe("the M9 uncapped-retry scope row reaches the RENDERED report, sub-shape counts intact (#1262)", () => {
+  const UNCAPPED_RETRY = `export async function GET() {
+  let done = false;
+  while (!done) {
+    try { await fetch("https://example.com"); done = true; } catch (e) {}
+  }
+  return new Response("ok");
+}
+`;
+  const scopeRow = detectAppRouterFindings([{ path: "app/api/sync/route.ts", text: UNCAPPED_RETRY }]).find(
+    (f) => f.taxonomy === "M9 — Uncapped retry/fan-out — scope",
+  );
+
+  it("the detector really emits it (so the render assertion below is about a live row)", () => {
+    expect(scopeRow).toBeDefined();
+    expect(scopeRow?.confidence).toBe("N/A");
+  });
+
+  it("it is a valid finding — nothing rejects it before the renderer sees it", () => {
+    expect(validateFindings(doc([finding(), scopeRow!]))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("its sub-shape list survives into the HTML, and is NOT replaced by 'Not applicable in context.'", () => {
+    const document = doc([finding(), scopeRow!]);
+    const html = buildHtml(document);
+    expect(reconcileRender(document, html)).toEqual([]);
+    expect(html).toContain("route/edge handler");
+    // #1440's requirement that the sub-shape list be EXHAUSTIVE is what the client actually reads.
+    expect(html).toContain("FOUR sub-shapes were NOT fully assessed");
+    expect(html).not.toContain("Not applicable in context.");
+  });
+});

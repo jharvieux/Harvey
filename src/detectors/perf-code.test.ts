@@ -588,6 +588,20 @@ export async function POST(req: Request) {
     }
   });
 
+  it("#1542: the exclusion also applies to a root/unnamed package.json, which workspacePackages() itself skips", () => {
+    // No `name` field — workspacePackages() requires one and would drop this manifest entirely,
+    // so the own-entry exclusion is not derivable by filtering ITS output; it has to reach a root
+    // manifest directly.
+    const files: SourceInput[] = [
+      { path: "package.json", text: JSON.stringify({ main: "./dist/index.js", exports: { ".": "./dist/index.js" }, scripts: { build: "tsup src/index.ts" } }) },
+      { path: "src/index.ts", text: `import { pick } from "./join";\nexport const api = { pick };\n` },
+      { path: "src/join.tsx", text: joinBody },
+    ];
+    const hits = detectPerfCodeFindings(files).filter((f) => f.taxonomy === JOIN);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toContain("src/join.tsx");
+  });
+
   it("#1526: the exclusion does not reach the `bin` arm — a CLI whose bin IS its main stays suppressed", () => {
     const cli: SourceInput[] = [
       {

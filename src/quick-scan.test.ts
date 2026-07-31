@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { Finding, PrecisionTier, Severity } from "./findings.js";
+import { MODULES } from "./audit-coverage.js";
 import { mechanicalFinding } from "./scan/common.js";
 import { CI_PIPELINE_CATEGORY, CORS_BARE_WILDCARD_TAXONOMY, POSTMESSAGE_WILDCARD_TAXONOMY } from "./scan/semgrep.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./scan/secrets.js";
@@ -38,6 +39,44 @@ describe("trust boundary — precision-tier gating", () => {
   it("keeps only high-precision findings out of a mixed set", () => {
     const findings = [finding("A", "Critical", "high"), finding("B", "High", "review")];
     expect(selectFreeFindings(findings).map((f) => f.id)).toEqual(["A"]);
+  });
+
+  // #1415 criterion 5. The free/paid split is a COMMERCIAL lever, so the proof it works is not that
+  // MODULES[].freeTier holds the right value — it is that changing the value changes what a
+  // free-tier client is handed. This flips M4 and watches an M4 finding leave the free set while an
+  // identically-shaped M1 finding stays, then restores it. Before #1415 nothing read the field and
+  // this test could not have failed in either direction.
+  describe("commercial gating — MODULES[].freeTier decides which modules the free tier delivers", () => {
+    const m1 = finding("m1", "Critical", "high", { taxonomy: "M1 — Multi-tenant security" });
+    const m4 = finding("m4", "Critical", "high", { taxonomy: "M4 — Duplication" });
+
+    afterEach(() => {
+      MODULES.M4.freeTier = true;
+    });
+
+    it("delivers an M4 finding while M4 is a free module", () => {
+      expect(MODULES.M4.freeTier).toBe(true);
+      expect(selectFreeFindings([m1, m4]).map((f) => f.id)).toEqual(["m1", "m4"]);
+      expect(buildQuickScanReport([m1, m4]).total).toBe(2);
+    });
+
+    it("withholds the same finding once M4 is moved behind the paywall, with no other change", () => {
+      MODULES.M4.freeTier = false;
+      expect(selectFreeFindings([m1, m4]).map((f) => f.id)).toEqual(["m1"]);
+      // Followed through to the assembled free report, not just the selector: an accounted-for
+      // filter that never reaches the client's numbers would prove nothing.
+      expect(buildQuickScanReport([m1, m4]).total).toBe(1);
+    });
+
+    it("delivers a paid-LLM module's findings when it is offered free as a hook — the other legal divergence", () => {
+      const m6 = finding("m6", "Critical", "high", { taxonomy: "M6 — Simplification / maintainability" });
+      MODULES.M6.needs = "llm";
+      try {
+        expect(selectFreeFindings([m6]).map((f) => f.id)).toEqual(["m6"]);
+      } finally {
+        MODULES.M6.needs = "source";
+      }
+    });
   });
 
   it("a review-tier finding never reaches the free count, categories, or grade", () => {

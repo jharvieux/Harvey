@@ -19,17 +19,18 @@ const FIXTURE = "targets/test-only-export-control";
 // are independent views of the same run.
 const runs = new Map<string, { status: number; stdout: string }>();
 
-function run(baseline: string): { status: number; stdout: string } {
-  const cached = runs.get(baseline);
+function run(baseline: string, extra: string[] = []): { status: number; stdout: string } {
+  const key = [baseline, ...extra].join(" ");
+  const cached = runs.get(key);
   if (cached) return cached;
   let result: { status: number; stdout: string };
   try {
-    result = { status: 0, stdout: execFileSync("node_modules/.bin/tsx", [CLI, "--dir", FIXTURE, "--config", "knip.json", "--baseline", baseline], { cwd: REPO_ROOT, encoding: "utf8" }) };
+    result = { status: 0, stdout: execFileSync("node_modules/.bin/tsx", [CLI, "--dir", FIXTURE, "--config", "knip.json", "--baseline", baseline, ...extra], { cwd: REPO_ROOT, encoding: "utf8" }) };
   } catch (e) {
     const err = e as { status?: number; stdout?: string };
     result = { status: err.status ?? 1, stdout: err.stdout ?? "" };
   }
-  runs.set(baseline, result);
+  runs.set(key, result);
   return result;
 }
 
@@ -62,5 +63,22 @@ describe("test-only-exports gate — negative control (#1307)", () => {
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("export src/lib.ts:usedInProduction");
     expect(r.stdout).toContain("GATE FAIL — 0 new, 1 stale.");
+  });
+
+  // #1547. The ruling is "a caller OR a recorded reason" and the gate could only see callers, so a
+  // row someone had genuinely triaged printed identically to one nobody had read, and the backlog
+  // number could only fall by wiring. Driven through the real CLI rather than the pure function,
+  // because the wiring — collectReasons over the analysed directory — is the half with no other
+  // failing direction (#1407's class).
+  it("separates a baseline row carrying a recorded reason from one that carries none", () => {
+    const r = run("baseline.json", ["--list"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("of the 3: 1 carry a recorded reason, 2 still await a caller or a reason");
+    expect(r.stdout).toContain("2 untriaged");
+    // The planted block names TestOnlyType and nothing else, so the SAME file's other plant and the
+    // orphan module must stay unmarked. A file-wide absolution would mark all three.
+    expect(r.stdout).toMatch(/type {3}src\/lib\.ts:TestOnlyType {2}\[recorded reason — src\/lib\.ts:\d+\]/);
+    expect(r.stdout).toMatch(/export src\/lib\.ts:testOnlyExport\n/);
+    expect(r.stdout).toMatch(/file {3}src\/orphan\.ts — every export unreachable: neverCalledInProduction, ORPHAN_LIMIT\n/);
   });
 });

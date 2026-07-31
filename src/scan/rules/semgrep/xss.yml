@@ -163,6 +163,107 @@ x-dom-url-guard: &dom_url_guard
     - focus-metavariable: $X
 # ---------------------------------------------------------------------------------------------
 
+# #1248: the (a2) validator guards, with a failure branch that THROWS instead of returning.
+# Throwing is the idiomatic guard in a Next.js Server Action or route handler under an error
+# boundary, in Express with http-errors/createError, and in NestJS (BadRequestException) — so
+# before this block a correct throwing guard read as a Critical injection. MEASURED 2026-07-31
+# (semgrep 1.164.0): the issue's own repro fired harvey-sql-injection-template at Critical.
+#
+# WHY IT IS A SEPARATE SANITIZER AND NOT A WIDENED ARM. A `return` is unconditionally an exit.
+# A `throw` is an exit only if nothing between the guard and the sink catches it: with the guard
+# inside a `try` whose `catch` swallows, execution continues into the sink with the rejected
+# value live, and a `finally` runs the sink even when the throw propagates. That has no analogue
+# on the return path, so the throw spellings carry a constraint the return spellings do not —
+# the guard must not be lexically inside a try statement. This is deliberately conservative: a
+# guard AND its sink both inside one try (where the throw does skip the sink) is not cleared,
+# which costs precision in the safe direction and never clears a live value.
+# MEASURED 2026-07-31, both directions: with the two pattern-not-inside conjuncts the swallowed
+# and finally-run shapes FIRE; with them deleted both go silent — a real bug cleared by a guard
+# that never protected it. Adversarial positives P-SQLI-THROW-SWALLOWED / P-SQLI-THROW-FINALLY.
+#
+# `throw $E;` rather than `throw ...;`: a throw always carries an operand, so there is no
+# valueless twin to cover the way `return;` needed one.
+x-throw-guard: &throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# #1248: the SCHEMA-validator (a2) guard whose failure branch throws. Same soundness argument and
+# the same two try exclusions as x-throw-guard above, and the same allowlist constraints as the
+# return spelling — an ANCHORED, POSITIVE-class `.regex(...)` or an `.enum([...])` membership list,
+# because a bare `z.string()` accepts everything and `$P.data` IS then the raw input.
+#
+# UNLIKE the return spelling it is `by-side-effect` on `$P`, not a `pattern-inside` region ending
+# at `$P.data`. MEASURED 2026-07-31: semgrep's statement `...` matches DEEPLY, so a region written
+# `safeParse(...); ... if (!$P.success) throw $E; ...` matches a guard nested inside a `try` — and
+# the try exclusions, attached to the `$P.data` use site, sat outside that try and cleared it. Both
+# swallowed-throw fixtures went silent under that form and fire under this one
+# (P-CMD-ZOD-THROW-SWALLOWED, P-CMD-ZOD-ENUM-THROW-SWALLOWED).
+x-throw-schema-guard: &throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # DOM XSS via .innerHTML / insertAdjacentHTML assigned a request/URL-controlled value. High —
   # both sinks execute any <script>/event-handler markup in the string unconditionally; there is
@@ -294,6 +395,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -461,6 +564,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -770,12 +875,16 @@ rules:
       props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that
       never names one. Filter the object against an explicit allowlist of prop names before
       spreading it, and never use a blocklist (new dangerous props keep being added).
-      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
-      a spread object is treated as safe only when it passes an explicit allowlist membership test
-      (Object.fromEntries over a .has/.includes filter, or pick()). Any other sanitizer — a custom
-      filter function, a validation library, a schema parse — is not recognised, so a correctly
-      filtered spread can still be reported here. The recognised test is a structural match on the
-      filtering code, not evidence that the allowlist it uses is itself complete.
+      SCOPE OF THIS CHECK (#1342/#1237), so its silence elsewhere is not read as a clean bill of
+      health: a spread object is treated as safe only when it passes an explicit allowlist test in
+      one of three recognised spellings — Object.fromEntries over a .has/.includes filter, pick(),
+      or a for-of copy whose keys come from a NAMED allowlist (for (const k of ALLOWED) safe[k] =
+      raw[k]). Any other sanitizer — a custom filter function, a validation library, a schema parse
+      — is not recognised, so a correctly filtered spread can still be reported here. The recognised
+      test is a structural match on the filtering code, not evidence that the allowlist it uses is
+      itself complete: MEASURED 2026-07-31, a loop whose allowlist is laundered through a local
+      const off the untrusted object (const allowed = raw.fields; for (const k of allowed) ...) is
+      NOT reported, the same one-hop indirection the .has/.includes arm has always had.
     pattern-sources:
       - *dom_source
       - *request_source
@@ -783,6 +892,23 @@ rules:
       - pattern: Object.fromEntries(Object.entries($O).filter((...) => $ALLOW.has(...)))
       - pattern: Object.fromEntries(Object.entries($O).filter((...) => $ALLOW.includes(...)))
       - pattern: pick($O, ...)
+      # #1237(a): the loop-copy spelling of the same allowlist —
+      # `for (const k of ALLOWED_PROPS) if (k in raw) safe[k] = raw[k]`. It was firing, and it is
+      # the OWASP sheet's own remedy written imperatively, so the rule was reporting a correct fix.
+      #
+      # Sound for the same reason the object-literal sink exclusion is: what makes this safe is that
+      # the KEY comes from somewhere other than the untrusted object, so no attacker-chosen prop
+      # name can reach the component. The metavariable-regex is what enforces that — $ALLOW must be
+      # a bare identifier, which is the whole guard, not a stylistic constraint. MEASURED 2026-07-31
+      # against four probes: `for (const k of Object.keys(raw))` FIRES, `for (const k of raw.fields)`
+      # FIRES, the named-allowlist loop CLEARS, and a plain `{...raw}` FIRES. Drop the regex and the
+      # first two go silent — a widened sanitizer clearing real bugs, the #989/#1066 trade.
+      - patterns:
+          - pattern: $RAW[$K]
+          - pattern-inside: for (const $K of $ALLOW) ...
+          - metavariable-regex:
+              metavariable: $ALLOW
+              regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
     pattern-sinks:
       # #1237/#1344: NOT an object literal built in place. The weakness this rule is about is that
       # "the caller chooses which props the component receives" — in `{...{ placeholder: raw.x }}`

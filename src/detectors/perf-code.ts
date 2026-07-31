@@ -16,6 +16,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
+import { entryBasesFor } from "../workspaces.js";
 import { buildImportGraph, collectPathAliases, importClosure } from "./app-router.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import { SOURCE_FILE } from "./load-sources.js";
@@ -343,25 +344,21 @@ const SCRIPT_FILE_TOKEN = /(?:^|[\s'"=])(\.{0,2}\/?[\w.@/-]+\.[cm]?[jt]sx?)(?=$|
 // — that is the package building itself, not a dev/ops tool, and treating it as a tooling ROOT
 // marks its whole import closure as tooling. carbon: `@carbon/ee`'s `dev` script silenced a real
 // nested-loop join in `packages/react/src/MultiSelect.tsx` once #1353 taught the graph to follow
-// workspace specifiers (#1526).
+// workspace specifiers (#1526). Bases come from `entryBasesFor` (src/workspaces.ts) — the same
+// helper `workspacePackages` uses for import resolution, so this exclusion and M7/M9 reachability
+// can never grow two separate ideas of a package's entry (#1542; previously duplicated here as a
+// second recursive-exports walk).
 //
-// Bases, not literal paths, and `src/index`/`src/main` are kept as fallbacks, because the common
-// manifest declares BUILT output the source tree does not contain: `main: "./dist/index.js"` with
-// `build: "tsup src/index.ts"` never matches literally. MEASURED 2026-07-30 (probe in PR): a
-// literal match re-silences the identical finding on that manifest.
-function packageEntryBases(pkg: { main?: unknown; module?: unknown; exports?: unknown }, dir: string): Set<string> {
-  const declared: string[] = [];
-  const add = (v: unknown): void => {
-    if (typeof v === "string") declared.push(v);
-    else if (v && typeof v === "object") for (const inner of Object.values(v)) add(inner);
-  };
-  add(pkg.main);
-  add(pkg.module);
-  add(pkg.exports);
-  const bases = [...declared.map((e) => e.replace(/^\.\//, "").replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "src/main"];
-  return new Set(bases.map((b) => dir + b));
-}
-
+// #1554: `entryBasesFor`'s `src/index`/`index`/`src/main` fallback is unconditional there because
+// import resolution needs SOME guess even for a package that declares no main/module/exports at
+// all. That guess is wrong for THIS question — a package with nothing declared has no build
+// target for a script named `src/index.ts` to be approximating, so it stays a genuine tooling
+// script (a script-only "gen" package whose only file happens to be `src/index.ts` must not be
+// exempted from the tooling-root set just because it shares that filename). Gated on
+// `declared.length > 0`: MEASURED 2026-07-30 (probe in PR, negative
+// `M7CODE-N-AWAIT-TOOLING-NO-ENTRY`) — `{ scripts: { gen: "tsx src/index.ts" } }` with no
+// main/module/exports keeps its own N+1 suppressed as tooling with the guard in place, and fires
+// (wrongly exempted) with it removed.
 function scriptReferencedFiles(files: SourceInput[]): Set<string> {
   const out = new Set<string>();
   for (const f of files) {
@@ -380,7 +377,8 @@ function scriptReferencedFiles(files: SourceInput[]): Set<string> {
     } catch {
       continue; // an unparseable manifest answers nothing; the path arm above still applies
     }
-    const entryBases = packageEntryBases(pkg, dir);
+    const { declared, bases } = entryBasesFor(pkg, dir);
+    const entryBases = new Set(declared.length > 0 ? bases : []); // #1554
     // Split, because the own-entry exclusion applies to `scripts` ONLY. A `bin` entry declares the
     // package IS a CLI, and boxyhq's admin CLI names its own `main` — applying the exclusion there
     // empties the tooling set and re-opens the #1476 false positive (MEASURED 2026-07-30 on the
@@ -2033,7 +2031,16 @@ function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextI
         confidence: "Review",
         taxonomy: "M7 — Nested-loop join",
         location: loc(path, sf, first),
-        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs once per item of the enclosing loop over a loop-invariant collection${hits.length > 1 ? ` (first of ${hits.length})` : ""} — O(n·m) comparisons where a lookup built once would be O(n+m).`,
+        // #1488: a third read of this class's field rows on the pinned corpus settled 5 of 7 false
+        // — a UI selection array, a small fixed Stripe pricing catalog (twice), and URL path
+        // segments (twice) — every false row a collection bounded by something OTHER than tenant/
+        // user data, which the guards below do not see (they prove loop-invariance and array-ness,
+        // not scale). No mechanical guard was added: the same shape the false rows share (a
+        // parameter-typed array, no local trace to its own origin) is also the shape an existing
+        // corpus POSITIVE (`M7CODE-P-NESTED-LOOP`'s filter-allowed.ts fixture) deliberately relies
+        // on to fire, so a guard broad enough to silence the false rows silences that real one too.
+        // The bound now states itself in the evidence a reader sees FIRST, not only in `impact`.
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs once per item of the enclosing loop over a loop-invariant collection${hits.length > 1 ? ` (first of ${hits.length})` : ""} — O(n·m) comparisons where a lookup built once would be O(n+m). This only costs something if BOTH collections scale with tenant/user data; a UI selection, a small fixed catalog, or a string split (route segments) does not, however array-shaped it looks — confirm what each collection actually holds before treating this as a defect.`,
         impact: "Cost multiplies: 1k items × 1k rows is a million comparisons per call. Only matters when BOTH collections scale with tenant/user data — a scan over a small bounded array is fine regardless of shape; confirm sizes before reporting.",
         fix: "Index the scanned collection once before the loop — `const byId = new Map(other.map(o => [o.id, o]))` (or a Set of keys) — and use `.get()`/`.has()` inside it.",
         value: 3,

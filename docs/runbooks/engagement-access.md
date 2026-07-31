@@ -39,6 +39,19 @@ quoted.
    **completeness gate** — every enumerated app/backend/seam must have a
    recorded test result at close, or the engagement is not complete.
 
+3a. **Bundle-analyzer stats JSON — optional, one per app.** Ask only if the
+   M7 [B] depth tier is in scope. Same trust class as the `.next` build
+   artifact: it is build output, not source or credentials. Requested via
+   questionnaire §0; if not supplied, M7B-04/05/06 record not-assessed with the
+   reason, per the coverage guard. It must come from
+   `BundleAnalyzerPlugin({ generateStatsFile: true })` wired into the app's own
+   `next.config` webpack hook — **not** from `@next/bundle-analyzer`'s
+   `analyzerMode`, whose option surface has no `generateStatsFile` and whose
+   `"json"` mode writes a treemap report in a different shape from the
+   `Stats.toJson()` file the parser reads (MEASURED 2026-07-28 against 14.2.3
+   and 16.2.12, #1304). Reproduction:
+   `src/detectors/__fixtures__/bundle-analyzer-stats/README.txt`.
+
 4. **Read-only Supabase connection string — one per backend.** A monorepo has
    more than one database (ATC: a primary project + a separate RAG project);
    request a set for **each** backend in the manifest, not one for the repo.

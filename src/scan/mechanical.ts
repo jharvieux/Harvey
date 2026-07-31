@@ -30,6 +30,9 @@ import { scanStaleQuotaRead } from "./stale-quota-read.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
+import { scanPropOvershare } from "./prop-overshare.js";
+import { scanDedupWithoutUnique } from "./dedup-unique.js";
+import { scanBolaCrossFile } from "./bola-cross-file.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
@@ -70,6 +73,7 @@ import {
   checkMigrationRlsBypass,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
+  checkUnreadSqlSurfaces,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -320,6 +324,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkMigrationDynamicSqlInjection(scanDir));
       findings.push(...checkMigrationRlsInitplanStatic(scanDir));
       findings.push(...checkMigrationStorageBuckets(scanDir));
+      // #1323 — the static SQL pass reads two surfaces (supabase/migrations/*.sql and a root
+      // schema.sql). Any other .sql in the tree is counted and named, so a schema kept in db/ or
+      // sql/ produces a disclosure row instead of an empty section that reads as clean.
+      findings.push(...checkUnreadSqlSurfaces(scanDir));
       findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
       // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
       // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
@@ -526,6 +534,21 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
     // layer is structurally blind to it.
     findings.push(...scanSsrSanitizer(scanDir));
+
+    // #1252 — a whole domain object handed to a component as one prop when its declared type
+    // carries a sensitive field. Its own pass because it is a TYPE question: the semgrep layer does
+    // not read an interface declaration, so it has no view of what is in the object being passed.
+    findings.push(...scanPropOvershare(scanDir));
+
+    // #1257 / D-091 item 25 — SELECT-then-INSERT dedup whose predicate columns carry no UNIQUE
+    // constraint. Folds the migration DDL against the app-side predicate, the same shape
+    // migration-column-drift.ts uses for item 13.
+    findings.push(...scanDedupWithoutUnique(scanDir));
+
+    // #1267 — the route → repository → query chain across a module boundary: the cross-file
+    // complement of scanBolaOwner, which is single-file by construction. Non-overlap is structural
+    // (one requires the .eq() in the handler file, the other requires it in an imported module).
+    findings.push(...scanBolaCrossFile(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

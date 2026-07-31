@@ -152,6 +152,12 @@ export const BOUNDED_RULES: readonly string[] = [
   "harvey-sensitive-response-cached", "harvey-server-action-noauth", "harvey-ssrf-fetch",
   "harvey-static-iv", "harvey-vite-service-role-in-client", "harvey-xxe-parse",
   "harvey-zero-row-update",
+  // #1273 — the sink-coverage widening. harvey-path-traversal MOVED here out of BOUND_TRIAGE: its
+  // comments now record a real bound (the `root` option it does not read) rather than only the
+  // pattern mechanics they described before, so the marker vocabulary sees it and its message
+  // states it. The three new rules arrive bounded rather than joining the residual.
+  "harvey-path-traversal", "harvey-xpath-injection", "harvey-ldap-injection",
+  "harvey-csv-formula-injection",
 ];
 
 // A deliberately WIDER net than BOUND_MARKERS, used only to measure the vocabulary's residual — the
@@ -186,7 +192,6 @@ export function residualBoundish(rules: readonly SemgrepRule[]): SemgrepRule[] {
 export const BOUND_TRIAGE: readonly { readonly id: string; readonly disposition: string }[] = [
   { id: "harvey-service-role-in-client", disposition: "pattern mechanics — 'correctly NOT flagged' describes an intended non-firing (a server-only file), which is the rule's edge, not a class it leaves unassessed" },
   { id: "harvey-prototype-pollution", disposition: "pattern mechanics — 'a source that cannot reach' explains why three candidate source extensions were REJECTED as recall theatre; the rejected shapes are not reachable defects" },
-  { id: "harvey-path-traversal", disposition: "pattern mechanics — names a specific measured false positive the pattern-not exists to exclude, i.e. the rule's edge working as intended" },
   { id: "harvey-spawn-shell-true", disposition: "pattern mechanics — 'deliberately excluded' describes the DIVISION OF LABOUR with the argv-array rules, which do cover the excluded family; nothing is unassessed" },
   { id: "harvey-unsafe-deserialization", disposition: "genuine bound — scope sentence written into the message ('depends on the deserialization library actually in use'); its phrasing is outside the marker vocabulary, so the sentence is voluntary rather than gate-held" },
   { id: "harvey-template-autoescape-off", disposition: "genuine bound — scope sentence written into the message ('whether user data actually flows through this template is not traced'); same voluntary status as above" },

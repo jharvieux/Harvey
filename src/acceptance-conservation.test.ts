@@ -303,6 +303,42 @@ describe("evidence checked for TRUTH, not only shape", () => {
     expect(evidenceProblems("regenerated `src/scan/config.json`", world)).toEqual([]);
   });
 
+  // #1400. Ordering fixed `.json` one pair at a time and left `.jsx` and `.mdx` truncating; the
+  // `(?!\w)` boundary fixes the class. Both directions per extension on purpose: a fix that made
+  // every `.json`/`.jsx` citation pass unconditionally would hide the check's actual job.
+  describe("an extension that is a PREFIX of another is neither truncated nor waved through (#1400)", () => {
+    const extWorld = {
+      ...world,
+      topLevelEntries: new Set(["src", "docs", "dry-run", "targets"]),
+      pathExists: (p: string) =>
+        [
+          "dry-run/findings.json",
+          "src/Panel.tsx",
+          "targets/calibration/components/AdminPanel.jsx",
+          "docs/design/ruling.mdx",
+          "docs/design/ruling.md",
+          "src/scan/rules.yaml",
+          "src/scan/rules.yml",
+        ].includes(p),
+    };
+
+    for (const [ext, real, fake] of [
+      ["json", "dry-run/findings.json", "dry-run/invented.json"],
+      ["tsx", "src/Panel.tsx", "src/Invented.tsx"],
+      ["jsx", "targets/calibration/components/AdminPanel.jsx", "targets/calibration/components/Invented.jsx"],
+      ["mdx", "docs/design/ruling.mdx", "docs/design/invented.mdx"],
+      ["yaml", "src/scan/rules.yaml", "src/scan/invented.yaml"],
+      ["yml", "src/scan/rules.yml", "src/scan/invented.yml"],
+    ] as const) {
+      it(`a real .${ext} citation passes and a fake one still fails`, () => {
+        expect(evidenceProblems(`the file \`${real}\` carries the change`, extWorld), real).toEqual([]);
+        expect(evidenceProblems(`the file \`${fake}\` carries the change`, extWorld), fake).toEqual([
+          expect.stringContaining(`\`${fake}\`, which does not exist`),
+        ]);
+      });
+    }
+  });
+
   it("leaves a path outside this repo's top level alone rather than failing on a foreign tree", () => {
     expect(evidenceProblems("upstream/lib/parser.ts:44 is the culprit", world)).toEqual([]);
   });
@@ -539,6 +575,17 @@ describe("venue parity — a green PR check predicts the close-time verdict (#15
 
   // The invariant itself, rather than one instance of it: whatever the arrangement of venues, the
   // two gates return the same verdict. This is what would have caught the defect.
+  //
+  // WHAT IT DOES NOT COVER (#1573): DIVERGENCE, not LOSS. Both paths now collect the issue's
+  // comments at one point — the `for (const c of closes)` loop in checkAcceptance — so a regression
+  // that deletes comment-reading removes it from BOTH sides and this assertion stays green. Loss is
+  // guarded elsewhere, and MEASURED 2026-07-31 by deleting that loop: 7 tests fail, none of them
+  // this one — "REGRESSION: fails a PR whose dispositions are ALSO recorded as issue comments",
+  // "accounts for a criterion dispositioned ONLY in an issue comment, as the close path does",
+  // "says which venues it read, so a duplicate does not appear from nowhere", "passes a bare click
+  // whose dispositions are recorded as issue comments — the venue #1341 chose", "ignores a closing
+  // keyword for another issue in the surfaces it reads", and both `--selftest` parity tests. Do not
+  // read a green parity assertion as covering the venue set's existence.
   it("PR verdict == close verdict, over every arrangement of the venues", () => {
     const arrangements = [
       { name: "dispositions in the PR body only", body: PR_BODY, comments: [] },
@@ -583,6 +630,104 @@ describe("venue parity — a green PR check predicts the close-time verdict (#15
     const r = checkAcceptance(PR_BODY, withComments(), undefined, undefined, { linkedCloses: [{ number: 700, ref: "#700" }] });
     expect(r.closes).toHaveLength(1);
     expect(r.ok).toBe(true);
+  });
+});
+
+// #1565. The grammar is exact and the parser is line-by-line, so a near-miss read as ABSENT: the
+// author was told the bullet was UNMAPPED rather than what was wrong with the line they wrote.
+// Every shape here was hit by a real executor on 2026-07-30 and cost a CI round trip. Each test
+// pins the SPECIFIC defect the message must name — it fails if the message degrades back to the
+// generic "expected <grammar>", which is what the old one said for all four.
+describe("a near-miss disposition line is reported as MALFORMED, naming the defect (#1565)", () => {
+  const withLine = (line: string): string[] => problems(`Closes #10\n\n${line}\nACCEPTANCE #10.2 met: src/foo.ts:1\n`, lookupOf(issue({ number: 10 })));
+
+  it("names the DASH when an em-dash stands where the grammar needs a colon", () => {
+    const [first] = withLine("ACCEPTANCE #10.1 met — src/foo.ts:1 now throws");
+    expect(first).toContain("separated from its evidence by a dash");
+    expect(first).toContain("needs a COLON");
+    // The correction, spelled out — this is what turns a rejection into a one-edit fix.
+    expect(first).toContain("ACCEPTANCE #10.1 met: src/foo.ts:1 now throws");
+  });
+
+  it("names the same defect for an en-dash and a plain hyphen, which read identically to the parser", () => {
+    for (const dash of ["–", "-"]) {
+      expect(withLine(`ACCEPTANCE #10.1 met ${dash} src/foo.ts:1 now throws`)[0]).toContain("separated from its evidence by a dash");
+    }
+  });
+
+  it("names the PARENTHETICAL between the verdict and the colon", () => {
+    const [first] = withLine("ACCEPTANCE #10.1 met (this PR): src/foo.ts:1 now throws");
+    expect(first).toContain("parenthetical sits between the verdict and the colon");
+    expect(first).toContain("ACCEPTANCE #10.1 met: src/foo.ts:1 now throws");
+    expect(first).toContain('fold "this PR" into the detail');
+  });
+
+  it("says `no-stated-criteria` is a WHOLE-ISSUE declaration when it is written per-criterion", () => {
+    const [first] = withLine("ACCEPTANCE #10.1 no-stated-criteria: the bar was a green verify");
+    expect(first).toContain("WHOLE-ISSUE declaration and takes no criterion number");
+    expect(first).toContain("ACCEPTANCE #10 no-stated-criteria:");
+    // And it must say the escape hatch does not apply here, or the author just deletes the `.1`.
+    expect(first).toContain("only when the issue states no criteria at all");
+  });
+
+  it("names an unrecognised verdict word rather than reciting the grammar at it", () => {
+    const [first] = withLine("ACCEPTANCE #10.1 done: src/foo.ts:1 now throws");
+    expect(first).toContain("`done` is not a disposition");
+    expect(first).toContain("`met`, `split` and `relayed`");
+  });
+
+  it("names an empty detail after the colon", () => {
+    expect(withLine("ACCEPTANCE #10.1 met:")[0]).toContain("carries no detail after the colon");
+  });
+
+  // NEGATIVE CONTROL for the whole family: a WELL-FORMED line must not be diagnosed at all, or the
+  // new messages would be firing on the population they exist to leave alone.
+  it("NEGATIVE CONTROL: a well-formed disposition produces no malformed-line message", () => {
+    expect(problems(BOTH_MET, lookupOf(issue({ number: 10 })))).toEqual([]);
+  });
+});
+
+describe("evidence truncated at a line break says so (#1565)", () => {
+  const wrapped = [
+    "Closes #10",
+    "",
+    "ACCEPTANCE #10.1 met: the whole point of this change, argued at length,",
+    "which is that `pnpm verify` passes and src/foo.ts:12 now throws",
+    "ACCEPTANCE #10.2 met: src/foo.ts:12 now throws",
+  ].join("\n");
+
+  it("names the continuation line rather than reporting a mystery evidence failure", () => {
+    const found = problems(wrapped, lookupOf(issue({ number: 10 })));
+    expect(found.some((p) => p.includes("names none of"))).toBe(true);
+    const hint = found.find((p) => p.includes("TRUNCATED AT A LINE BREAK"));
+    expect(hint).toBeDefined();
+    expect(hint).toContain("line 3 is read to its end and line 4");
+    expect(hint).toContain("which is that `pnpm verify` passes");
+    expect(hint).toContain("Put the whole disposition on one line");
+  });
+
+  // NEGATIVE CONTROL: the hint decorates a failure, it never creates one. A disposition whose FIRST
+  // line already carries evidence is correct, wrap or no wrap, and must stay silent — otherwise
+  // every PR body with prose after its last disposition would start reporting a defect.
+  it("NEGATIVE CONTROL: says nothing when the first line already carries evidence", () => {
+    const body = `${BOTH_MET}\nAnd some closing prose about the change.\n`;
+    expect(problems(body, lookupOf(issue({ number: 10 })))).toEqual([]);
+  });
+
+  it("does not read the NEXT disposition as a continuation of the one above it", () => {
+    const body = "Closes #10\n\nACCEPTANCE #10.1 met: all good\nACCEPTANCE #10.2 met: src/foo.ts:1\n";
+    const found = problems(body, lookupOf(issue({ number: 10 })));
+    expect(found.some((p) => p.includes("TRUNCATED AT A LINE BREAK"))).toBe(false);
+  });
+});
+
+describe("an out-of-range criterion number prints the criteria the gate parsed (#1565)", () => {
+  it("lists them, numbered, so the author can renumber against the parse and not the rendering", () => {
+    const body = `${BOTH_MET}ACCEPTANCE #10.3 met: \`pnpm verify\` green\n`;
+    const [first] = problems(body, lookupOf(issue({ number: 10, body: "## Acceptance\n- the first bar\n- the second bar\n" })));
+    expect(first).toContain("but #10 states 2");
+    expect(first).toContain("1. the first bar  |  2. the second bar");
+    expect(first).toContain("POSITIONAL");
   });
 });
 

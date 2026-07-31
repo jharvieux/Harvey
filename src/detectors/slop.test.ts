@@ -54,7 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
-  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 4, severity: "Low", confidence: "Review" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 7, severity: "Low", confidence: "Review" },
   { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
@@ -122,8 +122,11 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("single-use-helper exempts an exported single-caller but still catches a non-exported one, and stays silent on a two-site helper", () => {
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
-    expect(pos.map((f) => f.title)).toEqual([
+    expect([...pos.map((f) => f.title)].sort()).toEqual([
+      expect.stringContaining("buildFeedXml"),
+      expect.stringContaining("cacheIsWarm"),
       expect.stringContaining("computeDiscount"),
+      expect.stringContaining("detectIntent"),
       expect.stringContaining("loadRate"),
       expect.stringContaining("requireCliLogin"),
       expect.stringContaining("streamToText"),
@@ -145,6 +148,18 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]);
   });
 
+  // #1532 residual, found by RE-DRAWING (seed 20260731, 30 of the 597 then spared, read at source):
+  // 1 of the 30 was still wrongly spared because `doesOwnIo` reads the helper's own body only, and
+  // carbon's `depsInSync` stats two files through `isAtLeastAsNew` one call away. The same run found
+  // the opposite error: matching the spawner names on a METHOD call made `RE.exec(s)` read as
+  // spawning, which cost three rows including one #1532's own baseline note grades a genuine seam.
+  it("follows a resolvable callee one hop for I/O, and does not read `RE.exec(s)` as spawning (#1532)", () => {
+    const titles = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper").map((f) => f.title);
+    expect(titles.some((t) => t.includes("cacheIsWarm"))).toBe(true); // existsSync/statSync one hop away, through a `.js` specifier
+    expect(titles.some((t) => t.includes("requireCliLogin"))).toBe(true); // the bare-identifier `spawnSync` half must survive the narrowing
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]); // `matchTeamRoute` stays spared
+  });
+
   // #370 criterion 3, the FP class briefs/quality-extras.txt names and #325 fixtures for M6.
   // MEASURED 2026-07-28: before this, M5 and M6 diverged on it — M6-N-SEAM (reconcile.ts) is spared
   // by M5 only because it happens to be exported; dropping that one keyword made M5 flag the very
@@ -159,10 +174,27 @@ describe("discrimination boundaries (regression locks)", () => {
     const evidence = pos.find((f) => f.title.includes("loadRate"))?.evidence ?? "";
     expect(evidence).toContain("exempts a helper that does no I/O of its own whose one caller is async or awaits");
     // #1532/#1345: the bound reaches the client WITH ITS POPULATION. #1447 disclosed the bound and
-    // shipped no number, which leaves a reader nothing to weigh it against — 653 spared, 401 on an
-    // await that has nothing to do with the helper, is the fact that makes the trade-off legible.
+    // shipped no number, which leaves a reader nothing to weigh it against. Re-measured 2026-07-31
+    // over the same ten pins: 592 spared (653 before #1532/#1533), 380 on an await that has nothing
+    // to do with the helper, 24 on an async caller this pass could not read.
+    expect(evidence).toContain("592");
     expect(evidence).toContain("653");
-    expect(evidence).toContain("401");
+    expect(evidence).toContain("380");
+    expect(evidence).toContain("24");
+  });
+
+  // #1533 — the `async` caller that awaits NOTHING. MEASURED 2026-07-31 over the same ten pins:
+  // 39 rows, of which 14 now fire and 25 stay spared; all 14 were read at source and none is a
+  // false positive. Each assertion below has a live counterexample in the negative fixture, so
+  // neither direction can pass by accident.
+  it("fires when an async caller that awaits nothing provably does no async work, and only then (#1533)", () => {
+    const titles = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper").map((f) => f.title);
+    expect(titles.some((t) => t.includes("buildFeedXml"))).toBe(true); // caller returns `new Response(...)`
+    expect(titles.some((t) => t.includes("detectIntent"))).toBe(true); // needs the CROSS-FILE hop to know composeStarterResult is sync
+    // All three counterexamples must stay spared: a caller that returns a local async function's
+    // promise, one that hands an async callback to a constructor, and one whose callee is a
+    // package outside the repo and therefore unreadable.
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]);
   });
 });
 

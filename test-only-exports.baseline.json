@@ -5,7 +5,6 @@
   ],
   "exports": [
     "src/audit-completeness.ts:completenessStatement",
-    "src/coverage-scorecard.ts:statusFromDynamicProbe",
     "src/dynamic-validate.ts:runDynamicValidation",
     "src/epic-builder/state-machine.ts:canTransition",
     "src/fix/detector-rerun.ts:resolvesToDetector",
@@ -18,9 +17,7 @@
     "src/pentest/race-toctou.ts:RACE_TOCTOU_PROBE_ID",
     "src/pentest/session-lifecycle.ts:SESSION_LIFECYCLE_PROBE_IDS",
     "src/pentest/upload-attack.ts:UPLOAD_ATTACK_PROBE_IDS",
-    "src/pentest/verify.ts:applyVerifyResults",
-    "src/quality-scan.ts:matchesJscpdIgnoreGlob",
-    "src/recorded-reasons.ts:collectReasons"
+    "src/quality-scan.ts:matchesJscpdIgnoreGlob"
   ],
   "types": []
 }

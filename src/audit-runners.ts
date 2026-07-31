@@ -7,10 +7,12 @@
 // reimplement any scanner — a probe shells out to the same `pnpm <script>` an operator runs by hand
 // and reports what happened.
 
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { findFreshPass, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
+import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
@@ -315,7 +317,10 @@ const m1: ModuleRunner = {
         falsifier: `${command} — a non-zero "lines of application code across N file(s)" count on that report makes this reason false`,
       };
     }
-    const mechanical = readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00");
+    const mechanical = [
+      ...briefProvenanceFinding(ctx.targetDir),
+      ...readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00"),
+    ];
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
     // it, M1 stays honestly partial on the mechanical tier alone.
@@ -362,6 +367,42 @@ const m1: ModuleRunner = {
     };
   },
 };
+
+// #678 criterion 2 — the deliverable records WHICH D-091 catalog version the M1 semantic brief was
+// derived from. The engagement banner prints it, but a banner is not a deliverable: the client's
+// report is where "these are the classes we hunted" has to be legible, and the whole point of #678
+// is that a stale class list produces a clean-looking report over an un-hunted class. Reaches the
+// assembled document through M1's own probe, so it is conserved and rendered like any other row.
+function briefProvenanceFinding(targetDir: string): Finding[] {
+  const vendored = readFileSync(new URL("../briefs/anti-patterns.md", import.meta.url), "utf8");
+  const targetCatalog = join(targetDir, "docs", "runbooks", "anti-patterns.md");
+  const { lines } = briefFreshnessBanner(vendored, existsSync(targetCatalog) ? readFileSync(targetCatalog, "utf8") : undefined);
+  return [
+    {
+      id: "M1-BRIEF-00",
+      title: "D-091 anti-pattern catalog version this engagement's M1 semantic brief was built from",
+      severity: "Info",
+      confidence: "N/A",
+      category: "Multi-tenant security",
+      taxonomy: "Coverage — M1 semantic brief provenance",
+      location: "briefs/anti-patterns.md",
+      status: "Open",
+      evidence: lines.join(" "),
+      impact:
+        "M1's semantic pass hunts the class list in this catalog. If the catalog is behind the one the " +
+        "codebase's own team maintains, the classes added since are not absent from this report because " +
+        "they were looked for and not found — they were never looked for. Recorded so the version is a " +
+        "stated fact rather than an assumption.",
+      fix:
+        "Re-sync briefs/anti-patterns.md and briefs/scan-extras.txt from the canonical catalog and re-run, " +
+        "or run `pnpm brief-freshness <target-repo>` to diff them against a target that ships its own copy.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
 
 // M2 (#356): `--dynamic` is the operator's CLAIM that a live two-tenant stack exists — not evidence
 // one is reachable, and #229's doctrine is that a status must be derived from what was observed. The

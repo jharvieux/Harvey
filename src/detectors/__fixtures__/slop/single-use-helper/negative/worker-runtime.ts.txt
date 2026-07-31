@@ -1,0 +1,24 @@
+// #1533 scope control 2 of 3 — reading the RETURNS alone is not enough. `startWorkers` awaits
+// nothing and returns a plain object literal, yet it opens a queue connection and hands it an
+// `async` job handler, so it is I/O-entangled and `parseQueues` is the pure half. MEASURED
+// 2026-07-31: the first cut of this fix flagged inbox-zero apps/worker/src/runtime.mjs:13 twice
+// for precisely this, which is why the nested-async check exists.
+import { QueueWorker } from "job-queue";
+
+function parseQueues(spec: string): { name: string; concurrency: number }[] {
+  return spec.split(",").map((part) => {
+    const [name, concurrency] = part.split(":");
+    return { name: name ?? "default", concurrency: Number(concurrency ?? 1) };
+  });
+}
+
+export async function startWorkers(spec: string, run: (job: string) => Promise<void>) {
+  const queues = parseQueues(spec);
+  const workers = queues.map(
+    (q) =>
+      new QueueWorker(q.name, async (job: string) => {
+        await run(job);
+      }),
+  );
+  return { queues, workers };
+}
