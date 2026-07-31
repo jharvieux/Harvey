@@ -638,10 +638,12 @@ const rlsIndicator = (severity: Severity): Finding => ({
 });
 
 describe("free-tier calibration invariant (#261)", () => {
-  it("covers exactly #227's four named repos plus #934's scale case, each pinned in the corpus", () => {
+  it("covers exactly #227's four named repos, #934's scale case and #1473's graded-channel case, each pinned in the corpus", () => {
     // The invariant is defined against these targets by name; a target quietly dropped from the
-    // list is the check silently shrinking.
-    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["carbon", "multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
+    // list is the check silently shrinking. launch-mvp joined on 2026-07-31 (#1473) — it is the
+    // corpus's clearest known-vulnerable member and sat outside this gate until `mustBeLoud` could
+    // express a promise the indicator channel does not carry.
+    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["carbon", "launch-mvp", "multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
     for (const e of FREE_TIER_EXPECTATIONS) {
       expect(EXTERNAL_CORPUS.some((t) => t.slug === e.slug), e.slug).toBe(true);
     }
@@ -890,11 +892,49 @@ describe("free-tier loudness invariant is channel-agnostic and can fail (#1473)"
     expect(scoreFreeTierExpectation(expectation("carbon"), gradedOnly).find((r) => r.check === "indicator posture")!.detail).toContain("NOT ASSESSED");
   });
 
-  it("leaves every existing corpus row scored exactly as before — the new field is opt-in", () => {
-    for (const e of FREE_TIER_EXPECTATIONS) {
+  it("leaves every PRE-EXISTING corpus row scored exactly as before — the new field is opt-in", () => {
+    // launch-mvp is the one row that opted IN (#1473's whole point); every other row predates the
+    // field and must not have quietly gained an assertion nobody measured.
+    for (const e of FREE_TIER_EXPECTATIONS.filter((x) => x.slug !== "launch-mvp")) {
       expect(e.mustBeLoud, `${e.slug} predates #1473 and must not have gained an unmeasured assertion`).toBeUndefined();
       expect(scoreFreeTierExpectation(e, gradedOnly).some((r) => r.check.startsWith("must be loud")), e.slug).toBe(false);
     }
+  });
+
+  // #1473's mechanism was shipped with a PLANTED control and no corpus row, so nothing tied it to a
+  // real repo. These three do — and the third is the one that makes the row mean something: it is
+  // the exact regression launch-mvp was pinned to catch.
+  describe("launch-mvp is the row the mechanism exists for", () => {
+    const launchMvp = (): FreeTierExpectation => expectation("launch-mvp");
+
+    it('asserts the GRADED channel, and makes no "must not score F" claim about a repo that should grade badly', () => {
+      expect(launchMvp().mustBeLoud).toBe("graded");
+      expect(launchMvp().mustNotScoreF).toBe(false);
+      expect(launchMvp().mustRaiseLoudIndicator).toBeUndefined();
+      expect(launchMvp().why).toContain("F (51/100)");
+    });
+
+    it("PASSES on its measured shape: graded loud, indicator channel empty", () => {
+      // The report below reproduces the 2026-07-31 measurement of the pinned tree — 4 graded Highs,
+      // 0 indicators — not a convenient synthetic one.
+      const measured = buildQuickScanReport([gradedHigh, gradedHigh, gradedHigh, { ...gradedHigh, id: "cors", severity: "High" }]);
+      expect(measured.indicators).toHaveLength(0);
+      const row = scoreFreeTierExpectation(launchMvp(), measured).find((r) => r.check.startsWith("must be loud"))!;
+      expect(row.pass).toBe(true);
+      expect(row.detail).toContain("graded channel LOUD");
+      const posture = scoreFreeTierExpectation(launchMvp(), measured).find((r) => r.check === "indicator posture")!;
+      expect(posture.detail).not.toContain("NOT ASSESSED");
+    });
+
+    it("FAILS if the object-level-authz Highs stop firing — the regression this target was pinned for", () => {
+      // The same scan on the 2026-07-26 scanner emitted ZERO of these rows (#1174). If they go dark
+      // again, the free tier is silent on two unauthenticated service-role Criticals and this row is
+      // what says so.
+      const withoutAuthzHighs = buildQuickScanReport([{ ...gradedHigh, severity: "Low" }]);
+      const row = scoreFreeTierExpectation(launchMvp(), withoutAuthzHighs).find((r) => r.check.startsWith("must be loud"))!;
+      expect(row.pass).toBe(false);
+      expect(row.detail).toContain("STAYED QUIET");
+    });
   });
 });
 

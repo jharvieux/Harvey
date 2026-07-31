@@ -223,4 +223,38 @@ describe("classifyLeftoverAuth", () => {
   it("does not flag a role read from a non-storage variable with no privilege comparison", () => {
     expect(has(classifyLeftoverAuth({ path: "src/App.tsx", content: "const role = session.role; return <span>{role}</span>;" }), CLIENT_AUTHZ)).toBe(false);
   });
+
+  // #135/#1366 — Host header trusted to build an absolute URL (reset-link poisoning). The three
+  // "does not flag" cases below are the discriminators: the read alone, the read into a NON-authority
+  // position, and a fixed deploy-time origin. Without them this check would be "the file mentions a
+  // header", which is not the class.
+  const HOST_URL = "Host header trusted in URL construction";
+  it("flags a reset link whose authority comes from a bound Host header read", () => {
+    const content = 'import { headers } from "next/headers";\nexport function buildResetLink(token) {\n  const host = headers().get("host");\n  return `https://${host}/reset?token=${token}`;\n}';
+    expect(has(classifyLeftoverAuth({ path: "lib/reset-link.js", content }), HOST_URL)).toBe(true);
+  });
+
+  it("flags the App Router x-forwarded-host shape and the string-concatenation shape", () => {
+    const appRouter = 'const h = request.headers.get("x-forwarded-host");\nconst url = new URL("/verify", `https://${h}`);';
+    expect(has(classifyLeftoverAuth({ path: "app/api/verify/route.ts", content: appRouter }), HOST_URL)).toBe(true);
+    const express = 'const host = req.headers.host;\nconst link = "https://" + host + "/reset?token=" + token;';
+    expect(has(classifyLeftoverAuth({ path: "pages/api/reset.js", content: express }), HOST_URL)).toBe(true);
+  });
+
+  it("does not flag a Host header read that never reaches a URL authority", () => {
+    // targets/calibration/pages/api/header-exec.js — the same read, planted as command injection
+    // (P-CMD-HEADER-SOURCE). A rule that fired here would be reporting the read, not the class.
+    const content = 'const host = req.headers["x-forwarded-host"];\nexec(`nslookup ${host}`);';
+    expect(has(classifyLeftoverAuth({ path: "pages/api/header-exec.js", content }), HOST_URL)).toBe(false);
+  });
+
+  it("does not flag a link built from a fixed deploy-time origin", () => {
+    const content = "export function buildResetLink(token) {\n  return `${process.env.NEXT_PUBLIC_SITE_URL}/reset?token=${token}`;\n}";
+    expect(has(classifyLeftoverAuth({ path: "lib/reset-link-safe.js", content }), HOST_URL)).toBe(false);
+  });
+
+  it("does not flag a commented-out example of the vulnerable shape", () => {
+    const content = "// const host = headers().get('host');\n// return `https://${host}/reset`;\nreturn buildFromEnv();";
+    expect(has(classifyLeftoverAuth({ path: "lib/reset-link-doc.js", content }), HOST_URL)).toBe(false);
+  });
 });

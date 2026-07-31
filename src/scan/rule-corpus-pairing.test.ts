@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { committedScanFindings, harveySemgrepRules, ruleCorpusPairings, type SemgrepRule } from "./rule-corpus-pairing.js";
+import { committedScanFindings, freeCountCoverage, harveySemgrepRules, ruleCorpusPairings, type SemgrepRule } from "./rule-corpus-pairing.js";
 import { CORPUS } from "./calibration.js";
 import type { Finding } from "../findings.js";
 
@@ -35,5 +35,44 @@ describe("#1301 rule ↔ corpus pairing (a rule may not enter the free count unv
     const overridden = harveySemgrepRules().filter((r) => r.taxonomy !== `src.scan.rules.semgrep.${r.id}`);
     expect(overridden.length).toBeGreaterThan(0);
     for (const r of overridden) expect(ruleCorpusPairings([r], committedScanFindings(), CORPUS)[0]?.positives.length).toBeGreaterThan(0);
+  });
+});
+
+// #1414 — the gate above covers `harvey-*` semgrep rules. `precisionTier: "high"` does not. These
+// hold the difference to a MEASURED number, and prove the per-rule prototype can actually withhold
+// something, so "it drops zero today" reads as a measurement rather than as dead code.
+describe("#1414 free-count coverage of the pairing gate, and the per-rule gate prototype", () => {
+  it("MEASURES the share of the free count the pairing gate does not reach — it is not 100%", () => {
+    const c = freeCountCoverage();
+    expect(c.highTier).toBeGreaterThan(100);
+    expect(c.coveredByPairingGate + c.outsidePairingGate).toBe(c.highTier);
+    // The claim #1301 shipped — that an unvalidated rule never reaches a client's grade — is false for a
+    // third of this population, and this is the assertion that keeps that fact from being
+    // re-forgotten. It fails the day someone widens the gate to cover everything — which would be
+    // good news, and should be a deliberate edit here rather than a silent one.
+    expect(c.outsidePairingGate).toBeGreaterThan(0);
+    expect(c.outsideTaxonomies).toContain("Committed credential");
+    // A secret scanner, an AST detector and a dependency check are all in the uncovered set, so the
+    // gap is structural (several engines), not one stray taxonomy.
+    expect(c.outsideTaxonomies.length).toBeGreaterThan(5);
+  });
+
+  it("the per-rule gate withholds nothing today, because the build gate keeps the unpaired set empty", () => {
+    expect(ruleCorpusPairings().filter((p) => p.unpaired)).toEqual([]);
+    expect(freeCountCoverage().droppedByPerRuleGate).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL — the per-rule gate DOES withhold an unpaired rule's findings", () => {
+    // Without this, "drops 0" is indistinguishable from a filter that drops nothing ever.
+    const findings = committedScanFindings();
+    const invented: SemgrepRule = { id: "harvey-invented-1414", file: "invented.yml", taxonomy: "src.scan.rules.semgrep.harvey-invented-1414" };
+    const hit: Finding = { ...findings.find((f) => f.precisionTier === "high")!, id: "INVENTED-1", taxonomy: invented.taxonomy };
+    const rules = [...harveySemgrepRules(), invented];
+    const withHit = [...findings, hit];
+    const c = freeCountCoverage(withHit, rules, ruleCorpusPairings(rules, withHit));
+    expect(c.droppedByPerRuleGate).toEqual(["INVENTED-1"]);
+    // ...and the same finding is NOT in the uncovered set, because its rule IS enumerated — the two
+    // measurements answer different questions and must not collapse into one.
+    expect(c.outsideTaxonomies).not.toContain(invented.taxonomy);
   });
 });

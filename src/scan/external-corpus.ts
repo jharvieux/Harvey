@@ -506,10 +506,11 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
   // What it buys the corpus that no existing target does: it is the only member with an
   // UNAUTHENTICATED service-role IDOR at Critical (#774 — `app/api/user/delete/route.ts` takes a
   // userId from the query string and soft-deletes that account through the service-role client, no
-  // auth call in the file). #1473 (still open): it is deliberately NOT in FREE_TIER_EXPECTATIONS
-  // below — measured grade F (51/100) with 0 review-tier tenant-isolation indicators, and all three
-  // values of `mustRaiseLoudIndicator` would state something false about it, since its known
-  // Criticals land in the graded set rather than the indicator channel that expectation scores.
+  // auth call in the file). #1473, CLOSED 2026-07-31: it is now IN FREE_TIER_EXPECTATIONS below,
+  // carrying `mustBeLoud: "graded"` — measured grade F (51/100) with 0 review-tier tenant-isolation
+  // indicators, which is why all three values of the older `mustRaiseLoudIndicator` stated something
+  // false about it: its known Criticals land in the graded set, not in the indicator channel that
+  // field scores. The channel-agnostic assertion is what let it into the gate.
   // MEASURED 2026-07-28 during the #1174 re-scan: the free tier now emits 3 High/Confirmed "tenant
   // predicate populated from the request" rows on it, and the same scan on the 2026-07-26 scanner
   // (d1da2e4) emitted ZERO — a real-code detection this manifest would otherwise have no baseline
@@ -1100,13 +1101,13 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
     slug: "multi-tenant-starter",
     mustNotScoreF: false,
     mustRaiseLoudIndicator: true,
-    why: "The don't-stay-quiet case: any authed user self-joins any tenant as owner (#217 Critical, confirmed dynamically). If the free tier is silent here it has failed the promise. Measured 2026-07-15: 4 High RLS indicators. RE-MEASURED 2026-07-28 (#1473): grade B (89/100), 2 graded (0 Critical/High), 3 indicators of which 2 are loud — both public.tenants RLS semantic-review rows, i.e. the row still passes on the surface the #217 Critical is about, not on an unrelated signal. Its grade is deliberately unconstrained — the Critical is an indicator, never a graded hygiene verdict (#213/#220).",
+    why: "The don't-stay-quiet case: any authed user self-joins any tenant as owner (#217 Critical, confirmed dynamically). If the free tier is silent here it has failed the promise. Measured 2026-07-15: 4 High RLS indicators. RE-MEASURED 2026-07-28 (#1473): grade B (89/100), 2 graded (0 Critical/High), 3 indicators of which 2 are loud — both public.tenants RLS semantic-review rows, i.e. the row still passes on the surface the #217 Critical is about, not on an unrelated signal. Its grade is deliberately unconstrained — the Critical is an indicator, never a graded hygiene verdict (#213/#220). RE-VERIFIED 2026-07-31 (#1473's 'was any existing row passing for the wrong reason?' check, run rather than inherited): identical — B (89/100), 3 indicators, the same 2 public.tenants rows loud.",
   },
   {
     slug: "proposit",
     mustNotScoreF: false,
     mustRaiseLoudIndicator: true,
-    why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured 2026-07-15: 1 High RLS indicator on organisation_invitations — the very table the Critical is about. RE-MEASURED 2026-07-28 (#1473): grade C (77/100), 2 graded (1 Critical/High), 8 indicators of which 7 are loud — the organisation_invitations policy row is still first, the other six are SECURITY DEFINER caller-authorization reviews added since. Still passing for the right reason.",
+    why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured 2026-07-15: 1 High RLS indicator on organisation_invitations — the very table the Critical is about. RE-MEASURED 2026-07-28 (#1473): grade C (77/100), 2 graded (1 Critical/High), 8 indicators of which 7 are loud — the organisation_invitations policy row is still first, the other six are SECURITY DEFINER caller-authorization reviews added since. Still passing for the right reason. RE-VERIFIED 2026-07-31 (#1473, re-cloned and re-scanned rather than inherited): identical — C (77/100), 8 indicators of which 7 loud, organisation_invitations still first.",
   },
   // #934: the first LARGE repo in this gate — the invariant had only ever been scored against
   // starter kits, and carbon is the target that broke it at scale (F (0/100), every Critical a
@@ -1129,6 +1130,26 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
     // explicit "not asserted" row for it.
     mustNotGradeDocContextCreds: true,
     why: "#934's scale case: a professionally-maintained ERP whose self-hosting docs/contrib/dev-compose surface drew 14 'Critical' placeholder credentials and an F (0/100). The weekly assertions: the reclassification invariant (those hits stay REPORTED informational and OUT of the graded set) and, since #996, mustNotScoreF — measured 2026-07-24 post-#996 at A (97/100), graded set 1 Low (unpinned deps); the former 11 Highs (7 bare-wildcard CORS, 3 GHA workflow, 1 postMessage) are non-grading but still reported. Scored against a real 4k-file repo, not only starter kits. #1344: RE-MEASURED 2026-07-27 at C (74/100), graded set 2 High + 1 Low. The F (0/100) this run started from was 21 High 'Slopsquatted/hallucinated dependency' rows on carbon's OWN @carbon/* workspace packages — #1231 widened the registry existence check from the root manifest to every workspace member, and a member is resolved from inside the repo, so the registry 404s on it; #1344 excludes workspace-internal names and discloses them in SUP-SCOPE-00. The 2 residual Highs are NOT false positives and are deliberately left graded: #1210's Supabase `.eq()` sink correctly finds packages/database/supabase/functions/seed-company/index.ts scoping a service-role query on companyId AND userId taken straight from `req.json()`. The invariant this row asserts (must not score F) holds; the grade moving A -> C is a real new detection, not noise.",
+  },
+  // #1473 — the sixth member, and the one the invariant could not previously express. It is the
+  // corpus's clearest known-vulnerable repo (two unauthenticated service-role Criticals, #774) and
+  // it sat OUTSIDE this gate entirely because every value of `mustRaiseLoudIndicator` stated
+  // something false about it. `mustBeLoud` is the field that fixed that, and this is its first
+  // real user — until now it existed with a passing planted control and no corpus row, which is a
+  // mechanism nothing exercises.
+  {
+    slug: "launch-mvp",
+    // Deliberately NOT asserted, and not an oversight: this repo SHOULD grade badly. Asserting
+    // "must not score F" here would be the #213 inversion in reverse.
+    mustNotScoreF: false,
+    // The promise, on the channel that actually carries it. MEASURED 2026-07-31 by cloning the pin
+    // and running buildQuickScanReport(await runMechanicalScan({ dir })): grade F (51/100), graded
+    // set 5 findings of which 4 are High, indicators 0 — reproducing #1473's original measurement
+    // exactly. `mustRaiseLoudIndicator` is left unset on purpose; the "indicator posture" row then
+    // says the loudness is asserted on the graded channel rather than calling this repo's tenancy
+    // posture NOT ASSESSED, which would be false of a target disclosed twice (#168, #774).
+    mustBeLoud: "graded",
+    why: "#1473's separating case, and the reason `mustBeLoud` exists. MEASURED 2026-07-31 at the pinned commit 513a8f0: grade F (51/100), graded set 5 (4 High + 1 Low), indicators 0. Three of the four Highs are #1174's object-level-authz rows on app/api/user/delete/route.ts and app/api/email/send/route.ts — `tenant scope user_id is populated from the request` — i.e. the free tier surfaces #774's unauthenticated service-role account deletion as GRADED findings, at Confirmed confidence and category 'Broken access control', which is exactly why they never reach the review-tier indicator channel selectIndicators draws from. Under `mustRaiseLoudIndicator` all three values were false about this repo: true fails with 'STAYED QUIET' on a repo graded F, false asserts 'must not accuse a sound repo' about two unauth Criticals, undefined calls a twice-disclosed target NOT ASSESSED. The row passes because the graded channel is loud, and it would FAIL the day those three Highs stop firing — which is the regression this target was added to the corpus to catch (the same scan on the 2026-07-26 scanner emitted ZERO).",
   },
 ];
 
