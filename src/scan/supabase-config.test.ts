@@ -165,6 +165,28 @@ describe("AuthConfig conforms to the captured Management API response schema", (
     expect(schema.properties).not.toHaveProperty("otp_expiry");
     expect(Object.keys(AUTH_CONFIG_FIELDS)).not.toContain("otp_expiry");
   });
+
+  // #1291 — the schema lists every one of its 237 properties as `required`, and PROVENANCE.md used
+  // to infer from that "a well-formed response carries every one of them". An adversarial review
+  // obtained a live 200 that did NOT carry `nimbus_oauth_email_optional`, so the inference is false:
+  // a vendor spec documenting a response is not the response. Nothing in the scan reasoned from
+  // `required` when that was found — every AuthConfig field is optional and a missing one leaves its
+  // check unrun — and this test is what keeps that true. The `required` list is read from the
+  // fixture rather than named inline, so a re-capture moves the assertion with the schema.
+  it("treats every schema-`required` field as optional — a response missing one leaves that check unrun", () => {
+    const required = (JSON.parse(
+      readFileSync(new URL("./__fixtures__/supabase/auth-config-response-schema-2026-07-26.json", import.meta.url), "utf8"),
+    ) as { required: string[] }).required;
+    for (const field of Object.keys(AUTH_CONFIG_FIELDS)) expect(required).toContain(field);
+
+    // A response carrying only the ONE field each check reads must produce only that check's
+    // finding — never a finding derived from a sibling the wire happened to omit.
+    expect(checkAuthConfig({ mailer_autoconfirm: true, external_email_enabled: true }).map((f) => f.id)).toEqual(["SB-AUTH-AUTOCONFIRM"]);
+    expect(checkAuthConfig({ password_hibp_enabled: false, external_email_enabled: true }).map((f) => f.id)).toEqual(["SB-AUTH-HIBP"]);
+    // And an EMPTY response — every `required` property absent — produces nothing at all, rather
+    // than reading each missing field as its unsafe value.
+    expect(checkAuthConfig({})).toEqual([]);
+  });
 });
 
 describe("checkDangerousExtensions", () => {

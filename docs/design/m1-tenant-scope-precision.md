@@ -112,8 +112,8 @@ prisma-multi-tenant 273 — none of them from these three detectors, and none fr
 **Two of the three rows above are populations of zero, so the corpus proves nothing about them.**
 None of these three libraries is a Next.js app or ships a background-job directory, so
 `bola-owner`'s and `job-tenant-scope`'s file filters admitted no file at all. A limit measured over
-an empty population is a guess. The acceptance criterion asked for this exact scan and this is what
-it can and cannot answer.
+an empty population is a guess. The acceptance criterion asked for this exact scan; the table above
+is its whole answer, and for two of the three detectors that answer is "this corpus is silent".
 
 ## What the corpus could not answer, answered by planting the shape
 
