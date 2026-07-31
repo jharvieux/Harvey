@@ -695,8 +695,14 @@ function containsAwait(node: ts.Node): boolean {
 // every `fs`/`child_process` sync API without naming them); `new Promise` covers callback and
 // event I/O; the bare `child_process` spawners and `process.exit` are named because neither
 // pattern reaches them.
+//
+// The spawner names match a BARE IDENTIFIER only — `import { spawn } from "child_process"` is how
+// all three sampled rows called it (tanstack-com scripts/auth-login.ts:37 among them). Matching the
+// method half as well made `/re/.exec(text)` and `regex.exec(s)` read as spawning a process:
+// MEASURED 2026-07-31, that is the whole reason tanstack-com scripts/check-docs-menu-links.ts:554
+// was disqualified, a helper whose deepest side effect is a string split.
 const SYNC_IO_CALLEE = /^(spawn|exec|execFile|fork)$/;
-function doesOwnIo(node: ts.Node): boolean {
+function doesOwnIo(node: ts.Node, hop?: { path: string; sf: ts.SourceFile; resolve: CalleeResolver }): boolean {
   let found = false;
   const visit = (n: ts.Node) => {
     if (found) return;
@@ -704,7 +710,22 @@ function doesOwnIo(node: ts.Node): boolean {
     if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "Promise") found = true;
     if (ts.isCallExpression(n)) {
       const callee = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : ts.isIdentifier(n.expression) ? n.expression.text : "";
-      if (callee.endsWith("Sync") || SYNC_IO_CALLEE.test(callee) || (ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === "process" && callee === "exit")) found = true;
+      if (
+        callee.endsWith("Sync") ||
+        (ts.isIdentifier(n.expression) && SYNC_IO_CALLEE.test(callee)) ||
+        (ts.isPropertyAccessExpression(n.expression) && n.expression.expression.getText() === "process" && callee === "exit")
+      ) {
+        found = true;
+      }
+      // One hop, and only where the callee RESOLVES (#1532 residual, MEASURED 2026-07-31): carbon
+      // `packages/dev/src/services/apps.ts:367` was drawn in the 30-row re-check and graded wrongly
+      // spared — `depsInSync` does `existsSync`/`statSync` through `isAtLeastAsNew`, one call away,
+      // and a body-only scan reads it as pure. Same cross-file resolver as #1533; an unresolvable
+      // callee still reads as pure, so this only ever finds I/O that is present in the source.
+      if (!found && hop && ts.isIdentifier(n.expression)) {
+        const target = hop.resolve(hop.path, hop.sf, n.expression.text);
+        if (target && doesOwnIo((target.fn as ts.FunctionLikeDeclaration).body ?? target.fn)) found = true;
+      }
     }
     if (found) return;
     ts.forEachChild(n, visit);
@@ -767,7 +788,14 @@ function makeCalleeResolver(files: SourceInput[]): CalleeResolver {
     allPaths ??= new Set(files.map((f) => f.path));
     textByPath ??= new Map(files.map((f) => [f.path, f.text] as const));
     aliases ??= collectPathAliases(files);
-    const target = resolveImport(fromPath, specifier, allPaths, aliases);
+    // `resolveImport` appends extensions to the specifier verbatim, so the ESM-TS convention of
+    // importing `../helpers.js` from `helpers.ts` resolves to nothing. MEASURED 2026-07-31: that is
+    // why the very row this hop was built for — carbon `packages/dev/src/services/apps.ts:367`,
+    // whose `isAtLeastAsNew` comes `from "../helpers.js"` — was still spared with the hop in place.
+    // Stripped here rather than in `resolveImport` itself: that function also backs M9's import
+    // graph and #1344's reachability gate, so widening it moves baselines this change has not
+    // measured. Tracked for the shared resolver as a follow-up.
+    const target = resolveImport(fromPath, specifier, allPaths, aliases) ?? resolveImport(fromPath, specifier.replace(/\.(m|c)?js$/, ""), allPaths, aliases);
     const sf = target === undefined ? undefined : sourceAt(target);
     const fn = sf && functionNamed(sf, name);
     return fn ? { sf, fn } : undefined;
@@ -914,15 +942,15 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 //     hop) to a function that is itself not async, awaits nothing, and returns only such values.
 //     Everything it does not resolve — a method call, a parameter, a package outside the repo —
 //     stays spared, so the firing direction is the one that has to be earned.
-//     MEASURED 2026-07-31 over the same ten pins: 16 of the 39 now fire, 23 stay spared, and every
-//     one of the 16 was read at source. The three rows the class was named for come out right:
+//     MEASURED 2026-07-31 over the same ten pins: 14 of the 39 now fire, 25 stay spared, and every
+//     one of the 14 was read at source. The three rows the class was named for come out right:
 //     mvp-boilerplate app/api/og/route.tsx:15 fires (`return new ImageResponse(…)`), inbox-zero
 //     utils/outlook/mail.ts:408 stays spared (`return sendEmailWithHtml(…)`, a local async), and
 //     saas-lite app/sitemap.xml/route.ts:24 stays spared — that third one CORRECTS #1533's body,
 //     which called its caller synchronous: it returns `getServerSideSitemap(…)` from `next-sitemap`,
 //     outside the repo and unreadable here, so it is a disclosed miss, not a proven seam.
 function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression, path: string, sf: ts.SourceFile, resolve: CalleeResolver): boolean {
-  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody)) return false; // the helper does the I/O — not a pure seam
+  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody, { path, sf, resolve })) return false; // the helper does the I/O — not a pure seam
   let enclosing: ts.Node | undefined = callSite.parent;
   while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
   if (!enclosing) return false;
@@ -971,7 +999,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, 
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31, ten pinned corpus repos): it spares 597 helpers, down from 653 before the purity test was widened. Of those 597, 385 have a caller whose awaits never touch the helper's result and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous — so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31, ten pinned corpus repos): it spares 592 helpers, down from 653 before the purity test was widened. Of those 592, 380 have a caller whose awaits never touch the helper's result and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous — so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,

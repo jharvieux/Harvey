@@ -1,0 +1,7 @@
+// The far side of the one-hop `doesOwnIo` (see cache-probe.ts). Exported, so it is never a
+// single-use-helper candidate itself.
+import { existsSync, statSync } from "node:fs";
+
+export function fileIsFresh(path: string): boolean {
+  return existsSync(path) && statSync(path).mtimeMs > 0;
+}

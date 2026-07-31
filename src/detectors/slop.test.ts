@@ -54,7 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
-  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 6, severity: "Low", confidence: "Review" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 7, severity: "Low", confidence: "Review" },
   { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
@@ -124,6 +124,7 @@ describe("discrimination boundaries (regression locks)", () => {
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
     expect([...pos.map((f) => f.title)].sort()).toEqual([
       expect.stringContaining("buildFeedXml"),
+      expect.stringContaining("cacheIsWarm"),
       expect.stringContaining("computeDiscount"),
       expect.stringContaining("detectIntent"),
       expect.stringContaining("loadRate"),
@@ -147,6 +148,18 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]);
   });
 
+  // #1532 residual, found by RE-DRAWING (seed 20260731, 30 of the 597 then spared, read at source):
+  // 1 of the 30 was still wrongly spared because `doesOwnIo` reads the helper's own body only, and
+  // carbon's `depsInSync` stats two files through `isAtLeastAsNew` one call away. The same run found
+  // the opposite error: matching the spawner names on a METHOD call made `RE.exec(s)` read as
+  // spawning, which cost three rows including one #1532's own baseline note grades a genuine seam.
+  it("follows a resolvable callee one hop for I/O, and does not read `RE.exec(s)` as spawning (#1532)", () => {
+    const titles = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper").map((f) => f.title);
+    expect(titles.some((t) => t.includes("cacheIsWarm"))).toBe(true); // existsSync/statSync one hop away, through a `.js` specifier
+    expect(titles.some((t) => t.includes("requireCliLogin"))).toBe(true); // the bare-identifier `spawnSync` half must survive the narrowing
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]); // `matchTeamRoute` stays spared
+  });
+
   // #370 criterion 3, the FP class briefs/quality-extras.txt names and #325 fixtures for M6.
   // MEASURED 2026-07-28: before this, M5 and M6 diverged on it — M6-N-SEAM (reconcile.ts) is spared
   // by M5 only because it happens to be exported; dropping that one keyword made M5 flag the very
@@ -162,11 +175,11 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(evidence).toContain("exempts a helper that does no I/O of its own whose one caller is async or awaits");
     // #1532/#1345: the bound reaches the client WITH ITS POPULATION. #1447 disclosed the bound and
     // shipped no number, which leaves a reader nothing to weigh it against. Re-measured 2026-07-31
-    // over the same ten pins: 597 spared (653 before #1532/#1533), 385 on an await that has nothing
+    // over the same ten pins: 592 spared (653 before #1532/#1533), 380 on an await that has nothing
     // to do with the helper, 24 on an async caller this pass could not read.
-    expect(evidence).toContain("597");
+    expect(evidence).toContain("592");
     expect(evidence).toContain("653");
-    expect(evidence).toContain("385");
+    expect(evidence).toContain("380");
     expect(evidence).toContain("24");
   });
 
