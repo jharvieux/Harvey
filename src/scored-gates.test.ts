@@ -91,6 +91,31 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
     expect(checkScoredGates(inputs(), gate({ cadence })).join("\n")).not.toContain("as its staleness alarm");
   });
 
+  // #1691 — MEASURED 2026-07-31: a workflow naming the CLI ONLY in its PR-trigger `paths:` filter
+  // satisfied the cadence check, so deleting the invocation left this gate green. A path filter says
+  // which diffs START the job; it never says the job runs the tool.
+  it("REFUSES a cadence evidenced only by a PR-trigger paths: filter", () => {
+    const yml = ['on:', '  pull_request:', '    paths:', '      - "src/cli/validate-x.ts"', 'jobs:', '  x:', '    steps:', '      - run: echo hi'].join("\n");
+    const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": yml } }), gate({ cadence: { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } }));
+    expect(v.join("\n")).toContain("never invokes src/cli/validate-x.ts");
+  });
+
+  it("accepts an invocation by CLI path or by package script, so the check above is not always-on", () => {
+    const base = ['on:', '  pull_request:', '    paths:', '      - "docs/**"', 'jobs:', '  x:', '    steps:'].join("\n");
+    const cadence = { kind: "workflow", file: ".github/workflows/x.yml", job: "x", when: "PR" } as const;
+    for (const step of ["      - run: pnpm exec tsx src/cli/validate-x.ts", "      - run: pnpm validate:x"]) {
+      const v = checkScoredGates(inputs({ workflows: { ".github/workflows/x.yml": `${base}\n${step}` } }), gate({ cadence }));
+      expect(v.join("\n"), step).not.toContain("never invokes");
+    }
+  });
+
+  // #1691's disclosure row: a measured-number CLI outside the `validate-*` discovery predicate is
+  // named rather than skipped, and held to the SAME cadence check — which makes it a disclosure.
+  it("holds a MEASURED_OUTSIDE_DISCOVERY row to the cadence check", () => {
+    const outside: ScoredGate[] = [{ id: "some-census", script: "some-census", measures: "a population", cadence: { kind: "workflow", file: ".github/workflows/gone.yml", job: "c", when: "monthly" } }];
+    expect(checkScoredGates(inputs(), gate(), NOT_SCORED, outside).join("\n")).toContain("some-census: declares cadence in .github/workflows/gone.yml, which does not exist");
+  });
+
   it("discovers validate-* CLIs and excludes their test files", () => {
     const ids = discoverValidateClis(new URL("./cli/", import.meta.url).pathname);
     expect(ids).toContain("validate-reasons");

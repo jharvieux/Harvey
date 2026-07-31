@@ -8,6 +8,7 @@
 
 import { assertKnownFlags } from "./args.js";
 import {
+  MEASURED_OUTSIDE_DISCOVERY,
   NOT_SCORED,
   SCORED_GATES,
   checkScoredGates,
@@ -49,6 +50,15 @@ for (const gate of gates) {
   console.log(`  ${" ".repeat(24)} ${describeCadence(gate.cadence)}  [pnpm ${gate.script}]`);
 }
 console.log(`\nClassified as not scored (structural or schema checks, no recall/precision number): ${NOT_SCORED.length}`);
+
+// #1691 — this gate's population is `src/cli/validate-*.ts`, and a measured number produced by a
+// CLI named anything else was invisible here for no reason but its filename. Said out loud, with
+// each venue held to the same cadence check above.
+console.log(`\nSCOPE — this gate discovers \`src/cli/validate-*.ts\`. ${MEASURED_OUTSIDE_DISCOVERY.length} measured-number CLI(s) fall outside that predicate and are disclosed, not skipped:`);
+for (const gate of MEASURED_OUTSIDE_DISCOVERY) {
+  console.log(`  ${gate.id.padEnd(24)} ${gate.measures}`);
+  console.log(`  ${" ".repeat(24)} ${describeCadence(gate.cadence)}  [pnpm ${gate.script}]`);
+}
 
 const noCadence = gates.filter((g) => g.cadence.kind === "none");
 if (noCadence.length) {

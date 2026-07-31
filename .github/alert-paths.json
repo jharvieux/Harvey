@@ -1,21 +1,21 @@
 {
   "_why": [
     "#1287 (Gate 5 of epic #1320). Every CI alert path in this repo was unfired, and three marker",
-    "labels did not exist — `ci-conservation-alert`, `ci-reasons-alert`, `ci-owasp-watch-alert`.",
+    "labels did not exist \u2014 `ci-conservation-alert`, `ci-reasons-alert`, `ci-owasp-watch-alert`.",
     "Each alert step carries a self-healing `gh label create`, so a MISSING MARKER LABEL IS PROOF",
     "the path never executed. An alert path that has never fired is indistinguishable from one that",
     "cannot fire, so this file records the run that PROVED each one, and src/cli/validate-alert-paths.ts",
     "refuses a path with no proof. Re-prove any of them with:",
     "    gh workflow run <workflow name> -f alert_drill=true",
-    "which opens, comments on and then closes a self-cleaning `… — alert-path drill` issue under the",
+    "which opens, comments on and then closes a self-cleaning `\u2026 \u2014 alert-path drill` issue under the",
     "real job token.",
     "#1348 (2026-07-28) unified the drill onto the production find-or-update branch (previously a",
-    "hand-written parallel branch sharing only the label-create step and the raw gh primitives — see",
+    "hand-written parallel branch sharing only the label-create step and the raw gh primitives \u2014 see",
     "the action's own header). The five proof runs below were re-taken against that fix, on one",
     "branch back to back, and a negative control (breaking find_or_update's `gh issue comment` call)",
     "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted.",
     "",
-    "#1288 (2026-07-28) added `pendingProof` — the one disclosed way a path may sit here unproven.",
+    "#1288 (2026-07-28) added `pendingProof` \u2014 the one disclosed way a path may sit here unproven.",
     "It is built to fail loud, not open: `tracking` must name an OPEN issue (re-read by --labels),",
     "the marker label is excluded from expectedLabels while pending BECAUSE its absence is the",
     "evidence, and pendingProof and provenBy are mutually exclusive.",
@@ -26,13 +26,13 @@
     "the first clause survives measurement. What GitHub actually requires is that the workflow FILE",
     "exist on the default branch (#1288's TRIED evidence is a 404 on a file that did not: `HTTP 404:",
     "workflow secbench.yml not found on the default branch`). It does NOT require the INPUTS, JOBS or",
-    "STEPS to be there — a workflow_dispatch run executes the copy on the `--ref` you name, so a",
+    "STEPS to be there \u2014 a workflow_dispatch run executes the copy on the `--ref` you name, so a",
     "newly-declared `alert_drill` input is dispatchable from the branch that declares it. MEASURED",
     "2026-07-31, four times on an unmerged branch, each dispatch accepted and each run executing the",
     "branch's copy of the drill step: runs 30605765391, 30605813952, 30605818422, 30605815019. The",
     "422 recorded in alert-paths.yml's header (`Unexpected inputs provided: [\"alert_drill\"]`) did",
     "not reproduce. Consequence: a NEW alert path in an EXISTING workflow file needs no hatch at all",
-    "— drill it on the branch before you ask for review. The hatch remains for the genuine case, a",
+    "\u2014 drill it on the branch before you ask for review. The hatch remains for the genuine case, a",
     "workflow file that does not yet exist on main.",
     "The same measurement discharged two hatches that had simply outlived their reason: free-recall",
     "and semantic-freshness had both long since merged, so `cannot be proven before it merges` was",
@@ -131,7 +131,7 @@
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
       "pendingProof": {
-        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural — the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` — it proves ci-heavy-cli-alert in the same run.",
+        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural \u2014 the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` \u2014 it proves ci-heavy-cli-alert in the same run.",
         "tracking": 1612,
         "since": "2026-07-31"
       }
@@ -176,8 +176,17 @@
       "workflow": ".github/workflows/supervised-declines.yml",
       "marker": "ci-supervised-declines-alert",
       "pendingProof": {
-        "why": "The workflow FILE is not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not — MEASURED 2026-07-31: `gh api repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f ref=feature/sweep-ci-1545` returned HTTP 404, while ten sibling drills dispatched from that same branch the same hour all ran. The marker label therefore does not exist, and that absence is the evidence — do not create it by hand.",
+        "why": "The workflow FILE is not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not \u2014 MEASURED 2026-07-31: `gh api repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f ref=feature/sweep-ci-1545` returned HTTP 404, while ten sibling drills dispatched from that same branch the same hour all ran. The marker label therefore does not exist, and that absence is the evidence \u2014 do not create it by hand.",
         "tracking": 1688,
+        "since": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/genai-census.yml",
+      "marker": "ci-genai-census-alert",
+      "pendingProof": {
+        "why": "The workflow FILE does not yet exist on the default branch, which is the one case #1333's narrowing left the hatch for. ATTEMPTED rather than assumed, 2026-07-31: `gh workflow run genai-census.yml --ref feature/sweep-reasons-1646 -f alert_drill=true` returned `HTTP 404: workflow genai-census.yml not found on the default branch`. #1333 measured that a NEW alert path in an EXISTING workflow file needs no hatch at all, so this exemption does not generalise to one. One command closes it once the file is on main: `gh workflow run genai-census.yml --ref main -f alert_drill=true` \u2014 the drill fails the job before the 18 clones, so it costs seconds.",
+        "tracking": 1711,
         "since": "2026-07-31"
       }
     }
@@ -186,7 +195,7 @@
     {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "owasp-ack-alert",
-      "why": "The news path, not a failure path: it fires when upstream MOVES, so it has no failure branch to drill. It is also the one alerting path that has demonstrably run — it opened issue #1218 under the real job token on a manual dispatch, 2026-07-27. Its find-or-update is inlined rather than using the shared action because it stamps the last-reported state into the issue body for idempotence, which the shared action does not model.",
+      "why": "The news path, not a failure path: it fires when upstream MOVES, so it has no failure branch to drill. It is also the one alerting path that has demonstrably run \u2014 it opened issue #1218 under the real job token on a manual dispatch, 2026-07-27. Its find-or-update is inlined rather than using the shared action because it stamps the last-reported state into the issue body for idempotence, which the shared action does not model.",
       "provenBy": {
         "run": "manual workflow_dispatch, 2026-07-27",
         "issue": 1218
@@ -198,7 +207,7 @@
     "deleting it: this is the ONE hatch in this gate that fails OPEN. A scheduled workflow listed",
     "here goes red on a branch nobody watches and raises nothing; only the tracking issue carries it,",
     "which is why checkDisclosureTracking re-reads that issue and fails when it is closed. The four",
-    "workflows that sat here — alert-paths, dry-run-drift, osv-staleness, corpus-m8 — now alert and",
+    "workflows that sat here \u2014 alert-paths, dry-run-drift, osv-staleness, corpus-m8 \u2014 now alert and",
     "are recorded above with their drill runs."
   ],
   "scheduledWithoutAlertPath": []

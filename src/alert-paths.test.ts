@@ -269,12 +269,23 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // Retire it the same way: drill it, record provenBy, drop pendingProof, and this list goes back to
   // empty, which is the state it should normally be in. `pendingProof`'s own behaviour stays covered
   // by the fixture tests above, so naming the current occupant here does not un-test the mechanism.
+  //
+  // TWO occupants since #1691 (2026-07-31). ci-genai-census-alert is the OTHER kind, and the one the
+  // `_why` block still reserves the hatch for after #1333 narrowed it: genai-census.yml is a brand
+  // new workflow FILE, so the dispatch 404s on the default branch. ATTEMPTED, not assumed — the 404
+  // is quoted verbatim in its `why`. Tracked by #1711, one command from retirement once it merges.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    // `ci-supervised-declines-alert` joined on 2026-07-31 (#1545): its workflow file is not yet on
-    // the default branch, and GitHub refuses workflow_dispatch for one that is not — MEASURED, a
-    // 404 from the dispatch API, tracked by #1688. This list is meant to SHRINK; each addition has
-    // to be a named exception a reader can go and check, never a silent default.
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-main-red-alert", "ci-supervised-declines-alert"]);
+    // Three occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
+    // default. `ci-supervised-declines-alert` (#1688, from #1545) and `ci-genai-census-alert`
+    // (#1711, from #1691) both joined the same day and for the SAME reason: their workflow FILE is
+    // not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not.
+    // Both are ATTEMPTED rather than assumed — each `why` quotes the verbatim 404 from the dispatch
+    // API. This list is meant to SHRINK; both retire with one command once their files land.
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
+      "ci-genai-census-alert",
+      "ci-main-red-alert",
+      "ci-supervised-declines-alert",
+    ]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 

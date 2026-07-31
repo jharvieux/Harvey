@@ -99,7 +99,8 @@ const count = (kind: Unreferenced["kind"]): number => rows.filter((r) => r.kind 
 // #1547: the ruling is "a caller OR a recorded reason", and until now the gate could only see
 // callers — so a row someone had triaged into a REASON: block was indistinguishable from one nobody
 // had read, and the backlog number could only shrink by wiring. Both halves are counted now.
-const triaged = new Map(reasonTriaged(rows, collectReasons(["src"], dir)).map((t) => [`${t.row.kind} ${t.row.id}`, t]));
+const readSource = (path: string): string => readFileSync(resolve(dir, path), "utf8");
+const triaged = new Map(reasonTriaged(rows, collectReasons(["src"], dir), readSource).map((t) => [`${t.row.kind} ${t.row.id}`, t]));
 
 // A `file` row means NOTHING in it is reachable, so name what is inside it — otherwise the
 // strongest rows in the report are also the least specific.
@@ -107,7 +108,7 @@ const line = (r: Unreferenced): string => {
   const t = triaged.get(`${r.kind} ${r.id}`);
   const mark = t ? `  [recorded reason — ${t.file}:${t.line}]` : "";
   if (r.kind !== "file") return `${r.kind.padEnd(6)} ${r.id}${mark}`;
-  const names = exportedNames(r.id, readFileSync(resolve(dir, r.id), "utf8"));
+  const names = exportedNames(r.id, readSource(r.id));
   return `file   ${r.id} — every export unreachable: ${names.join(", ")}${mark}`;
 };
 

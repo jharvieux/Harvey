@@ -110,29 +110,45 @@ describe("reasonTriaged (#1547)", () => {
     { kind: "file", id: "src/fixture.ts" },
   ] as const;
   const reason = (file: string, text: string) => ({ file, line: 7, fields: { REASON: text } });
+  const SOURCE: Record<string, string> = { "src/fixture.ts": "export const recordedResponses = 1;\nexport function replay() {}\n" };
+  const read = (p: string): string => SOURCE[p] ?? "";
+  const triaged = (blocks: Parameters<typeof reasonTriaged>[1]) => reasonTriaged(rows, blocks, read).map((x) => x.row.id);
 
   it("marks a row whose OWN file carries a reason naming its symbol", () => {
-    const t = reasonTriaged(rows, [reason("src/a.ts", "alpha is an oracle, so production never imports it")]);
+    const t = reasonTriaged(rows, [reason("src/a.ts", "alpha is an oracle, so production never imports it")], read);
     expect(t.map((x) => x.row.id)).toEqual(["src/a.ts:alpha"]);
     expect(t[0]!.line).toBe(7);
   });
 
   it("does NOT let one reason in a file absolve every export in it", () => {
-    expect(reasonTriaged(rows, [reason("src/a.ts", "alpha is an oracle")]).map((x) => x.row.id)).not.toContain("src/a.ts:beta");
+    expect(triaged([reason("src/a.ts", "alpha is an oracle")])).not.toContain("src/a.ts:beta");
   });
 
   it("does NOT accept a reason recorded in some OTHER file, however precisely it names the symbol", () => {
-    expect(reasonTriaged(rows, [reason("src/elsewhere.ts", "src/a.ts:alpha and alpha are deliberate")])).toEqual([]);
+    expect(triaged([reason("src/elsewhere.ts", "src/a.ts:alpha and alpha are deliberate")])).toEqual([]);
   });
 
-  it("takes a whole-file row's own path as the symbol it must name", () => {
-    expect(reasonTriaged(rows, [reason("src/fixture.ts", "src/fixture.ts is a recorded-response oracle")]).map((x) => x.row.id)).toEqual(["src/fixture.ts"]);
-    expect(reasonTriaged(rows, [reason("src/fixture.ts", "this file is deliberate")])).toEqual([]);
+  it("takes a whole-file row's path OR any of its unreachable exports as what the claim must name", () => {
+    expect(triaged([reason("src/fixture.ts", "src/fixture.ts is a recorded-response oracle")])).toEqual(["src/fixture.ts"]);
+    expect(triaged([reason("src/fixture.ts", "recordedResponses is an answer key, never a production input")])).toEqual(["src/fixture.ts"]);
+    expect(triaged([reason("src/fixture.ts", "this file is deliberate")])).toEqual([]);
   });
 
-  it("reads any field of the block, so a TOUCHES: naming the symbol counts", () => {
-    const block = { file: "src/a.ts", line: 3, fields: { REASON: "deliberate", TOUCHES: "src/a.ts:beta" } };
-    expect(reasonTriaged(rows, [block]).map((x) => x.row.id)).toEqual(["src/a.ts:beta"]);
+  // #1648 — the binding was satisfiable by a PASSING MENTION. Both vectors below were probed against
+  // the shipped function on 2026-07-31 and both absolved their row.
+  it("REFUSES a substring: alphaBetaGamma is not a claim about alpha", () => {
+    expect(triaged([reason("src/a.ts", "alphaBetaGamma is deliberate")])).toEqual([]);
+    expect(triaged([reason("src/a.ts", "prealpha is deliberate")])).toEqual([]);
+    expect(triaged([reason("src/a.ts", "`alpha` is deliberate")])).toEqual(["src/a.ts:alpha"]);
+  });
+
+  it("REFUSES an incidental mention outside REASON: — only the field carrying the claim counts", () => {
+    expect(triaged([{ file: "src/a.ts", line: 3, fields: { REASON: "unrelated", PROVENANCE: "MEASURED 2026-07-31 — grepped for alpha" } }])).toEqual([]);
+    expect(triaged([{ file: "src/a.ts", line: 3, fields: { REASON: "unrelated", TOUCHES: "src/a.ts:beta" } }])).toEqual([]);
+  });
+
+  it("REFUSES a whole-file row absolved by a TOUCHES: that merely lists the file — that is what TOUCHES: always says", () => {
+    expect(triaged([{ file: "src/fixture.ts", line: 3, fields: { REASON: "the scanner skips minified output", TOUCHES: "src/fixture.ts" } }])).toEqual([]);
   });
 });
 

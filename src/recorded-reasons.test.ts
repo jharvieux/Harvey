@@ -140,6 +140,58 @@ describe("validateRecordedReason — the empirical/decisional split is structura
   });
 });
 
+// #1646 — a falsifier that answers differently depending on WHO RAN IT re-tests nothing. MEASURED
+// 2026-07-31: `src/disclosure-venue.ts`'s shipped `grep -qv` exited 1 (blocker holds) under the
+// `sh -c` --revalidate uses and 0 (blocker GONE) under a Claude Code agent shell, on the same tree.
+describe("a falsifier must not invert a shadowed bare grep (#1646)", () => {
+  const withFalsifier = (cmd: string) => validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, `FALSIFIER: ${cmd}`])).join();
+
+  it("REFUSES `grep -qv` — the exact form that measured 1 under sh -c and 0 under the agent shell", () => {
+    expect(withFalsifier("grep -qv '\\.test\\.ts$' /tmp/x.txt && exit 1 || exit 0")).toContain("inverts a BARE `grep`");
+  });
+
+  it("REFUSES the split `-q -v` and the long `--invert-match` forms — a ban on one spelling is not a ban", () => {
+    expect(withFalsifier("grep -q -v beta /tmp/x.txt")).toContain("inverts a BARE `grep`");
+    expect(withFalsifier("grep --invert-match beta /tmp/x.txt > /tmp/y.txt; test -s /tmp/y.txt")).toContain("inverts a BARE `grep`");
+  });
+
+  it("allows `git grep`, `command grep` and an absolute path — the shell function shadows the bare word only", () => {
+    expect(withFalsifier("git grep -q x -- ':(glob,exclude)src/**/*.test.ts'")).toEqual("");
+    expect(withFalsifier("command grep -qv beta /tmp/x.txt")).toEqual("");
+    expect(withFalsifier("/usr/bin/grep -qv beta /tmp/x.txt")).toEqual("");
+  });
+
+  it("allows an inverting grep inside `sh -c '…'` — a new process inherits no zsh function", () => {
+    expect(withFalsifier("sh -c 'grep -qv beta /tmp/x.txt && exit 1 || exit 0'")).toEqual("");
+  });
+
+  it("does not fire on a non-inverting grep, however many flags it carries", () => {
+    expect(withFalsifier("grep -rlE '^ *//' --include='*.ts' src > /tmp/x.txt; grep -q . /tmp/x.txt")).toEqual("");
+    expect(withFalsifier("grep -c beta /tmp/x.txt")).toEqual("");
+  });
+});
+
+// #1647 — git matches pathspecs with WM_PATHNAME off, so `**/` demands an intervening directory.
+// MEASURED 2026-07-31: `git ls-files -- 'src/**/*.ts'` listed 478 files and no top-level `src/*.ts`,
+// and the falsifier written on it answered "still blocked" with a production importer planted at
+// src/__probe.ts.
+describe("a `**` git pathspec needs :(glob) magic (#1647)", () => {
+  const withFalsifier = (cmd: string) => validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, `FALSIFIER: ${cmd}`])).join();
+
+  it("REFUSES the bare `src/**/*.ts` that silently skipped the top level", () => {
+    expect(withFalsifier("git grep -q calibration-fixture -- 'src/**/*.ts' ':!src/**/*.test.ts'")).toContain("without `:(glob)` magic");
+  });
+
+  it("REFUSES a `**` exclusion that lacks the magic even when the inclusion carries it", () => {
+    expect(withFalsifier("git grep -q x -- ':(glob)src/**/*.ts' ':!src/**/*.test.ts'")).toContain("without `:(glob)` magic");
+  });
+
+  it("allows the magic form, and does not police `**` outside a git command", () => {
+    expect(withFalsifier("git grep -q x -- ':(glob)src/**/*.ts' ':(glob,exclude)src/**/*.test.ts'")).toEqual("");
+    expect(withFalsifier("pnpm exec vitest run 'src/**/*.test.ts'")).toEqual("");
+  });
+});
+
 // #1319 — the four falsified claims (#951, #957, #52, #873) were all impossibility assertions over
 // an untested basis. PROVENANCE already records whether anyone looked, so the rule is checkable.
 describe("a budget limit must not borrow impossibility's vocabulary (#1319)", () => {
