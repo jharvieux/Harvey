@@ -303,6 +303,42 @@ describe("evidence checked for TRUTH, not only shape", () => {
     expect(evidenceProblems("regenerated `src/scan/config.json`", world)).toEqual([]);
   });
 
+  // #1400. Ordering fixed `.json` one pair at a time and left `.jsx` and `.mdx` truncating; the
+  // `(?!\w)` boundary fixes the class. Both directions per extension on purpose: a fix that made
+  // every `.json`/`.jsx` citation pass unconditionally would hide the check's actual job.
+  describe("an extension that is a PREFIX of another is neither truncated nor waved through (#1400)", () => {
+    const extWorld = {
+      ...world,
+      topLevelEntries: new Set(["src", "docs", "dry-run", "targets"]),
+      pathExists: (p: string) =>
+        [
+          "dry-run/findings.json",
+          "src/Panel.tsx",
+          "targets/calibration/components/AdminPanel.jsx",
+          "docs/design/ruling.mdx",
+          "docs/design/ruling.md",
+          "src/scan/rules.yaml",
+          "src/scan/rules.yml",
+        ].includes(p),
+    };
+
+    for (const [ext, real, fake] of [
+      ["json", "dry-run/findings.json", "dry-run/invented.json"],
+      ["tsx", "src/Panel.tsx", "src/Invented.tsx"],
+      ["jsx", "targets/calibration/components/AdminPanel.jsx", "targets/calibration/components/Invented.jsx"],
+      ["mdx", "docs/design/ruling.mdx", "docs/design/invented.mdx"],
+      ["yaml", "src/scan/rules.yaml", "src/scan/invented.yaml"],
+      ["yml", "src/scan/rules.yml", "src/scan/invented.yml"],
+    ] as const) {
+      it(`a real .${ext} citation passes and a fake one still fails`, () => {
+        expect(evidenceProblems(`the file \`${real}\` carries the change`, extWorld), real).toEqual([]);
+        expect(evidenceProblems(`the file \`${fake}\` carries the change`, extWorld), fake).toEqual([
+          expect.stringContaining(`\`${fake}\`, which does not exist`),
+        ]);
+      });
+    }
+  });
+
   it("leaves a path outside this repo's top level alone rather than failing on a foreign tree", () => {
     expect(evidenceProblems("upstream/lib/parser.ts:44 is the culprit", world)).toEqual([]);
   });
