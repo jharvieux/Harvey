@@ -318,6 +318,10 @@ rules:
       Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie
       without HttpOnly is readable by any injected script (XSS → session theft); without
       Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests.
+      SCOPE OF THIS CHECK (#1294): the CWE this finding carries names the SECURE attribute only,
+      because a finding carries one weakness id. The `(?s)^[^;]*$` match below proves the cookie
+      has NO attribute at all, so the missing HttpOnly and SameSite are equally determined and are
+      equally your problem — read the CWE as the narrowest of the three, not as the whole defect.
     patterns:
       - pattern: $RES.setHeader("Set-Cookie", $V)
       - metavariable-regex:
