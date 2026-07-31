@@ -1,21 +1,21 @@
 {
   "_why": [
     "#1287 (Gate 5 of epic #1320). Every CI alert path in this repo was unfired, and three marker",
-    "labels did not exist \u2014 `ci-conservation-alert`, `ci-reasons-alert`, `ci-owasp-watch-alert`.",
+    "labels did not exist — `ci-conservation-alert`, `ci-reasons-alert`, `ci-owasp-watch-alert`.",
     "Each alert step carries a self-healing `gh label create`, so a MISSING MARKER LABEL IS PROOF",
     "the path never executed. An alert path that has never fired is indistinguishable from one that",
     "cannot fire, so this file records the run that PROVED each one, and src/cli/validate-alert-paths.ts",
     "refuses a path with no proof. Re-prove any of them with:",
     "    gh workflow run <workflow name> -f alert_drill=true",
-    "which opens, comments on and then closes a self-cleaning `\u2026 \u2014 alert-path drill` issue under the",
+    "which opens, comments on and then closes a self-cleaning `… — alert-path drill` issue under the",
     "real job token.",
     "#1348 (2026-07-28) unified the drill onto the production find-or-update branch (previously a",
-    "hand-written parallel branch sharing only the label-create step and the raw gh primitives \u2014 see",
+    "hand-written parallel branch sharing only the label-create step and the raw gh primitives — see",
     "the action's own header). The five proof runs below were re-taken against that fix, on one",
     "branch back to back, and a negative control (breaking find_or_update's `gh issue comment` call)",
     "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted.",
     "",
-    "#1288 (2026-07-28) added `pendingProof` \u2014 the one disclosed way a path may sit here unproven.",
+    "#1288 (2026-07-28) added `pendingProof` — the one disclosed way a path may sit here unproven.",
     "It is built to fail loud, not open: `tracking` must name an OPEN issue (re-read by --labels),",
     "the marker label is excluded from expectedLabels while pending BECAUSE its absence is the",
     "evidence, and pendingProof and provenBy are mutually exclusive.",
@@ -26,13 +26,13 @@
     "the first clause survives measurement. What GitHub actually requires is that the workflow FILE",
     "exist on the default branch (#1288's TRIED evidence is a 404 on a file that did not: `HTTP 404:",
     "workflow secbench.yml not found on the default branch`). It does NOT require the INPUTS, JOBS or",
-    "STEPS to be there \u2014 a workflow_dispatch run executes the copy on the `--ref` you name, so a",
+    "STEPS to be there — a workflow_dispatch run executes the copy on the `--ref` you name, so a",
     "newly-declared `alert_drill` input is dispatchable from the branch that declares it. MEASURED",
     "2026-07-31, four times on an unmerged branch, each dispatch accepted and each run executing the",
     "branch's copy of the drill step: runs 30605765391, 30605813952, 30605818422, 30605815019. The",
     "422 recorded in alert-paths.yml's header (`Unexpected inputs provided: [\"alert_drill\"]`) did",
     "not reproduce. Consequence: a NEW alert path in an EXISTING workflow file needs no hatch at all",
-    "\u2014 drill it on the branch before you ask for review. The hatch remains for the genuine case, a",
+    "— drill it on the branch before you ask for review. The hatch remains for the genuine case, a",
     "workflow file that does not yet exist on main.",
     "The same measurement discharged two hatches that had simply outlived their reason: free-recall",
     "and semantic-freshness had both long since merged, so `cannot be proven before it merges` was",
@@ -171,13 +171,23 @@
         "issue": 1620,
         "at": "2026-07-31"
       }
+    },
+    {
+      "workflow": ".github/workflows/supervised-declines.yml",
+      "marker": "ci-supervised-declines-alert",
+      "provenBy": {
+        "run": "PENDING",
+        "issue": 0,
+        "at": "PENDING",
+        "sourceSha": "PENDING"
+      }
     }
   ],
   "unconverted": [
     {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "owasp-ack-alert",
-      "why": "The news path, not a failure path: it fires when upstream MOVES, so it has no failure branch to drill. It is also the one alerting path that has demonstrably run \u2014 it opened issue #1218 under the real job token on a manual dispatch, 2026-07-27. Its find-or-update is inlined rather than using the shared action because it stamps the last-reported state into the issue body for idempotence, which the shared action does not model.",
+      "why": "The news path, not a failure path: it fires when upstream MOVES, so it has no failure branch to drill. It is also the one alerting path that has demonstrably run — it opened issue #1218 under the real job token on a manual dispatch, 2026-07-27. Its find-or-update is inlined rather than using the shared action because it stamps the last-reported state into the issue body for idempotence, which the shared action does not model.",
       "provenBy": {
         "run": "manual workflow_dispatch, 2026-07-27",
         "issue": 1218

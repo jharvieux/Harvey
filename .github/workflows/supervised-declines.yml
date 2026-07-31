@@ -1,0 +1,117 @@
+# #1545 — the repo's densest false-decline family, given a venue that reads it.
+#
+# "X is a supervised path" was 6 of the 9 defective claims in the #1378 seeded 40-PR sample. The
+# sentence is true about an executor's edit permission and false about whether the work can be done,
+# because the grant is routine and is routinely given. CLAUDE.md already carries the doctrine ("a
+# supervised path produces a RELAY, not a silent close"). Nothing measured whether the relay
+# happened: `validate-reasons` reaches only `REASON:` blocks, and PR prose is reachable by no gate.
+#
+# WHY A SCHEDULED SCAN AND NOT A PR-BLOCKING GATE (#1545 chose this shape deliberately): the decline
+# is prose, the prose is routinely edited after the merge, and the check must read the ISSUE the
+# decline names as well — so there is no moment at merge time when the answer is stable. A daily
+# scan over what merged since the last run costs one `gh pr list` and reads the same window a human
+# reviewing the day would.
+#
+# WHY IT IS ALLOWED TO GO RED: an unrelayed decline is a deliverable nobody asked for permission to
+# skip. The alert path find-or-updates ONE tracking issue, so a standing backlog updates a single
+# issue rather than opening one a day — and clearing it is one comment on the issue the decline
+# named, which is the whole remedy.
+#
+# The window is one day, so this cannot become permanently red on historical instances: the
+# population before this workflow existed is recorded in #1545, not in this exit code.
+
+name: supervised-declines
+
+on:
+  schedule:
+    - cron: "30 8 * * *" # daily 08:30 UTC — after reasons-drift (08:00), which reads the other half of the same defect class
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-supervised-declines-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1568). SKIPS the scan and its self-test, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
+  # So a change to the check is exercised BY the check. Only the hermetic self-test runs on a PR:
+  # the live scan reads merged history, which a PR cannot change.
+  pull_request:
+    paths:
+      - "src/supervised-declines.ts"
+      - "src/supervised-declines.test.ts"
+      - "src/cli/validate-supervised-declines.ts"
+      - ".github/workflows/supervised-declines.yml"
+
+concurrency:
+  group: supervised-declines-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  supervised-declines:
+    name: a supervised-path decline carries the relay it claims
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # read for the scan itself; write since this gate has no PR to show a red tick on when it runs
+      # on its schedule.
+      issues: write
+      pull-requests: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # After the checkout (the alert step is a LOCAL composite action) and before the install, so
+      # the drill proves the ALERT path without paying for the scan it guards.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a supervised-decline finding."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The negative control, on every invocation: a check that has only ever been seen reporting
+      # zero is indistinguishable from one that cannot report anything, and a quiet day is the
+      # normal result here. Hermetic — no network — so it holds even when the scan finds nothing.
+      - name: Negative control — the check must FIRE on an unrelayed decline and stay SILENT on a relayed one
+        if: ${{ !inputs.liveness_drill }}
+        run: pnpm exec tsx src/cli/validate-supervised-declines.ts --selftest
+
+      - name: Scan the PR bodies merged since yesterday
+        if: ${{ github.event_name != 'pull_request' && !inputs.liveness_drill }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm exec tsx src/cli/validate-supervised-declines.ts --since-days 1
+
+      # #1509/#1568: `always()` so a job that died in setup names the phase that never ran rather
+      # than leaving a reader to infer it. `expect` is EVENT-dependent because the live scan does not
+      # run on a pull_request — a condition that stopped matching would retire it in silence.
+      # Excluded on the alert drill, which fails on purpose before anything is scored.
+      - name: Gate liveness — did this job actually read anything?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: supervised-declines-selftest ${{ github.event_name != 'pull_request' && 'supervised-declines' || '' }}
+
+      - name: Open or update the supervised-decline tracking issue
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-supervised-declines-alert
+          label-description: Auto-opened when a merged PR declines a supervised path with no relay
+          title: a merged PR declined a supervised path with no relay
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The daily `supervised-declines` scan found at least one merged PR body declining a deliverable on a supervised path with no relay artifact (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The job log names the PR, the line and the issues it did and did not ask. THE REMEDY IS ONE COMMENT: put the question to the operator on the issue the decline names, with the exact wording proposed — `.github/workflows/**`, `docs/**` and `package.json` are all routinely granted, and `package.json` was never supervised at all. A filed tracker is not a relay. Close this issue once the window is clear."

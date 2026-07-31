@@ -51,63 +51,133 @@
   "gates": [
     {
       "workflow": ".github/workflows/corpus-drift.yml",
-      "expect": ["corpus-drift"],
+      "expect": [
+        "corpus-drift"
+      ],
       "note": "One record per corpus-drift invocation; the #1498 narrowed-PR path emits one per scored target and the assert sums them.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/conservation.yml",
-      "expect": ["conservation-plants", "conservation-negative-controls"],
+      "expect": [
+        "conservation-plants",
+        "conservation-negative-controls"
+      ],
       "note": "Two gates because the negative controls are a separate claim: a gate nobody has watched fail is indistinguishable from one that cannot, so 'the controls ran' must be asserted, not inferred from the steps existing.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/dry-run-drift.yml",
-      "expect": ["dry-run-regen", "dry-run-diff"],
+      "expect": [
+        "dry-run-regen",
+        "dry-run-diff"
+      ],
       "note": "Regeneration and comparison are separate phases. A regeneration that produced findings and then never got diffed is exactly the produce-vs-deliver gap CLAUDE.md's conservation rule is about.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/ci.yml",
-      "expect": ["heavy-cli-tests", "calibration-gate", "source-recall-gate"],
+      "expect": [
+        "heavy-cli-tests",
+        "calibration-gate",
+        "source-recall-gate"
+      ],
       "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only and source-recall-gate shard 2 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/secbench.yml",
-      "expect": ["secbench-recall"],
+      "expect": [
+        "secbench-recall"
+      ],
       "note": "Monthly, so a dead run is invisible for 30 days. The CLI already refuses a zero-entry score; the receipt is what makes the fetch/lockfile-tree/osv phases upstream of it equally loud.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/free-recall.yml",
-      "expect": ["free-recall"],
+      "expect": [
+        "free-recall"
+      ],
       "note": "Monthly over five THIRD-PARTY clones, so a run that dies in setup or in the fetch phase is invisible for 30 days. The CLI already refuses a zero-target score; the receipt covers every phase upstream of it. Added because the registry check FAILED LOUD on this workflow the moment #1185 landed it on main — the mechanism working exactly as designed.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/disclosure-venue.yml",
-      "expect": ["disclosure-venue", "conditional-scan"],
+      "expect": [
+        "disclosure-venue",
+        "conditional-scan"
+      ],
       "note": "#1568. Gate 4 and gate 4b share one job and one in-job filter, so a filter that stopped matching would retire BOTH in a green run. Two ids because they score different populations — semgrep rules read for a comment-declared bound, and modules with sibling scan paths — and one id would let either stand in for the other.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/alert-paths.yml",
-      "expect": ["alert-paths", "alert-paths-negative-controls"],
+      "expect": [
+        "alert-paths",
+        "alert-paths-negative-controls"
+      ],
       "note": "#1568. The marker-label pass is the one assertion in this repo NO DIFF CAN SPEAK TO, so a run that died before reaching it reports an absence that reads exactly like 'every label exists'. The three seeded controls are a separate claim and sit behind the in-job filter, so they get their own id and their own declared no-op.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/acceptance.yml",
-      "expect": ["acceptance-selftest", "acceptance-pr"],
+      "expect": [
+        "acceptance-selftest",
+        "acceptance-pr"
+      ],
       "note": "#1568. `acceptance-pr` rides inside `if: github.event_name == 'pull_request'`, so the assert's `expect` is EVENT-dependent the way ci.yml's is matrix-dependent. The self-test is the gate's negative control and is its own claim.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     },
     {
       "workflow": ".github/workflows/acceptance-close.yml",
-      "expect": ["acceptance-close-selftest", "acceptance-close"],
+      "expect": [
+        "acceptance-close-selftest",
+        "acceptance-close"
+      ],
       "note": "#1568, and the sharpest case in the registry: this job runs on `issues: [closed]`. It answers to no PR, it is on no schedule and it raises no alarm, so a run that dies in setup posts no comment, re-opens nothing, and is indistinguishable from a close it had no objection to. `acceptance-close` records a DECLARED NO-OP on the bot-issue exemption rather than a count, because 'not assessed on purpose' and 'never got there' must not share a channel.",
-      "provenBy": { "run": "PENDING", "at": "PENDING" }
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
+    },
+    {
+      "workflow": ".github/workflows/supervised-declines.yml",
+      "expect": [
+        "supervised-declines-selftest",
+        "supervised-declines"
+      ],
+      "note": "#1545. Daily, and its live half does not run on a pull_request, so the assert's `expect` is EVENT-dependent the way ci.yml's is matrix-dependent. `supervised-declines` records a DECLARED NO-OP on a window with no merged PRs, because 'nothing merged' and 'never reached `gh pr list`' must not share an empty receipt.",
+      "provenBy": {
+        "run": "PENDING",
+        "at": "PENDING"
+      }
     }
   ],
   "exempt": [
