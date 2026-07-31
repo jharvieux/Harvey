@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -23,7 +24,7 @@ export default function ResponsibleDisclosure() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Responsible disclosure
+              <Link href="/">Harvey</Link> / Responsible disclosure
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Trust &amp; ethics

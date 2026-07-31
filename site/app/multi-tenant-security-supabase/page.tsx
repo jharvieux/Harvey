@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -41,7 +42,7 @@ export default function MultiTenantPillar() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Multi-tenant security in Supabase
+              <Link href="/">Harvey</Link> / Multi-tenant security in Supabase
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Pillar guide
@@ -186,9 +187,9 @@ CREATE POLICY "read" ON documents
                 <p>The free scan flags the risky policies on your source. The Full audit proves — live — whether one tenant can read another.</p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/supabase-security-audit" className="btn btn-ghost">
                   Supabase security audit
                 </a>

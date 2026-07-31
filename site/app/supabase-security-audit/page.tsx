@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -69,7 +70,7 @@ export default function SupabaseSecurityAudit() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Supabase security audit
+              <Link href="/">Harvey</Link> / Supabase security audit
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Supabase security
@@ -82,9 +83,9 @@ export default function SupabaseSecurityAudit() {
               Harvey reads the logic and then proves it against a live copy of your stack.
             </div>
             <div className="hero-cta">
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Run the free scan →
-              </a>
+              </Link>
               <a href="/pricing" className="btn btn-ghost">
                 See pricing
               </a>
@@ -259,9 +260,9 @@ CREATE POLICY "users can read" ON documents
                 <p>Source-only, no credentials, same-day. If it finds nothing worth going deeper on, don&apos;t buy a thing.</p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/supabase-security-checklist" className="btn btn-ghost">
                   Security checklist
                 </a>

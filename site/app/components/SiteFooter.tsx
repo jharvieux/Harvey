@@ -1,11 +1,13 @@
+import Link from "next/link";
+
 export default function SiteFooter() {
   return (
     <footer>
       <div className="wrap foot-in">
-        <a href="/" className="brand">
+        <Link href="/" className="brand">
           <span className="dot" />
           harvey<span className="tld">-qa</span>
-        </a>
+        </Link>
         <nav className="foot-links">
           <a href="/the-audit">The audit</a>
           <a href="/pricing">Pricing</a>

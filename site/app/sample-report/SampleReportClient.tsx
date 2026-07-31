@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 import { sampleMeta, sampleCounts, sampleFindings, sampleLedger } from "./sample-data";
@@ -41,7 +42,7 @@ export default function SampleReportClient() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Sample report
+              <Link href="/">Harvey</Link> / Sample report
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               What you get
@@ -203,9 +204,9 @@ export default function SampleReportClient() {
               repo and we&apos;ll send it within one business day.
             </p>
             <div className="hero-cta">
-              <a href="/#scan" className="btn btn-primary">
+              <Link href="/#scan" className="btn btn-primary">
                 Run the free scan →
-              </a>
+              </Link>
               <a href="/the-audit" className="btn btn-ghost">
                 How the audit works
               </a>

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
 
@@ -42,7 +43,7 @@ export default function LoadReadinessPillar() {
         <div className="hero page-hero">
           <div className="wrap">
             <span className="crumb">
-              <a href="/">Harvey</a> / Load-readiness check
+              <Link href="/">Harvey</Link> / Load-readiness check
             </span>
             <span className="eyebrow" style={{ marginTop: "14px" }}>
               Before launch day
@@ -125,9 +126,9 @@ export default function LoadReadinessPillar() {
                 <p>The free scan flags N+1s, missing indexes, and unbounded selects on your source — no database access needed.</p>
               </div>
               <div className="btns">
-                <a href="/#scan" className="btn btn-primary">
+                <Link href="/#scan" className="btn btn-primary">
                   Run the free scan →
-                </a>
+                </Link>
                 <a href="/the-audit" className="btn btn-ghost">
                   How the audit works
                 </a>
