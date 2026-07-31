@@ -13,44 +13,138 @@
     "(unitsExamined: 0 is a NotAssessed, never a clean scan) applied to CI. Mechanism:",
     ".github/actions/gate-liveness. Design note: docs/design/ci-gate-liveness.md.",
     "",
-    "THIS FILE IS THE FAIL-LOUD PART. src/ci-liveness.test.ts (under `pnpm verify`) requires every",
-    "workflow that installs the mechanical binaries — the marker of a job heavy enough to die in setup —",
-    "to appear in `gates` or in `exempt` with a reason, and requires every gate id here to be BOTH",
-    "asserted by its workflow and produced by something (a `gate:` record step, or recordMeasured in a",
-    "gate CLI). A new gate cannot quietly join without one, and a producer/asserter mismatch is a test",
-    "failure rather than a silently vacuous check."
+    "THIS FILE IS THE FAIL-LOUD PART. src/ci-liveness.test.ts (under `pnpm verify`) holds it to four",
+    "rules, and requires every gate id here to be BOTH asserted by its workflow and produced by",
+    "something (a `gate:` record step, or recordMeasured/recordDeclaredNoOp in a gate CLI). A new gate",
+    "cannot quietly join without one, and a producer/asserter mismatch is a test failure rather than a",
+    "silently vacuous check.",
+    "",
+    "#1568 (2026-07-31) replaced the DISCOVERY rule. It used to require registration only of workflows",
+    "that install the mechanical binaries — a PROXY for 'heavy enough to die in setup', chosen because",
+    "that is what #1509 broke, and it left NINE workflows outside the registry by construction. The",
+    "rule is now EXHAUSTIVE over .github/workflows/*.yml: every file is a `gates` row or an `exempt`",
+    "row, so a new workflow cannot be omitted, only classified. Measured on adoption: the proxy also",
+    "missed semantic-freshness.yml and site-ci.yml, which #1568's own list of nine did not name — the",
+    "shape a proxy cannot fix by being widened.",
+    "",
+    "AN EXEMPTION IS A CLAIM, and this one is machine-checked rather than taken on the prose. An",
+    "`exempt` row asserts that a run which died before scoring is DISTINGUISHABLE without a receipt,",
+    "and the test refuses it for any workflow that carries a step gated on an in-job filter output or",
+    "a matrix conditional — that is exactly the shape (#1107's `paths:`-filter-moved-in-job) which",
+    "turns a dead scoring phase GREEN. Every exempt row therefore states two things separately:",
+    "`measures` (what the job scores) and `whyDistinguishable` (what a reader sees when it dies).",
+    "",
+    "#1569 (2026-07-31): a guard nobody has watched fail is indistinguishable from one that cannot,",
+    "so every gate carries `provenBy` — the workflow_dispatch run that FORCED its scoring off and",
+    "watched the assert be the only failing step — or the `pendingProof` hatch, mirroring",
+    ".github/alert-paths.json. Re-prove any of them with:",
+    "    gh workflow run \"<workflow name>\" -f liveness_drill=true",
+    "MEASURED 2026-07-31 (alert-paths.yml's own header records the same): a workflow_dispatch input",
+    "need only exist on the BRANCH being dispatched, not on the default branch — only the workflow",
+    "FILE must be on main — so a drill is taken before merge, not one merge late.",
+    "The liveness drill and the alert drill are MUTUALLY EXCLUSIVE by construction: each switches the",
+    "other's machinery off. `alert_drill` skips the liveness assert (it fails on purpose before",
+    "anything is scored); `liveness_drill` skips the alert step, because otherwise proving the guard",
+    "under workflow_dispatch would open a REAL tracking issue indistinguishable from a genuine failure",
+    "— which is why #1586's criterion 4 sat unproven rather than being dispatched."
   ],
   "gates": [
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "expect": ["corpus-drift"],
-      "note": "One record per corpus-drift invocation; the #1498 narrowed-PR path emits one per scored target and the assert sums them."
+      "note": "One record per corpus-drift invocation; the #1498 narrowed-PR path emits one per scored target and the assert sums them.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     },
     {
       "workflow": ".github/workflows/conservation.yml",
       "expect": ["conservation-plants", "conservation-negative-controls"],
-      "note": "Two gates because the negative controls are a separate claim: a gate nobody has watched fail is indistinguishable from one that cannot, so 'the controls ran' must be asserted, not inferred from the steps existing."
+      "note": "Two gates because the negative controls are a separate claim: a gate nobody has watched fail is indistinguishable from one that cannot, so 'the controls ran' must be asserted, not inferred from the steps existing.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     },
     {
       "workflow": ".github/workflows/dry-run-drift.yml",
       "expect": ["dry-run-regen", "dry-run-diff"],
-      "note": "Regeneration and comparison are separate phases. A regeneration that produced findings and then never got diffed is exactly the produce-vs-deliver gap CLAUDE.md's conservation rule is about."
+      "note": "Regeneration and comparison are separate phases. A regeneration that produced findings and then never got diffed is exactly the produce-vs-deliver gap CLAUDE.md's conservation rule is about.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "expect": ["heavy-cli-tests", "calibration-gate", "source-recall-gate"],
-      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only and source-recall-gate shard 2 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence."
+      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only and source-recall-gate shard 2 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     },
     {
       "workflow": ".github/workflows/secbench.yml",
       "expect": ["secbench-recall"],
-      "note": "Monthly, so a dead run is invisible for 30 days. The CLI already refuses a zero-entry score; the receipt is what makes the fetch/lockfile-tree/osv phases upstream of it equally loud."
+      "note": "Monthly, so a dead run is invisible for 30 days. The CLI already refuses a zero-entry score; the receipt is what makes the fetch/lockfile-tree/osv phases upstream of it equally loud.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     },
     {
       "workflow": ".github/workflows/free-recall.yml",
       "expect": ["free-recall"],
-      "note": "Monthly over five THIRD-PARTY clones, so a run that dies in setup or in the fetch phase is invisible for 30 days. The CLI already refuses a zero-target score; the receipt covers every phase upstream of it. Added because the registry check FAILED LOUD on this workflow the moment #1185 landed it on main — the mechanism working exactly as designed."
+      "note": "Monthly over five THIRD-PARTY clones, so a run that dies in setup or in the fetch phase is invisible for 30 days. The CLI already refuses a zero-target score; the receipt covers every phase upstream of it. Added because the registry check FAILED LOUD on this workflow the moment #1185 landed it on main — the mechanism working exactly as designed.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
+    },
+    {
+      "workflow": ".github/workflows/disclosure-venue.yml",
+      "expect": ["disclosure-venue", "conditional-scan"],
+      "note": "#1568. Gate 4 and gate 4b share one job and one in-job filter, so a filter that stopped matching would retire BOTH in a green run. Two ids because they score different populations — semgrep rules read for a comment-declared bound, and modules with sibling scan paths — and one id would let either stand in for the other.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
+    },
+    {
+      "workflow": ".github/workflows/alert-paths.yml",
+      "expect": ["alert-paths", "alert-paths-negative-controls"],
+      "note": "#1568. The marker-label pass is the one assertion in this repo NO DIFF CAN SPEAK TO, so a run that died before reaching it reports an absence that reads exactly like 'every label exists'. The three seeded controls are a separate claim and sit behind the in-job filter, so they get their own id and their own declared no-op.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
+    },
+    {
+      "workflow": ".github/workflows/acceptance.yml",
+      "expect": ["acceptance-selftest", "acceptance-pr"],
+      "note": "#1568. `acceptance-pr` rides inside `if: github.event_name == 'pull_request'`, so the assert's `expect` is EVENT-dependent the way ci.yml's is matrix-dependent. The self-test is the gate's negative control and is its own claim.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
+    },
+    {
+      "workflow": ".github/workflows/acceptance-close.yml",
+      "expect": ["acceptance-close-selftest", "acceptance-close"],
+      "note": "#1568, and the sharpest case in the registry: this job runs on `issues: [closed]`. It answers to no PR, it is on no schedule and it raises no alarm, so a run that dies in setup posts no comment, re-opens nothing, and is indistinguishable from a close it had no objection to. `acceptance-close` records a DECLARED NO-OP on the bot-issue exemption rather than a count, because 'not assessed on purpose' and 'never got there' must not share a channel.",
+      "provenBy": { "run": "PENDING", "at": "PENDING" }
     }
   ],
-  "exempt": []
+  "exempt": [
+    {
+      "workflow": ".github/workflows/reasons-drift.yml",
+      "measures": "Re-runs every empirical falsifier in the recorded-reason registry (`validate-reasons --revalidate`) and re-tests the external-corpus not-run reasons, daily.",
+      "whyDistinguishable": "Every step runs unconditionally — no in-job filter, no matrix, no `continue-on-error` — so a run that dies before the revalidation pass exits NON-ZERO, and its own `ci-reasons-alert` path then find-or-updates a tracking issue on a schedule failure. The absence is therefore already loud in two places. What it does NOT cover: a falsifier that runs and cannot fire (#1345's case-sensitive `grep -q CLOSED`), which is a property of the falsifier, not of this job's liveness."
+    },
+    {
+      "workflow": ".github/workflows/corpus-m8.yml",
+      "measures": "Runs Stryker mutation scoring per pinned corpus target against its committed baseline — the tier corpus-drift explicitly defers (#470).",
+      "whyDistinguishable": "No conditional step and no failure-swallowing: a run that dies before Stryker exits non-zero and its `ci-corpus-m8-alert` path opens or updates a tracking issue. A partial run cannot report as clean either — the scorer fails on a target whose mutation run produced no report, rather than scoring it zero."
+    },
+    {
+      "workflow": ".github/workflows/osv-staleness.yml",
+      "measures": "Reads the external OSV database's freshness and fails when the pinned advisory data has gone stale past its window.",
+      "whyDistinguishable": "Every step runs unconditionally, and the check's own failure mode IS an unreadable database — a fetch that cannot complete exits non-zero rather than reporting a fresh result, and `ci-osv-staleness-alert` raises it. There is no green-having-read-nothing state for a receipt to disclose."
+    },
+    {
+      "workflow": ".github/workflows/owasp-ack-watch.yml",
+      "measures": "Reads the state of the two upstream OWASP cheat-sheet proposals (#2308/#2309) and reports a change once, stamping the last-reported state into its own tracking issue.",
+      "whyDistinguishable": "Its two `exit 0` paths are BOTH downstream of the read — 'no change' and 'already reported' — so they are outcomes of a completed measurement, not short-circuits around it. #1402 deliberately removed the one shape that could exit 0 having silently dropped a read, and a failed read now turns the job red where `ci-owasp-watch-alert` picks it up."
+    },
+    {
+      "workflow": ".github/workflows/semantic-freshness.yml",
+      "measures": "Checks that the recorded M1-semantic pass artifacts have not gone stale against the corpus they were scored on.",
+      "whyDistinguishable": "No conditional scoring step, and it carries a `ci-semantic-freshness-alert` path that find-or-updates a tracking issue on a scheduled failure — so a run that dies before the freshness read is red AND alarmed, never a quiet green."
+    },
+    {
+      "workflow": ".github/workflows/site-smoke.yml",
+      "measures": "Fetches the deployed marketing site and asserts the live pages and the quote path respond as expected.",
+      "whyDistinguishable": "Nothing here short-circuits: a fetch that fails IS the failure this job exists to report, so a dead run and a bad result take the same red path, and `site-smoke-alert` raises it on a schedule. A receipt would restate the job's own verdict."
+    },
+    {
+      "workflow": ".github/workflows/site-ci.yml",
+      "measures": "Builds and lints `site/` on any PR that touches it — `next build` catches what `tsc --noEmit` does not.",
+      "whyDistinguishable": "It reports on the PR that caused it, so a run that dies in setup is a RED check the author sees before merging. There is no cadence over which its silence could accumulate unread, and no in-job filter that could make a dead build green."
+    }
+  ]
 }

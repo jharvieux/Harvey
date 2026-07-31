@@ -27,6 +27,10 @@ on:
         description: "Prove the ci-heavy-cli-alert path fires end-to-end (#1287). Fails shard 1 on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1569). SKIPS the heavy tests and both scored gates, leaving a shard every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -203,6 +207,7 @@ jobs:
       # the record step below a real number instead of a claim. Three of these files gate blocks
       # behind skipIf(), so "the step succeeded" and "tests executed" are genuinely different facts.
       - name: Heavy CLI tests
+        if: ${{ !inputs.liveness_drill }}
         env:
           HARVEY_HEAVY_CLI_TESTS: "1"
         run: pnpm exec vitest run ${{ steps.shard.outputs.files }} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shard.json"
@@ -237,7 +242,7 @@ jobs:
       # installs the mechanical binaries. Shard 1 only: it is one run of one scan, not a sharded
       # test file, and three copies would just burn two runners.
       - name: Calibration gate (real binaries, scored against the corpus answer key)
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-calibration.ts
 
       # #1288: the same hole one gate over. `validate-source-recall` scores the app-layer
@@ -251,7 +256,7 @@ jobs:
       # 0 by design (it reports, it does not gate), so on a cadence it would spend network on a
       # number nothing can fail. The planted-fixture gate below is the one with a pass/fail.
       - name: Source-detector recall gate (real binaries, request→sink answer key)
-        if: matrix.shard == 2
+        if: matrix.shard == 2 && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
       # #1491 WITHDRAWN from this shard (2026-07-31), and the reason is recorded rather than left as
@@ -297,7 +302,7 @@ jobs:
       # PR — but `workflow_dispatch` is now permanently in the condition (#1287): this path had never
       # executed once, and until this change the workflow had no manual trigger to prove it with.
       - name: Open or update the heavy-cli tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-heavy-cli-alert

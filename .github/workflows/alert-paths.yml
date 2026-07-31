@@ -33,6 +33,10 @@ on:
         description: "Prove the ci-alert-paths-alert path fires end-to-end (#1287/#1333). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1568). SKIPS the label pass and the negative controls, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
   pull_request:
 
 concurrency:
@@ -118,12 +122,13 @@ jobs:
       # Always, on every PR and every schedule. `gh` that cannot run exits 127 = UNVERIFIABLE and
       # still fails the job — "I could not check" must never be reported as "checked and clean".
       - name: Every marker label exists (and the structure still holds)
+        if: ${{ !inputs.liveness_drill }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: pnpm exec tsx src/cli/validate-alert-paths.ts --labels
 
       - name: Negative control — a schedule-only alert condition must FAIL the gate
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           if pnpm exec tsx src/cli/validate-alert-paths.ts --seed-unprovable; then
             echo "::error::--seed-unprovable put every alert path back on a cron-only condition — the exact state main was in while four alert paths sat unfired — and the gate still exited 0. The PASS above means nothing (#1287)."
@@ -131,7 +136,7 @@ jobs:
           fi
 
       - name: Negative control — a missing marker label must FAIL the gate
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -141,7 +146,7 @@ jobs:
           fi
 
       - name: Negative control — a CLOSED tracking issue must FAIL the no-alarm disclosure
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -150,10 +155,43 @@ jobs:
             exit 1
           fi
 
+      # The negative controls are a SEPARATE claim from the gate (conservation.yml's shape): a gate
+      # nobody has watched fail is indistinguishable from one that cannot, and the `if:` above can
+      # retire all three in silence. Recorded here rather than by the CLI because what is asserted
+      # is that the three steps EXECUTED — those CLI runs are supposed to exit non-zero.
+      - name: Record that all three negative controls executed
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: alert-paths-negative-controls
+          units: 3
+          scope: "--seed-unprovable + --seed-missing-label + --seed-closed-tracking, all three required to exit non-zero"
+
+      - name: Declare the controls' no-op (a short-circuit must not read like a scoring run)
+        if: steps.filter.outputs.relevant != 'true'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: alert-paths-negative-controls
+          status: declared-no-op
+          scope: "in-job filter found no workflow, no shared action, no registry and no gate source in this diff, so the three seeded controls were skipped. The label check above still ran and carries the verdict; nothing here is evidence that the controls can still fail."
+
+      # #1568/#1509: the label pass is the one assertion in this repo that no diff can speak to, so a
+      # run that died before reaching it reports an absence that reads exactly like "every label is
+      # there". `always()` so a job that died in setup names the phase that never ran. Excluded on the
+      # alert drill, which fails on purpose at its first step, before anything is scored.
+      - name: Gate liveness — did this job actually check any path?
+        if: always() && !inputs.alert_drill
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: alert-paths, alert-paths-negative-controls
+
       # #1333: the daily label check is the one assertion in this repo that NO DIFF CAN SPEAK TO, so
       # a scheduled failure here is precisely the case nobody would otherwise notice.
       - name: Open or update the alert-paths tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-alert-paths-alert

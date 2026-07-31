@@ -46,6 +46,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
+import { recordDeclaredNoOp, recordMeasured } from "../ci-liveness.js";
 import { fileURLToPath } from "node:url";
 import {
   checkAcceptance,
@@ -97,6 +98,12 @@ if (args.includes("--selftest") || args.includes("--selftest-close")) {
     process.exit(1);
   }
   console.log("\n✓ every healthy case passes and every seeded violation fails.");
+  // #1568: the self-test is this gate's negative control, and a workflow that skipped it would be
+  // green having proved nothing. The count is what it actually scored, not what it intended to.
+  // Two literal call sites rather than one with a computed id: the registry test greps for
+  // `recordMeasured("<gate>"`, so an id assembled at runtime would read as produced by nothing.
+  if (closing) recordMeasured("acceptance-close-selftest", scored.length, "hermetic close-path cases scored in both directions");
+  else recordMeasured("acceptance-selftest", scored.length, "hermetic PR-body cases scored in both directions");
   process.exit(0);
 }
 
@@ -259,6 +266,11 @@ if (closedIssueFlag) {
       console.log(`\nℹ ACTED: removed \`${CLOSE_LABEL}\` — the dispositions are now on record, so the label would be a false statement about this issue.`);
     }
   }
+  // #1568: this job answers to no PR and raises no alarm — it runs on `issues: [closed]`, so a run
+  // that died in setup posts no comment and looks exactly like a close nobody had to object to.
+  // The receipt is the only thing that tells those apart.
+  if (closeReport.notAssessed) recordDeclaredNoOp("acceptance-close", closeReport.notAssessed);
+  else recordMeasured("acceptance-close", 1, `closed issue #${issue} assessed over ${closeReport.surfacesRead.length} surface(s)`);
   process.exit(closeReport.ok ? 0 : 1);
 }
 
@@ -325,4 +337,8 @@ if (seeded.length > 0) console.log("  The gate MUST exit 1 below. Exit 0 means i
 // body under test (#1581).
 const report = checkAcceptance(body, lookup, self, evidenceWorld(), { linkedCloses, selfPr: prFlag ? `#${prFlag}` : undefined });
 console.log(args.includes("--json") ? JSON.stringify(report, null, 2) : formatAcceptance(report));
+// #1568. A PR that closes nothing is a legitimate green no-op, so it is DECLARED rather than left
+// as an empty receipt — which is what a run that died before reading the PR would also leave.
+if (report.noop) recordDeclaredNoOp("acceptance-pr", "this PR body carries no closing keyword, GitHub records no closing reference and there is no `remainder:` line, so there were no criteria to conserve");
+else recordMeasured("acceptance-pr", report.issues.length + report.remainders.length, `issue(s) and remainder(s) held to their stated criteria from ${source}`);
 process.exit(report.ok ? 0 : 1);

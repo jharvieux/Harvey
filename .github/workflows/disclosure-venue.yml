@@ -30,6 +30,11 @@ name: disclosure-venue
 
 on:
   workflow_dispatch:
+    inputs:
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1568). SKIPS both gate CLIs, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
   pull_request:
 
 # A cancellation here is only ever caused by a NEWER run on the same `github.ref` — for a PR that
@@ -86,6 +91,18 @@ jobs:
             echo "GREEN NO-OP: no rule file and no part of the gate is in this diff, so nothing that can emit a bound changed and no rule's comments or message can have moved. A docs-only or CI-only PR costs this gate nothing. Reporting success so a required context is never silent (#1107)."
           fi
 
+      # #1568: this job short-circuits to a green no-op on an irrelevant diff, so "green" and
+      # "scored" are different facts. The no-op is DECLARED, with its reason, so the assert below
+      # can pass it while still printing something no reader can mistake for a scoring run.
+      - name: Declare the no-op (a short-circuit must not read like a scoring run)
+        if: steps.filter.outputs.relevant != 'true'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: disclosure-venue, conditional-scan
+          status: declared-no-op
+          scope: "in-job filter found no semgrep rule, no registered scan path and no part of either gate in this diff — nothing was scored, and this run is evidence about nothing."
+
       - uses: pnpm/action-setup@v4
         if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
@@ -97,7 +114,7 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
 
       - name: Disclosure-venue gate (must PASS)
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-disclosure-venue.ts --list
 
       - name: Negative control — two seeded comment-only bounds must FAIL the gate
@@ -111,7 +128,7 @@ jobs:
       # Gate 4b (#1330): the omission that carries no bound comment at all, because the branch that
       # skips the check simply does not call it. Same job, same negative-control posture.
       - name: Conditional-scan gate (must PASS)
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-conditional-scan.ts --list
 
       - name: Negative control — a seeded undeclared omission must FAIL the gate
@@ -121,3 +138,16 @@ jobs:
             echo "::error::--seed-omission removed a check call from a registered scan path, creating an omission the registry does not declare and the deliverable would not mention, and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
             exit 1
           fi
+
+      # #1568/#1509: the two gate CLIs above write a receipt naming how many units they scored, and
+      # this refuses to let the job be green without one. `always()` so a job that died in setup
+      # names the phase that never ran rather than leaving a reader to infer it from a red step.
+      # A short-circuited run passes here on the DECLARED NO-OP recorded above, printing its reason
+      # instead of a count — which is what stops "the filter skipped it" reading like "it scored and
+      # found nothing".
+      - name: Gate liveness — did this job actually score anything?
+        if: always()
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: disclosure-venue, conditional-scan

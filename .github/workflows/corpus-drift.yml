@@ -432,8 +432,14 @@ jobs:
       # failures are already visible on the PR — but `workflow_dispatch` is now permanently in the
       # condition (#1287), because this path had never executed once and a cron-only alert cannot be
       # proven to work.
+      #
+      # EXCLUDED on a liveness drill (#1586 criterion 4, #1569). The two drills each switch off the
+      # other's machinery: `alert_drill` skips the liveness assert above, and `liveness_drill` skips
+      # this alert. Without this clause, proving the liveness guard under `workflow_dispatch` opens a
+      # REAL `ci-corpus-drift-alert` issue — a false alarm indistinguishable from a genuine corpus
+      # failure — which is why #1586's criterion 4 was left unproven rather than dispatched.
       - name: Open or update the drift tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-corpus-drift-alert
