@@ -431,8 +431,10 @@ describe("M8 manifest shape (#300)", () => {
     }
     // #1268: inbox-zero and rallly joined — a pnpm-aware install (and, for inbox-zero, disabling
     // the target's own enableGlobalVirtualStore) resolved the pnpm-workspace blocker that used to
-    // leave both not-run.
-    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "inbox-zero", "proposit", "rallly"]);
+    // leave both not-run. #1496: multi-tenant-starter joined through a DIFFERENT mechanism — its
+    // own suite still isn't scored (Docker per mutant); m8-corpus.ts's `extraFiles` vendors a
+    // separate DB-free suite instead (see its M8 baseline note).
+    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "inbox-zero", "multi-tenant-starter", "proposit", "rallly"]);
   });
 
   it("carries a covered scope matching the Stryker mutate config on every mutation baseline (#319)", () => {
@@ -551,12 +553,13 @@ describe("per-module scan roots (#322)", () => {
 // findings), and stays quiet while the reason still holds. The signature defect this closes: a
 // stale excuse silently costing coverage that only someone stumbling into it would catch.
 describe("revalidateNotRunReasons (#321)", () => {
-  // multi-tenant-starter records M8 not-run — its only suite spawns a Docker Postgres per mutant, a
-  // cost no CI budget justifies. (saas-lite's M5-knip, this block's prior example, gained a measured
-  // per-workspace baseline in #544 once #519 made knip run per workspace.)
+  // saas-lite records M8 not-run — every test file it ships is a Playwright E2E spec, so there is
+  // no unit suite for Stryker to mutate at all (#1436's M8_E2E_ONLY_SUITE). (multi-tenant-starter,
+  // this block's prior example, gained a real mutation baseline under #1496 — a vendored, DB-free
+  // suite, not its own Docker-dependent one — so it no longer records M8 not-run.)
   const notRunTarget = (): ExternalTarget => {
-    const t = EXTERNAL_CORPUS.find((x) => x.slug === "multi-tenant-starter");
-    if (!t || !isNotRun(t.modules.M8!)) throw new Error("multi-tenant-starter/M8 is expected to be recorded not-run");
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite");
+    if (!t || !isNotRun(t.modules.M8!)) throw new Error("saas-lite/M8 is expected to be recorded not-run");
     return t;
   };
   const m8Finding = (id: string): Finding => ({ ...finding("M8 — Survives implementation deletion", "Medium"), id });
@@ -954,8 +957,10 @@ describe("#1436 — every recorded not-run carries a falsifier the reason regist
   );
 
   it("finds the not-runs this test exists to watch, so it cannot pass by scoring an empty set", () => {
-    expect(notRuns.length).toBeGreaterThanOrEqual(5);
-    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("multi-tenant-starter/M8");
+    // #1496: multi-tenant-starter/M8 left this list — it now carries a real MutationBaseline (a
+    // vendored, DB-free suite), not a not-run reason. saas-lite and carbon still have no scoreable
+    // suite at all and remain the population this test watches.
+    expect(notRuns.length).toBeGreaterThanOrEqual(4);
     expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("saas-lite/M8");
     expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("carbon/M8");
   });
