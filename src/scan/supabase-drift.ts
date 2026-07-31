@@ -30,7 +30,7 @@
 // was edited in the dashboard is NOT detected by this pass.
 
 import { existsSync, readFileSync } from "node:fs";
-import { readNamesSafe } from "../fs-walk.js";
+import { isDirectorySafe, readNamesSafe } from "../fs-walk.js";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
@@ -105,9 +105,14 @@ function readMigrationFiles(dir: string): MigrationFile[] {
   // #1451: raw statSync/readdirSync throw on a committed DANGLING SYMLINK, and this walk runs
   // inside a connected-tier scan — a throw there discards a completed pass. readNamesSafe skips
   // unreadable ENTRIES; it does NOT tolerate an unreadable DIRECTORY (it calls readdirSync on `dir`
-  // itself and propagates ENOENT), so the existsSync guard stays. MEASURED: dropping it fails
-  // `loadMigrations > returns nothing for a path that does not exist` with ENOENT on scandir.
-  if (!existsSync(dir)) return [];
+  // itself), so a precondition on `dir` itself stays.
+  //
+  // #1508 wanted BOTH halves of the original `existsSync(dir) || statSync(dir).isDirectory()`, and
+  // the repair that landed as 5934aef kept only the first. MEASURED 2026-07-31 before this line
+  // changed: `loadMigrations("targets/calibration/package.json")` threw ENOTDIR out of scandir —
+  // the `--migrations <path-to-a-file>` typo, on the same connected-tier path. isDirectorySafe is
+  // the guard's own replacement for the dropped half and answers both questions at once.
+  if (!isDirectorySafe(dir)) return [];
   return readNamesSafe(dir)
     .filter((f) => f.toLowerCase().endsWith(".sql"))
     .sort()

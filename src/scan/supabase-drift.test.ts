@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -186,6 +186,26 @@ describe("loadMigrations", () => {
 
   it("returns nothing for a path that does not exist", () => {
     expect(loadMigrations(join(tmpdir(), "harvey-drift-does-not-exist"))).toEqual([]);
+  });
+
+  // #1508's first criterion asked for BOTH halves of the original guard — `existsSync` AND
+  // `isDirectory` — and 5934aef's repair kept only the first, so `--migrations <a .sql file>` threw
+  // ENOTDIR out of scandir on the connected-tier path. MEASURED before the fix on
+  // targets/calibration/package.json; a fair typo, and a throw here discards a completed pass.
+  it("returns nothing for a path that exists but is a FILE, rather than throwing ENOTDIR", () => {
+    const d = scratch();
+    const file = join(d, "0001_init.sql");
+    writeFileSync(file, "alter table quotes enable row level security;");
+    expect(loadMigrations(file)).toEqual([]);
+  });
+
+  // A dangling symlink INSIDE the directory is the shape the walk guard itself exists for: the
+  // entry survives a names-only listing and the readFileSync after it is what throws (#1451).
+  it("skips a committed dangling symlink instead of taking the whole pass down", () => {
+    const d = scratch();
+    writeFileSync(join(d, "0001_init.sql"), "alter table quotes enable row level security;");
+    symlinkSync(join(d, "gone.sql"), join(d, "0002_dangling.sql"));
+    expect(loadMigrations(d).map((m) => m.file)).toEqual(["0001_init.sql"]);
   });
 });
 
