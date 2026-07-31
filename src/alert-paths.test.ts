@@ -191,15 +191,16 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
 
   // The hatch is a named list, not a category that grows: any unproven path has to edit this line,
   // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
-  // retired the same day once its drill ran (run 30376371298, issue #1430). TWO occupy it now, both
-  // under the same circularity: site-smoke-alert (#1509/#1543) and ci-free-recall-alert (#1185/#1536)
-  // are brand-new workflows, and a drill only dispatches against one already on the default branch.
-  // Retire each the same way — drill it on main, record provenBy, drop pendingProof — and this list
-  // goes back to empty, which is the state it should normally be in. `pendingProof`'s own behaviour
-  // stays covered by the fixture tests above, so naming the current occupants here does not un-test
-  // the mechanism.
+  // retired the same day once its drill ran (run 30376371298, issue #1430). site-smoke-alert
+  // (#1509/#1543) occupied it the same way and was retired 2026-07-31 once site-smoke.yml landed on
+  // main and its drill ran (run 30595915001, issue #1598). ci-free-recall-alert (#1185/#1536) is the
+  // sole remaining occupant, under the same circularity: a drill only dispatches against a workflow
+  // already on the default branch. Retire it the same way — drill it on main, record provenBy, drop
+  // pendingProof — and this list goes back to empty, which is the state it should normally be in.
+  // `pendingProof`'s own behaviour stays covered by the fixture tests above, so naming the current
+  // occupants here does not un-test the mechanism.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-free-recall-alert", "site-smoke-alert"]);
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-free-recall-alert"]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 
