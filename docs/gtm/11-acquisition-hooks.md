@@ -119,11 +119,9 @@ Don't work all nine at once. Sequence:
 1. **F-1 Security** — already has verified demand; the launch on-ramp.
 2. **M-1 Scalability/load-readiness** — highest-urgency moment hook, distinct lane, real
    M7 depth. **Shipped 2026-07-30** (`/supabase-load-readiness`, refs #728).
-3. **F-3 The re-fixing trap** *or* **F-2 AI slop** — pick one to open the code-health
-   half; both are on-brand and emotionally resonant. (F-3 is broader; F-2 is punchier.)
-   **See "Demand-validation status" below (2026-07-30 pass) — F-2's exact framing is now
-   contested by direct competitors; this changes the trade-off this line describes but the
-   choice is still open, pending an operator call.**
+3. **F-3 The re-fixing trap** — chosen over F-2 AI slop (operator ruling 2026-07-30,
+   #1537: F-2's positioning is contested by several vendors; F-3's founder-facing framing
+   is an open door). **Shipped 2026-07-30** (`/re-fixing-the-same-files`, refs #1537).
 4. **M-2 Launch-readiness** — the umbrella; cheap to stand up since it's the brand itself.
 
 Add **F-4 compliance** and **M-3 diligence** as the customer base reveals regulated-data
