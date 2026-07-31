@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
-import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, staleProofs, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
@@ -73,6 +73,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // never appears in a tally.
   for (const w of registry.scheduledWithoutAlertPath) {
     console.log(`  (no alert path)          ${w.workflow} — scheduled failure raises nothing; tracked by #${w.tracking}`);
+  }
+
+  // #1604: every converted path's alert step runs through the ONE shared find-or-update.sh, so a
+  // change to it is a claim-invalidating event for every OTHER marker's provenBy, not just the one
+  // PR that touched it. Informational, not a violation — see staleProofs' own doc comment.
+  const sharedActionSha = spawnSync("git", ["rev-parse", "HEAD:.github/actions/alert-issue/find-or-update.sh"], { encoding: "utf8", cwd: REPO_ROOT });
+  if (sharedActionSha.status === 0) {
+    const stale = staleProofs(registry, sharedActionSha.stdout.trim());
+    if (stale.length > 0) {
+      console.log(`\n⚠ ${stale.length} proof(s) predate the current find-or-update.sh (${sharedActionSha.stdout.trim().slice(0, 12)}):`);
+      for (const s of stale) console.log(`  ${s.marker} — recorded against ${s.recordedSha.slice(0, 12)}; re-drill to refresh`);
+    }
   }
 
   if (process.argv.includes("--labels")) {
