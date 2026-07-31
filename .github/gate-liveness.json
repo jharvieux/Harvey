@@ -112,7 +112,12 @@
     {
       "workflow": ".github/workflows/genai-census.yml",
       "expect": ["genai-admission-census"],
-      "note": "Monthly over 18 pinned third-party clones, so a run that dies in setup or in the fetch phase is invisible for 30 days and reads no differently from a quiet month. It is registered here even though the job installs no mechanical binaries \u2014 the exhaustive rule keys on those, and keying a receipt to them would leave every clone-heavy job that happens not to need semgrep outside the mechanism (#1691). The CLI's recordMeasured throws on units=0, so an empty census cannot render as a clean one."
+      "note": "Monthly over 18 pinned third-party clones, so a run that dies in setup or in the fetch phase is invisible for 30 days and reads no differently from a quiet month. It is registered here even though the job installs no mechanical binaries \u2014 the exhaustive rule keys on those, and keying a receipt to them would leave every clone-heavy job that happens not to need semgrep outside the mechanism (#1691). The CLI's recordMeasured throws on units=0, so an empty census cannot render as a clean one.",
+      "pendingProof": {
+        "why": "The workflow FILE is not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not \u2014 the sibling alert-path drill from this same branch already measured the 404 (`.github/alert-paths.json`'s ci-genai-census-alert pendingProof, #1711: `gh workflow run genai-census.yml --ref feature/sweep-reasons-1646 -f alert_drill=true` returned `HTTP 404: workflow genai-census.yml not found on the default branch`), and the liveness drill dispatches through the identical workflow_dispatch surface, so it 404s the same way. One command closes it once the file is on main: `gh workflow run genai-census.yml --ref main -f liveness_drill=true`.",
+        "tracking": 1711,
+        "since": "2026-07-31"
+      }
     },
     {
       "workflow": ".github/workflows/free-recall.yml",

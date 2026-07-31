@@ -40,6 +40,10 @@ on:
         description: "Prove the ci-genai-census-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1569). SKIPS the census, leaving a job every one of whose steps succeeds — the guard is then the only thing that can turn it red. Cheap on purpose: nothing is cloned."
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "src/cli/genai-admission-census.ts"
@@ -89,6 +93,7 @@ jobs:
       # No mechanical-binaries step: the census reads git history and runs the TS/AST hand-rolled
       # detector. Nothing here shells out to semgrep/trufflehog/osv-scanner/gitleaks.
       - name: Census the pinned corpus
+        if: ${{ !inputs.liveness_drill }}
         run: |
           pnpm exec tsx src/cli/genai-admission-census.ts 2>&1 | tee "$RUNNER_TEMP/genai-census.log"
           exit "${PIPESTATUS[0]}"
@@ -128,7 +133,7 @@ jobs:
       # #1287 found five of them shipped unfired. Never fires on the PR trigger — that failure is
       # already on the PR.
       - name: Open or update the genai-census tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-genai-census-alert
