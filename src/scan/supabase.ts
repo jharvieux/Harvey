@@ -309,6 +309,11 @@ function localScopeFinding(): Finding[] {
 // shape the disclosure family exists to prevent. The separator moved to ASCII 0x1F so the collision
 // should no longer occur; this row exists because "should no longer" is a claim, and a residual
 // drop must be counted rather than assumed away.
+//
+// The counter's own bound, stated in `evidence` rather than only here (#1317's rule): a line is
+// recognised as a lost lint by its third field being a Splinter level, so a separator inside `name`
+// or `title` shifts the level column and evades the count. Under 0x1F that is a residual of a
+// residual, but the row may not claim an invariant the counter does not enforce.
 function unparsedSplinterFinding(unparsedRows: number): Finding[] {
   if (unparsedRows === 0) return [];
   return [
@@ -324,11 +329,16 @@ function unparsedSplinterFinding(unparsedRows: number): Finding[] {
       evidence:
         `${unparsedRows} row(s) of the Supabase Advisor (Splinter) lint output carried the field separator inside ` +
         "a value — a database identifier containing that character — so they could not be split back into their " +
-        "ten columns and are absent from the advisor findings below.",
+        "ten columns and are absent from the advisor findings below. WHAT THIS COUNT CAN AND CANNOT SEE: a " +
+        "malformed line is recognised as a lost lint only while its third field is still a Splinter level " +
+        "(ERROR/WARN/INFO) — that is the only thing distinguishing a lint row from psql's command-tag and " +
+        "warning noise. A separator landing inside the first two fields (the lint's `name` or `title`) shifts " +
+        "the level out of that column, and such a row is discarded WITHOUT reaching this count.",
       impact:
         "Those lints were produced by the linter and then lost in transit: the security and performance " +
         "advisories they carried are missing from this report, and their absence is not evidence that the " +
-        "underlying objects are clean. Counted and named here so the loss cannot be read as a clean result.",
+        "underlying objects are clean. Counted and named here so the loss cannot be read as a clean result — " +
+        "but read the number as a FLOOR on the lints lost, not a proven total, for the reason above.",
       fix:
         "Re-run the Supabase pass and report the count above (issue #1264) — the parser's separator needs to " +
         "move to one the affected identifiers do not contain.",

@@ -303,6 +303,21 @@ describe("runSupabaseScan", () => {
       expect(row?.evidence).toContain("field separator");
     });
 
+    // #1323. The row used to assert the never-silent invariant in full generality, which is broader
+    // than the counter: `unparsedRows` only increments while fields[2] is still a Splinter level, so
+    // a separator inside `name` or `title` shifts the level column and the row is dropped uncounted.
+    // A disclosure row that overstates its own completeness is the defect the family exists to
+    // prevent, so the bound has to be IN the row, not only in the parser's comments.
+    it("states the shape that evades its own counter, rather than claiming a proven total", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [], unparsedRows: 2 }) });
+      const row = findings.find((f) => f.id === "SB-SPLINTER-00");
+
+      expect(row?.evidence).toContain("third field is still a Splinter level");
+      expect(row?.evidence).toContain("`name` or `title`");
+      expect(row?.evidence).toContain("WITHOUT reaching this count");
+      expect(row?.impact).toContain("FLOOR");
+    });
+
     it("stays silent when every row parsed, so the row means something when it appears", async () => {
       const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [], unparsedRows: 0 }) });
       expect(findings.some((f) => f.id === "SB-SPLINTER-00")).toBe(false);

@@ -21,9 +21,11 @@
 // `-F <US>` (ASCII 0x1F unit separator) splits into exactly 10, identifiers intact. Text output
 // from Postgres does not carry control bytes unless a value literally contains one, so the unit
 // separator removes the collision rather than narrowing it. The pipe path is still parsed —
-// src/scan/fixtures/splinter-out.txt is a recorded artifact of a real pre-#1264 run — and any
-// line that looks like a lint row but does not yield 10 fields is now COUNTED, so a residual
-// drop reaches SB-SPLINTER-00 instead of vanishing.
+// src/scan/fixtures/splinter-out.txt is a recorded artifact of a real pre-#1264 run — and a line
+// still identifiable as a lint row (its third field is a Splinter level) that does not yield 10
+// fields is now COUNTED, so that residual drop reaches SB-SPLINTER-00 instead of vanishing.
+// It is not every drop: see `parseSplinterPipeText` for the shape that evades the count, and
+// SB-SPLINTER-00's own `evidence`, which states that bound to the reader of the report.
 //
 // Requires the `psql` binary (ships with the Supabase CLI / any Postgres client install) —
 // same class of external-tool dependency as semgrep/gitleaks/osv-scanner elsewhere in this
@@ -64,6 +66,11 @@ interface SplinterRow {
 // not yield 10 columns because a value contained the separator. Under FIELD_SEP that count is
 // expected to stay 0; it is carried rather than assumed so a residual drop is disclosed
 // (SB-SPLINTER-00) instead of silently shrinking the advisor set — #1264.
+//
+// The level test is what tells a lint row apart from psql's command-tag/warning noise, so it also
+// bounds the count: a separator inside `name` or `title` shifts the level out of fields[2] and the
+// row is dropped uncounted. That residual is disclosed in SB-SPLINTER-00's `evidence` rather than
+// left to this comment — a bound nobody outside this file can read is not a disclosure (#1317).
 export function parseSplinterPipeText(raw: string): { rows: SplinterRow[]; unparsedRows: number } {
   const sep = raw.includes(FIELD_SEP) ? FIELD_SEP : "|";
   const rows: SplinterRow[] = [];
