@@ -200,6 +200,16 @@ export interface ExternalTarget {
   // stamps every scored row of such a target with its scanned scope — the disagreement is
   // recorded in the output, and cross-module comparisons on the target are scope-invalid.
   scanRoots?: { "M5-knip"?: string };
+  // #1524: clone-relative directories DELETED from the disposable clone before any module scans
+  // it — for a target that vendors another project's full source tree inside its own repo (a
+  // reference copy, not application code). Without this, every whole-repo module counts the
+  // vendored tree's own findings as this target's baseline: MEASURED on effective (this PR),
+  // `repos/effect` (a full checkout of the Effect-TS monorepo, 1769 files / ~501k lines) produced
+  // 2699 of 2713 static-detect findings (99.5%) and 2682 of 2699 quality-scan findings (99.4%) —
+  // a baseline that would be almost entirely about a third-party library's own duplication/test
+  // shapes, not this target's ~47-file app. `schemaPath` and `installTargetDeps` are unaffected:
+  // both resolve against the clone ROOT, which this never touches.
+  vendoredSubtrees?: string[];
 }
 
 export function isNotRun(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m is ModuleNotRun {
@@ -925,6 +935,95 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       "M8-intent": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no test files to inspect, so the M8-00 above is this target's whole M8 story." },
       M9: { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no Next.js app here at all." },
       M10: { counted: 2, total: 2, note: "#895: MEASURED 2026-07-24 over rls-broken-lab/supabase/migrations — profiles and posts, both Low. Chosen as the schemaPath over the other two labs' migration dirs because it is the one whose broken/fixed pair is the point of the target." },
+    },
+  },
+  // ── #1524 (#1325 remainder, #542): full corpus-drift baselines for the three AI_FREQUENCY_CORPUS
+  // (#413) targets that until now were measured ONLY for M6 hand-rolled-shape frequency. Same pins
+  // handrolled-frequency.ts already uses, so the two measurements agree on which tree they describe.
+  {
+    slug: "cravab",
+    repo: "stoimera/Cravab",
+    commit: "f0b355fe5e082b9f67bacf3593393e763f50acea",
+    license: "AGPL-3.0",
+    provenance: "ai-generated",
+    provenanceNote: "#413: .cursor/rules mandating tenant_id isolation + AI-slop README; strong stack fit (tenant_id everywhere, RLS, migrations, App Router). AGPL — scan-only, never vendor.",
+    securityVerdict: "NOT ASSESSED — #1524 baselines the source-tier QUALITY modules only, same posture as #894's ghostfolio/rallly/etc entries. No M1 semantic pass, no dynamic tier, and no disclosure has been filed. This field is deliberately not a clean bill of health.",
+    schemaPath: "supabase/migrations",
+    modules: {
+      "M1-boundary": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 via `pnpm corpus-drift --target cravab --install` — the M9 boundary pass runs and produces no missing-auth / client-owner-id row here. An FP floor, same posture as every other target's M1-boundary reading." },
+      M4: { counted: 130, total: 212, note: "#1524: MEASURED 2026-07-30 via `pnpm corpus-drift --target cravab --install` — 211 'Duplication' rows (130 counted Low/Medium, the rest Info below the significant-duplication floor) + 1 Info 'Diverged clone (whole-repo)'. Command reproducible: clone the pin, `npm install`, `pnpm exec tsx src/cli/quality-scan.ts <clone> --out f.json`." },
+      "M4-diverged": { counted: 37, total: 37, note: "#1524: MEASURED 2026-07-30 — 37 diverged security-path clone families (High, review tier), the corpus's largest reading for this key. Consistent with the target's per-entity API-route scaffolding (src/app/api/**) that its .cursor/rules mandate." },
+      "M5-knip": { counted: 160, total: 161, note: "#1524: MEASURED 2026-07-30 via `pnpm corpus-drift --target cravab --install` (npm, single package.json at the clone root) — 161 unused-file/unused-export findings, 160 counted (Low/Medium) + 1 Info M5-98/M5-99-family disclosure." },
+      "M5-slop": { counted: 467, total: 566, note: "#1524: MEASURED 2026-07-30 — 327 'Unused import', 56 'Single-use helper', 49 'Unused parameter', 19 'Else after return', 7 'Orphan TODO', 5 'Placeholder stub', 4 'Rethrow catch' counted (Low); 68 'Decorative emoji' + 31 'Narrating comment' Info. The corpus's highest M5-slop reading by a wide margin — 'Unused import' alone (327) dominates and is UNTRIAGED beyond this count; a future precision pass on this class should read this target first." },
+      "M6-indicator": { counted: 71, total: 71, note: "#1524: MEASURED 2026-07-30 — 48 'raw-millisecond date math' (heavily concentrated in src/app/api/reports/*), 5 each of 'composite timestamp-random id' and 'markdown-to-HTML by regex', 4 'random-string id', 3 'email-shape regex', plus small counts of 5 other indicator classes. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 55, total: 72, note: "#1524: MEASURED 2026-07-30 — 27 'Unbounded select', 16 'Client fetch in useEffect', 6 'Await in loop (N+1)', 3 'Nested-loop join', 2 'Blocking sync I/O in request handler', 1 'Raw <img>' counted (Perf); 10 'Missing hook dependencies' + 7 'State sprawl' Info. UNTRIAGED — no field precision read yet, recorded as the raw scanner output per #1524's acceptance." },
+      M8: {
+        // REASON: cravab is not mutation-scoreable because no M8_CORPUS_CONFIGS entry exists for it — the blocker is our own backlog, not the target
+        // KIND: empirical
+        // PROVENANCE: MEASURED 2026-07-30 — `mutation-scan --detect-only` over the pinned clone reports "test suite detected" (jest.config.js + jest.setup.js + 3 spec files), so #224's zero-coverage finding correctly does NOT fire and a finding count is the wrong unit. src/scan/m8-corpus.ts has no cravab entry.
+        // FALSIFIER: sh -c 'test -f src/scan/m8-corpus.ts || exit 127; grep -q "^  \"\{0,1\}cravab\"\{0,1\}:" src/scan/m8-corpus.ts && exit 0 || exit 1'
+        // TOUCHES: src/scan/m8-corpus.ts
+        reason: "#1524: MEASURED 2026-07-30 — mutation-scan --detect-only DETECTS a real suite here (jest, 3 spec files), so #224's zero-coverage finding correctly does NOT apply and a finding count is the wrong unit. Scoring it for real needs a provisioned Stryker + jest-runner plugin and an M8_CORPUS_CONFIGS entry naming a `mutate` scope narrowed to the files the suite actually covers — corpus-m8.yml's job, not this manifest change. This blocker is OURS, not the target's — the falsifier exits 0 the moment an M8_CORPUS_CONFIGS entry lands. Recorded not-run rather than 0 — a 0 would read as 'no surviving mutants' on a suite nobody has mutated.",
+        falsifier: "sh -c 'test -f src/scan/m8-corpus.ts || exit 127; grep -q \"^  \\\"\\{0,1\\}cravab\\\"\\{0,1\\}:\" src/scan/m8-corpus.ts && exit 0 || exit 1'",
+      },
+      "M8-intent": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 — the 3 spec files trip no assertion-free/tautological/happy-path-only/mock-the-subject shape. A real FP floor for the test-intent pass on this target's thin suite." },
+      M9: { counted: 9, total: 10, note: "#1524: MEASURED 2026-07-30 — 6 'Accidental dynamic rendering', 2 'SSR-only API misuse', 1 'Data-fetching waterfall' counted; 1 Info M9-RETRY scope disclosure row." },
+      M10: { counted: 27, total: 27, note: "#1524: MEASURED 2026-07-30 via m10FindingsFromSchema over supabase/migrations (one init migration) — 27 PII-bearing tables. Headline is tenants: Critical (email/phone/address plus plaintext-adjacent vapi_api_key_encrypted/twilio_phone_number/vapi_public_api_key — the same must-not-miss plaintext-credential-column shape #233 exists to catch), then 6 Medium (audit_logs, clients, invoices, payments, service_area_coverage, users), the rest Low. The corpus's largest M10 reading — a full CRM/call-center schema (clients, calls, appointments, invoices, payments, consent_records)." },
+    },
+  },
+  {
+    slug: "flori-web",
+    repo: "flori-ai-kr/web",
+    commit: "bead044955f069525edac4134696d0a8f1a3071b",
+    license: "none (all rights reserved)",
+    provenance: "ai-generated",
+    provenanceNote: "#413: Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. No license — clone-and-scan only, never vendor.",
+    securityVerdict: "NOT ASSESSED — #1524 baselines the source-tier QUALITY modules only, same posture as #894's ghostfolio/rallly/etc entries. No M1 semantic pass, no dynamic tier, and no disclosure has been filed. This field is deliberately not a clean bill of health.",
+    schemaPath: "supabase/migrations",
+    modules: {
+      "M1-boundary": { counted: 1, total: 1, note: "#1524: MEASURED 2026-07-30 via `pnpm corpus-drift --target flori-web --install` — 1 High 'Server Action missing authorization check'. Unlike the other two #1524 targets this is non-zero: a real finding, not just an FP floor." },
+      M4: { counted: 160, total: 272, note: "#1524: MEASURED 2026-07-30 (pnpm install — this clone carries both a pnpm-lock.yaml and a stray package-lock.json; detectPackageManager prefers pnpm) — 271 'Duplication' rows (160 counted) + 1 Info 'Diverged clone (whole-repo)'. Command reproducible: clone the pin, `pnpm install`, `pnpm exec tsx src/cli/quality-scan.ts <clone> --out f.json`." },
+      "M4-diverged": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 — no diverged security-path family found. An FP floor." },
+      "M5-knip": { counted: 54, total: 54, note: "#1524: MEASURED 2026-07-30 via `pnpm corpus-drift --target flori-web --install` (pnpm; this clone declares no workspaces, so pnpm/npm resolution is not in play the way it is for the corpus's monorepo targets) — 54 unused-file/unused-export findings, all Low/Medium." },
+      "M5-slop": { counted: 95, total: 108, note: "#1524: MEASURED 2026-07-30 — 89 'Single-use helper' counted (Low), plus small counts of 'Unused import'/'Else after return'/'Orphan TODO'; 11 'Decorative emoji' + 2 'Narrating comment' Info. 'Single-use helper' alone (89) is UNTRIAGED and dominates — the same per-entity-scaffolding vein #1532's `doesOwnIo` fix addressed corpus-wide (this target predates that measurement, not exempt from it)." },
+      "M6-indicator": { counted: 24, total: 24, note: "#1524: MEASURED 2026-07-30 — 9 'raw-millisecond date math', 6 'manual date formatting', 4 'email-shape regex', 2 'base64url conversion', plus 3 singleton classes. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 8, total: 30, note: "#1524: MEASURED 2026-07-30 — 2 'Await in loop (N+1)', 1 each of 'Raw <img>'/'Sort in render body'/'Fetch in middleware hot path'/'JSON deep-clone'/'Oversized committed images'/'Unreferenced committed images' counted (Perf/Low); 20 'State sprawl' + 2 'Missing hook dependencies' Info (React 18+ automatic batching likely falsifies most of the 20 state-sprawl rows per #1261's field precedent — UNTRIAGED here, they are Info and excluded from `counted` either way)." },
+      M8: {
+        // REASON: flori-web is not mutation-scoreable because no M8_CORPUS_CONFIGS entry exists for it — the blocker is our own backlog, not the target
+        // KIND: empirical
+        // PROVENANCE: MEASURED 2026-07-30 — `mutation-scan --detect-only` over the pinned clone reports "test suite detected" (vitest, 118 spec/test files), so #224's zero-coverage finding correctly does NOT fire and a finding count is the wrong unit. src/scan/m8-corpus.ts has no flori-web entry.
+        // FALSIFIER: sh -c 'test -f src/scan/m8-corpus.ts || exit 127; grep -q "^  \"\{0,1\}flori-web\"\{0,1\}:" src/scan/m8-corpus.ts && exit 0 || exit 1'
+        // TOUCHES: src/scan/m8-corpus.ts
+        reason: "#1524: MEASURED 2026-07-30 — mutation-scan --detect-only DETECTS a real suite here (vitest, 118 spec/test files — the corpus's largest test-file count among the three new targets), so #224's zero-coverage finding correctly does NOT apply and a finding count is the wrong unit. Scoring it for real needs a provisioned Stryker + vitest-runner plugin and an M8_CORPUS_CONFIGS entry naming a `mutate` scope narrowed to the files the suite actually covers — corpus-m8.yml's job, not this manifest change. This blocker is OURS, not the target's — the falsifier exits 0 the moment an M8_CORPUS_CONFIGS entry lands. Recorded not-run rather than 0 — a 0 would read as 'no surviving mutants' on a suite nobody has mutated.",
+        falsifier: "sh -c 'test -f src/scan/m8-corpus.ts || exit 127; grep -q \"^  \\\"\\{0,1\\}flori-web\\\"\\{0,1\\}:\" src/scan/m8-corpus.ts && exit 0 || exit 1'",
+      },
+      "M8-intent": { counted: 56, total: 56, note: "#1524: MEASURED 2026-07-30 — 29 'Unrestored vi.spyOn' (Medium), 21 'Call-count-only test' (Low), 3 each of 'Happy-path-only tests on security-critical code' and 'vi.hoisted misuse' (Medium). The corpus's highest M8-intent reading — a large vitest suite (118 files) with a recurring mock-hygiene shape, UNTRIAGED beyond this count." },
+      M9: { counted: 19, total: 20, note: "#1524: MEASURED 2026-07-30 — 16 'Accidental dynamic rendering' (Medium), 2 'SSR-only API misuse' (Low), 1 'Server Action missing input validation' (High) counted; 1 Info M9-RETRY scope disclosure row." },
+      M10: { counted: 4, total: 4, note: "#1524: MEASURED 2026-07-30 via m10FindingsFromSchema over supabase/migrations (14 migration files) — 4 PII-bearing tables: recurring_expenses (High, item_name/payment_method/note), instagram_accounts (Low, username/display_name/notes), trend_articles + insight_scraps (Low). Smallest M10 reading of the three #1524 targets — an expense-tracking app with a narrower schema than cravab's CRM." },
+    },
+  },
+  {
+    slug: "effective",
+    repo: "joshcoolman/effective",
+    commit: "52744674ef83306bc58ecfc607aa840092137132",
+    license: "MIT",
+    provenance: "ai-assisted",
+    provenanceNote: "#413: CLAUDE.md + Co-Authored-By: Claude, but higher-skill Effect TS and a thin schema — a capable-dev-with-AI contrast to the vibe-coded repos. Large tree (~500k LOC via a vendored repos/effect reference copy, stripped from every scan below — see vendoredSubtrees); the app itself is ~47 files under src/.",
+    securityVerdict: "NOT ASSESSED — #1524 baselines the source-tier QUALITY modules only, same posture as #894's ghostfolio/rallly/etc entries. No M1 semantic pass, no dynamic tier, and no disclosure has been filed. This field is deliberately not a clean bill of health.",
+    schemaPath: "supabase/migrations",
+    vendoredSubtrees: ["repos"],
+    modules: {
+      "M1-boundary": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 via `pnpm corpus-drift --target effective --install` (post `repos/` removal, see vendoredSubtrees) — an FP floor on a small app." },
+      M4: { counted: 3, total: 6, note: "#1524: MEASURED 2026-07-30 (with vendoredSubtrees' repos/ removed first — WITHOUT that removal quality-scan reads 485/1074, almost entirely repos/effect's own internal duplication; see vendoredSubtrees's comment for the static-detect-side split) — 3 counted Low self-file clone pairs + 3 Info rows (a CHANGELOG.md clone, the whole-repo M4 disclosure, and the whole-repo diverged-clone disclosure). Of the 3 COUNTED rows, only ONE is real app code (src/styles/tokens.css:60-75 <-> :1-17); the other TWO are self-file duplication inside vendored `.agents/skills/**` reference-rule markdown (server-parallel-fetching.md, advanced-effect-event-deps.md) — noise `vendoredSubtrees` does not reach because it only strips `repos/`, disclosed here rather than adding a second exclusion mechanism for 2 rows." },
+      "M4-diverged": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 — FP floor." },
+      "M5-knip": { counted: 8, total: 8, note: "#1524: MEASURED 2026-07-30 via `pnpm corpus-drift --target effective --install` (pnpm; this clone declares no workspaces) — 8 unused-file/unused-export findings across src/features/*, all Low/Medium." },
+      "M5-slop": { counted: 12, total: 12, note: "#1524: MEASURED 2026-07-30 — 10 'Single-use helper' (src/features/core/server.ts x5, scripts/*.mjs x3, src/features/core/use-chat.ts, src/features/generate/server.ts) + 2 'Single-call wrapper' (src/app/api/turn/route.ts, src/proxy.ts), all Low. The corpus's smallest M5-slop reading, consistent with this target's thin ~47-file app tree." },
+      "M6-indicator": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 — FP floor on a small app with no visible request-path perf anti-pattern." },
+      M8: { counted: 1, total: 1, note: "#1524: MEASURED 2026-07-30 — ZERO test files outside the vendored repos/effect tree (the root `\"test\": \"vitest run\"` script has nothing to run against once repos/ is excluded), so mutation-scan emits #224's M8-00 zero-coverage finding (High), which IS the measurement. Not a mutation baseline and not a not-run: 1 counted, per #263's rule that a test-FILE count is not the finding." },
+      "M8-intent": { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 — no test files to inspect, so the M8-00 above is this target's whole M8 story (same shape as supabase-security-labs)." },
+      M9: { counted: 1, total: 2, note: "#1524: MEASURED 2026-07-30 — 1 'Accidental dynamic rendering' (Medium, src/app/login/page.tsx) counted; 1 Info M9-RETRY scope disclosure row." },
+      M10: { counted: 0, total: 0, note: "#1524: MEASURED ZERO 2026-07-30 via m10FindingsFromSchema over supabase/migrations (one 'create_todos' migration) — no PII-bearing columns. Consistent with the provenanceNote's 'thin schema': a todo app, not a tenant-data product." },
     },
   },
 ];

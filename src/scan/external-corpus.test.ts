@@ -81,9 +81,9 @@ describe("external corpus manifest", () => {
     // dropping to not-run is exactly what this asserts against.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
     expect(scored.sort()).toEqual([
-      "boxyhq", "carbon", "documenso", "ghostfolio", "inbox-zero", "launch-mvp",
-      "multi-tenant-starter", "mvp-boilerplate", "proposit", "rallly", "saas-lite",
-      "subscription-payments", "supabase-security-labs", "tanstack-com",
+      "boxyhq", "carbon", "cravab", "documenso", "effective", "flori-web", "ghostfolio",
+      "inbox-zero", "launch-mvp", "multi-tenant-starter", "mvp-boilerplate", "proposit",
+      "rallly", "saas-lite", "subscription-payments", "supabase-security-labs", "tanstack-com",
     ]);
   });
 

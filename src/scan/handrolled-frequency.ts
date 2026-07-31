@@ -15,15 +15,20 @@
 // exactly the junk count this file must not emit.
 
 import type { SourceInput } from "../detectors/common.js";
-import type { Provenance } from "./external-corpus.js";
+import { EXTERNAL_CORPUS, type Provenance } from "./external-corpus.js";
 
-// #413: AI-authored repos measured for M6 hand-rolled-frequency ONLY — deliberately NOT full
-// ExternalTarget corpus entries. The corpus contract requires MEASURED per-module drift baselines
-// (M4/M5/M7/M8/M9/M10), which cost a full scan + triage per repo to establish honestly; fabricating
-// them would be exactly the junk-number the repo's measure-don't-recall doctrine forbids. The M6
-// frequency question — "do the catalogue's 17 measured-zero YES shapes fire on genuinely
-// AI-generated code?" — needs only the source tree, so these are a lightweight clone-and-count
-// list. Full corpus-drift baselines for these repos are a separate, heavier follow-up (see #413).
+// #413: AI-authored repos measured for M6 hand-rolled-frequency. The M6 frequency question — "do
+// the catalogue's 17 measured-zero YES shapes fire on genuinely AI-generated code?" — needs only
+// the source tree, so this stayed a lightweight clone-and-count list even after #1524 gave three
+// of these four (cravab, flori-web, effective) a full ExternalTarget entry in external-corpus.ts
+// too: the two measurements are independent questions (shape frequency vs. drift baseline) over
+// the SAME pinned tree, so a slug legitimately lives in both lists — handrolled-frequency.test.ts's
+// "never duplicate a slug" check was relaxed to "if a slug is in both, the pin must agree" once
+// that overlap became intentional rather than a bookkeeping accident. `teardown` remains
+// frequency-only per #1524's own scoping: it already serves as a live M1/M2 ground-truth target
+// (the vandyand/saas-security-teardown measurements, verified in #1325) rather than needing a
+// source-tier drift baseline — a fourth full ExternalTarget entry for it is untracked, separate
+// follow-up work, not part of #1524.
 //
 // Source is NEVER vendored (same posture as external-corpus.ts): clone-on-demand only, so AGPL /
 // no-license repos are usable for internal scanning as long as their source isn't copied into
@@ -77,6 +82,32 @@ export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
     curated: true,
   },
 ];
+
+export type FrequencyTier = Provenance | "curated";
+
+interface FrequencyCorpusTarget {
+  slug: string;
+  repo: string;
+  commit: string;
+  provenance: Provenance;
+  tier: FrequencyTier;
+}
+
+// #1524: three AI_FREQUENCY_CORPUS slugs (cravab, flori-web, effective) also gained a full
+// EXTERNAL_CORPUS entry for the unrelated drift-baseline measurement, so the two lists can
+// legitimately share a slug now (handrolled-frequency.test.ts's "pins must agree" check).
+// Concatenating the two lists undeduped would make a shared slug contribute TWICE to a
+// per-provenance-tier aggregate while a same-tier repo present in only one list contributes once
+// — a non-proportional double-count. EXTERNAL_CORPUS wins a shared slug: none of its entries are
+// `curated` teaching repos, so its provenance is the correct tier, and it is the corpus this
+// measurement already treats as canonical everywhere else.
+export function buildFrequencyTargets(): FrequencyCorpusTarget[] {
+  const externalSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+  return [
+    ...EXTERNAL_CORPUS.map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: t.provenance as FrequencyTier })),
+    ...AI_FREQUENCY_CORPUS.filter((t) => !externalSlugs.has(t.slug)).map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: (t.curated ? "curated" : t.provenance) as FrequencyTier })),
+  ];
+}
 
 interface MeasuredShape {
   /** Row number in docs/design/m6-handrolled-catalogue.md. */

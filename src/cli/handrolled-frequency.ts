@@ -30,25 +30,16 @@ import { join } from "node:path";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { cloneAtPin } from "../scan/corpus-clone.js";
-import { EXTERNAL_CORPUS, type Provenance } from "../scan/external-corpus.js";
-import { AI_FREQUENCY_CORPUS, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "../scan/handrolled-frequency.js";
+import { buildFrequencyTargets, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES, type FrequencyTier } from "../scan/handrolled-frequency.js";
 
 // A repo is either the organic tier of its provenance, or "curated" if it is an intentionally-
 // vulnerable teaching repo (its shape mix is authored, not organic — #413).
-type Tier = Provenance | "curated";
+type Tier = FrequencyTier;
 
-interface FreqTarget {
-  slug: string;
-  repo: string;
-  commit: string;
-  provenance: Provenance;
-  tier: Tier;
-}
-
-const targets: FreqTarget[] = [
-  ...EXTERNAL_CORPUS.map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: t.provenance as Tier })),
-  ...AI_FREQUENCY_CORPUS.map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: (t.curated ? "curated" : t.provenance) as Tier })),
-];
+// #1524: buildFrequencyTargets() dedupes the EXTERNAL_CORPUS/AI_FREQUENCY_CORPUS overlap so a
+// shared slug (cravab, flori-web, effective) contributes to sumForTier's aggregate exactly once —
+// see its own doc comment in src/scan/handrolled-frequency.ts for why and which entry wins.
+const targets = buildFrequencyTargets();
 
 // The 17 YES entries the 2026-07-16 run measured at ZERO across all six corpus repos (the reason
 // they were deferred). #413's core question: do any fire on AI-authored code?
