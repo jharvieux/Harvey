@@ -332,6 +332,11 @@ rules:
               - pattern: NextResponse.redirect($URL)
               - pattern: "$RES.writeHead($CODE, { Location: $URL })"
               - pattern: '$RES.setHeader("Location", $URL)'
+              # #1273: express `res.location(url)` sets the SAME Location header `res.redirect`
+              # sets — it is `res.redirect`'s implementation — and a `res.location(u); res.end()`
+              # pair redirects exactly as `res.redirect(u)` does. Measured 2026-07-31: the shape
+              # fired on nothing before this arm while `res.redirect` fired.
+              - pattern: $RES.location($URL)
           - focus-metavariable: $URL
 
   # Reflected XSS: request-controlled value flows into dangerouslySetInnerHTML. Taint mode with

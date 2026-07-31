@@ -33,6 +33,12 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   // A03 — Injection
   "CWE-78": "A03:2021 - Injection",
   "CWE-88": "A03:2021 - Injection",
+  // #1273, VERIFIED 2026-07-31 against OWASP's own published A03:2021 "List of Mapped CWEs":
+  // CWE-90 (LDAP Injection) and CWE-643 (XPath Injection) are both in it. CWE-1236 (CSV formula
+  // injection) is NOT, in that list or any other A0X one, so harvey-csv-formula-injection carries
+  // a cwe with no owasp field — the harvey-redos posture.
+  "CWE-90": "A03:2021 - Injection",
+  "CWE-643": "A03:2021 - Injection",
   "CWE-79": "A03:2021 - Injection",
   "CWE-89": "A03:2021 - Injection",
   "CWE-94": "A03:2021 - Injection",
@@ -95,6 +101,12 @@ const NO_OWASP_CWES: Record<string, string> = {
   // definitions/524.html): Memberships lists two SFP/comprehensive-categorization clusters, no
   // OWASP Top Ten mention at all.
   "CWE-524": "Use of Cache Containing Sensitive Information — MITRE's memberships carry no OWASP Top Ten mapping of any year",
+  // #1273, VERIFIED 2026-07-31 against OWASP's own A03:2021 "List of Mapped CWEs" page: the list
+  // is CWE-20, 74, 75, 77, 78, 79, 80, 83, 87, 88, 89, 90, 91, 93, 94, 95, 96, 97, 98, 99, 100,
+  // 113, 116, 138, 184, 470, 471, 564, 610, 643, 644, 652, 917 — CWE-1236 is absent, and it is a
+  // post-2021 CWE (the same reason CWE-1321 is here). Falsifier: re-read that page's list; if
+  // CWE-1236 appears, move it into OFFICIAL_CWE_TO_OWASP_2021 instead.
+  "CWE-1236": "Improper Neutralization of Formula Elements in a CSV File — post-2021 CWE, absent from A03:2021's mapped-CWE list and from every other 2021 category's",
 };
 
 const RULES_DIR = join(dirname(fileURLToPath(import.meta.url)));
@@ -247,6 +259,7 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-79": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
   "CWE-88": "Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')",
   "CWE-89": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+  "CWE-90": "Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')",
   "CWE-95": "Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
   "CWE-113": "Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')",
   "CWE-116": "Improper Encoding or Escaping of Output",
@@ -279,6 +292,7 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-602": "Client-Side Enforcement of Server-Side Security",
   "CWE-611": "Improper Restriction of XML External Entity Reference",
   "CWE-613": "Insufficient Session Expiration",
+  "CWE-643": "Improper Neutralization of Data within XPath Expressions ('XPath Injection')",
   "CWE-614": "Sensitive Cookie in HTTPS Session Without 'Secure' Attribute",
   "CWE-639": "Authorization Bypass Through User-Controlled Key",
   "CWE-668": "Exposure of Resource to Wrong Sphere",
@@ -295,6 +309,7 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-943": "Improper Neutralization of Special Elements in Data Query Logic",
   "CWE-1021": "Improper Restriction of Rendered UI Layers or Frames",
   "CWE-1321": "Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')",
+  "CWE-1236": "Improper Neutralization of Formula Elements in a CSV File",
   "CWE-1333": "Inefficient Regular Expression Complexity",
 };
 
@@ -312,6 +327,9 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-79": /\bXSS\b|cross-site scripting|innerHTML|dangerouslySetInnerHTML|__html|document\.write|autoescap|javascript:/i,
   "CWE-88": /argument injection|as an argv|argv-array element/i,
   "CWE-89": /\bSQL\b|parameterized quer/i,
+  // #1273. Not a bare `filter`/`search`: those are the vocabulary of the PostgREST and Mongo rules
+  // in the same category. CWE-90's own weakness is the LDAP query being rewritten.
+  "CWE-90": /\bLDAP\b|search filter|bind DN/i,
   "CWE-95": /\beval\b|new Function/i,
   "CWE-113": /\bCRLF\b|CR\/LF|response splitting/i,
   // Not a bare escape/sanitize verb: every XSS rule's remediation sentence says "sanitize", which
@@ -361,6 +379,9 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-602": /client-supplied|client-side|escalate/i,
   "CWE-611": /\bXXE\b|external entit|\bXML\b/i,
   "CWE-613": /expir|\bTTL\b|maxAge|long-lived/i,
+  // #1273. `predicate` alone would also read as the SQL/PostgREST vocabulary; CWE-643 is the
+  // XPath expression specifically.
+  "CWE-643": /\bXPath\b|selectNodes|selectSingleNode/i,
   // The cookie's ATTRIBUTES, not the noun: a CORS rule that mentions "the victim's cookies" is not
   // reporting a missing Secure flag.
   "CWE-614": /HttpOnly|Set-Cookie|res\.cookie|SameSite/i,
@@ -384,6 +405,9 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-943": /\bNoSQL\b|PostgREST|query operator|filter clause|MongoDB/i,
   "CWE-1021": /X-Frame-Options|frame-ancestors|clickjack|\bframed\b/i,
   "CWE-1321": /prototype pollution|__proto__|Object\.prototype/i,
+  // #1273. Anchored on the FORMULA half: a bare `CSV` also names the export format in rules that
+  // have nothing to do with formula evaluation.
+  "CWE-1236": /formula injection|as a formula|formula prefix|formula element/i,
   "CWE-1333": /\bReDoS\b|catastrophic backtrack|nested quantifier|regular expression complexity/i,
 };
 
@@ -459,6 +483,10 @@ const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
   "CWE-918": /remotePatterns|hostname: \$/,
   // The recursive-merge helpers through which a `__proto__` key reaches Object.prototype.
   "CWE-1321": /defaultsDeep|mergeWith\(|merge\(\$TARGET/,
+  // #1273 — the CSV/spreadsheet SERIALIZERS are the surface on which a formula-prefixed cell is
+  // written, whoever wrote the rule: csv-stringify's `stringify`, fast-csv's `writeToString`,
+  // papaparse's `unparse`, SheetJS's sheet builders.
+  "CWE-1236": /stringifySync\(|writeToString\(|writeToBuffer\(|unparse\(|_to_sheet\(/,
 };
 
 /** True when the rule's own machine half — never its prose — corroborates `cwe`. */
