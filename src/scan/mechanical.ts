@@ -30,6 +30,7 @@ import { scanStaleQuotaRead } from "./stale-quota-read.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
+import { scanPropOvershare } from "./prop-overshare.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
@@ -531,6 +532,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
     // layer is structurally blind to it.
     findings.push(...scanSsrSanitizer(scanDir));
+
+    // #1252 — a whole domain object handed to a component as one prop when its declared type
+    // carries a sensitive field. Its own pass because it is a TYPE question: the semgrep layer
+    // cannot read an interface declaration to find out what is in the object being passed.
+    findings.push(...scanPropOvershare(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

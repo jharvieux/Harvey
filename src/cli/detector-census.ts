@@ -53,6 +53,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/stale-quota-read.ts": "M1", // #1230 / D-091 item 6 — quota gate consumed across a loop
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
+  "src/scan/prop-overshare.ts": "M1", // #1252 — whole object with a sensitive field handed to a component as one prop
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/language-coverage.ts": "M1",
