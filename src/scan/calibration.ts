@@ -363,8 +363,12 @@ export interface CoverageMatrix {
   // #1428: rows this run did not score because it had no live venue for them. Reported beside the
   // pass rate, never folded into it — the count IS the disclosure.
   liveNotScored: number;
-  noRuleTotal: number; // positives with no mechanical rule by design ("none" tier)
-  noRuleHeld: number; // ...of those, the intended gap still holds (nothing of the class fired)
+  noRuleTotal: number; // positives with no mechanical rule ("none" tier)
+  noRuleHeld: number; // ...of those, the gap still holds (nothing of the class fired)
+  // The `none` tier holds two different things and the roll-up used to call all of them "by design",
+  // which reports outstanding work as a settled boundary — the exact misreport `gapKind` exists to
+  // prevent, and it widened as #1366 grew this set. Split so the summary line stops saying it.
+  noRuleMeasuredGap: number; // ...of those, OUTSTANDING work (gapKind "measured-gap"), not a boundary
   // #881: the same two counts in the OWASP-Benchmark vocabulary. Scored on the basis this gate
   // already enforces — a positive is a TP when some rule caught it, a negative is an FP when a
   // FREE-COUNT (high-tier) finding lands on it — so the metrics and the pass/fail verdict can
@@ -700,6 +704,7 @@ export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] =
     liveNotScored: rows.filter((r) => r.notScored).length,
     noRuleTotal: noRule.length,
     noRuleHeld,
+    noRuleMeasuredGap: corpus.filter((e) => e.kind === "positive" && e.expectedTier === "none" && e.gapKind === "measured-gap").length,
     metrics: detectionMetrics({
       tp: positivesCaught,
       fn: staticPos.length - positivesCaught,

@@ -14346,7 +14346,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-807: Reliance on Untrusted Inputs in a Security Decision"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-mw-matcher-excludes-api-middleware-ts",

@@ -166,6 +166,16 @@ const isNonGrading = (f: Finding): boolean =>
 // the current split on every run (FREE-COUNT COVERAGE OF THAT GATE), because a bound nobody
 // re-measures becomes a belief.
 //
+// AND WHEN YOU RUN IT, THE NUMBER WILL NOT MATCH THIS ONE — the two figures are over DIFFERENT
+// POPULATIONS, both correct, so a reader reconciling them is not looking at a drifted bound.
+// This comment: the COMMITTED dry-run artifact (`dry-run/findings.json`, the default argument of
+// `freeCountCoverage()`) — 157 high-tier, 53 outside (33.8%), MEASURED 2026-07-31. `validate-
+// calibration`: THIS RUN's LIVE findings — 181 high-tier, 77 outside (42.5%), same date, same
+// numerator of 104. The artifact is the smaller population by construction: the dry-run harness
+// deliberately pins off the inputs that are not deterministic (slopsquat, the licence check's
+// live-registry fallback, the built-bundle secret pass), and it is a snapshot besides. The live run
+// is the stronger reading of the same bound — an artifact goes stale; a live scan is this run.
+//
 // The filter is deliberately NOT gated on validation status at runtime. Two separate reasons, and
 // #1414 rejected the first one standing alone. (a) PER-FINDING gating would trade a precision risk
 // for a silent omission — a client repo can exercise a rule on shapes the corpus has no fixture for

@@ -220,7 +220,17 @@ console.log(
     "  below; the other seven modules have fixture counts above and no metric anywhere), and precision over a corpus is a\n" +
     "  property of the positive:negative ratio WE chose, not of how often each shape occurs in a real repo.",
 );
-if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
+// The roll-up used to call every `none` row "by design". It is two populations: settled boundaries
+// and MEASURED GAPS, which are outstanding work. Naming only the first reports undone work as a
+// decision — the misreport `gapKind` exists to prevent. Both counts, so neither can hide the other.
+if (matrix.noRuleTotal) {
+  const byDesign = matrix.noRuleTotal - matrix.noRuleMeasuredGap;
+  console.log(
+    `No-mechanical-rule gaps (excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held` +
+      ` — ${byDesign} by design, ${matrix.noRuleMeasuredGap} measured-gap (OUTSTANDING work, not a boundary; see the entry note for the tracking issue).` +
+      ` A rule firing on one is a GATE FAIL`,
+  );
+}
 // #1248: mustCatch rows are excluded here — they are fatal, and printing them under a "non-fatal"
 // heading is how a soundness miss reads as an accepted gap.
 const reviewGaps = reviewMisses.filter((r) => !r.mustCatch);

@@ -62,7 +62,7 @@ never on a recall gap, because a recall gap is the measurement.
 |---|---|---|---|
 | **Source-detector recall (this gate)** | app-layer request→sink fixtures | semgrep taint + AST taint detectors | **39/39 (100.0%, MEASURED 2026-07-31)** |
 | SCA / SecBench (#879) | ~600 real npm CVEs (library-internal) | osv-scanner | 0/600 source; SCA per the #879 gate |
-| M1 mixed corpus (`validate-calibration`) | all M1 mechanical classes | all mechanical engines | 218/221 (MEASURED 2026-07-24) |
+| M1 mixed corpus (`validate-calibration`) | all M1 mechanical classes | all mechanical engines | **354/354 (100.0%, MEASURED 2026-07-31)** |
 
 The M1 mixed number blends the source detectors with the SCA, secret, security-header, crypto-primitive,
 `next.config`, and RLS-config/schema tiers — a different answer key measuring a different thing. No

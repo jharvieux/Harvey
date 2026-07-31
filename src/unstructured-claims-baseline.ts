@@ -832,7 +832,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// for something that never executed cannot manufacture a false green (the repo's signature defect).",
   ],
   "src/fp-rules.test.ts": [
-    "// did not survive a skill upgrade). So the carve-out gets a test: it may be reworded, but it cannot",
     "// The section the triage verifier reads for this override, isolated so a match cannot be satisfied",
   ],
   "src/grant-classifier.ts": [
@@ -1100,7 +1099,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// scan\". Optional because the pure-transform entry point takes a Finding[] and cannot walk a",
     "// Grading on it produced F's built entirely on unverified version matches while the real",
     "// on repository/trigger settings the scan cannot see — and the headline grade presents itself as",
-    "// rule cannot reach a client's grade because it cannot reach `main`. The filter is deliberately NOT",
     "// static tier can see a policy's shape but cannot prove how it behaves against a live database,",
     "// is exactly the claim this tier cannot make.",
   ],
@@ -1203,9 +1201,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/scan/calibration/b14-applogic.entries.ts": [
     "// is absent in THIS file, never that it isn't enforced in middleware/a wrapper it can't see), so",
-  ],
-  "src/scan/calibration/b15-nextjs-authz.entries.ts": [
-    "// judgment, cross-function taint, or a server→client boundary a grep/AST can't do FP-safely, so the",
   ],
   "src/scan/calibration/b16-storage-secdef.entries.ts": [
     "// reasoning a structural grep can't do reliably, so — per #123 option (b) — detection was left to",

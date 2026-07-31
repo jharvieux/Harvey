@@ -1090,6 +1090,17 @@ describe("buildCoverageMatrix", () => {
     expect(m.negativesTotal).toBe(CORPUS.filter((e) => e.kind === "negative" && !isLiveTier(e.expectedTier)).length);
   });
 
+  // The summary line used to call every `none` row "by design" while some are OUTSTANDING work.
+  // Asserting the split is NON-TRIVIAL (both populations non-empty) is the part that can fail: a
+  // count that silently collapsed to all-by-design would restore the misreport with the field intact.
+  it("splits no-rule gaps into by-design boundaries and measured-gaps, so the roll-up cannot call both 'by design'", () => {
+    const m = buildCoverageMatrix([], CORPUS);
+    const measured = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none" && e.gapKind === "measured-gap");
+    expect(m.noRuleMeasuredGap).toBe(measured.length);
+    expect(measured.length, "a measured-gap row must exist or the split reports nothing").toBeGreaterThan(0);
+    expect(m.noRuleTotal - m.noRuleMeasuredGap, "a by-design row must exist or the split reports nothing").toBeGreaterThan(0);
+  });
+
   // #1428 — the denominator must MOVE when the run has the venue. Without this, a live row could be
   // "scored" and still sit outside every count, which is the old defect wearing a new field.
   it("counts a live-tier row into the totals once its venue is declared (#1428)", () => {

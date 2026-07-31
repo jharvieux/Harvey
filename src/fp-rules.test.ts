@@ -2,8 +2,8 @@
 // to the verifier's exclusion rules. The presence-based carve-out is the ONLY thing standing between
 // a committed credential and the built-in dead-code exclusion, and #1302's whole history is a
 // limitation that was written down somewhere a future engagement never read (a runbook line that did
-// not survive a skill upgrade). So the carve-out gets a test: it may be reworded, but it cannot
-// silently lose a class or stop naming the exclusions it overrides.
+// not survive a skill upgrade). So the carve-out gets a test: it may be reworded, but the test fails
+// if it silently loses a class or stops naming the exclusions it overrides.
 //
 // #1412 IS THE SECOND HALF, AND THE REASON THE FIRST WAS NOT ENOUGH. Every assertion below the
 // PRESENCE_CLASSES block used to be of the form "this phrase is present", which a brief REWORDED
