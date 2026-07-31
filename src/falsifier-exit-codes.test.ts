@@ -2,9 +2,14 @@
 //
 // `revalidateReasons` maps 127 (and a signal/timeout) to UNVERIFIABLE and every other non-zero to
 // "holds". That contract is only safe if the commands themselves reserve 127 for "I could not look",
-// and MEASURED 2026-07-31 over the whole population they did not: of 31 offline empirical falsifiers,
-// 19 returned something else when the path they read was absent. Two of them returned **0** — a
-// lookup that read nothing reporting the blocker GONE.
+// and MEASURED 2026-07-31 over the whole population they did not. The population is 34 offline
+// empirical falsifiers under `offlineFalsifiers()`'s own filter; 3 are the pure-existence rows
+// exempted below, leaving 31 non-existence-test falsifiers of which **19 returned something other
+// than 127** when the path they read was absent (22 of 34 counting the exempt three). THREE of the 19
+// returned **0** — a lookup that read nothing reporting the blocker GONE. Two are the real defect
+// (src/disclosure-venue.ts:77, src/test-only-exports.ts:32); the third, src/alert-paths.ts:50, is a
+// NETWORK lookup whose 0 was correct — the self-retiring `gh api` row #1422 discharges. Derivation
+// and the re-run recipe: docs/design/recorded-reasons.md.
 //
 // The two ways it happens, both boring and both silent:
 //   • a bare `grep PATTERN FILE` exits **2** when FILE is renamed or deleted, not 1;

@@ -209,9 +209,24 @@ an unbound placeholder must fail, or the binding rule has stopped being enforced
 
 `revalidateReasons` maps 127 — and a signal or timeout — to `UNVERIFIABLE`, and **every other
 non-zero exit to "the blocker still holds"**. That mapping is only safe if the commands themselves
-reserve 127 for *I could not look*. MEASURED 2026-07-31 over the whole population: of **31 offline
-empirical falsifiers, 19 returned something else** when the path they read was absent. Two returned
-**0**, which is worse in the other direction — a lookup that read nothing reporting the blocker GONE.
+reserve 127 for *I could not look*.
+
+MEASURED 2026-07-31 over the whole population, re-run against the pre-fix tree (`git archive
+304a284 | tar -x` into a scratch dir, then `offlineFalsifiers()`'s own filter — empirical `KIND:`,
+a `FALSIFIER:`, no `FALSIFIER-TIER:`, no unbound `<placeholder>` — and each command executed in an
+empty working directory). The population is **34** offline empirical falsifiers. **3** of them are the
+pure-existence rows the section below exempts by derivation — in `src/scan/__fixtures__/`, at
+`FIXTURE-INVENTORY.md:156`, `supabase/PROVENANCE.md:48` and `trufflehog/PROVENANCE.md:48` — which
+leaves **31 non-existence-test falsifiers, of which 19 returned something other than 127** when the
+path they read was absent. Counting the exempt three, the raw not-127 tally is 22 of 34.
+
+**Three of the 19 returned `0`** — worse in the other direction: a lookup that read nothing reporting
+the blocker GONE. Two are the real defect (`src/disclosure-venue.ts:77` and
+`src/test-only-exports.ts:32`, both `grep … && exit 1 || exit 0`, where the `grep` failing on a
+missing file lands in the `exit 0` arm). The third, `src/alert-paths.ts:50`, is a **network** lookup
+and its `0` is the correct answer, not a defect: it is the deliberately self-retiring `gh api`
+falsifier that exits 0 the day `secbench.yml` reaches `main`, which it had, and this change discharges
+that reason block rather than repairing it.
 
 There are exactly two ways it happens, both boring, both silent:
 
@@ -238,9 +253,10 @@ hand-kept exemption list is the suppression this registry refuses everywhere els
 
 - a **pure existence test** (`test -f X`, `ls X`) has no cannot-run state distinct from its answer:
   the file's absence *is* the claim ("no live-captured fixture exists yet");
-- a **network falsifier** reads the world, not the checkout, so an empty working directory is not its
-  state that an empty working directory reproduces. It still carries its own
-  `command -v curl … || exit 127` guards.
+- a **network falsifier** reads the world, not the checkout, so an empty working directory does not
+  reproduce the state in which it has nothing to read — running it there exercises nothing, which is
+  why it is exempt from the checkout-reading arm rather than scored by it. It still carries its own
+  `command -v curl … || exit 127` guards, which the structural arm holds it to.
 
 `src/falsifier-exit-codes.test.ts` enforces both halves under `pnpm verify`: a structural arm (every
 non-existence-test falsifier carries an explicit `exit 127` branch) and an empirical arm that RUNS
