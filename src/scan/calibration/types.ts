@@ -98,6 +98,20 @@ export interface CorpusEntry {
   // src/scan/calibration.test.ts. ADDING a taxonomy from here on is a deliberate act and belongs in
   // the entry's `note` with the reason it is acceptable noise rather than a rule to narrow.
   reviewTierHits?: readonly string[];
+  // #1248 — REVIEW-TIER POSITIVES ONLY. Marks a row as a SOUNDNESS guard rather than a recall
+  // aspiration, making its miss FATAL. Review-tier misses are non-fatal by design in
+  // validate-calibration.ts, because review recall has documented standing gaps (P-MW-SOLE-AUTHZ,
+  // P-HOST-HEADER-URL, P-CLIENT-RENDER-AUTHZ) that nobody claims to catch. An adversarial positive
+  // is the opposite kind of row: it is planted to prove that a specific SANITIZER EXCLUSION still
+  // works, so "we don't catch this yet" is never the right reading of its miss.
+  //
+  // Why this exists: MEASURED 2026-07-31, adding P-SSRF-HOST-THROW-SWALLOWED at plain review tier
+  // did NOT make the gate red when harvey-ssrf-fetch's projection-throw try exclusions were
+  // deleted — the row flipped to FAIL, joined the tracked review-gap list, and the run still exited
+  // 0 with GATE PASS. The two sibling #1248 rows (P-REDIRECT-HOST-THROW-SWALLOWED,
+  // P-PATH-TRAVERSAL-THROW-SWALLOWED) were in the same unguarded state: three regression guards
+  // that could not fail. Same shape as #1344 — "until now no gate could fail on it".
+  mustCatch?: true;
   note: string;
 }
 

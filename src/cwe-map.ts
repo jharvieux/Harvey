@@ -65,6 +65,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Authz decision from client-controlled input": ["639", "A01"],
   "Object-level authorization gap: client-supplied id reaches a read-by-id repo function (pg-idor-repo-fn)": ["639", "A01"],
   "Object-level authorization gap: client-supplied owner id scopes the query": ["639", "A01"],
+  // #1267: the cross-file complement of the row above — same weakness (a user-controlled key
+  // selects the object), the query one module out. Same 639/A01 for that reason.
+  "Object-level authorization gap across a module boundary": ["639", "A01"],
   "Object-level authorization gap: Drizzle query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: Prisma query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: tenant predicate populated from the request": ["639", "A01"],
@@ -187,6 +190,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Failure): the mechanism does not merely fail, it never runs, and what ships is unsanitized HTML
   // rendered into the page — which is CWE-79's definition, and the class the OWASP sheet names.
   "Browser-only sanitizer in a server-rendered component": ["79", "A03"],
+  // #1252: a whole object with a sensitive field handed to a component as one prop. CWE-200 rather
+  // than CWE-359 (Exposure of Private Personal Information): the fields are not necessarily
+  // personal, and what the weakness is about is the value crossing a boundary it did not need to
+  // cross. A01 is where OWASP's own mapping places CWE-200.
+  "Sensitive fields in props": ["200", "A01"],
   // #1242: an audit trail that cannot be scoped to a tenant is the A09 class — the detective
   // control exists but does not record enough to reconstruct the access. CWE-778 is A09:2021's
   // canonical member, the same basis as "Sensitive value logged to console" → 532/A09 above.
@@ -198,6 +206,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Top-10-2021 category by OWASP's mapping, so owasp is omitted rather than forced.
   "Quota gate consumed across a loop without re-reading": ["367", null],
   "Batch send stamped after dispatch instead of claimed before": ["362", null],
+  // #1257 / D-091 item 25: a check-then-act across two round trips with no lock between them, which
+  // is CWE-362's definition rather than CWE-367's — TOCTOU (367) is about the state changing between
+  // a check and a use of the SAME resource handle, and both concurrent callers here act on a
+  // correct read. Same basis as the sibling row above. No OWASP Top-10-2021 category.
+  "SELECT-then-INSERT dedup with no unique constraint": ["362", null],
   "External send without a deterministic idempotency key": ["837", null],
   "Idempotency row written before the dispatched handler": ["754", null],
   // #1204: X-Powered-By names the server framework to any caller. MEASURED against MITRE's own
