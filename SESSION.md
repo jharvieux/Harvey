@@ -2,7 +2,122 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-30 — **session COMPLETE.** 38 closed / 40 filed / 0 reopened → **189 open, the tracker GREW by 2.** 35 PRs merged, 0 open, 0 stale worktrees. `.git/issue-sweep-ledger.json` deleted. Newest block first._
+_Last updated: 2026-07-30 — **SWEEP IN ROUND 2.** 6 PRs merged, 10 issues closed, 2 PRs open awaiting verification. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`. Newest block first._
+
+## 2026-07-30 (sweep, round 2) — the site is a workspace member and DEPLOYED; a density claim withdrawn
+
+**READ THIS FIRST IF YOU ARE ABOUT TO QUOTE THE AI-DENSITY RATIO.** The `~3.4x` headline in
+`docs/design/m6-corpus-frequency.md` / `m6-handrolled-catalogue.md` is **WITHDRAWN** (#1600, operator
+ruled `1600-refound`). It was withdrawn for having **no verified ground truth**, not for being stale —
+the distinction is load-bearing. MEASURED and independently reproduced over the 18-repo corpus:
+professional **0.28**/KLOC, ai-assisted **0.30**, ai-generated **1.13**. So the withdrawn claim's OWN
+quantity (ai-generated vs professional) measures **4.04x today — it went UP**. The `~1.3x` figure that
+circulated during triage is the **blend** (ai-generated + ai-assisted), a *different quantity*; it was
+written into the issue, into an executor brief, and relayed to the operator before anyone checked it.
+**One corpus and one label set support either 4.0x or 1.3x purely by grouping choice** — that, not
+staleness, is why the claim cannot stand. Had 1.3x been right, a re-measure would have appeared to
+CONFIRM the original claim.
+
+The re-founded measurement (commit-level **self-admitted** GenAI usage, ground truth declared rather
+than inferred) returned a **NEGATIVE result**: within-repo rate ratios 1.32 / 0.90 / 0.79, every 95% CI
+spanning 1, pooled Mantel-Haenszel **0.95**, two of three in the opposite direction. Recorded as the
+finding, not tuned. Only 3 of 18 repos supply both arms, so it supports "no detectable difference at
+this power" and nothing stronger.
+
+### Operator rulings taken this round
+
+| item | ruling |
+|---|---|
+| **#1600** | **`1600-refound`** — re-found, don't retire or demote. Carries the `docs/**` grant for those two files and that claim only. |
+| **site-ci install** | **"Change approved"** — `.github/workflows/site-ci.yml` may install from the pnpm root and widen its `paths:`. Scoped to that file; does NOT cover registering it as a required check. |
+| **#1597 deploy** | Deploy permitted where beneficial — **superseded #1520's hold, and the deploy HAPPENED.** |
+
+### The site now deploys from the REPO ROOT, not from `site/`
+
+`site/` is a **pnpm workspace member**; `site/package-lock.json` is gone and there is one root lockfile.
+The Vercel **Root Directory is now `site`** and the project has **no git integration**, so nothing
+auto-deploys — `cd site && vercel --prod` no longer works. Procedure and rollback are in
+`site/README.md`. Verify any deploy with `pnpm exec tsx src/cli/site-smoke.ts`.
+
+**#1520 is resolved in substance:** production serves `main`, `curl https://harvey-qa.com/llms.txt |
+diff - site/public/llms.txt` exits 0, site-smoke went 3-of-6-failing → **6/6 green**, and `GET
+/api/scan` returns `sandboxSender: false` — answering the `RESEND_FROM` question this file recorded as
+unanswerable.
+
+**The boundary is proven dissolved, not asserted:** `site/app/supabase-security-checker/page.tsx` now
+imports `../../../src/supabase-write-probe`, and the compiled module is live in the production bundle.
+
+**pnpm non-hoisting bit — and not the expected way.** It did not fail to resolve a plugin; it
+**substituted a different version** of one (root's `eslint-plugin-react-hooks@7.1.1` over
+`eslint-config-next`'s pinned 5.2.0), and `next build` failed on a v7-only rule. It failed LOUDLY here;
+**the same mechanism could as easily have installed a LOOSER ruleset silently.** Pinned and guarded.
+
+### `site/` finally has a CI gate — and its lint had never run
+
+`.github/workflows/site-ci.yml` (#1592) runs `site/`'s own build + lint. Before it, **nothing in CI
+built, typechecked or linted `site/`** (root `tsconfig` covers `src` only; eslint and knip both exclude
+it), and `next lint` **could not run at all** — no eslint was installed, so it exited 1 demanding one.
+Wiring it surfaced **29 real violations** across 13 pages. Gate proven failing and passing in real CI,
+twice — once at creation, again after the workspace conversion rewrote its install path.
+
+### Open for the operator
+
+- **Register `site build + lint` as a required check?** Deliberately not self-granted. Note #1107's
+  rule: a path-filtered required check deadlocks every PR outside its filter, so promoting it means
+  moving the filter in-job first.
+- **`corpus-frequency.yml`** — a scheduled re-measure, relayed verbatim on #1600. Neither
+  `handrolled-frequency` nor `genai-admission-census` runs on any cadence; that is exactly the property
+  that let the old figure survive a 3x corpus growth.
+
+### Filed this round, all OPEN
+
+#1592 (closed) · **#1595** (merged) · **#1597** · **#1600** · **#1603** (validate-acceptance grades the
+issue BODY, so acceptance revised in a comment passes green against a superseded bar — happened twice
+this sweep) · **#1604** (six alert-path `provenBy` proofs cite shas predating two changes to the shared
+`find-or-update.sh`).
+
+## 2026-07-30 (sweep, round 1) — triage of the 8 untriaged issues; APPROVED, EXECUTING
+
+### Operator rulings taken at the gate (verbatim approval: *"All recommendations accepted. Go"*)
+
+| item | ruling |
+|---|---|
+| **#1537 lane** | **Build F-3** (re-fixing / hotspots, *"the 3 files causing 60% of your bugs"*). **F-2 (AI slop) is NOT built** — its positioning is contested by 5+ vendors; F-3's founder-facing framing is an open door. This unblocks #1537, which had demanded the ruling before building. |
+| **`workflow_dispatch`** | **GRANTED.** Executor may dispatch `corpus-drift`/`conservation`/`ci` to prove the schedule path green rather than waiting ~8h for cron. |
+| **CI plumbing** | **GRANTED, SCOPED to `.github/actions/alert-issue/**`** for the duplicate-alarm race. **Not** a blanket `.github/workflows/**` grant. |
+| **`docs/gtm/**`** | **NOT granted.** #1537's "mark it shipped" criterion is **relayed** with proposed wording, never applied. |
+
+### Dispatch state
+
+| batch | issues | state |
+|---|---|---|
+| `ci-binaries-1511` | #1511 #1512 #1513 #1514 | executing |
+| `calibration-1524` | #1524 | executing (heavy) |
+| `gtm-1537` | #1537 | executing |
+| `ci-mechanisms-1543` | #1543 #1571 | **HELD** — #1543's drill exercises `find_or_update` in `.github/actions/alert-issue`, the exact function batch 1 is changing. Dispatch once batch 1 is terminal. |
+
+### Scope and the standing finding
+
+Operator asked for new issues only. 189 open · 4 dropped (`deferred`/`needs-human-fix`) · 177 already
+carry a model tier and were NOT re-triaged · **8 newly triaged**, all now labelled.
+
+**Most of them are already stale.** Three scheduled gates (`ci.yml` heavy-cli, `corpus-drift`,
+`conservation`) went red 07-29 and 07-30 with ONE shared cause — `##[error]semgrep missing after
+install/restore`, a poisoned `mech-bins…-v1` cache. Fixed on `main` by `7689491` (09:49 EDT) plus the
+key bump to `-v3` in `52d78f5` (10:53), **both after the last failing scheduled run (07-30 09:57
+UTC)**. PR-path runs green since; the schedule path is unproven, hence the dispatch grant.
+
+- **#1511 and #1512 are one alarm split in two** — same run `30436646111`, different shards. The
+  `find_or_update` in `.github/actions/alert-issue` raced across 3 concurrent shard jobs. That race
+  was tracked by nothing.
+- **#1543's recorded blocker is FALSE**: `site-smoke.yml` IS on `main` (`git ls-files`).
+- **#1571 was very likely shipped by `dc26096`** (07-30 16:39 EDT), which post-dates the issue's own
+  filing; `.github/actions/corpus-clone-cache/` + `verify-clones.sh` exist. Verify-and-close.
+- **#1524 is genuine work** — MEASURED: `cravab`, `flori-web`, `effective` all absent from
+  `src/scan/external-corpus.ts`.
+
+**Next sweep action:** on each executor completion — update ledger, dispatch an independent
+`acceptance-verifier`, then dispatch `ci-mechanisms-1543` once batch 1 is terminal.
 
 ## 2026-07-30 (post-sweep) — corpus-drift sharded 22.2 → 10.0 min, and a net figure that was wrong twice
 
@@ -24,13 +139,13 @@ deliberate.** Measure it, never quote it:
 ### corpus-drift sharding (#1586) — MEASURED, not modelled
 
 `22.2 min → 10.0 min` end-to-end (run 30592067650). Shard 1 = carbon alone at 9.8 min IS the floor,
-so a 4th shard buys nothing. Merged scorecard: **157 rows over 14 targets** — the partition's
-exhaustiveness shown empirically, not just asserted. **The corpus is 14 targets, not 31** (a bad
+so a 4th shard buys nothing. Merged scorecard: **157 rows over 14 targets** *(corpus is now **17** — #1524/PR #1593 added cravab, flori-web, effective; re-measure rather than quoting either number)* — the partition's
+exhaustiveness shown empirically, not just asserted. **The corpus was 14 targets, not 31, when this was written — it is 17 since PR #1593** (a bad
 grep of `slug:` also matches the type declaration and `FREE_TIER_EXPECTATIONS`), and the dominant
 target is **carbon (564–587s), not tanstack-com (46s)**.
 
 Shard count varies by event ON PURPOSE: PR/merge_group → 3, schedule/dispatch → 1. The clone cache
-keys on the whole 14-target pin set and a key is immutable once written, so only a run holding every
+keys on the whole pin set (14 then, 17 now — the #1593 merge is a guaranteed one-time cache MISS by that action's design, not a bug) and a key is immutable once written, so only a run holding every
 clone may save it. Do not "simplify" this to a constant 3 without re-reading
 `.github/actions/corpus-clone-cache`.
 
@@ -256,7 +371,7 @@ Every brief now requires a gate **watched failing**, both exit codes shown.
 | item | ruling |
 |---|---|
 | **Site contact address** | **`info@harvey-qa.com`.** Wired into every user-facing error path that says "email us directly" — the site previously published no address at all while telling prospects to write in. In flight. |
-| **Site redeploy (#1520)** | **HOLD until the end of the sweep.** Nothing deploys before then. Consequence to remember: #742 cannot close and `site-smoke` against production stays red until it happens, both by design rather than by defect. |
+| ~~**Site redeploy (#1520)**~~ | **DONE 2026-07-30 — the HOLD was superseded by the #1597 deploy grant and the deploy HAPPENED.** Production serves `main`: `curl https://harvey-qa.com/llms.txt \| diff - site/public/llms.txt` exits 0, `site-smoke` went 3-of-6-failing → **6/6 green**, and `GET /api/scan` returns `sandboxSender: false`. **The deploy PROCEDURE changed** — deploy from the REPO ROOT, not `site/` (Vercel Root Directory is now `site`, and the project has no git integration so nothing auto-deploys). See `site/README.md`. |
 | **#1070 rendered pages** | **INCLUDE** the narrowed prod-vs-migration drift claim on `site/app/pricing/page.tsx` (×2) and `site/app/supabase-security-audit/page.tsx`. In flight, with a by-CONCEPT re-search afterwards because this claim has escaped three keyword sweeps. |
 | **`site-smoke` cadence** | **GO.** Daily scheduled workflow wired to the shared `.github/actions/alert-issue` composite, its own marker label created, and a re-runnable drill exercising the same `find_or_update()` the production branch calls (#1348's rule). In flight. |
 | **#1305 option (b)** | **Retired as moot, not answered.** The acceptance was an explicit disjunction, arm (a) shipped, and #1305 is CLOSED. The only residual is cosmetic: the record still lists a (b) that was never struck through. One line on the issue would tidy it; nothing is blocked either way. |
@@ -277,7 +392,7 @@ Every brief now requires a gate **watched failing**, both exit codes shown.
 | **`site-smoke` cadence** (2026-07-30) | `src/cli/site-smoke.ts`'s own header says "Run it on a schedule against production; that is the whole point." That sentence is **false**: `grep -rn site-smoke .github package.json` returns nothing. The check written to catch a silent 6-day outage is itself only run by hand. Add a daily workflow wired to the shared `.github/actions/alert-issue` composite? (A net-new cron is excluded from inline fixing.) |
 | **#1304 — one line in a runbook** (2026-07-30) | `docs/runbooks/engagement-access.md` needs the bundle-analyzer stats-file request. It is the ONLY thing keeping #1304 open; wording is drafted verbatim on the issue. The sibling document `docs/templates/auth-questionnaire.md` got it (PR #1452), this one did not, and #1452's body did not disclose dropping it. Consequence: the **[B] depth tier stays half-unreachable in real engagements** — capability built and proven, artifact requested on only one of the two onboarding paths. `docs/runbooks/**` sat outside the docs grant, so it was relayed rather than applied. |
 | **#1272 — `plansDisagree`** (2026-07-30) | Product call, three options on the issue (comment 5132445273). It is the last unmet criterion of #1272 (the other three are met and shipped in PR #1527); its grep returns no call site. **Recommended: option 3**, originated by the executor and not previously offered — `emitFixPrompt` drafts a plan at emit time and `producePlan` runs again at ingest, days apart against a checkout the client may have moved, so comparing them makes the trigger fire on REAL plan drift instead of being dead code. Options 1 and 2 are delete-with-evidence and keep-as-declared-dead. |
-| **`RESEND_FROM`** (2026-07-30) | **Operator updated it.** But it is NOT externally verifiable yet: live `GET https://harvey-qa.com/api/scan` returns `{"service":"scan-intake","configured":true}` with **no `sandboxSender` field**, because the deployed build predates PR #1518 which added that probe. The value is set; the instrument built to confirm it ships with the held redeploy. One deploy answers it in one call. |
+| ~~**`RESEND_FROM`**~~ | **ANSWERED 2026-07-30.** The deploy shipped the #1518 probe, and live `GET https://harvey-qa.com/api/scan` now returns `sandboxSender: false` — confirmed off the Resend sandbox. Nothing outstanding. |
 | | |
 |---|---|
 | PRs merged | #1381 #1382 #1383 #1387 #1397 #1398 #1405 #1417 |
