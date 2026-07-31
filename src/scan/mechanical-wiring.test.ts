@@ -22,6 +22,9 @@ const SCAN_DIR = fileURLToPath(new URL(".", import.meta.url));
 const ELSEWHERE: Record<string, string> = {
   scanPrismaAppPerf: "src/cli/static-detect.ts",
   scanPrismaSchemaPerf: "src/cli/static-detect.ts",
+  // #1664 — not a scanner: the predicate a scoring gate halts on when the SEM-00 "scan did not
+  // complete" row is present in a finished scan's output.
+  scanDidNotRun: "src/cli/validate-calibration.ts",
 };
 
 function scannerExports(): { file: string; name: string }[] {

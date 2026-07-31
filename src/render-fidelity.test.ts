@@ -23,6 +23,7 @@ import { assembleEngagementDocument } from "./audit-report.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
+import { semgrepUnavailableFinding } from "./scan/semgrep.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
 import type { RunContext } from "./audit-runner.js";
 import type { EngagementEnv, ModuleCoverage } from "./audit-coverage.js";
@@ -121,6 +122,10 @@ function deliverable(): FindingsDocument {
     // and the easiest thing in a report to compress away.
     finding({ id: "M9-INFO-01", severity: "Info", confidence: "Likely", category: "Architecture", taxonomy: "M9 — App Router boundary", evidence: "an Info row whose body text must survive the main findings list, not just its title" }),
     realExtCoverageRow(),
+    // #1664: the incomplete-semgrep disclosure, produced by the real producer with the exit/signal-
+    // naming reason runSemgrep now returns — the "not-assessed row's OWN reason reaches the HTML"
+    // assertion below is what proves a crashed scan reaches the client as a named gap, not silence.
+    semgrepUnavailableFinding("semgrep run did not complete (killed by signal SIGBUS)"),
     fixedFinding(),
     ...rolled,
   ];
@@ -133,7 +138,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
   const html = buildHtml(doc);
 
   it("the fixture actually exercises all three places content can be lost", () => {
-    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00"]);
+    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
     expect(doc.findings.some((f) => f.severity === "Info" && f.confidence !== "N/A")).toBe(true);
     expect(html).toMatch(/not individually rendered/);
   });
@@ -157,7 +162,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
       html,
     );
     const breaches = renderFidelityBreaches(doc, broken);
-    expect(breaches.map((b) => b.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00"]);
+    expect(breaches.map((b) => b.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
     expect(breaches.every((b) => b.kind === "reason-dropped")).toBe(true);
   });
 

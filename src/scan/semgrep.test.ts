@@ -14,6 +14,7 @@ import {
   POSTMESSAGE_WILDCARD_TAXONOMY,
   runRegistryPacksOnFile,
   runSemgrep,
+  scanDidNotRun,
   semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
@@ -341,6 +342,24 @@ describe("semgrepUnavailableFinding (#950)", () => {
     expect(finding.confidence).toBe("N/A");
     expect(finding.evidence).toContain("semgrep not found on PATH");
     expect(finding.impact).toContain("not a finding of zero footguns");
+  });
+});
+
+// #1664: the predicate validate-calibration halts on — a scoring gate that sees SEM-00 must say THE
+// SCAN DID NOT RUN instead of rendering a recall table over zero results. Both directions: reverting
+// the predicate to always-empty makes the first test fail.
+describe("scanDidNotRun (#1664)", () => {
+  it("returns the SEM-00 row so a scoring gate can halt on it", () => {
+    const sem = semgrepUnavailableFinding("semgrep run did not complete (killed by signal SIGBUS)");
+    const rows = scanDidNotRun([sem]);
+    expect(rows.map((f) => f.id)).toEqual(["SEM-00"]);
+    expect(rows[0]?.evidence).toContain("SIGBUS");
+  });
+
+  it("returns nothing on a scan that ran — real findings and other disclosure rows do not halt the gate", () => {
+    const real = { ...semgrepUnavailableFinding("unused"), id: "SEM-ERR-00" };
+    expect(scanDidNotRun([real])).toEqual([]);
+    expect(scanDidNotRun([])).toEqual([]);
   });
 });
 

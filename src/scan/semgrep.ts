@@ -302,6 +302,54 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
 // whole footgun scan down; fall back to a run without it. That degradation is not silent — the
 // files it re-drops then show up in SEM-SCOPE-00, which is derived from paths.scanned, not from
 // which flags we passed.
+// #1664: whether a non-zero exit can be benign — MEASURED 2026-07-31, semgrep 1.164.0. A COMPLETED
+// run of these invocations exits 0 in every benign case probed: findings are non-blocking without
+// `--error` (392 findings → exit 0), and a per-file syntax error exits 0 with an `errors[]` entry at
+// level "warn". The incomplete runs all exit non-zero or die on a signal: `--config /dev/null`
+// exits 7 with a valid empty envelope (results: [], errors[] at level "error"); killing semgrep-core
+// with SIGBUS once is survived (respawn, exit 0, a genuinely complete scan); killing every respawn
+// makes the wrapper exit 2 with stdout `<ERROR: missing output>` — non-empty but NOT JSON. The
+// previous shape of this catch treated ANY non-empty stdout as success, so a crashed run's
+// empty/partial envelope scored as a CLEAN scan — the live `semgrep-core exited with -10!` crash
+// behind #1664 made validate-calibration read "113 rules have never been shown to work" off a scan
+// that never ran. There is no benign non-zero exit to spare, so every one is INCOMPLETE, named by
+// its observed exit code or signal.
+function execSemgrep(argv: string[]): { out: string } | { failure: string; enoent: boolean } {
+  try {
+    return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 }) };
+  } catch (err) {
+    const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
+    if (e.code === "ENOENT") return { failure: "semgrep not found on PATH", enoent: true };
+    const how = e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`;
+    return { failure: `semgrep run did not complete (${how})${envelopeErrorSummary(e.stdout)}`, enoent: false };
+  }
+}
+
+// The crash's own explanation, when the wrapper still emitted its JSON envelope on the way down
+// (the exit-7 shape carries "invalid configuration file found" there; the SIGBUS shape emits no
+// JSON at all, so a parse failure here is expected, not exceptional).
+function envelopeErrorSummary(stdout: string | undefined): string {
+  if (!stdout) return "";
+  try {
+    const errors = (JSON.parse(stdout) as SemgrepOutput).errors ?? [];
+    const msgs = errors.map((e) => e.message?.trim().split("\n")[0]).filter(Boolean).slice(0, 3);
+    return msgs.length ? `: ${msgs.join("; ")}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string } {
+  try {
+    return { result: JSON.parse(out) as SemgrepOutput };
+  } catch {
+    // Measured adjacent shape (#1664): a crashed run can leave literal `<ERROR: missing output>` on
+    // stdout (observed at exit 2, not at exit 0). Whatever the exit, unparseable scanner output
+    // degrades to a disclosed failure rather than an uncaught SyntaxError or a false clean.
+    return { result: {}, failure: "semgrep exited 0 but printed something other than its JSON envelope — treated as an incomplete run, never as a clean scan" };
+  }
+}
+
 export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
   const args = [
     ...REGISTRY_PACKS.flatMap((p) => ["--config", p]),
@@ -315,20 +363,10 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
     "--verbose",
     dir,
   ];
-  const attempt = (argv: string[]): { out: string } | { failure: string; enoent: boolean } => {
-    try {
-      return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 }) };
-    } catch (err) {
-      const e = err as { stdout?: string; code?: string; message?: string };
-      if (typeof e.stdout === "string" && e.stdout.length > 0) return { out: e.stdout };
-      const enoent = e.code === "ENOENT";
-      return { failure: enoent ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output"), enoent };
-    }
-  };
-  let run = attempt(["--x-ignore-semgrepignore-files", ...args]);
-  if ("failure" in run && !run.enoent) run = attempt(args);
+  let run = execSemgrep(["--x-ignore-semgrepignore-files", ...args]);
+  if ("failure" in run && !run.enoent) run = execSemgrep(args);
   if ("failure" in run) return { result: {}, failure: run.failure };
-  return { result: JSON.parse(run.out) as SemgrepOutput };
+  return parseEnvelope(run.out);
 }
 
 // A bare rule id (e.g. "harvey-route-noauth") matched against a JSON check_id, which carries a
@@ -669,18 +707,13 @@ export function harveyRuleIds(): Set<string> {
 // silence: a file the run never reached is a failure, not a clean detector.
 export function runSemgrepOnFile(absFile: string, root: string): { result: SemgrepOutput; failure?: string } {
   const rel = relative(root, absFile);
-  let out: string;
-  try {
-    out = execFileSync("semgrep", ["--config", CUSTOM_RULES, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", root], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 128,
-    });
-  } catch (err) {
-    const e = err as { stdout?: string; code?: string; message?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else return { result: {}, failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
-  }
-  const result = JSON.parse(out) as SemgrepOutput;
+  // #1664: same completeness classification as runSemgrep — a non-zero exit or a signal means the
+  // run did not complete (see execSemgrep's measurement), and its partial output must not feed the
+  // pathError/paths.scanned checks below as if it were a finished scan.
+  const run = execSemgrep(["--config", CUSTOM_RULES, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", root]);
+  if ("failure" in run) return { result: {}, failure: run.failure };
+  const { result, failure } = parseEnvelope(run.out);
+  if (failure) return { result: {}, failure };
   const pathError = (result.errors ?? []).find((e) => e.path === absFile);
   if (pathError) return { result, failure: `semgrep could not scan the file: ${pathError.message ?? pathError.type ?? "unknown error"}` };
   if (!(result.paths?.scanned ?? []).includes(absFile)) {
@@ -702,19 +735,11 @@ export function runSemgrepOnFile(absFile: string, root: string): { result: Semgr
 export function runRegistryPacksOnFile(absFile: string, root: string): { result: SemgrepOutput; ruleIds: Set<string>; failure?: string } {
   const rel = relative(root, absFile);
   const configArgs = REGISTRY_PACKS.flatMap((p) => ["--config", p]);
-  let out: string;
-  try {
-    out = execFileSync(
-      "semgrep",
-      [...configArgs, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", "--time", root],
-      { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 },
-    );
-  } catch (err) {
-    const e = err as { stdout?: string; code?: string; message?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else return { result: {}, ruleIds: new Set(), failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
-  }
-  const result = JSON.parse(out) as SemgrepOutput;
+  // #1664: same completeness classification as runSemgrep — see execSemgrep's measurement.
+  const run = execSemgrep([...configArgs, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", "--time", root]);
+  if ("failure" in run) return { result: {}, ruleIds: new Set(), failure: run.failure };
+  const { result, failure } = parseEnvelope(run.out);
+  if (failure) return { result: {}, ruleIds: new Set(), failure };
   const ruleIds = new Set(result.time?.rules ?? []);
   const pathError = (result.errors ?? []).find((e) => e.path === absFile);
   if (pathError) return { result, ruleIds, failure: `semgrep could not scan the file: ${pathError.message ?? pathError.type ?? "unknown error"}` };
@@ -725,22 +750,35 @@ export function runRegistryPacksOnFile(absFile: string, root: string): { result:
 }
 
 // Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00/SEC-BUNDLE-00: a visible not-assessed row,
-// never a silent skip — a missing semgrep binary must not read as "zero footguns found".
+// never a silent skip — a missing semgrep binary must not read as "zero footguns found". #1664
+// widened it from "binary missing" to any run that did not COMPLETE (a semgrep-core crash returning
+// exit -10 used to reach the deliverable as a zero-finding clean scan); the reason names the
+// observed exit code or signal, and the whole footgun pass is what was not scanned — partial output
+// from a crashed run is discarded rather than delivered as if it covered the tree.
 export function semgrepUnavailableFinding(reason: string): Finding {
   return {
     id: "SEM-00",
-    title: "Semgrep footgun scan did not run",
+    title: "Semgrep footgun scan did not run to completion",
     severity: "Info",
     confidence: "N/A",
     category: "Next.js/web footgun",
     taxonomy: "Next.js/web footgun — coverage not assessed",
     location: "(repo-wide)",
     status: "Open",
-    evidence: `Semgrep failed to run: ${reason}`,
+    evidence: `Semgrep failed to run: ${reason}. No file in this tree was semgrep-scanned on this pass.`,
     impact: "Semgrep footgun coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero footguns.",
-    fix: "Install semgrep on the scanning machine (see this file's header) and re-run the scan.",
+    fix: "Install semgrep on the scanning machine (see this file's header) — or, if the evidence names an exit code or signal, investigate the crash — and re-run the scan.",
     value: 1,
     ease: 3,
     safety: 5,
   };
+}
+
+// #1664: the row that means the mechanical scan's semgrep pass itself did not complete. A gate that
+// SCORES findings (validate-calibration) must stop on this rather than render a recall table over a
+// scan that never ran — "113 rules have never been shown to work" and "the scanner crashed" lead a
+// reader to opposite actions. On the engagement path the row is the correct deliverable; on a
+// measurement path it invalidates the measurement.
+export function scanDidNotRun(findings: Finding[]): Finding[] {
+  return findings.filter((f) => f.id === "SEM-00");
 }

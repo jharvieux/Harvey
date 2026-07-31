@@ -31,6 +31,7 @@ import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, resolvedTree } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { scanDidNotRun } from "../scan/semgrep.js";
 import { freeCountCoverage, harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
@@ -97,6 +98,20 @@ console.log(
 
 const scanned = [...(await runMechanicalScan({ dir })), ...scanManifestFixtures(dir)];
 
+// #1664: a crashed semgrep is a scan that did not run, not a scan that found nothing. Before this
+// check, a semgrep-core crash (observed live: `semgrep-core exited with -10!`) scored every
+// semgrep-sourced row as a miss and this gate printed "113 rules have never been shown to work" —
+// loud, but explained backwards: it reads as a detector regression when nothing was measured.
+// Exit 2, not 1, same convention as the --seed-dark-review control below: the gate did not fail a
+// measurement, it could not measure.
+const notRun = scanDidNotRun(scanned);
+if (notRun.length) {
+  console.error("\n✗ THE SCAN DID NOT RUN — nothing was measured, so no recall table follows (#1664).");
+  for (const f of notRun) console.error(`  ${f.id}: ${f.evidence}`);
+  console.error("  Fix the named failure (exit code / signal / missing binary) and re-run this gate.");
+  process.exit(2);
+}
+
 // #1628's end-to-end negative control, the `--seed-unaccounted` shape (#1096): the in-run control
 // further down proves the VERDICT FUNCTION fires, and this proves the PROCESS exits 1 — the two are
 // different facts, and the second is the one a CI step actually reads. It darkens a review-tier
@@ -130,8 +145,10 @@ for (const r of matrix.rows.filter((r) => r.kind === "positive")) console.log(li
 console.log("\nNEGATIVES (benign lookalikes — must NOT be flagged in the free count):");
 for (const r of matrix.rows.filter((r) => r.kind === "negative")) console.log(line(r));
 
-// The credibility-critical gate: zero free-count FPs on negatives, and every high-expected
-// positive caught at high. Review-tier recall gaps are surfaced but non-fatal.
+// The credibility-critical gate: zero free-count FPs on negatives, every high-expected positive
+// caught at high, and — since #1628 — every review-tier positive caught at ANY tier. (This comment
+// used to end "Review-tier recall gaps are surfaced but non-fatal", outliving the decision that
+// retired that category — #1746.)
 const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
 // #1344: a negative that draws an UNRECORDED review-tier hit. Distinct from a free-count FP — it
 // costs no precision today, but it is a rule that moved onto benign code, and until now no gate
