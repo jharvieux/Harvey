@@ -62,6 +62,51 @@ function rendered(html: string, text: string): boolean {
 }
 
 /**
+ * #1627 — IDENTITY BY FINDING, NOT BY STRING. `rendered(html, …)` asks whether some text is anywhere
+ * in the document, and that is not the same question as whether THIS finding's words reached the
+ * client. Two findings of one shape routinely carry a BYTE-IDENTICAL evidence string — the text is a
+ * template over the shape, not over the name — so when the rollup renders one as a representative
+ * and withholds the other, the withheld one's evidence is "present", attributed to its twin. It then
+ * drops out of the absentee set, the rollup arithmetic compares a short count against the renderer's
+ * correct one, and the gate reports a miscount that does not exist. MEASURED 2026-07-31 on a real
+ * ten-module deliverable over targets/calibration: shape `M1 — Multi-tenant security High`, 11
+ * members, 5 scored absent against 6 actually withheld, because
+ * `SB-RLS-POLICY-public.nocode_invoices.nocode_invoices_read` and
+ * `SB-RLS-POLICY-public.documents.documents_select_all` are both `using (true)` policies with the
+ * same finding text. That is #1062's masking shape reached through the render seam: one finding's
+ * output standing in for another's.
+ *
+ * The POPULATION, before anyone reads this as a corner case, measured on that same 895-finding
+ * deliverable: 430 live findings share an evidence string with at least one twin, across 78 distinct
+ * strings. Roughly half the document is exposed to the collision — which is what you get when the
+ * finding text is written per shape and the shape is the thing the rollup groups on.
+ *
+ * The document already carries the attribution, so this READS it rather than reconstructing it:
+ * `findingCard`, `groupCard`'s withheld `<details>` list and `notApplicableSection` all open a row
+ * with `<span class="fid">ID</span>`. A region runs from one such marker to the next, bounded by the
+ * next `<h2>` so the LAST row on the page does not absorb the coverage table and the legal terms.
+ * A finding with no marker at all has an empty region, which is the correct answer — nothing in the
+ * report is attributed to it.
+ *
+ * Keyed by the ESCAPED id, because that is what the renderer wrote; callers look up `esc(f.id)`.
+ * `resolvedSection` prefixes its marker with `✓ `, which is stripped so a prior-audit row lands on
+ * its own id rather than a near-miss key.
+ */
+function regionsById(html: string): Map<string, string> {
+  const marks = [...html.matchAll(/<span class="fid"[^>]*>([^<]*)<\/span>/g)];
+  const regions = new Map<string, string>();
+  marks.forEach((m, i) => {
+    const start = (m.index ?? 0) + m[0].length;
+    const nextMarker = marks[i + 1]?.index ?? html.length;
+    const nextHeading = html.indexOf("<h2>", start);
+    const end = Math.min(nextMarker, nextHeading === -1 ? html.length : nextHeading);
+    const id = (m[1] ?? "").replace(/^✓\s*/, "").trim();
+    regions.set(id, `${regions.get(id) ?? ""}\n${html.slice(start, end)}`);
+  });
+  return regions;
+}
+
+/**
  * Findings whose own words did not reach `html`, and whose absence is not disclosed and counted.
  * An empty array is the pass. Takes the ASSEMBLED document and the REAL rendered output — checking
  * this at the producer would re-prove what the conservation gate already proves, and would have
@@ -69,6 +114,9 @@ function rendered(html: string, text: string): boolean {
  */
 export function renderFidelityBreaches(doc: FindingsDocument, html: string): FidelityBreach[] {
   const breaches: FidelityBreach[] = [];
+  const regions = regionsById(html);
+  /** The part of the report the report itself attributes to this finding. Empty ⇒ it rendered no row. */
+  const region = (f: Finding): string => regions.get(esc(f.id)) ?? "";
 
   // #1555 — the same invariant one table over. The COVERAGE LEDGER is not a finding, and it is the
   // one place in the report that states what each module did and did not reach; `coverageSection`
@@ -99,7 +147,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
 
   for (const f of doc.findings.filter((x) => x.confidence === "N/A")) {
     const reason = f.note ?? f.evidence;
-    if (!rendered(html, reason)) {
+    if (!rendered(region(f), reason)) {
       breaches.push({
         id: f.id,
         kind: "reason-dropped",
@@ -110,6 +158,15 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
 
   // The renderer's own partition (buildHtml): reviewFlagOnly rows leave the findings body for the
   // nested-PII table, which lists location + columns rather than evidence.
+  //
+  // This is the ONE path still scored against the whole document rather than the finding's own
+  // region, and it is a real residual, not an oversight: `reviewFlagSection` emits a plain `<tr>`
+  // with no `<span class="fid">`, so the report attributes nothing to a row's id and there is no
+  // region to read. Two nested-PII rows on the same location with the same columns would therefore
+  // still cover for each other. Closing it means adding the marker to that section — a renderer
+  // change, tracked by #1730. MEASURED on the same 895-finding deliverable: 11 rows reach this path
+  // and no two share a (location, columns) pair, so nothing is mis-scored today. A live path with no
+  // collision yet, not an empty one — the first draft of #1730 said "zero rows" and was wrong.
   for (const f of doc.findings.filter((x) => x.reviewFlagOnly && x.confidence !== "N/A")) {
     const missing = [f.location, ...(f.reviewFlagColumns ?? [])].filter((t) => !rendered(html, t));
     if (missing.length > 0) {
@@ -118,7 +175,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
   }
 
   const live = doc.findings.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly);
-  const absent = live.filter((f) => !rendered(html, f.evidence));
+  const absent = live.filter((f) => !rendered(region(f), f.evidence));
 
   // #825 — the same invariant applied to the paid tier's most concrete deliverable. A verified
   // `suggestedFix` is a patch a client may apply; it reached filed tickets and, until this check,
@@ -128,7 +185,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
   const carded = new Set(live.filter((f) => !absent.includes(f)).map((f) => f.id));
   for (const f of live) {
     const diff = f.suggestedFix?.verified ? f.suggestedFix.diff.replace(/\n+$/, "") : "";
-    if (!diff.trim() || !carded.has(f.id) || rendered(html, diff)) continue;
+    if (!diff.trim() || !carded.has(f.id) || rendered(region(f), diff)) continue;
     breaches.push({
       id: f.id,
       kind: "fix-diff-dropped",
@@ -143,7 +200,7 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
 
   for (const [shape, group] of byShape) {
     const first = group[0] as Finding;
-    const unlisted = group.filter((f) => !rendered(html, f.location));
+    const unlisted = group.filter((f) => !rendered(region(f), f.location));
     if (unlisted.length > 0) {
       breaches.push({
         id: unlisted.map((f) => f.id).join(", "),

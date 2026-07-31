@@ -3,9 +3,9 @@
 // (the blocker is gone, the text still asserts it) and one malformed block — and assert the gate
 // exits non-zero naming both.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -217,5 +217,137 @@ describe("validate-reasons CLI", () => {
     expect(code).toBe(0);
     expect(out).toContain("loader.ts:1  // Harvey cannot analyse Elixir today.");
     expect(out).not.toContain("loader.ts:2");
+  });
+});
+
+// #1616 — the RATCHET path, which every test above skips by construction. `--root` narrows the
+// census to a caller-chosen surface, and the ratchet declines to score a narrowed run (it would
+// compare two different populations against a baseline written for DEFAULT_ROOTS). So the two
+// `spawnSync` helpers that feed `attributeClaim` in that path — `blameLine` and `branchCommits`
+// (#1401) — were reachable by no test at all: MEASURED 2026-07-31 by the acceptance verifier on
+// PR #1613, stubbing `blameLine` to `return undefined` left `vitest run src/recorded-reasons.test.ts
+// src/cli/validate-reasons.test.ts` at 88 passed. Every attributed row would have silently degraded
+// to "provenance unavailable" — the #1407 shape, a library-level test with the CLI's own call site
+// unproven.
+//
+// The fixture is a SELF-CONTAINED git repo, not a worktree of this one, and that is the load-bearing
+// choice: attribution is a question about the commit range between HEAD and the base branch, so
+// borrowing this checkout's history would make the answer depend on how CI cloned it — `attributeClaim`
+// itself degrades to "no commit range" on a depth-1 checkout. A fresh `git init` over every tracked file
+// gives full fidelity (every path a TOUCHES: line names exists, so the structural pass is clean) with
+// a history the test writes itself.
+//
+// It copies the WORKING TREE (`git ls-files` piped through tar), not `git archive HEAD`. The archive
+// form was written first and is wrong in a way that hides: it exports the COMMITTED tree, so an
+// uncommitted edit to validate-reasons.ts is invisible to the fixture and the negative control below
+// passed with the helper stubbed out. In CI the checkout is the commit under review either way, which
+// is exactly what makes that a silent hole rather than a loud one.
+describe("the claim ratchet's provenance attribution, through the real CLI (#1616)", () => {
+  const PLANT = "src/planted-claim.ts";
+  const CLAIM = "// A planted census line: this shape cannot be attributed without a blame lookup.";
+  let fixture: string;
+
+  const git = (...args: string[]): string =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=Test", "-c", "commit.gpgsign=false", ...args], {
+      cwd: fixture,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+  /** The real CLI over the fixture as its OWN repo root — no `--root`, so the ratchet scores. */
+  const ratchet = (): { code: number; out: string } => {
+    try {
+      return { code: 0, out: execFileSync("node_modules/.bin/tsx", [join(fixture, CLI)], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+    } catch (e) {
+      const err = e as { status: number; stdout: string; stderr: string };
+      return { code: err.status, out: `${err.stdout}${err.stderr}` };
+    }
+  };
+
+  /** The `↳` line the CLI prints under the planted row — the whole point of the attribution. */
+  const attribution = (out: string): string => out.split("\n").find((l) => l.includes("↳"))?.trim() ?? "(no attribution line printed)";
+
+  beforeAll(() => {
+    fixture = mkdtempSync(join(tmpdir(), "harvey-ratchet-"));
+    execFileSync("sh", ["-c", `git ls-files -z | tar --null -T - -cf - | tar -x -C '${fixture}'`], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    git("init", "-q", "-b", "main");
+    git("add", "-A");
+    git("commit", "-q", "-m", "fixture base");
+    // Rebuild the baseline from the fixture itself, so the ONLY breach below is the planted line
+    // whatever state this checkout's committed baseline happens to be in.
+    execFileSync("node_modules/.bin/tsx", [join(fixture, CLI), "--update-baseline"], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    git("add", "-A");
+    git("commit", "-q", "--allow-empty", "-m", "fixture baseline");
+  }, 120_000);
+
+  afterAll(() => {
+    if (fixture) rmSync(fixture, { recursive: true, force: true });
+  });
+
+  it("scores clean with nothing planted — so a breach below is the plant, not the fixture", () => {
+    const { code, out } = ratchet();
+    expect(out).toContain("Ratchet (#1318/#1399)");
+    expect(out).not.toContain("CLAIM RATCHET");
+    expect(code).toBe(0);
+  });
+
+  it("says AUTHORED on this branch when the breaching line's commit is in the branch range", () => {
+    git("checkout", "-q", "-b", "feature/planted");
+    writeFileSync(join(fixture, PLANT), `${CLAIM}\n`);
+    git("add", "-A");
+    git("commit", "-q", "-m", "plant a claim line");
+    const sha = git("rev-parse", "--short", "HEAD").trim();
+
+    const { code, out } = ratchet();
+    expect(code).toBe(1);
+    expect(out).toContain(`NEW  ${PLANT}:1  ${CLAIM}`);
+    // Both helpers had to work: branchCommits() to produce a range at all, blameLine() to name the
+    // commit. The sha proves the blame lookup ran rather than defaulting.
+    expect(attribution(out)).toBe(`↳ AUTHORED on this branch by ${sha} plant a claim line`);
+    expect(out).toContain("1 row(s) AUTHORED on this branch, 0 INHERITED from the base branch, 0 unattributable.");
+  });
+
+  it("says INHERITED for the SAME line once its commit is reachable from the base branch", () => {
+    git("checkout", "-q", "main");
+    git("merge", "-q", "--ff-only", "feature/planted");
+    const sha = git("rev-parse", "--short", "HEAD").trim();
+
+    const { code, out } = ratchet();
+    expect(code).toBe(1);
+    // Same file, same line, same blame sha — only the RANGE moved, so this verdict and the one above
+    // pin down both helpers together. MEASURED 2026-07-31 by stubbing each in turn: `blameLine`
+    // returning undefined reddens both, and a `branchCommits` returning an empty set unconditionally
+    // reddens the AUTHORED one while leaving this one green.
+    expect(attribution(out)).toBe(`↳ INHERITED — already on the base branch by ${sha} plant a claim line`);
+    expect(out).toContain("0 row(s) AUTHORED on this branch, 1 INHERITED from the base branch, 0 unattributable.");
+  });
+
+  it("says provenance unavailable, naming the blame, when the breaching line is not committed yet", () => {
+    git("checkout", "-q", "-b", "feature/uncommitted");
+    git("rm", "-q", "--cached", PLANT);
+    git("commit", "-q", "-m", "untrack the planted line");
+
+    const { code, out } = ratchet();
+    expect(code).toBe(1);
+    // blameLine's OWN failing direction: `git blame` exits non-zero on an untracked path, so the
+    // helper returns undefined and the CLI states that rather than guessing an author.
+    expect(attribution(out)).toBe(`↳ provenance unavailable: git blame could not read ${PLANT}:1 — an uncommitted line has no commit yet`);
+    expect(out).toContain("0 row(s) AUTHORED on this branch, 0 INHERITED from the base branch, 1 unattributable.");
+  });
+
+  it("says provenance unavailable, naming the missing range, when no base branch resolves", () => {
+    git("checkout", "-q", "--detach");
+    git("branch", "-q", "-D", "main");
+    git("branch", "-q", "-D", "feature/planted");
+    git("branch", "-q", "-D", "feature/uncommitted");
+    writeFileSync(join(fixture, PLANT), `${CLAIM}\n`);
+
+    const { code, out } = ratchet();
+    expect(code).toBe(1);
+    // branchCommits' OWN failing direction, and it needs its own control: neither `origin/main` nor
+    // `main` resolves, so `git merge-base` fails for both and the helper returns undefined BEFORE
+    // blameLine is consulted. It is the shallow-CI-checkout case the CLI degrades to on purpose.
+    expect(attribution(out)).toContain("↳ provenance unavailable: no commit range against the base branch");
+    expect(out).toContain("0 row(s) AUTHORED on this branch, 0 INHERITED from the base branch, 1 unattributable.");
   });
 });

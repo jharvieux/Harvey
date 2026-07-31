@@ -36,7 +36,28 @@
     "workflow file that does not yet exist on main.",
     "The same measurement discharged two hatches that had simply outlived their reason: free-recall",
     "and semantic-freshness had both long since merged, so `cannot be proven before it merges` was",
-    "true when written and false when read. Both drilled 2026-07-31 and recorded below."
+    "true when written and false when read. Both drilled 2026-07-31 and recorded below.",
+    "",
+    "#1612 (2026-07-31) retired the last hatch that was NOT about a missing file, and the way it",
+    "failed is worth more than the fix. Its `why` read 'NOT ATTEMPTED this round' — and the attempt",
+    "had ALREADY BEEN MADE, by the run recorded two entries above as ci-heavy-cli-alert's own proof.",
+    "Run 30607143343 is a `-f alert_drill=true` dispatch on main; its job list ends `a red main raises",
+    "an alarm  success`, and it opened, commented on and closed drill issue #1642 under the",
+    "ci-main-red-alert marker at 05:37Z. This file's own workflow comment says so in advance ('ONE",
+    "dispatch proves both of this workflow's alert paths, each into its own marker namespace') — the",
+    "second half was simply never recorded. So the hatch was born stale: the marker label existed, and",
+    "'its absence is the evidence the path never ran' was false the moment it was written. #1650, a",
+    "REAL non-drill alarm from run 30609450580 at 06:25Z, then fired the production branch too.",
+    "A hatch is a claim like any other, and one written in the same hour as its own refutation is the",
+    "reason `--labels` re-reads the tracking issue instead of trusting the text.",
+    "",
+    "Re-drilled anyway, at a known sha and under the current find-or-update.sh, because that is what",
+    "provenBy records: run 30664857256, drill issue #1729, `PROVED ci-main-red-alert`. The hatch's",
+    "other claim — a COST, 'proving it means a full red ci.yml run' during a live merge train — was",
+    "an estimate nobody had priced, and is now MEASURED and small: dispatched 20:57:55Z, main-red's",
+    "step reported PROVED at 21:01:50Z. Under four minutes, because `alert_drill` fails heavy-cli",
+    "shard 1 on its FIRST step, before install, so the only wait is shards 2 and 3 finishing normally.",
+    "A dispatch run also reports on no PR's head sha, so nothing in the merge train was gated on it."
   ],
   "paths": [
     {
@@ -130,10 +151,11 @@
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
-      "pendingProof": {
-        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural \u2014 the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` \u2014 it proves ci-heavy-cli-alert in the same run.",
-        "tracking": 1612,
-        "since": "2026-07-31"
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30664857256",
+        "issue": 1729,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {

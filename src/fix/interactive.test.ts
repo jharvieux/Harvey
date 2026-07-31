@@ -224,8 +224,15 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     expect(first.baseline).toMatchObject({ requested: 1, executed: 1 });
     expect(second.baseline).toMatchObject({ requested: 1, executed: 0 });
     // The saving is real time, not just a counter: the second ingest spends none of it on a baseline.
-    expect(second.baseline.durationMs).toBe(0);
+    // Stated as a RATIO, not as an exact 0 (#1674). `durationMs` is `Date.now() - started` around the
+    // work, so a cache hit that does no work still reads 1 whenever the clock ticks between the two
+    // reads — a real elapsed measurement, and the exact-zero form failed CI on that (run 30618536115,
+    // `expected 1 to be +0`). The ratio keeps the failing direction the exact form had: with the cache
+    // removed the second ingest re-runs the same worktree + client suite, so the two are comparable
+    // and 10x apart is unreachable. It is also more robust on a slow runner, not less — load inflates
+    // the executed run, while the cache hit spawns nothing.
     expect(first.baseline.durationMs).toBeGreaterThan(0);
+    expect(second.baseline.durationMs * 10).toBeLessThan(first.baseline.durationMs);
     // And the second fix is still scored on the same evidence — a cheaper run, not a weaker one.
     expect(second.green).toBe(true);
     expect(second.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test"]);
