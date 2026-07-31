@@ -205,6 +205,53 @@ HARVEY_FALSIFIER_SUPERREDHAT_CLONE=/clones/superredhat \
 The negative control lives in `.github/workflows/reasons-drift.yml`: a planted live-tier reason with
 an unbound placeholder must fail, or the binding rule has stopped being enforced.
 
+### A falsifier whose lookup CANNOT RUN exits **127**, never 1 and never 2 (#1426)
+
+`revalidateReasons` maps 127 — and a signal or timeout — to `UNVERIFIABLE`, and **every other
+non-zero exit to "the blocker still holds"**. That mapping is only safe if the commands themselves
+reserve 127 for *I could not look*. MEASURED 2026-07-31 over the whole population: of **31 offline
+empirical falsifiers, 19 returned something else** when the path they read was absent. Two returned
+**0**, which is worse in the other direction — a lookup that read nothing reporting the blocker GONE.
+
+There are exactly two ways it happens, both boring, both silent:
+
+1. **A bare `grep PATTERN FILE` exits 2** — not 1 — when `FILE` is renamed or deleted. A renamed file
+   is the single likeliest way a falsifier stops being able to answer, and it lands in the
+   *still-blocked* bucket.
+2. **A pipeline exits with its LAST stage's code.** `grep -E … file | grep -Eq …` reports 1 when the
+   first stage dies on a missing file. `set -o pipefail` is **not** a portable fix here:
+   `revalidateReasons` runs `spawnSync("sh", ["-c", cmd])`, and `/bin/sh` on a Linux CI runner is
+   dash, which has no `pipefail`. Eliminate the pipe — redirect to a file, then read it.
+
+Two patterns, and there is no third:
+
+```bash
+# guard the path, then read it
+test -f <path> || exit 127; grep -q "<pattern>" <path>
+
+# guard the tool and the fetch, then read the result
+command -v gh >/dev/null 2>&1 || exit 127; gh issue view 1341 --json state --jq .state > /tmp/f 2>/dev/null || exit 127; grep -qix closed /tmp/f && exit 0 || exit 1
+```
+
+Two categories are exempt, and both are DERIVED from the command rather than listed by hand — a
+hand-kept exemption list is the suppression this registry refuses everywhere else:
+
+- a **pure existence test** (`test -f X`, `ls X`) has no cannot-run state distinct from its answer:
+  the file's absence *is* the claim ("no live-captured fixture exists yet");
+- a **network falsifier** reads the world, not the checkout, so an empty working directory is not its
+  state that an empty working directory reproduces. It still carries its own
+  `command -v curl … || exit 127` guards.
+
+`src/falsifier-exit-codes.test.ts` enforces both halves under `pnpm verify`: a structural arm (every
+non-existence-test falsifier carries an explicit `exit 127` branch) and an empirical arm that RUNS
+each checkout-reading falsifier with its input absent and requires 127. The structural arm alone
+would miss a guard that is present but wrong — the #1345 shape, where a case-sensitive `grep -q
+CLOSED` over an API answering lowercase `closed` exits 1 in *both* directions and re-tests nothing.
+
+**Exercise a new falsifier in all three directions before recording it**, and write the exit codes
+down: blocker holds → non-zero but not 127; blocker gone → 0; cannot run → 127. A falsifier nobody
+has watched exit 0 is indistinguishable from one that cannot.
+
 ### `TOUCHES:` is declared **or derived** — and never mandatory
 
 Subsystem drift only ever watched the reasons whose author happened to declare `TOUCHES:` — 9 of 15
@@ -304,6 +351,28 @@ pnpm validate-reasons --root <dir> --list
   Advisory, never a gate failure: a hard gate over a heuristic gets argued down or suppressed, and
   what this needs to do is stay visible while the number shrinks. **Do not quote the number from
   here — run the tool.**
+- **The claim ratchet (#1318), which scores TEXT since #1399.** The census above is advisory; the
+  ratchet over it is not. The committed baseline (`src/unstructured-claims-baseline.ts`) records every
+  claim VERBATIM, and until #1399 the gate compared per-file COUNTS — so **rewriting a baselined
+  claim in place left it green**, and a baselined claim could be turned into a stronger or materially
+  different one in silence. MEASURED 2026-07-28 on PR #1387: `"with no live DB"` → `"lacking a live
+  DB"`, exit 0, count unchanged. The gate now matches the current lines against the recorded ones as
+  a multiset and fails on any unaccounted row, which strictly subsumes the count check. A reword
+  shows as one added row plus one dropped row, printed together so a reviewer reads the old text next
+  to the new.
+
+  The churn was priced before the trade was taken, not argued about (MEASURED 2026-07-31, every
+  commit touching each surface): `SESSION.md` 3 of 32 commits, `src` 3 of 67, `docs` 2 of 22 would
+  newly breach — 8 of 121, against 58 of the same 121 that already breached on count. `SESSION.md`
+  stays in scope with that measurement recorded as a decisional reason in `src/recorded-reasons.ts`.
+
+  **Each breaching row names its origin (#1401).** Scoring is repo-wide over source, so a breaching
+  line can sit in a file the author never opened — that happened to three PRs in one session, and
+  "your PR broke the ratchet" sends the author hunting through their own diff for someone else's
+  line. Every NEW row now says `AUTHORED on this branch` or `INHERITED — already on the base branch`
+  with the commit, from `git blame` against the merge-base, and a shallow checkout gets a stated
+  "provenance unavailable" rather than a confident wrong answer. Repo-wide scoring is deliberately
+  kept: diff-scoped scoring would let a claim added by a PR that touches nothing else escape.
 
 Seeded proof, per the acceptance criteria — a gate that has never fired on a known-bad input is not
 evidence: `src/cli/validate-reasons.test.ts` runs the real CLI against a planted corpus containing a

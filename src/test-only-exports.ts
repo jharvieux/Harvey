@@ -32,7 +32,7 @@
 // REASON: a symbol exported AND used inside its own file is invisible to this ratchet even when the in-file use is itself dead, so the gated row count understates the dead surface
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-30 — `pnpm test-only-exports --blind-spot` runs knip with and without `ignoreExportsUsedInFile` and prints both totals plus the hidden delta; the two instances recorded by #1331 (src/fix/schedule.ts DEFAULT_CAPS, src/fix/verify.ts scrubSecrets) both have production callers as of this run, so the triaged suspect list is empty.
-// FALSIFIER: grep -q '"ignoreExportsUsedInFile": true' knip.production.json && exit 1 || exit 0
+// FALSIFIER: test -f knip.production.json || exit 127; grep -q '"ignoreExportsUsedInFile": true' knip.production.json && exit 1 || exit 0
 // TOUCHES: knip.production.json
 
 import ts from "typescript";

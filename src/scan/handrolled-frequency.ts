@@ -661,7 +661,7 @@ export const UNMEASURED_SHAPES: UnmeasuredShape[] = [
   // REASON: entry 102 has no countable signature — the shape is module-scope state plus a TTL comparison somewhere else, so a regex either matches nothing or matches every legitimate cache; it needs the AST scope analysis handrolled.ts does, not a frequency regex
   // KIND: empirical
   // PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
-  // FALSIFIER: grep -q "module-level Map cache" src/detectors/handrolled.ts
+  // FALSIFIER: test -f src/detectors/handrolled.ts || exit 127; grep -q "module-level Map cache" src/detectors/handrolled.ts
   // TOUCHES: src/detectors/handrolled.ts
   {
     entry: 102,

@@ -104,7 +104,7 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   REASON: the pnpm-backtick narrowing in citedScripts skips the truth check on any unbackticked pnpm reference, which would under-serve a real case if a genuine `pnpm <script>` citation ever went unbackticked in practice
   KIND: empirical
   PROVENANCE: MEASURED 2026-07-28 — the falsifier below, run as committed, found 0 unbackticked-but-real script references and exited 1, twice on a growing live population the same day (200 merged PRs / 60 `met` lines / 19 pnpm mentions, then 200 / 75 / 22 on re-run; up from the original 3-reference/2-PR sample). Exercised in all three directions: exit 0 against a seeded population carrying an unbackticked `pnpm verify` citation (blocker gone), exit 1 as committed (blocker holds), exit 127 when `gh` cannot answer or stdin is empty/garbled/an empty array (cannot run) — it does NOT exit 1 on a failed lookup, which `revalidateReasons` would read as "the blocker still holds"
-  FALSIFIER: gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body > /tmp/harvey-pnpm-evidence.json 2>/dev/null || exit 127; pnpm exec tsx src/cli/measure-pnpm-evidence.ts < /tmp/harvey-pnpm-evidence.json
+  FALSIFIER: test -f src/cli/measure-pnpm-evidence.ts || exit 127; command -v gh >/dev/null 2>&1 || exit 127; gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body > /tmp/harvey-pnpm-evidence.json 2>/dev/null || exit 127; pnpm exec tsx src/cli/measure-pnpm-evidence.ts < /tmp/harvey-pnpm-evidence.json
   TOUCHES: src/acceptance-conservation.ts, src/cli/measure-pnpm-evidence.ts
   -->
 

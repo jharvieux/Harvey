@@ -486,7 +486,7 @@ gap cannot quietly graduate into a claimed catch.
   > REASON: Does Harvey detect a SELECT-then-INSERT dedup whose predicate columns have no UNIQUE constraint in the migrations?
   > KIND: empirical
   > PROVENANCE: MEASURED 2026-07-27
-  > FALSIFIER: grep -q "d091/dedup-without-unique" dry-run/findings.json
+  > FALSIFIER: test -f dry-run/findings.json || exit 127; grep -q "d091/dedup-without-unique" dry-run/findings.json
 
   Re-checked against #1230's "cross-time dataflow" framing and it is neither cross-time nor out of
   reach: the dedup predicate is in the app code and the constraint set is in the migrations — the

@@ -6,7 +6,6 @@ import { CLAIM_BASELINE } from "./unstructured-claims-baseline.js";
 import {
   DEFAULT_ROOTS,
   attributeClaim,
-  claimCensusByFile,
   claimCounts,
   claimDrift,
   claimTotal,

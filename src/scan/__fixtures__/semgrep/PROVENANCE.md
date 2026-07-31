@@ -85,7 +85,7 @@ present — the `.npmrc` uses `${NPM_TOKEN}`, not a literal token.
 REASON: No semgrep rule across the six registry packs Harvey loads emits a match with a bare-STRING `references` value, nor a match carrying no `cwe` at all — both are shapes the JSON type admits and `parseSemgrepFindings` must handle defensively, but neither is reproducible from a real run, so they stay as labelled synthetic negative-control literals rather than fabricated captures.
 KIND: empirical
 PROVENANCE: MEASURED 2026-07-26 (build-corpus.mjs against all six packs; bare-string `cwe`/`owasp` DO occur — bypass-tls-verification — bare-string `references` and no-`cwe` do not)
-FALSIFIER: node src/scan/__fixtures__/semgrep/build-corpus.mjs | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s).results;process.exit(r.some(x=>typeof x.extra?.metadata?.references==='string'||!x.extra?.metadata?.cwe)?0:1)})"
+FALSIFIER: test -f src/scan/__fixtures__/semgrep/build-corpus.mjs || exit 127; node src/scan/__fixtures__/semgrep/build-corpus.mjs > /tmp/harvey-semgrep-corpus.json 2>/dev/null || exit 127; node -e "let r;try{r=JSON.parse(require('fs').readFileSync('/tmp/harvey-semgrep-corpus.json','utf8')).results}catch{process.exit(127)}process.exit(r.some(x=>typeof x.extra?.metadata?.references==='string'||!x.extra?.metadata?.cwe)?0:1)"
 
 The falsifier exits 0 once any pack ships a bare-string `references` or a no-`cwe` match, at which point
 those two literals can be replaced by a captured record.

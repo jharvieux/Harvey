@@ -239,6 +239,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "**What stays prose.** The rule also applies to PR bodies and issue comments, which this gate cannot",
     "is protected\"*) or the object of a prohibition (*\"cannot edit `<path>`\"*, *\"a supervised path like",
     "A live-only falsifier cannot hard-code its target: the crAPI gateway URL, the external SecBench",
+    "### A falsifier whose lookup CANNOT RUN exits **127**, never 1 and never 2 (#1426)",
+    "- a **pure existence test** (`test -f X`, `ls X`) has no cannot-run state distinct from its answer:",
+    "down: blocker holds → non-zero but not 127; blocker gone → 0; cannot run → 127. A falsifier nobody",
+    "has watched exit 0 is indistinguishable from one that cannot.",
     "`REASON: planted claim with no way to re-test it` / `PROVENANCE: ASSUMED 2026-07-27`, which tripped",
     "- The gate **counts** the empirical reasons drift cannot watch, and names them. Silence from a reason",
     "the gate cannot pass on an empty set (the `requires-live-run: 0` failure of #345). Each #1319 rule",
@@ -808,6 +812,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/epic-builder/session.ts": [
     "// story is ignored (it can't constrain ordering).",
+  ],
+  "src/falsifier-exit-codes.test.ts": [
+    "//   • a PURE EXISTENCE TEST (`test -f X`, `ls X`) has no cannot-run state distinct from its answer.",
   ],
   "src/findings.ts": [
     "// Shown verbatim in the deliverable — a higher severity the client cannot trace back to a table",
