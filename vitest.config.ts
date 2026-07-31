@@ -14,14 +14,18 @@ const BASE_EXCLUDE = [
   ...configDefaults.exclude,
   "targets/**",
   "epic-builder-web/**",
-  // The marketing site is a separately-deployed Next.js app with its own toolchain, so its app
-  // code never belongs in this suite — but it deploys ALONE from site/ and therefore cannot import
-  // shared logic from src/. The free RLS checker's non-destructive write-probe (#888) lives in
-  // site/ for that reason, and its offline gate (write-probe.test.ts) has to ride this suite to run
-  // in `pnpm verify`. So exclude site's build/deps dirs, not the tree. Since #1308 a second one
-  // rides it too — site-contract.test.ts, the offline half of the lead-capture guard. Both import
-  // nothing from `next`, deliberately: CI installs the repo root's deps but never site/node_modules,
-  // so a test needing the Next runtime would be skipped there.
+  // The marketing site is a separately-DEPLOYED Next.js app, so its page/component code doesn't
+  // belong in this suite — but since #1597 (2026-07-30) it is a pnpm WORKSPACE MEMBER, not a
+  // separate npm project, and the two constraints this comment used to record are gone:
+  //   - "it deploys ALONE from site/ and therefore cannot import shared logic from src/" — FALSE
+  //     now. The Vercel project's Root Directory is `site` with the repo root uploaded, and
+  //     site/app/supabase-security-checker/page.tsx imports src/supabase-write-probe.ts directly.
+  //     The #888 write-probe moved back to src/ for that reason; its gate is src/supabase-write-probe.test.ts.
+  //   - "CI installs the repo root's deps but never site/node_modules" — FALSE now. One root
+  //     `pnpm install` provisions site/ too, so a test here CAN reach the Next runtime.
+  //     site-contract.test.ts still imports nothing from `next` at runtime, but that is now its own
+  //     choice (it needs no bundler), not a constraint imposed by what CI installs.
+  // So exclude site's build/deps dirs, not the tree.
   "site/node_modules/**",
   "site/.next/**",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).

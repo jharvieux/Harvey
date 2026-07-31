@@ -3,8 +3,8 @@
 // SHAPE of a Harvey report. It is NOT a real client's data — real engagement findings live in
 // report-template/findings.*.json and are never published here.
 
-export type Severity = "Critical" | "High" | "Medium" | "Low" | "Perf" | "Info";
-export type LedgerStatus = "ran" | "part";
+type Severity = "Critical" | "High" | "Medium" | "Low" | "Perf" | "Info";
+type LedgerStatus = "ran" | "part";
 
 export const sampleMeta = {
   client: "Larkspur (sample)",

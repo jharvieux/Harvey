@@ -19,3 +19,8 @@ stryker-tmp/
 
 # Dry-run timing — non-deterministic per-run timestamps, not committed (#302, #842)
 dry-run/timing.json
+
+# Vercel CLI project link (#1597). Lives at the repo ROOT now that the site deploys from here;
+# .vercel/.env.production.local holds pulled production secrets.
+.vercel/
+.vercel

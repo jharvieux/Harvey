@@ -1,5 +1,31 @@
 {
-  "entry": ["src/findings.ts", "src/cli/*.ts", "src/**/*.test.ts", "report-template/render.mjs", "tools/*.mjs"],
-  "project": ["src/**/*.ts", "report-template/*.mjs", "tools/*.mjs"],
-  "ignore": ["site/**"]
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/findings.ts",
+        "src/cli/*.ts",
+        "src/**/*.test.ts",
+        "report-template/render.mjs",
+        "tools/*.mjs"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "report-template/*.mjs",
+        "tools/*.mjs"
+      ]
+    },
+    "site": {
+      "entry": [
+        "app/**/*.test.ts"
+      ],
+      "project": [
+        "app/**/*.{ts,tsx}"
+      ],
+      "ignoreDependencies": [
+        "eslint",
+        "eslint-config-next",
+        "eslint-plugin-react-hooks"
+      ]
+    }
+  }
 }

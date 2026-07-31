@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -86,5 +87,38 @@ describe("site route contract", () => {
       appFiles.flatMap((f) => [...readFileSync(f, "utf8").matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1])),
     );
     expect([...read].filter((name) => !example.includes(name))).toEqual([]);
+  });
+});
+
+// #1597 — the workspace-conversion hazard, caught in the act. Under the old separate-npm-project
+// layout site/node_modules was FLAT, so eslint-config-next's own eslint-plugin-react-hooks@5.2.0
+// sat there and was what `next lint` loaded. As a pnpm workspace member site/node_modules holds
+// only site's DIRECT deps, so an unlisted one resolves by walking UP to the repo root — where the
+// root's own eslint-plugin-react-hooks@7.1.1 lives. MEASURED 2026-07-30: that swap happened, and
+// `next build` then failed on a v7-only rule (react-hooks/set-state-in-effect) against app/page.tsx
+// code that v5 accepts. It failed loudly here; the same mechanism could just as easily have
+// substituted a LOOSER ruleset and gone unnoticed. So: anything eslint-config-next declares that is
+// also resolvable from site/ must be at the major it declares, which is only true if site declares
+// it itself.
+describe("site toolchain isolation under pnpm", () => {
+  const configNextDir = dirname(createRequire(join(SITE_DIR, "package.json")).resolve("eslint-config-next/package.json"));
+  const declaredDeps: Record<string, string> = JSON.parse(readFileSync(join(configNextDir, "package.json"), "utf8")).dependencies;
+  const siteRequire = createRequire(join(SITE_DIR, "package.json"));
+
+  it("never lets a repo-root package shadow a version eslint-config-next pins", () => {
+    const shadowed: string[] = [];
+    for (const [name, range] of Object.entries(declaredDeps)) {
+      let resolved: string;
+      try {
+        // Not resolvable from site/ is the healthy pnpm case: eslint loads it from
+        // eslint-config-next's own tree, at the declared version, and nothing can shadow it.
+        resolved = JSON.parse(readFileSync(siteRequire.resolve(`${name}/package.json`), "utf8")).version;
+      } catch {
+        continue;
+      }
+      const allowedMajors = range.split("||").map((r) => r.trim().replace(/^[\^~>=<\s]*/, "").split(".")[0]);
+      if (!allowedMajors.includes(resolved.split(".")[0])) shadowed.push(`${name}: site resolves ${resolved}, eslint-config-next declares ${range}`);
+    }
+    expect(shadowed).toEqual([]);
   });
 });
