@@ -24,3 +24,7 @@ dry-run/timing.json
 # .vercel/.env.production.local holds pulled production secrets.
 .vercel/
 .vercel
+
+# Python bytecode — seed.py is imported by the fixture-drift harness and by ad-hoc probes.
+__pycache__/
+*.pyc

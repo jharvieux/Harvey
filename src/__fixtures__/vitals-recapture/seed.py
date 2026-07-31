@@ -161,6 +161,29 @@ def build_repo(repo):
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "seed")
     git(repo, "config", "user.email", "seed@example.com")
+    # #1703: git >= 2.54 detaches `git maintenance run --auto` after EVERY commit, and for a corpus
+    # this shape one of those background processes runs `git repack -d -l --cruft --write-midx`,
+    # which DELETES the loose objects it just packed while the seed's next `git add`/`git commit` —
+    # and, later, vitals' own `git log` — are still reading them. MEASURED 2026-07-31 in ubuntu
+    # containers: git 2.43.0 -> 0 detaches, 0 packs, 293 loose objects; git 2.54.0 (the runner image's
+    # git that day) -> 73 detaches, 1 background repack, 0 loose, 1 pack. That race is the source of
+    # BOTH conservation failure signatures. Measured by unlinking core/billing.ts's loose blob in a
+    # built corpus and replaying the four commands the seed and vitals actually run: `git commit`
+    # printed the CI log's line verbatim, down to the sha —
+    #   error: invalid object 100644 4d193a8444f26e2c021839ca7397511831407130 for 'core/billing.ts'
+    #   error: Error building trees
+    # — and `git log --numstat` (vitals' get_file_churn) exited 128, which its own `_run_git` swallows
+    # into an empty churn table, emptying code_files and so `hotspots`. The three commands that were
+    # still POPULATED in run 30635897491 all exited 0 on the same broken corpus: `log --name-only`
+    # (coupling), `log --format=%aN -- <file>` (knowledge_risk) and the seed's own `log --oneline`
+    # sanity line — none of them reads blob CONTENT. NOT reproduced: the race arising on its own; 560
+    # seed builds and ~55k `git log --numstat` samples on git 2.54.0 caught neither signature, so the
+    # step from "auto maintenance unlinks these objects" to "this is what unlinked them in CI" is
+    # inference from a matching fault, not a caught one. This is not a retry either way: it removes a
+    # concurrent mutation of the fixture's input that the fixture was never measuring.
+    # assert_no_background_gc() below fails loud if a future git finds another route to it.
+    git(repo, "config", "gc.auto", "0")
+    git(repo, "config", "maintenance.auto", "false")
 
     # Distinct calendar days for every churn commit so no two unrelated files ever share a day (which
     # would manufacture a spurious coupling pair). Days 3..~74 ago -> all inside the 90-day churn
@@ -186,6 +209,33 @@ def build_repo(repo):
             when=NOW - day * DAY)
         day += 1
         rev += 1
+
+
+def assert_no_background_gc(repo):
+    """Fail loud if anything packed or pruned the corpus while it was being built.
+
+    The gc.auto/maintenance.auto config in build_repo is a claim about git's behaviour, and git is an
+    upstream tool that moves — 2.54 started detaching per-commit maintenance where 2.43 did not, and
+    nothing in this repo would have noticed. So the claim is CHECKED rather than trusted: with auto
+    maintenance off, every object this seed writes stays loose for the life of the throwaway repo, so
+    a pack (or a repack's in-flight .tmp-*-pack) means a background process mutated the corpus and the
+    #1703 race is live again. Cheap, and it converts the next occurrence from an intermittent red into
+    a named one.
+
+    Called AFTER run_vitals, not after build_repo: the offending maintenance process is DETACHED, so
+    it can land any time up to and including the vitals run itself. Measured 2026-07-31 on git 2.54.0
+    — the pack appeared only after build_repo's last commit had returned, so a check placed there
+    would have passed while the race was live."""
+    packdir = os.path.join(repo, ".git", "objects", "pack")
+    stray = sorted(os.listdir(packdir)) if os.path.isdir(packdir) else []
+    if stray:
+        sys.exit(
+            f"background gc ran against the seed corpus in {repo}: .git/objects/pack contains {stray}.\n"
+            "build_repo sets gc.auto=0 and maintenance.auto=false precisely so nothing repacks or prunes\n"
+            "the corpus mid-build (#1703). A pack here means this git found another route to auto\n"
+            "maintenance — re-read `git config --list --show-origin` in this repo and disable it too,\n"
+            "rather than letting a background `repack -d` unlink loose objects the next command reads."
+        )
 
 
 def seed_provenance(repo):
@@ -308,6 +358,7 @@ def main():
         seed_provenance(repo)
         sanity = git_scope_sanity(repo)
         report = run_vitals(repo)
+        assert_no_background_gc(repo)
 
         # Prepend a provenance _note (metadata, not a tool field) — mirrors the lighthouse fixtures.
         # Absolute capture-machine path leaks nothing useful; normalize `scope`/path-ish fields.
