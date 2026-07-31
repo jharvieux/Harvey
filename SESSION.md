@@ -8,7 +8,7 @@ _Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED
 
 ### The one thing only the operator can unblock
 
-**The `gh` token lacks the `workflow` OAuth scope.** `gh auth status` → `gist, read:org, repo`. Any PR touching `.github/workflows/**` cannot merge:
+**The `gh` token lacks the `workflow` OAuth scope.** `gh auth status` → `gist, read:org, repo`. Any PR touching `.github/workflows/**` is refused at merge:
 
 ```
 HTTP 403  refusing to allow an OAuth App to create or update workflow
@@ -49,7 +49,7 @@ The trap is that `gh pr merge` reports *"the base branch policy prohibits the me
 
 The last is a distinct sub-species: the number was **reproducible but mislabelled** — the command ran and gave that answer, it just did not measure what its label said.
 
-**And a recorded reason was false in THREE places at once** (#1333): `alert-paths.json`'s `_why`, the workflow header, and `src/alert-paths.ts`'s reason block all claimed a drill cannot be dispatched before merge. Only the FILE must be on the default branch. Two `pendingProof` hatches were exemptions from a proof nothing was blocking. One copy still asserted it **eight seconds after** the dispatch that disproved it.
+**And a recorded reason was false in THREE places at once** (#1333): `alert-paths.json`'s `_why`, the workflow header, and `src/alert-paths.ts`'s reason block all claimed a drill is undispatchable before merge. Only the FILE must be on the default branch. Two `pendingProof` hatches were exemptions from a proof nothing was blocking. One copy still asserted it **eight seconds after** the dispatch that disproved it.
 
 ### Environment hazard, filed as #1646
 
