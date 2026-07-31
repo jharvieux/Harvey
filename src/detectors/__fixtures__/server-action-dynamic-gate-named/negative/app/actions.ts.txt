@@ -2,6 +2,9 @@
 // reason #1263's resolver could not see it is that `requireAdmin` binds its own check through a
 // DYNAMIC `await import()`. Two hops of resolution reach `getAuthenticatedUser`, whose body reads
 // the session. Correctly authorized — nothing must fire.
+//
+// The boundary for the positive next door: same destructured dynamic import, same resolution, and
+// the ONE variable is whether what it resolves to actually checks anything.
 "use server";
 
 import { z } from "zod";

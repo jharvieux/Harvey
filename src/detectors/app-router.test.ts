@@ -1523,25 +1523,33 @@ describe("TanStack Start boundary adapter (#918)", () => {
 describe("gate reached through a dynamic import (#1462)", () => {
   const AUTHZ = "M1 — Server Action missing authorization check";
 
-  it("resolves `const { x } = await import(…)` two hops out and clears the gated action", () => {
-    // The shape MEASURED on TanStack/tanstack.com: `requireAdmin` binds its real check with a
-    // dynamic import, so #1263's resolver saw a callee that matched nothing and stopped.
-    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/negative"));
-    expect(taxonomies(findings)).not.toContain(AUTHZ);
-  });
+  // #1484 criterion 3, second pass: these four shapes used to live in ONE fixture dir behind ONE
+  // corpus entry that passed on any one of them. They are four dirs and four corpus rows now, and
+  // this suite asserts each on its own fixture rather than counting four evidences in one.
+  const SHAPES = [
+    { shape: "named", why: "a destructured dynamic import that resolves, to a helper that checks nothing" },
+    { shape: "namespace", why: "the namespace form of the same non-gate module" },
+    { shape: "computed", why: "a COMPUTED specifier, so the module goes unidentified" },
+    { shape: "package", why: "a specifier naming a package outside the loaded source set" },
+  ];
 
-  it("leaves EVERY unresolvable or non-gate dynamic-import shape flagged", () => {
-    // The corpus positive passes on any one of these four, which is exactly why they are asserted
-    // individually here: widening resolution must not turn "awaits something it imported
-    // dynamically" into "is gated", and a specifier this pass does not evaluate must leave the
-    // finding standing rather than read as a gate.
-    const findings = detectAppRouterFindings(loadFixtureDir("server-action-dynamic-gate/positive"));
-    const flagged = findings.filter((f) => f.taxonomy === AUTHZ).map((f) => f.evidence);
-    expect(flagged).toHaveLength(4);
-    for (const action of ["renameA", "renameB", "renameC", "renameD"]) {
-      expect(flagged.some((e) => e.includes(`\`${action}\``)), `${action} must still be flagged`).toBe(true);
-    }
-  });
+  for (const { shape, why } of SHAPES) {
+    it(`clears the gated action reached through a ${shape} dynamic import`, () => {
+      // The shape MEASURED on TanStack/tanstack.com: `requireAdmin` binds its real check with a
+      // dynamic import, so #1263's resolver saw a callee that matched nothing and stopped.
+      const findings = detectAppRouterFindings(loadFixtureDir(`server-action-dynamic-gate-${shape}/negative`));
+      expect(taxonomies(findings)).not.toContain(AUTHZ);
+    });
+
+    it(`leaves the ${shape} shape flagged — ${why}`, () => {
+      // Widening resolution must not turn "awaits something it imported dynamically" into "is
+      // gated", and a specifier this pass does not evaluate must leave the finding standing.
+      const findings = detectAppRouterFindings(loadFixtureDir(`server-action-dynamic-gate-${shape}/positive`));
+      const flagged = findings.filter((f) => f.taxonomy === AUTHZ).map((f) => f.evidence);
+      expect(flagged).toHaveLength(1);
+      expect(flagged[0]).toContain("`renameOrganisation`");
+    });
+  }
 });
 
 describe("browser global in a module-level helper (#1460)", () => {

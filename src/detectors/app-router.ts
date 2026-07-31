@@ -819,7 +819,7 @@ function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
 // The #1240 -> #1358 lesson (a NAME-keyed widening regressed silently) does not apply to raising
 // this number the same way: this pass can only ever SUPPRESS a finding, never invent one, so the
 // only failure mode is a real gate/exit reached one hop further out getting suppressed when it
-// should not be — i.e. a FALSE NEGATIVE, not a false positive. `M9C-GATE-DEPTH-NEG` plants exactly
+// should not be — i.e. a FALSE NEGATIVE, not a false positive. `M9C-GATEDEPTH-NEG` plants exactly
 // that: a 4-hop chain of NON-gates (no helper anywhere in it denies or is consumed) that must still
 // fire at depth 4, so a future widening that stops resolving real chains would go red here first.
 const GATE_DEPTH = 4;

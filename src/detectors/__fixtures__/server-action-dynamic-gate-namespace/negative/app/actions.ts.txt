@@ -1,0 +1,18 @@
+// The boundary for the namespace positive next door: the SAME `const ns = await import("…")` form,
+// resolved through the SAME `site.qualifier` arm of GateResolver, and the one variable is that
+// `roles.requireAdmin` really does reach a session read (one further dynamic hop, into
+// `getAuthenticatedUser`). Correctly authorized — nothing must fire.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const roles = await import("../lib/roles");
+  await roles.requireAdmin();
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}

@@ -712,24 +712,94 @@ export const m9CheckEntries: CorpusEntry[] = [
   // #1462/#1460/#1461 — the three residual FP families #1293's and #1276's triage left open, each
   // scored the #1263 way round: the NEGATIVE carries the shape that used to false-fire, the POSITIVE
   // the near-identical shape that must still fire, so a fix that over-suppresses fails here.
+  // #1484 criterion 3, second pass: the bundled `action-dynamic-gate` positive carried FOUR
+  // relevant findings under one `match` key and passed on any one of them — MEASURED, scoring it
+  // with `renameB`+`renameC` deleted still read `pass=true`, and so did scoring it with only
+  // `renameA` left. Its own note and its detector-test comment both already said "passes on any one
+  // of them", so this was a documented hole, not a discovered one. The four shapes regress at four
+  // DISTINCT code points, which is what makes this a split rather than an accepted exception:
+  //   named     — collectDynamicImports' `named` map / GateResolver's identifier arm
+  //   namespace — collectDynamicImports' `namespaces` map / GateResolver's `site.qualifier` arm
+  //   computed  — the `specifier === undefined` branch (fail-safe half)
+  //   package   — the `if (resolved)` guard (fail-safe half)
+  // The two fail-safe rows are the ones worth the fixtures: their regression is "unresolvable read
+  // as gated", a SILENT FALSE NEGATIVE on real code, and under the bundled entry it left the row
+  // green on its two resolvable siblings.
   {
-    id: "M9C-DYNGATE-POS",
+    id: "M9C-DYNGATE-NAMED-POS",
     kind: "positive",
-    cls: "server mutation whose only dynamically-imported callee performs no check, or whose specifier cannot be resolved",
+    cls: "server mutation whose destructured dynamically-imported callee resolves, to a helper that checks nothing",
     module: "M9",
-    location: "m9-corpus/action-dynamic-gate/positive",
+    location: "m9-corpus/action-dynamic-gate-named/positive",
     match: ["missing authorization"],
     expectedTier: "review",
-    note: "server-action-dynamic-gate/positive: four actions, every one of which must STILL fire — a destructured `await import()` resolving to a helper that only reshapes a string, a COMPUTED specifier, a package specifier outside the source set, and the namespace form of the non-gate module. The suppression-only constraint means an unevaluable specifier must leave the finding standing; `#1462 leaves every unresolvable dynamic-import shape flagged` in app-router.test.ts asserts all four individually, because this entry passes on any one of them.",
+    note: "server-action-dynamic-gate-named/positive: `const { normaliseOrgId } = await import('../lib/format')` — it resolves, and what it resolves to only reshapes a string. Resolving a dynamic import must not turn 'awaits SOMETHING it imported dynamically' into 'is gated'.",
   },
   {
-    id: "M9C-DYNGATE-NEG",
+    id: "M9C-DYNGATE-NAMED-NEG",
     kind: "negative",
-    cls: "server mutation behind a gate reached through a dynamic `await import()`",
+    cls: "server mutation behind a gate reached through a destructured dynamic `await import()`",
     module: "M9",
-    location: "m9-corpus/action-dynamic-gate/negative",
+    location: "m9-corpus/action-dynamic-gate-named/negative",
     match: ["missing authorization"],
-    note: "server-action-dynamic-gate/negative: `requireAdmin()` binds its real check with `const { getAuthenticatedUser } = await import('./auth-helpers')`. All 12 of TanStack/tanstack.com's High rows in this class were read against source and 6 are exactly this shape (MEASURED 2026-07-28) — the other 6 are a longer gate chain, tracked separately.",
+    note: "server-action-dynamic-gate-named/negative: `requireAdmin()` binds its real check with `const { getAuthenticatedUser } = await import('./auth-helpers')`. All 12 of TanStack/tanstack.com's High rows in this class were read against source and 6 are exactly this shape (MEASURED 2026-07-28) — the other 6 are a longer gate chain, scored by the action-gate-depth pair.",
+  },
+  {
+    id: "M9C-DYNGATE-NS-POS",
+    kind: "positive",
+    cls: "server mutation whose namespace-bound dynamically-imported callee resolves, to a helper that checks nothing",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-namespace/positive",
+    match: ["missing authorization"],
+    expectedTier: "review",
+    note: "server-action-dynamic-gate-namespace/positive: `const format = await import('../lib/format')` then `format.normaliseOrgId(…)`. Separate from the destructured row next door because it regresses at a separate code point — `namespaces` rather than `named` in collectDynamicImports, and GateResolver's `site.qualifier` arm rather than its identifier arm.",
+  },
+  {
+    id: "M9C-DYNGATE-NS-NEG",
+    kind: "negative",
+    cls: "server mutation behind a gate reached through a namespace-bound dynamic `await import()`",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-namespace/negative",
+    match: ["missing authorization"],
+    note: "server-action-dynamic-gate-namespace/negative: `const roles = await import('../lib/roles')` then `roles.requireAdmin()`, the same real gate the destructured negative uses, reached through the namespace arm. The one variable against its own positive is whether what resolves actually checks anything.",
+  },
+  {
+    id: "M9C-DYNGATE-COMPUTED-POS",
+    kind: "positive",
+    cls: "server mutation whose gate is bound through a dynamic import with a COMPUTED specifier, so the module goes unidentified",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-computed/positive",
+    match: ["missing authorization"],
+    expectedTier: "review",
+    note: "server-action-dynamic-gate-computed/positive: the FAIL-SAFE half. `const specifier = process.env.GATE_MODULE ?? '../lib/roles'; const { requireAdmin } = await import(specifier)`. STRONGER than the bundled version this replaces, deliberately: the fallback names a module that DOES export a real gate and is present in this fixture's own tree, so the ONLY reason the row still fires is that the specifier is unevaluable. A fail-open at the `specifier === undefined` branch of collectDynamicImports reds this row alone. Nor may a future pass const-fold the `??` — `process.env.GATE_MODULE` decides the real module at runtime, so folding to the fallback would vouch for a module that may never load.",
+  },
+  {
+    id: "M9C-DYNGATE-COMPUTED-NEG",
+    kind: "negative",
+    cls: "the same action with the specifier written as a plain string literal, so the module resolves",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-computed/negative",
+    match: ["missing authorization"],
+    note: "server-action-dynamic-gate-computed/negative: byte-for-byte its positive with ONE variable flipped — `await import('../lib/roles')` instead of `await import(specifier)`. Same module, same gate, same call, same mutation. The precision boundary the computed positive sits just outside of.",
+  },
+  {
+    id: "M9C-DYNGATE-PACKAGE-POS",
+    kind: "positive",
+    cls: "server mutation whose gate is bound through a dynamic import of a package outside the loaded source set",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-package/positive",
+    match: ["missing authorization"],
+    expectedTier: "review",
+    note: "server-action-dynamic-gate-package/positive: the other FAIL-SAFE half, and a DIFFERENT code point from the computed row — the specifier IS a string literal, so it evaluates; it is `resolveImport` that returns nothing. Strengthened the same way: `../lib/roles` exports a real gate named `requireAdmin` and sits in this fixture's own tree, so the pass must not reach for a same-named export it was not pointed at. A fail-open at the `if (resolved)` guard reds this row alone.",
+  },
+  {
+    id: "M9C-DYNGATE-PACKAGE-NEG",
+    kind: "negative",
+    cls: "the same action with the specifier naming the in-tree relative module instead of a package",
+    module: "M9",
+    location: "m9-corpus/action-dynamic-gate-package/negative",
+    match: ["missing authorization"],
+    note: "server-action-dynamic-gate-package/negative: byte-for-byte its positive with ONE variable flipped — `'../lib/roles'` instead of `'@vendor/org-utils'`. Same binding, same gate, same mutation. The precision boundary the package positive sits just outside of.",
   },
   // #1500 — #1462's own residual: the OTHER 6 of TanStack/tanstack.com's 12 missing-auth rows,
   // whose real check sits 4 resolvable hops out (not 2) and one hop is bound only through a

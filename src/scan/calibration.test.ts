@@ -969,6 +969,48 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
   });
 });
 
+describe("a corpus entry id cited in a source comment must exist (#1484's third correction)", () => {
+  // The defect this gates, found by review and not by any check: the rationale comment above
+  // `GATE_DEPTH` in app-router.ts named the row that protects it with an extra hyphen in the middle
+  // of `M9C-GATEDEPTH-NEG`. So the one grep a future reader would run — "which row catches me if I
+  // lower this?" — returned NOTHING, and the comment read as if the answer were recorded when it
+  // was not. That is the silent-omission shape: an argument resting on a citation nobody can
+  // follow. (This block cites the CORRECT id on purpose; a comment that spelled the broken one out
+  // would trip its own gate, which is the rule working.)
+  //
+  // POPULATION, MEASURED 2026-07-31 before the gate was written rather than assumed: 100 `-POS`/
+  // `-NEG`-shaped references across the git-tracked `src/**/*.ts`, of which exactly ONE dangled.
+  // Deliberately keyed to that naming convention and nothing wider — the same sweep over every
+  // `M<n>-…`-shaped token reads 40 "unknown" tokens, all of them finding ids and id PREFIXES rather
+  // than corpus entries, so a wider rule would be noise a reader learns to ignore.
+  const REFERENCE = /\bM\d+[A-Z]*-[A-Z0-9-]*-(?:POS|NEG)\b/g;
+  const SRC = fileURLToPath(new URL("../", import.meta.url));
+
+  function sourceFiles(dir: string): string[] {
+    const out: string[] = [];
+    for (const { name, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) out.push(...sourceFiles(full));
+      else if (name.endsWith(".ts") && !name.endsWith(".d.ts")) out.push(full);
+    }
+    return out;
+  }
+
+  it("every `-POS`/`-NEG` id named anywhere in src/ resolves to a real corpus entry", () => {
+    const ids = new Set(CORPUS.map((e) => e.id));
+    const dangling: string[] = [];
+    let cited = 0;
+    for (const file of sourceFiles(SRC)) {
+      for (const [token] of readFileSync(file, "utf8").matchAll(REFERENCE)) {
+        cited++;
+        if (!ids.has(token)) dangling.push(`${relative(SRC, file)}: ${token}`);
+      }
+    }
+    expect(dangling).toEqual([]);
+    // Canary: a regex that stopped matching, or a tree that stopped citing ids, passes vacuously.
+    expect(cited).toBeGreaterThan(50);
+  });
+});
+
 describe("#1355 self-matching `match` keys (a keyword that is a substring of its own fixture path)", () => {
   it("no corpus entry carries a key that is a substring of its own location", () => {
     const rows = selfMatchingMatchKeys(CORPUS);
@@ -1292,7 +1334,13 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "action-gate-strength-discarded", dir: "action-gate-strength-discarded", neg: "negative" },
     { check: "uncapped-retry-while", dir: "uncapped-retry-while", neg: "negative" },
     // #1462/#1460/#1461, same inverted scoring — the three residual FP families #1293/#1276 left open.
-    { check: "action-dynamic-gate", dir: "server-action-dynamic-gate", neg: "negative" },
+    // #1484 criterion 3, second pass: the bundled action-dynamic-gate positive carried four
+    // relevant findings and passed on any one of them — split into one dir per shape, each
+    // regressing at its own code point (see the entries' notes).
+    { check: "action-dynamic-gate-named", dir: "server-action-dynamic-gate-named", neg: "negative" },
+    { check: "action-dynamic-gate-namespace", dir: "server-action-dynamic-gate-namespace", neg: "negative" },
+    { check: "action-dynamic-gate-computed", dir: "server-action-dynamic-gate-computed", neg: "negative" },
+    { check: "action-dynamic-gate-package", dir: "server-action-dynamic-gate-package", neg: "negative" },
     { check: "ssr-module-helper", dir: "ssr-module-helper", neg: "negative" },
     { check: "waterfall-helper-exit", dir: "waterfall-helper-exit", neg: "negative" },
     // #1434, the last raw-text AUTH_PATTERN test in the pass. Same inverted scoring.

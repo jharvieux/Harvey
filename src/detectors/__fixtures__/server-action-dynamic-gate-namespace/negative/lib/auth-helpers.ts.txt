@@ -1,0 +1,7 @@
+import { authService } from "./db";
+
+export async function getAuthenticatedUser() {
+  const user = await authService.getCurrentUser();
+  if (!user) throw new Error("Not authenticated");
+  return user;
+}
