@@ -15,7 +15,7 @@
 // exactly the junk count this file must not emit.
 
 import type { SourceInput } from "../detectors/common.js";
-import type { Provenance } from "./external-corpus.js";
+import { EXTERNAL_CORPUS, type Provenance } from "./external-corpus.js";
 
 // #413: AI-authored repos measured for M6 hand-rolled-frequency. The M6 frequency question — "do
 // the catalogue's 17 measured-zero YES shapes fire on genuinely AI-generated code?" — needs only
@@ -82,6 +82,32 @@ export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
     curated: true,
   },
 ];
+
+export type FrequencyTier = Provenance | "curated";
+
+interface FrequencyCorpusTarget {
+  slug: string;
+  repo: string;
+  commit: string;
+  provenance: Provenance;
+  tier: FrequencyTier;
+}
+
+// #1524: three AI_FREQUENCY_CORPUS slugs (cravab, flori-web, effective) also gained a full
+// EXTERNAL_CORPUS entry for the unrelated drift-baseline measurement, so the two lists can
+// legitimately share a slug now (handrolled-frequency.test.ts's "pins must agree" check).
+// Concatenating the two lists undeduped would make a shared slug contribute TWICE to a
+// per-provenance-tier aggregate while a same-tier repo present in only one list contributes once
+// — a non-proportional double-count. EXTERNAL_CORPUS wins a shared slug: none of its entries are
+// `curated` teaching repos, so its provenance is the correct tier, and it is the corpus this
+// measurement already treats as canonical everywhere else.
+export function buildFrequencyTargets(): FrequencyCorpusTarget[] {
+  const externalSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+  return [
+    ...EXTERNAL_CORPUS.map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: t.provenance as FrequencyTier })),
+    ...AI_FREQUENCY_CORPUS.filter((t) => !externalSlugs.has(t.slug)).map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: (t.curated ? "curated" : t.provenance) as FrequencyTier })),
+  ];
+}
 
 interface MeasuredShape {
   /** Row number in docs/design/m6-handrolled-catalogue.md. */

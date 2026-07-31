@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { EXTERNAL_CORPUS } from "./external-corpus.js";
-import { AI_FREQUENCY_CORPUS, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "./handrolled-frequency.js";
+import { AI_FREQUENCY_CORPUS, buildFrequencyTargets, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "./handrolled-frequency.js";
 
 describe("measured shapes count their canonical example", () => {
   for (const shape of MEASURED_SHAPES) {
@@ -42,11 +42,16 @@ describe("catalogue bookkeeping", () => {
     }
   });
 
-  it("AI frequency targets are pinned to a full 40-hex commit, and any slug shared with the drift corpus agrees on the pin", () => {
+  it("AI frequency targets are pinned to a full 40-hex commit, and any slug shared with the drift corpus agrees on pin and provenance", () => {
     // #1524 gave cravab/flori-web/effective a full ExternalTarget entry too — shape frequency and
     // drift baseline are independent measurements over the SAME pinned tree, so overlap is now
     // intentional. What must never happen is the bookkeeping accident this check originally
     // guarded against: the same slug naming two DIFFERENT repos/commits in the two lists.
+    // Provenance is checked too (restored/strengthened alongside #1524's dedup fix, not merely
+    // left at "pin agrees"): buildFrequencyTargets() silently lets EXTERNAL_CORPUS's provenance
+    // win a shared slug (it decides which provenance TIER the repo's indicators are summed into),
+    // so a divergence there is a real data inconsistency, not a cosmetic one — it would previously
+    // have been invisible because nothing read AI_FREQUENCY_CORPUS's provenance for a shared slug.
     const corpusBySlug = new Map(EXTERNAL_CORPUS.map((t) => [t.slug, t]));
     for (const t of AI_FREQUENCY_CORPUS) {
       expect(t.commit, t.slug).toMatch(/^[0-9a-f]{40}$/);
@@ -54,12 +59,44 @@ describe("catalogue bookkeeping", () => {
       if (shared) {
         expect(shared.repo, t.slug).toBe(t.repo);
         expect(shared.commit, t.slug).toBe(t.commit);
+        expect(shared.provenance, t.slug).toBe(t.provenance);
       }
     }
   });
 
   it("has at least one genuinely AI-generated repo to answer the #413 question", () => {
     expect(AI_FREQUENCY_CORPUS.some((t) => t.provenance === "ai-generated" && !t.curated)).toBe(true);
+  });
+
+  // #1524: src/cli/handrolled-frequency.ts sums per-repo indicator counts by iterating the built
+  // targets list once per tier — a shared slug appearing twice would contribute to that sum twice,
+  // while a same-tier repo present in only one list contributes once. This asserts the real overlap
+  // (cravab/flori-web/effective are genuinely in both lists, per the assertion below) collapses to
+  // one entry per slug, and that EXTERNAL_CORPUS's provenance wins the shared slug.
+  describe("buildFrequencyTargets dedupes the corpus overlap (#1524)", () => {
+    it("the overlap this test guards is real, not vacuous", () => {
+      const externalSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+      const overlap = AI_FREQUENCY_CORPUS.filter((t) => externalSlugs.has(t.slug));
+      expect(overlap.length).toBeGreaterThan(0);
+    });
+
+    it("never lists a slug more than once", () => {
+      const slugs = buildFrequencyTargets().map((t) => t.slug);
+      expect(new Set(slugs).size).toBe(slugs.length);
+    });
+
+    it("length equals the union of both corpora's slugs, not their naive concatenation", () => {
+      const unionSize = new Set([...EXTERNAL_CORPUS.map((t) => t.slug), ...AI_FREQUENCY_CORPUS.map((t) => t.slug)]).size;
+      expect(buildFrequencyTargets().length).toBe(unionSize);
+    });
+
+    it("a slug present in EXTERNAL_CORPUS keeps that corpus's provenance, not AI_FREQUENCY_CORPUS's curated bucketing", () => {
+      const bySlug = new Map(buildFrequencyTargets().map((t) => [t.slug, t]));
+      for (const t of EXTERNAL_CORPUS) {
+        expect(bySlug.get(t.slug)?.provenance, t.slug).toBe(t.provenance);
+        expect(bySlug.get(t.slug)?.tier, t.slug).toBe(t.provenance);
+      }
+    });
   });
 
   it("shipped taxonomies exist in the real detector's output vocabulary", () => {
