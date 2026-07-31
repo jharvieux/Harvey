@@ -1,6 +1,6 @@
 {
-  "target": "http://127.0.0.1:3100",
-  "generatedAt": "2026-07-31T08:41:03.087Z",
+  "target": "http://127.0.0.1:3000",
+  "generatedAt": "2026-07-31T17:45:10.781Z",
   "allowDestructive": true,
   "probes": [
     {
@@ -17,20 +17,20 @@
     },
     {
       "findingId": "CACHE-CROSS-USER",
-      "status": "cleared",
+      "status": "caught",
       "severity": "High",
-      "evidence": "Probed 1 cacheable route(s); none served another user's cached response to anon."
+      "evidence": "/api/me/summary returns a per-identity body under a shared-cache directive (Cache-Control: public, s-maxage=60) with no Vary on the credential (Vary: Accept-Encoding): the authenticated and anon bodies differ, so the response is per-identity; no shared cache sits in front of this origin in the harness, so the leak is proven from the origin's own directives rather than from a captured hit. Any CDN/proxy in front of this origin will store Tenant A's personalized response under the path and replay it to every later visitor."
     },
     {
       "findingId": "ANON-PRIVILEGED-RPC",
       "status": "caught",
       "severity": "Critical",
-      "evidence": "Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised from INSIDE the function — the body executed as anon and only a data constraint stopped it); EXECUTE is granted to anon with no auth.uid() check."
+      "evidence": "Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised by the DATABASE ENGINE from inside the function (\"null value in column \"tenant_id\" of relation \"audit_logs\" violates not-null constraint\") — the body executed as anon and a data constraint, not the function, stopped it); EXECUTE is granted to anon with no auth.uid() check."
     }
   ],
   "summary": {
-    "caught": 3,
-    "cleared": 1,
+    "caught": 4,
+    "cleared": 0,
     "not-applicable": 0,
     "not-run": 0
   }

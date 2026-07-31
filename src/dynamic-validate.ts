@@ -313,6 +313,37 @@ function clientSuiteFailureFinding(targetDir: string, output: string): Finding {
   });
 }
 
+// #1672 — a dependency the stand-up REMOVED from the manifest before installing, so the app could
+// boot at all. Operator ruling 2026-07-31: the prune is allowed, and it must be visible in the
+// output. A stand-up that quietly drops dependencies is probing a codebase that does not exist.
+export interface PrunedDep {
+  name: string;
+  spec: string;
+  reason: string;
+}
+
+// The disclosure the ruling's condition requires: `confidence: "N/A"` so it lands in the rendered
+// report's "Checked & ruled out (not applicable)" section, naming EVERY pruned dependency and why,
+// rather than living only in the stand-up log.
+export function prunedDepsFinding(appDir: string, pruned: PrunedDep[]): Finding {
+  return mechanicalFinding({
+    id: "M2-DEPPRUNE-00",
+    title: `Dependencies removed from the manifest before the live stand-up could install (${pruned.length})`,
+    severity: "Info",
+    category: "Dynamic pen-test (M2)",
+    taxonomy: "M2 — Scope disclosure",
+    location: join(appDir, "package.json"),
+    evidence: `The app under test was NOT installed from its manifest as committed. ${pruned.length} declared dependenc${pruned.length === 1 ? "y was" : "ies were"} removed before \`npm install\` so the app could boot: ${pruned
+      .map((d) => `"${d.name}": "${d.spec}" (${d.reason})`)
+      .join("; ")}. Every M2 result in this report therefore describes the app MINUS ${pruned.length === 1 ? "that dependency" : "those dependencies"}; any behaviour they would have contributed at runtime was not exercised. The static supply-chain tier still reads the unmodified manifest, so their presence is assessed there.`,
+    impact:
+      "A live probe is only evidence about the code it actually ran. A dependency dropped to make the install succeed is a silent narrowing of the target unless it is stated, and a narrowed target reads exactly like a clean one.",
+    fix: "If a pruned dependency is a deliberate scan fixture, nothing to change. If it is real application code, the M2 verdict for any route touching it is not assessed — resolve the dependency and re-run the stand-up.",
+    precisionTier: "high",
+    confidence: "N/A",
+  });
+}
+
 // The live-execution seam. The real runner shells out to `supabase start`, applies the client
 // migrations, seeds two tenants, runs the app, drives pentest.ts, and (bonus) the client's own
 // suite; a test injects a fake. `pentest` returns the M2 findings so the harness can bank them.
@@ -344,7 +375,7 @@ export interface StandUpResult {
 
 export interface StandUpRunner {
   standUpDb: (targetDir: string, plan: ProvisioningPlan) => StandUpResult;
-  runApp: (targetDir: string) => { ok: boolean; output: string };
+  runApp: (targetDir: string) => { ok: boolean; output: string; prunedDeps?: PrunedDep[] };
   pentest: (targetDir: string, coverage: Coverage) => { ok: boolean; findings: Finding[]; output: string };
   clientSuite?: (targetDir: string, suite: ClientSecuritySuite) => { ok: boolean; output: string };
 }
@@ -423,8 +454,12 @@ function probeOneProject(opts: {
     notes.push(`seed: ${plan.seed.scopedTables.length - scopedSkipped}/${plan.seed.scopedTables.length} scoped table(s) seeded and probed; ${db.seedSkips.length} table(s) skipped-and-disclosed (per-table SAVEPOINT, #649)`);
   }
 
+  // #1672 — pruned deps are disclosed whether or not the app then booted: the install DID happen
+  // against a modified manifest, so the narrowing is a fact about the run either way.
+  let prunedDeps: PrunedDep[] = [];
   if (coverage === "full") {
     const app = runner.runApp(appDir);
+    prunedDeps = app.prunedDeps ?? [];
     if (!app.ok) {
       coverage = "postgrest-only";
       limitations.push(`the app failed to run (${app.output}) — degraded to PostgREST-only probing`);
@@ -437,6 +472,13 @@ function probeOneProject(opts: {
   }
 
   const findings = [...pt.findings];
+
+  if (prunedDeps.length) {
+    findings.push(prunedDepsFinding(appDir, prunedDeps));
+    limitations.push(
+      `app install: ${prunedDeps.length} declared dependenc${prunedDeps.length === 1 ? "y was" : "ies were"} PRUNED from the manifest before \`npm install\` (${prunedDeps.map((d) => `${d.name}@${d.spec}`).join(", ")}) — the app probed is the target MINUS ${prunedDeps.length === 1 ? "it" : "them"} (M2-DEPPRUNE-00)`,
+    );
+  }
 
   // #875 — every M2 run that actually probed ships the scope statement WITH its results: what was
   // stood up, from which schema at which commit, which surfaces/identities were exercised, and that
