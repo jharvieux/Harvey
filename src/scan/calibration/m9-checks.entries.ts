@@ -649,4 +649,29 @@ export const m9CheckEntries: CorpusEntry[] = [
     match: ["Data-fetching waterfall"],
     note: "waterfall-helper-exit/negative: `await requireUnlocked({ isLocked: … })` — the `throw redirect(…)` is one hop out, where #1292's syntactic test cannot see it. Scored INSIDE #1438/#1441's model: the second query is a write, so #1441's abort-over-write rule applies. A read/read version would legitimately still fire under #1438's relaxation and would prove nothing about whether the exit inside the helper was seen.",
   },
+
+  // #1434 — #1263's residual. detectClientSuppliedOwnerId was the LAST raw-text AUTH_PATTERN test
+  // in the pass, so a house-style gate was invisible to it and its evidence told the client the
+  // action "makes no auth/session call at all" — on the higher-severity of the two findings. Same
+  // inversion as the pairs above: the NEGATIVE is the gated action that must now clear, the
+  // POSITIVE the near-identical action whose helper enforces nothing.
+  {
+    id: "M9C-OWNER-GATE-POS",
+    kind: "positive",
+    cls: "service-role action writing a client-supplied owner id, vouched for only by a logger — and by a comment",
+    module: "M9",
+    location: "m9-corpus/owner-id-helper-gate/positive",
+    match: ["Client-supplied owner id"],
+    expectedTier: "review",
+    note: "owner-id-helper-gate/positive carries BOTH #1434 shapes and a `match` key is satisfied by one finding, so this entry alone would stay green with half the fix reverted — the per-shape lock is app-router.test.ts's assertion that the dir yields exactly 2 owner-id findings, one per action. `updateUserProfile`'s only helper is `auditLog`, which reads the session for a log line, cannot deny and whose result is discarded (#1439's strength test, reused here). `updateUserEmail` carries `// TODO: requireUser() before shipping`, which the raw-text test read as a real auth call and silenced — a false negative, not just false evidence.",
+  },
+  {
+    id: "M9C-OWNER-GATE-NEG",
+    kind: "negative",
+    cls: "service-role action writing a client-supplied owner id behind a house-style gate that throws",
+    module: "M9",
+    location: "m9-corpus/owner-id-helper-gate/negative",
+    match: ["Client-supplied owner id"],
+    note: "owner-id-helper-gate/negative: P-SVC-NOAUTH-BARE-ID's exact shape plus `await ensureMember(userId)`, which resolves to a helper that reads the session and throws. Silence here is the same answer an inline `await requireUser()` already gets — auth called, nothing bound — so resolving the callee adds no policy, it applies the existing one to a form the raw-text test could not see. The dir's own `Server Action missing input validation` row is the scope control: it proves the fixture was scanned, and it does not carry this entry's match key.",
+  },
 ];
