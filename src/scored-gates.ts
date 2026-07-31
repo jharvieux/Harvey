@@ -173,6 +173,28 @@ export const SCORED_GATES: readonly ScoredGate[] = [
 ];
 
 /**
+ * #1691 — MEASURED-NUMBER CLIs OUTSIDE THE `validate-*` DISCOVERY PREDICATE.
+ *
+ * This gate's population is `src/cli/validate-*.ts`, and that boundary was unstated, which reads as
+ * coverage: a tool that produces a number and runs nowhere is invisible here purely because of what
+ * it is called. `genai-admission-census` was exactly that — #1600's own finding is that a WITHDRAWN
+ * ratio survived a 3x growth of the corpus because nothing re-measured it, and its replacement
+ * shipped with the same defect.
+ *
+ * Enumerated rather than discovered, because "produces a measured number" has no filename predicate.
+ * That is a disclosure row, not a suppression list: the entries below are held to the SAME cadence
+ * check the scored gates get, so a venue that stops invoking one fails this gate.
+ */
+export const MEASURED_OUTSIDE_DISCOVERY: readonly ScoredGate[] = [
+  {
+    id: "genai-admission-census",
+    script: "genai-admission-census",
+    measures: "POPULATION available to a commit-level self-admitted-GenAI comparison over the pinned corpus (#1600)",
+    cadence: { kind: "workflow", file: ".github/workflows/genai-census.yml", job: "genai-census", when: "monthly (3rd, 05:00 UTC) + workflow_dispatch + PR on the corpus/classifier" },
+  },
+];
+
+/**
  * The other `src/cli/validate-*.ts` CLIs, each with the reason it produces no score. Present so
  * discovery is exhaustive: a new validate-* CLI must land in one list or the other.
  */
@@ -208,10 +230,39 @@ export interface GateInputs {
   readonly workflows: Readonly<Record<string, string>>;
 }
 
+/**
+ * The workflow text with its `paths:`/`paths-ignore:` trigger lists removed.
+ *
+ * MEASURED 2026-07-31 (#1691): a workflow that named `src/cli/<gate>.ts` ONLY in its PR-trigger
+ * filter satisfied the cadence check. A path filter says which diffs start the job, never that the
+ * job runs the tool — so deleting the actual invocation left this gate green, which is the same
+ * false pass the gate exists to remove one level up.
+ */
+function withoutTriggerFilters(yml: string): string {
+  const out: string[] = [];
+  let skipIndent: number | undefined;
+  for (const line of yml.split("\n")) {
+    const indent = line.length - line.trimStart().length;
+    if (skipIndent !== undefined && (line.trim() === "" || indent > skipIndent)) continue;
+    skipIndent = /^\s*paths(-ignore)?:\s*$/.test(line) ? indent : undefined;
+    if (skipIndent === undefined) out.push(line);
+  }
+  return out.join("\n");
+}
+
+/**
+ * Whether `yml` (already stripped of trigger filters) invokes the gate — by CLI path, or through the
+ * package script, which is how secbench.yml and free-recall.yml do it.
+ */
+function invokes(yml: string, gate: ScoredGate): boolean {
+  return yml.includes(`src/cli/${gate.id}.ts`) || yml.includes(`pnpm ${gate.script}`);
+}
+
 export function checkScoredGates(
   inputs: GateInputs,
   gates: readonly ScoredGate[] = SCORED_GATES,
   notScored: readonly { id: string; why: string }[] = NOT_SCORED,
+  outsideDiscovery: readonly ScoredGate[] = MEASURED_OUTSIDE_DISCOVERY,
 ): string[] {
   const violations: string[] = [];
   const classified = new Set([...gates.map((g) => g.id), ...notScored.map((n) => n.id)]);
@@ -228,7 +279,9 @@ export function checkScoredGates(
     if (!found.has(id)) violations.push(`${id}: registered in src/scored-gates.ts but src/cli/${id}.ts does not exist — stale row.`);
   }
 
-  for (const gate of gates) {
+  // The disclosed rows outside the discovery predicate get the same cadence check, which is what
+  // makes them a disclosure rather than an exemption (#1691).
+  for (const gate of [...gates, ...outsideDiscovery]) {
     const cmd = inputs.scripts[gate.script];
     if (cmd === undefined) {
       violations.push(`${gate.id}: no package.json script "${gate.script}" — four of the five scored gates had none, which is why nobody could find them (#1288).`);
@@ -245,7 +298,7 @@ export function checkScoredGates(
       const text = inputs.workflows[gate.cadence.file];
       if (text === undefined) {
         violations.push(`${gate.id}: declares cadence in ${gate.cadence.file}, which does not exist.`);
-      } else if (!text.includes(`src/cli/${gate.id}.ts`)) {
+      } else if (!invokes(withoutTriggerFilters(text), gate)) {
         violations.push(
           `${gate.id}: declares cadence in ${gate.cadence.file} (${gate.cadence.job}) but that workflow never invokes src/cli/${gate.id}.ts — the cadence was removed, or never landed.`,
         );

@@ -171,6 +171,15 @@
         "issue": 1620,
         "at": "2026-07-31"
       }
+    },
+    {
+      "workflow": ".github/workflows/genai-census.yml",
+      "marker": "ci-genai-census-alert",
+      "pendingProof": {
+        "why": "The workflow FILE does not yet exist on the default branch, which is the one case #1333's narrowing left the hatch for. ATTEMPTED rather than assumed, 2026-07-31: `gh workflow run genai-census.yml --ref feature/sweep-reasons-1646 -f alert_drill=true` returned `HTTP 404: workflow genai-census.yml not found on the default branch`. #1333 measured that a NEW alert path in an EXISTING workflow file needs no hatch at all, so this exemption does not generalise to one. One command closes it once the file is on main: `gh workflow run genai-census.yml --ref main -f alert_drill=true` \u2014 the drill fails the job before the 18 clones, so it costs seconds.",
+        "tracking": 1711,
+        "since": "2026-07-31"
+      }
     }
   ],
   "unconverted": [

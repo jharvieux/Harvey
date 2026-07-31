@@ -269,8 +269,13 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // Retire it the same way: drill it, record provenBy, drop pendingProof, and this list goes back to
   // empty, which is the state it should normally be in. `pendingProof`'s own behaviour stays covered
   // by the fixture tests above, so naming the current occupant here does not un-test the mechanism.
+  //
+  // TWO occupants since #1691 (2026-07-31). ci-genai-census-alert is the OTHER kind, and the one the
+  // `_why` block still reserves the hatch for after #1333 narrowed it: genai-census.yml is a brand
+  // new workflow FILE, so the dispatch 404s on the default branch. ATTEMPTED, not assumed — the 404
+  // is quoted verbatim in its `why`. Tracked by #1711, one command from retirement once it merges.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-main-red-alert"]);
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-genai-census-alert", "ci-main-red-alert"]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 

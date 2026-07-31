@@ -47,6 +47,11 @@
       "note": "Monthly, so a dead run is invisible for 30 days. The CLI already refuses a zero-entry score; the receipt is what makes the fetch/lockfile-tree/osv phases upstream of it equally loud."
     },
     {
+      "workflow": ".github/workflows/genai-census.yml",
+      "expect": ["genai-admission-census"],
+      "note": "Monthly over 18 pinned third-party clones, so a run that dies in setup or in the fetch phase is invisible for 30 days and reads no differently from a quiet month. It is registered here even though the job installs no mechanical binaries \u2014 the exhaustive rule keys on those, and keying a receipt to them would leave every clone-heavy job that happens not to need semgrep outside the mechanism (#1691). The CLI's recordMeasured throws on units=0, so an empty census cannot render as a clean one."
+    },
+    {
       "workflow": ".github/workflows/free-recall.yml",
       "expect": ["free-recall"],
       "note": "Monthly over five THIRD-PARTY clones, so a run that dies in setup or in the fetch phase is invisible for 30 days. The CLI already refuses a zero-target score; the receipt covers every phase upstream of it. Added because the registry check FAILED LOUD on this workflow the moment #1185 landed it on main — the mechanism working exactly as designed."

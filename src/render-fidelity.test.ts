@@ -189,7 +189,13 @@ describe("#1435 a finding's own words survive the render seam", () => {
     // buildHtml handed back. This is the artifact end of "accounted for is not delivered".
     expect(written).toContain(esc("no M3 hotspot focus"));
     expect(renderFidelityBreaches(doc, written)).toEqual([]);
-  });
+    // The 30s is the measurement, not padding. This assertion spawns the real renderer in a child
+    // process and its wall time straddles vitest's 5s default: MEASURED 2026-07-31 on `origin/main`
+    // with NO local changes, this test timed out at 6153ms in one of three consecutive runs of the
+    // file alone. A gate that goes red on scheduling noise is read as noise and re-run away, which
+    // is how a real render-seam regression would be lost. Inside #1120's standing 60s ceiling, and
+    // below the spawnSync timeout above so a genuinely hung renderer still surfaces as itself.
+  }, 30_000);
 
   // #825 — the seam one step past the ticket body. `attachSuggestedFix` decides paid + green + above
   // the filing floor; by the time a diff is on a Finding, the report's only job is not to lose it.

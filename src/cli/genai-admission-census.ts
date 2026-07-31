@@ -45,7 +45,7 @@
 // REASON: the monthly re-measure covers the CENSUS only — `--density`, the arm-vs-arm ratio, is not on any cadence, because it needs a FULL-history clone plus a per-file `git blame` of every product source in each two-armed repo rather than the blobless fetch the census uses
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-31 — the workflow runs `pnpm genai-admission-census` without `--density`; the density half re-clones each usable repo at full depth (`git fetch` with no `--filter`) and blames every product file, which is why it is opt-in in the tool and off the schedule. Any ratio quoted from it is POINT-IN-TIME: quote it with its date and the corpus base commit, never as a standing fact.
-// FALSIFIER: test -d .github/workflows || exit 127; git grep -q -- '--density' -- '.github/workflows/genai-census.yml' && exit 0 || exit 1
+// FALSIFIER: test -f .github/workflows/genai-census.yml || exit 127; git grep -qF 'genai-admission-census.ts --density' -- '.github/workflows/genai-census.yml' && exit 0 || exit 1
 // TOUCHES: src/cli/genai-admission-census.ts .github/workflows/genai-census.yml
 
 import { execFileSync } from "node:child_process";
@@ -252,7 +252,8 @@ console.log(out.join("\n"));
 
 // #1509's receipt, after the scoring rather than before it: this job clones 18 repos on a monthly
 // schedule, so a run that dies in the fetch phase is invisible for 30 days and reads exactly like a
-// quiet month. recordMeasured throws on units=0, so an empty census cannot render as a clean one.
+// quiet month. recordMeasured throws on units=0, so an empty census fails loud instead of reading
+// as a clean one.
 recordMeasured("genai-admission-census", rows.length, "pinned corpus repos censused for commit-level self-admission");
 
 // Fail loud rather than let a broken classifier render as a negative result — see

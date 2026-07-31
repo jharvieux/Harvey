@@ -446,7 +446,7 @@ const SH_C_SEGMENT = /\bsh -c '[^']*'/g;
 const GREP_INVOCATION = /(?:^|[\s|;&(])((?:git\s+|command\s+|\/\S*\/)?grep)((?:\s+-{1,2}[^\s'"]+)*)/g;
 
 /** The first bare-`grep` invocation in `command` that uses `-v`, or undefined. */
-export function shadowedInvertGrep(command: string): string | undefined {
+function shadowedInvertGrep(command: string): string | undefined {
   for (const m of command.replace(SH_C_SEGMENT, " ").matchAll(GREP_INVOCATION)) {
     if (m[1] !== "grep") continue;
     const flags = m[2] ?? "";
@@ -464,7 +464,7 @@ export function shadowedInvertGrep(command: string): string | undefined {
 const UNGLOBBED_DOUBLE_STAR = /'((?::\([^)]*\))?[^']*\*\*[^']*)'/g;
 
 /** The first `**`-bearing git pathspec in `command` that lacks `:(glob)` magic, or undefined. */
-export function unglobbedPathspec(command: string): string | undefined {
+function unglobbedPathspec(command: string): string | undefined {
   if (!/\bgit\s+(?:grep|ls-files|log|diff)\b/.test(command)) return undefined;
   for (const m of command.matchAll(UNGLOBBED_DOUBLE_STAR)) {
     const spec = m[1] as string;

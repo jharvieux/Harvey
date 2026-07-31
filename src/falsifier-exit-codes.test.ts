@@ -84,13 +84,18 @@ describe("a falsifier that cannot run exits 127, never 'the blocker holds' (#142
     expect(unguarded.map((f) => `${f.at}  ${f.command.slice(0, 100)}`)).toEqual([]);
   });
 
+  // The 30s is not padding, it is the measurement. This arm spawns one `sh -c` per falsifier and its
+  // wall time straddles vitest's 5s default: MEASURED 2026-07-31 on `origin/main` with NO local
+  // changes, three consecutive runs of this file alone gave 2755ms, then 5597ms FAIL, then 6091ms
+  // FAIL. A gate that goes red on scheduling noise is read as noise, which is how a real 127
+  // regression would get re-run away. Well inside #1120's standing 60s ceiling for the light suite.
   it("every checkout-reading falsifier exits 127 with its input absent, not 1 or 2", () => {
     const wrong = all
       .filter((f) => !PURE_EXISTENCE.test(f.command) && !READS_NETWORK.test(f.command))
       .map((f) => ({ at: f.at, code: exitCodeInEmptyDir(f.command) }))
       .filter((r) => r.code !== 127);
     expect(wrong).toEqual([]);
-  });
+  }, 30_000);
 
   // Both arms have to be able to fail, and on the exact shapes that shipped — a bare grep (exit 2)
   // and an unguarded pipeline whose first stage dies (the last stage's exit 1 wins).

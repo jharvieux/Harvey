@@ -7,7 +7,7 @@
 # no test and no workflow, so nothing re-measured it. A population figure with no cadence decays the
 # same way a recall figure does.
 #
-# The reason block in src/cli/genai-admission-census.ts previously recorded this as DECISIONAL,
+# The census CLI's own reason block previously recorded this as DECISIONAL,
 # blocked on `.github/workflows/` being a supervised path. #1691 found that to be a false decline —
 # supervision stops the EDIT, never the CRITERION, and workflow grants are routine — so the venue is
 # here and the block now records what is genuinely still open: the `--density` half is off the
@@ -90,7 +90,7 @@ jobs:
       # detector. Nothing here shells out to semgrep/trufflehog/osv-scanner/gitleaks.
       - name: Census the pinned corpus
         run: |
-          pnpm genai-admission-census 2>&1 | tee "$RUNNER_TEMP/genai-census.log"
+          pnpm exec tsx src/cli/genai-admission-census.ts 2>&1 | tee "$RUNNER_TEMP/genai-census.log"
           exit "${PIPESTATUS[0]}"
 
       - name: Gate liveness — did this job actually census any repo?
