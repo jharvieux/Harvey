@@ -215,6 +215,41 @@ function installTargetDeps(dir: string, flags: readonly string[]): void {
 //
 // stderr, not the --json scorecard: #1564 makes that file a FUTURE run's --baseline-findings input,
 // and a timing key would travel into a comparison it has no business in.
+//
+// WHAT IT MEASURED, and it moves the answer #1574 was filed with.
+// PROVENANCE: MEASURED 2026-07-31 on a 10-core darwin box, `pnpm corpus-drift --install` over the
+// whole corpus (17 targets, 854s timed), n=1 for the run and n=2 for the three heaviest targets
+// (`--install --target <slug>`, second pass in close agreement: carbon 343s/331s, proposit 93s/90s,
+// saas-lite 91s/92s). Per-repeat numbers are in this PR's body; the run prints its own every time,
+// so nothing here has to be believed.
+//
+//   free-tier quick-scan  447.9s  52.5%     clone            61.9s   7.3%
+//   quality-scan          138.6s  16.2%     detect-static    61.7s   7.2%
+//   install               134.2s  15.7%     mutation-scan     9.4s   1.1%
+//
+// #1574's table split this as "~79% scanning / ~21% clone+install" and named the scanners as
+// "semgrep / detect-static / jscpd / knip". Both halves reconcile — 76.9% vs 21.1% here — but the
+// DOMINANT phase is one that table does not name at all: the FREE-TIER quick-scan, the full
+// `runMechanicalScan` the #261 invariant needs, which runs for the 6 targets carrying a
+// FREE_TIER_EXPECTATIONS entry and is 52.5% of the corpus on its own (247s of carbon's 343s). An
+// optimisation aimed at "the scanners" as the table describes them would have gone after
+// detect-static, which is 7.2%.
+//
+// WHAT IS NOT DONE HERE, each with the cost this run measured (#1574 criterion 3):
+//   * Caching the --install tree, #1574's option 1. Ceiling 134.2s (15.7%), and only on a cache
+//     HIT — the key would be the target's lockfile, so the first run after any pin bump pays it in
+//     full. The largest single install is documenso's 23.2s.
+//   * Caching scan results per (target sha, scanner version, rule set), option 2. Ceiling 657.6s
+//     (77%) and the only one with real headroom, which is what #1574 already suspected. Every input
+//     is pinned; the work is deriving a key that a semgrep rule edit invalidates, and #1710 makes
+//     the correctness bar higher than it looks — semgrep returned 47/62/70 findings across three
+//     identical carbon runs, so a cache would be pinning one draw from a distribution.
+//   * Bounding the per-target scan, option 3. carbon is 343s of 854s; bounding it to the corpus
+//     mean would buy ~290s and cost the corpus its only large target, which is the one that finds
+//     things the others do not. It would also need a counted not-assessed row naming what it
+//     skipped, per the disclosure family.
+// Option 4, sharding, IS done — #1586 — and is measured before/after in this PR's body: 22m04s
+// (n=3 single-job CI runs) to 11m00s (n=5 three-shard CI runs).
 const phaseSeconds: Record<string, Record<string, number>> = {};
 let phaseTarget = "";
 

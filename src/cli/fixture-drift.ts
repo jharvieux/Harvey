@@ -49,7 +49,6 @@ import {
   checkJscpdContract,
   checkKnipContract,
   checkTruffleHogContract,
-  checkVitalsContract,
   checkStrykerContract,
   checkLighthouseContract,
   checkSemgrepFixtureContract,

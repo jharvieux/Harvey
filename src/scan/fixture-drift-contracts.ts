@@ -245,7 +245,7 @@ export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScope
  * arrays), so a contract check that ran first would report a schema drift for a git failure, and
  * `notRunIf` would never be consulted.
  */
-export type FreshRunVerdict =
+type FreshRunVerdict =
   | { kind: "not-run"; reason: string }
   | { kind: "drift"; violations: string[] }
   | { kind: "ok" };

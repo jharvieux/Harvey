@@ -347,7 +347,7 @@ const SUPERSEDING_CONVENTION =
   + "If you cannot, disposition against the revised list and say in the PR body which list you graded. "
   + "Falsifier for the convention: `pnpm exec tsx src/cli/superseded-acceptance-census.ts` — any NEW flagged comment on an issue closed after 2026-07-31 is the convention not being followed.";
 
-export interface SupersedingComment {
+interface SupersedingComment {
   url: string;
   /** The heading that announced the list, or `a checklist` when the checkbox shape fired. */
   heading: string;
