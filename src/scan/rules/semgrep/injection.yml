@@ -143,6 +143,24 @@ rules:
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               - pattern: |
@@ -256,6 +274,24 @@ rules:
                           if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
@@ -374,6 +410,24 @@ rules:
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               - pattern: |
@@ -487,6 +541,24 @@ rules:
                           if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
@@ -819,6 +891,24 @@ rules:
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               - pattern: |
@@ -1069,6 +1159,24 @@ rules:
                           if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
@@ -1379,6 +1487,24 @@ rules:
                           if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1363: the same guard with the regex HOISTED to a named constant — how it is normally
+              # written once the regex is reused, and until now it read as vulnerable. metavariable-regex
+              # reads a metavariable's matched TEXT, so $RE binds to the identifier `OK` and the anchoring
+              # constraint has to move to the literal, bound alongside the guard by pattern-inside. `const`
+              # deliberately, not a bare `$RE = $LIT`: MEASURED 2026-07-31, the bare form also clears a
+              # guard whose regex was reassigned to /.*/ first — a sanitizer that clears a real bug.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
