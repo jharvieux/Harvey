@@ -368,7 +368,7 @@ difference at any magnitude.
 Recorded because #1600 requires it, and because quoting an unread number is the defect this section
 exists to correct.
 
-**Read in full (the retrieved PDF, end to end):**
+**Read in full (end to end, including appendices):**
 
 - **Xiao et al., "Self-Admitted GenAI Usage in Open-Source Software"** ([arXiv:2507.10422](https://arxiv.org/pdf/2507.10422), 9pp).
   Source of the method above. Load-bearing details that came from reading it rather than from a
@@ -393,6 +393,31 @@ exists to correct.
   in the other direction: they report human-written code carrying *more* maintainability issues and
   greater structural complexity, which cuts against the direction of the withdrawn claim.
 
+- **GitClear, "AI Copilot Code Quality" (v2025.2.5, February 2025)**, 34pp,
+  [PDF](https://gitclear-public.s3.us-west-2.amazonaws.com/GitClear-AI-Copilot-Code-Quality-2025.pdf).
+  Read end to end including all appendices, because its *design* is the alternative this issue asked
+  us to weigh, and four things are visible only from the appendices:
+  - **It carries no AI label at all.** The whole design is a calendar-year trend, 2020–2024. It never
+    identifies which code an assistant wrote; AI is inferred from the year. So it trades our
+    labelling problem for an uncontrolled one — everything else about software also changed over
+    those five years. That is a genuine cost, not a free lunch, and it is why the temporal design was
+    not simply adopted here.
+  - **Its headline duplicate-block figure compares two different sampling procedures.** Appendix A8:
+    2020–2023 were backfilled by analysing only "the largest (by Diff Delta) 1,000 commits made to
+    each repo", while 2024 was measured directly — commits scanned goes 19,805 (2020) → 56,495
+    (2024). The report argues the bias runs against its own conclusion; either way the "~10x" is not
+    a like-for-like year comparison.
+  - **The population is a customer base**, not a sample: Appendix A2 puts it at roughly two-thirds
+    private corporations that opted into anonymised data sharing, one third open source, and notes
+    that under half of what a conventional git stats aggregator counts as "lines changed" qualifies.
+  - **The 2025 row in its tables is a projection**, produced by fitting a quadratic in ChatGPT's code
+    interpreter (final appendix), printed in the same tables as the measured years.
+  Figures verified first-hand against Appendix A1, since the circulating summaries are what this
+  issue warns about: Moved lines 24.17% (2020) → 9.47% (2024); Copy/pasted 8.86% → 12.32%; churn
+  3.05% → 5.67%. The directional summaries in #1600's body are accurate to the source. **None of
+  these numbers is used as evidence for anything in this repo** — they are recorded so the next
+  reader does not have to re-derive whether the report supports what it is cited for.
+
 **Read in part:**
 
 - **Suh et al., "An Empirical Study on Automatically Detecting AI-Generated Source Code"**
@@ -403,12 +428,17 @@ exists to correct.
   own best fine-tuned model reaches F1 82.55. That is the reason no detector-based labelling was
   attempted here — the declared label was chosen instead.
 
-**Not read (cited nowhere, and no figure from either is used):**
+**Not read:**
 
-- GitClear's 2025 AI code-quality report and "Maintainability Gap" — vendor reports behind a
-  marketing page; the duplication/churn figures circulating from them are NOT quoted anywhere in this
-  repo. Note Xiao et al. §RQ3 tests the churn claim directly and does not reproduce it.
-- "Impact of GenAI on Code Expertise Models" (arXiv:2507.08160), and the devclass summary piece.
+- GitClear's separate "Maintainability Gap" page, "Impact of GenAI on Code Expertise Models"
+  (arXiv:2507.08160), and the devclass summary piece. Nothing is cited from any of them.
+
+**One tension worth recording**, now that both have been read rather than summarised: GitClear reads
+a rise in churn off the calendar, with no per-project AI label; Xiao et al. §RQ3 puts an adoption
+boundary *inside each project* (RDD at the first GenAI mention, 151 repos) and finds **no general
+increase in churn**. The two most credible external designs disagree, and the one with the tighter
+identification is the one that finds nothing. Our own null belongs in that context rather than being
+read as anomalous.
 
 ### Cadence
 
