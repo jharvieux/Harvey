@@ -193,14 +193,22 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
   // retired the same day once its drill ran (run 30376371298, issue #1430). site-smoke-alert
   // (#1509/#1543) occupied it the same way and was retired 2026-07-31 once site-smoke.yml landed on
-  // main and its drill ran (run 30595915001, issue #1598). ci-free-recall-alert (#1185/#1536) is the
-  // sole remaining occupant, under the same circularity: a drill only dispatches against a workflow
-  // already on the default branch. Retire it the same way — drill it on main, record provenBy, drop
-  // pendingProof — and this list goes back to empty, which is the state it should normally be in.
-  // `pendingProof`'s own behaviour stays covered by the fixture tests above, so naming the current
-  // occupants here does not un-test the mechanism.
+  // main and its drill ran (run 30595915001, issue #1598). Three occupants today, all under the same
+  // circularity — a drill only dispatches against a workflow already on the DEFAULT branch:
+  // ci-free-recall-alert (#1185/#1536), ci-semantic-freshness-alert (#1270/#1611) and
+  // ci-main-red-alert (#1507/#1612). The last one is the interesting case: ci.yml IS on main, but
+  // its `main-red` JOB is not, so main's copy of the file has no such job and the drill would prove
+  // nothing — the hatch is about what the default branch can RUN, not about which file exists.
+  // Retire each the same way — drill it on main, record provenBy, drop pendingProof — and this list
+  // goes back to empty, which is the state it should normally be in. `pendingProof`'s own behaviour
+  // stays covered by the fixture tests above, so naming the current occupants here does not un-test
+  // the mechanism.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-free-recall-alert"]);
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
+      "ci-free-recall-alert",
+      "ci-main-red-alert",
+      "ci-semantic-freshness-alert",
+    ]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 

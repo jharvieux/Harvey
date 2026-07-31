@@ -44,9 +44,15 @@
 
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-28 — `pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir <empty>` exits 1 with every corpus target NOT SCORED; no M1.pass.json is committed anywhere in this repo. The staleness-alarm half is tracked by #1270.
-// FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
+// PROVENANCE: MEASURED 2026-07-31 — `pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir <empty>` exits 1 with every corpus target NOT SCORED; `git ls-files | grep M1.pass.json` is still empty. The staleness half is no longer outstanding: semantic-freshness.yml alarms daily when the recorded number ages past the 30-day window (#1270), which bounds the gap without closing it.
+// FALSIFIER: test -d .github/workflows || exit 127; grep -rq -- '--artifacts-dir' .github/workflows/ && grep -rq 'validate-semantic\.ts' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
+//
+// The falsifier deliberately requires BOTH the scorer's own file AND an --artifacts-dir: the
+// staleness alarm shipped in the same directory under a name containing `validate-semantic` as a
+// substring, and a bare `grep -rq validate-semantic` would have read that alarm as the scoring
+// cadence it is explicitly NOT — a reason retiring itself on the arrival of its own consolation
+// prize.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -64,8 +70,15 @@ export type Cadence =
    * running daily on every PR — a wrong cadence printed by the gate whose whole job is cadences.
    */
   | { readonly kind: "workflow"; readonly file: string; readonly job: string; readonly when: string }
-  /** No cadence. Carries the issue tracking it; the reason lives in this file's header. */
-  | { readonly kind: "none"; readonly issue: number };
+  /**
+   * No cadence. Carries the issue tracking it; the reason lives in this file's header.
+   *
+   * `alarmedBy` is the second-best outcome for a gate whose input is produced outside anything a
+   * schedule drives: a workflow that does not RUN the gate, but watches whether its recorded number
+   * has aged out of the window that makes it evidence (#1270). Naming it is the point — "no cadence"
+   * and "no cadence and nothing watching" are different facts and used to print identically.
+   */
+  | { readonly kind: "none"; readonly issue: number; readonly alarmedBy?: { readonly file: string; readonly when: string } };
 
 export interface ScoredGate {
   /** CLI basename without extension — also the discovery key. */
@@ -133,7 +146,15 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-semantic",
     script: "validate:semantic",
     measures: "M1 semantic (paid LLM) recall against the recorded-pass answer key",
-    cadence: { kind: "none", issue: 1270 },
+    // The SCORE still has no cadence — its input is an interactive LLM pass, and the recorded claim
+    // about that, with its falsifier, is in this file's header. What #1270 shipped is the fallback:
+    // a daily job that fails loud when the recorded number ages out of the 30-day pass-artifact
+    // window, so the tier no longer goes dark unannounced.
+    cadence: {
+      kind: "none",
+      issue: 1270,
+      alarmedBy: { file: ".github/workflows/semantic-freshness.yml", when: "daily 09:00 UTC + workflow_dispatch" },
+    },
   },
 ];
 
@@ -152,6 +173,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
+  { id: "validate-semantic-freshness", why: "staleness alarm — reports how old the recorded M1 semantic measurement is, not what it scored (#1270)" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];
 
@@ -216,6 +238,10 @@ export function checkScoredGates(
       }
     } else if (!(gate.cadence.issue > 0)) {
       violations.push(`${gate.id}: has no cadence and names no tracking issue. An undisclosed gap never appears in a tally.`);
+    } else if (gate.cadence.alarmedBy && inputs.workflows[gate.cadence.alarmedBy.file] === undefined) {
+      // Same failing direction the `workflow` cadence has: a substitute alarm that stopped existing
+      // is worse than none, because the row still reads as watched.
+      violations.push(`${gate.id}: names ${gate.cadence.alarmedBy.file} as its staleness alarm, and that workflow does not exist.`);
     }
   }
 
@@ -248,6 +274,8 @@ export function describeCadence(cadence: Cadence): string {
     case "workflow":
       return `${cadence.file} — ${cadence.job} (${cadence.when})`;
     case "none":
-      return `NO CADENCE — runs only by hand, tracked by #${cadence.issue}`;
+      return cadence.alarmedBy
+        ? `NO CADENCE for the score — runs only by hand (#${cadence.issue}); its STALENESS is alarmed by ${cadence.alarmedBy.file} (${cadence.alarmedBy.when})`
+        : `NO CADENCE — runs only by hand, tracked by #${cadence.issue}`;
   }
 }

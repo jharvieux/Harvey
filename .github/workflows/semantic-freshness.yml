@@ -1,0 +1,115 @@
+# #1270 (remainder of #870) — the staleness alarm for the M1 SEMANTIC recall gate.
+#
+# #1288 gave every scored gate a cadence except this one, and the reason it gave is true: the input
+# `validate-semantic` scores is an interactive LLM pass (`/vuln-scan` → `/triage`), so no workflow
+# can produce it. #1288's own acceptance names the consequence and the remedy in one bullet —
+# "whatever genuinely cannot run on a cadence gets a STALENESS ALARM instead."
+#
+# This is that alarm. It does not score anything. It asks the one question a schedule CAN answer:
+# is the recorded semantic number still inside the 30-day window that makes it evidence about the
+# present (`MAX_PASS_AGE_MS`, src/audit-pass-artifact.ts)? Before it existed, the answer changed
+# silently — the tally would age out and the only thing that would happen is that a hand-run of
+# `validate-semantic`, in a session nobody was scheduled to have, would start printing NOT SCORED.
+#
+# MEASURED 2026-07-31 on the authoring machine: the check reads four corpus rows and exits in well
+# under a second — no clone, no binaries, no network. It is scheduled rather than per-PR because
+# what moves it is the CALENDAR, which no diff in this repo can speak to (the same argument
+# reasons-drift.yml and the conservation job's time-based fixture checks give).
+#
+# THE NEGATIVE CONTROL IS PART OF THE JOB (conservation.yml / reasons-drift.yml's posture, #1065's
+# lesson): today every row is inside the window, which is also exactly what an alarm that can no
+# longer fire looks like. The control moves the CLOCK — not the corpus — past the window and
+# requires both a non-zero exit and the GONE DARK wording, so a green run means "passed AND can
+# still fail" rather than "passed". A control that accepts any non-zero exit cannot tell the gate
+# firing for its own reason from the gate crashing (#1253 item 2).
+
+name: semantic-freshness
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # Daily 09:00 UTC — after reasons-drift (08:00) and site-smoke (08:15)
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-semantic-freshness-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  # On PRs too, but ONLY when the alarm's own moving parts move: the corpus dates, the freshness
+  # rule, the CLI, or this file. This is NOT a required check, so a path filter here cannot deadlock
+  # anything (#1107's rule applies to required contexts). A PR that edits `recordedOn` should hear
+  # about it before it merges, not at 09:00 the next morning.
+  pull_request:
+    paths:
+      - "src/scan/semantic-corpus.ts"
+      - "src/semantic-freshness.ts"
+      - "src/audit-pass-artifact.ts"
+      - "src/cli/validate-semantic-freshness.ts"
+      - "reports/semantic-recall/**"
+      - ".github/workflows/semantic-freshness.yml"
+
+concurrency:
+  group: semantic-freshness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-freshness:
+    name: the recorded M1 semantic number is still inside its window
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a semantic-freshness failure."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Is the recorded M1 semantic measurement still inside its 30-day window?
+        run: pnpm validate:semantic-freshness
+
+      # Moves the CLOCK, never the corpus: a control that edited `recordedOn` would be testing a
+      # file it also has to leave untouched, and would pass on a repo whose real dates had already
+      # aged out. 400 days is far enough that no future corpus edit can accidentally satisfy it.
+      - name: Negative control — a clock past the window must FAIL, with the GONE DARK reason
+        run: |
+          set -uo pipefail
+          future=$(date -u -d "+400 days" +%Y-%m-%d)
+          if out=$(pnpm validate:semantic-freshness --now "$future" 2>&1); then
+            printf '%s\n' "$out"
+            echo "::error::Every recorded semantic measurement read as fresh 400 days from now. The alarm cannot fire, so the PASS above means nothing (#1065)."
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qF 'SEMANTIC RECALL GONE DARK'; then
+            echo "::error::validate:semantic-freshness exited non-zero for a clock 400 days ahead, but not by reporting GONE DARK. A control that passes on any failure is not a control (#1253 item 2)."
+            exit 1
+          fi
+
+      # Scheduled and dispatched failures go red on a branch nobody watches. `pull_request` is
+      # deliberately NOT in this condition: a PR failure is already in front of its author, and
+      # opening a tracking issue per PR would bury the real alarm.
+      - name: Open or update the semantic-freshness tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-semantic-freshness-alert
+          label-description: Auto-opened when the recorded M1 semantic recall measurement ages past its 30-day window
+          title: M1 semantic recall has gone dark — the recorded measurement is past its window
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The recorded M1 SEMANTIC recall measurement is older than the 30-day pass-artifact window (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), or the negative control stopped failing (the alarm itself broke — fix that before trusting a pass). While it is stale, #870's risk is live again: a `briefs/scan-extras.txt` edit, a model change or an `fp-rules.txt` tweak can degrade the paid semantic tier and nothing will fail. The fix is to RE-RUN the semantic pass over the stale targets and re-score it — `docs/design/semantic-recall-gate.md` has the loop, and `pnpm record-pass --module M1 --pass semantic --out reports/semantic-recall/<slug>` is where the evidence lands. Moving `recordedOn` in src/scan/semantic-corpus.ts without a re-measurement silences this alarm by falsifying the corpus; do not do that. Close this issue once green."
