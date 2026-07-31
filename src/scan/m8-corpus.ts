@@ -150,9 +150,12 @@ export const M8_CORPUS_CONFIGS: Record<string, M8CorpusConfig> = {
   // multi-tenant-starter --install --m8`, i.e. network clone + install + Stryker — on one developer
   // laptop: 17.5s / 10.5s / 9.8s end to end (corpus-drift's own per-target banner: 16s / 9s / 8s;
   // the first run pays a cold npm cache). Stryker's own mutation phase is the small part of that:
-  // it reported `Done in 1 second.` on all three, over 23 mutants. A CI runner is slower again, so
-  // quote the phase and the machine or re-run the command — not a number from this comment. Either
-  // way it is nowhere near the original suite's one-Docker-container-start-per-mutant.
+  // it reported `Done in 1 second.` on all three, over 23 mutants. The number that actually sizes
+  // the monthly job is the RUNNER's, and it is ~3x the laptop's: MEASURED on a GitHub runner the
+  // same day (PR #1693, job 91187639590, the corpus-m8 step this target was wired into), the same
+  // command reported `multi-tenant-starter: 30s` and reproduced 95.7% (22/23). Quote the phase and
+  // the machine or re-run the command — not a bare number from this comment. Either way it is
+  // nowhere near the original suite's one-Docker-container-start-per-mutant.
   //
   // See external-corpus.ts's multi-tenant-starter M8 baseline for the accepted trade this implies
   // (a stubbed suite can score differently from the suite it stands in for) and the one surviving
