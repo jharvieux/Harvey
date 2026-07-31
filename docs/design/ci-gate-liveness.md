@@ -172,8 +172,9 @@ run column is therefore per row, resolved from each job id via
 | `acceptance-close-selftest` | 8 hermetic cases | — | 30640273614 |
 | `acceptance-close` | 1 closed issue over 3 surfaces | — | 30640273614 |
 
-`supervised-declines-selftest` scored **9** on that run and scores **17** after the precision fix
-below; the run above is cited for what it measured on the day, not as the current count.
+`supervised-declines-selftest` scored **9** on that run and scores **20** after the precision fix
+below — MEASURED from the receipt of run 30643557209, not counted by hand; the run in the table is
+cited for what it measured on the day, not as the current count.
 
 `supervised-declines` (the live scan) is the one id with no MEASURED run: it runs on no
 `pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.
