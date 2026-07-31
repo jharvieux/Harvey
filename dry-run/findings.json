@@ -12847,7 +12847,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
-    "location": "src/owasp-react/rsc-fetch-unvalidated.tsx:10",
+    "location": "src/owasp-react/rsc-arrow-fetch-unvalidated.tsx:15",
     "status": "Open",
     "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
     "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
@@ -12866,6 +12866,54 @@
   },
   {
     "id": "SEM-430",
+    "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
+    "location": "src/owasp-react/rsc-arrow-untyped-loader.ts:14",
+    "status": "Open",
+    "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
+    "id": "SEM-431",
+    "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
+    "location": "src/owasp-react/rsc-fetch-unvalidated.tsx:10",
+    "status": "Open",
+    "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
+    "id": "SEM-432",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -12889,7 +12937,7 @@
     ]
   },
   {
-    "id": "SEM-431",
+    "id": "SEM-433",
     "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it recognises secrets by the PARAMETER NAME only. Names deliberately left out — `session`, `code`, and anything project-specific — are not assessed, so a credential carried under a different parameter name will not appear here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12913,7 +12961,7 @@
     ]
   },
   {
-    "id": "SEM-432",
+    "id": "SEM-434",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it fires only when the fallback literal is SECRET-SHAPED — a known key-format prefix, or a long hex/base64 string. A hardcoded fallback credential that does not look like one (a short password, a project-specific token format) is not assessed by this rule.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -12937,7 +12985,7 @@
     ]
   },
   {
-    "id": "SEM-433",
+    "id": "SEM-435",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -12965,7 +13013,7 @@
     ]
   },
   {
-    "id": "SEM-434",
+    "id": "SEM-436",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -12994,7 +13042,7 @@
     ]
   },
   {
-    "id": "SEM-435",
+    "id": "SEM-437",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",

@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readNamesSafe } from "../../../fs-walk.js";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { parse, stringify } from "yaml";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // #1221: the taint SOURCE vocabulary drifted apart rule by rule. Twelve rules carried a
 // byte-identical hand-copied source list and the widenings of #570/#984/#987/#601 landed on some
@@ -16,6 +19,35 @@ import { describe, expect, it } from "vitest";
 // that hand-rolls its own source list is the defect, and it now cannot land silently.
 
 const RULES_DIR = dirname(fileURLToPath(import.meta.url));
+
+// The executable half of this file needs the real binary. `pnpm verify`'s CI job deliberately does
+// not install it, so the block below skips there — and a skipIf is a silent pass by design, which is
+// this repo's own worst failure shape. Two things close that: `heavy CLI tests (shard 3/3)` runs this
+// file with HARVEY_REQUIRE_SEMGREP=1, which turns a missing binary into a red run instead of a skip;
+// and the two mustCatch corpus rows (P-RSC-ARROW-TYPED-BINDING / P-RSC-ARROW-UNTYPED-BINDING) gate
+// the same arms through `validate-calibration` in shard 1.
+const SEMGREP_PRESENT = ((): boolean => {
+  try {
+    execFileSync("which", ["semgrep"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+if (process.env.HARVEY_REQUIRE_SEMGREP === "1" && !SEMGREP_PRESENT) {
+  throw new Error("HARVEY_REQUIRE_SEMGREP=1 but semgrep is not on PATH — the pattern-match block would have skipped silently");
+}
+if (!SEMGREP_PRESENT) {
+  console.warn(
+    "⚠ shared-sources.test.ts: semgrep absent — the block that EXECUTES the canonical source block against probes did not run.\n" +
+      "  It is the only check here that can catch a pattern that is present but inert (#1544). CI runs it in `heavy CLI tests (shard 3/3)`.",
+  );
+}
+
+const probeDirs: string[] = [];
+afterAll(() => {
+  for (const d of probeDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 // Rules that deliberately do NOT take the canonical block. Each is a judgment about what the rule
 // is ABOUT, not an oversight — an unexplained absence from this map is what the test catches.
@@ -130,6 +162,8 @@ describe("canonical request-taint source block (#1221)", () => {
       "function $RSCFN(..., { ..., $RSCBIND, ... }: $T, ...) { ... }",
       "(..., { ..., $RSCBIND, ... }, ...) => ...",
       "(..., { ..., $RSCBIND, ... }: $T, ...) => ...",
+      "(..., { ..., $RSCBIND, ... }, ...) => { ... }",
+      "(..., { ..., $RSCBIND, ... }: $T, ...) => { ... }",
       "const { ..., $RSCBIND, ... } = $SRC;",
     ]) {
       expect(
@@ -145,6 +179,93 @@ describe("canonical request-taint source block (#1221)", () => {
     expect(canonical, "the $RSCBIND binding must be constrained to the RSC prop names").toMatch(
       /metavariable: \$RSCBIND\n\s+regex: \^\(params\|searchParams\)\$/,
     );
+  });
+
+  // EVERY ASSERTION ABOVE IS A STRING COMPARISON, and #1544 proved that is not enough. Its first cut
+  // shipped `(..., { ..., $RSCBIND, ... }, ...) => ...`, which the test above happily confirmed was
+  // PRESENT — while MEASURED 2026-07-31 (semgrep 1.164.0) that spelling matches an EXPRESSION-bodied
+  // arrow only and returns 0 on `({ params }) => { … }`, the only spelling the real world uses (40
+  // occurrences in 33 files across the 17 pinned corpus repos, against ZERO of the expression form).
+  // A pattern can be present and inert. So the block is now EXECUTED against probes, extracted from
+  // base.yml rather than retyped, so a stale or gutted arm fails here and not in a client's report.
+  describe.skipIf(!SEMGREP_PRESENT)("the canonical block, EXECUTED against probes rather than grepped (#1544)", () => {
+    // Written as source, not as an assertion about source: every file here is a real binding shape.
+    const MUST_MATCH: Record<string, string> = {
+      "fn-untyped.tsx": "export default async function Page({ params }) {\n  return fetch(`/x/${params.id}`);\n}\n",
+      "fn-typed.tsx": "export default async function Page({ params }: P) {\n  return fetch(`/x/${params.id}`);\n}\n",
+      "fn-layout-multikey.tsx": "export default function Layout({ children, params }: P) {\n  return fetch(`/x/${params.id}`);\n}\n",
+      "arrow-untyped-expr.ts": "export const a = ({ params }) => fetch(`/x/${params.id}`);\n",
+      "arrow-typed-expr.ts": "export const b = ({ params }: P) => fetch(`/x/${params.id}`);\n",
+      // The two the first cut of #1544 could not see. THE BODIES MUST HOLD MORE THAN ONE STATEMENT.
+      // MEASURED 2026-07-31 while proving this test's failing direction: with the `=> { ... }` arm
+      // deleted, a probe whose body is a bare `return …` STILL MATCHED — `=> ...` reaches a
+      // single-statement block. A one-line body therefore fails to separate the two spellings, and a
+      // probe set written that way is what let the regression ship. That is #1544's own lesson
+      // reproduced one layer down, inside the test written to catch it.
+      "arrow-untyped-block.ts": "export const loader = async ({ params }) => {\n  const res = await fetch(`/x/${params.id}`);\n  return res.json();\n};\n",
+      "arrow-typed-block.ts": "export const c = async ({ params }: P) => {\n  const res = await fetch(`/x/${params.id}`);\n  return res.json();\n};\n",
+      "in-body-destructure.ts": "export function Page(props) {\n  const { params } = props;\n  return fetch(`/x/${params.id}`);\n}\n",
+    };
+
+    // The shapes the binding requirement exists to SPARE. Each was measured firing before #1544.
+    const MUST_NOT_MATCH: Record<string, string> = {
+      "benign-plain-param.ts": "export function runJob(params) {\n  return fetch(`/x/${params.dir}`);\n}\n",
+      "benign-plain-param-arrow.ts": "export const run = (params) => {\n  return fetch(`/x/${params.dir}`);\n};\n",
+      "benign-loop-var.ts": "export function q(rows) {\n  for (const params of rows) fetch(`/x/${params.id}`);\n}\n",
+      "benign-array-destructure.ts": "export function h() {\n  const [params] = useUrlParams();\n  return fetch(`/x/${params.id}`);\n}\n",
+      "benign-import-const.ts": 'import { params } from "./config";\nexport const u = () => fetch(`/x/${params.id}`);\n',
+      "benign-local-assign.ts": "export function s(q) {\n  const searchParams = new URLSearchParams(q);\n  return fetch(`/x/${searchParams.get(\"a\")}`);\n}\n",
+    };
+
+    let matched: Set<string>;
+
+    beforeAll(() => {
+      const dir = mkdtempSync(join(tmpdir(), "harvey-shared-source-probe-"));
+      probeDirs.push(dir);
+      for (const [name, body] of Object.entries({ ...MUST_MATCH, ...MUST_NOT_MATCH })) {
+        writeFileSync(join(dir, name), body);
+      }
+
+      // The block itself, resolved by the YAML parser — anchors resolve at parse time, so this is the
+      // same mapping every rule below receives. Retyping it here would test a copy, not the block.
+      const doc = parse(readFileSync(join(RULES_DIR, "base.yml"), "utf8")) as Record<string, unknown>;
+      const block = doc["x-request-source"];
+      expect(block, "base.yml no longer declares x-request-source").toBeDefined();
+      const rulePath = join(dir, "probe-rule.yml");
+      writeFileSync(
+        rulePath,
+        stringify({
+          rules: [{ id: "probe-request-source", languages: ["javascript", "typescript"], severity: "INFO", message: "probe", ...(block as object) }],
+        }),
+      );
+
+      const out = execFileSync(
+        "semgrep",
+        ["--config", rulePath, "--metrics=off", "--no-git-ignore", "--json", "-j", "1", "--timeout", "0", dir],
+        { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+      );
+      const parsed = JSON.parse(out) as { results: { path: string }[]; errors: unknown[] };
+      // A config semgrep could not load reports ZERO findings and every MUST_NOT assertion passes —
+      // the silent-zero this whole file exists to prevent, one level down.
+      expect(parsed.errors, "semgrep reported config/parse errors, so a zero here means nothing").toEqual([]);
+      matched = new Set(parsed.results.map((r) => r.path.split("/").pop()!));
+    });
+
+    it.each(Object.keys(MUST_MATCH))("matches %s", (name) => {
+      expect(
+        matched.has(name),
+        `the canonical block did not match ${name}. A pattern-inside arm is missing or inert — the ` +
+          "shipped-and-silent state #1544's first cut was in for the two block-bodied arrow spellings.",
+      ).toBe(true);
+    });
+
+    it.each(Object.keys(MUST_NOT_MATCH))("spares %s", (name) => {
+      expect(
+        matched.has(name),
+        `the canonical block matched ${name}, which is not a request source. The binding requirement ` +
+          "or one of the not-insides has been widened away (#1344/#1544).",
+      ).toBe(false);
+    });
   });
 
   it("is used by every server-side taint rule that is not narrow by design", () => {

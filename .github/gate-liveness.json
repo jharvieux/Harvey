@@ -38,8 +38,8 @@
     },
     {
       "workflow": ".github/workflows/ci.yml",
-      "expect": ["heavy-cli-tests", "calibration-gate", "source-recall-gate"],
-      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only and source-recall-gate shard 2 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence."
+      "expect": ["heavy-cli-tests", "calibration-gate", "source-recall-gate", "shared-source-match"],
+      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only, source-recall-gate shard 2 only and shared-source-match shard 3 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence. shared-source-match (#1544) is the only venue where the pattern-MATCH half of shared-sources.test.ts can execute: it needs semgrep, which the `verify` job does not install."
     },
     {
       "workflow": ".github/workflows/secbench.yml",

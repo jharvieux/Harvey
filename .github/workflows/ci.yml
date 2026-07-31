@@ -254,6 +254,33 @@ jobs:
         if: matrix.shard == 2
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
+      # #1544: shared-sources.test.ts asserted for months that the canonical request-source block
+      # CONTAINED certain pattern strings. A pattern can be present and inert — the two block-bodied
+      # arrow arms shipped in a spelling that matched nothing the real world writes, and that test
+      # was green throughout. It now also EXECUTES the block against probes with real semgrep, which
+      # means it skips in `verify` (that job installs no binaries) and this is the only job where it
+      # can run. HARVEY_REQUIRE_SEMGREP=1 makes a missing binary red rather than a silent skip.
+      # Shard 3: shards 1 and 2 already carry a scored gate each, and this is one 3s vitest file.
+      - name: Shared request-source block — patterns MATCH probes, not merely present
+        id: shared-source-match
+        if: matrix.shard == 3
+        env:
+          HARVEY_REQUIRE_SEMGREP: "1"
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run src/scan/rules/semgrep/shared-sources.test.ts \
+            --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shared-sources.json"
+          ran=$(jq '(.numPassedTests // 0) + (.numFailedTests // 0)' "$RUNNER_TEMP/vitest-shared-sources.json")
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
+      - name: Record the shared-source match gate's executed-probe count
+        if: matrix.shard == 3
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: shared-source-match
+          units: ${{ steps.shared-source-match.outputs.ran }}
+          scope: "assertions executed against the canonical x-request-source block with real semgrep (passed + failed, skipped excluded)"
+
       # #1491 WITHDRAWN from this shard (2026-07-31), and the reason is recorded rather than left as
       # an absent step. A `supabase/setup-cli@v1` + `supabase start -x vector,logflare` pair landed
       # here to give `validate-connected` its first CI cadence, and the stack never came up:
@@ -289,7 +316,7 @@ jobs:
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
-          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }}
+          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }} ${{ matrix.shard == 3 && 'shared-source-match' || '' }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
