@@ -32,6 +32,7 @@ import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
 import { scanPropOvershare } from "./prop-overshare.js";
 import { scanDedupWithoutUnique } from "./dedup-unique.js";
+import { scanBolaCrossFile } from "./bola-cross-file.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
@@ -543,6 +544,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // constraint. Folds the migration DDL against the app-side predicate, the same shape
     // migration-column-drift.ts uses for item 13.
     findings.push(...scanDedupWithoutUnique(scanDir));
+
+    // #1267 — the route → repository → query chain across a module boundary: the cross-file
+    // complement of scanBolaOwner, which is single-file by construction. Non-overlap is structural
+    // (one requires the .eq() in the handler file, the other requires it in an imported module).
+    findings.push(...scanBolaCrossFile(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

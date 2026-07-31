@@ -55,6 +55,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
   "src/scan/prop-overshare.ts": "M1", // #1252 — whole object with a sensitive field handed to a component as one prop
   "src/scan/dedup-unique.ts": "M1", // #1257 / D-091 item 25 — SELECT-then-INSERT dedup with no UNIQUE constraint behind it
+  "src/scan/bola-cross-file.ts": "M1", // #1267 — route -> imported repository -> ownership-scoped query, across a module boundary
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/language-coverage.ts": "M1",

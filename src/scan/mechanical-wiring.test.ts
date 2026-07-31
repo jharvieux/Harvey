@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readEntriesSafe } from "../fs-walk.js";
 
 // #1252, found while shipping a detector: reverting the ONE line in mechanical.ts that calls a new
 // scanner left all 1704 tests in src/scan/ green. The detector's own unit tests still passed, its
@@ -24,7 +25,9 @@ const ELSEWHERE: Record<string, string> = {
 };
 
 function scannerExports(): { file: string; name: string }[] {
-  return readdirSync(SCAN_DIR)
+  return readEntriesSafe(SCAN_DIR)
+    .entries.filter((e) => !e.isDirectory)
+    .map((e) => e.name)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "mechanical.ts")
     .flatMap((file) => {
       const text = readFileSync(join(SCAN_DIR, file), "utf8");
