@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
-import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
@@ -105,7 +105,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (r.status !== 0) unverifiable(`\`gh issue view ${issue}\``, r.stderr || r.error?.message || "");
       return r.stdout.trim();
     };
-    const stale = checkDisclosureTracking(registry, trackingState);
+    // #1333: the control has to have a population — see seedClosedTrackingPopulation for why zero
+    // hatches would otherwise turn this control into a green light nobody can read.
+    const seeded = seedClosed ? seedClosedTrackingPopulation(registry) : registry;
+    if (seeded !== registry) {
+      console.log("\nℹ --seed-closed-tracking: no live hatch exists, so the control ran against a synthetic disclosure row. It still proves checkDisclosureTracking rejects a CLOSED tracker; it proves nothing about today's registry, which has nothing to check.");
+    }
+    const stale = checkDisclosureTracking(seeded, trackingState);
     violations.push(...stale);
     // Counted over BOTH hatches this function now covers — the no-alarm disclosures and the
     // unproven paths. Reporting only the first would understate what was checked, in the one line a

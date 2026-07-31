@@ -30,7 +30,16 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # #1507: PR runs are superseded by the next push to the same branch and cancelling them is pure
+  # savings. A run on `main` is not — it is the ONLY thing that tests the merged pair that
+  # `strict: false` never re-tested, and every main push shares one concurrency group (the ref is
+  # always refs/heads/main). MEASURED 2026-07-31 over the last 200 push-to-main CI runs: 165
+  # success, 3 failure, and **32 CANCELLED** — 16% of merges to main were never verified at all, and
+  # a cancelled run reports neither green nor red, so nothing distinguishes it from a clean one.
+  # Merges per day over the last 6 days, same measurement: 50, 49, 37, 18, 33, 13 — dense enough that
+  # one main run routinely outlives the next merge. It is a hole the alarm below could not have
+  # covered, because a cancelled run produces no result to alarm on.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Tier router: inspect the change set and decide which heavy jobs are needed.
@@ -245,7 +254,32 @@ jobs:
         if: matrix.shard == 2
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
-      # #1509: the two scored gates above ride inside `if: matrix.shard == N`, and a condition that
+      # #1491 WITHDRAWN from this shard (2026-07-31), and the reason is recorded rather than left as
+      # an absent step. A `supabase/setup-cli@v1` + `supabase start -x vector,logflare` pair landed
+      # here to give `validate-connected` its first CI cadence, and the stack never came up:
+      #
+      #   failed to read file: open targets/calibration/supabase/functions/admin-refund/index.ts:
+      #   no such file or directory
+      #
+      # `targets/calibration/supabase/config.toml` declares `[functions.admin-refund]` (the
+      # P-EDGEFN-VERIFY-JWT-OFF plant, which is a config-only fixture by design — the detector reads
+      # config.toml, not the handler) and `[functions.user-profile]` (its negative control), and
+      # NEITHER has a directory in git. A current Supabase CLI refuses to start on a declared function
+      # with no source; the 2.102.0 on the authoring machine tolerates it, which is why this shipped
+      # green locally and red in CI.
+      #
+      # Fixing it properly means either adding two real Edge Function directories to the calibration
+      # fixture — which changes the scanned corpus, so it drags in a dry-run regeneration and a
+      # re-score of the plant it exists to serve — or pinning the CLI to a version chosen for
+      # tolerating a broken fixture. Neither belongs in a PR whose subject is alert paths, so the
+      # steps are removed rather than made `continue-on-error`: a live-stack gate that is allowed to
+      # fail is a green shard that measured nothing, which is the exact defect #1509's liveness
+      # assert below exists to catch. `validate-connected` is BACK to `cadence: none` in
+      # src/scored-gates.ts with the reason above and a falsifier, so `validate-scored-gates` reports
+      # NO CADENCE — the registry must not assert a venue that has never once executed. #1491 stays
+      # open with the measured cause on it.
+
+      # #1509: the scored gates above ride inside `if: matrix.shard == N`, and a condition that
       # stopped matching would retire them in complete silence — the shape #1301/#1288 found when each
       # ran in no workflow at all. `expect` is matrix-dependent for the same reason: shard 1 must
       # prove the calibration gate ran, shard 2 the source-recall gate, and neither can be satisfied
@@ -312,3 +346,58 @@ jobs:
             fi
           done
           echo "OK"
+
+  # #1507 — the alarm for a RED `main`.
+  #
+  # Branch protection sets `strict: false`, so a branch is never required to be up to date before
+  # merging. That is a deliberate throughput choice at this merge rate, but it means the merged pair
+  # is tested for the FIRST time on `main`, after the fact — and #1507 measured that happening:
+  # #1445/#1446 added a raw `statSync` walk, #1451 added the repo-wide gate banning it, neither
+  # appeared in the other's diff so no conflict was possible, both were green on their own base, and
+  # `main` went red in the combination (c597012).
+  #
+  # What was missing was NOT the test. `on.push.branches: [main]` above already re-runs the full
+  # verify on the merged result, and it CAUGHT c597012 — MEASURED 2026-07-31, run 30412823963,
+  # conclusion `failure`, one of 3 failures in the last 200 push-to-main runs. What was missing is
+  # that a red `main` raised NOTHING: the only alert path in this file is heavy-cli's, and its
+  # condition is schedule/dispatch-only, so a failure on push reported to no one and `main` stayed
+  # red until the next PR author tripped over it. Re-running verify in a NEW workflow would have
+  # duplicated the compute and left that same gap; this raises the alarm on the run that already
+  # exists.
+  #
+  # It watches the AGGREGATE (`verify`), not heavy-cli, deliberately: in run 30412823963 the failing
+  # job was `build` (step `Run pnpm verify`), which no alert path covered at all. Also on `schedule`,
+  # where the same hole exists for every job except heavy-cli.
+  main-red:
+    name: a red main raises an alarm
+    needs: [verify]
+    # The job gates on the RESULT only; which events may alarm lives on the step below. Both halves
+    # could sit here, but src/alert-paths.ts reads STEP-level `if:` — deliberately, because that is
+    # where a condition can silently narrow an alert path to something nobody can dispatch (#1287's
+    # four unfired paths). Splitting them keeps one copy of the event list, in the place the gate
+    # checks. Cost: a ~10s checkout job on a red PR, where the step is skipped.
+    if: always() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      # `pull_request` is deliberately absent: a red PR is already in front of its author, and a
+      # tracking issue per red PR would bury the real alarm.
+      #
+      # The drill (`-f alert_drill=true`) fails heavy-cli shard 1, which fails `verify`, which
+      # reaches here — so ONE dispatch proves both of this workflow's alert paths, each into its own
+      # marker namespace.
+      - name: Open or update the red-main tracking issue
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-main-red-alert
+          label-description: Auto-opened when CI fails on the main branch itself
+          title: main is red — the merged result does not pass verify
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "CI failed on `main` itself (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, commit ${{ github.sha }}). Every subsequent PR now inherits this failure, so fix or revert before merging anything else. Note what this usually is NOT: a PR that was wrong. `strict: false` means the merged pair is tested for the first time here, so the common cause is two individually-green PRs whose combination breaks a repo-wide gate — `fs-walk`, `validate-reasons`, `validate-disclosure-venue`, the BOUNDED_RULES ratchet, `selfMatchingMatchKeys`, `test-only-exports` or the parity census — with neither PR appearing in the other's diff (#1507, #1451/#1445). Read the failing job before assuming the last merge is the culprit. Close this issue once `main` is green."
+

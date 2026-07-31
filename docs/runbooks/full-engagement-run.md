@@ -176,6 +176,26 @@ default, `--allow-non-local` needs separate written authorization, destructive p
 `--allow-destructive` and run only against the disposable seed), and how to interpret
 explore/verify output.
 
+**Bank the dynamic scorecard, and attach the verdicts to their M1 rows.** A verify pass that
+writes neither leaves M2 as a set of rows nobody can point at later. Both flags were built and
+neither was ever passed by anything (#1310/#1312), so pass them explicitly:
+
+```bash
+pnpm exec tsx src/cli/pentest.ts --mode=verify <id,id,...> \
+    --app-dir <target-dir> --allow-destructive \
+    --scorecard dry-run/dynamic-scorecard.json \        # the durable per-probe caught/cleared/
+                                                        # not-applicable/not-run record (#347)
+    --findings-doc <m1-findings.json> \                 # attach each verdict to the M1 finding
+    --findings-out <findings.annotated.json>            # it confirms (#5) — use the annotated
+                                                        # document downstream, not the input
+```
+
+`--scorecard` is what lets a `requires-live-run` deferral resolve against a real recorded outcome
+instead of a memory: `src/cli/dry-run-scorecard.ts` reads `dry-run/dynamic-scorecard.json` by
+default, so a banked run drops those rows to a real caught/missed verdict on the next regeneration.
+`--findings-doc` is what makes a proven exploit and the static finding it proves the SAME row in
+the deliverable rather than two unrelated ones — `--findings-out` is the document to carry forward.
+
 Once every enumerated app/backend/seam has a recorded test result, confirm completeness:
 
 ```bash

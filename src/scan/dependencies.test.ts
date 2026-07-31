@@ -8,8 +8,11 @@ import {
   CURATED_CLAIMS,
   osvUnavailableFinding,
   parseOsvFindings,
+  resolvedTree,
   type OsvScanResult,
+  type ResolvedTree,
 } from "./dependencies.js";
+import type { Finding } from "../findings.js";
 
 // The staleness check (src/cli/osv-staleness.ts, #247) verifies CURATED_CLAIMS against OSV over the
 // network, so it can't run in verify. These offline tests guard the list it reads: an advisory
@@ -132,6 +135,90 @@ describe("checkNextVersionCVEs", () => {
 
   it("16.2.5 is the fully-clean patched next-16 (no null-origin, RSC, or WS-SSRF)", () => {
     expect(checkNextVersionCVEs("16.2.5")).toEqual([]);
+  });
+});
+
+// #1471 — the number a CVE row asserts, and where it came from. Until this landed the caller
+// stripped the caret at the call site and the finding said "Installed next@14.2.5" about a manifest
+// range floor: a measurement word for something nothing had installed, at Critical/Confirmed.
+describe("checkNextVersionCVEs version provenance (#1471)", () => {
+  const tree = (version: string): ResolvedTree => ({ versions: new Map([["next", version]]), source: "package-lock.json" });
+  const row = (fs: Finding[], id: string): Finding | undefined => fs.find((f) => f.id === id);
+
+  it("uses the LOCKFILE-resolved version, not the declared range floor, and cites the lockfile", () => {
+    // The live shape on this repo's own calibration target: ^14.2.5 declared, 14.2.35 resolved.
+    const findings = checkNextVersionCVEs("^14.2.5", "package.json", tree("14.2.35"));
+    expect(findings.map((f) => f.id)).not.toContain("DEP-CVE-2025-29927");
+    const ws = row(findings, "DEP-CVE-2026-44578");
+    expect(ws?.evidence).toContain("Installed next@14.2.35 (resolved from package-lock.json)");
+    expect(ws?.precisionTier).toBe("high");
+  });
+
+  it("still flags when the RESOLVED version is the vulnerable one, even under a wide declared range", () => {
+    const findings = checkNextVersionCVEs("^14.0.0", "package.json", tree("14.2.5"));
+    const mw = row(findings, "DEP-CVE-2025-29927");
+    expect(mw?.precisionTier).toBe("high");
+    expect(mw?.confidence).toBe("Confirmed");
+    expect(mw?.evidence).toContain("Installed next@14.2.5 (resolved from package-lock.json)");
+  });
+
+  it("a declared RANGE with no lockfile is raised as a review-tier conditional, never as installed", () => {
+    const findings = checkNextVersionCVEs("^14.2.0");
+    const mw = row(findings, "DEP-CVE-2025-29927");
+    expect(mw).toBeDefined();
+    // The whole point: the claim must not contain the word "Installed", must name the declared
+    // range, and must not reach the free count.
+    expect(mw?.evidence).not.toContain("Installed");
+    expect(mw?.evidence).toContain("declares next@^14.2.0, whose range floor 14.2.0");
+    expect(mw?.evidence).toContain("an install can land on either side of the fix");
+    expect(mw?.title).toContain("next@^14.2.0 (declared range, unresolved) may be vulnerable");
+    expect(mw?.precisionTier).toBe("review");
+    expect(mw?.confidence).toBe("Review");
+    expect(mw?.severity).toBe("Critical"); // the weakness's impact is unchanged by the provenance
+    expect(mw?.fix).toContain("Commit a lockfile");
+  });
+
+  it("an EXACT pin with no lockfile keeps the high-tier claim — whatever installs is that version", () => {
+    const mw = row(checkNextVersionCVEs("14.2.5"), "DEP-CVE-2025-29927");
+    expect(mw?.precisionTier).toBe("high");
+    expect(mw?.evidence).toContain("Installed next@14.2.5 is below the fixed version");
+    expect(mw?.evidence).not.toContain("either side of the fix");
+  });
+
+  it("a specifier with no derivable floor draws nothing rather than a 0.0.0 claim", () => {
+    for (const spec of ["latest", "*", ">=14 <15", "git+https://github.com/vercel/next.js.git", "workspace:*"]) {
+      expect(checkNextVersionCVEs(spec), spec).toEqual([]);
+    }
+  });
+
+  it("carries the same provenance split into the curated non-Next table", () => {
+    // Declared ^1.7.2 (vulnerable floor) against a lockfile resolving the patched 1.8.2: the row
+    // the caller's old declared-range-wins ordering drew for a version nothing installs.
+    const resolvedPatched: ResolvedTree = { versions: new Map([["axios", "1.8.2"]]), source: "pnpm-lock.yaml" };
+    expect(checkKnownDependencyCVEs({ axios: "^1.7.2" }, "package.json", resolvedPatched)).toEqual([]);
+    const conditional = checkKnownDependencyCVEs({ axios: "^1.7.2" })[0];
+    expect(conditional?.precisionTier).toBe("review");
+    expect(conditional?.evidence).toContain("declares axios@^1.7.2, whose range floor 1.7.2");
+    const pinned = checkKnownDependencyCVEs({ axios: "1.7.2" })[0];
+    expect(pinned?.precisionTier).toBe("high");
+    expect(pinned?.evidence).toContain("Installed axios@1.7.2 falls in the CVE-2025-27152 affected range");
+  });
+});
+
+// resolvedTree is the seam that decides which of the three provenances above a real scan gets, so
+// it is exercised against the committed lockfiles rather than a hand-built map.
+describe("resolvedTree (#1471)", () => {
+  it("reads the resolved version out of the target's committed lockfile", () => {
+    const tree = resolvedTree("targets/calibration");
+    expect(tree?.source).toBe("package-lock.json");
+    expect(tree?.versions.get("next")).toBe("14.2.35");
+  });
+
+  it("returns undefined for a root with no lockfile, so declared ranges are never read as resolved", () => {
+    // collectDependencies falls back to the MANIFEST for such a root, and its "versions" are the
+    // declared ranges — treating those as resolved is the defect this whole seam exists to prevent.
+    expect(resolvedTree("targets/calibration/fixtures/b25-next-declared-range")).toBeUndefined();
+    expect(resolvedTree("targets/calibration/fixtures/legacy-app")).toBeUndefined();
   });
 });
 

@@ -8,15 +8,30 @@ on:
   schedule:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
   workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-osv-staleness-alert path fires end-to-end (#1287/#1333). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
 
 jobs:
   osv-staleness:
     name: osv-staleness
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
     steps:
       - uses: actions/checkout@v4
+
+      # After the checkout (the alert step below is a LOCAL composite action) and before the install,
+      # so the drill proves the ALERT path without paying for the corpus re-verification.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an OSV drift."
+          exit 1
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -24,44 +39,47 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Same defect as reasons-drift.yml's check step (#1422): a `run:` with no `shell:` key is
-      # `bash -e {0}` with NO pipefail, so `… | tee` exits with tee's 0 whatever the CLI said. Here it
-      # also disabled the step BELOW, whose `steps.check.outcome == 'failure'` guard could never be
-      # true — this job's only way of reporting drift.
+      # `bash -e {0}` with NO pipefail, so `… | tee` exits with tee's 0 whatever the CLI said. It is
+      # what made this job unable to fail at all, and every step below is gated on `failure()` — so
+      # drift was detected, printed, and then reported to nobody.
       - id: check
         run: |
           pnpm osv-staleness 2>&1 | tee osv-staleness.log
           exit "${PIPESTATUS[0]}"
-      - name: Open an issue on drift
-        if: failure() && steps.check.outcome == 'failure'
-        uses: actions/github-script@v7
+      # #1333 replaced a bespoke `actions/github-script` find-or-update here with the shared
+      # composite. Three things the hand-rolled version got wrong, all of them the reasons #1287
+      # extracted one action in the first place:
+      #   • it de-duplicated on issue TITLE within `labels: audit-service`, not on a marker label, so
+      #     nothing recorded whether this path had ever executed — the marker-label invariant the
+      #     alert-paths gate is built on had no purchase here.
+      #   • it fired ONLY on `steps.check.outcome == 'failure'`, so an install, network or setup
+      #     failure raised nothing at all.
+      #   • it had no drill, so it was unprovable — and it was in fact unreachable, because the check
+      #     step above could not fail (see #1613's pipefail fix).
+      - name: Capture the check log for the alert body
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        id: log
+        run: |
+          set -uo pipefail
+          {
+            echo 'tail<<HARVEY_LOG_EOF'
+            tail -c 3000 osv-staleness.log 2>/dev/null || echo '(no osv-staleness.log — the job failed before the check step produced one)'
+            echo 'HARVEY_LOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the OSV staleness tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
         with:
-          script: |
-            const fs = require('fs');
-            const log = fs.readFileSync('osv-staleness.log', 'utf8');
-            const title = 'Curated CVE corpus has drifted from OSV';
-            const { data: existing } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'audit-service',
-            });
-            const body = [
-              'The scheduled OSV staleness check (#247) found a curated advisory claim that no longer matches OSV.',
-              'Each one is a fact this scanner asserts to clients — see #212 for what a fabricated CVE cost.',
-              '',
-              '```',
-              log.slice(-4000),
-              '```',
-              '',
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            ].join('\n');
-            const dupe = existing.find((i) => i.title === title);
-            if (dupe) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: dupe.number, body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title, body, labels: ['audit-service', 'opus'],
-              });
-            }
+          marker: ci-osv-staleness-alert
+          label-description: Auto-opened when the scheduled OSV staleness check fails
+          title: Curated CVE corpus has drifted from OSV
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: |
+            The scheduled OSV staleness check (#247) failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either a curated advisory claim no longer matches OSV, or the job errored before it could check. Each curated claim is a fact this scanner asserts to clients — see #212 for what a fabricated CVE cost.
+
+            ```
+            ${{ steps.log.outputs.tail }}
+            ```

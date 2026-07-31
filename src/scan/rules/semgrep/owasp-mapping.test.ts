@@ -14,7 +14,6 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   // A01 — Broken Access Control
   "CWE-22": "A01:2021 - Broken Access Control",
   "CWE-200": "A01:2021 - Broken Access Control",
-  "CWE-285": "A01:2021 - Broken Access Control",
   "CWE-352": "A01:2021 - Broken Access Control",
   "CWE-540": "A01:2021 - Broken Access Control",
   "CWE-601": "A01:2021 - Broken Access Control",
@@ -26,13 +25,17 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   "CWE-319": "A02:2021 - Cryptographic Failures",
   "CWE-321": "A02:2021 - Cryptographic Failures",
   "CWE-327": "A02:2021 - Cryptographic Failures",
-  "CWE-329": "A02:2021 - Cryptographic Failures",
-  "CWE-330": "A02:2021 - Cryptographic Failures",
   "CWE-338": "A02:2021 - Cryptographic Failures",
   "CWE-347": "A02:2021 - Cryptographic Failures",
   // A03 — Injection
   "CWE-78": "A03:2021 - Injection",
   "CWE-88": "A03:2021 - Injection",
+  // #1273, VERIFIED 2026-07-31 against OWASP's own published A03:2021 "List of Mapped CWEs":
+  // CWE-90 (LDAP Injection) and CWE-643 (XPath Injection) are both in it. CWE-1236 (CSV formula
+  // injection) is NOT, in that list or any other A0X one, so harvey-csv-formula-injection carries
+  // a cwe with no owasp field — the harvey-redos posture.
+  "CWE-90": "A03:2021 - Injection",
+  "CWE-643": "A03:2021 - Injection",
   "CWE-79": "A03:2021 - Injection",
   "CWE-89": "A03:2021 - Injection",
   "CWE-94": "A03:2021 - Injection",
@@ -95,6 +98,26 @@ const NO_OWASP_CWES: Record<string, string> = {
   // definitions/524.html): Memberships lists two SFP/comprehensive-categorization clusters, no
   // OWASP Top Ten mention at all.
   "CWE-524": "Use of Cache Containing Sensitive Information — MITRE's memberships carry no OWASP Top Ten mapping of any year",
+  // #1273, VERIFIED 2026-07-31 against OWASP's own A03:2021 "List of Mapped CWEs" page: the list
+  // is CWE-20, 74, 75, 77, 78, 79, 80, 83, 87, 88, 89, 90, 91, 93, 94, 95, 96, 97, 98, 99, 100,
+  // 113, 116, 138, 184, 470, 471, 564, 610, 643, 644, 652, 917 — CWE-1236 is absent, and it is a
+  // post-2021 CWE (the same reason CWE-1321 is here). Falsifier: re-read that page's list; if
+  // CWE-1236 appears, move it into OFFICIAL_CWE_TO_OWASP_2021 instead.
+  "CWE-1236": "Improper Neutralization of Formula Elements in a CSV File — post-2021 CWE, absent from A03:2021's mapped-CWE list and from every other 2021 category's",
+  // #1294, VERIFIED 2026-07-31. harvey-static-iv moved CWE-329 -> CWE-1204 because CWE-329 is
+  // CBC-RESTRICTED and its pattern leaves the mode unconstrained. A02:2021's mapped-CWE list is
+  // CWE-259, 261, 296, 310, 319, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 335, 336,
+  // 337, 338, 340, 347, 523, 720, 757, 759, 760, 780, 818, 916 — 1204 is absent, and MITRE's own
+  // CWE-1204 page lists no OWASP Top Ten membership of any year. So the correction TRADES an owasp
+  // category for a correct CWE, which is the right way round: a wrong bucket is a wrong claim.
+  "CWE-1204": "Generation of Weak Initialization Vector (IV) — MITRE's memberships carry no OWASP Top Ten mapping of any year; absent from A02:2021's mapped-CWE list",
+  // #1294, VERIFIED 2026-07-31. harvey-fail-open moved CWE-285 -> CWE-636 because its shape is a
+  // permissive default on error, not specifically an authorization defect (its own planted fixture
+  // is a rate limiter). CWE-636 is in neither A01:2021's mapped-CWE list (CWE-22, 23, 35, 59, 200,
+  // 201, 219, 264, 275, 276, 284, 285, 352, 359, 377, 402, 425, 441, 497, 538, 540, 548, 552, 566,
+  // 601, 639, 651, 668, 706, 862, 863, 913, 922, 1275) nor A04:2021's, and MITRE's own CWE-636 page
+  // places it under OWASP Top Ten 2004 A7 and 2025 A10 — no 2021 category. Same shape as CWE-252.
+  "CWE-636": "Not Failing Securely ('Failing Open') — MITRE's memberships place it under OWASP 2004 A7 and 2025 A10, not any Top-10-2021 category",
 };
 
 const RULES_DIR = join(dirname(fileURLToPath(import.meta.url)));
@@ -220,9 +243,11 @@ describe("#493/#975: harvey-* rule metadata.owasp matches OWASP's official 2021 
 //     which words stand for a CWE is our judgement, so check 2 is corroboration between two
 //     artefacts we control, not independent measurement. CLAUDE.md's rule about an answer key we
 //     wrote applies: it shows a label INCONSISTENT with its rule; it does not certify one correct.
-//   - It reads the rule's SELF-DESCRIPTION. A rule whose message is wrong in the same direction as
-//     its CWE passes. The counted mitigation is PROSE_ONLY below — the rules for which the evidence
-//     lands only in the prose and not in the id/patterns.
+//   - It reads the rule's SELF-DESCRIPTION as well as its machinery. A rule whose message is wrong
+//     in the same direction as its CWE would pass on prose alone; the counted mitigation is
+//     PROSE_ONLY below — the rules for which the evidence lands ONLY in the message. #1540 drove
+//     that population from 41 to 0 by adding CWE_MACHINE_EVIDENCE, a second table keyed on the
+//     SINK/IDIOM each weakness occurs on, checked against the machine half alone.
 //   - Its discrimination is BOUNDED and MEASURED, not assumed: UNDISCRIMINATED names every rule for
 //     which some same-category sibling CWE's vocabulary ALSO matches, so a swap to that specific
 //     sibling would stay green. SINGLETON_CATEGORY names every rule whose CWE is the only one its
@@ -245,6 +270,7 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-79": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
   "CWE-88": "Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')",
   "CWE-89": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+  "CWE-90": "Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')",
   "CWE-95": "Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
   "CWE-113": "Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Request/Response Splitting')",
   "CWE-116": "Improper Encoding or Escaping of Output",
@@ -254,13 +280,10 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-235": "Improper Handling of Extra Parameters",
   "CWE-252": "Unchecked Return Value",
   "CWE-256": "Plaintext Storage of a Password",
-  "CWE-285": "Improper Authorization",
   "CWE-295": "Improper Certificate Validation",
   "CWE-319": "Cleartext Transmission of Sensitive Information",
   "CWE-321": "Use of Hard-coded Cryptographic Key",
   "CWE-327": "Use of a Broken or Risky Cryptographic Algorithm",
-  "CWE-329": "Generation of Predictable IV with CBC Mode",
-  "CWE-330": "Use of Insufficiently Random Values",
   "CWE-338": "Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)",
   "CWE-346": "Origin Validation Error",
   "CWE-347": "Improper Verification of Cryptographic Signature",
@@ -277,6 +300,9 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-602": "Client-Side Enforcement of Server-Side Security",
   "CWE-611": "Improper Restriction of XML External Entity Reference",
   "CWE-613": "Insufficient Session Expiration",
+  // #1294 — MITRE names, read from each CWE's own page 2026-07-31.
+  "CWE-636": "Not Failing Securely ('Failing Open')",
+  "CWE-643": "Improper Neutralization of Data within XPath Expressions ('XPath Injection')",
   "CWE-614": "Sensitive Cookie in HTTPS Session Without 'Secure' Attribute",
   "CWE-639": "Authorization Bypass Through User-Controlled Key",
   "CWE-668": "Exposure of Resource to Wrong Sphere",
@@ -293,6 +319,8 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-943": "Improper Neutralization of Special Elements in Data Query Logic",
   "CWE-1021": "Improper Restriction of Rendered UI Layers or Frames",
   "CWE-1321": "Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')",
+  "CWE-1204": "Generation of Weak Initialization Vector (IV)",
+  "CWE-1236": "Improper Neutralization of Formula Elements in a CSV File",
   "CWE-1333": "Inefficient Regular Expression Complexity",
 };
 
@@ -310,6 +338,9 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-79": /\bXSS\b|cross-site scripting|innerHTML|dangerouslySetInnerHTML|__html|document\.write|autoescap|javascript:/i,
   "CWE-88": /argument injection|as an argv|argv-array element/i,
   "CWE-89": /\bSQL\b|parameterized quer/i,
+  // #1273. Not a bare `filter`/`search`: those are the vocabulary of the PostgREST and Mongo rules
+  // in the same category. CWE-90's own weakness is the LDAP query being rewritten.
+  "CWE-90": /\bLDAP\b|search filter|bind DN/i,
   "CWE-95": /\beval\b|new Function/i,
   "CWE-113": /\bCRLF\b|CR\/LF|response splitting/i,
   // Not a bare escape/sanitize verb: every XSS rule's remediation sentence says "sanitize", which
@@ -323,9 +354,6 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-235": /parameter pollution|repeated query parameter|Array\.isArray/i,
   "CWE-252": /discard|fire-and-forget|return value|no \.select|never complete/i,
   "CWE-256": /password/i,
-  // A bare `authoriz` is the vocabulary of the whole A01 category; CWE-285's own weakness is the
-  // fail-open direction of the decision.
-  "CWE-285": /fails? OPEN|fail-open|failing closed|improper authoriz/i,
   "CWE-295": /certificate|rejectUnauthorized/i,
   // Not a bare `plaintext`: ECB/CBC rules say "leaks plaintext structure" about a stored cipher,
   // which is CWE-327's weakness, not transmission in the clear.
@@ -334,9 +362,6 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   // `createCipher\(` and not `createCipher`: the latter is a prefix of createCipheriv, the SAFE
   // API, so it matched the rule about a static IV passed to it (the #1355 self-match shape).
   "CWE-327": /\bMD5\b|\bSHA-?1\b|\b3?DES\b|\bRC[24]\b|Blowfish|\bECB\b|createCipher\(|authTag|broken|weak.{0,12}(cipher|hash|KDF)/i,
-  // `$IV` in a pattern metavariable is not evidence of an IV-PREDICTABILITY defect.
-  "CWE-329": /initialization vector|predictable iv|reusing an iv|the iv passed/i,
-  "CWE-330": /Math\.random|insufficiently random|not cryptographically secure/i,
   "CWE-338": /pseudo-?random|\bPRNG\b|CSPRNG/i,
   "CWE-346": /\borigin\b/i,
   // Verification of a signature, not the noun on its own — "can forge valid signatures" is what a
@@ -359,6 +384,13 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-602": /client-supplied|client-side|escalate/i,
   "CWE-611": /\bXXE\b|external entit|\bXML\b/i,
   "CWE-613": /expir|\bTTL\b|maxAge|long-lived/i,
+  // #1294. The PERMISSIVE-DEFAULT-ON-ERROR direction, which is CWE-636's own weakness. A bare
+  // `authoriz` was the vocabulary of the whole A01 category and is deliberately not here — that
+  // breadth is exactly what let CWE-285 sit on a rate-limiter rule unchallenged.
+  "CWE-636": /fails? OPEN|fail-open|failing closed|not failing securely/i,
+  // #1273. `predicate` alone would also read as the SQL/PostgREST vocabulary; CWE-643 is the
+  // XPath expression specifically.
+  "CWE-643": /\bXPath\b|selectNodes|selectSingleNode/i,
   // The cookie's ATTRIBUTES, not the noun: a CORS rule that mentions "the victim's cookies" is not
   // reporting a missing Secure flag.
   "CWE-614": /HttpOnly|Set-Cookie|res\.cookie|SameSite/i,
@@ -382,10 +414,104 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-943": /\bNoSQL\b|PostgREST|query operator|filter clause|MongoDB/i,
   "CWE-1021": /X-Frame-Options|frame-ancestors|clickjack|\bframed\b/i,
   "CWE-1321": /prototype pollution|__proto__|Object\.prototype/i,
+  // #1273. Anchored on the FORMULA half: a bare `CSV` also names the export format in rules that
+  // have nothing to do with formula evaluation.
+  "CWE-1236": /formula injection|as a formula|formula prefix|formula element/i,
+  // #1294. Anchored on the IV itself. `$IV` in a pattern metavariable is not evidence of an
+  // IV-PREDICTABILITY defect, which is why the prose terms carry it.
+  "CWE-1204": /initialization vector|predictable iv|reusing an iv|the iv passed|weak.{0,4}iv/i,
   "CWE-1333": /\bReDoS\b|catastrophic backtrack|nested quantifier|regular expression complexity/i,
 };
 
 const NO_CATEGORY = "(no OWASP Top-10-2021 category)";
+
+// #1540 — the MACHINE half's own vocabulary. CWE_EVIDENCE above is drawn from each CWE's MITRE
+// NAME, and a rule's patterns are written in API idioms that name never uses: harvey-void-async
+// matches `void $F(...)` for "Unchecked Return Value", harvey-mass-assignment matches a spread into
+// `.insert()` for CWE-915. So 41 of 110 rules carried their CWE's vocabulary ONLY in the
+// client-facing `message:` prose, and for those the label rested entirely on the rule's
+// self-description — a message wrong in the same direction as the label passed green.
+//
+// This table is the second one #1540 asked for: per CWE, the SINK OR IDIOM a rule for that weakness
+// executes. It is checked against `rule.machine` ONLY (id + match machinery, never the message), so
+// a rule it corroborates is corroborated by what it RUNS, and machinery resists being written to
+// flatter a label in the way prose does not.
+//
+// WRITING RULE, and it is what keeps this from being a rubber stamp: each entry is derived from the
+// WEAKNESS — the API surface on which that weakness occurs — never from "whatever these rules
+// happen to contain". `exec`/`child_process` is where OS command injection lives whoever wrote the
+// rule; `focus-metavariable: $ARGS` is the argv-array half CWE-88 is about and CWE-78 is not;
+// `ejs`/`Handlebars`/`pug` are template engines whether or not Harvey ever ships another SSTI rule.
+// A CWE with no such surface gets NO row here and its rules stay in PROSE_ONLY with a reason.
+//
+// It feeds BOTH computations in the census below — the PROSE_ONLY population and the
+// UNDISCRIMINATED one — because a signature that corroborates a label must also be able to
+// MIScorroborate a sibling's, and hiding it from the second computation would understate the
+// ambiguity it introduces.
+const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
+  // Exposure: the process-global reads that ARE the exposed thing, plus the server-only boundary
+  // marker whose absence is the defect.
+  "CWE-200": /process\.env|process\.cwd\(|"server-only"/,
+  // The caught error object serialised straight into a response body.
+  "CWE-209": /\bjson\(\{? ?error\b/,
+  // A repeated query parameter arrives as an ARRAY; the cast back to `string` is the tell.
+  "CWE-235": /query\.\$\w+ as string/,
+  // A return value that goes nowhere: `void` discards it, and the not-insides on assignment /
+  // `return` / a chained `.select()` are the three places it would otherwise have been read.
+  "CWE-252": /\bvoid \$\w+\(|pattern-not-inside: (return \.\.\.|\$A = \$B|\$Z\.select)/,
+  // Transport security turned off at the client.
+  "CWE-319": /ssl: ?false|rejectUnauthorized/,
+  // The IV argument position of createCipheriv, which is where predictability is decided.
+  "CWE-1204": /Buffer\.from\(\$IV/,
+  // #1294 — the non-cryptographic RNG APIs themselves. `Math.random()` is JS's weak PRNG and
+  // `pseudoRandomBytes` is node's; both are the surface on which this weakness occurs, whoever
+  // wrote the rule.
+  "CWE-338": /Math\.random\(\)|pseudoRandomBytes\(/,
+  // #1294 — the permissive value returned from the failure branch, which IS the fail-open default.
+  "CWE-636": /return \{ allowed: true \}/,
+  // postMessage's second argument IS the target-origin check.
+  "CWE-346": /postMessage\(/,
+  // The verify/decode API surface, and the AEAD tag check that is the symmetric-crypto equivalent.
+  "CWE-347": /jwt\.(decode|verify)\(|jsonwebtoken\.|jwtDecode|jwt_decode|return \$\w+\.update\(/i,
+  // The Origin header read that a CSRF defence performs.
+  "CWE-352": /\.get\("origin"\)|["']csrf/i,
+  // Reflection: a member looked up by a computed key and immediately called.
+  "CWE-470": /\$\w+\[\$\w+\]\(/,
+  // Credential-looking names in a URL QUERY STRING, which is CWE-598's whole subject.
+  "CWE-598": /\[\?&\]/,
+  // Privilege flags taken from the client rather than decided on the server.
+  "CWE-602": /is_\?(admin|superuser|root|owner)/i,
+  // A shell-spawning API, or an argv API explicitly opted into a shell.
+  "CWE-78": /\bexecS?y?n?c?\(|child_process\.exec(Sync)?\(|shell: ?true/,
+  // The HTML/DOM write surfaces and the escaping APIs whose absence is the defect.
+  "CWE-79": /DOMPurify|escapeHtml|sanitizeHtml|<a href=|<\$EL \{\.\.\.|window\.location|location\.href/,
+  // The argv-ARRAY position, which is what separates CWE-88 from CWE-78's shell string.
+  "CWE-88": /focus-metavariable: \$ARGS/,
+  // A hard-coded literal standing in for a missing environment secret, or an admin/service client.
+  "CWE-798": /env\.(get\(\.\.\.\)|\$\w+) *(\?\?|\|\|) *"|auth\.admin\.|service[-_ ]?role/i,
+  // The authority calls a handler is missing: named in the pattern-not-inside that lets one pass.
+  "CWE-862": /getServerSession|assertPermission|requirePermission|requireRole|query\.secret|supabaseAdmin\./,
+  // The privileged surface, and the auth calls that establish identity but not ROLE.
+  "CWE-863": /\*admin\*|\*privileged\*|requireAuth|verifyAccessToken|verifySession/,
+  // A whole request body spread into a write.
+  "CWE-915": /\$BODY|req\.body\)/,
+  // The template engines on which server-side template injection occurs.
+  "CWE-917": /(ejs|pug)\.(render|compile)\(|Handlebars\.compile\(\$\w+, \.\.\.\)|nunjucks\.renderString/i,
+  // Next's image remotePatterns, the config surface whose wildcard host is the SSRF.
+  "CWE-918": /remotePatterns|hostname: \$/,
+  // The recursive-merge helpers through which a `__proto__` key reaches Object.prototype.
+  "CWE-1321": /defaultsDeep|mergeWith\(|merge\(\$TARGET/,
+  // #1273 — the CSV/spreadsheet SERIALIZERS are the surface on which a formula-prefixed cell is
+  // written, whoever wrote the rule: csv-stringify's `stringify`, fast-csv's `writeToString`,
+  // papaparse's `unparse`, SheetJS's sheet builders.
+  "CWE-1236": /stringifySync\(|writeToString\(|writeToBuffer\(|unparse\(|_to_sheet\(/,
+};
+
+/** True when the rule's own machine half — never its prose — corroborates `cwe`. */
+function machineCorroborates(cwe: string, machine: string): boolean {
+  return CWE_EVIDENCE[cwe]!.test(machine) || (CWE_MACHINE_EVIDENCE[cwe]?.test(machine) ?? false);
+}
+
 
 /**
  * #1521 disclosure, measured by the census test below and asserted exactly in both directions.
@@ -394,11 +520,21 @@ const NO_CATEGORY = "(no OWASP Top-10-2021 category)";
  * A rule leaving this list (its vocabulary narrowed) fails as loudly as one joining it.
  */
 const UNDISCRIMINATED: string[] = [
-  "harvey-crypto-pseudorandombytes", // CWE-338 vs CWE-330, of which MITRE makes 338 a child
+  // #1294, 2026-07-31. TWO rules LEFT this list and one joined, and the movement is the point.
+  // `harvey-crypto-pseudorandombytes` (was "CWE-338 vs CWE-330") and `harvey-static-iv` (was
+  // "CWE-329 vs CWE-327") left because the CWEs they were confusable WITH are no longer in use:
+  // CWE-330 was the parent label #1294 corrected off harvey-insecure-random-token, and CWE-329 was
+  // the CBC-restricted label corrected off harvey-static-iv itself. Fixing a mislabel therefore
+  // shrank the ambiguity census, which is the census working as designed.
   "harvey-prod-sourcemaps", // CWE-540 vs CWE-200, of which MITRE makes 540 a descendant
   "harvey-public-bucket", // CWE-668 vs CWE-200 — both "exposure", differing in what is exposed
   "harvey-secret-in-url-param", // CWE-598 vs CWE-256: its sink list names `password` as a param
-  "harvey-static-iv", // CWE-329 vs CWE-327 — a predictable IV is a way of using the cipher badly
+  // #1294 — and this one JOINED, which is the correction's honest cost. CWE-636 has no OWASP
+  // Top-10-2021 category, so this rule moved out of A01 (where CWE-285's only sibling shapes were
+  // authorization ones) into the NO_CATEGORY bucket, whose members share nothing but their absence
+  // from OWASP's tables. A swap to the sibling named at runtime would stay green. Disclosed rather
+  // than smoothed over: the CWE is now right and the intra-bucket discrimination is now weaker.
+  "harvey-fail-open",
 ];
 
 /**
@@ -413,54 +549,21 @@ const SINGLETON_CATEGORY: string[] = [
 ];
 
 /**
- * #1521 disclosure. Rules whose declared CWE's vocabulary is found ONLY in the client-facing
- * `message:` prose, never in the id or the match machinery. For these the binding rests entirely on
- * the rule's self-description, so a message written wrong in the same direction as the label passes.
- * Everything NOT listed here is corroborated by the id/patterns as well.
+ * #1521 disclosure, CLOSED by #1540 and kept as a ratchet. Rules whose declared CWE is corroborated
+ * ONLY by the client-facing `message:` prose, never by the id or the match machinery — for those the
+ * label rests on the rule's self-description, so a message written wrong in the same direction as
+ * the label passes green.
+ *
+ * MEASURED: 41 of 110 rules on 2026-07-30, **0 of 110** on 2026-07-31, after CWE_MACHINE_EVIDENCE
+ * gave each CWE the sink/idiom its rules actually execute. The list is asserted in BOTH directions,
+ * so this is a ratchet rather than a milestone: a new rule whose patterns say nothing about its
+ * label fails here and has to be added deliberately.
+ *
+ * A row added here must carry, in its own comment, the reason the machine half of that rule fails to
+ * corroborate its label — the population is the disclosure, and an unexplained row is the thing this
+ * count exists to prevent.
  */
-const PROSE_ONLY: string[] = [
-  "harvey-aead-decipher-no-final",
-  "harvey-argument-injection",
-  "harvey-auth-admin-in-client",
-  "harvey-authed-no-role-check",
-  "harvey-client-trusted-role",
-  "harvey-command-injection",
-  "harvey-cron-no-secret",
-  "harvey-csrf-missing",
-  "harvey-db-error-disclosure",
-  "harvey-dynamic-dispatch",
-  "harvey-edgefn-secret-fallback",
-  "harvey-hpp-query-cast",
-  "harvey-href-js-url",
-  "harvey-html-template-literal",
-  "harvey-img-remotepatterns-wild",
-  "harvey-internal-state-response",
-  "harvey-isr-revalidate-nosecret",
-  "harvey-jsx-prop-spread-injection",
-  "harvey-jwt-decode-noverify",
-  "harvey-jwt-decode-render",
-  "harvey-jwt-verify-noalg",
-  "harvey-lib-command-injection",
-  "harvey-mass-assignment",
-  "harvey-mass-assignment-bare",
-  "harvey-missing-server-only",
-  "harvey-nextconfig-env-secret",
-  "harvey-node-secret-fallback",
-  "harvey-open-url-sink",
-  "harvey-pg-mass-assignment",
-  "harvey-pg-ssl-disabled",
-  "harvey-postmessage-wildcard",
-  "harvey-prototype-pollution",
-  "harvey-route-noauth",
-  "harvey-secret-in-url-param",
-  "harvey-server-action-noauth",
-  "harvey-spawn-shell-true",
-  "harvey-static-iv",
-  "harvey-template-injection",
-  "harvey-unchecked-mutation",
-  "harvey-void-async",
-  "harvey-zero-row-update",
-];
+const PROSE_ONLY: string[] = [];
 
 describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns and message", () => {
   const files = readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
@@ -504,9 +607,11 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
       const cweId = cweOf(rule);
       const siblings = inUse.filter((c) => c !== cweId && categoryOf(c) === categoryOf(cweId));
       if (siblings.length === 0) singleton.push(rule.id);
-      const confusable = siblings.filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`));
+      // #1540: a sibling counts as confusable if EITHER vocabulary reaches this rule — the machine
+      // signature is folded in here too, so the ambiguity it adds is disclosed rather than hidden.
+      const confusable = siblings.filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`) || (CWE_MACHINE_EVIDENCE[c]?.test(rule.machine) ?? false));
       if (confusable.length > 0) undiscriminated.set(rule.id, confusable);
-      if (!CWE_EVIDENCE[cweId]!.test(rule.machine)) proseOnly.push(rule.id);
+      if (!machineCorroborates(cweId, rule.machine)) proseOnly.push(rule.id);
     }
 
     // Printed on every run: these populations ARE the disclosure, and a disclosure nobody reads is
@@ -529,4 +634,68 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
     expect(singleton.sort(), "SINGLETON_CATEGORY drifted — a category gained or lost its second CWE").toEqual([...SINGLETON_CATEGORY].sort());
     expect(proseOnly.sort(), "PROSE_ONLY drifted — a rule's machine-level corroboration appeared or disappeared").toEqual([...PROSE_ONLY].sort());
   });
+
+  // #1294 asked for "a gate that at least flags a rule whose CWE is a PARENT of one another rule
+  // already uses for the same sink shape". This is it, and it is the specific hole that let
+  // harvey-insecure-random-token carry CWE-330 while harvey-crypto-pseudorandombytes — four rules
+  // away in the same file, same weakness, same determinacy — carried the child CWE-338. Every
+  // pre-existing check passed that pair: 330 and 338 both map to A02, so the OWASP check could not
+  // see it, and each rule's own vocabulary corroborated its own label.
+  //
+  // A parent and its child BOTH being in use is not automatically wrong — a rule set can
+  // legitimately use the child where it applies and the parent where it does not. So the gate is a
+  // ratchet, not a ban: every live pair carries a stated reason, and a pair that APPEARS or
+  // DISAPPEARS fails. The proof it works is what is NOT below — `CWE-330 -> CWE-338` was live until
+  // this change and is now absent, because the parent label was corrected off the rule.
+  it("every parent/child CWE pair in simultaneous use is one that has been reasoned about", () => {
+    const inUseSet = new Set(inUse);
+    const live = CWE_PARENT_OF.filter(([parent, child]) => inUseSet.has(parent) && inUseSet.has(child)).map(([p, c]) => `${p} -> ${c}`);
+    const detail = live.map((pair) => {
+      const [p, c] = pair.split(" -> ") as [string, string];
+      const named = (cwe: string) => rules.filter((r) => cweOf(r) === cwe).map((r) => r.id).join(", ");
+      return `${pair}: parent on [${named(p)}], child on [${named(c)}]`;
+    });
+    console.log(`#1294 parent/child CWE pairs live in the rule set: ${live.length}\n${detail.map((d) => `      ${d}`).join("\n")}`);
+    expect(live.sort(), "a parent CWE and its MITRE child are both in use and the pair is not in PARENT_CHILD_REASONED — the parent label is under-specific unless there is a stated reason").toEqual([...Object.keys(PARENT_CHILD_REASONED)].sort());
+  });
 });
+
+/**
+ * #1294 — the parent/child CWE pairs that are simultaneously in use ON PURPOSE, each with the reason
+ * the parent is not the lazy label. Asserted EXACTLY, in both directions: a new pair fails as an
+ * under-specific label, and a pair that stops being live fails as a stale disclosure.
+ *
+ * `CWE-330 -> CWE-338` is deliberately absent. It was live until 2026-07-31 and was the defect
+ * #1294 found: `harvey-insecure-random-token` carried the parent while `harvey-crypto-
+ * pseudorandombytes` carried the child for the same weakness. Re-adding CWE-330 to any rule fails
+ * this test, which is the negative control.
+ */
+const PARENT_CHILD_REASONED: Record<string, string> = {
+  "CWE-200 -> CWE-540":
+    "harvey-prod-sourcemaps carries the CHILD (source-code inclusion) because that is exactly what productionBrowserSourceMaps ships. The five CWE-200 rules expose something that is not source code — process.env in a response body, a missing server-only boundary, SELECT * PII — so the parent is the specific label there, not a fallback.",
+  "CWE-668 -> CWE-200":
+    "harvey-public-bucket carries the PARENT deliberately: `public: true` proves a RESOURCE reached the wrong sphere and proves nothing about whether the bucket holds sensitive data, which is what the child asserts. Claiming CWE-200 would be an over-claim about the contents.",
+};
+
+/**
+ * #1294 — MITRE ChildOf relations among the CWEs this rule set has used, read from each child's own
+ * cwe.mitre.org page. Only pairs where BOTH ends have appeared in a harvey-* rule are listed: the
+ * table exists to catch the under-specific-label mistake, not to mirror the CWE catalogue.
+ *
+ * `[parent, child]`. CWE-330/CWE-338 is the pair #1294 found live; the other two are the
+ * relationships already named in the UNDISCRIMINATED comments above, written down here so the check
+ * can act on them instead of a reader having to notice.
+ */
+const CWE_PARENT_OF: readonly (readonly [string, string])[] = [
+  ["CWE-330", "CWE-338"], // Use of Insufficiently Random Values -> Cryptographically Weak PRNG
+  ["CWE-200", "CWE-540"], // Exposure of Sensitive Information -> Inclusion of Sensitive Info in Source Code
+  ["CWE-284", "CWE-285"], // Improper Access Control -> Improper Authorization
+  ["CWE-707", "CWE-74"], // Improper Neutralization -> Injection
+  ["CWE-74", "CWE-89"], // Injection -> SQL Injection
+  ["CWE-74", "CWE-79"], // Injection -> Cross-site Scripting
+  ["CWE-74", "CWE-78"], // Injection -> OS Command Injection
+  ["CWE-74", "CWE-90"], // Injection -> LDAP Injection
+  ["CWE-74", "CWE-643"], // Injection -> XPath Injection
+  ["CWE-94", "CWE-95"], // Improper Control of Generation of Code -> Eval Injection
+  ["CWE-668", "CWE-200"], // Exposure of Resource to Wrong Sphere -> Exposure of Sensitive Information
+];

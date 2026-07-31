@@ -239,13 +239,32 @@ def git_scope_sanity(repo):
     seed bug) or git itself failed (the #1206 flake class) -- something vitals' own output cannot
     say. Recorded in the fixture as `_gitScopeSanity`, read by
     src/scan/fixture-drift-contracts.ts's classifyVitalsGitScopeFailure.
+
+    scopeMatchesToplevel separates the two causes that produce the IDENTICAL all-empty signature.
+    main()'s realpath() exists to prevent the second one: vitals resolves the repo root via
+    `git rev-parse --show-toplevel` (symlinks resolved) while scoping against the path it was
+    handed, so a handed path that is not already the resolved toplevel empties the file scope with
+    git working perfectly. The comparison is deliberately LITERAL -- realpath()ing both sides would
+    make it always true and measure nothing, because the mismatch under test IS resolved-vs-handed.
+    Without this field the NOT-RUN gate would absorb a regression in that realpath() as a disclosed
+    flake (raised by PR #1398's acceptance verifier).
     """
     r = subprocess.run(
         ["git", "-C", repo, "log", "--since=90.days.ago", "--oneline"],
         capture_output=True, text=True,
     )
     commits = len(r.stdout.strip().splitlines()) if r.returncode == 0 and r.stdout.strip() else 0
-    return {"commits": commits, "returncode": r.returncode, "stderr": (r.stderr.strip() or None)}
+    top = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    toplevel = top.stdout.strip() if top.returncode == 0 else None
+    return {
+        "commits": commits,
+        "returncode": r.returncode,
+        "stderr": (r.stderr.strip() or None),
+        "scopeMatchesToplevel": toplevel == repo,
+    }
 
 
 def run_vitals(repo):
@@ -316,6 +335,7 @@ def main():
             print(f"  {a['file_path']}  total_events={a['total_events']} edit={a['edit_count']} write={a['write_count']}", file=sys.stderr)
         print("=== git scope sanity (independent of vitals, #1206) ===", file=sys.stderr)
         print(f"  commits(90d window)={sanity['commits']} returncode={sanity['returncode']}"
+              f" scopeMatchesToplevel={sanity['scopeMatchesToplevel']}"
               + (f" stderr={sanity['stderr']!r}" if sanity["stderr"] else ""), file=sys.stderr)
         print(f"\nwrote {args.out}", file=sys.stderr)
     finally:

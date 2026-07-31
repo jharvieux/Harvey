@@ -82,11 +82,6 @@ export function workspacePackages(manifests: { path: string; text: string }[]): 
     }
     if (typeof pkg.name !== "string" || !pkg.name) continue;
     const dir = m.path.includes("/") ? m.path.slice(0, m.path.lastIndexOf("/")) : "";
-    const declared = [pkg.main, pkg.module, exportsDot(pkg.exports)].filter((e): e is string => typeof e === "string");
-    // candidatePaths() appends the extensions and /index, so strip a declared extension rather than
-    // guessing which one is on disk — an internal package declaring "./src/index.ts" and one
-    // declaring "./dist/index.js" both want src/index in a source-only view of the tree.
-    const bases = [...declared.map((e) => e.replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "index", "src/main"];
     const subpaths = exportsWildcards(pkg.exports)
       .map((w) => ({ prefix: `${pkg.name}/${w.from}`, baseDir: joinRepoPath(dir, w.to) }))
       // Longest specifier prefix first, so `./server-only/*` beats a catch-all `./*`.
@@ -94,9 +89,23 @@ export function workspacePackages(manifests: { path: string; text: string }[]): 
     // A package with no wildcard exports still takes `<name>/<file>` against its own directory —
     // the pre-exports convention, and what a `"files"`-only internal package relies on.
     subpaths.push({ prefix: `${pkg.name}/`, baseDir: dir });
-    out.push({ name: pkg.name, dir, entryBases: [...new Set(bases.map((b) => joinRepoPath(dir, b)))], subpaths });
+    out.push({ name: pkg.name, dir, entryBases: entryBasesFor(pkg, dir).bases, subpaths });
   }
   return out;
+}
+
+// The declared entry (main/module/exports["."]), extension-stripped, plus the src/index / index /
+// src/main fallbacks a source-only view of a built package needs — candidatePaths() appends the
+// extensions and /index, so a literal `main: "./dist/index.js"` never matches a source tree that
+// only has src/index.ts. Shared by workspacePackages above (import resolution, where the fallback
+// always applies — a bare workspace import has to resolve to SOMETHING) and by perf-code.ts's
+// own-declared-entry exclusion (#1526/#1542/#1554), which gates its USE of `bases` on whether
+// `declared` is non-empty: import resolution and "is this script building the package's own
+// entry" are different questions, and only the first wants a guess when nothing was declared.
+export function entryBasesFor(pkg: { main?: unknown; module?: unknown; exports?: unknown }, dir: string): { declared: string[]; bases: string[] } {
+  const declared = [pkg.main, pkg.module, exportsDot(pkg.exports)].filter((e): e is string => typeof e === "string");
+  const bases = [...declared.map((e) => e.replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "index", "src/main"];
+  return { declared, bases: [...new Set(bases.map((b) => joinRepoPath(dir, b)))] };
 }
 
 // `exports` keys carrying a `*`, reduced to the literal prefix on each side: `"./*": "./src/*.ts"`

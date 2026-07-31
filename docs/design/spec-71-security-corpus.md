@@ -290,15 +290,31 @@ Sequencing rationale: B1–B2 first (highest free-count value, most deterministi
 
 ---
 
-## 5. Out-of-scope — NOT mechanically detectable (stay in dynamic/semantic tiers)
+## 5. Out-of-scope for the FREE COUNT — currently no mechanical rule, or review-tier only
 
-Do **not** pad the mechanical count with these. They belong to the DEEP / dynamic / connected-semantic tiers (the paid M-series modules and the #5 pen-test), and are already the semantic ground truth in `GROUND-TRUTH.md`.
+> **This section is a claim about the world, and claims decay — re-measure before citing it.**
+> Run `pnpm exec tsx src/cli/validate-calibration.ts` and look for the class's corpus id before
+> quoting any bullet below as a reason not to build something. **Three bullets that stood here until
+> 2026-07-31 had been false for over a week** (#1375): cross-tenant RLS `USING (true)`, counter race
+> and unscoped cross-tenant `.update()` all ship review-tier rules, and the section was still
+> instructing corpus sweeps not to attempt them. A negative claim fails silently — nobody exercises a
+> path recorded as foreclosed — so the burden is on the citer to re-run the gate, not on the reader
+> to trust the prose.
 
-- **Cross-tenant RLS *logic*** — `USING (true)`, `USING (auth.role()='authenticated')` (calibration bugs #1, #2). Enabled, present policies that *look* correct; only reading the policy body + tenant model catches the leak. The Advisor catches RLS *disabled* (#3), not permissive-but-present. **Semantic.**
+Do **not** pad the *free count* with these. Some have no mechanical rule at all; others are caught at
+**review** tier and triaged, which is not the same as being undetectable. The dynamic/semantic ground
+truth for the class list is `GROUND-TRUTH.md`.
+
+**Now mechanical at review tier — MEASURED 2026-07-31 (was listed here as "NOT mechanically detectable"):**
+
+- **Cross-tenant RLS *logic*** — `USING (true)` on a tenant-scoped table is caught by `usingTrueReview` (`src/rls-policy-review.ts`, #333), scored `PASS ... review` by `P-RLS-USING-TRUE-STATIC` / `-REGULATED` / `-PII-SPARED`, with `N-RLS-PUBLIC-CATALOG-USING-TRUE` and `N-RLS-USING-TRUE-AMBIGUOUS-NAME` cleared. It stays out of the free count because the discriminator is the table's *schema*, not the policy text — a published price list and a tenant leak carry byte-identical clauses. `USING (auth.role()='authenticated')` (bug #2) is **not** re-measured here and carries no verdict either way. The Advisor still catches only RLS *disabled* (#3).
+- **Counter/balance race** (#6) — caught by `detectCounterRaceFindings` (`src/scan/counter-race.ts`, #353), scored `PASS ... review` by `P-COUNTER-RACE`. Review tier because the pass does not observe a DB-side lock or transaction that would make the read-modify-write safe.
+- **Unscoped cross-tenant `.update()`** (#7) — caught by the `unscoped-write` grep (`src/scan/leftover-auth.ts`, #353), scored `PASS ... review` by `P-UPDATE-UNSCOPED`, with `N-UPDATE-SCOPED` cleared. Review tier because a `WHERE`-less `UPDATE` is textually identical to a deliberate admin reset or backfill.
+
+**Unchanged — no mechanical rule, or a review-tier shape only.** Only the webhook-replay bullet was re-measured on 2026-07-31; the rest are carried forward exactly as written and **nobody re-ran the gate against them** — apply the re-measure instruction above before citing any of them.
+
+- **Webhook replay** (#5) — needs freshness-control semantics (timestamp window / nonce / dedup) across the handler + provider SDK. A by-design LLM-tier gap, and the only one of the four above that survived re-measurement: pinned by `P-WEBHOOK-REPLAY-NO-RULE` at the `none` tier, an entry that fails the gate loud if a rule ever does fire there.
 - **Single-layer tenant isolation** — app-`.eq('tenant_id')` OR RLS but not both. Needs whole-program reasoning about defense layers.
-- **Webhook replay** (#5) — needs freshness-control semantics (timestamp window / nonce / dedup) across the handler + provider SDK.
-- **Counter/balance race** (#6) — read-modify-write dataflow; concurrency, not a pattern.
-- **Unscoped cross-tenant `.update()`** (#7) — needs cross-tenant reasoning about what the missing `.eq()` exposes.
 - **Business-logic authorization / broken object-level authz at runtime** — true BOLA/IDOR exploitability (OWASP API1) needs a live request with two tenants; only the *statically-visible* shape (P-IDOR-PARAM) is a `review` heuristic, never `high`.
 - **Idempotency-row-before-dispatch, fail-open under store outage, state-machine transition validity** — semantic/dynamic.
 - **Prompt injection / LLM instruction-data separation / LLM tool-call authority** (OWASP LLM01) — DEEP; only the mechanical shell (`dangerouslySetInnerHTML` fed by an LLM var) is a pattern.

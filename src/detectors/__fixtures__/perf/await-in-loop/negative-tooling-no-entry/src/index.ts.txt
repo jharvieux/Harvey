@@ -1,0 +1,14 @@
+import { supabase } from "../lib/db";
+
+// #1554: this package declares NO main/module/exports at all — it is a genuinely script-only
+// tool, and its `gen` script happens to name this file `src/index.ts` by convention. There is no
+// declared build target for `src/index` to be approximating, so it must stay a tooling ROOT
+// (unlike #1526's shape, where a real declared entry's own build script is exempted).
+export async function gen(tenantIds: string[]) {
+  for (const id of tenantIds) {
+    const { data } = await supabase.from("accounts").select("id").eq("tenant_id", id).limit(1);
+    console.log(data);
+  }
+}
+
+gen(process.argv.slice(2));

@@ -80,3 +80,68 @@ injects the predicate*, and the AST at the call site cannot see that. Nothing me
 the size of that class — no such application was scanned — so it is recorded as an open question
 rather than fixed on a guess. Filed as a follow-up; the finding is review-tier, so today it lands as
 something a triage pass clears rather than a free-count false positive.
+
+---
+
+# The other three app-layer detectors (#1269, 2026-07-31)
+
+#896 fixed `prisma-tenant-scope.ts` only. #911's body flagged that `pg-idor.ts`, `bola-owner.ts` and
+`job-tenant-scope.ts` had never been measured for the same exposure, and its closing PR (#1006) did
+not address it. Re-measured here. Every number below was produced by a run in this worktree on
+2026-07-31; re-run rather than quote.
+
+## Method
+
+Same three MIT clones, same pins, fetched with `src/scan/corpus-clone.ts`'s `cloneAtPin` and
+verified at HEAD. Tool: `pnpm quick-scan --dir <clone> --findings-out <f> --json`. Findings bucketed
+by class prefix (`SEC-PG-IDOR-*`, `AUTH-bola-body-owner-*`, `AUTH-job-tenant-scope-*`) and by path
+against the same `NON_SHIPPING_PATH`/`NON_SHIPPING_FILE` matchers `prisma-tenant-scope.ts` exports.
+
+## Result — and the population, which is the more important half
+
+| detector | files READ across the 3 clones | of those, non-shipping | findings | shipping | non-shipping |
+|---|---|---|---|---|---|
+| `pg-idor` (whole source tree) | 977 | 631 | **0** | 0 | 0 |
+| `bola-owner` (`pages/api/**`) | **0** | 0 | 0 | 0 | 0 |
+| `job-tenant-scope` (`JOB_PATH`) | **0** | 0 | 0 | 0 | 0 |
+
+Total findings across all classes on the three clones: prisma-rls 37, zenstack 297,
+prisma-multi-tenant 273 — none of them from these three detectors, and none from
+`prisma-tenant-scope` either (its #896 gate holds).
+
+**Two of the three rows above are populations of zero, so the corpus proves nothing about them.**
+None of these three libraries is a Next.js app or ships a background-job directory, so
+`bola-owner`'s and `job-tenant-scope`'s file filters admitted no file at all. A limit measured over
+an empty population is a guess. The acceptance criterion asked for this exact scan; the table above
+is its whole answer, and for two of the three detectors that answer is "this corpus is silent".
+
+## What the corpus could not answer, answered by planting the shape
+
+Each detector's own positive fixture, moved into a non-shipping path and re-run
+(`detect*Findings([{ path, text }])`, 2026-07-31, before the fix):
+
+| detector | non-shipping path | findings | shipping control | findings |
+|---|---|---|---|---|
+| `pg-idor` | `tests/orders.test.js` | 1 | `src/lib/orders.js` | 1 |
+| `pg-idor` | `examples/basic/orders.js` | 1 | — | — |
+| `bola-owner` | `e2e/pages/api/invoice.js` | 1 | `pages/api/invoice.js` | 1 |
+| `bola-owner` | `examples/next-app/pages/api/invoice.js` | 1 | — | — |
+| `job-tenant-scope` | `tests/jobs/import.test.ts` | 1 | `src/inngest/import.ts` | 1 |
+| `job-tenant-scope` | `examples/inngest/import.ts` | 1 | — | — |
+
+So the exposure is real for all three and it is structural, not corpus-dependent: `pages/api/` and
+`jobs/` are path segments an example app or an e2e fixture tree carries just as readily as a product
+does. `pg-idor` is the widest of the three — it reads the whole source tree, 631 of the 977 files it
+read here being non-shipping.
+
+## The fix
+
+All three now apply the same exclusion `prisma-tenant-scope.ts` has carried since #896. Re-running
+the planted-shape table above gives 0 for every non-shipping row and 1 for every shipping control.
+`pnpm validate:precision` still passes.
+
+Note what this fix is NOT observable in: the clone scan reports 0 both before and after, because
+these classes produced nothing there to begin with. The guard is the ten new cases in
+`src/scan/{pg-idor,bola-owner,job-tenant-scope}.test.ts`, each with a shipping scope control;
+reverting any one of the three shipping lines fails 5, 5 and 4 of them respectively (measured, both
+directions).

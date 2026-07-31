@@ -1,0 +1,5 @@
+// The far side of #1533's CROSS-FILE hop (see starter-route.ts). Exported, so it is API surface and
+// never a single-use-helper candidate itself — it is here to be resolved through, not flagged.
+export function composeStarterResult(input: { intent: string; recipe: string }): { headline: string; recipe: string } {
+  return { headline: `Your ${input.intent} is ready`, recipe: input.recipe };
+}

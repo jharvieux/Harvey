@@ -10,6 +10,7 @@ import {
   MODULES,
   MODULES_NEVER_EXECUTED,
   type ModuleCoverage,
+  moduleOfFinding,
 } from "./audit-coverage.js";
 
 const ran = (module: ModuleCoverage["module"]): ModuleCoverage => ({ module, status: "ran" });
@@ -60,11 +61,10 @@ describe("the module enumeration itself (#275)", () => {
   // one field over: derive the split from the document instead of restating it, so the constant
   // cannot be wrong in silence while it waits for its first consumer.
   //
-  // #1296: freeTier alone didn't catch a real drift, because nothing gates behaviour on freeTier —
-  // `needs` does (envGated in audit-coverage.ts), and M6 had needs:"llm" while freeTier:true and
-  // the doc both said M6 is free. One field wider: a free-tier module's minimum can never be "llm"
-  // (or "connected"/"dynamic" — the free tier is source-only by definition, docs/free-tier-scope.md's
-  // "no database, no credentials, no contact with production"), so assert that too.
+  // #1296 widened this to also assert `needs === "source"` for every documented-free module.
+  // #1415 REMOVED that half under the operator ruling (2026-07-28): the free/paid line is
+  // commercial, so a free module's `needs` is no longer this test's business. What it guards is
+  // exactly the doc↔code agreement it was built for, and nothing else.
   it("splits free from paid exactly as docs/free-tier-scope.md does — read, not restated", () => {
     const doc = readFileSync(fileURLToPath(new URL("../docs/free-tier-scope.md", import.meta.url)), "utf8");
     const table = doc.split("## What the free scan delivers")[1]?.split("\n## ")[0] ?? "";
@@ -72,13 +72,31 @@ describe("the module enumeration itself (#275)", () => {
     if (free.size === 0) throw new Error("parsed no modules from the free-tier table in docs/free-tier-scope.md — its shape changed");
     for (const id of AUDIT_MODULES) {
       expect(MODULES[id].freeTier, `${id} (${MODULES[id].name})`).toBe(free.has(id));
-      if (free.has(id)) {
-        expect(MODULES[id].needs, `${id} (${MODULES[id].name}) is documented free but needs its paid-only tier to run at all`).toBe("source");
-      }
     }
     // The one module the doc deliberately withholds from the free tier — pinned so a table that
     // stopped parsing (every module "paid") cannot pass this test by accident.
     expect(free.has("M2")).toBe(false);
+  });
+
+  // #1415 criterion 3: both divergent states must be EXPRESSIBLE, because that is the whole point
+  // of keeping two fields. #1296's load-time invariant threw on construction of either, so this
+  // test could not have been written before it was removed.
+  it("lets freeTier and needs disagree in both directions — the commercial lever the ruling asked for", () => {
+    const hook: (typeof MODULES)[AuditModule] = { name: "paid-LLM module given away as a hook", needs: "llm", freeTier: true };
+    const paywalled: (typeof MODULES)[AuditModule] = { name: "source-only module behind the paywall", needs: "source", freeTier: false };
+    // No throw, no coercion: the values survive intact, and `moduleOfFinding` + `freeTier` is what
+    // the gating path reads, so each is actionable rather than merely storable.
+    expect([hook.freeTier, hook.needs]).toEqual([true, "llm"]);
+    expect([paywalled.freeTier, paywalled.needs]).toEqual([false, "source"]);
+  });
+
+  it("maps a finding's taxonomy to its module, falling back to M1 for quick-scan's unprefixed rows", () => {
+    expect(moduleOfFinding("M4 — Duplication")).toBe("M4");
+    expect(moduleOfFinding("M10 — Data classification")).toBe("M10");
+    // NEGATIVE CONTROL for the \b in the pattern: "M1" must not swallow "M10", and an unknown
+    // module number must not become a MODULES key that does not exist.
+    expect(moduleOfFinding("M99 — invented")).toBe("M1");
+    expect(moduleOfFinding("Secret exposure")).toBe("M1");
   });
 
   it("keeps the never-executed ledger to real modules, so a typo can't silently never fire", () => {

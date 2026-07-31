@@ -39,6 +39,7 @@ import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entrie
 import { b22GhaPermissionsEntries } from "./calibration/b22-gha-permissions.entries.js";
 import { b23D091GapEntries } from "./calibration/b23-d091-gaps.entries.js";
 import { b24ConnectedPostgrestRealtimeEntries } from "./calibration/b24-connected-postgrest-realtime.entries.js";
+import { b25DepProvenanceEntries } from "./calibration/b25-dep-provenance.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
@@ -90,6 +91,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b22GhaPermissionsEntries,
   ...b23D091GapEntries,
   ...b24ConnectedPostgrestRealtimeEntries,
+  ...b25DepProvenanceEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,
@@ -224,6 +226,9 @@ export interface MatrixRow {
   kind: CorpusEntry["kind"];
   cls: string;
   expectedTier?: CorpusEntry["expectedTier"];
+  // #1248: echoes the entry's soundness flag so validate-calibration can make this row's miss fatal
+  // even though review-tier misses are non-fatal in general.
+  mustCatch?: true;
   caughtTier?: PrecisionTier; // best tier a relevant finding landed at (positives)
   highFlagged: boolean; // a relevant finding at HIGH (free-count) tier exists
   reviewFlagged: boolean; // a relevant finding at review tier exists
@@ -308,7 +313,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[], scoredVenues
     const detail = pass
       ? `caught at ${caughtTier}${entry.expectedTier && entry.expectedTier !== caughtTier ? ` (expected ${entry.expectedTier})` : ""}${sevDetail}`
       : "NOT caught by any rule";
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch, notScored: false };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, mustCatch: entry.mustCatch, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch, notScored: false };
   }
 
   // negative. #1344: `!highFlagged` alone let a widened rule light up a planted negative at review

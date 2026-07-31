@@ -1,0 +1,33 @@
+// #1533 scope control 1 of 3 — the counterexample that stopped the naive fix. `sendPlainText` is
+// declared `async` and awaits NOTHING, so "require a real await in the caller" would have flagged
+// `toHtmlParagraphs`; it does its I/O by RETURNING the promise `sendHtml` produces. Read at source
+// 2026-07-30: inbox-zero apps/web/utils/outlook/mail.ts:408 is exactly this.
+function toHtmlParagraphs(text: string): string {
+  return text
+    .split("\n\n")
+    .map((p) => `<p>${p}</p>`)
+    .join("");
+}
+
+export async function sendHtml(client: { send: (body: string) => Promise<void> }, html: string): Promise<void> {
+  await client.send(html);
+}
+
+export async function sendPlainText(client: { send: (body: string) => Promise<void> }, text: string): Promise<void> {
+  return sendHtml(client, toHtmlParagraphs(text));
+}
+
+// The same class one step weaker, and the only thing in this suite that exercises the `async`
+// KEYWORD on a resolved callee: `enqueue` awaits nothing, so `containsAwait` says nothing about it —
+// it is a promise purely by declaration, and returning one is still doing the async work.
+export async function enqueue(client: { send: (body: string) => Promise<void> }, subject: string): Promise<void> {
+  client.send(subject);
+}
+
+function toSubjectLine(text: string): string {
+  return text.split("\n")[0]?.slice(0, 78) ?? "(no subject)";
+}
+
+export async function queuePlainText(client: { send: (body: string) => Promise<void> }, text: string): Promise<void> {
+  return enqueue(client, toSubjectLine(text));
+}

@@ -27,6 +27,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateFindings, type FindingsDocument } from "../findings.js";
 import { runGate, type GateReport } from "../fix/gate.js";
 import { GitHubTracker } from "../trackers/github.js";
@@ -167,9 +168,15 @@ async function main(): Promise<void> {
 }
 
 // #1357: guarded so importing writebackGate for a direct unit test (fix-verify.test.ts) doesn't also
-// run the CLI (main() would otherwise fire on import with no argv, throwing the usage error) — same
-// guard as detect-deeper.ts/scan.ts.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// run the CLI (main() would otherwise fire on import with no argv, throwing the usage error).
+//
+// #1546: the guard's comment claimed parity with src/cli/scan.ts while using the weaker
+// `file://${argv[1]}` string form, which is not a correct file URL for any path needing percent-
+// encoding (a space, a `#`, most non-ASCII). A mismatch here makes the CLI exit 0 having done
+// nothing — the quietest possible failure, and one a client reads as "my rescan ran". Now the same
+// `fileURLToPath` form scan.ts actually uses, and src/cli/fix-verify-cli.test.ts fails if the
+// process ever produces no output.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   main().catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

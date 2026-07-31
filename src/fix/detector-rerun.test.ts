@@ -305,21 +305,10 @@ describe("rerunDetector — the semgrep resolver never manufactures a clean dete
     expect(detectorHalfClean(run)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
-  it.skipIf(SEMGREP_PRESENT)("semgrep absent from PATH is notRun on this machine — resolvable ≠ runnable", () => {
-    const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
-    expect(run.notRun).toContain("semgrep not found on PATH");
-    expect(detectorHalfClean(run)).toBe(false);
-  }, SEMGREP_TIMEOUT_MS);
-
-  // #1368: the SAME "resolvable ≠ runnable" honesty rule, for the registry-pack path — and here it is
-  // proven WITHOUT needing a real network outage (MEASURED 2026-07-30: pointing semgrep at a dead
-  // proxy to force a live network failure took 96s, an unusable test time), because the identical
-  // execFileSync-throws failure branch fires whether semgrep itself is on PATH or not — the fail-loud
-  // posture is widened here (a registry-specific reason), never weakened (still notRun, never clean).
-  it.skipIf(SEMGREP_PRESENT)("registry-pack replay is notRun on a machine with no semgrep — never a false clean, widened reason", () => {
-    const run = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, readFileSync(join(REPO_ROOT, "targets/calibration", LOCATION_NAV), "utf8")));
-    expect(run.notRun).toContain("semgrep not found on PATH");
-    expect(run.notRun).toContain("registry-pack rule");
-    expect(detectorHalfClean(run)).toBe(false);
-  }, SEMGREP_TIMEOUT_MS);
+  // #1546: the two "semgrep is not runnable" cases that used to live here — one harvey-*, one
+  // registry-pack — were `it.skipIf(SEMGREP_PRESENT)` inside this heavy-CLI-only file, so they
+  // skipped in CI (which installs the binaries) AND on any dev machine that has semgrep. They ran
+  // nowhere. They now live in src/fix/detector-rerun-offline.test.ts, driven by a
+  // vi.mock("node:child_process") ENOENT fake in the LIGHT suite, where the result does not depend
+  // on what the runner happens to have installed. Do not reintroduce the skipIf convention here.
 });

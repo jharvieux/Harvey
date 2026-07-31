@@ -91,6 +91,7 @@ import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger 
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
+import { briefFreshnessBanner } from "../brief-freshness.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, formatIdCollisions, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
@@ -238,6 +239,23 @@ console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.d
 if (appList.length > 1) console.log(`Monorepo apps enumerated (per-app tiers fan out): ${appList.map((a) => a.name).join(", ")}`);
 if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 advisors fan out): ${supabaseRefsArg.join(", ")}`);
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
+
+// #678 — engagement bootstrap: say which D-091 catalog version the M1 semantic brief was derived
+// from, and diff it against a target that ships the same catalog. `pnpm brief-freshness` has existed
+// since #689 and was wired into NOTHING (`git grep brief-freshness` reached only package.json), so
+// the check ran at engagement start only if someone remembered — which is how the 21-vs-29 drift
+// this issue was filed for happened in the first place. Behind is FATAL: the semantic pass is about
+// to hunt an out-of-date class list, and a run that proceeds silently is the stale-brief defect.
+const targetCatalogPath = join(targetDir, "docs", "runbooks", "anti-patterns.md");
+const freshness = briefFreshnessBanner(
+  readFileSync(new URL("../../briefs/anti-patterns.md", import.meta.url), "utf8"),
+  existsSync(targetCatalogPath) ? readFileSync(targetCatalogPath, "utf8") : undefined,
+);
+for (const line of freshness.lines) console.log(line);
+if (freshness.behind.length > 0) {
+  console.error(`\nBRIEF STALE — re-sync briefs/anti-patterns.md and briefs/scan-extras.txt from ${targetCatalogPath} before running the M1 semantic pass (#678).`);
+  process.exit(1);
+}
 console.log("");
 
 const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality, idCollisions } = runAudit(AUDIT_RUNNERS, ctx);

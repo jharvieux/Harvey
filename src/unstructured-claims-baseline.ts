@@ -307,11 +307,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/free-tier-scope.md": [
     "The free (mechanical) tier produces **indicators, not verdicts.** It reads source and reports what the code *indicates* — it does not, and structurally cannot, prove that a finding is reachable or exploitable in production. That gap between **indicated** (free, mechanical) and **proved** (paid: semantic cross-file review, connected read-only confirmation, dynamic pen-test) is the product's spine, not a disclaimer to bury.",
-    "**What this means for how the free report reads:** a strong free result is a genuine head start; a thin free result on an evasive target is **not a clean bill of health** — it is exactly where the paid tiers earn their keep. The free scan's job is to be honestly useful and to make that boundary legible, so \"static analysis indicates X; confirm it by…\" is the natural bridge to paid confirmation, not a hedge. Where the free tier is silent on a whole class — cross-file authorization, live RLS effect, exploitability — it is silent because it could not look, and it says so (see the ceiling and reserved-for-paid sections below). **The mechanically-impossible classes are not gaps to apologize for; they are the paid tier's remit** — the concrete \"indicated vs proved\" upsell for each is spelled out in *Explicitly reserved for paid*.",
     "— so a module that did not run cannot disappear into \"no results.\" Prefer the `run-audit` form when",
     "## What source-only structurally cannot see (the mechanical ceiling)",
-    "**Not every mechanical miss is the ceiling, though.** Some are *closeable* rule gaps — a single-function shape a new detector could catch — and those are tracked as improvement issues, not framed as paid-only (measurement docs' per-target gap analyses distinguish the two; the closeable ones filed under #868 are the storage-bucket, PII-aware `USING(true)`, and verbose-error passes). The upsell is only for what an AST *structurally cannot decide* — intent, cross-file reachability, and live/exploitability — never for a mechanization we simply haven't shipped.",
-    "- **Cross-file authorization (the semantic pass):** the dataflow the mechanical tier structurally cannot follow — see the ceiling section above. *\"We read the route end to end, not one function at a time.\"*",
     "- **M8 mutation testing:** the free tier reads tests statically; the paid pass runs the suite against mutated code to find the tests that cannot fail. Needs a runnable suite, so it is not source-only.",
   ],
   "docs/go-no-go.md": [
@@ -481,8 +478,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/audit-coverage.ts": [
     "// The rule it enforces: a module that cannot run is recorded `partial`/`requires-live-run` WITH",
     "// reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).",
-    "// parity test is now that reader, so a wrong value cannot sit here waiting to be adopted as truth.",
-    "// production\"), a module whose MINIMUM environment is anything but \"source\" cannot be free — so",
     "// cannot claim full module coverage on the strength of a module that has never produced output.",
     "// recording a reason. This cannot be fixed by a reason; only by running the module.",
     "// we can't know which is true, so refuse to pick rather than let a \"ran\" mask a gap.",
@@ -543,7 +538,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/cli/dry-run-scorecard.ts": [
     "// WITH its reason — an unlisted bug can't appear in a tally. replayId is the replay registered in",
-    "// (the FK-integrity guard that makes drift structurally impossible), and the \"none\" tier maps its",
+    "// structurally impossible), and the \"none\" tier maps its accepted no-mechanical-rule gap to a",
   ],
   "src/cli/dry-run.ts": [
     "// answer; a migration-SQL-only feed cannot distinguish \"default, never touched\" from \"explicitly",
@@ -1560,7 +1555,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// the reviewer cannot tell them apart. What it cannot see is that another module ALREADY decided —",
   ],
   "src/scan/supabase.ts": [
-    "// That endpoint's exact request/response envelope was NOT independently re-verified against",
     "// auth config), which is not held in Postgres, so a local connection cannot answer their question.",
   ],
   "src/scan/supply-chain.ts": [

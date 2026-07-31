@@ -329,6 +329,42 @@ describe("client-supplied owner id — widened service-role shapes (#465)", () =
   });
 });
 
+// #1434 — the residual #1263 left: this detector kept the raw-text AUTH_PATTERN test, so a
+// house-style gate was invisible to it and its evidence asserted "makes no auth/session call at
+// all". The corpus pair (M9C-OWNER-GATE-POS/NEG) scores the class; these are the per-shape locks,
+// because one `match` key is satisfied by one finding and the positive dir carries two shapes.
+describe("client-supplied owner id — house-style gate resolution (#1434)", () => {
+  it("does not flag a service-role action gated by a resolvable helper that can deny", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/negative"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+    // Scope control: the fixture WAS scanned. A dir the loader never read reports the same zero.
+    expect(taxonomies(findings)).toContain("M9 — Server Action missing input validation");
+  });
+
+  it("still flags the two shapes a helper does not gate — a logger, and the word `auth` in a comment", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/positive"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+
+    // One per action: reverting either half of the fix drops one of these and reds this line,
+    // where the corpus entry alone would stay green.
+    expect(hits.map((f) => f.title).join(" ")).toContain("updateUserProfile");
+    expect(hits.map((f) => f.title).join(" ")).toContain("updateUserEmail");
+    expect(hits).toHaveLength(2);
+  });
+
+  it("never claims a helper was read and cleared when none authenticates", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate/positive"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+
+    for (const f of hits) {
+      // The claim #1434 exists to remove. What replaces it names both what was read and its bound.
+      expect(f.evidence).not.toContain("makes no auth/session call at all");
+      expect(f.evidence).toContain("none in any helper it calls that this pass could resolve");
+    }
+  });
+});
+
 describe("Server Action missing input validation", () => {
   it("flags a 'use server' action that mutates from formData with no schema parse", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-validation/positive"));

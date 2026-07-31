@@ -4,6 +4,7 @@ import { AUDIT_MODULES, type ModuleCoverage } from "./audit-coverage.js";
 import { assembleEngagementDocument, coverageLedger, dedupeFindings } from "./audit-report.js";
 import { runAudit, type RunContext } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { applyVerifyResults } from "./pentest/verify.js";
 import { type Finding, type ReportMeta, validateFindings } from "./findings.js";
 
 const meta: ReportMeta = {
@@ -36,6 +37,28 @@ describe("assembleEngagementDocument (#312)", () => {
     expect(doc.coverage).toHaveLength(AUDIT_MODULES.length);
     expect(validateFindings(doc).ok).toBe(true);
     expect(doc.coverage?.find((r) => r.module === "M5")?.reason).toMatch(/no node_modules/);
+  });
+
+  // #1312 — the produced→delivered half this seam has never had. applyVerifyResults attaching a
+  // verdict is one thing; the attachment SURVIVING assembly and arriving on the M1 row in the
+  // assembled deliverable is the claim M2's value rests on ("here's the other tenant's row"), and
+  // it is the step where this repo's named defect class drops findings. Asserted for a PROVEN
+  // verdict specifically, because that is the one a client reads.
+  it("a PROVEN M2 verdict reaches the assembled deliverable attached to the M1 finding it confirms (#1312)", () => {
+    const m1 = finding("BOLA-1");
+    const annotated = applyVerifyResults({ meta, findings: [m1, finding("UNRELATED")] }, [
+      { findingId: "BOLA-1", verdict: "proven", severity: "High", repro: null, evidence: "read tenant B's invoice row as tenant A" },
+    ]);
+    const doc = assembleEngagementDocument(recorded, env, annotated.findings, meta);
+
+    const delivered = doc.findings.find((f) => f.id === "BOLA-1");
+    expect(delivered, "the confirmed M1 finding must survive assembly, not be deduped or dropped").toBeDefined();
+    expect(delivered!.status).toBe("Proven (dynamic)");
+    expect(delivered!.confidence).toBe("Confirmed");
+    expect(delivered!.note).toContain("read tenant B's invoice row as tenant A");
+    // The control: assembly must not spray the verdict onto findings the replay never named.
+    expect(doc.findings.find((f) => f.id === "UNRELATED")!.status).toBe("Open");
+    expect(validateFindings(doc).ok).toBe(true);
   });
 
   // #515: when an M3 hotspot ranking is passed, every module's findings on a hot file get tagged.
@@ -190,7 +213,9 @@ describe("runAudit findings capture (#312/#420)", () => {
     // (#397), filtered to the `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy
     // doesn't match, so it collects nothing here too, but for a different (mock-fidelity) reason.
     // Each quality-scan row appears ONCE despite both probes reading it (#1101).
-    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
+    // M1-BRIEF-00 (#678) rides with M1's mechanical rows: the D-091 catalog version the semantic
+    // brief was built from, recorded in the deliverable rather than only in the bootstrap banner.
+    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M1-BRIEF-00", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
   });
 
   it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {

@@ -256,7 +256,10 @@ let sidebarNote = "";
 if (bodyFile) {
   body = readFileSync(bodyFile, "utf8");
   source = bodyFile;
-  sidebarNote = "ℹ NOT ASSESSED  --body-file reads the text supplied and nothing else, so GitHub's own `closingIssuesReferences` (which a Development-sidebar link populates with no keyword in the body) was NOT consulted. Issue comments WERE read, so the one-disposition-per-criterion rule is checked in full. Re-run with `--pr <n>` once the PR exists for the sidebar half.";
+  // Every clause here has to be true READ ALONE (#1573). The row used to open "reads the text
+  // supplied and nothing else" and then correctly say two sentences later that issue comments WERE
+  // read — and the opening clause is the part a skimmer keeps.
+  sidebarNote = "ℹ NOT ASSESSED  --body-file takes the CLOSE SET from the supplied text alone, so GitHub's own `closingIssuesReferences` (which a Development-sidebar link populates with no keyword in the body) was NOT consulted. Issue comments WERE read, over `gh`, so the one-disposition-per-criterion rule is checked in full. Re-run with `--pr <n>` once the PR exists for the sidebar half.";
 } else {
   const r = gh(["pr", "view", prFlag!, ...repoArgs, "--json", "body,closingIssuesReferences"]);
   if (r.status !== 0) die(`\`gh pr view ${prFlag}\` failed (exit ${r.status}): ${r.stderr.trim()}`);

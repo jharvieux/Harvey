@@ -76,6 +76,21 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
     expect(v.join("\n")).toContain("names no tracking issue");
   });
 
+  // #1270's substitute: a gate whose score has no cadence may name a workflow that watches its
+  // STALENESS instead. That claim needs the same failing direction the `workflow` cadence has —
+  // otherwise a deleted alarm leaves the row still printing "its staleness is alarmed by".
+  it("fails when the named staleness alarm no longer exists", () => {
+    const cadence = { kind: "none", issue: 1270, alarmedBy: { file: ".github/workflows/gone.yml", when: "daily" } } as const;
+    expect(checkScoredGates(inputs(), gate({ cadence })).join("\n")).toContain("as its staleness alarm, and that workflow does not exist");
+  });
+
+  it("accepts a staleness alarm that does exist, so the check above is not simply always-on", () => {
+    const cadence = { kind: "none", issue: 1270, alarmedBy: { file: ".github/workflows/ci.yml", when: "daily" } } as const;
+    // The synthetic `inputs()` discovers only validate-x, so every NOT_SCORED row reports stale here
+    // by construction; the assertion is scoped to the staleness-alarm violation this pair is about.
+    expect(checkScoredGates(inputs(), gate({ cadence })).join("\n")).not.toContain("as its staleness alarm");
+  });
+
   it("discovers validate-* CLIs and excludes their test files", () => {
     const ids = discoverValidateClis(new URL("./cli/", import.meta.url).pathname);
     expect(ids).toContain("validate-reasons");

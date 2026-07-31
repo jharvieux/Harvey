@@ -31,7 +31,28 @@ directory the scanner never read reports zero exactly like one it scanned and cl
 false-positive count, and the row FAILS if it does not fire.
 
 Two scoping notes carried from the source docs, so we do not over-claim:
-- **Structural / cross-tenant RLS logic is NOT mechanically detectable.** `USING (true)` and `USING (auth.role() = 'authenticated')` (calibration bugs #1, #2) are enabled policies that *look* correct — only reading the policy body catches them. The Supabase Advisor (`get_advisors`, Splinter lint `0013 rls_disabled_in_public`) catches RLS *disabled* (bug #3), but not a permissive-but-present policy. Replay (#5), counter race (#6), and unscoped cross-tenant `.update()` (#7) are likewise semantic/dynamic. These belong to the DEEP / connected-advisor / dynamic tiers, not the mechanical free count.
+- **Where the structural / cross-tenant classes actually sit — MEASURED 2026-07-31, correcting the claim this bullet used to make (#1375).** This bullet previously read *"Structural / cross-tenant RLS logic is NOT mechanically detectable"* and swept `USING (true)` (bugs #1, #2), webhook replay (#5), counter race (#6) and unscoped cross-tenant `.update()` (#7) into it. Three of those four ship mechanical rules today, at **review tier**, gate-scored with their benign lookalikes cleared. `pnpm exec tsx src/cli/validate-calibration.ts` on this commit:
+
+  ```
+    PASS  P-UPDATE-UNSCOPED      review  caught at review
+    PASS  P-COUNTER-RACE         review  caught at review
+    PASS  P-RLS-USING-TRUE-STATIC review  caught at review
+    PASS  P-RLS-USING-TRUE-REGULATED review  caught at review
+    PASS  P-RLS-USING-TRUE-PII-SPARED review  caught at review [severity High]
+    GAP   P-WEBHOOK-REPLAY-NO-RULE -   intended gap — no mechanical rule by design (measured LLM-tier); nothing fired
+    PASS  N-RLS-USING-TRUE-AMBIGUOUS-NAME - cleared — not flagged
+    PASS  N-RLS-PUBLIC-CATALOG-USING-TRUE - cleared — not flagged
+  GATE PASS
+  ```
+
+  | class | rule | where it landed |
+  |---|---|---|
+  | `USING (true)` on a tenant-scoped read policy (bug #1) | `usingTrueReview` (`src/rls-policy-review.ts`) | #333, commit `c470f7c`, 2026-07-15 |
+  | counter race (bug #6) | `detectCounterRaceFindings` (`src/scan/counter-race.ts`) | #353, commit `8d35435`, 2026-07-16 |
+  | unscoped cross-tenant `.update()` (bug #7) | `unscoped-write` grep (`src/scan/leftover-auth.ts`) | #353, commit `8d35435`, 2026-07-16 |
+  | webhook replay (bug #5) | none, by design | scored as an intended gap by `P-WEBHOOK-REPLAY-NO-RULE` (`src/scan/calibration/b17-race-unscoped.entries.ts`) |
+
+  **Review tier is the right home, and that is the real content of the old claim.** Each rule sees the shape's EFFECT, not its INTENT: `USING (true)` is byte-identical on a leak and on a published price list (the discriminator is the table's schema, not the policy text — `N-RLS-PUBLIC-CATALOG-USING-TRUE`); a `WHERE`-less `UPDATE` is identical to a deliberate admin backfill; a read-modify-write is identical to one already protected by a DB-side lock the pass does not observe. So they are triaged, never free-counted — but they are **surfaced**, and a spec that forecloses them tells the next corpus sweep not to extend them. `USING (auth.role() = 'authenticated')` (bug #2) is not re-measured here and carries no verdict either way. The Supabase Advisor (`get_advisors`, Splinter lint `0013 rls_disabled_in_public`) still only catches RLS *disabled* (bug #3), not a permissive-but-present policy — that half of the old bullet stands.
 - **Existing repo assets to reuse, not re-derive:** `briefs/fp-rules.txt` already suppresses several benign classes (service-role legitimate server use, RLS-enabled-no-policy on a service-only table, in-memory `Map`-as-cache, operator/env config URLs, test/fixture scope, documented exceptions). `src/scan/rules/semgrep-nextjs-supabase.yml` already ships rules for `dangerouslySetInnerHTML`, permissive CORS, service-role-in-client, and open-redirect. Rows below cross-reference these rather than duplicating them.
 
 ---
@@ -107,7 +128,7 @@ One row per corpus entry. `kind`: POSITIVE (planted vuln, must be caught) or NEG
 | POSITIVE | P-MISSING-LOCKFILE `[B2-deferred]` | Missing lockfile (project root) | `fixtures/legacy-app/` — no lockfile | `checkLockfilePresence` (standalone root) | high | [scan-gaps §5.2](https://docs.npmjs.com/cli/v10/configuring-npm/package-json) |
 | POSITIVE | P-KNOWN-IOC-PKG `[B2-deferred]` | Known-malicious (IOC) dependency | `fixtures/legacy-app/package.json` — `flatmap-stream@0.1.1` (data only) | `checkKnownIoc` (new) — curated malware-name feed | high | [event-stream incident](https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident) |
 
-**Explicitly NOT mechanical (kept in GROUND-TRUTH for the DEEP/dynamic tiers, not the free count):** `RLS-USING-TRUE` (#1) and `RLS-AUTH-ROLE` (#2) — enabled-but-permissive policies, need policy-body semantics; `WEBHOOK-REPLAY` (#5) — needs freshness-control semantics; `COUNTER-RACE` (#6) — needs read-modify-write dataflow; `UPDATE-UNSCOPED` (#7) — needs cross-tenant reasoning. Do not promote these to the mechanical count.
+**Not in the FREE COUNT (superseded 2026-07-31, #1375 — three of these are now mechanical at review tier).** As drafted this paragraph said `RLS-USING-TRUE` (#1), `RLS-AUTH-ROLE` (#2), `WEBHOOK-REPLAY` (#5), `COUNTER-RACE` (#6) and `UPDATE-UNSCOPED` (#7) were "explicitly NOT mechanical". Per the measured run in the Intro above, `RLS-USING-TRUE`, `COUNTER-RACE` and `UPDATE-UNSCOPED` ship mechanical review-tier rules and are scored by `P-RLS-USING-TRUE-*`, `P-COUNTER-RACE` and `P-UPDATE-UNSCOPED`. What survives is the narrower and still-correct claim: **none of them belongs in the free count**, because each rule reads the shape's effect and not its intent. `WEBHOOK-REPLAY` (#5) remains a by-design LLM-tier gap with no mechanical rule, pinned by `P-WEBHOOK-REPLAY-NO-RULE` — an entry that flips the gate loud if a rule ever does fire there. `RLS-AUTH-ROLE` (#2) has not been re-measured; treat it as an open question rather than as foreclosed.
 
 ### Negative rows (benign lookalikes — must NOT be flagged)
 

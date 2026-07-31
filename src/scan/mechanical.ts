@@ -30,6 +30,9 @@ import { scanStaleQuotaRead } from "./stale-quota-read.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
+import { scanPropOvershare } from "./prop-overshare.js";
+import { scanDedupWithoutUnique } from "./dedup-unique.js";
+import { scanBolaCrossFile } from "./bola-cross-file.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
@@ -37,7 +40,7 @@ import { scanExpressPoweredBy } from "./express-powered-by.js";
 import { scanExpressSecurityHeaders } from "./express-security-headers.js";
 import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { checkWorkflowPermissions } from "./gha-permissions.js";
@@ -70,6 +73,7 @@ import {
   checkMigrationRlsBypass,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
+  checkUnreadSqlSurfaces,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -259,8 +263,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     const osv = runOsvScanner(scanDir);
     findings.push(...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result)));
     const pkg = readPackageJson(scanDir);
+    // #1471 — the lockfile's RESOLVED version, when there is one. Passing the manifest's range
+    // floor as if it were installed made "Installed next@14.2.5" a false claim on this repo's own
+    // calibration target, whose lockfile resolves the patched 14.2.35.
+    const resolved = resolvedTree(scanDir);
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
-    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
+    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion, "package.json", resolved));
 
     // Semgrep footguns + missing-CSP config check. #950 — a missing/crashing binary degrades to
     // the SEM-00 disclosure instead of an uncaught ENOENT (mirrors osv-scanner, #512).
@@ -316,6 +324,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkMigrationDynamicSqlInjection(scanDir));
       findings.push(...checkMigrationRlsInitplanStatic(scanDir));
       findings.push(...checkMigrationStorageBuckets(scanDir));
+      // #1323 — the static SQL pass reads two surfaces (supabase/migrations/*.sql and a root
+      // schema.sql). Any other .sql in the tree is counted and named, so a schema kept in db/ or
+      // sql/ produces a disclosure row instead of an empty section that reads as clean.
+      findings.push(...checkUnreadSqlSurfaces(scanDir));
       findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
       // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
       // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
@@ -377,12 +389,13 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       // The curated CVE table is the OFFLINE FALLBACK for the tier osv-scanner owns. When
       // osv-scanner ran it already walked the whole lockfile, so widening this to the tree would
       // double-report its rows against a second id; when it did not, the tree is otherwise
-      // unassessed for CVEs and the curated table is all there is. A declared range wins over the
-      // resolved version for a name that has both, so a manifest-scoped row is unchanged.
+      // unassessed for CVEs and the curated table is all there is. #1471: the DECLARED range used
+      // to win over the resolved version for a name that has both — a range floor is not a version
+      // match, so the resolved one now wins inside checkKnownDependencyCVEs via `resolved`.
       const curatedCveDeps: DependencyMap = {};
       if (osv.failure) for (const c of license.candidates) if (c.version) curatedCveDeps[c.name] ??= c.version;
       for (const d of declared) curatedCveDeps[d.name] = d.range;
-      findings.push(...checkKnownDependencyCVEs(curatedCveDeps));
+      findings.push(...checkKnownDependencyCVEs(curatedCveDeps, "package.json", resolved));
       findings.push(...checkUnpinnedDependencies(declared));
       findings.push(...checkNonRegistryDependencies(declared));
       findings.push(...checkInstallScripts(workspace.manifests));
@@ -521,6 +534,21 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
     // layer is structurally blind to it.
     findings.push(...scanSsrSanitizer(scanDir));
+
+    // #1252 — a whole domain object handed to a component as one prop when its declared type
+    // carries a sensitive field. Its own pass because it is a TYPE question: the semgrep layer does
+    // not read an interface declaration, so it has no view of what is in the object being passed.
+    findings.push(...scanPropOvershare(scanDir));
+
+    // #1257 / D-091 item 25 — SELECT-then-INSERT dedup whose predicate columns carry no UNIQUE
+    // constraint. Folds the migration DDL against the app-side predicate, the same shape
+    // migration-column-drift.ts uses for item 13.
+    findings.push(...scanDedupWithoutUnique(scanDir));
+
+    // #1267 — the route → repository → query chain across a module boundary: the cross-file
+    // complement of scanBolaOwner, which is single-file by construction. Non-overlap is structural
+    // (one requires the .eq() in the handler file, the other requires it in an imported module).
+    findings.push(...scanBolaCrossFile(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

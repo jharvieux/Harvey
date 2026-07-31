@@ -102,10 +102,13 @@ describe("classifyVitalsGitScopeFailure", () => {
   });
 
   it("fires when all three git-derived sections are empty but an independent git log found commits with no error (#1206's observed shape)", () => {
-    const withSanity = { ...emptied, _gitScopeSanity: { commits: 72, returncode: 0, stderr: null } };
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true } };
     const reason = classifyVitalsGitScopeFailure(withSanity);
     expect(reason).toContain("#1206");
     expect(reason).toContain("72 commit(s)");
+    // The claim the evidence supports. Asserting the hedge, not just the id, is what stops the
+    // over-claim reappearing the next time someone rewrites the sentence.
+    expect(reason).toContain("CONSISTENT WITH");
   });
 
   it("does NOT fire when the sections are empty and there is no independent sanity check to corroborate it", () => {
@@ -113,12 +116,32 @@ describe("classifyVitalsGitScopeFailure", () => {
   });
 
   it("does NOT fire when the independent sanity check itself errored (can't distinguish real-empty from swallowed-failure)", () => {
-    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 128, stderr: "fatal: not a git repository" } };
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 128, stderr: "fatal: not a git repository", scopeMatchesToplevel: true } };
+    expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
+  });
+
+  // The case above short-circuits on commits === 0, so it never reaches the returncode guard and a
+  // one-clause mutation there survives. This one has commits > 0 so returncode is the ONLY clause
+  // that can reject it (raised by PR #1398's acceptance verifier).
+  it("does NOT fire when the sanity check reported commits AND a non-zero returncode (isolates the returncode clause)", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 40, returncode: 128, stderr: "fatal: bad revision", scopeMatchesToplevel: true } };
     expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
   });
 
   it("does NOT fire when the sanity check found zero commits (a genuinely empty window is a real bug, not the #1206 flake)", () => {
-    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 0, stderr: null } };
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 0, stderr: null, scopeMatchesToplevel: true } };
+    expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
+  });
+
+  // The competing cause with the identical signature. Absorbing it as NOT RUN would let a regression
+  // in seed.py's realpath() pass silently; it has to stay a loud contract FAIL.
+  it("does NOT fire when the seeded path is not the resolved git toplevel (scope mismatch, not the swallow class)", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: false } };
+    expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
+  });
+
+  it("does NOT fire when the capture predates scopeMatchesToplevel and cannot rule the mismatch out", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 72, returncode: 0, stderr: null } };
     expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
   });
 
@@ -126,7 +149,7 @@ describe("classifyVitalsGitScopeFailure", () => {
     const partiallyEmptied: VitalsReport & { _gitScopeSanity: GitScopeSanity } = {
       ...fixture,
       coupling: [],
-      _gitScopeSanity: { commits: 72, returncode: 0, stderr: null },
+      _gitScopeSanity: { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true },
     };
     expect(classifyVitalsGitScopeFailure(partiallyEmptied)).toBeUndefined();
   });

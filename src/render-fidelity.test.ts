@@ -20,10 +20,13 @@ import { describe, expect, it } from "vitest";
 import { buildHtml } from "../report-template/render.mjs";
 import { esc } from "../report-template/sections.mjs";
 import { assembleEngagementDocument } from "./audit-report.js";
+import { runAudit } from "./audit-runner.js";
+import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
+import type { RunContext } from "./audit-runner.js";
 import type { EngagementEnv, ModuleCoverage } from "./audit-coverage.js";
-import type { Finding, FindingsDocument, ReportMeta } from "./findings.js";
+import type { CoverageRow, Finding, FindingsDocument, ReportMeta } from "./findings.js";
 
 const META: ReportMeta = {
   client: "Acme", subtitle: "Full audit", date: "2026-07-28", commit: "abc1234", auditor: "Harvey",
@@ -34,12 +37,30 @@ const META: ReportMeta = {
 
 const ENV: EngagementEnv = { connected: false, dynamic: false, llm: false };
 
-// Every module accounted for, so the ledger this document carries is a real one.
-const RECORDED: ModuleCoverage[] = (["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const).map((module) =>
-  module === "M2"
-    ? { module, status: "requires-live-run" as const, reason: "no two-tenant stack stood up for this engagement" }
-    : { module, status: "ran" as const },
-);
+// #1555 — the ledger is produced by the REAL ten-module orchestrator, not hand-written, for the same
+// reason the N/A rows below are: a hand-typed `detail` proves the renderer copies a string I chose,
+// while the thing that actually went missing was a string M1's own probe writes. The context drives
+// M1 down its semantic-pass branch with no hotspot focus recorded, which is the shape #1553 made
+// ordinary — `partial`, carrying BOTH the #502 warning in `detail` and the un-run tiers in `reason`.
+const NOW = Date.parse("2026-07-30T12:00:00Z");
+const LEDGER_CTX: RunContext = {
+  targetDir: "/target",
+  env: { connected: false, dynamic: false, llm: false },
+  exec: (_command, argv) => ({
+    ok: true,
+    output: argv.join(" ").includes("quick-scan") ? "  4,778 lines of application code across 400 file(s)\n  Band: Small" : "",
+    stderr: "",
+  }),
+  exists: () => true,
+  isGitRepoRoot: () => true,
+  artifactsDir: "/artifacts",
+  now: NOW,
+  readArtifact: (p) =>
+    p.endsWith("M1.pass.json")
+      ? { module: "M1", target: "/target", pass: "semantic", generatedAt: new Date(NOW - 3_600_000).toISOString() }
+      : undefined,
+};
+const RECORDED: ModuleCoverage[] = runAudit(AUDIT_RUNNERS, LEDGER_CTX).recorded;
 
 const finding = (over: Partial<Finding> & Pick<Finding, "id">): Finding => ({
   title: "Tenant-scope check missing", severity: "High", confidence: "Confirmed", category: "Security",
@@ -164,6 +185,9 @@ describe("#1435 a finding's own words survive the render seam", () => {
     const written = readFileSync(join(out, "report.html"), "utf8");
     rmSync(out, { recursive: true, force: true });
     expect(written).toBe(html);
+    // #1555: the #502 warning, asserted on the file the PDF pass is rendered FROM — not on a string
+    // buildHtml handed back. This is the artifact end of "accounted for is not delivered".
+    expect(written).toContain(esc("no M3 hotspot focus"));
     expect(renderFidelityBreaches(doc, written)).toEqual([]);
   });
 
@@ -191,6 +215,80 @@ describe("#1435 a finding's own words survive the render seam", () => {
     const h = buildHtml(d);
     expect(h).not.toContain(esc("-a\n+b"));
     expect(renderFidelityBreaches(d, h)).toEqual([]);
+  });
+
+  // ---- #1555: the coverage ledger, the one table that says what each module reached ----
+  //
+  // `coverageSection` rendered ONE of a row's two free-text fields, chosen by status: `detail` on a
+  // `ran` row, `reason` otherwise. #1553 made M1 correctly read `partial` in a realistic engagement,
+  // and the #502 "no M3 hotspot focus" warning — which lives in `detail` — stopped reaching the
+  // client while staying in findings.json. Same seam as the N/A rows above, opposite direction.
+
+  const m1 = (doc.coverage as CoverageRow[]).find((r) => r.module === "M1") as CoverageRow;
+
+  it("the fixture's ledger really is a partial M1 row carrying the #502 warning", () => {
+    // Without this the assertions below pass over a row that was never at risk.
+    expect(m1.status).toBe("partial");
+    expect(m1.detail).toMatch(/no M3 hotspot focus/);
+    expect(m1.reason).toMatch(/out-of-orchestrator tiers/);
+    expect((doc.coverage as CoverageRow[]).filter((r) => r.status === "requires-live-run" && r.reason).length).toBeGreaterThan(0);
+  });
+
+  it("a partial M1 row renders BOTH what ran and why it fell short — #502's warning included", () => {
+    expect(html).toContain(esc(m1.detail as string));
+    expect(html).toContain(esc(m1.reason as string));
+    expect(html).toContain(esc("no M3 hotspot focus"));
+  });
+
+  it("CONTROL — the shipped branch reconstructed: a partial row rendering only its reason", () => {
+    // Exactly what `r.status === "ran" ? detail : reason` produced — the reason survives, which is
+    // why nothing noticed, and the detail is gone.
+    const broken = html.replace(`${esc(m1.detail as string)}<br>`, "");
+    expect(broken, "the control must actually remove the detail").not.toBe(html);
+    expect(broken).toContain(esc(m1.reason as string));
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.map((b) => b.id)).toContain("M1");
+    expect(breaches.find((b) => b.id === "M1")?.kind).toBe("coverage-text-dropped");
+  });
+
+  it("CONTROL — the mirror image: a not-assessed row that loses its reason is caught too", () => {
+    // #1555 criterion 4 — the branch is generic, so the guard is checked on the other row type as
+    // well. A `requires-live-run` row with no reason on screen is the "unstated limitation reads as
+    // a clean bill of health" failure at its purest. The draft legal block re-states these reasons
+    // further down the report, which is exactly why this check reads the coverage table alone: the
+    // first occurrence is the table's, and removing it must still be caught.
+    const live = (doc.coverage as CoverageRow[]).find((r) => r.status === "requires-live-run" && r.reason) as CoverageRow;
+    const broken = html.replace(esc(live.reason as string), "");
+    expect(broken, "the report still states this reason elsewhere — a whole-document check would pass").toContain(esc(live.reason as string));
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.map((b) => b.id)).toContain(live.module);
+    expect(breaches.find((b) => b.id === live.module)?.kind).toBe("coverage-text-dropped");
+  });
+
+  // #1555 criterion 4. Under the orchestrator the population of these two shapes is ZERO —
+  // src/audit-runner.ts attaches `reason` only on `partial` and `detail` only on `ran`/`partial`, so
+  // `partial`.detail was the one field actually being lost. But the CALLER-supplied ledger path
+  // (`buildAuditCoverage`, `rows.push({ ...entry, name })`) passes any combination straight through,
+  // and the branch that dropped text was keyed on STATUS, not on which fields a row carries. So the
+  // fix is field-driven and this is the check that keeps it that way.
+  it("every status renders whatever free text its row carries, not the one field its status implies", () => {
+    const mixed: ModuleCoverage[] = (["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const).map((module) => {
+      if (module === "M3") return { module, status: "ran" as const, detail: "M3 ran the hotspot table", reason: "M3 ran but the clone was shallow, so the churn signal is thin" };
+      if (module === "M2") return { module, status: "requires-live-run" as const, detail: "M2 got as far as provisioning the stack", reason: "M2 could not seed a second tenant" };
+      return { module, status: "ran" as const, detail: `${module} ran` };
+    });
+    const d = assembleEngagementDocument(mixed, ENV, [finding({ id: "M1-03" })], META);
+    expect(renderFidelityBreaches(d, buildHtml(d))).toEqual([]);
+    const h = buildHtml(d);
+    expect(h).toContain(esc("M3 ran but the clone was shallow"));
+    expect(h).toContain(esc("M2 got as far as provisioning the stack"));
+  });
+
+  it("CONTROL — a report with no Module coverage table at all fails on every row", () => {
+    const broken = html.replace(/<h2>Module coverage<\/h2>[\s\S]*?<\/table>/, "");
+    expect(broken, "the control must actually remove the table").not.toBe(html);
+    const breaches = renderFidelityBreaches(doc, broken).filter((b) => b.kind === "coverage-text-dropped");
+    expect(breaches.map((b) => b.id).sort()).toEqual((doc.coverage as CoverageRow[]).map((r) => r.module).sort());
   });
 
   it("CONTROL — a withheld COUNT that understates what was withheld is caught", () => {

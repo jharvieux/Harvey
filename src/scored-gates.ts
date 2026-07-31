@@ -28,25 +28,43 @@
 // registry's definition of STALE. A reason kept past the day its blocker dissolved is the decay this
 // repo names as its signature defect, so the row is gone rather than reworded.
 //
-// validate-connected has no cadence for a DIFFERENT reason, and it is not an empirical one: the gate
-// runs fine (measured 2026-07-28 against a live `supabase start` stack — 16 of 20 live rows scored,
-// all held, and each of its three B24 detectors gutted in turn exits it 1). What is missing is a CI
-// venue, and adding one means editing .github/workflows/, which CLAUDE.md lists as supervised. The
-// operator question, with the wording proposed, is recorded on #1491 — a supervised path stops the
-// EDIT, never the CRITERION (#1319).
+// validate-connected still has no cadence, and its reason has CHANGED KIND — which is the whole
+// point of re-testing one rather than carrying it forward. It used to be decisional: the gate ran
+// fine (measured 2026-07-28 against a live `supabase start` stack: 16 of 20 live rows scored, all
+// held, each of its three B24 detectors gutted in turn exiting it 1), and the only missing piece was
+// a CI venue behind the supervised `.github/workflows/` path, tracked on #1491.
 //
-// REASON: validate-connected has no CI cadence because standing a Supabase stack up in a workflow is a change to .github/workflows/, which is a supervised path, and no command re-tests whether the operator has approved it
-// KIND: decisional
-// PROVENANCE: MEASURED 2026-07-28 — the gate itself runs and fails correctly against a live stack; the missing piece is only the venue. `grep -rl "supabase start" .github/workflows/` returns nothing today.
-// OWNER: operator (jharvieux)
-// DECISION: #1491 — carries the proposed workflow step verbatim for the operator to approve or decline
-// TOUCHES: src/cli/validate-connected.ts .github/workflows
+// The operator granted workflow edits on 2026-07-31, the decision was TAKEN, and the step landed in
+// ci.yml's heavy-cli shard 2 — where it immediately found a SECOND, empirical blocker nobody had
+// hit, because nothing had ever tried to stand this fixture's stack up in CI. The decisional reason
+// is therefore discharged and the empirical one below replaces it. Both the step and the
+// `workflow` cadence row are gone again: a registry asserting a venue that has never once executed
+// is worse than the gap it papers over, because `validate-scored-gates` then prints GATE PASS over
+// it. #1491 stays open, now with a measured cause rather than a supervised-path deferral.
+
+// REASON: validate-connected has no CI cadence because `supabase start` in targets/calibration cannot come up under a current Supabase CLI — config.toml declares [functions.admin-refund] and [functions.user-profile] and neither directory exists in git, so the CLI aborts before the stack the gate scores against exists
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-31 — the step ran in ci.yml heavy-cli shard 2 on feature/sweep-ci-1333 and died with `failed to read file: open targets/calibration/supabase/functions/admin-refund/index.ts: no such file or directory`. `git ls-files targets/calibration/supabase/functions` lists only send-billing-email, send-email, send-email-safe, send-welcome-email. The 2.102.0 CLI on the authoring machine tolerates the declaration, which is why the same step passed locally; supabase/setup-cli@v1 at `version: latest` does not. The GATE itself is not the blocker — it scored 16 of 20 live rows on 2026-07-28 against a stack stood up by hand.
+// FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-connected\.ts' .github/workflows/ && exit 0 || exit 1
+// TOUCHES: src/cli/validate-connected.ts targets/calibration/supabase/config.toml .github/workflows
+
+// The falsifier watches the VENUE, not the fixture, deliberately. Two different fixes clear this
+// blocker — commit the two Edge Function directories, or pin the CLI — and a falsifier keyed to
+// either one would keep reporting "still blocked" after the other landed. What makes the reason
+// stale is a workflow invoking the gate, whichever way that became possible; this is the same shape
+// as validate-secbench's retired falsifier, which is what retired that row.
 
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-28 — `pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir <empty>` exits 1 with every corpus target NOT SCORED; no M1.pass.json is committed anywhere in this repo. The staleness-alarm half is tracked by #1270.
-// FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
+// PROVENANCE: MEASURED 2026-07-31 — `pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir <empty>` exits 1 with every corpus target NOT SCORED; `git ls-files | grep M1.pass.json` is still empty. The staleness half is no longer outstanding: semantic-freshness.yml alarms daily when the recorded number ages past the 30-day window (#1270), which bounds the gap without closing it.
+// FALSIFIER: test -d .github/workflows || exit 127; grep -rq -- '--artifacts-dir' .github/workflows/ && grep -rq 'validate-semantic\.ts' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
+//
+// The falsifier deliberately requires BOTH the scorer's own file AND an --artifacts-dir: the
+// staleness alarm shipped in the same directory under a name containing `validate-semantic` as a
+// substring, and a bare `grep -rq validate-semantic` would have read that alarm as the scoring
+// cadence it is explicitly NOT — a reason retiring itself on the arrival of its own consolation
+// prize.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -64,8 +82,15 @@ export type Cadence =
    * running daily on every PR — a wrong cadence printed by the gate whose whole job is cadences.
    */
   | { readonly kind: "workflow"; readonly file: string; readonly job: string; readonly when: string }
-  /** No cadence. Carries the issue tracking it; the reason lives in this file's header. */
-  | { readonly kind: "none"; readonly issue: number };
+  /**
+   * No cadence. Carries the issue tracking it; the reason lives in this file's header.
+   *
+   * `alarmedBy` is the second-best outcome for a gate whose input is produced outside anything a
+   * schedule drives: a workflow that does not RUN the gate, but watches whether its recorded number
+   * has aged out of the window that makes it evidence (#1270). Naming it is the point — "no cadence"
+   * and "no cadence and nothing watching" are different facts and used to print identically.
+   */
+  | { readonly kind: "none"; readonly issue: number; readonly alarmedBy?: { readonly file: string; readonly when: string } };
 
 export interface ScoredGate {
   /** CLI basename without extension — also the discovery key. */
@@ -127,13 +152,23 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-connected",
     script: "validate:connected",
     measures: "live-tier corpus recall against a running Supabase stack (local / connected / hosted venues)",
+    // #1491, still open. Its reason is a REASON block in this file's header, carrying the falsifier
+    // that retires it; that block changed KIND on 2026-07-31, so read it rather than this line.
     cadence: { kind: "none", issue: 1491 },
   },
   {
     id: "validate-semantic",
     script: "validate:semantic",
     measures: "M1 semantic (paid LLM) recall against the recorded-pass answer key",
-    cadence: { kind: "none", issue: 1270 },
+    // The SCORE still has no cadence — its input is an interactive LLM pass, and the recorded claim
+    // about that, with its falsifier, is in this file's header. What #1270 shipped is the fallback:
+    // a daily job that fails loud when the recorded number ages out of the 30-day pass-artifact
+    // window, so the tier no longer goes dark unannounced.
+    cadence: {
+      kind: "none",
+      issue: 1270,
+      alarmedBy: { file: ".github/workflows/semantic-freshness.yml", when: "daily 09:00 UTC + workflow_dispatch" },
+    },
   },
 ];
 
@@ -152,6 +187,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
+  { id: "validate-semantic-freshness", why: "staleness alarm — reports how old the recorded M1 semantic measurement is, not what it scored (#1270)" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];
 
@@ -216,6 +252,10 @@ export function checkScoredGates(
       }
     } else if (!(gate.cadence.issue > 0)) {
       violations.push(`${gate.id}: has no cadence and names no tracking issue. An undisclosed gap never appears in a tally.`);
+    } else if (gate.cadence.alarmedBy && inputs.workflows[gate.cadence.alarmedBy.file] === undefined) {
+      // Same failing direction the `workflow` cadence has: a substitute alarm that stopped existing
+      // is worse than none, because the row still reads as watched.
+      violations.push(`${gate.id}: names ${gate.cadence.alarmedBy.file} as its staleness alarm, and that workflow does not exist.`);
     }
   }
 
@@ -248,6 +288,8 @@ export function describeCadence(cadence: Cadence): string {
     case "workflow":
       return `${cadence.file} — ${cadence.job} (${cadence.when})`;
     case "none":
-      return `NO CADENCE — runs only by hand, tracked by #${cadence.issue}`;
+      return cadence.alarmedBy
+        ? `NO CADENCE for the score — runs only by hand (#${cadence.issue}); its STALENESS is alarmed by ${cadence.alarmedBy.file} (${cadence.alarmedBy.when})`
+        : `NO CADENCE — runs only by hand, tracked by #${cadence.issue}`;
   }
 }

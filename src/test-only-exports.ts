@@ -185,6 +185,31 @@ function expand(baseline: Baseline): Unreferenced[] {
 const key = (r: Unreferenced): string => `${r.kind} ${r.id}`;
 
 /**
+ * #1547. The standing ruling is that an uncalled export gets **a caller or a recorded reason** — but
+ * the gate could only see callers, so a row someone had genuinely triaged into a `REASON:` block
+ * read identically to one nobody had looked at, and the backlog count could only ever shrink by
+ * wiring. Both halves of the ruling are now countable.
+ *
+ * The binding is deliberately narrow, because a loose one would let any reason anywhere in a file
+ * absolve every export in it: the block must live IN the file the row names, and must name the row's
+ * own symbol (or, for a whole-file row, its path). Structural validity is NOT re-checked here —
+ * `pnpm validate-reasons` already fails the build on a malformed block, and duplicating that
+ * judgement would give two answers to one question.
+ */
+export function reasonTriaged(
+  rows: readonly Unreferenced[],
+  reasons: readonly { file: string; line: number; fields: Partial<Record<string, string>> }[],
+): { row: Unreferenced; file: string; line: number }[] {
+  const out: { row: Unreferenced; file: string; line: number }[] = [];
+  for (const r of rows) {
+    const [path, symbol] = r.kind === "file" ? [r.id, r.id] : (r.id.split(":") as [string, string]);
+    const match = reasons.find((x) => x.file === path && Object.values(x.fields).some((v) => v !== undefined && v.includes(symbol)));
+    if (match) out.push({ row: r, file: match.file, line: match.line });
+  }
+  return out;
+}
+
+/**
  * `added` — reachable only from tests and not on the baseline: a capability that shipped without a
  * production caller. `stale` — on the baseline but reachable now: the ratchet's other pawl, so a
  * wired-up capability cannot leave its row behind to absorb the next regression.
