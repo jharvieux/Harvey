@@ -2,7 +2,7 @@
 // that only ever removes them cannot catch a regression; both directions have to fail.
 
 import { describe, expect, it } from "vitest";
-import { blindSpotSuspects, collect, compare, exportedNames, hiddenByFlag, inFileConsumers, toBaseline } from "./test-only-exports.js";
+import { blindSpotSuspects, collect, compare, exportedNames, hiddenByFlag, inFileConsumers, reasonTriaged, toBaseline } from "./test-only-exports.js";
 
 const report = {
   files: ["src/fix/escalation.ts"],
@@ -96,6 +96,43 @@ describe("blindSpotSuspects", () => {
   it("treats a whole dead FILE as a dead consumer, since nothing in it is reachable", () => {
     const baseline = { files: ["src/fix/schedule.ts"], exports: [], types: [] };
     expect(blindSpotSuspects([hidden[0]], baseline, read).map((s) => s.id)).toEqual(["src/fix/schedule.ts:DEFAULT_CAPS"]);
+  });
+});
+
+// #1547. The standing ruling is "a caller OR a recorded reason", and the gate could only ever see
+// the first — so a triaged row and an untouched one printed identically and the backlog number could
+// only fall by wiring. The binding is narrow on purpose; each direction below is one of the ways a
+// loose one would let a row absolve itself.
+describe("reasonTriaged (#1547)", () => {
+  const rows = [
+    { kind: "export", id: "src/a.ts:alpha" },
+    { kind: "export", id: "src/a.ts:beta" },
+    { kind: "file", id: "src/fixture.ts" },
+  ] as const;
+  const reason = (file: string, text: string) => ({ file, line: 7, fields: { REASON: text } });
+
+  it("marks a row whose OWN file carries a reason naming its symbol", () => {
+    const t = reasonTriaged(rows, [reason("src/a.ts", "alpha is an oracle, so production never imports it")]);
+    expect(t.map((x) => x.row.id)).toEqual(["src/a.ts:alpha"]);
+    expect(t[0]!.line).toBe(7);
+  });
+
+  it("does NOT let one reason in a file absolve every export in it", () => {
+    expect(reasonTriaged(rows, [reason("src/a.ts", "alpha is an oracle")]).map((x) => x.row.id)).not.toContain("src/a.ts:beta");
+  });
+
+  it("does NOT accept a reason recorded in some OTHER file, however precisely it names the symbol", () => {
+    expect(reasonTriaged(rows, [reason("src/elsewhere.ts", "src/a.ts:alpha and alpha are deliberate")])).toEqual([]);
+  });
+
+  it("takes a whole-file row's own path as the symbol it must name", () => {
+    expect(reasonTriaged(rows, [reason("src/fixture.ts", "src/fixture.ts is a recorded-response oracle")]).map((x) => x.row.id)).toEqual(["src/fixture.ts"]);
+    expect(reasonTriaged(rows, [reason("src/fixture.ts", "this file is deliberate")])).toEqual([]);
+  });
+
+  it("reads any field of the block, so a TOUCHES: naming the symbol counts", () => {
+    const block = { file: "src/a.ts", line: 3, fields: { REASON: "deliberate", TOUCHES: "src/a.ts:beta" } };
+    expect(reasonTriaged(rows, [block]).map((x) => x.row.id)).toEqual(["src/a.ts:beta"]);
   });
 });
 

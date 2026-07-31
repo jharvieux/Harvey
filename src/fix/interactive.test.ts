@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import type { FixPlan } from "./plan.js";
 import { emitFixPrompt, ingestFixDiff } from "./interactive.js";
+import type { BaselineCache } from "./verify-harness.js";
 import { capturePatch, disposeCorpus, materialize, readCalibration, type MaterializedCorpus } from "./materialize-calibration.js";
 import { deliverFix, createClient, type CommandRunner } from "./transport.js";
 
@@ -205,6 +206,54 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     expect(check.skipped).toBe("pre-existing-failure-on-baseline");
     expect(check.outputTail).toContain("client suite was already failing"); // visible, not swallowed
     expect(ingest.green).toBe(true);
+  });
+
+  // #1529. The baseline is a property of (targetDir, baselineCommit, workspace, command) — identical
+  // for every finding in one batch — and running it per fix made an N-fix batch execute the client's
+  // own suite 2N times. These two tests are the same workload with and without the shared map, so the
+  // saving is a measured difference rather than an assertion about one run.
+  it("runs a distinct baseline command ONCE across two ingests that share a cache", () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "ok"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+    const baselineCache: BaselineCache = new Map();
+    const args = { finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache };
+
+    const first = ingestFixDiff(args);
+    const second = ingestFixDiff(args);
+    expect(first.baseline).toMatchObject({ requested: 1, executed: 1 });
+    expect(second.baseline).toMatchObject({ requested: 1, executed: 0 });
+    // The saving is real time, not just a counter: the second ingest spends none of it on a baseline.
+    expect(second.baseline.durationMs).toBe(0);
+    expect(first.baseline.durationMs).toBeGreaterThan(0);
+    // And the second fix is still scored on the same evidence — a cheaper run, not a weaker one.
+    expect(second.green).toBe(true);
+    expect(second.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test"]);
+  });
+
+  // NEGATIVE CONTROL for the test above: without the shared map the SAME workload runs the baseline
+  // twice. If this ever reported 1 the assertion above would be measuring nothing.
+  it("NEGATIVE CONTROL: with no shared cache the same two ingests baseline the command twice", () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "ok"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+    const args = { finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM };
+
+    const runs = [ingestFixDiff(args), ingestFixDiff(args)];
+    expect(runs.map((r) => r.baseline.executed)).toEqual([1, 1]);
+    expect(runs.reduce((n, r) => n + r.baseline.executed, 0)).toBe(2);
+  });
+
+  // A cache keyed only on (workspace, command) would serve one engagement's baseline to another.
+  it("keys the shared baseline on the checkout and the pinned commit, not on the command alone", () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "ok"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+    const baselineCache: BaselineCache = new Map();
+    ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache });
+    const key = [...baselineCache.keys()][0] as string;
+    expect(key).toContain(c.commit);
+    expect(key).toContain(c.dir);
   });
 
   it("discovers a pull_request-triggered workflow's run: steps alongside the package.json scripts", () => {

@@ -20,7 +20,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags } from "./args.js";
-import { blindSpotSuspects, collect, compare, exportedNames, hiddenByFlag, toBaseline, type Baseline, type Unreferenced } from "../test-only-exports.js";
+import { blindSpotSuspects, collect, compare, exportedNames, hiddenByFlag, reasonTriaged, toBaseline, type Baseline, type Unreferenced } from "../test-only-exports.js";
+import { collectReasons } from "../recorded-reasons.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -95,18 +96,26 @@ if (process.argv.includes("--blind-spot")) {
 const { added, stale } = compare(rows, baseline);
 const count = (kind: Unreferenced["kind"]): number => rows.filter((r) => r.kind === kind).length;
 
+// #1547: the ruling is "a caller OR a recorded reason", and until now the gate could only see
+// callers — so a row someone had triaged into a REASON: block was indistinguishable from one nobody
+// had read, and the backlog number could only shrink by wiring. Both halves are counted now.
+const triaged = new Map(reasonTriaged(rows, collectReasons(["src"], dir)).map((t) => [`${t.row.kind} ${t.row.id}`, t]));
+
 // A `file` row means NOTHING in it is reachable, so name what is inside it — otherwise the
 // strongest rows in the report are also the least specific.
 const line = (r: Unreferenced): string => {
-  if (r.kind !== "file") return `${r.kind.padEnd(6)} ${r.id}`;
+  const t = triaged.get(`${r.kind} ${r.id}`);
+  const mark = t ? `  [recorded reason — ${t.file}:${t.line}]` : "";
+  if (r.kind !== "file") return `${r.kind.padEnd(6)} ${r.id}${mark}`;
   const names = exportedNames(r.id, readFileSync(resolve(dir, r.id), "utf8"));
-  return `file   ${r.id} — every export unreachable: ${names.join(", ")}`;
+  return `file   ${r.id} — every export unreachable: ${names.join(", ")}${mark}`;
 };
 
 console.log("test-only-exports gate (#1307) — production reachability, tests are NOT entry points");
 console.log(`  analysed ${dir} with ${config}`);
 console.log(`  unreferenced outside tests: ${count("file")} files, ${count("export")} exports, ${count("type")} types (${rows.length} total)`);
-console.log(`  known backlog recorded in ${baselinePath} — triage tracked in #1328, not authorised for deletion`);
+console.log(`  known backlog recorded in ${baselinePath} — triage tracked in #1547, not authorised for deletion`);
+console.log(`  of the ${rows.length}: ${triaged.size} carry a recorded reason, ${rows.length - triaged.size} still await a caller or a reason (#1547)`);
 if (listAll) for (const r of rows) console.log(`    ${line(r)}`);
 
 if (added.length > 0) {
@@ -124,4 +133,4 @@ if (added.length > 0 || stale.length > 0) {
   console.log(`\nGATE FAIL — ${added.length} new, ${stale.length} stale.`);
   process.exit(1);
 }
-console.log(`\nGATE PASS — no capability shipped without a production caller since the baseline (${rows.length} still on it).`);
+console.log(`\nGATE PASS — no capability shipped without a production caller since the baseline (${rows.length} still on it, ${rows.length - triaged.size} untriaged).`);
