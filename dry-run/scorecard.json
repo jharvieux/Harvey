@@ -107,7 +107,7 @@
       "id": "ANON-PRIVILEGED-RPC",
       "severity": "Critical",
       "location": "supabase/migrations/20260710000002_dynamic_probes.sql",
-      "expectedModule": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
+      "expectedModule": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs each DB-derived privileged RPC with only the anon key and proves the bug only when the body EXECUTED — a 2xx, or an engine-raised SQLSTATE (class 22/23) from a statement the body issued. A plpgsql P0001 the function RAISED itself is a self-guarding function refusing the caller, so it is reported and never asserted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
       "status": "caught",
       "tier": "high",
       "note": "M2 replay ANON-PRIVILEGED-RPC scored \"caught\" against http://127.0.0.1:3100 in the pen-test scorecard generated 2026-07-31T08:41:03.087Z: Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised from INSIDE the function — the body executed as anon and only a data constraint stopped it); EXECUTE is granted to anon with no auth.uid() check."

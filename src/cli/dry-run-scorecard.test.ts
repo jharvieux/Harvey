@@ -8,9 +8,11 @@
 //   - the corpus-derived verdicts on the committed findings are the expected ones — the historically
 //     drifted RLS classes (#332/#337) score caught, the accepted WEBHOOK-REPLAY gap scores missed.
 
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import { AUTOMATED_REPLAY_IDS } from "../pentest/verify.js";
 import type { DynamicScorecard } from "../pentest/scorecard.js";
@@ -159,5 +161,56 @@ describe("dynamic (M2) rows resolve against a committed pen-test scorecard (#131
     // Four M2 rows; three now carry a live verdict, so only ANON-PRIVILEGED-RPC still defers.
     expect(summary["requires-live-run"]).toBe(1);
     expect(summary.asserted).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// #1310's CLI half. Everything above drives `resolveDetection` directly, so replacing main()'s
+// `const dynamic = loadDynamicScorecard()` with `undefined` left all 123 src/cli tests green — the
+// #1407 blind spot, one level up: the library resolves the row, and nothing proved the flag reaches
+// it. This runs the REAL CLI as a child process. Reverting that line makes both of these fail.
+describe("dry-run-scorecard reads the recorded pen-test scorecard through its own CLI flag (#1310)", () => {
+  let dir: string;
+  beforeEach(() => (dir = mkdtempSync(join(tmpdir(), "harvey-scorecard-cli-"))));
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const CLI = join(import.meta.dirname, "dry-run-scorecard.ts");
+  const REPO_ROOT = join(import.meta.dirname, "..", "..");
+
+  const run = (extraArgs: string[]) =>
+    execFileSync("node_modules/.bin/tsx", [CLI, "--out", dir, ...extraArgs], { cwd: REPO_ROOT, encoding: "utf8" });
+
+  const written = () => JSON.parse(readFileSync(join(dir, "scorecard.json"), "utf8")) as { bugs: { id: string; status: string; tier?: string; note?: string }[] };
+
+  it("resolves the M2 rows against the scorecard the flag names, and says which run they came from", { timeout: 30_000 }, () => {
+    const card: DynamicScorecard = {
+      target: "http://127.0.0.1:9999",
+      generatedAt: "2026-07-31T00:00:00.000Z",
+      allowDestructive: true,
+      probes: [{ findingId: "ANON-PRIVILEGED-RPC", status: "caught", severity: "Critical", evidence: "HARVEY_CLI_FLAG_PROOF" }],
+      summary: { caught: 1, cleared: 0, "not-applicable": 0, "not-run": 0 },
+    };
+    const cardPath = join(dir, "dynamic.json");
+    writeFileSync(cardPath, JSON.stringify(card));
+
+    const stdout = run(["--dynamic-scorecard", cardPath]);
+    expect(stdout).toContain("M2 dynamic rows resolved against 1 probe(s) recorded on 2026-07-31T00:00:00.000Z against http://127.0.0.1:9999");
+
+    const row = written().bugs.find((b) => b.id === "ANON-PRIVILEGED-RPC")!;
+    expect(row.status).toBe("caught");
+    expect(row.tier).toBe("high");
+    expect(row.note).toContain("HARVEY_CLI_FLAG_PROOF");
+  });
+
+  // The other direction: a named-but-missing file is a hard error, never a silent fall back to
+  // requires-live-run — which would read as "no live run has happened yet" when one just did.
+  it("exits non-zero when the named scorecard does not exist", { timeout: 30_000 }, () => {
+    try {
+      run(["--dynamic-scorecard", join(dir, "absent.json")]);
+      throw new Error("expected a non-zero exit");
+    } catch (err) {
+      const e = err as { status?: number; stderr?: string };
+      expect(e.status).toBe(1);
+      expect(e.stderr).toContain("does not exist");
+    }
   });
 });

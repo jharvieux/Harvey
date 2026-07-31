@@ -85,7 +85,7 @@ export const GROUND_TRUTH_BUGS: PlantedBug[] = [
     id: "ANON-PRIVILEGED-RPC",
     severity: "Critical",
     location: "supabase/migrations/20260710000002_dynamic_probes.sql",
-    ...m2("ANON-PRIVILEGED-RPC", "POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive)"),
+    ...m2("ANON-PRIVILEGED-RPC", "POSTs each DB-derived privileged RPC with only the anon key and proves the bug only when the body EXECUTED — a 2xx, or an engine-raised SQLSTATE (class 22/23) from a statement the body issued. A plpgsql P0001 the function RAISED itself is a self-guarding function refusing the caller, so it is reported and never asserted (side-effecting, so it additionally needs allowDestructive)"),
   },
 ];
 
