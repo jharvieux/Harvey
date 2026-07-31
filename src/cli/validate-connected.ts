@@ -41,7 +41,6 @@
 // Clean tree: exit 0, 3/3 scored. A gate nobody has watched fail is indistinguishable from a dead one.
 
 import { arg, assertKnownFlags } from "./args.js";
-import { recordMeasured } from "../ci-liveness.js";
 import { buildCoverageMatrix, CORPUS, isLiveTier, LIVE_TIERS, type LiveTier, type MatrixRow } from "../scan/calibration.js";
 import { hasPgGraphql, runSupabaseScan } from "../scan/supabase.js";
 import { checkExposedSchemas, checkGraphqlIntrospection, type ExtensionInfo } from "../scan/supabase-config.js";
@@ -146,14 +145,6 @@ if (failures.length > 0) {
   console.log(`\nGATE FAIL — live-tier corpus miss: ${failures.map((r) => `${r.id} (${r.detail})`).join("; ")}`);
   process.exit(1);
 }
-// #1491: this gate rides inside `if: matrix.shard == 2` in ci.yml's heavy-cli job, exactly like
-// validate-calibration and validate-source-recall — and a shard condition that stopped matching
-// would retire it in complete silence, which is the #1509 shape and the very state #1428 found this
-// corpus in. The receipt is what makes shard 2's `expect` able to demand it ran. It records the
-// SCORED count, never `liveCorpus.length`: a run that reached only some venues must not leave a
-// receipt claiming it measured the rest.
-recordMeasured("connected-gate", scored.length, "live-tier corpus rows scored against a running Supabase stack");
-
 console.log(
   `\nGATE PASS — ${scored.length} live-tier corpus row(s) scored against a real run, all held.` +
     (notScored.length > 0

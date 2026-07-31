@@ -51,12 +51,25 @@ jobs:
     runs-on: ubuntu-latest
     # #1333: this gate holds every other scheduled workflow to "alert on failure, and prove it
     # once", and until now it did not meet its own rule. It does now — see the alert step at the
-    # bottom of this job. The proof itself still lands one merge late, for the reason #1287 measured
-    # and #1288 turned into the `pendingProof` hatch: `gh workflow run` validates `-f` inputs against
-    # the DEFAULT BRANCH's copy of the file, so the drill for a newly-declared `alert_drill` input is
-    # only dispatchable after this file is on main. Re-measured 2026-07-31 on this branch, unchanged:
-    #   $ gh workflow run alert-paths.yml --ref feature/sweep-ci-1333 -f alert_drill=true
-    #   could not create workflow dispatch event: HTTP 422: Unexpected inputs provided: ["alert_drill"]
+    # bottom of this job, and it was DRILLED ON THIS BRANCH BEFORE MERGING, not one merge late.
+    #
+    # This comment used to say the opposite, in MEASURED's register, and it was wrong. It claimed
+    # `gh workflow run` validates `-f` inputs against the DEFAULT BRANCH's copy of the file, so the
+    # drill for a newly-declared `alert_drill` input was "only dispatchable after this file is on
+    # main", and quoted an HTTP 422 to prove it. Run 30605765391 dispatched that exact command
+    # successfully at 2026-07-31T05:03:52Z — eight seconds after this comment was committed — on
+    # `--ref feature/sweep-ci-1333`, with the input accepted and the branch's own drill step
+    # executing. The 422 does not reproduce; three sibling paths drilled the same way the same night
+    # (30605813952, 30605818422, 30605815019).
+    #
+    # The corrected rule, which is what .github/alert-paths.json now records: only the workflow FILE
+    # must exist on the default branch (#1288's genuine evidence is a 404 on a file that did not:
+    # `HTTP 404: workflow secbench.yml not found on the default branch`). The INPUTS, JOBS and STEPS
+    # need not be — a workflow_dispatch run executes the copy on the `--ref` you name, so a newly
+    # declared `alert_drill` input is drillable from the branch that declares it. Consequence for
+    # anyone adding an alert path to an EXISTING workflow file: you need no `pendingProof` hatch,
+    # drill it on your branch. The hatch remains for the genuine case — a workflow file not yet on
+    # main.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
