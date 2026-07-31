@@ -2,7 +2,68 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-30 — **sweep COMPLETE.** 37 closed / 35 filed (6 worked in-sweep, 29 left open) → net −8. 30 PRs merged, 0 open. All 31 ledger batches terminal; `.git/issue-sweep-ledger.json` deleted. Newest block first._
+_Last updated: 2026-07-30 — **session COMPLETE.** 38 closed / 40 filed / 0 reopened → **189 open, the tracker GREW by 2.** 35 PRs merged, 0 open, 0 stale worktrees. `.git/issue-sweep-ledger.json` deleted. Newest block first._
+
+## 2026-07-30 (post-sweep) — corpus-drift sharded 22.2 → 10.0 min, and a net figure that was wrong twice
+
+**READ THIS FIRST IF YOU ARE ABOUT TO QUOTE A NET FIGURE.** This session first reported `net −8`,
+then "corrected" it to −4. Both were wrong, and wrong in the flattering direction. The rule: an issue
+the session both FILED and CLOSED goes in BOTH totals or NEITHER — counting it as a closure while
+excluding it from the filings inflates the result by exactly the size of that set. Measured here:
+C=38, F=40, S=7 (#1521/#1522/#1526/#1528/#1562/#1564/#1584). Both consistent methods give **+2, a
+tracker that grew**; if yours disagree, the asymmetry is the bug. The `/issue-sweep` skill's ledger
+rule was rewritten to require this (sync-token 1 → 2, portable copy at
+`~/.claude/commands/issue-sweep.md`).
+
+**`main` requires FOUR contexts, not three.** `clone pinned commits + score baselines` (corpus-drift)
+was registered as required on 2026-07-30 and is recorded nowhere in the ledger. It falsified two
+`CLAUDE.md` sentences at once, both corrected in PR #1583. **Operator: confirm the registration was
+deliberate.** Measure it, never quote it:
+`gh api repos/jharvieux/Harvey/branches/main/protection/required_status_checks --jq '.contexts'`.
+
+### corpus-drift sharding (#1586) — MEASURED, not modelled
+
+`22.2 min → 10.0 min` end-to-end (run 30592067650). Shard 1 = carbon alone at 9.8 min IS the floor,
+so a 4th shard buys nothing. Merged scorecard: **157 rows over 14 targets** — the partition's
+exhaustiveness shown empirically, not just asserted. **The corpus is 14 targets, not 31** (a bad
+grep of `slug:` also matches the type declaration and `FREE_TIER_EXPECTATIONS`), and the dominant
+target is **carbon (564–587s), not tanstack-com (46s)**.
+
+Shard count varies by event ON PURPOSE: PR/merge_group → 3, schedule/dispatch → 1. The clone cache
+keys on the whole 14-target pin set and a key is immutable once written, so only a run holding every
+clone may save it. Do not "simplify" this to a constant 3 without re-reading
+`.github/actions/corpus-clone-cache`.
+
+**#1586 IS STILL OPEN — two criteria are unproven and must not be marked met by reading conditions:**
+1. A **scheduled/dispatch single-shard run actually SAVING the cache.** Dispatch 30592812834 was
+   in flight at session end and had already proven the matrix collapses to ONE shard on that event;
+   confirm the save from the step's log.
+2. **Gate liveness failing loud for a shard that scored nothing** — `gh workflow run corpus-drift.yml
+   -f liveness_drill=true`. Not run, to avoid two corpus runs in one concurrency group.
+
+### Two bugs found only by RUNNING, both mine
+
+- **Free-tier guard scoped to `--target` alone**, so under `--shard` every expectation owned by
+  another shard read as an unrun check. It failed in the SAFE direction; a guard assuming "not my
+  target, not my problem" would have gone green while dropping coverage. The containment that makes
+  the fix sound now throws at **module load** in `external-corpus.ts` (operator's call — earlier than
+  a CLI check, and it covers every consumer), exercised in both directions.
+- **#1318's claim ratchet** failed `verify` on the word *"cannot"* in a comment defending that guard.
+  Impossibility vocabulary is reserved for what has been tested.
+
+### The acceptance-disposition failure rate, and its actual cause
+
+The `acceptance` check failed **15 of its last 100 runs** while every rule it enforces was already
+written down. The cause is the shape of the command, not knowledge: `gh pr create --body "$(cat
+<<'EOF' …)"` renders no PR template and is not a file, so `validate-acceptance --body-file` has
+nothing to read. PR #1589 replaced a trailing one-line mention in `.claude/agents/sweep-executor.md`
+with the three-command form. **Write the body to a file, validate it, create the PR from that file.
+Never pass `--body` inline.**
+
+### Filed at wrap-up, all OPEN
+#1579 (sync the stale Codex mirrors `AGENTS.md`/`.agents/**`), #1580 (corpus-drift explains a
+standing drift once then goes silent), #1581 (acceptance parity breaks across two linked PRs),
+#1582 (a false recorded reason for skipping `pii-classify`), #1586 (sharding, above).
 
 ## 2026-07-30 (wrap-up) — the ledger went stale mid-sweep, and `main` quietly gained a 4th required check
 
