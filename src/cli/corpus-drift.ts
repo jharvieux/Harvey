@@ -206,6 +206,28 @@ function installTargetDeps(dir: string, flags: readonly string[]): void {
   }
 }
 
+// #1574: PER-PHASE cost, per target. #1586 measured each target's TOTAL from banner intervals and
+// used it to partition the shards; that is the right input for a partition and the wrong one for an
+// optimisation, because it leaves open whether a target's minutes went to the clone, the install
+// or one scanner. #1574's own table asserted ~79% scanning from a single 2026-07-28 run and could not
+// break that down further. Every phase below is timed at its own call site, so any run — CI or
+// local — re-derives the split instead of quoting that table.
+//
+// stderr, not the --json scorecard: #1564 makes that file a FUTURE run's --baseline-findings input,
+// and a timing key would travel into a comparison it has no business in.
+const phaseSeconds: Record<string, Record<string, number>> = {};
+let phaseTarget = "";
+
+function timed<T>(phase: string, fn: () => T): T {
+  const at = Date.now();
+  try {
+    return fn();
+  } finally {
+    const bucket = (phaseSeconds[phaseTarget] ??= {});
+    bucket[phase] = (bucket[phase] ?? 0) + (Date.now() - at) / 1000;
+  }
+}
+
 function runScanner(script: string, scriptArgs: string[]): Finding[] {
   const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
   try {
@@ -305,12 +327,14 @@ for (const target of targets) {
   // intervals in one run's log. Printing each target's real elapsed time means any run re-measures
   // them directly, so a weight that has gone stale is visible rather than inferred.
   const startedAt = Date.now();
+  phaseTarget = target.slug;
+  phaseSeconds[target.slug] = {};
   try {
     // #1571: a per-run copy from $HARVEY_CORPUS_CACHE_DIR's pristine checkout when CI has one
     // (set by .github/actions/corpus-clone-cache) — a bare network clone otherwise, exactly as
     // before. `dir` stays a disposable mkdtemp copy either way, so --install/scanning below can
     // still mutate or delete it freely.
-    cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR);
+    timed("clone", () => cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR));
 
     // #1524: strip any vendored reference subtree BEFORE any scanner or install sees this disposable
     // clone — schemaPath/installTargetDeps below still resolve against `dir` itself, which this
@@ -323,7 +347,7 @@ for (const target of targets) {
     }
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
-    if (install) installTargetDeps(dir, target.m8?.installFlags ?? []);
+    if (install) timed("install", () => installTargetDeps(dir, target.m8?.installFlags ?? []));
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
     // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
@@ -364,9 +388,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...runScanner("detect-static", [dir]),
-      ...runScanner("quality-scan", [dir]),
-      ...runScanner("mutation-scan", [dir, "--detect-only"]),
+      ...timed("detect-static", () => runScanner("detect-static", [dir])),
+      ...timed("quality-scan", () => runScanner("quality-scan", [dir])),
+      ...timed("mutation-scan", () => runScanner("mutation-scan", [dir, "--detect-only"])),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -380,8 +404,8 @@ for (const target of targets) {
       if (!existsSync(rootDir)) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
-      if (install) installTargetDeps(rootDir, []);
-      const scoped = runScanner("quality-scan", [rootDir]).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
+      if (install) timed("install", () => installTargetDeps(rootDir, []));
+      const scoped = timed("quality-scan", () => runScanner("quality-scan", [rootDir])).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
 
@@ -434,11 +458,27 @@ for (const target of targets) {
     // than the synthetic findings #244 could only assert over.
     const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
     if (expectation) {
-      const report = buildQuickScanReport(await runMechanicalScan({ dir }));
+      // Timed around the SCAN, not just the report build: the scan is the whole cost (proposit's
+      // free-tier pass measured 84s of its 96s), and timing the cheap half would have left it in
+      // the untimed `other` bucket — a phase table whose largest row is "other" answers nothing.
+      const at = Date.now();
+      const mechanical = await runMechanicalScan({ dir });
+      const report = buildQuickScanReport(mechanical);
+      (phaseSeconds[phaseTarget] ??= {})["free-tier quick-scan"] = (Date.now() - at) / 1000;
       rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
     }
   } finally {
-    console.error(`  ${target.slug}: ${Math.round((Date.now() - startedAt) / 1000)}s`);
+    const total = (Date.now() - startedAt) / 1000;
+    const phases = phaseSeconds[target.slug] ?? {};
+    const timedTotal = Object.values(phases).reduce((a, b) => a + b, 0);
+    // "other" is every un-timed second inside the target's block — the M10 schema pass, the
+    // scorers, the temp-dir teardown. Printed rather than dropped: a phase table whose parts do not
+    // reconcile with the total is how "~79% scanning" becomes unfalsifiable.
+    const parts = [...Object.entries(phases), ["other", total - timedTotal] as [string, number]]
+      .filter(([, v]) => v >= 0.05)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k} ${v.toFixed(1)}s`);
+    console.error(`  ${target.slug}: ${Math.round(total)}s — ${parts.join(", ")}`);
     if (keep) console.error(`  (kept clone: ${dir})`);
     else rmSync(dir, { recursive: true, force: true });
   }
@@ -462,6 +502,24 @@ const freeTierScored = new Set(rows.filter((r) => r.check.startsWith("free tier:
 // orphaned expectation fails at import, before this line runs and before anything is cloned.
 const scopedSlugs = new Set(targets.map((t) => t.slug));
 const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.has(e.slug) && scopedSlugs.has(e.slug));
+
+// #1574 criterion 1: the run's OWN per-phase split, rolled up across every target it scored. The
+// figures #1574 was filed from ("~79% scanning", "clone ~4%") came from one 2026-07-28 run and were
+// stated in the issue body, which is exactly the shape this repo treats as a claim about the past.
+// This prints the current one every time, so the next optimisation argues with a number the run in
+// front of it produced.
+const rollup: Record<string, number> = {};
+for (const phases of Object.values(phaseSeconds)) {
+  for (const [phase, secs] of Object.entries(phases)) rollup[phase] = (rollup[phase] ?? 0) + secs;
+}
+const timedAll = Object.values(rollup).reduce((a, b) => a + b, 0);
+if (timedAll > 0) {
+  console.error(`\n──── where the time went (${targets.length} target(s), ${timedAll.toFixed(0)}s timed) ────`);
+  for (const [phase, secs] of Object.entries(rollup).sort((a, b) => b[1] - a[1])) {
+    console.error(`  ${phase.padEnd(22)} ${secs.toFixed(1).padStart(8)}s  ${((secs / timedAll) * 100).toFixed(1).padStart(5)}%`);
+  }
+  console.error("  (per-target lines above carry each target's own split, including its untimed `other`)");
+}
 
 console.error("\n──── corpus drift ────");
 for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd(23)} ${r.check.padEnd(46)} ${r.detail}`);

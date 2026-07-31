@@ -1,8 +1,8 @@
 // #1025 — an executable guard on the CI tier router in `.github/workflows/ci.yml`.
 //
 // The router decides whether `build` (which runs `pnpm verify`) and `heavy-cli` run at all. A
-// mis-route is expensive in both directions: too narrow and a code PR merges unverified; too wide
-// and every prose PR pays 20 minutes. PR #1031 deleted `src/ci-docs-tier.test.ts` — correctly, it
+// mis-route is expensive in both directions: too narrow and a code PR merges with no verify run at
+// all; too wide and every prose PR pays the full suite. PR #1031 deleted `src/ci-docs-tier.test.ts` — correctly, it
 // guarded per-file exceptions that no longer exist and had become vacuous — but nothing replaced it,
 // so from 2026-07-26 the router's behaviour had no test and (per #1025's reopen) no observation
 // either.

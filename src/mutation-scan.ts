@@ -353,7 +353,7 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
  * #1419: corpus-drift read `summary.overall` UNGUARDED, so an artifact from any of the degraded
  * rungs — no test suite (#503), root-workspace-unreachable (#623), workspace-suites-not-reachable
  * (#932) — all of which write `{ finding, moduleRecord }` and no `summary`, surfaced as
- * `TypeError: Cannot read properties of undefined (reading 'overall')`. mutation-scan prints its own
+ * a `TypeError` reading `overall` off `undefined`. mutation-scan prints its own
  * diagnosis immediately above, so nothing was lost; what a reader saw first was a crash in the
  * harness rather than a handled degradation of ONE target, which is a different triage.
  *
