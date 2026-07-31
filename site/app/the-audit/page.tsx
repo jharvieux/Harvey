@@ -246,5 +246,3 @@ export default function TheAudit() {
     </>
   );
 }
-
-export const harveySiteCiProbe: number = "type error injected to prove the site-ci gate fails in CI (#1592) — reverted next commit";
