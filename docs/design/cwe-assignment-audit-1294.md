@@ -62,7 +62,7 @@ the same under-claim in a different direction. `Finding.cwe` is an array but `me
 what the gates and the report read, so carrying all three is an API-shape change rather than a label
 fix. Instead the rule's `message` now states the bound: *"the CWE this finding carries names the
 SECURE attribute only … the missing HttpOnly and SameSite are equally determined and are equally
-your problem."* Making the CWE list genuinely multi-valued end-to-end is filed as a follow-up.
+your problem."* Making the CWE list genuinely multi-valued end-to-end is filed as **#1661**.
 
 ## The 113-row table
 
@@ -465,7 +465,9 @@ your problem."* Making the CWE list genuinely multi-valued end-to-end is filed a
 
 - **The `owasp` field is checked; a second or third CWE on a rule is not.** `metadata.cwe` is an
   array and every gate here reads `cwe[0]`. That is what made `harvey-cookie-insecure` a disclosure
-  rather than a fix, and it is the follow-up this audit leaves open.
+  rather than a fix. It is the follow-up this audit leaves open, and it is tracked as **#1661** —
+  which this document asserted was already filed when no such issue existed, so the disclosed
+  under-claim had no tracker at all until 2026-07-31.
 - **Rule↔CWE binding is vocabulary-based.** The #1521 check asks whether a rule's own body carries
   its CWE's vocabulary; four rules (`harvey-fail-open`, `harvey-public-bucket`,
   `harvey-prod-sourcemaps`, `harvey-secret-in-url-param`) would stay green under a swap to a named
