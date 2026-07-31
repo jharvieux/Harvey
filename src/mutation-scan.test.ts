@@ -32,6 +32,7 @@ import {
   summarizeMutationReport,
   survivingMutantFindings,
   testQualityFromArtifact,
+  mutationRunFromArtifact,
   toReportRows,
   TS7_TSCONFIG_BYPASS_FILENAME,
   unverifiableScopeModuleRecord,
@@ -1170,6 +1171,37 @@ describe("reRootReportToApp (#655)", () => {
 // #1045: the seam that was missing entirely — the CLI's --out artifact carried a real measurement
 // and nothing turned it into the deliverable's §3b payload. The honesty rules travel with it: an
 // unverifiable mutate scope is NOT a whole-repo claim, and a non-run must not fabricate a score.
+// #1419: corpus-drift died on `summary.overall` with a TypeError when mutation-scan wrote one of
+// its DEGRADED artifacts — the shape three real rungs produce (#503/#623/#932). mutation-scan's own
+// diagnosis was printed above it, so nothing was lost; the top-level message read as a crash in the
+// harness rather than a handled degradation of one target, and the target it happened to was not
+// named at all.
+describe("mutationRunFromArtifact (#1419)", () => {
+  const real = { summary: { overall: { mutationScore: 76, killed: 80, totalMutants: 130, ignored: 3, compileErrors: 2 } } };
+
+  it("reads the score, killed count and Stryker's own valid denominator", () => {
+    expect(mutationRunFromArtifact("inbox-zero", real)).toEqual({ mutationScore: 76, killed: 80, valid: 125 });
+  });
+
+  it("NEGATIVE CONTROL: an artifact with no `summary` names the TARGET and the degradation, not a TypeError", () => {
+    const degraded = { finding: { title: "M8 — No automated test suite" }, moduleRecord: noTestSuiteModuleRecord("no test script and no runner dependency") };
+    expect(() => mutationRunFromArtifact("proposit", degraded)).toThrow(/proposit/);
+    expect(() => mutationRunFromArtifact("proposit", degraded)).toThrow(/No automated test suite found \(no test script and no runner dependency\)/);
+    // The old failure, spelt out so a regression to it is recognisable: reading `.overall` off
+    // `undefined` is the exact message this replaced.
+    expect(() => mutationRunFromArtifact("proposit", degraded)).not.toThrow(TypeError);
+  });
+
+  it("still THROWS on a degraded artifact — a target with no score must not score as a pass", () => {
+    expect(() => mutationRunFromArtifact("boxyhq", { finding: { title: "M8 — Root-workspace test suite not reachable per-app" } })).toThrow(/boxyhq/);
+  });
+
+  it("says so when the artifact explains nothing either, rather than throwing an empty reason", () => {
+    expect(() => mutationRunFromArtifact("rallly", {})).toThrow(/neither a `summary` nor a `moduleRecord`/);
+    expect(() => mutationRunFromArtifact("rallly", null)).toThrow(/rallly/);
+  });
+});
+
 describe("testQualityFromArtifact (#1045)", () => {
   const artifact = {
     summary: {

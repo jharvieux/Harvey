@@ -73,6 +73,7 @@ import {
   scoreMutationBaseline,
   type DriftExplanation,
 } from "../scan/external-corpus.js";
+import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 
@@ -237,7 +238,7 @@ function runScanner(script: string, scriptArgs: string[]): Finding[] {
 // clone root for a single-package target (proposit/boxyhq, cfg.appPath undefined), or the
 // workspace MEMBER that actually carries the suite (inbox-zero's apps/web) when set. The package
 // manager is still detected from the clone ROOT: that is where the workspace's lockfile lives.
-function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: number; killed: number; valid: number } {
+function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig): { mutationScore: number; killed: number; valid: number } {
   const pm = detectPackageManager(dir);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
   const { bin, args } = installExtraCommand(pm, [...cfg.strykerPackages]);
@@ -261,12 +262,9 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
     env: { ...process.env, PATH: `${join(appDir, "node_modules", ".bin")}:${process.env.PATH ?? ""}` },
   });
 
-  const { summary } = JSON.parse(readFileSync(out, "utf8")) as {
-    summary: { overall: { mutationScore: number; killed: number; totalMutants: number; ignored: number; compileErrors: number } };
-  };
-  const o = summary.overall;
-  // "valid" is Stryker's own denominator for the score: everything it could actually judge.
-  return { mutationScore: o.mutationScore, killed: o.killed, valid: o.totalMutants - o.ignored - o.compileErrors };
+  // #1419: read through mutationRunFromArtifact, which names the target and the degradation instead
+  // of dying on `summary.overall` with a TypeError that reads as a crash in this harness.
+  return mutationRunFromArtifact(slug, JSON.parse(readFileSync(out, "utf8")));
 }
 
 // #279: every *.sql file under `dir`, sorted so migrations apply in filename order — the same
@@ -340,7 +338,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(dir, target.m8));
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, dir, target.m8));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
