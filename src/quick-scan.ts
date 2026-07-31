@@ -151,12 +151,41 @@ const isNonGrading = (f: Finding): boolean =>
 // #1301: `precisionTier` is a tag the DETECTOR sets, so this filter alone never asked whether the
 // rule behind a finding had ever been validated. What backs the tag now is a BUILD-TIME gate, not a
 // runtime one: src/scan/rule-corpus-pairing.test.ts fails `pnpm verify` if any `harvey-*` rule
-// lacks a positive corpus entry it caught and a benign twin it stayed silent on, so an unvalidated
-// rule cannot reach a client's grade because it cannot reach `main`. The filter is deliberately NOT
-// gated on validation status at runtime: a client repo can exercise a rule on shapes the corpus has
-// no fixture for, and dropping those findings would trade a precision risk for a silent omission —
-// the worse of the two. Whether the tag is the intended contract for the free count remains an open
-// product ruling (#1301), and this comment is not that ruling.
+// lacks a positive corpus entry it caught and a benign twin it stayed silent on.
+//
+// #1414 — THE BOUND OF THAT GATE, STATED WHERE THE CLAIM IS MADE. This comment used to end "so an
+// unvalidated rule never reaches a client's grade, because the build gate stops it reaching `main`",
+// full stop. That holds for `harvey-*` SEMGREP RULES and only for them: the gate enumerates
+// `src/scan/rules/semgrep/*.yml` and nothing else, while `precisionTier: "high"` is also set by the
+// AST detectors, the secret scanners, the dependency and licence checks, and third-party semgrep
+// packs — none of which it can see, and none of which has an equivalent pairing gate.
+// MEASURED 2026-07-31 by `freeCountCoverage()` over the committed dry-run: of 157 high-tier
+// findings, 104 come from an enumerated harvey-* rule and **53 (33.8%) do not** — committed
+// credentials, the M1 object-level-authz detector, static-RLS migration checks, dependency/licence
+// checks and two third-party packs. Do not quote those figures: `pnpm validate:calibration` prints
+// the current split on every run (FREE-COUNT COVERAGE OF THAT GATE), because a bound nobody
+// re-measures becomes a belief.
+//
+// AND WHEN YOU RUN IT, THE NUMBER WILL NOT MATCH THIS ONE — the two figures are over DIFFERENT
+// POPULATIONS, both correct, so a reader reconciling them is not looking at a drifted bound.
+// This comment: the COMMITTED dry-run artifact (`dry-run/findings.json`, the default argument of
+// `freeCountCoverage()`) — 157 high-tier, 53 outside (33.8%), MEASURED 2026-07-31. `validate-
+// calibration`: THIS RUN's LIVE findings — 181 high-tier, 77 outside (42.5%), same date, same
+// numerator of 104. The artifact is the smaller population by construction: the dry-run harness
+// deliberately pins off the inputs that are not deterministic (slopsquat, the licence check's
+// live-registry fallback, the built-bundle secret pass), and it is a snapshot besides. The live run
+// is the stronger reading of the same bound — an artifact goes stale; a live scan is this run.
+//
+// The filter is deliberately NOT gated on validation status at runtime. Two separate reasons, and
+// #1414 rejected the first one standing alone. (a) PER-FINDING gating would trade a precision risk
+// for a silent omission — a client repo can exercise a rule on shapes the corpus has no fixture for
+// — and silent omission is the worse of the two. (b) PER-RULE gating, which has neither problem, was
+// prototyped and MEASURED rather than argued away: `freeCountCoverage().droppedByPerRuleGate` is the
+// set a validation-gated free count would withhold, and it is EMPTY, and empty by construction —
+// the build gate above fails `pnpm verify` on an unpaired rule, so one never reaches `main` and
+// therefore never reaches a client scan. Wiring a runtime filter over a provably-empty set would ship
+// a check with no failing direction. Whether the tag is the intended contract for the free count is an
+// open product ruling (#1301/#1414), and this comment is not that ruling.
 //
 // #1415: the second filter is the COMMERCIAL one. `precisionTier` answers "is this row exact enough
 // to show for free"; `MODULES[...].freeTier` answers "is this module's output part of the free

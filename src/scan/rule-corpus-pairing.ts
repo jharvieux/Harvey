@@ -96,3 +96,58 @@ export function ruleCorpusPairings(
     return { rule: id, positives, twin };
   });
 }
+
+// #1414 — WHAT SHARE OF THE FREE COUNT THIS GATE ACTUALLY COVERS, and the per-rule filter measured
+// against it.
+//
+// #1301 shipped the pairing gate and a comment in quick-scan.ts asserting that an unvalidated rule
+// never reaches a client's grade, because the build gate stops it reaching `main`. That sentence holds
+// for `harvey-*` semgrep rules and ONLY for them — the gate enumerates `src/scan/rules/semgrep/*.yml`
+// and nothing else — while
+// `precisionTier: "high"` is set by AST detectors, the secret scanners, the dependency checks and
+// third-party semgrep packs too, none of which this gate can see. So the claim was being made about
+// the whole free count while covering part of it, and the size of the uncovered part was never
+// measured.
+//
+// It is measured here, on every run, rather than written down: `coveredByPairingGate` /
+// `outsidePairingGate` are counts over the committed scan, and a number that moves is the only kind
+// that stays true. MEASURED 2026-07-31 against dry-run/findings.json — 157 high-tier findings, 104
+// from an enumerated harvey-* rule, 53 (33.8%) from something else: committed credentials, the M1
+// object-level-authz AST detector, static-RLS migration checks, dependency and license checks, and
+// two third-party semgrep packs.
+//
+// `droppedByPerRuleGate` is #1414's requested prototype of the per-rule filter itself: the findings a
+// free count gated on VALIDATION STATUS (rather than on the self-declared `precisionTier` tag) would
+// withhold today. Per-RULE, not per-finding — dropping individual findings a corpus has no fixture
+// for would trade a precision risk for a silent omission, the worse of the two, while dropping a
+// whole unvalidated rule's output is exactly what #61 asked for. Its measured delta is 0 and stays 0
+// by construction: `pnpm verify` fails on any unpaired rule, so an unpaired rule never reaches `main`
+// and therefore never reaches a client scan. That is why the filter is reported here instead of being
+// wired into selectFreeFindings — a runtime filter over a set the build gate keeps empty is a check
+// with no failing direction, and this repo has spent this whole sweep removing those.
+interface FreeCountCoverage {
+  highTier: number;
+  coveredByPairingGate: number;
+  outsidePairingGate: number;
+  outsideTaxonomies: string[];
+  droppedByPerRuleGate: string[]; // finding ids a per-rule validation gate would withhold today
+}
+
+export function freeCountCoverage(
+  findings: Finding[] = committedScanFindings(),
+  rules: SemgrepRule[] = harveySemgrepRules(),
+  pairings: RulePairing[] = ruleCorpusPairings(rules, findings),
+): FreeCountCoverage {
+  const ruleTaxonomies = new Set(rules.map((r) => r.taxonomy));
+  const high = findings.filter((f) => f.precisionTier === "high");
+  const outside = high.filter((f) => !ruleTaxonomies.has(f.taxonomy));
+  const unpairedRules = new Set(pairings.filter((p) => p.unpaired).map((p) => p.rule));
+  const unpairedTaxonomies = new Set(rules.filter((r) => unpairedRules.has(r.id)).map((r) => r.taxonomy));
+  return {
+    highTier: high.length,
+    coveredByPairingGate: high.length - outside.length,
+    outsidePairingGate: outside.length,
+    outsideTaxonomies: [...new Set(outside.map((f) => f.taxonomy))].sort(),
+    droppedByPerRuleGate: high.filter((f) => unpairedTaxonomies.has(f.taxonomy)).map((f) => f.id),
+  };
+}

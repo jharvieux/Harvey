@@ -2,36 +2,28 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** 9 round-3 PRs merged, 4 stacked behind a token blocker, 4 executors live. Tracker 189 → 166. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
+_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** 19 round-3 PRs merged (+3 supervisor PRs), 1 in fix, 2 executors live, 9 queued, 5 parked on the operator. **Tracker measured at 143 open** (`gh issue list --state open --limit 400`), down from 189. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
 
 ## 2026-07-31 (round 3, mid-sweep state) — READ THIS BEFORE RESUMING
 
-### The one thing only the operator can unblock
+### Operator blockers — RESOLVED, do not re-raise
 
-**The `gh` token lacks the `workflow` OAuth scope.** `gh auth status` → `gist, read:org, repo`. Any PR touching `.github/workflows/**` is refused at merge:
-
-```
-HTTP 403  refusing to allow an OAuth App to create or update workflow
-          `.github/workflows/ci.yml` without `workflow` scope
-```
-
-**Fix: `gh auth refresh -h github.com -s workflow`.**
-
-The trap is that `gh pr merge` reports *"the base branch policy prohibits the merge"*, which sends you through branch protection, rulesets, review requirements and check-run duplicates — all clean. Only the raw REST endpoint gives the real reason. **Unexplained:** PR #1614 modified `ci.yml` and squash-merged fine ten minutes earlier with the same token. Do not treat "it worked once" as evidence the scope is present.
-
-### Merge order when the token is refreshed
-
-| PR | state | note |
-|---|---|---|
-| **#1643** | all green, close-set `[1333,1402,1516]` | merge FIRST (16 files) |
-| **#1644** | all green, verified all-met | rebase after #1643; **line-level conflict** in `src/alert-paths.ts`, `.test.ts`, `src/cli/validate-alert-paths.ts` — resolution must preserve BOTH `staleProofs`/`sourceSha` (#1644) and `seedClosedTrackingPopulation`/`SYNTHETIC_HATCH` (#1643) |
-| **#1613** | all green, verified all-met | independent of the other two |
-
-`#1536` and `#1611` are **drilled and proven** (runs 30605913478 / 30605914742) but stay open until #1643 lands, because the hatch removal lives in it.
+- **`gh` token `workflow` scope — REFRESHED.** The three PRs stacked behind it (#1643, #1644, #1613) all merged. Keep the diagnosis, because the symptom is deeply misleading: `gh pr merge` reports *"the base branch policy prohibits the merge"*, which sends you through branch protection, rulesets, review requirements and check-run duplicates — all clean. Only the raw REST endpoint names the real cause (`HTTP 403 refusing to allow an OAuth App to create or update workflow ... without 'workflow' scope`). Fix is `gh auth refresh -h github.com -s workflow`. **And do not treat "it worked once" as evidence the scope is present** — PR #1614 modified `ci.yml` and merged fine ten minutes before the refusal, still unexplained.
+- **`RESEND_API_KEY`** — set by the operator; issue closed.
+- **Contact address = `info@harvey-qa.com`** — ruled, implemented (`site/app/lib/constants.ts`), and **deployed to production**. This was ruled once before and I re-raised it on a stale inherited claim; #1609 is closed as not-planned with the correction. Do not re-open it. Note the bad test recorded there: grepping `/pricing` for the address returns 0 and means nothing — it renders on ERROR paths, not in static HTML.
+- **Supabase MCP `--read-only`** — operator ruled 2026-07-31 (#1658): leave `supabase-main` and `supabase-aop` as they are. Accepted state, not a defect.
 
 ### Live executors (do not dispatch into these files)
 
-`m9-1292` · `m1-1240` · `m1-1269` · `m5-1532` — all four mutually conflict-free.
+`m1-1295` (M1 static + calibration entries + `semgrep/injection.yml`) · `ci-1545` (CI gates, `.github/workflows/`, acceptance-conservation) · plus a fix agent on `feature/sweep-calibration-1366`.
+
+**The calibration cluster is heavily serialized right now.** `m1-1295` and PR #1675 between them hold `src/scan/calibration/**`, `external-corpus.ts` and `calibration.test.ts`, which blocks `calibration-1454`, `calibration-1483`, `corpus-740`, `m8-1285`, `m9-1440`, `m2-1369` and `m1-1544`. Only `m2-1271` (pentest/Docker) and `ci-1603` (conflicts with `ci-1545`) are otherwise free. Dispatch order after #1675 merges: drain calibration first, it is the bottleneck.
+
+**Concurrency:** operator set 4 for coding-only batches, 2 when a batch stands up Docker or Stryker. `m2-1271` (Docker) and `m8-1285` (Stryker) are the heavy ones.
+
+### Live-stack note
+
+`supabase start` on `targets/calibration` needs `-x vector -x logflare` — without them it hangs on those two containers. Used by the connected-tier and #1388 masking verification.
 
 ### The pattern this sweep is actually finding
 

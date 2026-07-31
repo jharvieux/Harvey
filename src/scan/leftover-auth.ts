@@ -101,6 +101,29 @@ function isClientSideAuthz(content: string): boolean {
   return USER_ROLE_COMPARE.test(content) && CLIENT_GATE.test(content);
 }
 
+// #135/#1366 — the Host header read, in the three forms the App Router and Express shapes use:
+// `headers().get("host")`, `request.headers.get("x-forwarded-host")`, `req.headers["host"]` and
+// `req.headers.host`.
+const HOST_HEADER_READ_SRC = String.raw`(?:headers\s*\(\s*\)|(?:req|request)\s*\.\s*headers)\s*(?:\.\s*get\s*\(\s*['"]|\[\s*['"]|\.\s*)(?:x-forwarded-)?host\b`;
+const HOST_HEADER_READ = new RegExp(HOST_HEADER_READ_SRC, "i");
+const HOST_HEADER_BIND = new RegExp(String.raw`\b(?:const|let|var)\s+([\w$]+)\s*=\s*(?:await\s+)?[^;\n]*?` + HOST_HEADER_READ_SRC, "i");
+
+// What makes this class rather than #984's header taint is the AUTHORITY POSITION: the header value
+// becomes the host of an absolute URL (`//${host}` in a template, or `"https://" + host`). Reading
+// the same header into a shell command (targets/calibration/pages/api/header-exec.js) or a DNS
+// lookup is a different planted class and must not match here.
+const urlAuthority = (expr: string): RegExp =>
+  new RegExp(String.raw`(?:https?:)?//\$\{\s*` + expr + String.raw`\s*\}|['"](?:https?:)?//['"]\s*\+\s*` + expr, "i");
+
+function buildsUrlFromHostHeader(content: string): boolean {
+  const code = stripComments(content);
+  if (!HOST_HEADER_READ.test(code)) return false;
+  if (urlAuthority(HOST_HEADER_READ_SRC).test(code)) return true;
+  const bound = HOST_HEADER_BIND.exec(code);
+  if (bound === null) return false;
+  return urlAuthority((bound[1] as string).replace(/\$/g, String.raw`\$`)).test(code);
+}
+
 // #991 — allowlist-grant / multi-hop authz decision from untrusted input. Broadens the
 // direct-equality client-priv-header check to the shape BenchProctor and real code use: a privileged
 // branch reached via an allowlist MEMBERSHIP test on request-derived input, or a role/"granted"
@@ -177,6 +200,19 @@ const B14_CHECKS: { id: string; title: string; taxonomy: string; category: strin
     impact: "The role/privilege check runs in the browser, where the user controls Web Storage and the JS bundle — they can flip the gate open (edit storage, patch the bundle) and reach the privileged view/action. Any data the gate is supposed to protect is already in the client.",
     fix: "Enforce the privileged read/action server-side: an RLS policy, or a server route that re-derives the role from the verified session. Treat any client-side role as display-only, never as the gate.",
     test: (f) => isClientSideAuthz(f.content),
+  },
+  {
+    // #135/#1366 — Host-header-trusted-in-URL-construction. Was recorded as "no mechanical rule …
+    // needs taint-from-Host-into-URL reasoning" and carried as one of three permanent review-tier
+    // recall misses; re-tested 2026-07-31 and the shape is a LOCAL, single-file dataflow fact.
+    id: "host-header-url",
+    title: "an absolute URL is built from the request's Host / X-Forwarded-Host header",
+    taxonomy: "Host header trusted in URL construction",
+    category: "Broken access control",
+    impact:
+      "Both Host and X-Forwarded-Host are set by the caller, and most proxies forward them untouched, so an attacker who triggers a password-reset/verification mail gets the victim's real token delivered inside a link pointing at a domain they control.",
+    fix: "Build absolute links from a fixed deploy-time origin (an env var), or validate the incoming host against an allowlist before it reaches the URL.",
+    test: (f) => buildsUrlFromHostHeader(f.content),
   },
 ];
 

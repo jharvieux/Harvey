@@ -100,8 +100,12 @@ export interface CorpusEntry {
   reviewTierHits?: readonly string[];
   // #1248 — REVIEW-TIER POSITIVES ONLY. Marks a row as a SOUNDNESS guard rather than a recall
   // aspiration, making its miss FATAL. Review-tier misses are non-fatal by design in
-  // validate-calibration.ts, because review recall has documented standing gaps (P-MW-SOLE-AUTHZ,
-  // P-HOST-HEADER-URL, P-CLIENT-RENDER-AUTHZ) that nobody claims to catch. An adversarial positive
+  // validate-calibration.ts, because review recall is allowed standing gaps that nobody claims to
+  // catch. (The three rows this comment used to name — P-MW-SOLE-AUTHZ, P-HOST-HEADER-URL,
+  // P-CLIENT-RENDER-AUTHZ — stopped being examples on 2026-07-31: #1366 ruled on them
+  // individually, graduating P-HOST-HEADER-URL to a real rule with `mustCatch` and moving the other
+  // two to `expectedTier: "none"` + gapKind "measured-gap", where a graduation fails loud. A named
+  // example list decays; the RULE is what this field encodes.) An adversarial positive
   // is the opposite kind of row: it is planted to prove that a specific SANITIZER EXCLUSION still
   // works, so "we don't catch this yet" is never the right reading of its miss.
   //
