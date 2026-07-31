@@ -1,0 +1,14 @@
+// #1533 scope control 3 of 3 — the conservative direction. `getServerSideSitemap` comes from a
+// package outside the repo, so no amount of import resolution can say whether it returns a promise;
+// an unreadable callee must keep the exemption rather than earn a finding. Read at source
+// 2026-07-31: saas-lite apps/web/app/sitemap.xml/route.ts:24 is this shape, and #1533's own issue
+// body was wrong to call its caller synchronous — nothing here can establish that either way.
+import { getServerSideSitemap } from "next-sitemap";
+
+function getPaths(base: string): { loc: string }[] {
+  return ["/", "/faq", "/terms"].map((p) => ({ loc: new URL(p, base).href }));
+}
+
+export async function GET(base: string) {
+  return getServerSideSitemap(getPaths(base));
+}

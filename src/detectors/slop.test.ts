@@ -54,7 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
-  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 4, severity: "Low", confidence: "Review" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 6, severity: "Low", confidence: "Review" },
   { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
@@ -122,8 +122,10 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("single-use-helper exempts an exported single-caller but still catches a non-exported one, and stays silent on a two-site helper", () => {
     const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
-    expect(pos.map((f) => f.title)).toEqual([
+    expect([...pos.map((f) => f.title)].sort()).toEqual([
+      expect.stringContaining("buildFeedXml"),
       expect.stringContaining("computeDiscount"),
+      expect.stringContaining("detectIntent"),
       expect.stringContaining("loadRate"),
       expect.stringContaining("requireCliLogin"),
       expect.stringContaining("streamToText"),
@@ -159,10 +161,27 @@ describe("discrimination boundaries (regression locks)", () => {
     const evidence = pos.find((f) => f.title.includes("loadRate"))?.evidence ?? "";
     expect(evidence).toContain("exempts a helper that does no I/O of its own whose one caller is async or awaits");
     // #1532/#1345: the bound reaches the client WITH ITS POPULATION. #1447 disclosed the bound and
-    // shipped no number, which leaves a reader nothing to weigh it against — 653 spared, 401 on an
-    // await that has nothing to do with the helper, is the fact that makes the trade-off legible.
+    // shipped no number, which leaves a reader nothing to weigh it against. Re-measured 2026-07-31
+    // over the same ten pins: 597 spared (653 before #1532/#1533), 385 on an await that has nothing
+    // to do with the helper, 24 on an async caller this pass could not read.
+    expect(evidence).toContain("597");
     expect(evidence).toContain("653");
-    expect(evidence).toContain("401");
+    expect(evidence).toContain("385");
+    expect(evidence).toContain("24");
+  });
+
+  // #1533 — the `async` caller that awaits NOTHING. MEASURED 2026-07-31 over the same ten pins:
+  // 39 rows, of which 14 now fire and 25 stay spared; all 14 were read at source and none is a
+  // false positive. Each assertion below has a live counterexample in the negative fixture, so
+  // neither direction can pass by accident.
+  it("fires when an async caller that awaits nothing provably does no async work, and only then (#1533)", () => {
+    const titles = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper").map((f) => f.title);
+    expect(titles.some((t) => t.includes("buildFeedXml"))).toBe(true); // caller returns `new Response(...)`
+    expect(titles.some((t) => t.includes("detectIntent"))).toBe(true); // needs the CROSS-FILE hop to know composeStarterResult is sync
+    // All three counterexamples must stay spared: a caller that returns a local async function's
+    // promise, one that hands an async callback to a constructor, and one whose callee is a
+    // package outside the repo and therefore unreadable.
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toEqual([]);
   });
 });
 
