@@ -359,7 +359,7 @@ jobs:
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool trufflehog
       - name: vitals fixture schema drift check
         if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals --fixture /nonexistent/vitals-report.json
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals
       - name: Stryker fixture schema drift check
         if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool stryker
