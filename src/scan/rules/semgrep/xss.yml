@@ -552,6 +552,17 @@ rules:
   # Open-URL sink: a request-controlled value assigned directly to window.location. Review — any
   # URL enables phishing/open-redirect, and a javascript:/data: value can execute script; a
   # static rule can't see a host allowlist that may run first.
+  #
+  # #1540 asked whether CWE-601 (URL Redirection to Untrusted Site) is the better label than the
+  # CWE-79 below, since the message leads with open redirect and phishing. DECIDED 2026-07-31: KEEP
+  # CWE-79, and the reason is a DIVISION OF LABOUR rather than a preference. This sink writes the
+  # CURRENT page's location, so a javascript:/data: value executes script in the page's OWN ORIGIN —
+  # that is XSS, and it is the higher-impact half of what the sink admits. The redirect half already
+  # has an owner: harvey-open-redirect (base.yml) declares CWE-601 for the server-side
+  # res.redirect/NextResponse.redirect shape. Relabelling this one CWE-601 too would erase that
+  # split and leave the script-execution half of the sink claimed by no rule. The message keeps
+  # naming BOTH consequences on purpose: a client reading it needs the phishing outcome as well, and
+  # the CWE field is a taxonomy key, not a summary of everything a finding implies.
   - id: harvey-open-url-sink
     languages: [javascript, typescript]
     mode: taint
