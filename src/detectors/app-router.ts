@@ -147,9 +147,22 @@ function isBuiltinCollectionReceiver(recv: ts.Expression, locals: ReadonlySet<st
 
 /**
  * True when the AST sees at least one mutation-named call and every one lands on a built-in
- * collection. The receiver names are collected from the whole MODULE, not just the action body:
- * flori-web's `src/lib/logger.ts` keeps its dedup `new Map()` at module scope and calls
- * `recentErrors.delete(k)` inside the function, which a body-only scan of the bindings misses.
+ * collection. The receiver names are collected from the whole MODULE, not just the action body —
+ * a MODELLED shape (a dedup/cache `Map` kept at module scope, mutated from inside the action), not
+ * one with a measured corpus population. flori-web's `src/lib/logger.ts` was the row that prompted
+ * this: `isDuplicate` keeps its `new Map()` at module scope and calls `recentErrors.delete(k)`
+ * inside the function. But `isDuplicate` there is NOT exported, so #1680's export requirement
+ * already removes it from consideration before this function ever runs — a body-only scan reaches
+ * the identical verdict on the real source. MEASURED 2026-07-31: reverting this to a body-only scan
+ * (`builtinCollectionLocals(fn)` instead of `builtinCollectionLocals(sf)`) and re-running
+ * `static-detect` over carbon/flori-web/inbox-zero produces IDENTICAL `M1-boundary` counts (5/0/0)
+ * on all three — module-wide scope removes zero rows body-only would not. Kept anyway for the
+ * generality (an exported dedup helper reading the same module-level Map is the same shape and
+ * would need it), not because a corpus row depends on it. The wider scope does add a small,
+ * currently-zero-population false-negative surface: a module-level `const cache = new Map()`
+ * marks the identifier `cache` as built-in for every action in the module, and a bare identifier
+ * literally named `headers`/`searchParams`/`localStorage`/`sessionStorage` is treated as built-in
+ * regardless of what it is actually bound to (`BUILTIN_COLLECTION_PROP`, above).
  */
 function onlyBuiltinCollectionMutations(sf: ts.SourceFile, fn: ts.Node): boolean {
   const locals = builtinCollectionLocals(sf);

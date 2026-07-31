@@ -1824,8 +1824,11 @@ describe("route actions: a built-in collection's `.delete()` is not a data mutat
     expect(taxonomies(findings)).not.toContain(AUTHZ);
   });
 
-  // flori-web's `src/lib/logger.ts` keeps its dedup `new Map()` at MODULE scope, so a body-only scan
-  // of the receiver bindings misses it. MEASURED on the pinned clone, not invented.
+  // Modelled on flori-web's `src/lib/logger.ts`, which keeps its dedup `new Map()` at MODULE scope
+  // and mutates it from inside `isDuplicate`. NOT a reproduction of that exact row: the real
+  // `isDuplicate` is not exported, so #1680's export requirement already clears it regardless of
+  // this scope — this fixture exports it so the module-wide-vs-body-only distinction has something
+  // to exercise. See the population note on `onlyBuiltinCollectionMutations`.
   it("does not flag a `.delete()` on a module-level Map used as an in-memory dedup cache", () => {
     const findings = detectAppRouterFindings([
       {

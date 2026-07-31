@@ -38,13 +38,15 @@ export const b26ClientTrustedValueEntries: CorpusEntry[] = [
   // silent. Filed here rather than in base.entries.ts because it is the same class as the price
   // rows above and shares their App Router arm verbatim.
   //
-  // WHICH GATE ACTUALLY FAILS IF THE ARM IS REVERTED, because these rows on their own do NOT.
-  // `validate-calibration` treats a REVIEW-tier recall gap as non-fatal by design (see its header),
-  // so deleting the arm leaves it at exit 0 printing 'Review-tier recall gaps (non-fatal, tracked):
-  // P-CLIENT-TRUSTED-ROLE-AR, P-CLIENT-TRUSTED-ROLE-AR-LET'. MEASURED 2026-07-31, both directions:
-  // the guard that goes red is the REQUIRED `dry-run-drift` check — regenerating `dry-run/
-  // findings.json` with the arm reverted drops exactly these two rows (720 -> 718, `diff` exit 1),
-  // which is also why the artifact regeneration is part of this change rather than a follow-up.
+  // WHICH GATE FAILS IF THE ARM IS REVERTED: these two rows themselves. #1628 (2026-07-31, landed
+  // on main as 6788487 after this branch's base) removed the non-fatal review-tier carve-out —
+  // `fatalRecallMisses` (src/scan/calibration.ts) no longer has a `mustCatch` condition, so any
+  // review-tier positive miss is fatal on its own. RE-MEASURED 2026-07-31 against that state, both
+  // directions: arm reverted -> `pnpm exec tsx src/cli/validate-calibration.ts` exits 1, printing
+  // `GATE FAIL — review-tier positives not caught by any rule (#1628): P-CLIENT-TRUSTED-ROLE-AR,
+  // P-CLIENT-TRUSTED-ROLE-AR-LET`; arm restored -> exit 0, `GATE PASS`. The `dry-run-drift` diff
+  // still fires too (these two rows drop out of `dry-run/findings.json`), but `validate-calibration`
+  // itself is now the guard that catches a regression here, not a fallback.
   {
     id: "P-CLIENT-TRUSTED-ROLE-AR",
     kind: "positive",
