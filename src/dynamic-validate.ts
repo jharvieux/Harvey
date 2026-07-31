@@ -325,7 +325,7 @@ export interface PrunedDep {
 // The disclosure the ruling's condition requires: `confidence: "N/A"` so it lands in the rendered
 // report's "Checked & ruled out (not applicable)" section, naming EVERY pruned dependency and why,
 // rather than living only in the stand-up log.
-export function prunedDepsFinding(appDir: string, pruned: PrunedDep[]): Finding {
+function prunedDepsFinding(appDir: string, pruned: PrunedDep[]): Finding {
   return mechanicalFinding({
     id: "M2-DEPPRUNE-00",
     title: `Dependencies removed from the manifest before the live stand-up could install (${pruned.length})`,
