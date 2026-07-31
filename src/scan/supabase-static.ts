@@ -20,7 +20,7 @@
 //     indistinguishable from a clean result.
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { classifyMigrationSql, type TableDataMapEntry } from "../../tools/pii-classify.mjs";
 import { definerReviewFindings } from "../definer-review.js";
@@ -90,7 +90,11 @@ function stripSqlComments(raw: string): string {
 // #565 — a Supabase Table-Editor / no-code (Lovable/Bolt/v0) export commits its schema as a single
 // root `schema.sql` instead of supabase/migrations/*.sql, so the migrations-only discovery returned
 // [] and every RLS-off table in that export was invisible. Read BOTH: every supabase/migrations/*.sql
-// AND a root schema.sql. (This M1 static-RLS side only; M2/M10 schema discovery is handled in #574/#529.)
+// AND a root schema.sql. (M2/M10 schema discovery is handled separately, in #574/#529.)
+//
+// #1323 — this is now the ONLY SQL source reader on the M1 static side. It used to be "this M1
+// static-RLS side only", with `readMigrations` below still migrations-only, which read as a scope
+// note and was actually a silent six-check gap.
 function readRlsSqlSources(dir: string): { file: string; raw: string }[] {
   const out: { file: string; raw: string }[] = [];
   const migrationsDir = join(dir, "supabase", "migrations");
@@ -635,13 +639,15 @@ function tableBody(sql: string, table: string): string | null {
   return sql.slice(open, end === -1 ? undefined : end);
 }
 
+// #1323 — the SAME source set checkMigrationRlsStatic reads, under this file's other key name.
+// #565 broadened only the RLS reader to see a root `schema.sql`; this one, feeding six further
+// checks, kept its own `if (!existsSync(supabase/migrations)) return []`. MEASURED 2026-07-30
+// against `targets/calibration/supabase/migrations/**` (24 files, 1180 lines) replayed as a single
+// root schema.sql: policy-semantics 11→0, RLS-initplan 7→0, definer-authz 2→0, definer-anon-grant
+// 1→0, dynamic-SQL-injection 1→0, storage-buckets 3→2 — 23 findings gone, silently, on exactly the
+// no-code export shape the product is positioned to rescue.
 function readMigrations(dir: string): { file: string; sql: string }[] {
-  const migrationsDir = join(dir, "supabase", "migrations");
-  if (!existsSync(migrationsDir)) return [];
-  return readNamesSafe(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
-    .sort()
-    .map((f) => ({ file: relative(dir, join(migrationsDir, f)), sql: readFileSync(join(migrationsDir, f), "utf8") }));
+  return readRlsSqlSources(dir).map(({ file, raw }) => ({ file, sql: raw }));
 }
 
 // Semantic RLS review over committed migration SQL (#220) — the source-tier path to the class the
@@ -1155,4 +1161,79 @@ export function inferAuthMethodsFromSource(dir: string): AuthMethods {
     email: emailInUse ? true : anyEvidence ? false : undefined,
     phone: phoneInUse ? true : anyEvidence ? false : undefined,
   };
+}
+
+
+// #1323 — M1-SQL-SCOPE-00. The static SQL side reads exactly two surfaces: every
+// supabase/migrations/*.sql and a root schema.sql (readRlsSqlSources). That is a real bound, and
+// until now it was an unstated one — a project whose schema lives in `db/schema.sql`, `sql/`, a
+// bare `migrations/`, or `supabase/seed.sql` got zero RLS/policy/definer/storage findings and no
+// row saying why, which reads exactly like a clean bill of health. The gap this file just closed
+// (six checks dark on a root schema.sql) was the same shape one layer down and stayed live for
+// weeks, so the reader now DECLARES what it skipped instead of leaving it to be rediscovered.
+//
+// The population is measured, not assumed: `git ls-files 'targets/**/*.sql'` on 2026-07-30 returns
+// two files outside the read surfaces in this repo's own fixture tree —
+// targets/calibration/public/backup.sql and targets/calibration/supabase/seed.sql. `supabase/seed.sql`
+// is a standard Supabase layout file and can legitimately carry `create policy` and
+// `insert into storage.buckets`, so this is a live bound rather than a hypothetical one.
+//
+// Disclosure only, by design: the fix is to point the scan at the schema, not for Harvey to guess
+// which of a repo's .sql files is the schema and which is a one-off dump.
+const SQL_SCOPE_EXCLUDED_DIR = /^(node_modules|\.git|\.next|dist|build|coverage|out|vendor|venv|\.venv|__pycache__|target)$/;
+
+function unreadSqlFiles(dir: string): string[] {
+  const readSurfaces = new Set(readRlsSqlSources(dir).map((s) => s.file));
+  const out: string[] = [];
+  const walk = (current: string): void => {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(current).entries) {
+      if (isDirectory) {
+        if (!SQL_SCOPE_EXCLUDED_DIR.test(entry)) walk(full);
+        continue;
+      }
+      if (!entry.toLowerCase().endsWith(".sql")) continue;
+      const rel = relative(dir, full).split(sep).join("/");
+      if (!readSurfaces.has(rel)) out.push(rel);
+    }
+  };
+  walk(dir);
+  return out.sort();
+}
+
+export function checkUnreadSqlSurfaces(dir: string): Finding[] {
+  const unread = unreadSqlFiles(dir);
+  if (unread.length === 0) return [];
+
+  const NAMED = 8;
+  const shown = unread.slice(0, NAMED).join(", ");
+  const rest = unread.length > NAMED ? `, and ${unread.length - NAMED} more` : "";
+  return [
+    {
+      id: "M1-SQL-SCOPE-00",
+      title: `${unread.length} SQL file(s) in this target were not read by the static schema checks`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Multi-tenant security",
+      taxonomy: "Coverage — SQL outside the schema surfaces M1 reads",
+      location: "(repo-wide)",
+      status: "Open",
+      evidence:
+        `M1's static SQL pass reads two surfaces: every \`supabase/migrations/*.sql\` and a root ` +
+        `\`schema.sql\`. ${unread.length} other .sql file(s) are present and were NOT read: ${shown}${rest}. ` +
+        `The RLS-enablement, policy-semantics, SECURITY DEFINER, dynamic-SQL and storage-bucket checks ` +
+        `therefore never saw whatever they contain.`,
+      impact:
+        "If any of these files is where the schema actually lives, every static SQL finding in this report " +
+        "is drawn from an incomplete picture — a permissive policy or a public storage bucket declared only " +
+        "there was never assessed. Counted and named here so their absence cannot be read as a clean result.",
+      fix:
+        "If one of these files is the schema, move it to `supabase/migrations/` or a root `schema.sql` (the two " +
+        "layouts Harvey reads) — or say which one it is so the scan can be pointed at it. If they are dumps, " +
+        "seeds or one-off scripts, no action is needed and this row is the record that they were skipped knowingly.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
 }

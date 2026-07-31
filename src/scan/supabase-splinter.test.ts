@@ -16,24 +16,79 @@ const FIXTURE_RAW = readFileSync(FIXTURE_PATH, "utf8");
 
 describe("parseSplinterPipeText", () => {
   it("discards psql's WARNING/SET/DO command-tag noise and parses only the 10-column data rows", () => {
-    const rows = parseSplinterPipeText(FIXTURE_RAW);
+    const { rows } = parseSplinterPipeText(FIXTURE_RAW);
     expect(rows).toHaveLength(33);
     expect(rows.every((r) => r.name && r.title && r.level)).toBe(true);
   });
 
   it("returns nothing for text with no valid 10-column rows", () => {
-    expect(parseSplinterPipeText("psql:foo.sql:1: WARNING: bla\nSET\nDO\n\n")).toEqual([]);
+    expect(parseSplinterPipeText("psql:foo.sql:1: WARNING: bla\nSET\nDO\n\n")).toEqual({ rows: [], unparsedRows: 0 });
+  });
+});
+
+// #1264. The ten field values below are VERBATIM psql output, not hand-written: captured
+// 2026-07-30 from `psql -t -A -F <sep> -f src/scan/rules/splinter.sql` against postgres:16-alpine
+// seeded with `create table public."parent|A" (id int primary key)` and
+// `create table public."child|B" (…, constraint "fk|pipe" foreign key (pid) references public."parent|A"(id))`
+// plus the anon/authenticated/service_role roles splinter.sql requires. Three of the ten columns
+// (detail, metadata, cache_key) carry the identifiers' pipes, because splinter.sql `format()`s
+// them in — so the same run under `-F '|'` produced SIXTEEN fields and the old `!== 10` guard
+// dropped a real lint in silence.
+const PIPE_BEARING_FIELDS = [
+  "unindexed_foreign_keys",
+  "Unindexed foreign keys",
+  "INFO",
+  "EXTERNAL",
+  "{PERFORMANCE}",
+  "Identifies foreign key constraints without a covering index, which can impact database performance.",
+  "Table \\`public.child|B\\` has a foreign key \\`fk|pipe\\` without a covering index. This can lead to suboptimal query performance.",
+  "https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys",
+  '{"name": "child|B", "type": "table", "schema": "public", "fkey_name": "fk|pipe", "fkey_columns": [2]}',
+  "unindexed_foreign_keys_public_child|B_fk|pipe",
+];
+const PSQL_NOISE = "psql:splinter.sql:18: WARNING:  SET LOCAL can only be used in transaction blocks\nSET\nDO\n";
+const UNIT_SEPARATED = PSQL_NOISE + PIPE_BEARING_FIELDS.join("\u001f") + "\n";
+const PIPE_SEPARATED = PSQL_NOISE + PIPE_BEARING_FIELDS.join("|") + "\n";
+
+describe("a lint whose identifiers contain the pipe character (#1264)", () => {
+  it("survives the parser under the unit separator, with every identifier intact", () => {
+    const { rows, unparsedRows } = parseSplinterPipeText(UNIT_SEPARATED);
+    expect(unparsedRows).toBe(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.detail).toContain("public.child|B");
+    expect(rows[0]?.cache_key).toBe("unindexed_foreign_keys_public_child|B_fk|pipe");
+  });
+
+  it("reaches a Finding whose id and metadata still carry the piped identifiers", () => {
+    const [finding] = parseAdvisorFindings(parseSplinterOutput(UNIT_SEPARATED));
+    expect(finding?.id).toBe("SB-ADV-unindexed_foreign_keys_public_child|B_fk|pipe");
+    expect(finding?.location).toBe("public.child|B");
+  });
+
+  // The negative direction: the SAME row, delimited the pre-#1264 way, is still unparseable —
+  // but it is now COUNTED, so scanLocal can disclose it (SB-SPLINTER-00) instead of shipping a
+  // silently shorter advisor list. If this ever reads 0 while `rows` is empty, the row went
+  // missing without a trace again, which is the whole defect.
+  it("is counted, not silently dropped, when the same row arrives pipe-delimited", () => {
+    const { rows, unparsedRows } = parseSplinterPipeText(PIPE_SEPARATED);
+    expect(rows).toHaveLength(0);
+    expect(unparsedRows).toBe(1);
+    expect(parseSplinterOutput(PIPE_SEPARATED).unparsedRows).toBe(1);
+  });
+
+  it("counts nothing on the recorded all-clean fixture, so the count means what it says", () => {
+    expect(parseSplinterOutput(FIXTURE_RAW).unparsedRows).toBe(0);
   });
 });
 
 describe("splinterRowsToAdvisorLints", () => {
   it("parses the Postgres array-literal categories field into a string array", () => {
-    const [lint] = splinterRowsToAdvisorLints(parseSplinterPipeText(FIXTURE_RAW));
+    const [lint] = splinterRowsToAdvisorLints(parseSplinterPipeText(FIXTURE_RAW).rows);
     expect(lint?.categories).toEqual(["PERFORMANCE"]);
   });
 
   it("parses the JSON metadata field into an object", () => {
-    const rows = parseSplinterPipeText(FIXTURE_RAW);
+    const { rows } = parseSplinterPipeText(FIXTURE_RAW);
     const authUsersRow = rows.find((r) => r.name === "auth_users_exposed")!;
     const [lint] = splinterRowsToAdvisorLints([authUsersRow]);
     expect(lint?.metadata).toEqual({ name: "user_directory", type: "view", schema: "public", exposed_to: ["anon"] });
@@ -99,5 +154,16 @@ describe("runSplinter argv (#1297)", () => {
     // The rest of the connection still has to reach psql, or the fix silently breaks the scan.
     expect(argv[0]).toContain("db.abcxyz.supabase.co:5432/postgres");
     expect(argv).toContain("-f");
+  });
+
+  // #1264 — the parser can only recover a piped identifier if psql was asked for a separator the
+  // identifier will not contain. Revert this to "|" and the pipe-bearing lint above goes back to
+  // being unparseable on every real local scan.
+  it("asks psql for the unit separator, not the pipe", () => {
+    vi.mocked(execFileSync).mockReturnValue("");
+    runSplinter("postgresql://postgres@localhost:54322/postgres");
+
+    const [, argv] = vi.mocked(execFileSync).mock.calls.at(-1) as [string, string[]];
+    expect(argv[argv.indexOf("-F") + 1]).toBe("\u001f");
   });
 });

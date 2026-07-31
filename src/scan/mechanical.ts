@@ -70,6 +70,7 @@ import {
   checkMigrationRlsBypass,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
+  checkUnreadSqlSurfaces,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -320,6 +321,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkMigrationDynamicSqlInjection(scanDir));
       findings.push(...checkMigrationRlsInitplanStatic(scanDir));
       findings.push(...checkMigrationStorageBuckets(scanDir));
+      // #1323 — the static SQL pass reads two surfaces (supabase/migrations/*.sql and a root
+      // schema.sql). Any other .sql in the tree is counted and named, so a schema kept in db/ or
+      // sql/ produces a disclosure row instead of an empty section that reads as clean.
+      findings.push(...checkUnreadSqlSurfaces(scanDir));
       findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
       // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
       // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.

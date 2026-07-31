@@ -31,7 +31,7 @@ import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationDefinerAnonGrant, checkMigrationDynamicSqlInjection, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationDefinerAnonGrant, checkMigrationDefinerAuthz, checkMigrationDynamicSqlInjection, checkMigrationPolicySemantics, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkMigrationStorageBuckets, checkOpenSignupConfig } from "./supabase-static.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import { moduleMatches } from "./external-corpus.js";
@@ -686,7 +686,25 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     "create table public.nocode_tickets (id uuid primary key);\ncreate table public.nocode_safe (id uuid primary key);\nalter table public.nocode_safe enable row level security;\n" +
       // #611 Gap B — bare (unqualified) create table (public implicit): workspaces RLS off (positive),
       // members RLS on via a bare alter (negative), private.internal_audit non-public schema (negative).
-      "create table workspaces (id uuid primary key);\ncreate table members (id uuid primary key);\nalter table members enable row level security;\ncreate table private.internal_audit (id uuid primary key);\n",
+      "create table workspaces (id uuid primary key);\ncreate table members (id uuid primary key);\nalter table members enable row level security;\ncreate table private.internal_audit (id uuid primary key);\n" +
+      // #1323 — the SIX checks that read SQL through readMigrations, which was supabase/migrations-only
+      // and therefore returned [] on this exact shape. Each planted defect is paired with the near-miss
+      // that must stay silent, so a reverted reader fails here rather than in a review-tier-only gate
+      // that exits 0 on a miss.
+      "create table public.nocode_invoices (id uuid primary key, tenant_id uuid not null, owner_id uuid not null);\n" +
+      "alter table public.nocode_invoices enable row level security;\n" +
+      "create policy nocode_invoices_read on public.nocode_invoices for select to authenticated using (true);\n" +
+      "create policy nocode_invoices_write on public.nocode_invoices for insert to authenticated with check (tenant_id = ((select auth.jwt()) ->> 'tenant_id')::uuid);\n" +
+      "create policy nocode_invoices_own on public.nocode_invoices for update to authenticated using (tenant_id = ((select auth.jwt()) ->> 'tenant_id')::uuid and owner_id = auth.uid());\n" +
+      "create or replace function public.nocode_set_role(target_user_id uuid, new_role text) returns void language plpgsql security definer as $$\nbegin\n  update public.profiles set role = new_role where id = target_user_id;\nend;\n$$;\n" +
+      "create or replace function public.nocode_promote_guarded(target_user_id uuid, new_role text) returns void language plpgsql security definer as $$\nbegin\n  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'admin') then\n    raise exception 'not authorized';\n  end if;\n  update public.profiles set role = new_role where id = target_user_id;\nend;\n$$;\n" +
+      "create or replace function public.nocode_search_invoices(p_filter text) returns setof public.nocode_invoices language plpgsql security definer as $$\nbegin\n  return query execute 'select * from public.nocode_invoices where amount::text like ''%' || p_filter || '%''';\nend;\n$$;\n" +
+      "create or replace function public.nocode_bound_invoice_query(p_filter text) returns setof public.nocode_invoices language plpgsql security definer as $$\nbegin\n  return query execute 'select * from public.nocode_invoices where amount::text like $1' using p_filter;\nend;\n$$;\n" +
+      "create or replace function public.nocode_all_invoices() returns setof public.nocode_invoices language plpgsql security definer as $$\nbegin\n  return query select * from public.nocode_invoices;\nend;\n$$;\ngrant execute on function public.nocode_all_invoices() to anon;\n" +
+      "insert into storage.buckets (id, name, public) values ('nocode-attachments', 'nocode-attachments', true);\n" +
+      "insert into storage.buckets (id, name, public) values ('nocode-private', 'nocode-private', false);\n" +
+      "create policy nocode_attachments_anon_read on storage.objects for select to anon using (bucket_id = 'nocode-attachments');\n" +
+      "create policy nocode_private_owner_read on storage.objects for select to anon using (bucket_id = 'nocode-private' and owner = (select auth.uid()));\n",
   );
   // #1425 — protect-then-unprotect, in its OWN dir so the "flags only audit_logs" test below keeps
   // supaDir focused. Three files, mirroring targets/calibration: billing_exports and import_staging
@@ -731,6 +749,14 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     ...checkOpenSignupConfig(supaDir),
     ...checkMigrationDynamicSqlInjection(supaDir), // #602 CX-12
     ...checkMigrationDefinerAnonGrant(supaDir), // #602 CX-11
+    // #1323 — the six checks that fed off readMigrations, run over the ROOT-SCHEMA dir. Before the
+    // fix every one of these returned [] here.
+    ...checkMigrationPolicySemantics(rootSchemaDir),
+    ...checkMigrationDefinerAuthz(rootSchemaDir),
+    ...checkMigrationDynamicSqlInjection(rootSchemaDir),
+    ...checkMigrationDefinerAnonGrant(rootSchemaDir),
+    ...checkMigrationStorageBuckets(rootSchemaDir),
+    ...checkMigrationRlsInitplanStatic(rootSchemaDir),
   ];
 
   it("catches every B13 positive at its declared tier and clears every B13 negative", () => {
@@ -748,7 +774,9 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     expect(m.positivesCaught).toBe(positives.length);
     // 8 before #1425; +2 for the protect-then-unprotect plant and its scope control.
     expect(m.positivesCaughtHigh).toBe(10);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(12);
+    // 12 before #1323; +7 for the root-schema probes of the six checks readMigrations feeds
+    // (checkMigrationStorageBuckets contributes two, one per half).
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(19);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

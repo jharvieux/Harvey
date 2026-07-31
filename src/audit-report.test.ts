@@ -190,7 +190,9 @@ describe("runAudit findings capture (#312/#420)", () => {
     // (#397), filtered to the `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy
     // doesn't match, so it collects nothing here too, but for a different (mock-fidelity) reason.
     // Each quality-scan row appears ONCE despite both probes reading it (#1101).
-    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
+    // M1-BRIEF-00 (#678) rides with M1's mechanical rows: the D-091 catalog version the semantic
+    // brief was built from, recorded in the deliverable rather than only in the bootstrap banner.
+    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M1-BRIEF-00", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
   });
 
   it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {

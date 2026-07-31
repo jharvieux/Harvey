@@ -27,6 +27,10 @@ export interface AdvisorLint {
 
 export interface AdvisorsResponse {
   lints: AdvisorLint[];
+  // #1264 — local (Splinter/psql) mode only: lint rows the delimited-text parser could not split
+  // into their 10 columns, so they are NOT in `lints`. Hosted mode reads JSON and never sets it.
+  // Carried so scanLocal can disclose the loss (SB-SPLINTER-00) rather than return a short list.
+  unparsedRows?: number;
 }
 
 // Severity for the lints the issue calls out by name, curated from the product's blast-radius
