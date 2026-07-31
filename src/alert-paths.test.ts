@@ -264,26 +264,24 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // circularity was "about what the default branch can RUN, not about which file exists"; that was
   // MEASURED FALSE the same day — a workflow_dispatch run executes the copy on the ref you name, so
   // a job or input present only on a branch is dispatchable from it (see .github/alert-paths.json's
-  // `_why`). ONE occupant today, ci-main-red-alert (#1507/#1612), and its hatch now records an
-  // operational reason — a full red ci.yml run during a live merge train — not a structural one.
-  // Retire it the same way: drill it, record provenBy, drop pendingProof, and this list goes back to
-  // empty, which is the state it should normally be in. `pendingProof`'s own behaviour stays covered
-  // by the fixture tests above, so naming the current occupant here does not un-test the mechanism.
-  //
-  // TWO occupants since #1691 (2026-07-31). ci-genai-census-alert is the OTHER kind, and the one the
-  // `_why` block still reserves the hatch for after #1333 narrowed it: genai-census.yml is a brand
-  // new workflow FILE, so the dispatch 404s on the default branch. ATTEMPTED, not assumed — the 404
-  // is quoted verbatim in its `why`. Tracked by #1711, one command from retirement once it merges.
+  // `_why`). ci-main-red-alert (#1507/#1612) was the last occupant whose reason was neither the
+  // circularity nor a missing file: it had narrowed itself honestly to a COST claim — a full red
+  // ci.yml run during a live merge train. #1612 (2026-07-31) priced that claim instead of inheriting
+  // it and it was small: dispatch 20:57:55Z → `PROVED ci-main-red-alert — #1729` at 21:01:50Z, under
+  // four minutes, because the drill fails heavy-cli shard 1 on its first step and only shards 2 and 3
+  // are the wait. Drilled, `provenBy` recorded, hatch dropped — which is the shape every retirement
+  // takes. `pendingProof`'s own behaviour stays covered by the fixture tests above, so naming the
+  // current occupants here does not un-test the mechanism.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    // Three occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
-    // default. `ci-supervised-declines-alert` (#1688, from #1545) and `ci-genai-census-alert`
-    // (#1711, from #1691) both joined the same day and for the SAME reason: their workflow FILE is
-    // not yet on the default branch, and GitHub refuses workflow_dispatch for one that is not.
-    // Both are ATTEMPTED rather than assumed — each `why` quotes the verbatim 404 from the dispatch
-    // API. This list is meant to SHRINK; both retire with one command once their files land.
+    // TWO occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
+    // default — and both are now the SAME kind, the one case #1333's narrowing left the hatch for.
+    // `ci-supervised-declines-alert` (#1688, from #1545) and `ci-genai-census-alert` (#1711, from
+    // #1691) both joined the same day because their workflow FILE is not yet on the default branch,
+    // and GitHub refuses workflow_dispatch for one that is not. Both are ATTEMPTED rather than
+    // assumed — each `why` quotes the verbatim 404 from the dispatch API. This list is meant to
+    // SHRINK; both retire with one command once their files land.
     expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
       "ci-genai-census-alert",
-      "ci-main-red-alert",
       "ci-supervised-declines-alert",
     ]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);

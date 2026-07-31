@@ -36,7 +36,17 @@
     "workflow file that does not yet exist on main.",
     "The same measurement discharged two hatches that had simply outlived their reason: free-recall",
     "and semantic-freshness had both long since merged, so `cannot be proven before it merges` was",
-    "true when written and false when read. Both drilled 2026-07-31 and recorded below."
+    "true when written and false when read. Both drilled 2026-07-31 and recorded below.",
+    "",
+    "#1612 (2026-07-31) retired the last hatch that was NOT about a missing file. ci-main-red-alert's",
+    "hatch had already narrowed itself honestly to a COST claim ('proving it means a full red ci.yml",
+    "run', during a live merge train) — and that cost was still an estimate nobody had priced. It is",
+    "now MEASURED and it was small: dispatched 20:57:55Z, main-red's step reported `PROVED` at",
+    "21:01:50Z. Under four minutes, because `alert_drill` fails heavy-cli shard 1 on its FIRST step,",
+    "before install, so the only wait is shards 2 and 3 finishing normally. A dispatch run also does",
+    "not report on any PR's head sha, so nothing in the merge train was gated on it. Record the number",
+    "rather than the fear: the next person weighing this drill against a busy branch needs 4 minutes,",
+    "not 'a full red ci.yml run'."
   ],
   "paths": [
     {
@@ -130,10 +140,11 @@
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
-      "pendingProof": {
-        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural \u2014 the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` \u2014 it proves ci-heavy-cli-alert in the same run.",
-        "tracking": 1612,
-        "since": "2026-07-31"
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30664857256",
+        "issue": 1729,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
