@@ -23,13 +23,15 @@
 # whenever that commit was authored, not when the ref was created) — building a safe steal-on-timeout
 # lock on top of that is real machinery for a path that fires rarely and races at most 3-wide.
 # Instead, every racer that creates-or-comments finishes by calling `reconcile_duplicates`, which
-# lists every OPEN issue in its namespace, keeps the LOWEST-numbered one canonical, and closes the
-# rest with a comment pointing at the canonical one. Whichever racer runs its reconcile LAST sees the
-# true final set (every sibling racer's create has already landed, because reconcile runs after each
-# racer's own create/comment step, and this whole step is synchronous within one job), so the run
-# converges to exactly one open issue by the time all racers finish. `gh issue close`/`gh issue
-# comment` on an issue another racer already closed/commented is idempotent enough to just re-run
-# harmlessly (GitHub allows commenting on a closed issue and closing an already-closed one).
+# lists every OPEN issue in its namespace and collapses each RUN ID's cluster down to its
+# lowest-numbered member (#1595 — see that function's header for why it is per-run-id and not one
+# global canonical), closing the rest with a comment pointing at the survivor. Whichever racer runs
+# its reconcile LAST sees the true final set (every sibling racer's create has already landed,
+# because reconcile runs after each racer's own create/comment step, and this whole step is
+# synchronous within one job), so racers of ONE run converge to exactly one open issue by the time
+# all of them finish. `gh issue close`/`gh issue comment` on an issue another racer already
+# closed/commented is idempotent enough to just re-run harmlessly (GitHub allows commenting on a
+# closed issue and closing an already-closed one).
 
 # $1 = drill|real. Partitions open issues on the marker by title so a drill and a live alarm can
 # never be confused for one another.
@@ -39,24 +41,57 @@ find_open() {
         '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | .[0].number // empty'
 }
 
-# Collapse every OPEN issue in this namespace down to one: the lowest-numbered survives, every other
-# one is closed with a comment redirecting to it. Returns the surviving (canonical) issue number, or
-# empty if none are open. Idempotent and safe to call after every create/comment, including when
-# there was never a duplicate — it then finds exactly one open issue and returns it unchanged.
+# Extracts the run identifier a body embeds ("actions/runs/<id>" — every alert body in
+# .github/workflows/*.yml carries one; see RUN_URL in action.yml). Empty if none found. First match
+# only: an alert body has exactly one self-referential run link in practice.
+run_id_of() {
+  grep -oE 'actions/runs/[0-9]+' <<<"$1" | head -n1 | grep -oE '[0-9]+' || true
+}
+
+# Collapse OPEN issues in this namespace down to one PER RUN ID (#1595), not down to one overall.
+# Sorts by number; for each run id, the FIRST (lowest-numbered) issue citing it becomes that run's
+# canonical, and every later issue citing the SAME run id is closed as a duplicate of it — that is
+# the one piece of positive evidence every alert body already carries for free, and it is exact (two
+# different failures never share a run id, and two shards of one failing run always do). An issue
+# sharing the marker but citing NO run id, or a DIFFERENT one (a human-labelled issue, or a genuinely
+# separate failure of the same workflow), matches no cluster and is left OPEN, untouched — the
+# pre-#1594 behaviour for anything this function cannot positively confirm.
+#
+# Grouping by the single lowest-numbered issue overall (rather than per run id) is wrong the moment
+# TWO distinct runs are open at once: whichever run happens to own issue #1 would "win" as the sole
+# canonical and every issue from every OTHER run would be compared against a run id that never
+# matches, closing nothing — see the regression this comment is next to for the reproduction.
+#
+# $2 = the run id (if any) of the alert THIS call is about — i.e. run_id_of on the body find_or_update
+# was invoked with. Returns the surviving canonical for THAT run's cluster specifically (empty if $2
+# is empty, since there is then no evidence to resolve one from). Idempotent and safe to call after
+# every create/comment, including when there was never a duplicate.
 reconcile_duplicates() {
-  local namespace="$1" nums canonical="" n
-  nums=$(gh issue list --state open --label "$MARKER" --json number,title \
-    | jq -r --arg s "$SUFFIX" --arg want "$namespace" \
-        '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | sort_by(.number) | .[].number') || return $?
-  for n in $nums; do
-    if [ -z "$canonical" ]; then
-      canonical="$n"
-    else
-      gh issue comment "$n" --body "Duplicate alarm for the same underlying failure — consolidated into #${canonical} by the alert-issue duplicate-reconciliation guard (jharvieux/Harvey#1511/#1512)." > /dev/null || return $?
+  local namespace="$1" own_run="$2" rows row n body run
+  local -A cluster_of=()
+  rows=$(gh issue list --state open --label "$MARKER" --json number,title,body \
+    | jq -c --arg s "$SUFFIX" --arg want "$namespace" \
+        '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | sort_by(.number) | .[]') || return $?
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    n=$(jq -r '.number' <<<"$row")
+    body=$(jq -r '.body' <<<"$row")
+    run=$(run_id_of "$body")
+    [ -z "$run" ] && continue # no evidence at all: never a cluster member, never closed, never canonical
+    if [ -n "${cluster_of[$run]:-}" ]; then
+      gh issue comment "$n" --body "Duplicate alarm for the same underlying failure (both cite run ${run}) — consolidated into #${cluster_of[$run]} by the alert-issue duplicate-reconciliation guard (jharvieux/Harvey#1511/#1512, run-ID gated per #1595)." > /dev/null || return $?
       gh issue close "$n" > /dev/null || return $?
+    else
+      cluster_of[$run]="$n"
     fi
-  done
-  echo "$canonical"
+  done <<<"$rows"
+  # Explicit `return 0`: without it, an empty $own_run (or one with no cluster entry) makes the `if`
+  # itself the function's exit status — false, i.e. non-zero — which callers like find_or_update
+  # would read as reconcile_duplicates HAVING FAILED (`|| return $?`) rather than "nothing to report".
+  if [ -n "$own_run" ] && [ -n "${cluster_of[$own_run]:-}" ]; then
+    echo "${cluster_of[$own_run]}"
+  fi
+  return 0
 }
 
 # THE find-or-update logic (#1348, reconciled #1511/#1512) — the ONE code path both the production
@@ -76,7 +111,7 @@ reconcile_duplicates() {
 # proven empirically, not assumed. Explicitly forwarding the failing command's exit code makes the
 # function's return status meaningful again, which the call sites below rely on.
 find_or_update() {
-  local namespace="$1" title="$2" body="$3" existing url status num canonical
+  local namespace="$1" title="$2" body="$3" existing url status num canonical own_run
   existing=$(find_open "$namespace") || return $?
   if [ -n "$existing" ]; then
     # `gh issue comment` prints the new comment's URL to stdout on success — which, inside
@@ -89,7 +124,8 @@ find_or_update() {
     url=$(gh issue create --title "$title" --label "$MARKER" --body "$body") || return $?
     status=created; num="${url##*/}"
   fi
-  canonical=$(reconcile_duplicates "$namespace") || return $?
+  own_run=$(run_id_of "$body")
+  canonical=$(reconcile_duplicates "$namespace" "$own_run") || return $?
   if [ -n "$canonical" ] && [ "$canonical" != "$num" ]; then
     status=commented
     num="$canonical"

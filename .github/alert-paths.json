@@ -81,8 +81,8 @@
       "workflow": ".github/workflows/site-smoke.yml",
       "marker": "site-smoke-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30595915001",
-        "issue": 1598,
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30597869743",
+        "issue": 1601,
         "at": "2026-07-31"
       }
     },
