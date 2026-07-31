@@ -192,7 +192,40 @@ export const owaspReactEntries: CorpusEntry[] = [
     match: ["ssrf"],
     expectedTier: "review",
     expectedSeverity: "Medium",
-    note: "Sheet, SSR Security: 'Validate User Input Before Server-Side Fetch Calls'. A FACET GAP, not a class gap, and that is what made it worth chasing: Harvey already caught this class — P-SSRF-APPROUTER scores App Router searchParams reaching a cross-file fetch wrapper — but every rule was anchored on request ACCESSORS (`req.query`, `searchParams.get`), and the sheet's own example is an async Server Component page taking `{ params }` as a destructured prop. CLOSED by #1240, which fixed it where it actually lived: the canonical `x-request-source` block (base/injection/headers .yml), so ALL 21 server-side taint rules gained the shape, not just SSRF. MEASURED 2026-07-27, caught at review tier. ProductPageValidated in the same fixture stays silent — #1240 also gave harvey-ssrf-fetch a validator-guard sanitizer, since without it the rule fired on the remedy the sheet recommends.",
+    note: "Sheet, SSR Security: 'Validate User Input Before Server-Side Fetch Calls'. A FACET GAP, not a class gap, and that is what made it worth chasing: Harvey already caught this class — P-SSRF-APPROUTER scores App Router searchParams reaching a cross-file fetch wrapper — but every rule was anchored on request ACCESSORS (`req.query`, `searchParams.get`), and the sheet's own example is an async Server Component page taking `{ params }` as a destructured prop. CLOSED by #1240, which fixed it where it actually lived: the canonical `x-request-source` block (base/injection/headers .yml), so ALL 21 server-side taint rules gained the shape, not just SSRF. MEASURED 2026-07-27, caught at review tier. ProductPageValidated in the same fixture stays silent — #1240 also gave harvey-ssrf-fetch a validator-guard sanitizer, since without it the rule fired on the remedy the sheet recommends. The two ARROW spellings of this same sheet item are P-RSC-ARROW-TYPED-BINDING and P-RSC-ARROW-UNTYPED-BINDING; this row alone cannot see a regression that costs only the arrow form, which is precisely what #1544's first cut did.",
+  },
+  {
+    // #1544 remainder. The two rows below exist because the first cut of #1544 shipped the
+    // destructuring requirement in a spelling that matched EXPRESSION-bodied arrows only, and no
+    // gate could see it: `validate-calibration` had no arrow fixture at all, and
+    // shared-sources.test.ts asserted that the pattern STRINGS were present, never that they
+    // matched anything. MEASURED 2026-07-31 (semgrep 1.164.0): `(..., { ..., $B, ... }, ...) => ...`
+    // returns 0 matches on a block-bodied arrow and `=> { ... }` returns 1, so the whole real-world
+    // population of the shape was silent — 40 occurrences in 33 files across the pinned corpus,
+    // against ZERO occurrences of the expression-bodied form the shipped patterns could match.
+    // `mustCatch` because a review-tier miss is otherwise non-fatal: without it, deleting the arm
+    // these rows guard flips them to FAIL, adds them to the tracked review-gap list, and the gate
+    // still prints GATE PASS and exits 0 — the #1248 shape.
+    id: "P-RSC-ARROW-TYPED-BINDING",
+    kind: "positive",
+    cls: "Route param interpolated into a server-side fetch URL inside a TYPED destructured arrow with a block body",
+    location: "src/owasp-react/rsc-arrow-fetch-unvalidated.tsx",
+    match: ["ssrf"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    mustCatch: true,
+    note: "#1544: guards the `(..., { ..., $RSCBIND, ... }: $T, ...) => { ... }` arm of the shared `x-request-source` block. Same sheet item as P-OWASP-REACT-RSC-SSRF ('Validate User Input Before Server-Side Fetch Calls'), same defect, different binding spelling — `const Page = async ({ params }: Props) => { … }` instead of `function Page({ params }: Props) { … }`. MEASURED 2026-07-31 (semgrep 1.164.0, `-j 1 --timeout 0`, 3 identical repeats per arm) against the real rule files: silent under the as-shipped #1544 block, harvey-ssrf-fetch under the block with the `=> { ... }` arms, and the benign twins in the same probe set (a plain-parameter arrow, and a plain-parameter arrow nested inside a real RSC page) stay silent in both. Delete that arm and this row fails.",
+  },
+  {
+    id: "P-RSC-ARROW-UNTYPED-BINDING",
+    kind: "positive",
+    cls: "Route param interpolated into a server-side fetch URL inside an UNTYPED destructured arrow with a block body",
+    location: "src/owasp-react/rsc-arrow-untyped-loader.ts",
+    match: ["ssrf"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    mustCatch: true,
+    note: "#1544: guards the `(..., { ..., $RSCBIND, ... }, ...) => { ... }` arm, the untyped twin of P-RSC-ARROW-TYPED-BINDING. This is the spelling the corpus actually contains — `export const loader = async ({ params }) => { … }`, MEASURED 2026-07-31 over all 17 pinned repos at their pins (semgrep 1.164.0, `-j 1 --timeout 0`, 3 repeats, byte-identical each time): 40 occurrences in 33 files (carbon 12, documenso 10, inbox-zero 18), against ZERO occurrences of the expression-bodied form. None of the 40 reaches a sink at those pins, so the regression cost exactly 0 corpus findings — a capability loss with no finding cost, which is the kind a differential over a real corpus cannot detect and only a planted fixture can.",
   },
   {
     id: "P-OWASP-REACT-URL-SECRET",
@@ -291,7 +324,24 @@ export const owaspReactEntries: CorpusEntry[] = [
     cls: "A plain function parameter named `params` / `searchParams` in server-internal code",
     location: "src/lib/job-runner.ts",
     reviewTierHits: ["src.scan.rules.semgrep.harvey-lib-command-injection", "src.scan.rules.semgrep.harvey-lib-path-traversal"],
-    note: "#1344: the FP twin of P-OWASP-REACT-RSC-SSRF, and the row that makes #1240's source falsifiable. That source matches `params.<field>` by NAME because semgrep OSS cannot match the destructured object parameter an RSC page really receives; its only guard excluded a name bound by ASSIGNMENT, and a function parameter is never assigned. MEASURED 2026-07-27 on this file against its own twin with the parameter renamed to `opts`: 6 findings vs 3 — a name-dependent delta of 3 on a scheduler job runner with no request anywhere near it, including `harvey-command-injection` at Critical / precisionTier \"high\", which is GRADED and therefore drops a repo's free-tier letter. The two recorded review-tier rows are the pre-existing `harvey-lib-*` family, which flags exported-function parameters as library entry points BY DESIGN (see NARROW_BY_DESIGN in shared-sources.test.ts) — they fire identically on the renamed twin, so they are name-INdependent and are not this defect. Fixed by excluding a plain-identifier parameter binding; the discriminator is sound precisely because the real RSC shape is destructured and therefore unmatchable. This row fails if that exclusion is ever widened away, and P-OWASP-REACT-RSC-SSRF fails if it is widened too far.",
+    note: "#1344: the FP twin of P-OWASP-REACT-RSC-SSRF, and the row that makes #1240's source falsifiable. That source reaches `params.<field>` by NAME; its only guard excluded a name bound by ASSIGNMENT, and a function parameter is never assigned. MEASURED 2026-07-27 on this file against its own twin with the parameter renamed to `opts`: 6 findings vs 3 — a name-dependent delta of 3 on a scheduler job runner with no request anywhere near it, including `harvey-command-injection` at Critical / precisionTier \"high\", which is GRADED and therefore drops a repo's free-tier letter. The two recorded review-tier rows are the pre-existing `harvey-lib-*` family, which flags exported-function parameters as library entry points BY DESIGN (see NARROW_BY_DESIGN in shared-sources.test.ts) — they fire identically on the renamed twin, so they are name-INdependent and are not this defect. Fixed by excluding a plain-identifier parameter binding. #1544 CORRECTED THE SOUNDNESS ARGUMENT RECORDED HERE: it used to read that the exclusion is sound because the real RSC shape is destructured and therefore unmatchable by semgrep OSS, which was ASSUMED and is false — MEASURED 2026-07-31 (semgrep 1.164.0), `function $F(..., { ..., $B, ... }: $T, ...) { ... }` matches the RSC fixture, and the destructuring binding is now a REQUIRED conjunct of the source rather than something inferred from the name. The exclusion is kept as a second, independent narrowing, so this row still fails if it is widened away, and P-OWASP-REACT-RSC-SSRF still fails if the source is widened too far. N-RSC-PARAM-NON-PARAM-BINDING is the row that keeps the new requirement falsifiable.",
+  },
+  {
+    id: "N-RSC-PARAM-NON-PARAM-BINDING",
+    kind: "negative",
+    cls: "`params` / `searchParams` bound by a loop variable, an array destructure, or an import",
+    location: "src/lib/job-queue.ts",
+    note: "#1544: the row that makes the DESTRUCTURING REQUIREMENT falsifiable, as job-runner.ts does for the plain-parameter exclusion. Three bindings that are not parameters at all — a for-of loop variable over DB rows, `const [searchParams] = loadQueue()`, and an imported module constant — none reachable from a request. MEASURED 2026-07-31 (semgrep 1.164.0) against the pre-#1544 rule files: this file produced 3 findings, `harvey-command-injection` at ERROR/Critical on the loop variable (GRADED, so it drops a repo's free-tier letter) plus two `harvey-path-traversal`; with the binding requirement it produces 0, while job-runner.ts's three `harvey-lib-*` review rows and P-OWASP-REACT-RSC-SSRF are unchanged. The pre-#1544 three not-insides could see none of these shapes: on all three the block fired exactly as an unguarded bare name did, which is why the parameter exclusion alone was never the discriminator it was recorded as.",
+  },
+  {
+    id: "P-CLIENT-HOOK-URL-PARAM",
+    kind: "positive",
+    cls: "Client component reads a URL param through an array-destructured hook, then interpolates it into a storage path",
+    location: "src/owasp-react/client-hook-url-param.tsx",
+    match: ["path-traversal"],
+    expectedTier: "none",
+    gapKind: "measured-gap",
+    note: "#1544: the ONE row the destructuring requirement costs, planted so the cost sits in the gate rather than in a PR body. Modelled on the real instance that found it — carbon (crbnos/carbon@92e19c0) apps/erp/app/modules/production/ui/Jobs/JobBillOfProcess.tsx:444 → :655, `const [params] = useUrlParams()` reaching `storage.from('private').upload(...)`. MEASURED 2026-07-31 across ALL 17 pinned corpus repos with the pre-#1544 and post-#1544 rule files, and stated the way the method can support it rather than the way a single pass reported it: 16 of the 17 repos are SET-IDENTICAL under both rule sets, and on carbon — the only repo with any delta — 6 repeats per arm at `-j 1 --timeout 0` give a stable core of 74 findings in BOTH arms, zero true gains and zero true losses. This row is the one real loss, isolated on its own file and reproduced 3/3 per arm (present pre-#1544, absent after), re-verified independently 2026-07-31. DO NOT QUOTE THE SINGLE-PASS FIGURES: `456 → 454` over the full rule set and `194 → 178` over the 22 rules that consume the shared source block were both single passes, and 15 of those 16 rows were engine noise — semgrep's default parallelism silently drops up to ~36% of findings on a repo this size while reporting a clean run, so the noise band on carbon is an order of magnitude wider than the signal. That is #1710, and this row is the first measurement it corrupted. Verified on this fixture the same day: fires harvey-path-traversal WARNING under the pre-#1544 rules, silent after. It was a TRUE positive caught by an UNSOUND rule — the pre-#1544 block reached the name with no binding requirement, which is the same reason it read a scheduler's DB rows as request input (N-RSC-PARAM-NON-PARAM-BINDING), so the binding requirement takes this one with the false ones. A MEASURED GAP, not a boundary: the shape is CLIENT-side and the client source block (`x-dom-source`, xss.yml) ALREADY carries `useSearchParams()` and `$SP.get(...)`, so the data exists — what is undecided is which server-side sink rules should also model client URL params, a per-rule judgment that belongs in shared-sources.test.ts's NARROW_BY_DESIGN/PENDING_JUDGMENT split. Tracked on #1708. `match` is scoped to this class's own taxonomy vocabulary so an unrelated finding on this file cannot read as a graduation.",
   },
   {
     id: "N-OWASP-REACT-PROP-SHAPED",

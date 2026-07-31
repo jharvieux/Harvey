@@ -271,7 +271,11 @@ export function formatAuditCoverage(report: AuditCoverageReport): string {
   const mark = (r: AuditCoverageReport["rows"][number]): string =>
     r.status === "ran" ? "RAN " : r.status === "partial" ? "PART" : "LIVE";
   const lines = report.rows.map((r) => {
-    const suffix = r.reason ? ` — ${r.reason}` : r.detail ? ` — ${r.detail}` : "";
+    // #1556, applying #1555's ruling to the CONSOLE ledger: this printed `reason` OR `detail`, so a
+    // partial row's `detail` — what the module DID run, and since #1556 which tiers do not apply to
+    // this architecture at all — never reached the operator reading the run. The report renders both
+    // side by side; so does this, detail first (what ran) then the reason it fell short.
+    const suffix = [r.detail, r.reason].filter((t) => t && t.trim()).map((t) => ` — ${t}`).join("");
     const label = r.instance ? `${r.name} [${r.instance}]` : r.name;
     return `  ${mark(r)}  ${r.module.padEnd(3)} ${label.padEnd(34)}${suffix}`;
   });

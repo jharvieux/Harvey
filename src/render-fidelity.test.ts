@@ -53,6 +53,9 @@ const LEDGER_CTX: RunContext = {
   }),
   exists: () => true,
   isGitRepoRoot: () => true,
+  // #1556: "/target" is not a real directory, so the architecture probe is doubled like `exists` is.
+  // "unknown" keeps every M1 tier applicable, which is the row shape the assertions below rely on.
+  detectOrm: () => "unknown",
   artifactsDir: "/artifacts",
   now: NOW,
   readArtifact: (p) =>
@@ -249,6 +252,35 @@ describe("#1435 a finding's own words survive the render seam", () => {
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.map((b) => b.id)).toContain("M1");
     expect(breaches.find((b) => b.id === "M1")?.kind).toBe("coverage-text-dropped");
+  });
+
+  // ---- #1556: "this tier does not apply here" has to reach the client, not just the ledger ----
+  //
+  // The row it replaces read `partial` forever on a Prisma/Drizzle target over a tier that could
+  // never become `ran` there. The fix moves that sentence from `reason` to `detail`, which is the
+  // field #1555 had just proven the report was dropping — so the produce→deliver leg is asserted
+  // here rather than inferred from the ledger, on the same real orchestrator → assembler → renderer
+  // path as everything else in this file.
+  it("a Prisma target's N/A-by-architecture tier reaches the rendered report (#1556)", () => {
+    const prismaDoc = assembleEngagementDocument(
+      runAudit(AUDIT_RUNNERS, { ...LEDGER_CTX, detectOrm: () => "prisma" }).recorded,
+      ENV,
+      [finding({ id: "M1-03" })],
+      META,
+    );
+    const row = (prismaDoc.coverage as CoverageRow[]).find((r) => r.module === "M1") as CoverageRow;
+    // Without this the assertion below could pass over a row that never carried the sentence.
+    expect(row.detail).toMatch(/Not applicable to this target's architecture/);
+    const prismaHtml = buildHtml(prismaDoc);
+    expect(prismaHtml).toContain(esc("connected Supabase"));
+    expect(prismaHtml).toContain(esc("N/A by architecture"));
+    expect(prismaHtml).toContain(esc("M1-ARCH-PRISMA"));
+    expect(renderFidelityBreaches(prismaDoc, prismaHtml)).toEqual([]);
+    // CONTROL: strip the sentence out of the rendered HTML and the fidelity gate must go red — the
+    // disclosure is guarded by the same mechanism as every other coverage-row text, not by hope.
+    const stripped = prismaHtml.replace(esc(row.detail as string), "");
+    expect(stripped, "the control must actually remove the sentence").not.toBe(prismaHtml);
+    expect(renderFidelityBreaches(prismaDoc, stripped).map((b) => b.id)).toContain("M1");
   });
 
   it("CONTROL — the mirror image: a not-assessed row that loses its reason is caught too", () => {
