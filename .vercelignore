@@ -1,0 +1,20 @@
+# #1597. The Vercel project's Root Directory is `site`, but the CLI uploads the directory it is
+# RUN FROM — so `vercel deploy` now runs from the repo root and this file decides what leaves the
+# machine. Without it the whole 40M / ~2000-file repo would be uploaded on every deploy, including
+# report-template/findings.*.json (real client engagement data) and targets/** (vendored apps).
+#
+# Allowlist, not denylist: a new top-level directory is EXCLUDED by default, so adding one cannot
+# silently start shipping. `src` is here deliberately — it is what makes the site able to import
+# shared logic (site/app/supabase-security-checker/page.tsx -> src/supabase-write-probe.ts) instead
+# of keeping a relocated copy. The three root manifests are what pnpm needs to resolve the
+# workspace; the build fails loudly, not silently, if any is missing.
+/*
+!/site
+!/src
+!/package.json
+!/pnpm-lock.yaml
+!/pnpm-workspace.yaml
+
+# Build output and local env inside the allowlisted dirs.
+site/.next
+site/node_modules

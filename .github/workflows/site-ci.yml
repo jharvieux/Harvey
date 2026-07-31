@@ -1,22 +1,24 @@
 # #1592: nothing in CI ran the site's OWN build or lint. `site-smoke.yml` only probes the
 # DEPLOYED site over HTTP, so a page that fails to build never reaches it — a broken page never
 # deploys, and site-smoke stays green against the last good deployment while `main` carries the
-# break. This job runs `site/`'s own toolchain instead: `npm run build` (which typechecks via the
-# Next TS plugin AND performs the static-generation pass — see below) and `npm run lint`
-# (`next lint`, now backed by a real `eslint-config-next` config). CORRECTED 2026-07-30: an earlier
-# draft of this comment claimed pre-PR `next lint` exited 0 unconditionally ("No ESLint warnings or
-# errors") — that is FALSE. MEASURED 2026-07-30 from a clean `npm ci` at `main@9001e7a`
-# (no eslint dependency present, no eslint config file): `npm run lint` prints Next's "How would
-# you like to configure ESLint?" interactive setup prompt, then exits 1 because CI has no TTY to
-# answer it (reproduced via `CI=true npm run lint < /dev/null`, both in a plain shell and matching
-# GitHub Actions' non-interactive stdin) — it never reached any actual lint check, so the gap was a
-# loud, unconditional exit-1 failure, not a silent pass. `site-smoke.yml`/nothing invoked
-# `npm run lint` before this PR either way, so the broken command's exit code never blocked
-# anything — the real defect this PR closes.
+# break. This job runs `site/`'s own toolchain instead: `pnpm run build` (`next build`, which
+# typechecks via the Next TS plugin AND performs the static-generation pass — see below) and
+# `pnpm run lint` (`next lint`, now backed by a real `eslint-config-next` config). CORRECTED
+# 2026-07-30: an earlier draft of this comment claimed pre-PR `next lint` exited 0 unconditionally
+# ("No ESLint warnings or errors") — that is FALSE. MEASURED 2026-07-30 from a clean `npm ci` at
+# `main@9001e7a` (no eslint dependency present, no eslint config file — this predates #1597's
+# conversion to pnpm): `npm run lint` prints Next's "How would you like to configure ESLint?"
+# interactive setup prompt, then exits 1 because CI has no TTY to answer it (reproduced via
+# `CI=true npm run lint < /dev/null`, both in a plain shell and matching GitHub Actions'
+# non-interactive stdin) — it never reached any actual lint check, so the gap was a loud,
+# unconditional exit-1 failure, not a silent pass. `site-smoke.yml`/nothing invoked a lint command
+# before this PR either way, so the broken exit code never blocked anything — the real defect this
+# PR closes.
 #
-# `site/` is a SEPARATE, self-contained npm project — its own `package.json` under npm, not a
-# pnpm workspace member (`pnpm-workspace.yaml` declares no packages). A pnpm invocation inside it
-# is a category error; this job uses `npm ci` / `npm run …` throughout, never `pnpm`.
+# Since #1597 `site/` is a `pnpm-workspace.yaml` MEMBER, not a separate npm project — there is no
+# `site/package-lock.json` any more, and its deps resolve out of the one lockfile at the repo
+# root. So install happens at the repo root (`pnpm install --frozen-lockfile`) and build/lint run
+# inside `site/` via pnpm, never npm.
 #
 # Why no separate `tsc --noEmit` step: MEASURED 2026-07-30 — a page that throws at render time
 # (`throw new Error(...)` at the top of a page component, which is syntactically and
@@ -39,15 +41,23 @@
 
 name: site-ci
 
+# `pnpm-lock.yaml` / `pnpm-workspace.yaml` are in the path filter, not just `site/**`: since #1597
+# site's deps resolve out of the root lockfile, so a dependency bump for site can land as a
+# root-lockfile-only diff that never touches `site/**` — without these two paths this gate would
+# never fire for that change, the same silent-coverage-loss shape #1592 was filed for.
 on:
   pull_request:
     paths:
       - "site/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/site-ci.yml"
   push:
     branches: [main]
     paths:
       - "site/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/site-ci.yml"
   workflow_dispatch:
 
@@ -63,27 +73,26 @@ jobs:
     name: site build + lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: site
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: site/package-lock.json
+          cache: pnpm
 
-      # npm, not pnpm: site/ is its own npm project (own package-lock.json), not a pnpm
-      # workspace member. `pnpm-workspace.yaml` at the repo root declares no packages.
-      - run: npm ci
+      # Install runs at the repo ROOT — see the header note. site/ has no lockfile of its own
+      # since #1597; its deps resolve out of pnpm-lock.yaml at the root.
+      - run: pnpm install --frozen-lockfile
 
       # Typechecks (via the Next TS plugin) AND performs the static-generation pass — see the
       # header note on why no separate `tsc` step is added.
-      - run: npm run build
+      - run: pnpm run build
+        working-directory: site
 
       # `next lint`, backed by `site/eslint.config.mjs` (flat config, `next/core-web-vitals` via
       # `FlatCompat`). See the header note: without an eslint dependency present this exited 1 on
       # an unanswerable interactive setup prompt and never ran a real lint check.
-      - run: npm run lint
+      - run: pnpm run lint
+        working-directory: site

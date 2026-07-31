@@ -1,6 +1,11 @@
 // Non-destructive write-attempt probe logic (Harvey #888), split out from page.tsx so it can be
 // unit-tested offline against the exact PostgREST response shapes measured on a local stack.
 //
+// It lived in site/ until #1597 (2026-07-30) — not by design, but because site/ deployed alone and
+// could not import from src/. Its only consumer is still the free RLS checker
+// (site/app/supabase-security-checker/page.tsx), which now imports it from here across a boundary
+// that no longer exists.
+//
 // SAFETY — why this never persists a row. The probe sends an INSERT that is GUARANTEED to fail
 // validation: it omits every column, so any table with at least one NOT-NULL-without-default column
 // (PostgREST lists these in `definitions[table].required`) raises 23502 (not-null violation) and the
@@ -14,7 +19,7 @@
 // ever writing. If the table has NO required column we CANNOT guarantee non-persistence, so the probe
 // is skipped for that table (disclosed, never a silent gap) rather than risking a stored row.
 
-export type WriteVerdict =
+type WriteVerdict =
   | "writable" // RLS/grant let the row through; only the deliberately-omitted column stopped it
   | "denied" // grant or RLS WITH CHECK rejected the row (the good outcome)
   | "persisted" // a 2xx came back — MUST NOT happen with an all-columns-omitted body; a default/trigger backfilled the column

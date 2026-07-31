@@ -1,2 +1,15 @@
+# site/ is a workspace member (#1597): until 2026-07-30 it was a separate npm project with its own
+# package-lock.json, which is why shared logic had to be RELOCATED into site/ instead of imported
+# from src/ (see src/site/write-probe.ts, moved back across that boundary by this change).
+packages:
+  - site
+
 allowBuilds:
   esbuild: true
+  # Both arrive with site/'s Next toolchain and both are DENIED, not merely unrecorded — pnpm 11
+  # makes an unrecorded ignored build a fatal install error, so a silent "we never decided" is not
+  # available. MEASURED 2026-07-30 with both denied: `next build` and `next lint` both exit 0
+  # (site/ ships no next/image usage, and eslint-config-next resolves without unrs-resolver's
+  # native binary). Flip one to true only with a measurement showing what it fixes.
+  sharp: false
+  unrs-resolver: false

@@ -4,7 +4,12 @@ import { useState } from "react";
 import Link from "next/link";
 import SiteHeader from "../components/SiteHeader";
 import SiteFooter from "../components/SiteFooter";
-import { canProbeWrite, classifyWriteResponse, pgCodeOf } from "./write-probe";
+// #1597: imported from the repo's own src/ rather than a copy relocated into site/. site/ is a
+// pnpm workspace member and the Vercel deploy now uploads the repo root, so this import crosses
+// what used to be a hard boundary. MEASURED 2026-07-30: `next build` needs no
+// `experimental.externalDir` for it — the compiled module lands in
+// .next/static/chunks/app/supabase-security-checker/page-*.js (grep 23502).
+import { canProbeWrite, classifyWriteResponse, pgCodeOf } from "../../../src/supabase-write-probe";
 import { SUPPORT_EMAIL } from "../lib/constants";
 
 type Probe = { table: string; status: "warn" | "ok" | "info"; label: string; detail: string };

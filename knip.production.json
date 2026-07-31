@@ -1,19 +1,32 @@
 {
-  "entry": [
-    "src/findings.ts",
-    "src/cli/*.ts",
-    "report-template/render.mjs",
-    "tools/*.mjs",
-    "epic-builder-web/app/**/*.{ts,tsx}",
-    "epic-builder-web/lib/*.ts"
-  ],
-  "project": [
-    "src/**/*.ts",
-    "!src/**/*.test.ts",
-    "report-template/*.mjs",
-    "tools/*.mjs",
-    "epic-builder-web/{app,lib}/**/*.{ts,tsx}"
-  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/findings.ts",
+        "src/cli/*.ts",
+        "report-template/render.mjs",
+        "tools/*.mjs",
+        "epic-builder-web/app/**/*.{ts,tsx}",
+        "epic-builder-web/lib/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "!src/**/*.test.ts",
+        "report-template/*.mjs",
+        "tools/*.mjs",
+        "epic-builder-web/{app,lib}/**/*.{ts,tsx}"
+      ]
+    },
+    "site": {
+      "entry": [
+        "app/**/*.{ts,tsx}"
+      ],
+      "project": [
+        "app/**/*.{ts,tsx}",
+        "!app/**/*.test.ts"
+      ]
+    }
+  },
   "vitest": false,
   "ignoreExportsUsedInFile": true,
   "rules": {

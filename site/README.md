@@ -9,9 +9,14 @@ Design and copy are ported 1:1 from the approved prototype in the main repo
 
 ## Run it locally
 
+Since #1597 this is a **pnpm workspace member of the repo root**, not a separate npm project:
+there is no `site/package-lock.json`, and one `pnpm install` at the repo root provisions it.
+
 ```bash
-npm install
-npm run dev
+cd ..            # repo root
+pnpm install     # provisions site/ too
+cd site
+pnpm dev
 ```
 
 Then open http://localhost:3000 — this is the real site (no claude.ai account needed).
@@ -35,7 +40,7 @@ clear "not set up yet" message rather than silently dropping leads — but it *i
 every lead, which is what happened in production for five days (#721/#1308):
 
 ```bash
-cd site
+cd ..    # repo root — the Vercel link lives here since #1597
 printf '%s' "$RESEND_KEY" | vercel env add RESEND_API_KEY production
 printf '%s' "$NOTIFY_INBOX" | vercel env add SCAN_NOTIFY_TO production
 vercel env ls                      # confirm both are listed
@@ -58,19 +63,36 @@ lead capture is live, 503 when its env vars are unset. It submits no lead and se
 ## Build for production
 
 ```bash
-npm run build
-npm run start
+cd site
+pnpm build
+pnpm start
 ```
 
-## Deploy (needs operator action)
+## Deploy
 
-The site is ready to deploy to Vercel, but two one-time steps are yours:
+**Deploy from the REPO ROOT, not from here.** MEASURED 2026-07-30 on the `harvey` Vercel project
+(`prj_53NH7eOFAxXwoSKAMYO8Ye93qEer`): it has **no Git integration** — `link` is absent from the
+project record, so nothing deploys on a push and every deploy is a manual CLI upload of the
+directory you run it in. Since #1597 the project's **Root Directory is `site`** and the workspace
+manifests it needs (`pnpm-lock.yaml`, `pnpm-workspace.yaml`, root `package.json`) live one level up,
+so `cd site && vercel --prod` would upload a tree with no lockfile and fail.
 
-1. **Authenticate Vercel** (the Claude Code Vercel plugin, or `npx vercel login`).
-2. **Register the domain** `harvey-qa.com` (primary; optionally the no-hyphen
-   `harveyqa.com` as a defensive redirect), then point it at the Vercel project.
+```bash
+cd ..                 # repo root — this is what gets uploaded
+vercel deploy         # preview (SSO-protected; verifies the BUILD, not the content)
+vercel deploy --prod  # production
+pnpm exec tsx src/cli/site-smoke.ts   # verify LIVE — 6 checks against https://harvey-qa.com
+```
 
-Then `npx vercel --prod` (or connect the repo in the Vercel dashboard for auto-deploys).
+`.vercelignore` (repo root) is an allowlist: only `site/`, `src/` and the three root manifests are
+uploaded. A new top-level directory is excluded by default, so nothing starts shipping silently.
+
+To undo the layout entirely, set the project's Root Directory back to empty:
+
+```bash
+vercel api -X PATCH "/v9/projects/prj_53NH7eOFAxXwoSKAMYO8Ye93qEer?teamId=team_MIXzwKpnQSfuj3hd9ZyWVPPh" \
+  --input - <<< '{"rootDirectory":null}'
+```
 
 ## Structure
 
@@ -84,8 +106,8 @@ app/
   sitemap.ts            /sitemap.xml (all routes) — also the route CONTRACT the checks below use
   robots.ts             /robots.txt
   site-contract.test.ts Offline guard (#1308): sitemap ↔ page files ↔ internal links ↔ .env.example.
-                        Runs in the main repo's `pnpm verify`; imports nothing from `next`,
-                        because CI installs the repo root's deps but never site/node_modules
+                        Runs in the main repo's `pnpm verify`. Also guards (#1597) that no
+                        repo-root package shadows a version eslint-config-next pins
   components/
     SiteHeader.tsx      Shared nav + theme toggle (used by every page)
     SiteFooter.tsx      Shared footer (links to all real pages)
@@ -96,7 +118,9 @@ app/
   data-handling/        Trust page — repo/DB access, retention, deletion
   supabase-security-audit/       SEO service page (answer-first + FAQPage JSON-LD)
   supabase-security-checklist/   Interactive checklist (scanner-vs-live-test column)
-  supabase-security-checker/     Free client-side RLS checker (browser-direct anon-read probe)
+  supabase-security-checker/     Free client-side RLS checker (browser-direct anon-read probe).
+                                 Its write-probe logic lives at ../src/supabase-write-probe.ts
+                                 since #1597 and is IMPORTED across what used to be a hard boundary
   multi-tenant-security-supabase/  Pillar guide (Article JSON-LD)
 public/
   favicon.svg    🔍 emoji favicon

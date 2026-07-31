@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canProbeWrite, classifyWriteResponse, pgCodeOf, requiredColumns } from "./write-probe";
+import { canProbeWrite, classifyWriteResponse, pgCodeOf, requiredColumns } from "./supabase-write-probe.js";
 
 // The response shapes below are the ONES MEASURED 2026-07-26 against postgres:16-alpine +
 // postgrest:v14.12 (docs/design/postgrest-write-eval-order.md). Keeping the fixture faithful to the
