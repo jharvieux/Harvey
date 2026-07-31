@@ -654,20 +654,42 @@ interface ClientOwnerIdResult {
   subsumedNoAuthActions: Set<ts.Node>;
 }
 
+// #1434: this detector tested AUTH_PATTERN against the action's RAW text, which is wrong twice
+// over. It is the only remaining raw-text use of that pattern — its sibling
+// detectServerActionAuthAndValidation blanks literals/comments (#845) and resolves callees
+// (#1263) — and the divergence reached the client: an action gated by a house-style helper got a
+// finding whose evidence read "makes no auth/session call at all", a false assertion about the
+// client's code on the higher-severity of the two findings.
+//
+// The two uses of `hasAuth` here are SEPARABLE and the issue asked which one moves. Both do, and
+// they move together, because the resolved form lands on the same policy the inline form
+// already has: `collectSessionBoundNames` only ever binds off an initializer matching
+// AUTH_PATTERN, so a gate reached through a callee binds NOTHING in the action body and therefore
+// always hits the `auth called, nothing bound → stay silent` rule below. That is exactly what an
+// inline `await requireUser()` gets today. So resolving the callee is a pure SUPPRESSION with no
+// new policy — the #1263 property — and it makes the no-auth evidence sentence true by
+// construction: it can now only be emitted when neither the body nor any resolvable helper
+// authenticates.
 function detectClientSuppliedOwnerId(
   sources: Map<string, ts.SourceFile>,
   nextId: NextId,
   mutationsFor: (path: string, sf: ts.SourceFile) => ServerMutation[],
   noun: string,
+  aliases: PathAlias[],
 ): ClientOwnerIdResult {
   const findings: Finding[] = [];
   const subsumedNoAuthActions = new Set<ts.Node>();
+  const gates = new GateResolver(sources, aliases);
   for (const [path, sf] of sources) {
     for (const action of mutationsFor(path, sf)) {
       const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
       if (!isDbMutationChain(text)) continue;
 
-      const hasAuth = AUTH_PATTERN.test(text);
+      // Literals and comments blanked first (#845): a `// TODO: add auth` used to vouch for the
+      // action here and silence it through the rule below — a false negative on the raw test.
+      const inBodyAuth = AUTH_PATTERN.test(stripLiteralsAndComments(sf, action.node));
+      const gate = inBodyAuth ? undefined : gates.gateIn(AUTH_PATTERN, path, action.node);
+      const hasAuth = inBodyAuth || gate !== undefined;
       const sessionNames = collectSessionBoundNames(action.node, sf);
       // Auth was called but nothing was bound from it (`await requireUser()` for its throw, or
       // an `assertPermission(…)` role gate). Whether the client value is authorized then depends
@@ -709,7 +731,13 @@ function detectClientSuppliedOwnerId(
           location: loc(path, sf, site.node),
           evidence: hasAuth
             ? `\`${action.name}\` authenticates the caller (binding \`${sessionName}\`) but decides which row it writes with \`${siteText}\` on a value that comes from the action's own arguments, not from \`${sessionName}\`. No comparison between the two appears in the body.`
-            : `\`${action.name}\` makes no auth/session call at all and runs on the service-role client (RLS bypassed), deciding which row it writes with \`${siteText}\` on a value from its own arguments. Nothing anywhere checks the caller may touch that row.`,
+            // #1434: the old sentence read "makes no auth/session call at all … Nothing anywhere
+            // checks the caller may touch that row" — two claims this check never established. It
+            // reads the action's own body and, since #1263's resolver was wired in above, the body
+            // of every helper it can resolve to a declaration in the scanned tree. A gate reached
+            // only through a package import is still invisible, so the sentence states its bound
+            // instead of asserting the universal.
+            : `\`${action.name}\` runs on the service-role client (RLS bypassed) and decides which row it writes with \`${siteText}\` on a value from its own arguments, with no auth/session call in its body and none in any helper it calls that this pass could resolve to a declaration in the scanned tree. No check on the caller's right to that row was found in what it could read.`,
           impact:
             "The caller is never authorized for the row: any user can pass another user's/tenant's id and mutate (or take ownership of) their data. Schema validation does not close this — a well-formed id from the wrong tenant still passes.",
           fix: hasAuth
@@ -2863,7 +2891,7 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
 
   // Owner-id runs first: its subsumed-action set feeds the missing-auth dedupe (#465).
   const ownerId = S.has("client-owner-id")
-    ? detectClientSuppliedOwnerId(sources, nextId, mutations, adapter.mutationNoun)
+    ? detectClientSuppliedOwnerId(sources, nextId, mutations, adapter.mutationNoun, collectPathAliases(files))
     : { findings: [] as Finding[], subsumedNoAuthActions: new Set<ts.Node>() };
 
   // The three Supabase-shaped data-layer checks run only on a Supabase/unknown data layer; on a

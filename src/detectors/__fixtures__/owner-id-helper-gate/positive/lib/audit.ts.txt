@@ -1,0 +1,12 @@
+import { createServiceClient } from "./supabase";
+
+// Reads the session for the log line and stops nothing: no throw, no redirect, and the caller
+// discards what it returns.
+export async function auditLog(event: string, subjectId: string) {
+  const supabase = createServiceClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  console.log(event, subjectId, "by", user?.id);
+}

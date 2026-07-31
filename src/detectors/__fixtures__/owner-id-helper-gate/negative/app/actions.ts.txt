@@ -1,0 +1,19 @@
+"use server";
+
+// #1434 — P-SVC-NOAUTH-BARE-ID's exact shape (no in-body auth, service-role client, bare
+// `.eq("id", userId)` on a client value) with ONE difference: the caller is gated by a
+// house-style helper. `ensureMember` throws, so it can deny. The old raw-text AUTH_PATTERN test
+// could not see it and told the client this action "makes no auth/session call at all".
+//
+// Nothing must fire here. That is the same answer an inline `await requireUser()` already gets:
+// auth happened and bound nothing, so what the client value is checked against lives beyond the
+// reach of this AST pass.
+import { createServiceClient } from "../lib/supabase";
+import { ensureMember } from "../lib/guards";
+
+export async function updateUserProfile(userId: string, displayName: string) {
+  await ensureMember(userId);
+
+  const supabaseService = createServiceClient();
+  await supabaseService.from("users").update({ display_name: displayName }).eq("id", userId);
+}

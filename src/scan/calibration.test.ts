@@ -1245,6 +1245,8 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "action-dynamic-gate", dir: "server-action-dynamic-gate", neg: "negative" },
     { check: "ssr-module-helper", dir: "ssr-module-helper", neg: "negative" },
     { check: "waterfall-helper-exit", dir: "waterfall-helper-exit", neg: "negative" },
+    // #1434, the last raw-text AUTH_PATTERN test in the pass. Same inverted scoring.
+    { check: "owner-id-helper-gate", dir: "owner-id-helper-gate", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {

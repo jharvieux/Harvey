@@ -1,0 +1,15 @@
+import { createServiceClient } from "./supabase";
+
+// A real gate: it reads the session and it can DENY (#1439 — a helper that only LOOKS at the
+// session is not a gate; see the positive-helper-logger fixture).
+export async function ensureMember(userId: string) {
+  const supabase = createServiceClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("unauthenticated");
+
+  const { data: membership } = await supabase.from("memberships").select("id").eq("user_id", user.id).single();
+  if (!membership) throw new Error("forbidden");
+  return membership;
+}
