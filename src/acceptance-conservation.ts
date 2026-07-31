@@ -739,7 +739,7 @@ interface AcceptanceExtras {
 
 /**
  * Every surface OTHER than the body under test that disposition lines are read out of, for one
- * closing reference. Both gates call this and nothing else, so the venue sets cannot drift apart.
+ * closing reference. Both gates call this and nothing else, so the venue sets stay identical.
  */
 function venuesOf(c: ClosingRef, lookup: IssueLookup, selfPr?: string): Venue[] {
   const record = lookup(c.number, c.repo);

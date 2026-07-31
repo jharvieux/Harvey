@@ -128,7 +128,7 @@
       ],
       "note": "#1568. Gate 4 and gate 4b share one job and one in-job filter, so a filter that stopped matching would retire BOTH in a green run. Two ids because they score different populations — semgrep rules read for a comment-declared bound, and modules with sibling scan paths — and one id would let either stand in for the other.",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30635904468",
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30642383231",
         "at": "2026-07-31"
       }
     },
@@ -140,7 +140,7 @@
       ],
       "note": "#1568. The marker-label pass is the one assertion in this repo NO DIFF CAN SPEAK TO, so a run that died before reaching it reports an absence that reads exactly like 'every label exists'. The three seeded controls are a separate claim and sit behind the in-job filter, so they get their own id and their own declared no-op.",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30635906115",
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30642388855",
         "at": "2026-07-31"
       }
     },
@@ -152,7 +152,7 @@
       ],
       "note": "#1568. `acceptance-pr` rides inside `if: github.event_name == 'pull_request'`, so the assert's `expect` is EVENT-dependent the way ci.yml's is matrix-dependent. The self-test is the gate's negative control and is its own claim.",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30635907715",
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30642393900",
         "at": "2026-07-31"
       }
     },
@@ -164,7 +164,7 @@
       ],
       "note": "#1568, and the sharpest case in the registry: this job runs on `issues: [closed]`. It answers to no PR, it is on no schedule and it raises no alarm, so a run that dies in setup posts no comment, re-opens nothing, and is indistinguishable from a close it had no objection to. `acceptance-close` records a DECLARED NO-OP on the bot-issue exemption rather than a count, because 'not assessed on purpose' and 'never got there' must not share a channel.",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30635909442",
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30642422222",
         "at": "2026-07-31"
       }
     },

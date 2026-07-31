@@ -79,7 +79,7 @@ enforces these against it:
 workflow that installs the mechanical binaries", a PROXY for "heavy enough to die in setup", chosen
 because that is literally what #1509 broke. It left NINE workflows outside the registry by
 construction — and, measured on adoption, two more that #1568's own list of nine did not think to
-name (`semantic-freshness`, `site-ci`). A proxy cannot be widened into exhaustiveness; it has to be
+name (`semantic-freshness`, `site-ci`). A proxy does not become exhaustive by being widened; it has to be
 replaced by it.
 
 Registered as gates: `corpus-drift`; `conservation` (gate + negative controls); `dry-run-drift`
@@ -137,7 +137,7 @@ failing direction (#1287's own finding). Eleven drills were dispatched on 2026-0
 the gate-liveness assert was the ONLY failing step, with `GATE LIVENESS: FAILED` naming the gate ids
 that never reached their measuring phase. `corpus-drift`'s drill additionally proved #1586's
 criterion 4 in the other direction: shard 1 failed on the assert alone and the aggregate job carrying
-the required context failed with it, so a shard that scored nothing cannot pass the aggregate.
+the required context failed with it, so a shard that scored nothing never passes the aggregate.
 
 `pendingProof` is the one disclosed way a gate may sit here unproven, and it is built to fail loud:
 `why`, an OPEN `tracking` issue and `since` are all required, and it is mutually exclusive with
@@ -153,21 +153,27 @@ from that same branch the same hour all ran. `supervised-declines` therefore lan
 
 ## Every new gate id, MEASURED on a real run (#1568 criterion 3)
 
-Not "the step exists" — the receipt, with its unit count, off a real run. All of these are from
-PR #1697's own CI run (30639911394) unless stated.
+Not "the step exists" — the receipt, with its unit count, off a real run. Every job below is from
+PR #1697, and each workflow gets its OWN run id: there is no single "the PR's CI run" to cite, which
+is how an earlier draft of this table came to name one (`30639911394`) that returns HTTP 404. The
+run column is therefore per row, resolved from each job id via
+`gh api repos/jharvieux/Harvey/actions/jobs/<job>`.
 
-| gate id | units | run |
-| --- | ---: | --- |
-| `disclosure-venue` | 113 semgrep rules | job 91185487205 |
-| `conditional-scan` | 1 module with sibling scan paths | job 91185487205 |
-| `alert-paths` | 15 alert paths across 18 workflows | job 91185485326 |
-| `alert-paths-negative-controls` | 3 seeded controls | job 91185485326 |
-| `acceptance-selftest` | 12 hermetic cases | job 91185484982 |
-| `acceptance-pr` | 8 issues + remainders | job 91185484982 |
-| `m2-coverage-gate` | 1 enumerated M2 target | job 91185517613 |
-| `supervised-declines-selftest` | 9 hermetic cases | job 91185487911 |
-| `acceptance-close-selftest` | 8 hermetic cases | run 30640273614 |
-| `acceptance-close` | 1 closed issue over 3 surfaces | run 30640273614 |
+| gate id | units | job | run |
+| --- | ---: | --- | --- |
+| `disclosure-venue` | 113 semgrep rules | 91185487205 | 30639491696 |
+| `conditional-scan` | 1 module with sibling scan paths | 91185487205 | 30639491696 |
+| `alert-paths` | 15 alert paths across 18 workflows | 91185485326 | 30639491130 |
+| `alert-paths-negative-controls` | 3 seeded controls | 91185485326 | 30639491130 |
+| `acceptance-selftest` | 12 hermetic cases | 91185484982 | 30639491150 |
+| `acceptance-pr` | 8 issues + remainders | 91185484982 | 30639491150 |
+| `m2-coverage-gate` | 1 enumerated M2 target | 91185517613 | 30639491070 |
+| `supervised-declines-selftest` | 9 hermetic cases | 91185487911 | 30639491925 |
+| `acceptance-close-selftest` | 8 hermetic cases | — | 30640273614 |
+| `acceptance-close` | 1 closed issue over 3 surfaces | — | 30640273614 |
+
+`supervised-declines-selftest` scored **9** on that run and scores **17** after the precision fix
+below; the run above is cited for what it measured on the day, not as the current count.
 
 `supervised-declines` (the live scan) is the one id with no MEASURED run: it runs on no
 `pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.

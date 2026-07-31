@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { readNamesSafe } from "./fs-walk.js";
 import { recordMeasured } from "./ci-liveness.js";
 
@@ -171,7 +172,7 @@ describe("the registry — a new gate job cannot join without a liveness assert"
   // #1568 replaced a PROXY with the population. The rule used to be "workflows that install the
   // mechanical binaries", chosen because that is what #1509 broke — and it left nine workflows
   // outside the registry BY CONSTRUCTION, including two (semantic-freshness, site-ci) that #1568's
-  // own list of nine did not think to name. A proxy cannot be widened into exhaustiveness; it has
+  // own list of nine did not think to name. A proxy does not become exhaustive by being widened; it has
   // to be replaced by it. Every workflow file is now a row, so a new one can only be CLASSIFIED,
   // never omitted.
   const allWorkflows = readNamesSafe(WORKFLOWS)
@@ -254,9 +255,20 @@ describe("the registry — a new gate job cannot join without a liveness assert"
   // file and fails a run that scored perfectly. MEASURED 2026-07-31: five workflows landed without
   // it and all five went red on their first real CI run. A drill cannot catch this — the drill
   // expects a red job.
-  it("every gate's job pins the receipt path, or its producer and its asserter disagree about the file", () => {
+  // Scoped to the JOB THAT ASSERTS, not to the file. A file-wide `grep` passes when the pin sits on
+  // some OTHER job — corpus-drift.yml already has plan/shard/aggregate jobs, so the shape is present
+  // in this repo today — and the asserting job would still read an empty receipt while this check
+  // stayed green. That is the same "green and executed are different facts" failure the whole
+  // registry exists to close, so it may not sit inside the registry's own guard.
+  it("the job that ASSERTS liveness is the job that pins the receipt path", () => {
     for (const gate of registry.gates) {
-      expect(text(gate.workflow), `${gate.workflow} sets a job-level HARVEY_LIVENESS_RECEIPT`).toMatch(/^\s+HARVEY_LIVENESS_RECEIPT:\s*\S+/m);
+      const doc = parse(text(gate.workflow)) as { env?: Record<string, unknown>; jobs: Record<string, { env?: Record<string, unknown>; steps?: { uses?: string; with?: { mode?: string } }[] }> };
+      const asserting = Object.entries(doc.jobs).filter(([, job]) => job.steps?.some((s) => s.uses?.includes("gate-liveness") && s.with?.mode === "assert"));
+      expect(asserting.length, `${gate.workflow} has no job running gate-liveness in assert mode`).toBeGreaterThan(0);
+      for (const [name, job] of asserting) {
+        const pinned = job.env?.HARVEY_LIVENESS_RECEIPT ?? doc.env?.HARVEY_LIVENESS_RECEIPT;
+        expect(pinned, `${gate.workflow} job \`${name}\` asserts liveness but does not pin HARVEY_LIVENESS_RECEIPT — it would assert against a file its own recorder never wrote`).toBeTruthy();
+      }
     }
   });
 

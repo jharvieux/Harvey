@@ -12,7 +12,7 @@
 
 // Per-target scan cost in SECONDS.
 //
-// PROVENANCE: MEASURED from CI run 30584076405 (job `clone pinned commits + score baselines`,
+// PROVENANCE: MEASURED from CI run 30584074986 (job `clone pinned commits + score baselines`,
 // 2026-07-30, a full `--install` scoring pass over every target). Derived from the per-target
 // `=== <slug> (<repo> @ <sha>) ===` banners corpus-drift.ts prints: each target's cost is the
 // interval between its banner and the next one, and the last target's is the interval to the

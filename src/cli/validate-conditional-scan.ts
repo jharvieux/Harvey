@@ -89,7 +89,7 @@ function main(): void {
   }
 
   // #1568: gate 4b rides inside the disclosure-venue job, whose in-job filter can make it a green
-  // no-op. Its own receipt, so "the job was green" cannot stand in for "4b scored anything".
+  // no-op. Its own receipt, so "the job was green" never stands in for "4b scored anything".
   recordMeasured("conditional-scan", CONDITIONAL_SCANS.length, `modules with sibling scan paths audited (${declaredOmissions.length} omissions declared)`);
 
   console.log(

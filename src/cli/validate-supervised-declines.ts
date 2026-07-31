@@ -14,7 +14,7 @@
 // A control that accepted "non-zero" would go green on exit 2 (#1246).
 //
 // --since-days defaults to 1, matching the daily cadence: the scan is over what merged since the
-// last run, so a standing backlog of historical instances cannot make it permanently red. The
+// last run, so a standing backlog of historical instances never makes it permanently red. The
 // historical population is in the issue and in the report's own footer, not in this exit code.
 
 import { spawnSync } from "node:child_process";
@@ -116,7 +116,7 @@ for (const pr of prs) {
       unrelayed++;
       console.log(`✗ PR #${pr.number} line ${hit.line} — UNRELAYED DECLINE (${v.detail})`);
       console.log(`    ${hit.text.slice(0, 220)}`);
-    } else if (v.relay === "nothing-owed") {
+    } else if (v.relay === "nothing-owed" || v.relay === "met-criterion") {
       notADecline++;
       console.log(`ℹ PR #${pr.number} line ${hit.line} — not a decline (${v.detail})`);
     } else {
@@ -137,16 +137,30 @@ console.log("\nRoutinely granted — a decline naming one of these is a permissi
 for (const g of ROUTINELY_GRANTED) console.log(`  ${g.path}\n    ${g.evidence}`);
 console.log(
   "\nA supervised path stops the EDIT, never the CRITERION: record the question ON THE ISSUE with the exact\n" +
-    "wording you propose, and name it in the PR body. A filed tracker is not a relay — PR #1481 filed #1483\n" +
-    "and #1483 asks the operator nothing, which is why this check still counts that decline.",
+    "wording you propose, and name it in the PR body. A filed tracker is not a relay: PR #1481 filed #1483,\n" +
+    "#1483 asked the operator nothing, and the work sat undone for four days. It is the RIGHT answer that\n" +
+    "clears this check, and #1483 has since been given one — so `--pr 1481` reads clean today. The check\n" +
+    "reads an issue's CURRENT state by design; a decline is relayed the moment someone writes the question.",
 );
 
-// The bound, stated on every run rather than left for a reader to assume it away: this is a
-// KEYWORD scan over prose. A decline phrased outside the vocabulary is invisible to it, so the
-// count below is a LOWER bound and its silence is not a clean bill of health.
+// The bound, stated on every run rather than left for a reader to assume it away. It runs in BOTH
+// directions on purpose: the first version disclosed only the recall floor, which reads as "anything
+// it does flag is real" — and on this check's own first window that was the false half. MEASURED
+// 2026-07-31, `--since-days 1` over 72 merged PRs: 4 flagged, at least 3 of them false (a heading
+// whose relay sat one paragraph below, a verbatim quoted grant the word list could not read, and an
+// `ACCEPTANCE … met` disposition). Those three causes are fixed; the residual precision bound below
+// is the one that survives, and it is a live instance, not a hypothetical.
 console.log(
-  `\nBOUND: ${unrelayed + relayed + notADecline} paragraph(s) matched a supervised-path signal AND a decline verb.` +
-    ` A decline phrased outside that vocabulary is not counted here — this is a floor, not a census.`,
+  `\nBOUND — RECALL: ${unrelayed + relayed + notADecline} paragraph(s) matched a supervised-path signal AND a decline verb.` +
+    ` A decline phrased outside that vocabulary is not counted here — this is a floor, not a census.` +
+    `\nBOUND — PRECISION: a flag is a paragraph to READ, not a proven defect. The check cannot tell which of several` +
+    `\n  files named in one paragraph a decline verb attaches to, so a sentence like "CLAUDE.md is not edited here;` +
+    `\n  the falsified sentences are elsewhere and are corrected in place" is reported as a decline (live: PR #1683` +
+    `\n  line 36, MEASURED 2026-07-31). Triage a flag before acting on it.` +
+    `\nAND THE SAME BOUND RUNS THE OTHER WAY: a relay is credited from the whole markdown SECTION, so a decline in a` +
+    `\n  section naming many issues is cleared if ANY ONE of them asks the operator something — about anything. The` +
+    `\n  verdict names which issue cleared it for exactly this reason (live: PR #1481 line 162, cleared via #1319,` +
+    `\n  MEASURED 2026-07-31). A "relayed" line is evidence to check, not a verdict to trust.`,
 );
 
 if (unrelayed > 0) {

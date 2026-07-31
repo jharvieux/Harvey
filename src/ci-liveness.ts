@@ -42,7 +42,7 @@ export function recordMeasured(gate: string, units: number, scope: string): void
  * a gate CLI, which is the only place that knows it short-circuited.
  *
  * It is NOT a quieter pass: the asserter prints DECLARED NO-OP as its own headline, so a reader
- * cannot mistake it for a scoring run. Omitting it instead would be the silent omission — a run
+ * never reads it as a scoring run. Omitting it instead would be the silent omission — a run
  * that scored nothing on purpose and a run that died before scoring would both leave an empty
  * receipt.
  */
