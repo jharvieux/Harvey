@@ -26,6 +26,7 @@ import { ingestFixDiff } from "../fix/interactive.js";
 import { intake, type EngagementManifest } from "../fix/pipeline.js";
 import { fileOfLocation } from "../fix/produce-plan.js";
 import { DEFAULT_CAPS, detectLateConflict, runScheduled, scheduleFixes, type ScheduleNode } from "../fix/schedule.js";
+import type { BaselineCache } from "../fix/verify-harness.js";
 
 const args = process.argv.slice(2);
 const VALUE_FLAGS = new Set(["--target", "--out"]);
@@ -120,6 +121,14 @@ let peakSlots = 0;
 let liveChecks = 0;
 let peakClientChecks = 0;
 let clientCheckMs = 0;
+// #1529. The whole batch is pinned to ONE baselineCommit against ONE checkout, so a baseline run is
+// identical for every finding that discovers the same command — and running it per finding made an
+// N-fix batch execute the client's own suite 2N times. One map, owned here for the run's lifetime,
+// so each distinct command is baselined once. Safe without a per-key promise while the ingest is
+// synchronous end to end (#1464): two workers never interleave inside `baseline()`.
+const baselineCache: BaselineCache = new Map();
+let baselineRequested = 0;
+let baselineExecuted = 0;
 await runScheduled(
   components,
   async (component, clientCheck) => {
@@ -144,13 +153,20 @@ await runScheduled(
               baselineCommit: manifest.baselineCommit,
               allowlist: manifest.allowlist,
               diffCap: manifest.diffCap,
+              baselineCache,
             });
           } finally {
             liveChecks--;
           }
         });
         const execution: ScoredExecution = { ...ingest.execution, green: ingest.green, rejectReason: ingest.rejectReason };
+        // BOTH halves of the client's suite. It used to count only the fixed-worktree run, so the
+        // baseline — the half #1529 is about — was invisible in the one number the CLI prints as
+        // "spent in the client's own suite", and sharing the baseline would have moved it by zero.
         for (const c of ingest.evidence.clientChecks) clientCheckMs += c.durationMs;
+        clientCheckMs += ingest.baseline.durationMs;
+        baselineRequested += ingest.baseline.requested;
+        baselineExecuted += ingest.baseline.executed;
         executions.push(execution);
         outcomes.push({
           findingId,
@@ -226,6 +242,10 @@ writeFileSync(
       baselineCommit: manifest.baselineCommit,
       targetDir,
       concurrency: { ...DEFAULT_CAPS, componentsScheduled: components.length, peakSlots, peakClientChecks, clientCheckMs, note: CONCURRENCY_NOTE },
+      // #1529: `requested` is what the batch asked the baseline for, `executed` is what it actually
+      // ran. Both are reported, so a regression that drops the shared cache shows up as the two
+      // numbers converging rather than as a run that is quietly twice as long.
+      baseline: { commandsRequested: baselineRequested, commandsExecuted: baselineExecuted, cacheHits: baselineRequested - baselineExecuted },
       lateConflicts,
       executions,
       awaitingImplementer,
@@ -260,7 +280,11 @@ if (awaitingImplementer.length) {
 }
 console.log(
   `\nScheduling: ${components.length} independent component(s), caps ${DEFAULT_CAPS.maxSlots} slot(s)/${DEFAULT_CAPS.maxClientChecks} client-check(s),` +
-    ` peak slots observed ${peakSlots}, peak client checks observed ${peakClientChecks}, ${clientCheckMs}ms spent in the client's own suite — ${CONCURRENCY_NOTE}.`,
+    ` peak slots observed ${peakSlots}, peak client checks observed ${peakClientChecks}, ${clientCheckMs}ms spent in the client's own suite (baseline + fixed) — ${CONCURRENCY_NOTE}.`,
+);
+console.log(
+  `Baseline: ${baselineExecuted} of ${baselineRequested} requested command run(s) actually executed` +
+    ` — the batch is pinned to one commit against one checkout, so ${baselineRequested - baselineExecuted} were served from the shared baseline (#1529).`,
 );
 for (const lc of lateConflicts) {
   console.log(

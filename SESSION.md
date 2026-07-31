@@ -2,7 +2,69 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** Rounds 1–2 are closed out (8 PRs merged, net −5 on the tracker). Round 3 opened the 177-issue tiered backlog. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
+_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** 9 round-3 PRs merged, 4 stacked behind a token blocker, 4 executors live. Tracker 189 → 166. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
+
+## 2026-07-31 (round 3, mid-sweep state) — READ THIS BEFORE RESUMING
+
+### The one thing only the operator can unblock
+
+**The `gh` token lacks the `workflow` OAuth scope.** `gh auth status` → `gist, read:org, repo`. Any PR touching `.github/workflows/**` is refused at merge:
+
+```
+HTTP 403  refusing to allow an OAuth App to create or update workflow
+          `.github/workflows/ci.yml` without `workflow` scope
+```
+
+**Fix: `gh auth refresh -h github.com -s workflow`.**
+
+The trap is that `gh pr merge` reports *"the base branch policy prohibits the merge"*, which sends you through branch protection, rulesets, review requirements and check-run duplicates — all clean. Only the raw REST endpoint gives the real reason. **Unexplained:** PR #1614 modified `ci.yml` and squash-merged fine ten minutes earlier with the same token. Do not treat "it worked once" as evidence the scope is present.
+
+### Merge order when the token is refreshed
+
+| PR | state | note |
+|---|---|---|
+| **#1643** | all green, close-set `[1333,1402,1516]` | merge FIRST (16 files) |
+| **#1644** | all green, verified all-met | rebase after #1643; **line-level conflict** in `src/alert-paths.ts`, `.test.ts`, `src/cli/validate-alert-paths.ts` — resolution must preserve BOTH `staleProofs`/`sourceSha` (#1644) and `seedClosedTrackingPopulation`/`SYNTHETIC_HATCH` (#1643) |
+| **#1613** | all green, verified all-met | independent of the other two |
+
+`#1536` and `#1611` are **drilled and proven** (runs 30605913478 / 30605914742) but stay open until #1643 lands, because the hatch removal lives in it.
+
+### Live executors (do not dispatch into these files)
+
+`m9-1292` · `m1-1240` · `m1-1269` · `m5-1532` — all four mutually conflict-free.
+
+### The pattern this sweep is actually finding
+
+**Inherited figures fail re-measurement, repeatedly.** Every one below was caught by someone re-running the measurement rather than repeating it:
+
+| claimed | measured |
+|---|---|
+| `48/384` rule-shaped findings | different predicate than the code used |
+| `318/321` static positives | value after commit 1 of 4, reported as final |
+| `13 of 409` PR comments | **9 of 413** under the repo's own published predicate |
+| `6` missing M9 checks | **8** |
+| `21 vs 26` catalog classes | **29 vs 28 — ahead, not behind** |
+| `three` workflows / `four` consumers | **four** / **six** |
+| `40 files / 143` call sites | **44 / 151**, and `git grep -c` counts lines not call sites |
+
+The last is a distinct sub-species: the number was **reproducible but mislabelled** — the command ran and gave that answer, it just did not measure what its label said.
+
+**And a recorded reason was false in THREE places at once** (#1333): `alert-paths.json`'s `_why`, the workflow header, and `src/alert-paths.ts`'s reason block all claimed a drill is undispatchable before merge. Only the FILE must be on the default branch. Two `pendingProof` hatches were exemptions from a proof nothing was blocking. One copy still asserted it **eight seconds after** the dispatch that disproved it.
+
+### Environment hazard, filed as #1646
+
+**`grep -qv` exits 1 under the agent shell but 0 under `/usr/bin/grep`.** `grep` is a Claude Code shell function that re-execs as `ugrep`; it forwards to `command grep` only for an allow-list that excludes `-qv`. The wrapper does **not** exist in an Actions `run:` step, so a falsifier can be authored and exercised by an agent and behave the opposite way in CI. Prefer `git grep -q` with a pathspec. Population unmeasured on purpose — other flag combos (`-c`, `-L`, `-o`, `-m`) are unchecked.
+
+### Standing traps confirmed live tonight
+
+- **Green on a stale head, twice.** #1613 and #1615 both reported ALL GREEN while their fix agents had not pushed. Check the head sha, not the colour.
+- **A gate that reports and does not block.** `validate-calibration` prints a review-tier recall miss and exits 0 (#1628) — for a review-tier detector a corpus row is bookkeeping, not a guard.
+- **A declared cadence that never runs is worse than a disclosed gap.** #1491's venue was registered while `supabase start` failed on every run, so `validate-scored-gates` asserted a venue that had never executed. Reverted to a disclosed gap.
+- **A closing keyword in prose still closes.** The supervisor's own note withdrawing `#1491` contained the literal string and re-added it to the close-set. GitHub's parser is negation-blind.
+
+### Four `instruction_updates` queued for CLAUDE.md (supervisor applies in ONE pass at wrap-up)
+
+One is marked `invalidated` — the `#1435` sentence claiming nothing gates the render seam end-to-end, false since 2026-07-28 and independently confirmed. Also pre-existing and worth tightening: CLAUDE.md says `validate-semantic` is the gate disclosed as running on no cadence; it is now **two**, with `validate-connected` (#1491) alongside it.
 
 ## 2026-07-31 (sweep, round 3) — the backlog is triaged; operator asleep, sweep running
 
