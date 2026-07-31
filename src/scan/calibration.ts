@@ -40,6 +40,8 @@ import { b22GhaPermissionsEntries } from "./calibration/b22-gha-permissions.entr
 import { b23D091GapEntries } from "./calibration/b23-d091-gaps.entries.js";
 import { b24ConnectedPostgrestRealtimeEntries } from "./calibration/b24-connected-postgrest-realtime.entries.js";
 import { b25DepProvenanceEntries } from "./calibration/b25-dep-provenance.entries.js";
+import { b26ClientTrustedValueEntries } from "./calibration/b26-client-trusted-value.entries.js";
+import { b27HeaderTrustEntries } from "./calibration/b27-header-trust.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
@@ -92,6 +94,8 @@ export const CORPUS: CorpusEntry[] = [
   ...b23D091GapEntries,
   ...b24ConnectedPostgrestRealtimeEntries,
   ...b25DepProvenanceEntries,
+  ...b26ClientTrustedValueEntries,
+  ...b27HeaderTrustEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,

@@ -479,8 +479,10 @@ const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
   "CWE-470": /\$\w+\[\$\w+\]\(/,
   // Credential-looking names in a URL QUERY STRING, which is CWE-598's whole subject.
   "CWE-598": /\[\?&\]/,
-  // Privilege flags taken from the client rather than decided on the server.
-  "CWE-602": /is_\?(admin|superuser|root|owner)/i,
+  // Server-owned values taken from the client rather than decided on the server: the privilege
+  // flags, and (#1373) the money/entitlement fields that are the same class in Harvey's taxonomy
+  // (briefs/scan-extras.txt:115 — "a client-supplied price, discount, trial length, role").
+  "CWE-602": /is_\?(admin|superuser|root|owner)|trial_\?\(days|unit_\?\(price\|amount\)/i,
   // A shell-spawning API, or an argv API explicitly opted into a shell.
   "CWE-78": /\bexecS?y?n?c?\(|child_process\.exec(Sync)?\(|shell: ?true/,
   // The HTML/DOM write surfaces and the escaping APIs whose absence is the defect.

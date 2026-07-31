@@ -82,9 +82,20 @@ export function workspacePackages(manifests: { path: string; text: string }[]): 
     }
     if (typeof pkg.name !== "string" || !pkg.name) continue;
     const dir = m.path.includes("/") ? m.path.slice(0, m.path.lastIndexOf("/")) : "";
-    const subpaths = exportsWildcards(pkg.exports)
-      .map((w) => ({ prefix: `${pkg.name}/${w.from}`, baseDir: joinRepoPath(dir, w.to) }))
-      // Longest specifier prefix first, so `./server-only/*` beats a catch-all `./*`.
+    const subpaths = [
+      ...exportsWildcards(pkg.exports).map((w) => ({ prefix: `${pkg.name}/${w.from}`, baseDir: joinRepoPath(dir, w.to) })),
+      // #1501: EXACT (non-wildcard) exports subpaths. #1353 shipped the wildcard form because that
+      // is what rallly declares; an exports map made of literal keys is at least as common and was
+      // skipped entirely. MEASURED 2026-07-31 on crbnos/carbon @92e19c04, whose `packages/auth`
+      // declares `"./auth.server": "./src/services/auth.server.ts"` and ten more like it:
+      // `resolveImport(…, "@carbon/auth/auth.server")` returned UNRESOLVED while
+      // packages/auth/src/services/auth.server.ts was present in the loaded tree, so every route
+      // action gated by `requirePermissions` imported from there read as ungated — 113 High
+      // `route action missing authorization check` rows, 111 of which are gated (#1501's triage).
+      ...exportsExact(pkg.exports).map((e) => ({ prefix: `${pkg.name}/${e.from}`, baseDir: joinRepoPath(dir, e.to) })),
+    ]
+      // Longest specifier prefix first, so `./server-only/*` beats a catch-all `./*`, and an exact
+      // key beats a wildcard that also covers it.
       .sort((a, b) => b.prefix.length - a.prefix.length);
     // A package with no wildcard exports still takes `<name>/<file>` against its own directory —
     // the pre-exports convention, and what a `"files"`-only internal package relies on.
@@ -121,6 +132,23 @@ function exportsWildcards(exp: unknown): { from: string; to: string }[] {
     const target = typeof value === "string" ? value : exportsDot(value);
     if (typeof target !== "string" || !target.includes("*")) continue;
     out.push({ from: key.slice(2, key.indexOf("*")), to: target.slice(0, target.indexOf("*")) });
+  }
+  return out;
+}
+
+// `exports` keys with NO `*` — `"./auth.server": "./src/services/auth.server.ts"` →
+// { from: "auth.server", to: "src/services/auth.server" }. The extension is stripped for the same
+// reason exportsWildcards drops everything after the `*`: candidatePaths() re-adds the extension
+// set, so a `.js` target in an internal TypeScript package still finds the `.ts` source. `"."` is
+// excluded — that is the package entry, handled by entryBasesFor.
+function exportsExact(exp: unknown): { from: string; to: string }[] {
+  if (!exp || typeof exp !== "object") return [];
+  const out: { from: string; to: string }[] = [];
+  for (const [key, value] of Object.entries(exp as Record<string, unknown>)) {
+    if (!key.startsWith("./") || key.includes("*")) continue;
+    const target = typeof value === "string" ? value : exportsDot(value);
+    if (typeof target !== "string" || target.includes("*")) continue;
+    out.push({ from: key.slice(2), to: target.replace(/^\.\//, "").replace(/\.[cm]?[jt]sx?$/, "") });
   }
   return out;
 }

@@ -12,6 +12,7 @@ import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { discoverAuthGuards } from "./auth-guard-discovery.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanSsrfWrapper } from "./ssrf-wrapper.js";
 import { scanCounterRace } from "./counter-race.js";
@@ -71,6 +72,7 @@ import {
   checkMigrationPolicySemantics,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsBypass,
+  checkMigrationRlsCommandCoverage,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
   checkUnreadSqlSurfaces,
@@ -148,6 +150,10 @@ interface MechanicalScanOptions {
   // registry-reachability dependency would let it drift on an offline/blipped CI run for reasons
   // that have nothing to do with the scanner's own code.
   skipNetworkChecks?: boolean;
+  // #1300 / #126 option (2): guard helper names supplied per engagement, folded into the
+  // route-noauth / authed-no-role-check clearance test alongside the ones discoverAuthGuards finds
+  // in the target's own source (option (1)). #126 recommended both; PR #127 shipped neither.
+  authGuards?: string[];
 }
 
 // #757 (part of #756): the recognized-architecture record for a Prisma/Postgres target. Same
@@ -285,7 +291,14 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       // nosem re-derivation runs. A function the guard-token check clears was never a finding to
       // begin with (not an in-repo suppression), so it must not reach partitionMarkerSuppressed or
       // SEM-SUPPRESS-00.
-      const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result);
+      // #1300: the name lists in those two regexes are OURS; a project's house style is not.
+      // Guard helpers discovered in the target's own source (option (1)) plus any supplied per
+      // engagement (option (2)) clear the finding the same way a recognised name does.
+      const projectGuards = [
+        ...discoverAuthGuards(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))),
+        ...(opts.authGuards ?? []),
+      ];
+      const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result, projectGuards);
       const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
       findings.push(...parseSemgrepFindings({ results: reported }));
       findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
@@ -318,6 +331,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     } else {
       findings.push(...checkMigrationRlsStatic(scanDir));
       findings.push(...checkMigrationRlsBypass(scanDir));
+      findings.push(...checkMigrationRlsCommandCoverage(scanDir));
       findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
       findings.push(...checkMigrationDefinerAuthz(scanDir));
       findings.push(...checkMigrationDefinerAnonGrant(scanDir));

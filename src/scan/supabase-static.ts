@@ -307,6 +307,99 @@ export function checkMigrationRlsBypass(dir: string): Finding[] {
   return findings;
 }
 
+// #1370 SB-RLS-CMDGAP-ROLLUP — the permission MATRIX read off migration SQL: table × command × role.
+//
+// #1046 retired the free tier's advertised "permission-matrix gaps" capability with this sentence in
+// docs/free-tier-scope.md: "Whether the roles × resources matrix as a whole has a hole is a question
+// about intended authority, not about code shape". #1370 split it, and the split is the point.
+// WHICH CELLS THE MATRIX OUGHT TO CONTAIN is intended authority and stays with the semantic pass.
+// WHICH CELLS EXIST is pure code shape, and parseLivePolicies has already produced it on every
+// Supabase scan since #937: each policy carries `cmd` (the FOR clause, defaulting to ALL) and
+// `roles` (the TO clause, defaulting to ["public"]).
+//
+// WHAT THE HOLE ACTUALLY MEANS — and #1370's own issue body states this backwards, so read this
+// rather than it. A missing policy under RLS is FAIL-CLOSED: Postgres denies the command outright
+// for every non-owner, non-BYPASSRLS role. The table does not "look protected while being exposed".
+// The finding is the question that follows: if the application performs that command successfully,
+// it is reaching the table through a path these policies do not govern — a service-role connection,
+// a SECURITY DEFINER function, or the owning role (SB-RLS-NOFORCE-ROLLUP). Tenant isolation for that
+// path is then enforced in application code, which this RLS review does not read. That is worth
+// saying out loud and nothing in the report said it.
+//
+// One ROLLED-UP review-tier finding, following SB-RLS-NOFORCE-ROLLUP: the shape is common enough
+// that per-table rows would be the volume problem #935 exists to prevent, and "which write path
+// serves this table" is one question about the app, not N questions about N tables.
+const RLS_COMMANDS = ["SELECT", "INSERT", "UPDATE", "DELETE"] as const;
+
+export function checkMigrationRlsCommandCoverage(dir: string): Finding[] {
+  const sources = readRlsSqlSources(dir);
+  if (sources.length === 0) return [];
+
+  const rlsOn = new Set([...resolveRlsState(sources).entries()].filter(([, t]) => t.on).map(([name]) => name));
+  const byTable = new Map<string, { cmds: Map<string, Set<string>>; at: string }>();
+  for (const p of parseLivePolicies(readMigrations(dir)).policies) {
+    if (p.schema.toLowerCase() !== "public") continue;
+    const table = p.table.toLowerCase();
+    if (!rlsOn.has(table)) continue;
+    const entry = byTable.get(table) ?? { cmds: new Map<string, Set<string>>(), at: `${p.file}:${p.line}` };
+    for (const cmd of p.cmd === "ALL" ? RLS_COMMANDS : [p.cmd]) {
+      const roles = entry.cmds.get(cmd) ?? new Set<string>();
+      for (const r of p.roles) roles.add(r);
+      entry.cmds.set(cmd, roles);
+    }
+    byTable.set(table, entry);
+  }
+
+  const gapped = [...byTable.entries()]
+    .map(([table, e]) => ({ table, e, missing: RLS_COMMANDS.filter((c) => !e.cmds.has(c)) }))
+    .filter((g) => g.missing.length > 0)
+    .sort((a, b) => a.table.localeCompare(b.table));
+  if (gapped.length === 0) return [];
+
+  // Cap the enumeration, count the remainder — a 200-table schema would otherwise ship one
+  // unreadable paragraph, and an elided row that does not say it was elided is the silent-omission
+  // shape (semgrepScopeFinding's convention).
+  const SHOWN = 25;
+  const matrix = gapped
+    .slice(0, SHOWN)
+    .map(
+      (g) =>
+        `${g.table} (${g.e.at}): ` +
+        RLS_COMMANDS.filter((c) => g.e.cmds.has(c))
+          .map((c) => `${c} (to ${[...g.e.cmds.get(c)!].sort().join(", ")})`)
+          .join("; ") +
+        ` — no policy for ${g.missing.join(", ")}`,
+    )
+    .join(" | ");
+
+  return [
+    reviewFinding({
+      id: "SB-RLS-CMDGAP-ROLLUP",
+      title: `${gapped.length} RLS-enabled table(s) have no policy for at least one of SELECT/INSERT/UPDATE/DELETE`,
+      severity: "Medium",
+      category: "Multi-tenant security",
+      taxonomy: "RLS policy set leaves a command uncovered (static permission matrix)",
+      // A ROLLUP addresses the migration SET, not one member of it: anchoring it to the first
+      // gapped table's file made a repo-wide statement look like a finding about that one file,
+      // and lit two planted BENIGN fixtures under the #1344 review-tier ratchet. Each table's own
+      // file:line is in the matrix above, so the row stays actionable.
+      location: "(repo-wide)",
+      evidence:
+        `Table x command x role, read from the live policy set at the end of migration history: ${matrix}` +
+        (gapped.length > SHOWN ? ` (and ${gapped.length - SHOWN} further table(s), not listed here).` : "."),
+      question:
+        "For each command with no policy: does the application ever perform it on that table, and over which connection? A command with no policy is DENIED to anon/authenticated, so a working feature means the write reaches the table outside these policies.",
+      impact:
+        "Row security denies a command outright when no policy grants it, so the uncovered cells are not unprotected — they are unreachable through PostgREST. Where the application does perform them, it is doing so through a service-role connection, a SECURITY DEFINER function, or the table owner, and tenant isolation on that path is enforced by application code rather than by the policies above. This static RLS review does not read that code, so a clean policy report says nothing about it.",
+      fix: "For each uncovered command: add the policy if the operation should be available to authenticated callers, or record that the operation is deliberately server-only and confirm the code that performs it scopes rows to the caller's tenant itself.",
+      okWhen:
+        "The uncovered commands are never performed on these tables by user-facing code, or are performed only by migrations/admin jobs that are deliberately outside row security.",
+      notOkWhen:
+        "A user-facing route inserts, updates or deletes on one of these tables — the request is bypassing RLS, and whatever scopes it to one tenant is unreviewed by this pass.",
+    }),
+  ];
+}
+
 // #1182 (cipherx CX-10) — storage buckets and storage.objects read policies declared in COMMITTED
 // migration SQL. checkPublicBucketsWithNoPolicies (supabase.ts) reads `select id, name, public from
 // storage.buckets` off a live database (connected tier) and the #560 semgrep rule reads

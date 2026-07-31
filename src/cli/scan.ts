@@ -1,6 +1,6 @@
 // Scan CLI entry point.
 //   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]
-//     [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--out <file>]
+//     [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--auth-guards a,b] [--out <file>]
 //   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--migrations <dir>]
 //     [--gotrue-url <url> --gotrue-anon-key <key>] [--out <file>]
 //
@@ -31,6 +31,7 @@ import { runMechanicalScan } from "../scan/mechanical.js";
 import { runSupabaseScan } from "../scan/supabase.js";
 
 const FLAGS = [
+  "--auth-guards",
   "--bundle",
   "--dir",
   "--target",
@@ -80,7 +81,10 @@ async function main(): Promise<void> {
     const tenantKey = arg("--tenant-key");
     const mode = tenantMode(arg("--tenant-mode"));
     const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
-    emit(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride }));
+    // #126 option (2), finally shipped by #1300: names the engagement knows are guards but whose
+    // house style neither the built-in list nor the project-aware discovery recognises.
+    const authGuards = arg("--auth-guards")?.split(",").map((n) => n.trim()).filter((n) => n.length > 0);
+    emit(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, authGuards }));
     return;
   }
 

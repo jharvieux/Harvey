@@ -585,9 +585,17 @@ function collectServerActions(sf: ts.SourceFile): ServerAction[] {
 // detectAppRouterFindings passes the subsumed action nodes to
 // detectServerActionAuthAndValidation, which skips its missing-auth finding for them.
 //
-// The broad class (#221's items 2 and 3 — trusting client-supplied prices/roles/trials, and
-// UI-only permission gates) still needs cross-file and business-context reasoning and stays
-// semantic/paid-tier: see the B15 corpus entries and docs/design/corpus-roadmap-to-100.md §4a.
+// #221's items 2 and 3 are NOT one bucket, and stating them as one is what made this comment wrong
+// (#1373, corrected 2026-07-31). Item 2 — trusting a client-supplied role, price, discount or trial
+// length — ships MECHANICALLY at review tier today, in two single-file semgrep rules with none of
+// the cross-file or business-context machinery this comment used to say the class requires:
+// `harvey-client-trusted-role` (auth.yml, landed 77b57db 2026-07-19, two days AFTER this comment)
+// covers the role member, and `harvey-client-trusted-price` (auth.yml, #1373) covers the price /
+// discount / trial-length members, including the `"use server"` parameter spelling the one disclosed
+// real-world instance actually has — `validate-source-recall --real` moved 0/3 -> 1/3 on it
+// (MEASURED 2026-07-31). Item 3 — UI-only permission gates — is the part that genuinely still needs
+// cross-file reasoning and stays semantic/paid-tier: see the B15 corpus entries and
+// docs/design/corpus-roadmap-to-100.md §4a.
 // Every finding here is `review`/`Likely`, never free-count: the AST proves the value's origin,
 // not that authorization is absent from code it can't see.
 
