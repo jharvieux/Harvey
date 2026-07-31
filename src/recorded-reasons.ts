@@ -363,7 +363,10 @@ interface ClaimDrift {
   file: string;
   /** Current claim lines the baseline does not account for. Any row here is a gate failure. */
   added: UntriagedClaim[];
-  /** Baseline lines no longer present. A REWORD produces one of each; a retirement, only these. */
+  /**
+   * Baseline lines no longer present. A REWORD produces one of each; a retirement, only these.
+   * Since #1685 a row here is a gate failure too — see claimDrift.
+   */
   dropped: string[];
   baseline: number;
   now: number;
@@ -388,6 +391,19 @@ interface ClaimDrift {
  * would newly breach — 8 of 121, against 58 of the same 121 that already breached the count ratchet.
  * So per-row comparison adds roughly a seventh again of an already-frequent gate, not a breach on
  * every innocuous edit.
+ *
+ * #1685 — A DROPPED ROW FAILS TOO, so the recorded set can only shrink DELIBERATELY. Until now the
+ * gate fired on `added` alone, and a baseline row whose claim had been reworded away, moved or
+ * deleted sat in `unstructured-claims-baseline.ts` forever: failing nothing, telling nobody, and
+ * inflating the backlog number the gate prints as its own headline — a claim about the past, which
+ * is the exact decay this whole module exists to catch. The sibling `test-only-exports` ratchet
+ * already works this way: a baseline row that has since gained a production caller FAILS, so a
+ * human prunes it in a diff rather than letting the count fall in silence. Auto-pruning instead
+ * would be the same defect pointing the other way.
+ *
+ * MEASURED 2026-07-31 on 3f6148c, before the change: 0 dead rows across 348 files / 906 baseline
+ * rows. So the population today is zero and this shipped costing nothing — recorded as a measurement
+ * rather than assumed, because "probably none" and "none" read identically afterwards.
  */
 export function claimDrift(baseline: Record<string, string[]>, current: UntriagedClaim[]): ClaimDrift[] {
   const byFile = new Map<string, UntriagedClaim[]>();
@@ -407,8 +423,8 @@ export function claimDrift(baseline: Record<string, string[]>, current: Untriage
       });
       return { file, added: marked.filter((m) => m.isNew).map((m) => m.claim), dropped, baseline: recorded.length, now: now.length };
     })
-    .filter((d) => d.added.length > 0)
-    .sort((a, b) => b.added.length - a.added.length);
+    .filter((d) => d.added.length > 0 || d.dropped.length > 0)
+    .sort((a, b) => b.added.length + b.dropped.length - (a.added.length + a.dropped.length));
 }
 
 export function claimTotal(census: ClaimBaseline): number {

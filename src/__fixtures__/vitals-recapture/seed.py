@@ -166,8 +166,9 @@ def build_repo(repo):
     # which DELETES the loose objects it just packed while the seed's next `git add`/`git commit` —
     # and, later, vitals' own `git log` — are still reading them. MEASURED 2026-07-31 in ubuntu
     # containers: git 2.43.0 -> 0 detaches, 0 packs, 293 loose objects; git 2.54.0 (the runner image's
-    # git that day) -> 73 detaches, 1 background repack, 0 loose, 1 pack. That race is the source of
-    # BOTH conservation failure signatures. Measured by unlinking core/billing.ts's loose blob in a
+    # git that day) -> ONE DETACH PER COMMIT (72 here, = the corpus's commit count, which is the
+    # durable way to say it; #1705 recorded 73), 1 background repack, 0 loose, 1 pack. That race is
+    # the source of BOTH conservation failure signatures. Measured by unlinking core/billing.ts's loose blob in a
     # built corpus and replaying the four commands the seed and vitals actually run: `git commit`
     # printed the CI log's line verbatim, down to the sha —
     #   error: invalid object 100644 4d193a8444f26e2c021839ca7397511831407130 for 'core/billing.ts'
@@ -176,10 +177,11 @@ def build_repo(repo):
     # into an empty churn table, emptying code_files and so `hotspots`. The three commands that were
     # still POPULATED in run 30635897491 all exited 0 on the same broken corpus: `log --name-only`
     # (coupling), `log --format=%aN -- <file>` (knowledge_risk) and the seed's own `log --oneline`
-    # sanity line — none of them reads blob CONTENT. NOT reproduced: the race arising on its own; 560
-    # seed builds and ~55k `git log --numstat` samples on git 2.54.0 caught neither signature, so the
-    # step from "auto maintenance unlinks these objects" to "this is what unlinked them in CI" is
-    # inference from a matching fault, not a caught one. This is not a retry either way: it removes a
+    # sanity line — none of them reads blob CONTENT. What the A/B establishes is that the PRECONDITION
+    # is deterministic and version-gated: every 2.54 build repacks this corpus and unlinks all 293
+    # loose objects, every 2.43 build leaves all 293 loose. What is INFERRED is only the read-vs-unlink
+    # timing window — 560 seed builds and ~55k `git log --numstat` samples on git 2.54.0 did not catch
+    # the race arising on its own. This is not a retry either way: it removes a
     # concurrent mutation of the fixture's input that the fixture was never measuring.
     # assert_no_background_gc() below fails loud if a future git finds another route to it.
     git(repo, "config", "gc.auto", "0")

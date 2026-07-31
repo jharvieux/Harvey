@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, type CorpusEntry } from "./calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, type CorpusEntry, type MatrixRow } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -1564,5 +1564,55 @@ describe("#1203 M7 blocking-loop (live detectPerfCodeFindings over the committed
     expect(hits).toHaveLength(2);
     expect(hits.every((f) => f.confidence === "Review")).toBe(true);
     expect(hits.every((f) => f.evidence.includes("reachability"))).toBe(true);
+  });
+});
+
+// #1628 — which positives' misses FAIL the calibration gate. This is the rule the live gate's own
+// in-run control replays; holding it here too means a change to it is caught under `pnpm verify`,
+// with no binaries, rather than only in heavy-cli.
+describe("fatalRecallMisses (#1628 — a review-tier miss is a regression, not a tracked gap)", () => {
+  const row = (over: Partial<MatrixRow> & Pick<MatrixRow, "id">): MatrixRow => ({
+    kind: "positive", cls: "c", pass: true, highFlagged: true, reviewFlagged: false,
+    detail: "", severityMismatch: false, notScored: false, ...over,
+  });
+
+  it("fails a review-tier positive that nothing caught — the state #1628 found", () => {
+    expect(fatalRecallMisses([row({ id: "P-R", expectedTier: "review", pass: false, highFlagged: false })]).map((r) => r.id)).toEqual(["P-R"]);
+  });
+
+  it("passes a review-tier positive caught at review tier, so the rule above is not always-on", () => {
+    expect(fatalRecallMisses([row({ id: "P-R", expectedTier: "review", caughtTier: "review", highFlagged: false, reviewFlagged: true })])).toEqual([]);
+  });
+
+  it("still fails a high-tier positive caught only at review — the pre-existing rule is unchanged", () => {
+    expect(fatalRecallMisses([row({ id: "P-H", expectedTier: "high", caughtTier: "review", highFlagged: false })]).map((r) => r.id)).toEqual(["P-H"]);
+  });
+
+  // The accepted-gap tier keeps its own inverted rule (a rule that GRADUATES onto it fails, in the
+  // CLI's noRuleBroken). Folding it in here would make every by-design gap a recall failure.
+  it("never claims a `none`-tier row, whichever way it scored", () => {
+    expect(fatalRecallMisses([row({ id: "P-N", expectedTier: "none", pass: false, highFlagged: false })])).toEqual([]);
+  });
+
+  // A live row this run had no venue for is excluded from every count, never passed (#1428).
+  it("never claims a NOT-SCORED live row", () => {
+    expect(fatalRecallMisses([row({ id: "P-L", expectedTier: "local", notScored: true, highFlagged: false })])).toEqual([]);
+  });
+
+  it("never claims a negative — those are scored by the free-count and #1344 rules", () => {
+    expect(fatalRecallMisses([row({ id: "N-X", kind: "negative", pass: false, highFlagged: true })])).toEqual([]);
+  });
+});
+
+describe("darkenEntry (#1628's plant — the gate's negative control needs a real miss to score)", () => {
+  const e = entry({ id: "P-SQLI", kind: "positive", cls: "sqli", location: "search.js", match: ["sql"], expectedTier: "review", note: "" });
+  const hit = finding({ location: "pages/api/search.js:11", taxonomy: "SQL injection", precisionTier: "review" });
+  const elsewhere = finding({ location: "pages/api/other.js:3", taxonomy: "SQL injection", precisionTier: "review" });
+
+  it("drops exactly the findings that score the entry, and turns it into a fatal miss", () => {
+    expect(scoreEntry(e, [hit, elsewhere]).pass).toBe(true);
+    const darkened = darkenEntry(e, [hit, elsewhere]);
+    expect(darkened).toEqual([elsewhere]);
+    expect(fatalRecallMisses([scoreEntry(e, darkened)]).map((r) => r.id)).toEqual(["P-SQLI"]);
   });
 });

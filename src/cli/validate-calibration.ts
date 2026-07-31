@@ -5,10 +5,16 @@
 //   pnpm validate:calibration            # scan the default calibration target
 //   pnpm validate:calibration --dir <p>  # scan another labeled corpus
 //   pnpm validate:calibration --json     # emit the raw matrix as JSON
+//   pnpm validate:calibration --seed-dark-review   # negative control: darken one caught review-tier
+//                                                  # positive and require this gate to exit 1
 //
-// Exit code: 1 (gate FAIL) if any benign NEGATIVE is flagged in the free count, or any
-// positive expected at "high" isn't caught at high. Review-tier recall gaps (documented
-// follow-ups, e.g. OSV needing a lockfile) are reported but do not fail the gate.
+// Exit code: 1 (gate FAIL) if any benign NEGATIVE is flagged in the free count, or any planted
+// POSITIVE is not caught — at "high" for a high-expected row, at any tier for a review-expected one.
+// #1628 (2026-07-31) made the review half fatal: it used to print as a tracked non-fatal gap and
+// exit 0, so 223 of the 384 positives this gate scores could go dark without failing anything.
+// The tier for a gap we accept is `expectedTier: "none"`, which fails in the other direction when a
+// rule graduates onto it. See fatalRecallMisses() in src/scan/calibration.ts for the decision and
+// the two measurements behind it.
 
 import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
@@ -16,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type CorpusEntry, type MatrixRow } from "../scan/calibration.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
@@ -32,6 +38,7 @@ const FLAGS = [
   "--dir",
   "--target",
   "--json",
+  "--seed-dark-review",
 ] as const;
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -88,7 +95,24 @@ console.log(
     `${CORPUS.length - scoredCorpus.length} module-tagged entries are excluded by design — see the per-module census below for where each is gated instead.`,
 );
 
-const findings = [...(await runMechanicalScan({ dir })), ...scanManifestFixtures(dir)];
+const scanned = [...(await runMechanicalScan({ dir })), ...scanManifestFixtures(dir)];
+
+// #1628's end-to-end negative control, the `--seed-unaccounted` shape (#1096): the in-run control
+// further down proves the VERDICT FUNCTION fires, and this proves the PROCESS exits 1 — the two are
+// different facts, and the second is the one a CI step actually reads. It darkens a review-tier
+// positive that is caught on this run, so a green seeded run means the fatal path is gone.
+// Exit 2, never 1, when no victim is available: a control that fails for its own reasons would be
+// indistinguishable from the regression it is meant to plant.
+const seedDarkReview = process.argv.includes("--seed-dark-review");
+const seededVictim = seedDarkReview
+  ? scoredCorpus.find((e) => e.kind === "positive" && e.expectedTier === "review" && buildCoverageMatrix(scanned, [e]).rows[0]?.pass === true)
+  : undefined;
+if (seedDarkReview && !seededVictim) {
+  console.error("✗ --seed-dark-review: no CAUGHT review-tier positive on this run to darken, so the control cannot plant anything.");
+  process.exit(2);
+}
+if (seededVictim) console.log(`\n⚠ --seed-dark-review: dropping every finding that scores ${seededVictim.id} (${seededVictim.expectedTier}). This run MUST exit 1.`);
+const findings = seededVictim ? darkenEntry(seededVictim, scanned) : scanned;
 const matrix = buildCoverageMatrix(findings, scoredCorpus);
 
 if (process.argv.includes("--json")) {
@@ -113,13 +137,15 @@ const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged)
 // costs no precision today, but it is a rule that moved onto benign code, and until now no gate
 // could fail on it (#1251).
 const negReviewDrift = matrix.rows.filter((r) => r.kind === "negative" && !r.highFlagged && !r.pass);
-const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
-const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.pass);
-// #1248: the subset of those misses that are SOUNDNESS guards, not recall aspirations — see
-// CorpusEntry.mustCatch. Review misses are non-fatal because review recall has documented standing
-// gaps; an adversarial positive planted to prove a sanitizer exclusion still works is the opposite
-// kind of row, so its miss is fatal. MEASURED 2026-07-31: without this, deleting harvey-ssrf-fetch's
-// projection-throw try exclusions flipped P-SSRF-HOST-THROW-SWALLOWED to FAIL and still exited 0.
+// #1628: ONE list, one implementation (fatalRecallMisses), covering high-tier and review-tier alike.
+// Split below only for the report, because "expected at high, caught at review" and "caught by
+// nothing" are different repairs.
+const recallMisses = fatalRecallMisses(matrix.rows);
+const highMisses = recallMisses.filter((r) => r.expectedTier === "high");
+const reviewMisses = recallMisses.filter((r) => r.expectedTier === "review");
+// #1248: the subset that are SOUNDNESS guards — adversarial positives planted to prove a sanitizer's
+// exclusions still work. Every recall miss is fatal since #1628; these get their own line so a
+// soundness miss is never narrated as a recall aspiration.
 const mustCatchMisses = reviewMisses.filter((r) => r.mustCatch);
 // A "none"-tier positive is an accepted no-mechanical-rule gap (e.g. WEBHOOK-REPLAY, #425). It
 // scores an intended gap while nothing of its class fires; a relevant finding means a rule
@@ -231,10 +257,8 @@ if (matrix.noRuleTotal) {
       ` A rule firing on one is a GATE FAIL`,
   );
 }
-// #1248: mustCatch rows are excluded here — they are fatal, and printing them under a "non-fatal"
-// heading is how a soundness miss reads as an accepted gap.
-const reviewGaps = reviewMisses.filter((r) => !r.mustCatch);
-if (reviewGaps.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewGaps.map((r) => r.id).join(", ")}`);
+// #1628: this used to read "Review-tier recall gaps (non-fatal, tracked)". There is no such
+// category any more — a review-tier positive caught by nothing is a GATE FAIL, printed below.
 
 // #823: the M7 code-tier / M8 test-intent heuristics are gated by their own labeled fixture
 // corpus (src/scan/heuristic-precision.ts — pure detectors, no binaries), so the calibration
@@ -322,6 +346,21 @@ const reviewRatchetControl = (() => {
 })();
 console.log(`\nREVIEW-TIER RATCHET (#1344, replaying #1251): ${reviewRatchetControl.detail}`);
 
+// #1628's in-run negative control. Take a review-tier positive this run CAUGHT, drop every finding
+// that scores it, and require fatalRecallMisses — the same function the verdict uses — to return it.
+// Because both sides call that one function, softening it back to "review misses are tracked, not
+// fatal" makes this print DID NOT FIRE and reds the gate, instead of quietly restoring the state
+// #1628 found. The control is skipped only if the corpus has no caught review positive at all,
+// which is itself reported as a failure rather than as silence.
+const reviewRecallControl = (() => {
+  const caught = matrix.rows.find((r) => r.kind === "positive" && r.expectedTier === "review" && r.pass && !r.notScored);
+  if (!caught) return { ok: false, detail: "no CAUGHT review-tier positive to darken — the review-tier recall gate is unproven on this run" };
+  const entry = scoredCorpus.find((e) => e.id === caught.id) as CorpusEntry;
+  const fired = fatalRecallMisses([scoreEntry(entry, darkenEntry(entry, findings))]).length > 0;
+  return { ok: fired, detail: `entry ${entry.id}: dropped every finding that scores it -> review-tier recall gate ${fired ? "FIRED" : "DID NOT FIRE"}` };
+})();
+console.log(`REVIEW-TIER RECALL GATE (#1628, ${matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.notScored).length} review-tier positives now fatal on a miss): ${reviewRecallControl.detail}`);
+
 // #1355: corpus integrity, not scanner behaviour — a `match` key that is a substring of its own
 // fixture path is satisfied by every finding on that fixture, so a positive row can stay green
 // while the detection it exists to score goes silent. Enforced under `pnpm verify` too
@@ -387,9 +426,10 @@ console.log(
 // the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
-const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && mustCatchMisses.length === 0;
+const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;
 if (!gatePass) {
   if (mustCatchMisses.length) console.log(`\nGATE FAIL — soundness positive not caught (#1248): ${mustCatchMisses.map((r) => r.id).join(", ")}. These rows are adversarial fixtures planted to prove a sanitizer's exclusions still work, not review-recall aspirations — a miss means a guard was widened into clearing a live bug, never "we don't catch that yet".`);
+  if (reviewMisses.length) console.log(`\nGATE FAIL — review-tier positives not caught by any rule (#1628): ${reviewMisses.map((r) => r.id).join(", ")}. A review-tier row is a claim that this class IS detected, at review confidence; the tier for a gap we accept is \`expectedTier: "none"\` with a gapKind. Re-tier the row with its tracking issue, or restore the detection.`);
   if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
   if (unkeyed.length) console.log(`\nGATE FAIL — unkeyed positive (#1388): ${unkeyed.map((e) => e.id).join(", ")} — a positive with no \`match\` list accepts every finding at its own location, so the detection it exists to score can go silent while the row stays green. Give it a key from the taxonomy vocabulary of the finding it scores.`);
@@ -406,6 +446,7 @@ if (!gatePass) {
   if (!parityControl.ok) console.log(`GATE FAIL — the #1314 parity negative control did not fire: ${parityControl.detail} — a module's fixtures could be deleted without the gate noticing`);
   if (severityMismatches.length) console.log(`GATE FAIL — delivered severity != answer key (#1157): ${severityMismatches.map((r) => `${r.id} (expected ${r.expectedSeverity}, got ${r.deliveredSeverities?.join("/") || "none"})`).join(", ")}`);
   if (!reviewRatchetControl.ok) console.log(`GATE FAIL — the #1344 review-tier ratchet did not fire on its negative control: ${reviewRatchetControl.detail} — a widened rule could light up a planted negative unseen again`);
+  if (!reviewRecallControl.ok) console.log(`GATE FAIL — the #1628 review-tier recall gate did not fire on its negative control: ${reviewRecallControl.detail} — a review-tier detector could go dark and this gate would still print PASS, which is the state #1628 found`);
   if (!severityControl.ok) console.log(`GATE FAIL — severity-correctness negative control did not fire (#1157): ${severityControl.detail} — the check is not proven able to fail`);
   process.exit(1);
 }
