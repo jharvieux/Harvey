@@ -228,7 +228,8 @@ function installTargetDeps(dir: string, flags: readonly string[]): void {
 //   install               134.2s  15.7%     mutation-scan     9.4s   1.1%
 //
 // #1574's table split this as "~79% scanning / ~21% clone+install" and named the scanners as
-// "semgrep / detect-static / jscpd / knip". Both halves reconcile — 76.9% vs 21.1% here — but the
+// "semgrep / detect-static / jscpd / knip". Both halves reconcile — 77.0% vs 23.0% here (scanning
+// 657.6s of 853.7s, setup 196.1s of 853.7s) — but the
 // DOMINANT phase is one that table does not name at all: the FREE-TIER quick-scan, the full
 // `runMechanicalScan` the #261 invariant needs, which runs for the 6 targets carrying a
 // FREE_TIER_EXPECTATIONS entry and is 52.5% of the corpus on its own (247s of carbon's 343s). An
@@ -248,8 +249,10 @@ function installTargetDeps(dir: string, flags: readonly string[]): void {
 //     mean would buy ~290s and cost the corpus its only large target, which is the one that finds
 //     things the others do not. It would also need a counted not-assessed row naming what it
 //     skipped, per the disclosure family.
-// Option 4, sharding, IS done — #1586 — and is measured before/after in this PR's body: 22m04s
-// (n=3 single-job CI runs) to 11m00s (n=5 three-shard CI runs).
+// Option 4, sharding, IS done — #1586 — and is measured before/after (single-job CI runs
+// `30584074986` 22m12s, `30588890377` 22m51s, `30346918870` 21m10s, n=3 mean 22m04s; three-shard
+// PR runs `30658181231` 11m35s, `30657876311` 10m55s, `30651453802` 11m18s, `30640448533` 10m52s,
+// `30630790646` 10m15s, n=5 max-shard mean 11m00s) — a 50% cut in the wall clock on the merge path.
 const phaseSeconds: Record<string, Record<string, number>> = {};
 let phaseTarget = "";
 

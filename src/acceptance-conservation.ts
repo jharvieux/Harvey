@@ -319,12 +319,17 @@ export function parseAcceptanceCriteria(body: string): ParsedCriteria {
  * would have matched.
  *
  * REPORTING against a bar looks identical to SETTING one until you read the bullets, and the repo
- * writes far more of the former. Three exclusions, each earned by a false positive in that census:
- * a comment carrying `ACCEPTANCE #n.m <verdict>:` lines (every executor's disposition record); the
- * close gate's own banner, which is posted under a HUMAN token on this repo — measured on #1384 —
- * so an author check does not see it; and a bullet list whose own items already carry verdicts
- * (`[x]`, ✅/❌, "**done**", "— MET"), which is a status report wearing an `## Acceptance` heading.
- * Those three take the flag from 16 comments to 11 over the whole population.
+ * writes far more of the former. Three exclusions guard against that: a comment carrying
+ * `ACCEPTANCE #n.m <verdict>:` lines (every executor's disposition record); the close gate's own
+ * banner, which is posted under a HUMAN token on this repo — measured on #1384 — so an author check
+ * does not see it; and a bullet list whose own items already carry verdicts (`[x]`, ✅/❌,
+ * "**done**", "— MET"), which is a status report wearing an `## Acceptance` heading. MEASURED
+ * 2026-07-31 against the whole population (893 closed issues, 707 comments): with none of the three
+ * applied the flag count is 66; the committed state (all three) is 12. Only two of the three are
+ * earned by a census false positive — the banner exclusion alone takes 12 back up to 63 if dropped,
+ * the verdict-ratio exclusion alone to 15. The disposition-record exclusion has a MEASURED
+ * population of zero in this census (dropping it alone leaves the count at 12) — it is defensible
+ * defensive code, not something this census demonstrates a need for.
  */
 const ACCEPTANCE_ANNOUNCE = /^\**\s*(?:revised|updated|corrected|amended|new|replacement|final|restated)?\s*acceptance\b/i;
 const UNCHECKED_BOX = /^\s*[-*+]\s+\[ \]\s+\S/;
