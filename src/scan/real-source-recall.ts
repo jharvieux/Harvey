@@ -33,8 +33,9 @@
 //     corpus already names this exact gap for its planted twin (P-CLIENT-PAYMENT-AMOUNT's sibling
 //     note: "the price/trial variant needs ... business context no AST pass has").
 //
-// A recall gap is the measurement, not a gate failure (same discipline as source-recall.ts's
-// P-HOST-HEADER-URL and the planted corpus's "none"-tier entries) — this file's number is expected
+// A recall gap is the measurement, not a gate failure (same discipline as the planted corpus's
+// "none"-tier entries; source-recall.ts's own last gap, P-HOST-HEADER-URL, was closed by #1366 on
+// 2026-07-31, so that half of this sentence is history, not a live example) — this file's number is expected
 // to be low today. Its value is turning "real code is presumably harder" from an assumption into a
 // measured, itemized, re-testable claim, and giving each gap a name a future detector change can
 // close and re-measure against.

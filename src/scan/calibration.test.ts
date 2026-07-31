@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -1006,9 +1006,18 @@ describe("#1355 self-matching `match` keys (a keyword that is a substring of its
       precisionTier: "high",
     });
 
-  it("every positive with a `match` list rejects an unrelated finding planted at its own location", () => {
-    const masked = CORPUS.filter((e) => e.kind === "positive" && e.match?.length && scoreEntry(e, [unrelated(e.location)]).caughtTier !== undefined);
+  // #1388: this used to read `e.match?.length &&`, which quietly excluded the 37 positives that
+  // carried no key at all — the population it most needed to cover, since `relevantFindings`
+  // short-circuits `if (!keys) return true` for exactly those. The filter is gone; the check now
+  // runs over EVERY positive, and its coverage is asserted rather than implied so a future
+  // narrowing shows up as a failing count instead of a quietly smaller denominator.
+  it("EVERY positive rejects an unrelated finding planted at its own location", () => {
+    const positives = CORPUS.filter((e) => e.kind === "positive");
+    const masked = positives.filter((e) => scoreEntry(e, [unrelated(e.location)]).caughtTier !== undefined);
     expect(masked.map((e) => e.id)).toEqual([]);
+    // Coverage, stated: every positive is in the denominator, none skipped for want of a key.
+    expect(unkeyedPositives(CORPUS)).toEqual([]);
+    expect(positives.length).toBeGreaterThan(400);
   });
 
   it("NEGATIVE CONTROL — a self-matching positive DOES accept that unrelated finding, which is the masking this check exists to stop", () => {
@@ -1016,6 +1025,28 @@ describe("#1355 self-matching `match` keys (a keyword that is a substring of its
     expect(scoreEntry(vacuous, [unrelated(vacuous.location)]).pass).toBe(true);
     const scoped = { ...vacuous, match: ["scopes on `tenantId`"] };
     expect(scoreEntry(scoped, [unrelated(scoped.location)]).pass).toBe(false);
+  });
+
+  // #1388's own negative control, and the exact experiment the PR #1382 verifier ran and watched
+  // PASS: strip a real positive's `match` list — which `formatSelfMatchingKeys` used to recommend —
+  // and both halves of this gate must go red. Keyed off a REAL corpus row, not a planted one, so it
+  // fails if the row is renamed rather than passing vacuously.
+  it("NEGATIVE CONTROL — stripping a real positive's `match` list makes both halves of this gate fail", () => {
+    const real = CORPUS.find((e) => e.id === "P-RLS-DISABLED") as CorpusEntry;
+    expect(real.match?.length).toBeTruthy();
+    const stripped: CorpusEntry[] = CORPUS.map((e) => (e.id === real.id ? { ...e, match: undefined } : e));
+    expect(unkeyedPositives(stripped).map((e) => e.id)).toEqual([real.id]);
+    const masked = stripped.filter((e) => e.kind === "positive" && scoreEntry(e, [unrelated(e.location)]).caughtTier !== undefined);
+    expect(masked.map((e) => e.id)).toEqual([real.id]);
+  });
+
+  it("the remediation text does not tell a POSITIVE to delete its match list (#1388)", () => {
+    const positive = selfMatchingMatchKeys([entry({ id: "P-C", kind: "positive", cls: "c", location: "src/owasp-mt/client-supplied-tenant.ts", match: ["tenant"], note: "" })]);
+    expect(formatSelfMatchingKeys(positive)).not.toContain("Delete the `match` list");
+    expect(formatSelfMatchingKeys(positive)).toContain("Do NOT delete the `match` list");
+    // ...and still does for a negative, where a vacuous key was already equivalent to no key.
+    const negative = selfMatchingMatchKeys([entry({ id: "N-C", kind: "negative", cls: "c", location: "sqli-parseint-safe.js", match: ["sql"], note: "" })]);
+    expect(formatSelfMatchingKeys(negative)).toContain("Delete the `match` list");
   });
 });
 

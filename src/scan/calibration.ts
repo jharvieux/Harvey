@@ -185,6 +185,10 @@ export function selfMatchingMatchKeys(corpus: CorpusEntry[] = CORPUS): SelfMatch
   return rows;
 }
 
+// #1388: the remediation text is HALF the gate. "Delete the `match` list" is correct for a NEGATIVE
+// — a vacuous key there was already equivalent to no key — and is a silent regression on a POSITIVE,
+// which becomes maximally vacuous and dodges both #1355 checks. The verifier on PR #1382 performed
+// exactly that experiment and watched it pass, following this message's own advice.
 export function formatSelfMatchingKeys(rows: SelfMatchingKeyRow[]): string {
   return rows
     .map(
@@ -192,10 +196,27 @@ export function formatSelfMatchingKeys(rows: SelfMatchingKeyRow[]): string {
         `${r.id} (${r.kind}) — key(s) ${r.keys.map((k) => JSON.stringify(k)).join(", ")} are a substring of its own location "${r.location}", ` +
         `so every finding on that fixture satisfies the entry. ` +
         (r.kind === "positive"
-          ? "Re-scope the key to vocabulary from the taxonomy/message of the finding this row exists to score."
+          ? "Re-scope the key to vocabulary from the taxonomy/message of the finding this row exists to score. Do NOT delete the `match` list: on a positive that is strictly worse than a vacuous key (#1388), because the row then accepts every finding at its location with nothing left for a check to inspect."
           : "Delete the `match` list — for a negative the entry already means 'any finding here is a false positive'."),
     )
     .join("\n");
+}
+
+// #1388 — the OMISSION half of #1355's masking shape, and the reason `match` is effectively
+// mandatory on a positive. `relevantFindings` short-circuits `if (!keys) return true`, so a positive
+// with NO `match` list accepts EVERY finding at its location, whatever defect that finding is for —
+// the same masking a self-matching key produces, reached by leaving the field out, and invisible to
+// a check keyed on the presence of `match`.
+//
+// MEASURED 2026-07-31 over the whole corpus, the predicate being
+// `e.kind === "positive" && !e.match?.length`: 37 of 493 positives had no key, and all 37 accepted a
+// synthetic control finding planted at their own location. Every one has since been keyed, and the
+// worst of them were not theoretical — P-RLS-DISABLED (`audit_logs`) drew FOUR live Splinter lints
+// of which only one was the `rls_disabled_in_public` it exists to score, and P-RLS-ENABLED-NO-POLICY
+// (`reports`) drew EIGHT including a storage-bucket finding for an entirely different class
+// (measured against a live `supabase start` stack the same day).
+export function unkeyedPositives(corpus: CorpusEntry[] = CORPUS): CorpusEntry[] {
+  return corpus.filter((e) => e.kind === "positive" && !e.match?.length);
 }
 
 function topTier(findings: Finding[]): PrecisionTier | undefined {
