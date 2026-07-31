@@ -14,6 +14,7 @@ export default function SiteFooter() {
           <a href="/supabase-security-checklist">Security checklist</a>
           <a href="/supabase-security-checker">Free RLS checker</a>
           <a href="/supabase-load-readiness">Load-readiness check</a>
+          <a href="/re-fixing-the-same-files">Re-fixing the same files</a>
           <a href="/responsible-disclosure">Responsible disclosure</a>
           <a href="/data-handling">Data handling</a>
         </nav>

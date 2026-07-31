@@ -14,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/supabase-security-checker", priority: 0.8, changeFrequency: "monthly" },
     { path: "/multi-tenant-security-supabase", priority: 0.8, changeFrequency: "monthly" },
     { path: "/supabase-load-readiness", priority: 0.8, changeFrequency: "monthly" },
+    { path: "/re-fixing-the-same-files", priority: 0.8, changeFrequency: "monthly" },
     { path: "/responsible-disclosure", priority: 0.4, changeFrequency: "yearly" },
     { path: "/data-handling", priority: 0.4, changeFrequency: "yearly" },
   ];
