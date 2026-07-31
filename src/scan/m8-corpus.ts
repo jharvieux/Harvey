@@ -39,11 +39,12 @@ export interface M8CorpusConfig {
   // install, and the mutation-scan invocation all need to target that subdirectory.
   appPath?: string;
   // #1496: files to write into appDir before the Stryker run (materializeM8Config below), keyed by
-  // path relative to appDir. Every other target here mutation-scores a suite the clone already ships; this is for a
-  // target whose only suite carries a per-mutant Docker cost (multi-tenant-starter, #1436) and
-  // needed a NEW, DB-free test file to get any mutation surface at all. The operator ruling on
-  // #1496 accepted the trade this implies: a stubbed suite may score differently than the real
-  // suite it stands in for, so a target using this field must say so in its baseline note.
+  // path relative to appDir. Every other target here mutation-scores a suite the clone already
+  // ships; this is for a target whose only suite carries a per-mutant Docker cost
+  // (multi-tenant-starter, #1436) and needed a NEW, DB-free test file to get any mutation surface
+  // at all. The operator ruling on #1496 accepted the trade this implies: a stubbed suite may score
+  // differently than the real suite it stands in for, so a target using this field must say so in
+  // its baseline note.
   extraFiles?: Record<string, string>;
 }
 
