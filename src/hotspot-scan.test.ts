@@ -343,11 +343,16 @@ describe("M3 trend findings (#1075)", () => {
 // the two, because "GONE M3" carries a standing instruction never to rebaseline — so the row that
 // says WHY is the thing keeping that instruction honest.
 describe("M3 knowledge-risk disclosure (#1112)", () => {
-  const noKnowledge: VitalsReport = { ...report, knowledge_risk: [] };
-  const multiAuthorOnly: VitalsReport = {
-    ...report,
-    knowledge_risk: report.knowledge_risk.map((r) => ({ ...r, truck_factor: 3 })),
-  };
+  // #1448: a REAL vitals run — vitals_cli.py:238-245 only ever puts truck_factor<=1 rows into
+  // `knowledge_risk`, so once the early return above has passed (no truck-factor-1 file), that
+  // array is NECESSARILY empty on every real capture, clean or not. `cleanRun` is that real shape:
+  // the population (file_health, same 7 files as the captured fixture) is non-empty, knowledge_risk
+  // is empty — this is what "the signal ran and genuinely found nothing" looks like on real vitals
+  // output, and per #1448's acceptance it must reach the MEASURED branch. `starved` is the other
+  // real shape: no population at all (reduced tier / no git history / a fully-decayed authorship
+  // window), which must still reach the NOT-assessed branch.
+  const cleanRun: VitalsReport = { ...report, knowledge_risk: [] };
+  const starved: VitalsReport = { ...report, knowledge_risk: [], file_health: {}, files_analyzed: undefined };
 
   it("stays silent while a truck-factor-1 file exists — no row alongside the finding it would explain", () => {
     expect(truckFactorOneFiles(report).length).toBeGreaterThan(0);
@@ -355,16 +360,16 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
     expect(toFactFindings(report).map((f) => f.id)).not.toContain("M3-KNOWLEDGE-00");
   });
 
-  it("distinguishes 'analysed and found none' from 'nothing to analyse'", () => {
-    const measured = knowledgeRiskNotAssessed(multiAuthorOnly)[0];
-    expect(measured?.title).toContain(`analysed across ${report.knowledge_risk.length}`);
+  it("distinguishes 'analysed and found none' from 'nothing to analyse' — reachable both ways from REAL vitals shapes", () => {
+    const measured = knowledgeRiskNotAssessed(cleanRun)[0];
+    expect(measured?.title).toContain("analysed across 7");
     expect(measured?.confidence).toBe("Confirmed");
     expect(measured?.impact).toContain("None");
 
-    const starved = knowledgeRiskNotAssessed(noKnowledge)[0];
-    expect(starved?.title).toContain("NOT assessed");
-    expect(starved?.confidence).toBe("N/A");
-    expect(starved?.impact).toContain("NOT evidence the knowledge is well distributed");
+    const unmeasured = knowledgeRiskNotAssessed(starved)[0];
+    expect(unmeasured?.title).toContain("NOT assessed");
+    expect(unmeasured?.confidence).toBe("N/A");
+    expect(unmeasured?.impact).toContain("NOT evidence the knowledge is well distributed");
   });
 
   it("names the TWO-YEAR authorship horizon, not the 90-day churn window", () => {
@@ -372,7 +377,7 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
     // old still emits both truck-factor rows (vitals_cli.py:131 falls back to all tracked source
     // files); at 800 days they are gone (git_analysis.py:260, --since=2.years.ago). A reader sent
     // after the churn window would look in the wrong place.
-    const evidence = knowledgeRiskNotAssessed(noKnowledge)[0]?.evidence ?? "";
+    const evidence = knowledgeRiskNotAssessed(starved)[0]?.evidence ?? "";
     expect(evidence).toContain("TWO YEARS");
     expect(evidence).toContain("NOT the 90-day churn window");
   });
@@ -380,8 +385,9 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
   it("carries a taxonomy the conservation gate's M3 plant cannot match", () => {
     // The gate matches M3 on `Knowledge risk (truck-factor-1)`. If this row shared that taxonomy it
     // would satisfy the plant while the plant was gone — a disclosure that hides the thing it
-    // discloses.
-    expect(knowledgeRiskNotAssessed(noKnowledge)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
+    // discloses. Checked on both branches since #1448 made both reachable.
+    expect(knowledgeRiskNotAssessed(cleanRun)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
+    expect(knowledgeRiskNotAssessed(starved)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
   });
 
   it("does not disturb the M3 corpus scoring", () => {

@@ -473,7 +473,16 @@ export function toFactFindings(report: VitalsReport): Finding[] {
 // is the window that actually empties it.
 export function knowledgeRiskNotAssessed(report: VitalsReport): Finding[] {
   if (truckFactorOneFiles(report).length > 0) return [];
-  const analysed = report.knowledge_risk.length;
+  // #1448: `knowledge_risk` itself does not distinguish "ran and found nothing" from "had nothing
+  // to run on" — vitals_cli.py:238-245 only ever puts truck_factor<=1 rows into that array, so by
+  // the time the truck-factor-1 early return above has passed, `knowledge_risk` is always empty on
+  // every real vitals run. Its length was never the right signal. The split instead keys off
+  // whether authorship analysis had inputs at all — vitalsScope's knowledgePopulation, the same
+  // population capScopeFinding discloses (file_health, falling back to files_analyzed in vitals'
+  // own empty-code_files branch): a nonzero population means the signal ran and genuinely found no
+  // sole-authored file; an undefined/zero population means there was nothing to analyse.
+  const { knowledgePopulation } = vitalsScope(report);
+  const analysed = knowledgePopulation !== undefined && knowledgePopulation > 0 ? Math.min(VITALS_KNOWLEDGE_CAP, knowledgePopulation) : 0;
   const measured = analysed > 0;
   return [
     {
@@ -488,7 +497,7 @@ export function knowledgeRiskNotAssessed(report: VitalsReport): Finding[] {
       location: "(repository-wide)",
       status: "Open",
       evidence: measured
-        ? `vitals returned authorship for ${analysed} file(s) and every one has more than one substantive author, so no truck-factor-1 row was emitted. The signal ran; this is a measured result, not a gap.`
+        ? `vitals had ${analysed} file(s) in its knowledge-risk population (capped at ${VITALS_KNOWLEDGE_CAP}) and returned no truck-factor-1 (sole-author) row among them, so no truck-factor-1 finding was emitted. The signal ran; this is a measured result, not a gap.`
         : "vitals returned NO authorship rows at all, so no file could be judged sole-authored. Causes, in the order worth checking: (a) no commit in the trailing TWO YEARS touches an analysed source file — vitals scopes the authorship log to `--since=2.years.ago` (git_analysis.py:260), which is what empties this list, NOT the 90-day churn window (vitals_cli.py:131 falls back to all tracked source files when nothing clears the churn gate); (b) the target has no git history, so vitals ran complexity-only; (c) the `vitals` plugin is absent and this is the reduced M3 tier, which computes no knowledge-risk signal at all (#807).",
       impact: measured
         ? "None — recorded so an empty truck-factor list is never read as an unrun signal."
