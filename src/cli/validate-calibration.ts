@@ -115,6 +115,12 @@ const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged)
 const negReviewDrift = matrix.rows.filter((r) => r.kind === "negative" && !r.highFlagged && !r.pass);
 const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
 const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.pass);
+// #1248: the subset of those misses that are SOUNDNESS guards, not recall aspirations — see
+// CorpusEntry.mustCatch. Review misses are non-fatal because review recall has documented standing
+// gaps; an adversarial positive planted to prove a sanitizer exclusion still works is the opposite
+// kind of row, so its miss is fatal. MEASURED 2026-07-31: without this, deleting harvey-ssrf-fetch's
+// projection-throw try exclusions flipped P-SSRF-HOST-THROW-SWALLOWED to FAIL and still exited 0.
+const mustCatchMisses = reviewMisses.filter((r) => r.mustCatch);
 // A "none"-tier positive is an accepted no-mechanical-rule gap (e.g. WEBHOOK-REPLAY, #425). It
 // scores an intended gap while nothing of its class fires; a relevant finding means a rule
 // graduated — that is a GATE FAIL, forcing a re-tier so a by-design gap can't silently become a
@@ -215,7 +221,10 @@ console.log(
     "  property of the positive:negative ratio WE chose, not of how often each shape occurs in a real repo.",
 );
 if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
-if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
+// #1248: mustCatch rows are excluded here — they are fatal, and printing them under a "non-fatal"
+// heading is how a soundness miss reads as an accepted gap.
+const reviewGaps = reviewMisses.filter((r) => !r.mustCatch);
+if (reviewGaps.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewGaps.map((r) => r.id).join(", ")}`);
 
 // #823: the M7 code-tier / M8 test-intent heuristics are gated by their own labeled fixture
 // corpus (src/scan/heuristic-precision.ts — pure detectors, no binaries), so the calibration
@@ -341,8 +350,9 @@ for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`)
 // the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
-const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
+const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && mustCatchMisses.length === 0;
 if (!gatePass) {
+  if (mustCatchMisses.length) console.log(`\nGATE FAIL — soundness positive not caught (#1248): ${mustCatchMisses.map((r) => r.id).join(", ")}. These rows are adversarial fixtures planted to prove a sanitizer's exclusions still work, not review-recall aspirations — a miss means a guard was widened into clearing a live bug, never "we don't catch that yet".`);
   if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
   if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);

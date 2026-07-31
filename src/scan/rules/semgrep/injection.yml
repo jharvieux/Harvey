@@ -88,6 +88,107 @@ x-request-source: &request_source
         - pattern-not-inside: |
             (..., $RSCPROP, ...) => ...
 
+# #1248: the (a2) validator guards, with a failure branch that THROWS instead of returning.
+# Throwing is the idiomatic guard in a Next.js Server Action or route handler under an error
+# boundary, in Express with http-errors/createError, and in NestJS (BadRequestException) — so
+# before this block a correct throwing guard read as a Critical injection. MEASURED 2026-07-31
+# (semgrep 1.164.0): the issue's own repro fired harvey-sql-injection-template at Critical.
+#
+# WHY IT IS A SEPARATE SANITIZER AND NOT A WIDENED ARM. A `return` is unconditionally an exit.
+# A `throw` is an exit only if nothing between the guard and the sink catches it: with the guard
+# inside a `try` whose `catch` swallows, execution continues into the sink with the rejected
+# value live, and a `finally` runs the sink even when the throw propagates. That has no analogue
+# on the return path, so the throw spellings carry a constraint the return spellings do not —
+# the guard must not be lexically inside a try statement. This is deliberately conservative: a
+# guard AND its sink both inside one try (where the throw does skip the sink) is not cleared,
+# which costs precision in the safe direction and never clears a live value.
+# MEASURED 2026-07-31, both directions: with the two pattern-not-inside conjuncts the swallowed
+# and finally-run shapes FIRE; with them deleted both go silent — a real bug cleared by a guard
+# that never protected it. Adversarial positives P-SQLI-THROW-SWALLOWED / P-SQLI-THROW-FINALLY.
+#
+# `throw $E;` rather than `throw ...;`: a throw always carries an operand, so there is no
+# valueless twin to cover the way `return;` needed one.
+x-throw-guard: &throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# #1248: the SCHEMA-validator (a2) guard whose failure branch throws. Same soundness argument and
+# the same two try exclusions as x-throw-guard above, and the same allowlist constraints as the
+# return spelling — an ANCHORED, POSITIVE-class `.regex(...)` or an `.enum([...])` membership list,
+# because a bare `z.string()` accepts everything and `$P.data` IS then the raw input.
+#
+# UNLIKE the return spelling it is `by-side-effect` on `$P`, not a `pattern-inside` region ending
+# at `$P.data`. MEASURED 2026-07-31: semgrep's statement `...` matches DEEPLY, so a region written
+# `safeParse(...); ... if (!$P.success) throw $E; ...` matches a guard nested inside a `try` — and
+# the try exclusions, attached to the `$P.data` use site, sat outside that try and cleared it. Both
+# swallowed-throw fixtures went silent under that form and fire under this one
+# (P-CMD-ZOD-THROW-SWALLOWED, P-CMD-ZOD-ENUM-THROW-SWALLOWED).
+x-throw-schema-guard: &throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
   # execute / run_sql style RPCs run a raw SQL string, so any request-tainted argument is a SQLi
@@ -214,6 +315,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -346,6 +449,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -481,6 +586,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -613,6 +720,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -821,6 +930,12 @@ rules:
       it reports the parse of request-controlled XML, NOT proof that external-entity resolution is
       enabled. Whether it is depends on parser options that may be set in config this rule does not
       read, so exploitability has to be confirmed against the parser's actual settings.
+      Two XML parsers are DELIBERATELY not matched (#1273) and their absence is not a gap:
+      `sax` resolves no DTD entities at all (its README: "It's possible to define additional
+      entities in XML by putting them in the DTD. This parser doesn't do anything with that"), and
+      `node-expat` exposes no external-entity handler, so neither reaches an external entity. Feed
+      either one XML you do not trust and you still own a resource-exhaustion question, which is a
+      different weakness from this one and is not what this rule reports.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -850,6 +965,14 @@ rules:
     message: >
       Request input is joined into a filesystem path and read/written — path traversal
       (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.
+      SCOPE OF THIS CHECK, two independent bounds, so its silence elsewhere is not read as a
+      clean bill of health. (1) The sinks (#1273) are the node `fs` family, Supabase Storage object
+      keys, and express `res.sendFile`/`res.download`. A file opened through some other library, or
+      a `res.sendFile(p, { root })` whose `root` option confines the read, is judged by neither —
+      the first is not matched at all, and for the second this rule does not read the option.
+      (2) A resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248)
+      only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard
+      whose resolve is itself wrapped in try/catch is reported here rather than cleared.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -996,6 +1119,37 @@ rules:
                   ...
                   if (!$R.startsWith($PREFIX)) return ...;
                   ...
+      # #1248: the same containment guard rejecting by THROW, as its own entry for the reason the
+      # projection arm in base.yml records — the guard is required by a `pattern-inside` region and
+      # semgrep's statement `...` matches deeply, so `pattern-not-inside: try {...}` tested against
+      # the `path.resolve(...)` expression excludes nothing when only the guard is wrapped. The
+      # third exclusion (no `try` may follow the resolve) is what makes the throw spelling sound
+      # here. MEASURED both directions on N-PATH-RESOLVE-THROW /
+      # P-PATH-TRAVERSAL-THROW-SWALLOWED.
+      - patterns:
+          - pattern: path.resolve($BASE, $X)
+          - pattern-either:
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) throw $E;
+                  ...
+          - pattern-not-inside: |
+              try { ... }
+          - pattern-not-inside: |
+              try { ... } finally { ... }
+          - pattern-not-inside: |
+              $RR = path.resolve(...);
+              ...
+              try { ... }
+              ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       # #1220: the five modelled sinks were all callback/sync `fs.*` spelled with a LITERAL `fs.`
       # prefix, so `import { readFile } from "node:fs/promises"` — the idiomatic App Router form —
@@ -1026,6 +1180,18 @@ rules:
               - pattern: copyFile($P, ...)
               - pattern: unlink($P, ...)
               - pattern: readdir($P, ...)
+          - focus-metavariable: $P
+      # #1273: express `res.sendFile(p)` / `res.download(p)` open and stream a file off disk, so a
+      # request-controlled path argument is the same CWE-22 as `fs.readFile` — and it is the shape
+      # the #985 expansion comment recorded as missed (42/50 pathtraver). MEASURED 2026-07-31:
+      # `res.sendFile(req.query.file)` fired no harvey-* rule while the fs sinks above fired.
+      # Scoped to the two express response methods rather than any `.sendFile`, and `root`-confined
+      # calls stay flagged deliberately — `res.sendFile(p, { root })` still traverses out of `root`
+      # only if `p` is absolute, which express rejects, but nothing here proves the option is set.
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.sendFile($P, ...)
+              - pattern: $RES.download($P, ...)
           - focus-metavariable: $P
       # #1220: Supabase Storage as a PATH sink. For a Supabase-specialist audit this was the
       # notable hole — storage is a first-class tenant-data surface and no rule treated an object
@@ -1088,8 +1254,13 @@ rules:
       category: security
       harveySeverity: High
     message: >
-      Request input is compiled/rendered as a server-side template (ejs/handlebars/pug) — SSTI,
-      which escalates to RCE on most engines. Treat user input as data, never as template source.
+      Request input is compiled/rendered as a server-side template (ejs/handlebars/pug/nunjucks/
+      lodash) — SSTI, which escalates to RCE on most engines. Treat user input as data, never as
+      template source. SCOPE OF THIS CHECK (#1273): the engines named above, matched by their
+      conventional module binding (`ejs.`, `pug.`, `nunjucks.`, `Handlebars.`/`handlebars.`/`hbs.`,
+      `_.`/`lodash.`). A template engine reached through any other binding — a re-export, a
+      renderer wrapper, a `require` assigned to an unconventional name — is not matched, so this
+      rule's silence is not evidence that no template is user-controlled.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -1100,6 +1271,238 @@ rules:
               - pattern: Handlebars.compile($X, ...)
               - pattern: pug.render($X, ...)
               - pattern: pug.compile($X, ...)
+              # #1273 — the engines the #985 expansion comment recorded as missed (SSTI 19/50,
+              # el_injection 11/50), each MEASURED silent on 2026-07-31 before this arm.
+              # `nunjucks.render` is deliberately ABSENT: its first argument is a template NAME
+              # resolved against the configured loader, not template source, so a tainted name is
+              # a path-traversal question and not SSTI. `renderString`/`compile` take source.
+              - pattern: nunjucks.renderString($X, ...)
+              - pattern: nunjucks.compile($X, ...)
+              # lodash `_.template(src)` compiles an ES-template-delimited string with `new
+              # Function` — RCE-equivalent, and the shape the comment logged as el_injection.
+              - pattern: _.template($X, ...)
+              - pattern: lodash.template($X, ...)
+              # The lowercase/`hbs` bindings. MEASURED 2026-07-31: only the capitalised
+              # `Handlebars.compile` was matched, so `const handlebars = require("handlebars")` —
+              # the form the module's own README uses — read as clean.
+              - pattern: handlebars.compile($X, ...)
+              - pattern: hbs.compile($X, ...)
+          - focus-metavariable: $X
+
+  # #1273 — XPath injection. Recorded as a 50/50 true miss in #985's expansion comment and, MEASURED
+  # 2026-07-31 against a planted `xpath.select(req.query.q, doc)`, matched by no harvey-* rule: the
+  # class existed in no rule and in no issue anywhere in the repo. Request input concatenated into an
+  # XPath expression lets an attacker rewrite the predicate — the XML analogue of SQL injection, and
+  # in an XML-backed auth check it is an authentication bypass.
+  #
+  # LIMITATION: it reads the expression argument at the call site only. A tainted expression
+  # assembled in a helper in another file, or an XPath engine bound to some other name, is not
+  # matched, so silence here is not evidence that no expression is request-controlled.
+  - id: harvey-xpath-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-643: Improper Neutralization of Data within XPath Expressions ('XPath Injection')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input reaches an XPath expression unparameterized — XPath injection. An attacker
+      rewrites the predicate (`' or '1'='1`) to select nodes the query was never meant to return,
+      and against an XML-backed credential store that is an authentication bypass. Bind the value
+      as an XPath variable (xpath.useNamespaces / a variable resolver) instead of concatenating it.
+      SCOPE OF THIS CHECK: it matches the EXPRESSION argument of the `xpath` package and of the DOM
+      `evaluate`/`selectNodes`/`selectSingleNode` methods. A tainted value reaching the expression
+      through a helper in another file, or an XPath engine bound to some other name, is not matched.
+    pattern-sources:
+      - *request_source
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: xpath.select($X, ...)
+              - pattern: xpath.select1($X, ...)
+              - pattern: xpath.evaluate($X, ...)
+              - pattern: xpath.parse($X, ...)
+              - pattern: $D.evaluate($X, ...)
+              - pattern: $D.selectNodes($X, ...)
+              - pattern: $D.selectSingleNode($X, ...)
+          - focus-metavariable: $X
+
+  # #1273 — LDAP injection. #985's expansion comment listed it as a new class ("lower priority");
+  # MEASURED 2026-07-31 it was matched by no harvey-* rule and named in no issue. Request input
+  # concatenated into a search FILTER lets an attacker rewrite it (`*)(uid=*`), turning a
+  # single-account lookup into a directory dump or an auth bypass.
+  #
+  # LIMITATION: scoped to the search/bind/compare/modify call sites of files that import or require
+  # ldapjs/ldapts. A filter assembled in a helper module and passed in, an LDAP client re-exported
+  # through a project wrapper, or any client outside that module set is not matched.
+  - id: harvey-ldap-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-90: Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input reaches an LDAP search filter or bind DN unescaped — LDAP injection. `*)(uid=*`
+      rewrites the filter into one that matches every entry, and in an LDAP-backed login that is an
+      authentication bypass. Escape with the client's filter-escaping helper (ldapjs
+      `filter.escape`, ldapts `EqualityFilter`) or build the filter from typed objects.
+      SCOPE OF THIS CHECK: the `search`/`searchAsync` options object, the `bind` DN, the `compare`
+      value and the `modify` Change — each taint-gated on its own argument, all four MEASURED
+      2026-07-31 as firing. It requires the file itself to pull in `ldapjs` or `ldapts` — by
+      `import` or by `require`, both also MEASURED — so a filter assembled in a helper module and
+      passed in, an LDAP client re-exported through a project wrapper, or any client outside that
+      module set is NOT matched.
+    pattern-sources:
+      - *request_source
+    pattern-sinks:
+      - patterns:
+          # Each arm focuses its OWN tainted argument. MEASURED 2026-07-31: with a single
+          # `focus-metavariable: $OPTS` covering the whole block, the bind/compare/modify arms were
+          # DEAD — they never bind `$OPTS`, so a planted tainted bind DN, compare value and modify
+          # Change all produced nothing while the message advertised all four call sites. That is a
+          # bound stated backwards: it claimed MORE coverage than the rule had.
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: $C.search($BASE, $OPTS, ...)
+                      - pattern: $C.searchAsync($BASE, $OPTS, ...)
+                  - focus-metavariable: $OPTS
+              # The bind DN. `log.bind(null, req.query.x)` — Function.prototype.bind inside a file
+              # that also imports an LDAP client — does NOT fire: the focus is the FIRST argument,
+              # which in that idiom is the `this` value, not the tainted one (MEASURED).
+              - patterns:
+                  - pattern: $C.bind($DN, ...)
+                  - focus-metavariable: $DN
+              - patterns:
+                  - pattern: $C.compare($DN, $ATTR, $X, ...)
+                  - focus-metavariable: $X
+              - patterns:
+                  - pattern: $C.modify($DN, $CHANGE, ...)
+                  - focus-metavariable: $CHANGE
+          # MEASURED 2026-07-31: a `require("ldapjs")`-only binding produced NOTHING for
+          # `import ldap from "ldapjs"` — the dominant form in the Next.js/TS apps this product
+          # audits — and nothing for `ldapts`, which this rule's own remediation text names. Both
+          # module forms and both clients are bound here; the calibration pair carries a CommonJS
+          # positive and an ESM/ldapts positive so neither form can silently regress.
+          - pattern-either:
+              - pattern-inside: |
+                  import "$MOD"
+                  ...
+              - pattern-inside: |
+                  require("$MOD")
+                  ...
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(ldapjs|ldapts)$
+
+  # #1273 — CSV formula injection. #985's expansion comment listed it as a new class; MEASURED
+  # 2026-07-31 it was matched by no harvey-* rule. A cell beginning `=`/`+`/`-`/`@`/tab/CR is
+  # evaluated as a FORMULA when the export is opened in Excel or Sheets — `=cmd|'/c calc'!A0` and
+  # `=IMPORTXML(...)` exfiltrate the row's neighbours to an attacker-controlled host. The defect is
+  # in the exporting app, and the victim is whoever opens the file.
+  #
+  # LIMITATION: both halves measured against planted shapes — it is taint-gated on a REQUEST source,
+  # so the commoner STORED variant (written in one request, exported in another) is not covered;
+  # and it matches the CSV/spreadsheet SERIALIZERS at their conventional module bindings, so a CSV
+  # assembled by string concatenation and handed to `res.send`, or a serializer reached through a
+  # re-export or an unconventional alias, is not matched.
+  - id: harvey-csv-formula-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      # #1273: CWE-1236 is definitional. Unlike the sibling injection rules it carries NO owasp
+      # field: VERIFIED 2026-07-31 against OWASP's own published A03:2021 "List of Mapped CWEs"
+      # (owasp.org/Top10/2021/A03_2021-Injection/), CWE-1236 is NOT in it — the list runs CWE-20,
+      # 74, 75, 77, 78, 79, 80, 83, 87, 88, 89, 90, 91, 93, 94, 95, 96, 97, 98, 99, 100, 113, 116,
+      # 138, 184, 470, 471, 564, 610, 643, 644, 652, 917. Same posture as harvey-redos.
+      cwe: ["CWE-1236: Improper Neutralization of Formula Elements in a CSV File"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Request input is serialized into a CSV/spreadsheet export without neutralizing formula
+      prefixes — CSV formula injection. A cell starting `=`, `+`, `-`, `@`, tab or CR is executed as
+      a formula by Excel and Google Sheets when a colleague opens the export, which is enough to
+      exfiltrate the sheet to an attacker-controlled URL. Prefix such cells with a single quote or
+      reject them at write time.
+      SCOPE OF THIS CHECK, both halves MEASURED 2026-07-31 against planted shapes. (1) It is
+      taint-gated on a REQUEST source, so it reports the reflected variant — input that reaches the
+      exporter in the same request. The commoner STORED variant, where a value is written to the
+      database in one request and exported in another, crosses a persistence boundary this rule
+      does not follow and is NOT reported by it. (2) It matches the CSV/spreadsheet SERIALIZERS
+      (csv-stringify, fast-csv, papaparse, json2csv, SheetJS) AT THEIR CONVENTIONAL MODULE
+      BINDINGS — the bare `stringify`/`writeToString` arms require the file to import one of those
+      modules (either `import` or `require`), and the json2csv arm requires both a json2csv import
+      and its own exported constructor name. A serializer reached through a re-export, an export
+      wrapper or an unconventional alias is NOT matched, and neither is a CSV assembled by string
+      concatenation and handed to `res.send`. Read its silence accordingly.
+    pattern-sources:
+      - *request_source
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # csv-stringify / fast-csv export BARE named functions, so the call alone says
+              # nothing about the callee. MEASURED 2026-07-31: an unbound `stringify($X, ...)`
+              # fires on a locally-defined `function stringify(o) { return String(o) }`. Bind the
+              # arm to a CSV module the file actually imports — both the ESM and the CommonJS
+              # form, because a `require`-only binding is blind to the dominant Next.js/TS shape.
+              - patterns:
+                  - pattern-either:
+                      - pattern: stringify($X, ...)
+                      - pattern: stringifySync($X, ...)
+                      - pattern: writeToString($X, ...)
+                      - pattern: writeToBuffer($X, ...)
+                  - pattern-either:
+                      - pattern-inside: |
+                          import "$MOD"
+                          ...
+                      - pattern-inside: |
+                          require("$MOD")
+                          ...
+                  - metavariable-regex:
+                      metavariable: $MOD
+                      regex: ^(csv-stringify(/sync)?|csv(/sync)?|fast-csv|@fast-csv/format)$
+              # papaparse / SheetJS, bound to their conventional module bindings the way the SSTI
+              # arms are bound to `ejs.`/`pug.`/`nunjucks.`. `$P` binds the dotted receiver, so
+              # `XLSX.utils.json_to_sheet` matches on the `XLSX\.utils` alternative.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $P.unparse($X, ...)
+                      - pattern: $P.json_to_sheet($X, ...)
+                      - pattern: $P.aoa_to_sheet($X, ...)
+                  - metavariable-regex:
+                      metavariable: $P
+                      regex: ^([Pp]apa([Pp]arse)?|(XLSX|xlsx)(\.utils)?|utils)$
+              # json2csv's `new Parser(opts).parse(records)`. MEASURED 2026-07-31: an unbound `$P`
+              # here fires on ANY constructor with a `.parse` method — `new expat.Parser('UTF-8')
+              # .parse(req.body.xml)` (the very shape this file DECLINES as an XXE sink, so it
+              # drew a CWE-1236 Medium instead of nothing) and `new XMLParser({…}).parse(…)` from
+              # fast-xml-parser. Bound to json2csv's own exported constructor names AND to a
+              # json2csv import — the name alone is not enough, since node-expat also exports a
+              # `Parser` that can be destructured out of its require.
+              - patterns:
+                  - pattern: new $P($OPTS).parse($X, ...)
+                  - metavariable-regex:
+                      metavariable: $P
+                      regex: ^(Parser|AsyncParser|Json2csvParser|json2csv\.Parser|json2csv\.AsyncParser)$
+                  - pattern-either:
+                      - pattern-inside: |
+                          import "$CSVMOD"
+                          ...
+                      - pattern-inside: |
+                          require("$CSVMOD")
+                          ...
+                  - metavariable-regex:
+                      metavariable: $CSVMOD
+                      regex: ^(json2csv|@json2csv/plainjs|@json2csv/node)$
           - focus-metavariable: $X
 
   # ReDoS: a regex literal with a nested quantifier ((a+)+ style) — catastrophic backtracking on a
@@ -1215,6 +1618,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -1559,6 +1964,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)

@@ -29,19 +29,34 @@ export const AUDIT_MODULES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M
 
 export type AuditModule = (typeof AUDIT_MODULES)[number];
 
-// The minimum environment a module requires. Lets the gate tell a legitimate environment-gated
-// skip (e.g. M2 with no running app in scope) from a silent omission — it annotates the gap with
-// what was missing rather than excusing it. This is the MINIMUM: M7 runs its code-level detectors
-// on source alone (#170) and M10 classifies columns straight out of migration SQL (#250); without
-// a live DB each loses a layer, so each records "partial", not a skip.
+// The minimum environment a module requires — a TECHNICAL requirement only, and since #1415 nothing
+// more. It lets the gate tell a legitimate environment-gated skip (e.g. M2 with no running app in
+// scope) from a silent omission: it annotates the gap with what was missing rather than excusing it.
+// This is the MINIMUM: M7 runs its code-level detectors on source alone (#170) and M10 classifies
+// columns straight out of migration SQL (#250); without a live DB each loses a layer, so each
+// records "partial", not a skip.
+//
+// It deliberately says NOTHING about price. #1296 briefly derived `freeTier` from this field, which
+// made the commercial boundary a consequence of an engineering fact and cost the product a lever.
+//
+// REASON: `needs` describes only what a module technically requires to execute; the free/paid split is `freeTier`, and the two are deliberately allowed to disagree.
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-07-31 — over the committed dry-run/findings.json (638 rows), the free set is 140 both before and after freeTier became the gate, so wiring it changed no client's current output; it made the boundary editable.
+// OWNER: operator
+// DECISION: #1296 (2026-07-28) — "The free/paid line is a commercial decision, not merely a technical one. Harvey may later put a source-only module behind the paywall, or include a paid-LLM module free as an acquisition hook. freeTier becomes the authoritative field for that; needs describes only the technical requirement." Carried into #1415, which wired it and removed the invariant that forbade the divergence.
 type ModuleNeed = "source" | "connected" | "dynamic" | "llm";
 
-// `freeTier`: contributes to the free source-only scan (vs paid-only). docs/free-tier-scope.md is
-// the source of truth, and since #1071 that is enforced rather than asserted — audit-coverage.test.ts
-// derives the split from that document's "What the free scan delivers" table and fails on any
-// disagreement. It had drifted: M3/M5/M6 were marked paid-only here while the doc AND the site
-// advertise all three as free. The field had no reader at the time, so nothing surfaced it; the
-// parity test is now that reader, so a wrong value cannot sit here waiting to be adopted as truth.
+// `freeTier`: whether the free source-only scan DELIVERS this module's findings to the client. It is
+// the authoritative commercial flag (operator ruling above) and the one `selectFreeFindings`
+// (src/quick-scan.ts) reads — flipping it here changes what a free-tier client receives, with no
+// other code change.
+//
+// docs/free-tier-scope.md remains the source of truth for the VALUES, enforced rather than asserted
+// since #1071: audit-coverage.test.ts derives the split from that document's "What the free scan
+// delivers" table and fails on any disagreement. It had drifted — M3/M5/M6 were marked paid-only
+// here while the doc AND the site advertise all three as free — and nothing read the field, so
+// nothing surfaced it. Changing the split therefore means editing the doc and this table together;
+// that is the intended friction, because the doc is what a client was promised.
 export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; freeTier: boolean }> = {
   M1: { name: "Multi-tenant security", needs: "source", freeTier: true },
   M2: { name: "Local pen-test (dynamic)", needs: "dynamic", freeTier: false },
@@ -59,19 +74,22 @@ export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; fre
   M10: { name: "Data classification (PII/PHI/PCI)", needs: "source", freeTier: true },
 };
 
-// #1296: `needs` is what actually gates behaviour (envGated, below) — `freeTier` had no production
-// reader and had drifted from it (M6 disagreed: needs:"llm", freeTier:true). Under the free tier's
-// own definition (docs/free-tier-scope.md: "no database, no credentials, no contact with
-// production"), a module whose MINIMUM environment is anything but "source" cannot be free — so
-// freeTier is fully determined by needs, and the two encoding the same fact by hand is exactly the
-// two-list drift this file's own history (#288) warns about. `needs` is the decided source of
-// truth; this throws at load if `freeTier` is ever hand-edited out of sync with it again, rather
-// than waiting for a test run to notice.
-for (const [id, m] of Object.entries(MODULES)) {
-  const derived = m.needs === "source";
-  if (m.freeTier !== derived) {
-    throw new Error(`MODULES.${id}: freeTier (${m.freeTier}) disagrees with needs (${m.needs}) — freeTier must equal (needs === "source")`);
-  }
+// #1296 shipped a load-time invariant here that threw whenever `freeTier !== (needs === "source")`.
+// #1415 REMOVED it under the operator ruling above: `freeTier: true, needs: "llm"` (a paid-LLM
+// module given away as an acquisition hook) and `freeTier: false, needs: "source"` (a source-only
+// module moved behind the paywall) are both legal, and an invariant forbidding them is the product
+// lever being asserted away as an engineering fact. Nothing replaces it — the doc↔code parity test
+// in audit-coverage.test.ts still pins every VALUE against docs/free-tier-scope.md, which is the
+// check that was actually catching drift.
+
+/** The module a finding rolls up to, for the free/paid split. */
+export function moduleOfFinding(taxonomy: string): AuditModule {
+  // An explicit "M<n> — …" taxonomy always wins. quick-scan's UN-prefixed rows (semgrep security
+  // rules, secrets, dependency CVEs, dangerous config) fall back to M1, the mechanical tier
+  // quick-scan leads — the same convention src/cli/breadth-sweep.ts's moduleOf uses.
+  const m = /^M(\d+)\b/.exec(taxonomy);
+  const id = m ? `M${m[1]}` : "M1";
+  return (id in MODULES ? id : "M1") as AuditModule;
 }
 
 // Modules with no execution record in ANY engagement, ever. This is a repo-level ledger, not a

@@ -51,3 +51,34 @@ alter table public.d091_contacts force row level security;
 create policy d091_contacts_tenant_isolation on public.d091_contacts
   for all
   using (tenant_id = current_setting('app.current_tenant')::uuid);
+
+-- #1257, the schema half of the item-25 NEGATIVES. Same shape as d091_contacts and the same RLS
+-- recipe, differing only in the constraint the detector has to read: the composite pair the app
+-- dedupes on is UNIQUE here, so the second concurrent insert fails and the dedup is correct.
+create table public.d091_contacts_unique (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null,
+  external_ref text not null,
+  unique (tenant_id, external_ref)
+);
+create index d091_contacts_unique_tenant_id_idx on public.d091_contacts_unique (tenant_id);
+alter table public.d091_contacts_unique enable row level security;
+alter table public.d091_contacts_unique force row level security;
+create policy d091_contacts_unique_tenant_isolation on public.d091_contacts_unique
+  for all
+  using (tenant_id = current_setting('app.current_tenant')::uuid);
+
+-- #1257: the same table WITHOUT the constraint, for the read-only and upsert negatives — so those
+-- two rows prove the app-side conjuncts rather than being satisfied by a constraint that would
+-- clear them anyway.
+create table public.d091_contacts_readonly (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null,
+  external_ref text not null
+);
+create index d091_contacts_readonly_tenant_id_idx on public.d091_contacts_readonly (tenant_id);
+alter table public.d091_contacts_readonly enable row level security;
+alter table public.d091_contacts_readonly force row level security;
+create policy d091_contacts_readonly_tenant_isolation on public.d091_contacts_readonly
+  for all
+  using (tenant_id = current_setting('app.current_tenant')::uuid);

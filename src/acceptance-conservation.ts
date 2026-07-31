@@ -112,6 +112,13 @@ interface DispositionLine {
   line: number;
   /** Which surface it was read from. A line number alone leaves the reader guessing which of two venues holds a duplicate. */
   venue: string;
+  /**
+   * The next line, when it reads as prose continuing this one (#1565). The parser is line-by-line
+   * and does NOT join it, so evidence that wraps is judged on its first line alone — the rejection
+   * every real executor hit hardest, because it punishes exactly the thorough evidence the gate
+   * asks for. Carried here so the failure can SAY that rather than reporting a mystery.
+   */
+  wrappedInto?: string;
 }
 
 interface NoCriteriaLine {
@@ -158,6 +165,63 @@ const REMAINDER_LINE = /^remainder\s*:\s*#(\d+)\b/i;
 
 const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
 const strip = (line: string): string => line.replace(DECORATION, "");
+
+/**
+ * #1565 — the near-miss diagnoses. The grammar is exact and the parser is line-by-line, so a line
+ * that ALMOST parses fell through to "malformed, expected <grammar>" and the criterion it meant to
+ * map was then reported as UNMAPPED somewhere else in the output. Every shape below was hit by a
+ * real executor on 2026-07-30 and cost a round trip, because the only way to discover the rule was
+ * to trip over it. Each one says what is wrong with THAT LINE.
+ */
+function malformedDisposition(line: string): string {
+  const grammar = "expected `ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>` or `ACCEPTANCE #<issue> no-stated-criteria: <bar>`";
+
+  const perCriterionNoCriteria = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+no-stated-criteria\b/i.exec(line);
+  if (perCriterionNoCriteria) {
+    return `malformed ACCEPTANCE line — \`no-stated-criteria\` is a WHOLE-ISSUE declaration and takes no criterion number, so \`#${perCriterionNoCriteria[1]}.${perCriterionNoCriteria[2]}\` cannot carry it. Write \`ACCEPTANCE #${perCriterionNoCriteria[1]} no-stated-criteria: <what the bar was>\`, and only when the issue states no criteria at all — an issue that DOES state them needs one \`met|split|relayed\` line per bullet. Got: ${line}`;
+  }
+
+  const verdict = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+(met|split|relayed)\b\s*(.*)$/i.exec(line);
+  if (verdict) {
+    const [, issue, index, word, rest = ""] = verdict;
+    const head = `ACCEPTANCE #${issue}.${index} ${word!.toLowerCase()}`;
+    if (/^[—–-]/.test(rest)) {
+      return `malformed ACCEPTANCE line — the verdict is separated from its evidence by a dash (\`${rest.charAt(0)}\`); the grammar needs a COLON and nothing else. Write \`${head}: ${rest.replace(/^[—–-]\s*/, "") || "<detail>"}\`. Got: ${line}`;
+    }
+    if (rest.startsWith("(")) {
+      const paren = /^\(([^)]*)\)\s*:?\s*(.*)$/.exec(rest);
+      return `malformed ACCEPTANCE line — a parenthetical sits between the verdict and the colon, and the grammar allows nothing there. Write \`${head}: ${paren?.[2] || "<detail>"}\`${paren?.[1] ? ` and fold "${paren[1]}" into the detail` : ""}. Got: ${line}`;
+    }
+    if (/^:\s*$/.test(rest) || rest === "") {
+      return `malformed ACCEPTANCE line — \`${head}\` carries no detail after the colon, and an empty detail is an unmapped bullet with a label on it. Got: ${line}`;
+    }
+    return `malformed ACCEPTANCE line — \`${head}\` must be followed by \`: <detail>\` with nothing between the verdict and the colon; ${grammar}. Got: ${line}`;
+  }
+
+  const unknownVerdict = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+([\w-]+)\b/i.exec(line);
+  if (unknownVerdict) {
+    return `malformed ACCEPTANCE line — \`${unknownVerdict[3]}\` is not a disposition; the three are \`met\`, \`split\` and \`relayed\`. ${grammar}. Got: ${line}`;
+  }
+
+  return `malformed ACCEPTANCE line — ${grammar}, got: ${line}`;
+}
+
+/**
+ * Whether the line after a disposition reads as PROSE CONTINUING it, rather than as the next piece
+ * of structure. Deliberately conservative: anything that is itself a disposition, a remainder, a
+ * heading, a bullet or a fence is structure, and a blank line ends the paragraph. Used only to
+ * DECORATE a failure that has already happened, never to create one — so a false positive costs a
+ * misleading hint, never a wrong verdict.
+ */
+function wrapContinuation(next: string | undefined): string | undefined {
+  if (next === undefined || next.trim() === "") return undefined;
+  if (BULLET.test(next) || /^\s*(?:#{1,6}\s|```|>|\|)/.test(next)) return undefined;
+  const text = next.trim();
+  const structure = /^ACCEPTANCE\s+#/i.test(text)
+    || REMAINDER_LINE.test(text)
+    || /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+(?:[\w.-]+\/[\w.-]+)?#\d/i.test(text);
+  return structure ? undefined : text;
+}
 
 /**
  * A bold pseudo-heading (`**Like this.**`) carries no level, so it ranks BELOW `######` — deliberately.
@@ -264,10 +328,12 @@ export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY
   const remainders: RemainderRef[] = [];
   const parseErrors: string[] = [];
 
-  lines(prBody).forEach((raw, i) => {
+  const all = lines(prBody);
+  all.forEach((raw, i) => {
     const line = strip(raw).trim();
     const d = DISPOSITION_LINE.exec(line);
     if (d) {
+      const wrappedInto = wrapContinuation(all[i + 1]);
       dispositions.push({
         issue: Number(d[1]),
         index: Number(d[2]),
@@ -275,6 +341,7 @@ export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY
         detail: d[4]!.trim(),
         line: i + 1,
         venue,
+        ...(wrappedInto === undefined ? {} : { wrappedInto }),
       });
       return;
     }
@@ -288,7 +355,7 @@ export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY
     // separates a real attempt from the `#<issue>` placeholders in .github/pull_request_template.md,
     // which survive in the raw body GitHub hands back even though the reader never sees them.
     if (/^ACCEPTANCE\s+#\d/i.test(line)) {
-      parseErrors.push(`${venue}, line ${i + 1}: malformed ACCEPTANCE line — expected \`ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>\` or \`ACCEPTANCE #<issue> no-stated-criteria: <bar>\`, got: ${line}`);
+      parseErrors.push(`${venue}, line ${i + 1}: ${malformedDisposition(line)}`);
       return;
     }
     const r = REMAINDER_LINE.exec(line);
@@ -336,12 +403,18 @@ export interface EvidenceWorld {
   testNames: ReadonlySet<string>;
 }
 
-// Order matters: JS regex alternation is first-match, not longest-match, so an extension that is a
-// PREFIX of another (js/json, ts/tsx) must be listed AFTER the longer one it would otherwise
-// truncate. MEASURED 2026-07-30: with `js` before `json`, `package-lock.json` matched as
-// `package-lock.js` — a real citation of an existing file reported as pointing at a nonexistent
-// one, on the acceptance-conservation gate's OWN evidence-checking path.
-const FILE_PATH = /[\w./-]+\.(?:tsx|ts|mjs|cjs|json|js|md|ya?ml|sql|sh|py|toml)(?::\d+)?/g;
+// JS regex alternation is first-match, not longest-match, so an extension that is a PREFIX of
+// another (js/json, ts/tsx, js/jsx, md/mdx) gets TRUNCATED — a real citation of an existing file is
+// then reported as pointing at a nonexistent one, on the acceptance gate's OWN evidence path.
+// #1266 fixed that by ORDERING, which fixes one pair at a time and left two live: MEASURED
+// 2026-07-31 against the real checkout, `targets/calibration/components/AdminPanel.jsx` (one of 26
+// tracked `.jsx` files) extracted as `AdminPanel.js`, and `docs/a.mdx` as `docs/a.md` (0 tracked
+// `.mdx` today — latent, not live). The `(?!\w)` boundary fixes the CLASS: a prefix match is
+// refused outright, so a future extension added in the wrong place stops being able to reintroduce
+// this. Order is kept longest-first anyway so the two mechanisms agree rather than one masking
+// the other.
+const FILE_PATH_SOURCE = String.raw`[\w./-]+\.(?:tsx|ts|jsx|js|mjs|cjs|json|mdx|md|ya?ml|sql|sh|py|toml)(?!\w)(?::\d+)?`;
+const FILE_PATH = new RegExp(FILE_PATH_SOURCE, "g");
 const BACKTICKED = /`([^`]+)`/g;
 const QUOTED_SPAN = /"([^"]{8,})"/g;
 
@@ -412,7 +485,9 @@ const EVIDENCE_SHAPES: { name: string; re: RegExp }[] = [
   // words and no longer matches HERE — it matches the command shape below, which is what it is.
   { name: "a backticked command, path or identifier", re: /`(?=[^`]{4,}`)(?:[^`\s]+|[^`]*[^`A-Za-z\s][^`]*)`/ },
   { name: "a command", re: /\b(?:pnpm|npm|npx|node|tsx|vitest|git|gh|semgrep|docker|make|curl|psql)\s+\S/ },
-  { name: "a file path", re: /[\w./-]+\.(?:ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh|py|toml)(?::\d+)?/ },
+  // Same source as FILE_PATH, so the shape check and the truth check can never disagree about what
+  // a path is — this line carried its OWN hand-copied alternation, still in the pre-#1266 order.
+  { name: "a file path", re: new RegExp(FILE_PATH_SOURCE) },
   { name: "a quoted test name", re: /"[^"]{8,}"/ },
   // The old /\b[0-9a-f]{7,40}\b/ matched ordinary English — "defaced", "accede", "facade" are all
   // 6-7 letters drawn from [a-f] — and any 7-digit number, so "run 90131391124 was green" read as a
@@ -459,7 +534,10 @@ export function evidenceProblems(detail: string, world?: EvidenceWorld): string[
     return [...text.matchAll(QUOTED_SPAN)].some((m) => namesATest(m[1]!, world));
   });
   if (held.length === 0) {
-    return [`\`met\` evidence names none of: ${EVIDENCE_SHAPES.map((s) => s.name).join(", ")}${world ? " (a quoted span counts only when the suite contains that test title)" : ""}. An assertion is not evidence`];
+    // The shape NAMES alone left the author guessing what a passing line looks like (#1565, mode 6),
+    // so one is shown. `pnpm verify` unbackticked matches the command shape but is not truth-checked;
+    // the example backticks it, which is the form the measured population already uses.
+    return [`\`met\` evidence names none of: ${EVIDENCE_SHAPES.map((s) => s.name).join(", ")}${world ? " (a quoted span counts only when the suite contains that test title)" : ""}. An assertion is not evidence — a line that passes looks like \`ACCEPTANCE #<issue>.<n> met: \`pnpm verify\` green; src/foo.ts:42 now throws\``];
   }
   return [];
 }
@@ -587,8 +665,12 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
   }
 
   const mine = parsed.dispositions.filter((d) => d.issue === issue);
+  // #1565: print the criteria the gate PARSED, not just how many there are. Numbering is positional
+  // over the issue's own bullets, and an author renumbering against the RENDERED issue is reading a
+  // different list from the gate's — the two differ exactly when the parse is the defect.
+  const parsedList = criteria.map((c) => `${c.index}. ${c.text.slice(0, 90)}`).join("  |  ");
   for (const d of mine.filter((d) => d.index < 1 || d.index > criteria.length)) {
-    problems.push(`${d.venue}, line ${d.line}: disposition names criterion #${issue}.${d.index}, but #${issue} states ${criteria.length}`);
+    problems.push(`${d.venue}, line ${d.line}: disposition names criterion #${issue}.${d.index}, but #${issue} states ${criteria.length}. Numbering is POSITIONAL over the bullets this gate parsed from the ${source} — renumber against these: ${parsedList}`);
   }
 
   const verdicts = criteria.map((c): CriterionVerdict => {
@@ -602,7 +684,17 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     }
     const d = matched[0]!;
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
-    if (d.disposition === "met") verdict.problems.push(...evidenceProblems(d.detail, world));
+    if (d.disposition === "met") {
+      const evidence = evidenceProblems(d.detail, world);
+      verdict.problems.push(...evidence);
+      // #1565: the wrap. The parser reads line by line, so a long correct `met` whose evidence runs
+      // onto the next line is judged on its first line alone and fails for a reason the message
+      // never stated. Attached ONLY to an evidence failure, so it explains a rejection rather than
+      // creating one.
+      if (evidence.length > 0 && d.wrappedInto !== undefined) {
+        verdict.problems.push(`the evidence was TRUNCATED AT A LINE BREAK — ${d.venue}, line ${d.line} is read to its end and line ${d.line + 1} ("${d.wrappedInto.slice(0, 70)}") is NOT joined to it. Put the whole disposition on one line`);
+      }
+    }
     if (d.disposition === "split" && !/#\d+/.test(d.detail)) {
       verdict.problems.push("`split` names no remainder issue — a split with no live remainder is a deletion (#1316)");
     }

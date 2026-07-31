@@ -40,7 +40,19 @@ function readScripts(dir: string): Record<string, string> | undefined {
   }
 }
 
-const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace">) => `${c.workspace}\u0000${c.command}`;
+export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace">) => `${c.workspace}\u0000${c.command}`;
+
+/**
+ * A baseline result is a property of `(targetDir, baselineCommit, workspace, command)` and nothing
+ * else — the run happens in a worktree cut at that commit, in that workspace, so two findings in one
+ * batch that discover the same command get the same answer (#1529). The commit and the checkout are
+ * in the key so a cache reused across batches, or across two engagements in one process, keeps each
+ * target's baseline to its own target.
+ */
+export type BaselineCache = Map<string, CommandRun>;
+
+export const baselineCacheKey = (targetDir: string, baselineCommit: string, c: Pick<DiscoveredCommand, "command" | "workspace">): string =>
+  `${targetDir}\u0000${baselineCommit}\u0000${cmdKey(c)}`;
 
 // Which runner the client's own scripts are meant to be invoked with, read off the committed
 // lockfile. It matters: `pnpm run <script>` performs a deps-status check that fails in a repo whose
