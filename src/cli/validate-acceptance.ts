@@ -51,6 +51,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkAcceptance,
   checkClosedIssue,
+  closeActions,
   closeFailureComment,
   closeSelftestCases,
   formatAcceptance,
@@ -245,23 +246,25 @@ if (closedIssueFlag) {
   console.log(args.includes("--json") ? JSON.stringify(closeReport, null, 2) : formatClosedIssue(closeReport));
 
   // The failure ACTION, run here rather than in YAML so it is the same code the tests and the drill
-  // exercise. Re-open ONCE: the label is the memory. Without it a human who closes the issue again
-  // deliberately gets into a fight with a bot; with it, the second close stands and the label is the
-  // standing record that a criterion was never accounted for.
+  // exercise. Re-open EVERY time (#1696): a failed close has ONE terminal state — commented,
+  // labelled, OPEN — whatever failed and however many times. The once-rule this replaced left the
+  // repeat failure closed-and-labelled, a state that reads as completed everywhere labels are not
+  // shown, and which had accumulated on 10 of 10 labelled closed issues by 2026-07-31 with the
+  // "standing record" reaching nobody. The way out of a re-open is one disposition line per
+  // criterion, not a second click. The decision lives in closeActions() so the suite can fail it.
   if (args.includes("--act")) {
     const labelled = gh(["issue", "view", String(issue), ...repoArgs, "--json", "labels", "--jq", "[.labels[].name] | join(\",\")"]).stdout.trim().split(",");
-    const already = labelled.includes(CLOSE_LABEL);
-    if (!closeReport.ok) {
+    const act = closeActions(closeReport.ok, labelled.includes(CLOSE_LABEL));
+    if (act.addLabel) {
       gh(["label", "create", CLOSE_LABEL, ...repoArgs, "--color", "B60205", "--description", "Closed with an acceptance criterion nothing accounted for (#1341)", "--force"]);
       gh(["issue", "edit", String(issue), ...repoArgs, "--add-label", CLOSE_LABEL]);
-      gh(["issue", "comment", String(issue), ...repoArgs, "--body", closeFailureComment(closeReport)]);
-      if (already) {
-        console.log(`\nℹ ACTED: commented and re-labelled, and did NOT re-open — \`${CLOSE_LABEL}\` was already on this issue, so it has been through here once and the human's second close stands.`);
-      } else {
-        const reopen = gh(["issue", "reopen", String(issue), ...repoArgs]);
-        console.log(reopen.status === 0 ? "\nℹ ACTED: commented, labelled and RE-OPENED. The gate holds the issue open until a disposition exists." : `\n✗ could not re-open #${issue}: ${reopen.stderr.trim()}`);
-      }
-    } else if (already) {
+    }
+    if (act.comment) gh(["issue", "comment", String(issue), ...repoArgs, "--body", closeFailureComment(closeReport)]);
+    if (act.reopen) {
+      const reopen = gh(["issue", "reopen", String(issue), ...repoArgs]);
+      console.log(reopen.status === 0 ? "\nℹ ACTED: commented, labelled and RE-OPENED — the one terminal state of a failed close (#1696). The gate holds the issue open until a disposition exists." : `\n✗ could not re-open #${issue}: ${reopen.stderr.trim()}`);
+    }
+    if (act.removeLabel) {
       gh(["issue", "edit", String(issue), ...repoArgs, "--remove-label", CLOSE_LABEL]);
       console.log(`\nℹ ACTED: removed \`${CLOSE_LABEL}\` — the dispositions are now on record, so the label would be a false statement about this issue.`);
     }

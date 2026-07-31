@@ -15,7 +15,7 @@
 // exactly as it would against real GitHub.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 const [kind, verb, id] = args;
+// Mutations are RECORDED, never emulated: the --act tests assert which side effects the CLI asked
+// for, which is exactly the seam where the #1696 divergence lived.
+if ((kind === "issue" && ["edit", "comment", "reopen"].includes(verb)) || (kind === "label" && verb === "create")) {
+  if (process.env.HARVEY_GH_LOG) fs.appendFileSync(process.env.HARVEY_GH_LOG, JSON.stringify(args) + "\\n");
+  process.exit(0);
+}
 if (verb !== "view" || (kind !== "issue" && kind !== "pr")) {
   console.error("stub gh: unexpected invocation: " + args.join(" "));
   process.exit(1);
@@ -44,6 +50,15 @@ if (!fs.existsSync(file)) {
   process.exit(1);
 }
 const full = JSON.parse(fs.readFileSync(file, "utf8"));
+const jqAt = args.indexOf("--jq");
+if (jqAt !== -1) {
+  if (args[jqAt + 1] !== '[.labels[].name] | join(",")') {
+    console.error("stub gh: unsupported --jq: " + args[jqAt + 1]);
+    process.exit(1);
+  }
+  process.stdout.write((full.labels || []).map((l) => l.name).join(","));
+  process.exit(0);
+}
 const at = args.indexOf("--json");
 const fields = at === -1 ? Object.keys(full) : args[at + 1].split(",");
 const out = {};
@@ -241,5 +256,79 @@ describe("validate-acceptance CLI — an issue closed by TWO PRs is one venue se
     };
     expect(cli(["--closed-issue", "700", "--repo", REPO], fixtures).code).toBe(1);
     expect(cli(["--pr", "910", "--repo", REPO], fixtures).code).toBe(1);
+  });
+});
+
+// #1696. The gate used to reach two terminal states for one class of error: a first defective close
+// was re-opened, a repeat one stood CLOSED behind an `acceptance-unaccounted` label — which is how
+// #1285's em-dash close ended silent while #1436's empty one went back in the queue the same hour.
+// These drive the real CLI with --act against the stub `gh`, which RECORDS every mutation it is
+// asked for: the assertion surface is exactly the side-effect list where the divergence lived.
+describe("validate-acceptance --act — ONE terminal state for a failed close (#1696)", () => {
+  const author = { login: "jharvieux", is_bot: false };
+  const asked = (log: string, ...head: string[]): boolean =>
+    log.split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).some((a) => head.every((h, i) => a[i] === h));
+
+  function act(fixtures: Record<string, unknown>): { code: number; log: string } {
+    const { bin, fixtureDir } = world(fixtures);
+    const logFile = join(fixtureDir, "mutations.log");
+    writeFileSync(logFile, "");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, "--closed-issue", "700", "--repo", REPO, "--act"], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_GH_FIXTURES: fixtureDir, HARVEY_GH_LOG: logFile },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      return { code: 0, log: readFileSync(logFile, "utf8") };
+    } catch (e) {
+      return { code: (e as { status: number }).status, log: readFileSync(logFile, "utf8") };
+    }
+  }
+
+  // THE BRANCH THAT CHANGED: label already present, bookkeeping still defective. Under the old
+  // "re-open once" rule this was commented and re-labelled but STOOD CLOSED — the silent outcome.
+  it("re-opens a repeat failure — a near-miss `met —` close with the label already present", () => {
+    const r = act({
+      "issue-700": {
+        ...ISSUE_700,
+        author,
+        labels: [{ name: "acceptance-unaccounted" }],
+        comments: [
+          { body: "ACCEPTANCE #700.1 met — src/acceptance-conservation.ts now checks it" },
+          { body: "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it" },
+        ],
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(asked(r.log, "issue", "reopen", "700")).toBe(true);
+    expect(asked(r.log, "issue", "comment", "700")).toBe(true);
+  });
+
+  it("re-opens a first-time failure — a bare click with no ACCEPTANCE lines and no label yet", () => {
+    const r = act({ "issue-700": { ...ISSUE_700, author, labels: [] } });
+    expect(r.code).toBe(1);
+    expect(asked(r.log, "issue", "reopen", "700")).toBe(true);
+    expect(asked(r.log, "issue", "edit", "700", "--repo", REPO, "--add-label")).toBe(true);
+  });
+
+  // The control direction: a well-formed close is not touched, and a stale label is removed rather
+  // than left standing as a false statement about the issue.
+  it("does not re-open a well-formed close, and removes a stale label", () => {
+    const r = act({
+      "issue-700": {
+        ...ISSUE_700,
+        author,
+        labels: [{ name: "acceptance-unaccounted" }],
+        comments: [
+          { body: "ACCEPTANCE #700.1 met: src/acceptance-conservation.ts now checks it" },
+          { body: "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it" },
+        ],
+      },
+    });
+    expect(r.code).toBe(0);
+    expect(asked(r.log, "issue", "reopen")).toBe(false);
+    expect(asked(r.log, "issue", "comment")).toBe(false);
+    expect(asked(r.log, "issue", "edit", "700", "--repo", REPO, "--remove-label")).toBe(true);
   });
 });
