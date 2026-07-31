@@ -434,7 +434,19 @@ export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY
   const parseErrors: string[] = [];
 
   const all = lines(prBody);
+  // A fenced code block is QUOTATION, not assertion (#1696). The comment that REPORTS a malformed
+  // disposition quotes the offending line verbatim — read live, that quote poisons its venue
+  // permanently, so the issue documenting a malformation could never again close green. The same
+  // reading would let a well-formed line quoted as an example silently map a criterion. State is
+  // per-venue by construction: parseBody runs once per body/comment, so an unclosed fence cannot
+  // leak into the next venue.
+  let inFence = false;
   all.forEach((raw, i) => {
+    if (/^\s*(?:```|~~~)/.test(raw)) {
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) return;
     const line = strip(raw).trim();
     const d = DISPOSITION_LINE.exec(line);
     if (d) {

@@ -720,6 +720,29 @@ describe("a near-miss disposition line is reported as MALFORMED, naming the defe
   });
 });
 
+// #1696. Venues are read cumulatively and FOREVER, so a comment that QUOTES a disposition line —
+// which is exactly what a bug report about a malformed one does, and what issue #1696's own first
+// comment did — used to poison its venue permanently: the issue documenting a malformation could
+// never again close green. A fence is quotation, not assertion.
+describe("a fenced code block is quotation, not assertion (#1696)", () => {
+  const ten = lookupOf(issue({ number: 10 }));
+
+  it("does not read a malformed line quoted in a fence, so a bug report cannot poison its venue", () => {
+    const body = "Closes #10\n\n```\nACCEPTANCE #10.1 met — quoted verbatim in a report about this exact defect\n```\n\nACCEPTANCE #10.1 met: src/foo.ts:1 now throws\nACCEPTANCE #10.2 met: src/foo.ts:1 now throws\n";
+    expect(problems(body, ten)).toEqual([]);
+  });
+
+  it("CONTROL: the identical line outside the fence is still diagnosed", () => {
+    const body = "Closes #10\n\nACCEPTANCE #10.1 met — quoted verbatim in a report about this exact defect\n\nACCEPTANCE #10.1 met: src/foo.ts:1 now throws\nACCEPTANCE #10.2 met: src/foo.ts:1 now throws\n";
+    expect(problems(body, ten).some((p) => p.includes("malformed ACCEPTANCE line"))).toBe(true);
+  });
+
+  it("does not let a WELL-FORMED line quoted in a fence map a criterion, or an example would count as a claim", () => {
+    const body = "Closes #10\n\n```\nACCEPTANCE #10.1 met: src/foo.ts:1 now throws\n```\n\nACCEPTANCE #10.2 met: src/foo.ts:1 now throws\n";
+    expect(problems(body, ten).some((p) => p.includes("UNMAPPED"))).toBe(true);
+  });
+});
+
 describe("evidence truncated at a line break says so (#1565)", () => {
   const wrapped = [
     "Closes #10",
