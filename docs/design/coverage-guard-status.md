@@ -79,6 +79,36 @@ gain one — it is an interactive LLM/skill invocation with no CLI Harvey's own 
 so `record-pass` stays its only write path. Recorded reason with a falsifier, exercised both
 directions: `docs/design/audit-pass-artifacts.md`.
 
+**2026-07-31 (#1407) — which VENUE proves each round trip, because library coverage and CLI
+coverage read identically in a status line.** #1364's three new round-trip tests called
+`buildM3PassArtifact` / `buildM6PassArtifact` and a hand-copied `writeFileSync` mirror; none of them
+invoked a CLI. An independent verifier restored the pre-#1364 `src/cli/*.ts` files on top of the
+library changes and **every test still passed** — the flag parsing could have been deleted outright
+without turning anything red. `src/cli/pass-artifact-cli.test.ts` now spawns each CLI for real.
+Read this table as the standing answer to "is that flag guarded, or only its library?":
+
+| pass | flag | library venue | CLI venue (spawns the entry point) |
+|---|---|---|---|
+| M1 live | `detect-deeper --findings-out` | `src/cli/detect-deeper.test.ts` | `src/cli/pass-artifact-cli.test.ts` |
+| M3 vitals | `hotspot-scan --artifacts-dir` | `src/hotspot-scan.test.ts:451` | `src/cli/pass-artifact-cli.test.ts` |
+| M6 verdict | `m6-agreement --target/--artifacts-dir` | `src/m6-agreement.test.ts:152` | `src/cli/pass-artifact-cli.test.ts` |
+| M2 dynamic | `dynamic-validate --execute` | — | `src/dynamic-validate.test.ts:353-372` |
+| M1 semantic | `record-pass` (generic) | `src/audit-pass-artifact.test.ts` | none — no CLI to attach one to (above) |
+
+MEASURED 2026-07-31, each CLI file reverted to `f20fe3b^` one at a time and the suite rerun:
+`m6-agreement.ts` → CLI venue **2 failed** / library venue 18 passed; `hotspot-scan.ts` → CLI venue
+**1 failed** / library venue 51 passed; `detect-deeper.ts` → CLI venue **1 failed** / library venue
+1 passed. Restored, all three green (6/6). The library column staying green through all three
+reversions is the defect this closes, not an aside.
+
+`detect-deeper`'s CLI venue stubs the `postgres` driver through a loader hook
+(`src/cli/testing/stub-postgres*.mjs`) rather than standing up a database. What is under test is the
+CLI's own argv parse and file write; the queries and the classifiers it runs are the real ones, and
+a live Postgres would add a 60s-class dependency to the light suite to prove nothing further. That
+is a bound on this venue and it is stated here rather than left for a reader to discover: **the CLI
+venue does not exercise `detect-deeper` against real Postgres catalog output**, and the queries
+themselves remain covered only by the live connected tier.
+
 **2026-07-30 (#1522) — correcting "derives `ran` … for M1" above.** `<module>.pass.json` was ONE
 slot per module while M1 has THREE out-of-orchestrator tiers (semantic, live, connected), so
 recording one deleted another — and, because the M1 probe's un-run-tier disclosure was gated on the

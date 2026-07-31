@@ -410,8 +410,8 @@ export interface EvidenceWorld {
 // 2026-07-31 against the real checkout, `targets/calibration/components/AdminPanel.jsx` (one of 26
 // tracked `.jsx` files) extracted as `AdminPanel.js`, and `docs/a.mdx` as `docs/a.md` (0 tracked
 // `.mdx` today — latent, not live). The `(?!\w)` boundary fixes the CLASS: a prefix match is
-// refused outright, so a future extension cannot reintroduce this by being added in the wrong
-// place. Order is kept longest-first anyway so the two mechanisms agree rather than one masking
+// refused outright, so a future extension added in the wrong place stops being able to reintroduce
+// this. Order is kept longest-first anyway so the two mechanisms agree rather than one masking
 // the other.
 const FILE_PATH_SOURCE = String.raw`[\w./-]+\.(?:tsx|ts|jsx|js|mjs|cjs|json|mdx|md|ya?ml|sql|sh|py|toml)(?!\w)(?::\d+)?`;
 const FILE_PATH = new RegExp(FILE_PATH_SOURCE, "g");
