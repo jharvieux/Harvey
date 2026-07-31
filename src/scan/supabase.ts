@@ -303,6 +303,43 @@ function localScopeFinding(): Finding[] {
   ];
 }
 
+// #1264. The Splinter lint set arrives as delimited text, so a lint whose detail/metadata/cache_key
+// contains the field separator cannot be split back into its 10 columns. Those rows used to be
+// dropped by a bare `continue` — no finding, no count, no row — which is the exact silent-omission
+// shape the disclosure family exists to prevent. The separator moved to ASCII 0x1F so the collision
+// should no longer occur; this row exists because "should no longer" is a claim, and a residual
+// drop must be counted rather than assumed away.
+function unparsedSplinterFinding(unparsedRows: number): Finding[] {
+  if (unparsedRows === 0) return [];
+  return [
+    {
+      id: "SB-SPLINTER-00",
+      title: `${unparsedRows} Supabase Advisor lint row(s) this scan could not parse`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — Supabase Advisor lints that could not be parsed",
+      location: "(splinter.sql output)",
+      status: "Open",
+      evidence:
+        `${unparsedRows} row(s) of the Supabase Advisor (Splinter) lint output carried the field separator inside ` +
+        "a value — a database identifier containing that character — so they could not be split back into their " +
+        "ten columns and are absent from the advisor findings below.",
+      impact:
+        "Those lints were produced by the linter and then lost in transit: the security and performance " +
+        "advisories they carried are missing from this report, and their absence is not evidence that the " +
+        "underlying objects are clean. Counted and named here so the loss cannot be read as a clean result.",
+      fix:
+        "Re-run the Supabase pass and report the count above (issue #1264) — the parser's separator needs to " +
+        "move to one the affected identifiers do not contain.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
 async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter, migrations: MigrationFile[] = [], driftReason?: string): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
@@ -327,11 +364,13 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const driftTables = migrations.length > 0 ? ((await sql.unsafe(DRIFT_TABLES_SQL)) as unknown as DriftLiveTable[]) : [];
     const driftPolicies = migrations.length > 0 ? ((await sql.unsafe(DRIFT_POLICIES_SQL)) as unknown as DriftLivePolicy[]) : [];
 
-    const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
+    const splinterResponse = splinterImpl(connectionString);
+    const splinterFindings = parseAdvisorFindings(splinterResponse);
 
     return [
       ...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason),
       ...localScopeFinding(),
+      ...unparsedSplinterFinding(splinterResponse.unparsedRows ?? 0),
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
       ...checkDangerousExtensions(extensions),

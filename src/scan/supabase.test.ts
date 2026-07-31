@@ -2,9 +2,19 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildHtml } from "../../report-template/render.mjs";
+import { esc } from "../../report-template/sections.mjs";
+import { renderFidelityBreaches } from "../render-fidelity.js";
 import { dedupeAutoExposed, hasPgGraphql, parseExposedSchemas, runSupabaseScan } from "./supabase.js";
 import { checkGraphqlIntrospection } from "./supabase-config.js";
 import { mechanicalFinding } from "./common.js";
+import type { FindingsDocument, ReportMeta } from "../findings.js";
+
+const RENDER_META: ReportMeta = {
+  client: "Acme", subtitle: "Supabase pass", date: "2026-07-30", commit: "abc1234", auditor: "Harvey",
+  confidential: true, overallHealth: 6, tenantIsolation: "Not verified", authModel: "Supabase",
+  headline: "Supabase local scan", scope: "the local stack", methodology: "M1", outOfScope: "infrastructure",
+};
 
 vi.mock("postgres", () => ({
   default: vi.fn(() => ({
@@ -277,6 +287,38 @@ describe("runSupabaseScan", () => {
       // must NOT be present: hosted mode asked the questions.
       expect(findings.some((f) => f.taxonomy === "PostgREST schema exposure wider than intended")).toBe(true);
       expect(findings.some((f) => f.taxonomy === "Auth config: email confirmation disabled")).toBe(true);
+    });
+  });
+
+  // #1264. A lint the parser could not split back into its 10 columns is missing from the advisor
+  // set. It used to leave no trace at all; it now has to reach the report as a counted row.
+  describe("local mode — an unparseable Splinter row is counted, not swallowed (#1264)", () => {
+    it("emits SB-SPLINTER-00 naming the number of lints lost in transit", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [], unparsedRows: 2 }) });
+      const row = findings.find((f) => f.id === "SB-SPLINTER-00");
+
+      expect(row).toBeDefined();
+      expect(row?.category).toBe("Coverage");
+      expect(row?.title).toContain("2");
+      expect(row?.evidence).toContain("field separator");
+    });
+
+    it("stays silent when every row parsed, so the row means something when it appears", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [], unparsedRows: 0 }) });
+      expect(findings.some((f) => f.id === "SB-SPLINTER-00")).toBe(false);
+    });
+
+    // Accounted-for is not delivered (#1433/#1435). SB-SPLINTER-00 is a confidence:"N/A" row, and
+    // the whole disclosure family once reached the client PDF with its reason replaced by a stock
+    // sentence. So follow this one to the rendered report rather than to a passing producer.
+    it("reaches the rendered report carrying its own count and reason", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [], unparsedRows: 3 }) });
+      const doc = { meta: RENDER_META, findings } as FindingsDocument;
+      const html = buildHtml(doc);
+
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+      expect(html).toContain(esc("3 Supabase Advisor lint row(s) this scan could not parse"));
+      expect(html).toContain(esc("could not be split back into their ten columns"));
     });
   });
 });
