@@ -27,7 +27,7 @@
     "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 213 chars].",
     "impact": "Pattern match on a potential secret; confirm before treating as a live credential.",
     "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore.",
-    "value": 4,
+    "value": 3,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
