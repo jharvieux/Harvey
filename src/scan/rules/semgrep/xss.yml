@@ -163,6 +163,107 @@ x-dom-url-guard: &dom_url_guard
     - focus-metavariable: $X
 # ---------------------------------------------------------------------------------------------
 
+# #1248: the (a2) validator guards, with a failure branch that THROWS instead of returning.
+# Throwing is the idiomatic guard in a Next.js Server Action or route handler under an error
+# boundary, in Express with http-errors/createError, and in NestJS (BadRequestException) — so
+# before this block a correct throwing guard read as a Critical injection. MEASURED 2026-07-31
+# (semgrep 1.164.0): the issue's own repro fired harvey-sql-injection-template at Critical.
+#
+# WHY IT IS A SEPARATE SANITIZER AND NOT A WIDENED ARM. A `return` is unconditionally an exit.
+# A `throw` is an exit only if nothing between the guard and the sink catches it: with the guard
+# inside a `try` whose `catch` swallows, execution continues into the sink with the rejected
+# value live, and a `finally` runs the sink even when the throw propagates. That has no analogue
+# on the return path, so the throw spellings carry a constraint the return spellings do not —
+# the guard must not be lexically inside a try statement. This is deliberately conservative: a
+# guard AND its sink both inside one try (where the throw does skip the sink) is not cleared,
+# which costs precision in the safe direction and never clears a live value.
+# MEASURED 2026-07-31, both directions: with the two pattern-not-inside conjuncts the swallowed
+# and finally-run shapes FIRE; with them deleted both go silent — a real bug cleared by a guard
+# that never protected it. Adversarial positives P-SQLI-THROW-SWALLOWED / P-SQLI-THROW-FINALLY.
+#
+# `throw $E;` rather than `throw ...;`: a throw always carries an operand, so there is no
+# valueless twin to cover the way `return;` needed one.
+x-throw-guard: &throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# #1248: the SCHEMA-validator (a2) guard whose failure branch throws. Same soundness argument and
+# the same two try exclusions as x-throw-guard above, and the same allowlist constraints as the
+# return spelling — an ANCHORED, POSITIVE-class `.regex(...)` or an `.enum([...])` membership list,
+# because a bare `z.string()` accepts everything and `$P.data` IS then the raw input.
+#
+# UNLIKE the return spelling it is `by-side-effect` on `$P`, not a `pattern-inside` region ending
+# at `$P.data`. MEASURED 2026-07-31: semgrep's statement `...` matches DEEPLY, so a region written
+# `safeParse(...); ... if (!$P.success) throw $E; ...` matches a guard nested inside a `try` — and
+# the try exclusions, attached to the `$P.data` use site, sat outside that try and cleared it. Both
+# swallowed-throw fixtures went silent under that form and fire under this one
+# (P-CMD-ZOD-THROW-SWALLOWED, P-CMD-ZOD-ENUM-THROW-SWALLOWED).
+x-throw-schema-guard: &throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # DOM XSS via .innerHTML / insertAdjacentHTML assigned a request/URL-controlled value. High —
   # both sinks execute any <script>/event-handler markup in the string unconditionally; there is
@@ -294,6 +395,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -461,6 +564,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:

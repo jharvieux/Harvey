@@ -1,0 +1,18 @@
+// #1532 residual, found by the 30-row re-draw of 2026-07-31 and read at source: carbon
+// `packages/dev/src/services/apps.ts:367`. `depsInSync` stats two files through `isAtLeastAsNew`,
+// one call away, and a body-only purity scan reads it as the pure half of an awaiting caller. So
+// `doesOwnIo` follows a callee it can RESOLVE, one hop.
+//
+// The specifier is written `./fs-age.js` deliberately: that is the ESM-TS convention carbon uses
+// (`from "../helpers.js"`), and with the raw specifier alone the hop resolved to nothing and this
+// row stayed spared with the fix in place.
+import { fileIsFresh } from "./fs-age.js";
+
+function cacheIsWarm(root: string): boolean {
+  return fileIsFresh(`${root}/manifest.json`);
+}
+
+export async function warmCache(root: string, fetchAll: () => Promise<void>): Promise<void> {
+  if (cacheIsWarm(root)) return;
+  await fetchAll();
+}

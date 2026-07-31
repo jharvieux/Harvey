@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -404,5 +404,73 @@ describe("parseExposedSchemas", () => {
     expect(parseExposedSchemas({ db_schema: "public,  graphql_public , internal " })).toEqual(["public", "graphql_public", "internal"]);
     expect(parseExposedSchemas({ db_schema: "" })).toEqual([]);
     expect(parseExposedSchemas({})).toEqual([]);
+  });
+});
+
+// #1265 — the Management API SQL envelope, assumed since this module was written and never
+// checked. These read the CAPTURED vendor spec
+// (src/scan/__fixtures__/supabase/database-query-schema-2026-07-31.json), so what they guard is the
+// agreement between Harvey's request and Supabase's published contract: re-capture the fixture and
+// a contract change fails here instead of at the first hosted run against a client's project.
+describe("Management API /database/query envelope (#1265, against the captured vendor spec)", () => {
+  const spec = JSON.parse(
+    readFileSync(new URL("./__fixtures__/supabase/database-query-schema-2026-07-31.json", import.meta.url), "utf8"),
+  ) as {
+    paths: Record<string, { post?: { responses: Record<string, unknown>; "x-oauth-scope"?: string } }>;
+    components: { schemas: Record<string, { properties: Record<string, unknown>; required: string[] }> };
+  };
+
+  async function capturedRequestBody(): Promise<{ body: Record<string, unknown>; status: number }> {
+    let body: Record<string, unknown> = {};
+    let status = 0;
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = url.toString();
+      if (u.includes("/database/query")) {
+        body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        // The documented success code, not 200 — a scan that only accepted 200 would break on
+        // every hosted project while passing every test that mocked 200.
+        status = 201;
+        return new Response(JSON.stringify([]), { status: 201 });
+      }
+      if (u.includes("/advisors/security")) return new Response(JSON.stringify({ lints: [] }));
+      if (u.includes("/config/auth")) return new Response(JSON.stringify({}));
+      if (u.includes("/postgrest")) return new Response(JSON.stringify({ db_schema: "public" }));
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    await runSupabaseScan({ projectRef: "abcdefghijklmnopqrst", managementApiToken: "t", fetchImpl });
+    return { body, status };
+  }
+
+  it("sends every key the spec requires, and nothing the spec does not declare", async () => {
+    const { body } = await capturedRequestBody();
+    const schema = spec.components.schemas.V1RunQueryBody!;
+    expect(schema.required).toEqual(["query"]);
+    for (const key of schema.required) expect(Object.keys(body)).toContain(key);
+    for (const key of Object.keys(body)) expect(Object.keys(schema.properties)).toContain(key);
+  });
+
+  it("opts into read_only on every SQL call — the endpoint's own scope is database:write", async () => {
+    const { body } = await capturedRequestBody();
+    expect(body.read_only, "a read-only pass must not reach a write-scoped endpoint without it").toBe(true);
+    expect(spec.paths["/v1/projects/{ref}/database/query"]?.post?.["x-oauth-scope"]).toBe("database:write");
+  });
+
+  it("accepts the documented 201, which is not 200", async () => {
+    const { status } = await capturedRequestBody();
+    expect(status).toBe(201);
+    expect(Object.keys(spec.paths["/v1/projects/{ref}/database/query"]?.post?.responses ?? {})).toContain("201");
+  });
+
+  // The half the spec does NOT settle, pinned so the gap stays visible: the 201 carries no content
+  // schema, which is why the bare-row-array shape is evidenced from the vendor's own client instead
+  // (see this module's header) and why PROVENANCE.md still carries a reason for the live capture.
+  it("records that the spec documents no response schema for the 201", () => {
+    expect(spec.paths["/v1/projects/{ref}/database/query"]?.post?.responses["201"]).toEqual({ description: "" });
+  });
+
+  it("pins db_schema as a REQUIRED string on the PostgREST config response", () => {
+    const schema = spec.components.schemas.PostgrestConfigWithJWTSecretResponse!;
+    expect(schema.required).toContain("db_schema");
+    expect(schema.properties.db_schema).toEqual({ type: "string" });
   });
 });

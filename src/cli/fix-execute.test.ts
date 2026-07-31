@@ -165,6 +165,50 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
       disposeCorpus(c);
     }
   }, 60_000);
+
+  // #1529. #1272's batch wiring made the client's own suite run 2N times per N-fix batch, disclosed
+  // rather than hidden. The whole batch is pinned to one commit against one checkout, so the baseline
+  // half is identical for every finding and belongs to the BATCH, not the fix. Asserted from
+  // fix-execution.json, which is the artifact the operator reads.
+  it("baselines each distinct client command ONCE across the batch, not once per fix", async () => {
+    const c = materialize(clientRepo({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" }));
+    try {
+      const cfg = engagement(c, [finding("F-A", "app/a.ts", patch("a", 1)), finding("F-B", "app/b.ts", patch("b", 1))]);
+      const { code, out, artifact } = await run(cfg, c.dir);
+      expect(code).toBe(0);
+      const baseline = artifact.baseline as unknown as { commandsRequested: number; commandsExecuted: number; cacheHits: number };
+      // Two fixes, one root workspace, one discovered `npm run test`: requested twice, run once.
+      expect(baseline.commandsRequested).toBe(2);
+      expect(baseline.commandsExecuted).toBe(1);
+      expect(baseline.cacheHits).toBe(1);
+      expect(out).toContain("1 of 2 requested command run(s) actually executed");
+      // Both fixes still cleared BOTH halves — sharing the baseline must not cost the client half.
+      expect((artifact.executions as unknown as { green: boolean }[]).every((e) => e.green)).toBe(true);
+    } finally {
+      disposeCorpus(c);
+    }
+  }, 60_000);
+
+  // The shared cache must carry a FAILING baseline exactly as faithfully as a passing one: every
+  // finding that discovers that command has to keep its `pre-existing-failure-on-baseline` row, or
+  // sharing the cache would silently re-attribute a pre-existing break to the second fix.
+  it("records the pre-existing baseline failure for EVERY fix that shares the command", async () => {
+    const c = materialize(clientRepo({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" }, "process.exit(1);\n"));
+    try {
+      const cfg = engagement(c, [finding("F-A", "app/a.ts", patch("a", 1)), finding("F-B", "app/b.ts", patch("b", 1))]);
+      const { artifact } = await run(cfg, c.dir);
+      const baseline = artifact.baseline as unknown as { commandsExecuted: number; cacheHits: number };
+      expect(baseline.commandsExecuted).toBe(1);
+      expect(baseline.cacheHits).toBe(1);
+      const executions = artifact.executions as unknown as { findingId: string; evidence?: { clientChecks: { skipped?: string }[] } }[];
+      expect(executions).toHaveLength(2);
+      for (const e of executions) {
+        expect(e.evidence!.clientChecks.map((ch) => ch.skipped)).toEqual(["pre-existing-failure-on-baseline"]);
+      }
+    } finally {
+      disposeCorpus(c);
+    }
+  }, 60_000);
 });
 
 // #1272 remainder. The batch CLI used to score a diff on `git apply --check` alone: MEASURED

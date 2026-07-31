@@ -81,11 +81,15 @@
 // TWELVE of the sheet's nineteen recommendations land here. That is the good-news half of this
 // measurement and it is why the gap list below is six rows rather than nineteen.
 //
-// WHAT THE SIX GAPS BECAME (2026-07-27, #1237/#1238/#1239/#1240 — one sweep, four issues). Five of
-// the six now have a detector and are scored as ordinary positives; ONE (PROP-OVERSHARE) is still an
-// open gap, and it is the one that was recorded rather than filed because it needs per-app knowledge
-// of which fields are sensitive. The five are worth reading as a group, because only ONE of them was
-// the thing the corpus appeared to say it was:
+// WHAT THE SIX GAPS BECAME (2026-07-27, #1237/#1238/#1239/#1240 — one sweep, four issues; then
+// #1252 on 2026-07-31). ALL SIX now have a detector and are scored as ordinary positives, and this
+// corpus has no open measured gap left. The sixth is the one worth reading twice: PROP-OVERSHARE was
+// RECORDED rather than filed, with the reason that scoring it "needs per-app knowledge of which
+// fields are sensitive". That reason survived four days and one whole sweep unchallenged, and it was
+// half a claim wearing a whole one — the naming half is a heuristic (hence review tier), but the
+// "was the whole object passed" half is pure syntax, and pairing them is what makes the rule
+// shippable. The other five are worth reading as a group, because only ONE was the thing the corpus
+// appeared to say it was:
 //   SSR-SANITIZER  — a genuine new class. Silent BECAUSE of a correct suppression: every
 //                    dangerouslySetInnerHTML rule excludes an import-bound sanitize() wrap, so
 //                    DOMPurify in a Server Component read as protection. New AST pass (#1239).
@@ -103,9 +107,9 @@
 // argument for a third-party answer key stated as a result rather than as a hope.
 //
 // THE ARITHMETIC, so nothing hides in it. The pinned sheet has 19 actionable items (18 `###`
-// subsections plus the Dependency and Supply Chain section). 12 are covered above, 6 are the
-// measured gaps below, and 1 — JSON State Serialization — is out-of-universe: 12 + 6 + 1 = 19, and
-// every item is in exactly one bucket. The out-of-universe list below carries SEVEN entries rather
+// subsections plus the Dependency and Supply Chain section). 12 are covered above, 6 were the
+// measured gaps below — all six now closed, the last by #1252 — and 1, JSON State Serialization, is
+// out-of-universe: 12 + 6 + 1 = 19, and every item is in exactly one bucket. The out-of-universe list below carries SEVEN entries rather
 // than one because six of them are sub-recommendations inside a covered or gapped subsection, not
 // items of their own; they are listed so a reader can see they were considered and why they are not
 // scoreable, but they do not add to the 19.
@@ -206,9 +210,19 @@ export const owaspReactEntries: CorpusEntry[] = [
     cls: "Whole account object passed as a prop to a component that needs two fields of it",
     location: "src/owasp-react/oversharing-props.tsx",
     match: ["sensitive fields in props"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Sensitive Data Exposure: 'Minimize Sensitive Data in Component State and Props'. The SSN and session token reach React's Fiber tree, which session-recording scripts and browser extensions read, even though neither is rendered. MEASURED 2026-07-27: zero findings. RECORDED, NOT FILED, and the weakest candidate in this corpus: scoring it needs to know which fields of an app's own types are sensitive, which is a per-app judgment rather than a syntactic shape — a plausible LLM/semantic-tier question and a poor mechanical rule. Kept here so the recommendation is accounted for either way, rather than dropped for being hard.",
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet, Sensitive Data Exposure: 'Minimize Sensitive Data in Component State and Props'. The SSN and session token reach React's Fiber tree, which session-recording scripts and browser extensions read, even though neither is rendered. CLOSED by #1252 (src/scan/prop-overshare.ts); MEASURED 2026-07-31, caught at review tier. CORRECTION TO THE RECORD: this row was left as a measured gap on 2026-07-27 with the reason 'scoring it needs to know which fields of an app's own types are sensitive, which is a per-app judgment rather than a syntactic shape'. Half of that is true and it is not the half that blocks a rule — WHICH names are sensitive is a naming heuristic, which is why this is review tier and not free-count, but WHETHER the whole object was passed is purely syntactic, and it is that conjunct that makes the heuristic usable. Its own bounds are stated in the finding's impact text: the type must be declared in the same file, only declared types are read, and the vocabulary is a fixed list.",
+  },
+  {
+    id: "P-OWASP-REACT-PROP-OVERSHARE-SPREAD",
+    kind: "positive",
+    cls: "Whole object with a sensitive field spread into a component's props",
+    location: "src/owasp-react/oversharing-props-spread.tsx",
+    match: ["sensitive fields in props"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "#1252: the same overshare spelled `<Avatar {...account} />`. Strictly worse than the named form — every field lands as its own prop — and invisible to a rule that reads only `prop={obj}`. Its own file so it cannot satisfy the named row's relevance check, and vice versa.",
   },
 
   // ---------------------------------------------------------------------------------------------
@@ -278,6 +292,20 @@ export const owaspReactEntries: CorpusEntry[] = [
     location: "src/lib/job-runner.ts",
     reviewTierHits: ["src.scan.rules.semgrep.harvey-lib-command-injection", "src.scan.rules.semgrep.harvey-lib-path-traversal"],
     note: "#1344: the FP twin of P-OWASP-REACT-RSC-SSRF, and the row that makes #1240's source falsifiable. That source matches `params.<field>` by NAME because semgrep OSS cannot match the destructured object parameter an RSC page really receives; its only guard excluded a name bound by ASSIGNMENT, and a function parameter is never assigned. MEASURED 2026-07-27 on this file against its own twin with the parameter renamed to `opts`: 6 findings vs 3 — a name-dependent delta of 3 on a scheduler job runner with no request anywhere near it, including `harvey-command-injection` at Critical / precisionTier \"high\", which is GRADED and therefore drops a repo's free-tier letter. The two recorded review-tier rows are the pre-existing `harvey-lib-*` family, which flags exported-function parameters as library entry points BY DESIGN (see NARROW_BY_DESIGN in shared-sources.test.ts) — they fire identically on the renamed twin, so they are name-INdependent and are not this defect. Fixed by excluding a plain-identifier parameter binding; the discriminator is sound precisely because the real RSC shape is destructured and therefore unmatchable. This row fails if that exclusion is ever widened away, and P-OWASP-REACT-RSC-SSRF fails if it is widened too far.",
+  },
+  {
+    id: "N-OWASP-REACT-PROP-SHAPED",
+    kind: "negative",
+    cls: "Only the two fields the child renders are projected out before the prop",
+    location: "src/owasp-react/oversharing-props-shaped.tsx",
+    note: "#1252: the sheet's own remedy — same account type, same Avatar, the only difference being the projection. Moved out of the positive's file by #1252 for the reason #1237 and #1238 both hit in this directory: while it shared that location the positive's own finding satisfied its relevance check and it could only score trivially.",
+  },
+  {
+    id: "N-OWASP-REACT-PROP-BENIGN-OBJECT",
+    kind: "negative",
+    cls: "Whole domain object passed as one prop, with nothing sensitive in its type",
+    location: "src/owasp-react/oversharing-props-benign.tsx",
+    note: "#1252: the harder negative, and the one the shaped twin structurally cannot be. It fully satisfies the SYNTACTIC half of the rule — a whole domain object handed to a component as a single prop — and is correct code because the type carries nothing sensitive. A rule that fires here has stopped reading the type and become 'any object passed as a prop', which on a real repo is hundreds of rows. `email` is in the type deliberately: it is the field most likely to be swept into a sensitive-name list, and a profile component legitimately renders it.",
   },
   {
     id: "N-OWASP-REACT-SHAPED-BOUNDARY",

@@ -88,6 +88,107 @@ x-request-source: &request_source
         - pattern-not-inside: |
             (..., $RSCPROP, ...) => ...
 
+# #1248: the (a2) validator guards, with a failure branch that THROWS instead of returning.
+# Throwing is the idiomatic guard in a Next.js Server Action or route handler under an error
+# boundary, in Express with http-errors/createError, and in NestJS (BadRequestException) — so
+# before this block a correct throwing guard read as a Critical injection. MEASURED 2026-07-31
+# (semgrep 1.164.0): the issue's own repro fired harvey-sql-injection-template at Critical.
+#
+# WHY IT IS A SEPARATE SANITIZER AND NOT A WIDENED ARM. A `return` is unconditionally an exit.
+# A `throw` is an exit only if nothing between the guard and the sink catches it: with the guard
+# inside a `try` whose `catch` swallows, execution continues into the sink with the rejected
+# value live, and a `finally` runs the sink even when the throw propagates. That has no analogue
+# on the return path, so the throw spellings carry a constraint the return spellings do not —
+# the guard must not be lexically inside a try statement. This is deliberately conservative: a
+# guard AND its sink both inside one try (where the throw does skip the sink) is not cleared,
+# which costs precision in the safe direction and never clears a live value.
+# MEASURED 2026-07-31, both directions: with the two pattern-not-inside conjuncts the swallowed
+# and finally-run shapes FIRE; with them deleted both go silent — a real bug cleared by a guard
+# that never protected it. Adversarial positives P-SQLI-THROW-SWALLOWED / P-SQLI-THROW-FINALLY.
+#
+# `throw $E;` rather than `throw ...;`: a throw always carries an operand, so there is no
+# valueless twin to cover the way `return;` needed one.
+x-throw-guard: &throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# #1248: the SCHEMA-validator (a2) guard whose failure branch throws. Same soundness argument and
+# the same two try exclusions as x-throw-guard above, and the same allowlist constraints as the
+# return spelling — an ANCHORED, POSITIVE-class `.regex(...)` or an `.enum([...])` membership list,
+# because a bare `z.string()` accepts everything and `$P.data` IS then the raw input.
+#
+# UNLIKE the return spelling it is `by-side-effect` on `$P`, not a `pattern-inside` region ending
+# at `$P.data`. MEASURED 2026-07-31: semgrep's statement `...` matches DEEPLY, so a region written
+# `safeParse(...); ... if (!$P.success) throw $E; ...` matches a guard nested inside a `try` — and
+# the try exclusions, attached to the `$P.data` use site, sat outside that try and cleared it. Both
+# swallowed-throw fixtures went silent under that form and fire under this one
+# (P-CMD-ZOD-THROW-SWALLOWED, P-CMD-ZOD-ENUM-THROW-SWALLOWED).
+x-throw-schema-guard: &throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
   # execute / run_sql style RPCs run a raw SQL string, so any request-tainted argument is a SQLi
@@ -214,6 +315,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -346,6 +449,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -481,6 +586,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -613,6 +720,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -856,11 +965,14 @@ rules:
     message: >
       Request input is joined into a filesystem path and read/written — path traversal
       (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.
-      SCOPE OF THIS CHECK (#1273), so its silence elsewhere is not read as a clean bill of health:
-      the sinks are the node `fs` family, Supabase Storage object keys, and express
-      `res.sendFile`/`res.download`. A file opened through some other library, or a
-      `res.sendFile(p, { root })` whose `root` option confines the read, is judged by neither —
+      SCOPE OF THIS CHECK, two independent bounds, so its silence elsewhere is not read as a
+      clean bill of health. (1) The sinks (#1273) are the node `fs` family, Supabase Storage object
+      keys, and express `res.sendFile`/`res.download`. A file opened through some other library, or
+      a `res.sendFile(p, { root })` whose `root` option confines the read, is judged by neither —
       the first is not matched at all, and for the second this rule does not read the option.
+      (2) A resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248)
+      only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard
+      whose resolve is itself wrapped in try/catch is reported here rather than cleared.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -1007,6 +1119,37 @@ rules:
                   ...
                   if (!$R.startsWith($PREFIX)) return ...;
                   ...
+      # #1248: the same containment guard rejecting by THROW, as its own entry for the reason the
+      # projection arm in base.yml records — the guard is required by a `pattern-inside` region and
+      # semgrep's statement `...` matches deeply, so `pattern-not-inside: try {...}` tested against
+      # the `path.resolve(...)` expression excludes nothing when only the guard is wrapped. The
+      # third exclusion (no `try` may follow the resolve) is what makes the throw spelling sound
+      # here. MEASURED both directions on N-PATH-RESOLVE-THROW /
+      # P-PATH-TRAVERSAL-THROW-SWALLOWED.
+      - patterns:
+          - pattern: path.resolve($BASE, $X)
+          - pattern-either:
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) throw $E;
+                  ...
+          - pattern-not-inside: |
+              try { ... }
+          - pattern-not-inside: |
+              try { ... } finally { ... }
+          - pattern-not-inside: |
+              $RR = path.resolve(...);
+              ...
+              try { ... }
+              ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       # #1220: the five modelled sinks were all callback/sync `fs.*` spelled with a LITERAL `fs.`
       # prefix, so `import { readFile } from "node:fs/promises"` — the idiomatic App Router form —
@@ -1459,6 +1602,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -1803,6 +1948,8 @@ rules:
                   ...
                   if (!$P.success) return ...;
                   ...
+      - *throw_guard
+      - *throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)

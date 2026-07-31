@@ -1,0 +1,15 @@
+// #1533 — the seam exemption used to accept a caller declared `async` that contains ZERO awaits.
+// An async function that never awaits can only be doing I/O by returning a promise, and this one
+// returns a `new Response(...)`, which is constructed synchronously — so the premise "the caller
+// does the I/O" is simply false and `buildFeedXml` is an ordinary single-use helper. Read at source
+// in the 2026-07-31 measurement: tanstack-com src/routes/rss[.]xml.ts:15 and mvp-boilerplate
+// nextjs/app/api/og/route.tsx:15 (`return new ImageResponse(...)`) are this shape.
+function buildFeedXml(items: { title: string; link: string }[]): string {
+  const entries = items.map((i) => `<item><title>${i.title}</title><link>${i.link}</link></item>`).join("");
+  return `<rss version="2.0"><channel>${entries}</channel></rss>`;
+}
+
+export async function GET(items: { title: string; link: string }[]): Promise<Response> {
+  const xml = buildFeedXml(items);
+  return new Response(xml, { headers: { "Content-Type": "application/xml" } });
+}
