@@ -2,7 +2,40 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-31 — **SWEEP IN ROUND 3, RUNNING OVERNIGHT UNSUPERVISED.** 19 round-3 PRs merged (+3 supervisor PRs), 1 in fix, 2 executors live, 9 queued, 5 parked on the operator. **Tracker measured at 143 open** (`gh issue list --state open --limit 400`), down from 189. Ledger live at `.git/issue-sweep-ledger.json`, `phase: executing`, `round: 3`. Newest block first._
+_Last updated: 2026-07-31 — **SWEEP WRAPPING UP.** 32 batches merged across rounds 3 and 4. **Tracker measured at 131 open** (`gh issue list --state open --limit 500`), down from 189. Ledger at `.git/issue-sweep-ledger.json`. Newest block first._
+
+## NEXT SESSION — priority order (operator-set 2026-07-31)
+
+The operator asked for the sweep's systemic findings to be filed and prioritised. Work them in this order; the reasoning for the order is that each earlier item makes the later ones measurable.
+
+**1. #1710 — semgrep drops ~36% of findings silently. OPERATOR RULED THIS A PRODUCT ISSUE.**
+Not a CI flake. On carbon, `--timeout 0`, zero reported errors and zero skipped paths, three identical runs gave **47 / 62 / 70** findings. This runs on client deliverables: a paid audit can omit a third of what it found with no diagnostic anywhere. Until fixed, a scan whose completeness is unestablished needs to SAY so — this repo's own disclosure doctrine applied to itself. Everything else on this list is internal; this one reaches a customer.
+
+**2. #1738 — mutation-test the guards. OPERATOR RULED: REPORT-ONLY for now, promote to blocking once we are comfortable.**
+#1628 measured the class: **223 of 384 mechanical corpus positives (58%) had no failing direction**, and giving them one cost **zero** (0 review misses, 359/359 static). Roughly fourteen distinct guards with no failing direction were found by hand in one day. Stryker already exists and is fast; the change is the target set. Note #1628's own PR discloses ~17 further `gatePass` terms that are individually deletable with nothing to notice — the class is visible now, not closed.
+
+**3. #1741 — a reported follow-up must be a filed follow-up.**
+Eight misses in one sweep; one batch reported three and filed zero. `remainder:` is gated, prose follow-ups in agent REPORTS are gated by nobody. The most consequential miss was #1710 itself. Cheapest real fix is an ordering change in the executor agent definition: file first, then cite the number.
+
+**4. #1739 — environment drift is an unmodelled decay mode.**
+Three recorded measurements invalidated in one day by things outside the repo: git 2.43→2.54 (broke the vitals seed; its 85 recorded clean runs were on the old version), the unpinned OSV advisory DB (#1726), and the agent shell's `grep` wrapper (#1646). Doctrine covers claims about CODE; nothing covers claims about the ENVIRONMENT.
+
+**5. #1740 — quote the command, not the number.**
+About a dozen stored figures failed re-measurement in one day. The decisive one: two batches measured the vuln-seam-app run at **21 and 23 for the same command on the same day**. A more accurate stored number is just a slower-decaying wrong one. Measure the population before building a lint.
+
+**6. #1742 (blast radius) and #1743 (dispatch-brief grant set) — smaller, both cheap.**
+#1742: a corpus-wide mechanism re-measured only against the two targets its issue named, turning a required gate red. #1743: my briefs stated exclusions without the full grant set, so three executors inferred the wrong thing; a fourth overrode me in the other direction and was defensibly right.
+
+### Where the bug density is, if hunting
+
+The **calibration/corpus layer** and the **registries**. Specifically: `SemanticEntry` has never been swept for vacuous match keys (#1560, and #1185 already found live ones inflating a recall figure); bundled positives keep appearing (7 of 31, not the 6 claimed); every registry matching by SUBSTRING is suspect after #1716.
+
+### Operator decisions still open
+
+- **#1663 — rotate three Supabase tokens.** Written to an agent transcript. Nothing reached the repo (verified across the tree, `origin/main` and every branch diff); confined to `/private/tmp`. Rotation is not something an agent should do on the operator's behalf.
+- **#774–#778 — five vulnerability disclosures**, including 2 Critical + 4 High in one third-party repo. The only externally-facing item; the cost of waiting is borne by someone who does not know yet.
+- **#1069** — DRAFT liability wording to counsel. **#1735** — how we obtain access to a client's project (org account they grant vs credentials we hold). **#1731** — does `validate-render-fidelity` block or report?
+- **GTM**: #10–#13, #729–#731, #740. **Site**: #742, #743, #1515 (ruled: intake site IS the booking path, tier-aware — see the issue).
 
 ## 2026-07-31 (round 3, mid-sweep state) — READ THIS BEFORE RESUMING
 
