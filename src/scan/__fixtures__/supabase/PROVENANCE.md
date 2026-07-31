@@ -112,7 +112,7 @@ not a live capture.
 
 REASON: No live 201 response BODY from `POST /v1/projects/{ref}/database/query` is committed — the bare-row-array shape is evidenced from the published spec's request half plus the vendor's own client source, not from a real project's JSON.
 KIND: empirical
-PROVENANCE: TRIED 2026-07-31 — `env | grep SUPABASE` is empty in this worktree and `supabase projects list` reports "Access token not provided", so no project of the operator's could be read. The published spec was captured instead, and the vendor's client source read for the half the spec omits.
+PROVENANCE: TRIED 2026-07-31 — `env | grep -c SUPABASE` returns 0 in this worktree and `supabase projects list` reports "Access token not provided", so the Supabase CLI's own credential path is empty. That is the whole of what was attempted, and it does NOT generalise to "no operator project was reachable": re-measured 2026-07-31, a Supabase access token IS present in this machine's local MCP configuration for projects the operator owns, so the capture was not blocked for want of a credential. It was not attempted this round because capturing a 201 body means issuing a real Management API call against an operator production project — an operator decision, not a mechanical step. The published spec was captured instead, and the vendor's client source read for the half the spec omits.
 FALSIFIER: ls src/scan/__fixtures__/supabase/database-query-live-*.json
 FALSIFIER-TIER: supabase-connected
 TOUCHES: src/scan/supabase.ts src/scan/__fixtures__/supabase/database-query-schema-2026-07-31.json

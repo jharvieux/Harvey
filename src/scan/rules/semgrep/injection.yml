@@ -1114,7 +1114,7 @@ rules:
       # semgrep's statement `...` matches deeply, so `pattern-not-inside: try {...}` tested against
       # the `path.resolve(...)` expression excludes nothing when only the guard is wrapped. The
       # third exclusion (no `try` may follow the resolve) is what makes the throw spelling sound
-      # here. MEASURED both directions on N-STORAGE-RESOLVE-GUARD-THROW /
+      # here. MEASURED both directions on N-PATH-RESOLVE-THROW /
       # P-PATH-TRAVERSAL-THROW-SWALLOWED.
       - patterns:
           - pattern: path.resolve($BASE, $X)

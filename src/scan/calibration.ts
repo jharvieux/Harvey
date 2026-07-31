@@ -226,6 +226,9 @@ export interface MatrixRow {
   kind: CorpusEntry["kind"];
   cls: string;
   expectedTier?: CorpusEntry["expectedTier"];
+  // #1248: echoes the entry's soundness flag so validate-calibration can make this row's miss fatal
+  // even though review-tier misses are non-fatal in general.
+  mustCatch?: true;
   caughtTier?: PrecisionTier; // best tier a relevant finding landed at (positives)
   highFlagged: boolean; // a relevant finding at HIGH (free-count) tier exists
   reviewFlagged: boolean; // a relevant finding at review tier exists
@@ -310,7 +313,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[], scoredVenues
     const detail = pass
       ? `caught at ${caughtTier}${entry.expectedTier && entry.expectedTier !== caughtTier ? ` (expected ${entry.expectedTier})` : ""}${sevDetail}`
       : "NOT caught by any rule";
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch, notScored: false };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, mustCatch: entry.mustCatch, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch, notScored: false };
   }
 
   // negative. #1344: `!highFlagged` alone let a widened rule light up a planted negative at review

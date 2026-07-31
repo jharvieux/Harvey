@@ -10802,7 +10802,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
-    "location": "pages/api/ssrf-host-userinfo.js:12",
+    "location": "pages/api/ssrf-host-throw-swallowed.js:17",
     "status": "Open",
     "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
     "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
@@ -10826,7 +10826,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
-    "location": "pages/api/ssrf-http.js:8",
+    "location": "pages/api/ssrf-host-userinfo.js:12",
     "status": "Open",
     "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
     "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
@@ -10845,6 +10845,30 @@
   },
   {
     "id": "SEM-346",
+    "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
+    "location": "pages/api/ssrf-http.js:8",
+    "status": "Open",
+    "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
+    "id": "SEM-347",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -10868,7 +10892,7 @@
     ]
   },
   {
-    "id": "SEM-347",
+    "id": "SEM-348",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -10892,7 +10916,7 @@
     ]
   },
   {
-    "id": "SEM-348",
+    "id": "SEM-349",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -10913,7 +10937,7 @@
     ]
   },
   {
-    "id": "SEM-349",
+    "id": "SEM-350",
     "title": "src.scan.rules.semgrep.harvey-argument-injection: Request input is passed as an argv-array element to execFile/spawn (no shell) — argument injection (CWE-88). Even without a shell, a leading -/--flag value is interpreted as an option by the invoked program. Validate the value against an allowlist and pass `--` before positional arguments. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the tainted argv element. Whether that is exploitable depends on how the invoked program treats a leading dash — a binary with no option parsing, or one already given `--`, is not at risk — and no source scan can determine that.",
     "severity": "High",
     "confidence": "Review",
@@ -10937,7 +10961,7 @@
     ]
   },
   {
-    "id": "SEM-350",
+    "id": "SEM-351",
     "title": "src.scan.rules.semgrep.harvey-spawn-shell-true: spawn/execFile is called with { shell: true }, which runs the command through a shell and re-parses the arguments — reintroducing command injection the argv array was preventing. Drop shell: true and pass the binary + argv array directly.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -10961,7 +10985,7 @@
     ]
   },
   {
-    "id": "SEM-351",
+    "id": "SEM-352",
     "title": "src.scan.rules.semgrep.harvey-argument-injection: Request input is passed as an argv-array element to execFile/spawn (no shell) — argument injection (CWE-88). Even without a shell, a leading -/--flag value is interpreted as an option by the invoked program. Validate the value against an allowlist and pass `--` before positional arguments. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the tainted argv element. Whether that is exploitable depends on how the invoked program treats a leading dash — a binary with no option parsing, or one already given `--`, is not at risk — and no source scan can determine that.",
     "severity": "High",
     "confidence": "Review",
@@ -10985,7 +11009,7 @@
     ]
   },
   {
-    "id": "SEM-352",
+    "id": "SEM-353",
     "title": "src.scan.rules.semgrep.harvey-log-injection: Request input is written to a log line unsanitized — log forging/injection via CR/LF. Strip newlines (or log structured fields) before writing user input to the log.",
     "severity": "Low",
     "confidence": "Review",
@@ -11009,7 +11033,7 @@
     ]
   },
   {
-    "id": "SEM-353",
+    "id": "SEM-354",
     "title": "src.scan.rules.semgrep.harvey-path-traversal: Request input is joined into a filesystem path and read/written — path traversal (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir. SCOPE OF THIS CHECK: a resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248) only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard whose resolve is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "High",
     "confidence": "Review",
@@ -11033,7 +11057,7 @@
     ]
   },
   {
-    "id": "SEM-354",
+    "id": "SEM-355",
     "title": "src.scan.rules.semgrep.harvey-path-traversal: Request input is joined into a filesystem path and read/written — path traversal (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir. SCOPE OF THIS CHECK: a resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248) only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard whose resolve is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "High",
     "confidence": "Review",
@@ -11057,7 +11081,7 @@
     ]
   },
   {
-    "id": "SEM-355",
+    "id": "SEM-356",
     "title": "src.scan.rules.semgrep.harvey-verbose-error: A caught error's .stack or .message is echoed directly into the JSON response — this leaks stack traces, file paths, and library versions to the client. Log the detail server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -11081,7 +11105,7 @@
     ]
   },
   {
-    "id": "SEM-356",
+    "id": "SEM-357",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11105,7 +11129,7 @@
     ]
   },
   {
-    "id": "SEM-357",
+    "id": "SEM-358",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11126,7 +11150,7 @@
     ]
   },
   {
-    "id": "SEM-358",
+    "id": "SEM-359",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11150,7 +11174,7 @@
     ]
   },
   {
-    "id": "SEM-359",
+    "id": "SEM-360",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11174,7 +11198,7 @@
     ]
   },
   {
-    "id": "SEM-360",
+    "id": "SEM-361",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11198,7 +11222,7 @@
     ]
   },
   {
-    "id": "SEM-361",
+    "id": "SEM-362",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11219,7 +11243,7 @@
     ]
   },
   {
-    "id": "SEM-362",
+    "id": "SEM-363",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11243,7 +11267,7 @@
     ]
   },
   {
-    "id": "SEM-363",
+    "id": "SEM-364",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11264,7 +11288,7 @@
     ]
   },
   {
-    "id": "SEM-364",
+    "id": "SEM-365",
     "title": "src.scan.rules.semgrep.harvey-xxe: An XML parser is configured to resolve external entities (noent/resolveEntities true) — XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution when parsing untrusted XML.",
     "severity": "High",
     "confidence": "Review",
@@ -11288,7 +11312,7 @@
     ]
   },
   {
-    "id": "SEM-365",
+    "id": "SEM-366",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11317,7 +11341,7 @@
     ]
   },
   {
-    "id": "SEM-366",
+    "id": "SEM-367",
     "title": "javascript.express.security.injection.raw-html-format.raw-html-format: User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11346,7 +11370,7 @@
     ]
   },
   {
-    "id": "SEM-367",
+    "id": "SEM-368",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the interpolated value reaching res.send(). It is not evidence that no escaping or sanitizer ran on that value earlier — in a helper, in middleware, or at write time — so confirm none did before treating this as unmitigated.",
     "severity": "High",
     "confidence": "Review",
@@ -11370,7 +11394,7 @@
     ]
   },
   {
-    "id": "SEM-368",
+    "id": "SEM-369",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11399,7 +11423,7 @@
     ]
   },
   {
-    "id": "SEM-369",
+    "id": "SEM-370",
     "title": "javascript.express.security.injection.raw-html-format.raw-html-format: User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11428,7 +11452,7 @@
     ]
   },
   {
-    "id": "SEM-370",
+    "id": "SEM-371",
     "title": "src.scan.rules.semgrep.harvey-xxe-parse: Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser). If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the parse of request-controlled XML, NOT proof that external-entity resolution is enabled. Whether it is depends on parser options that may be set in config this rule does not read, so exploitability has to be confirmed against the parser's actual settings.",
     "severity": "High",
     "confidence": "Review",
@@ -11452,7 +11476,7 @@
     ]
   },
   {
-    "id": "SEM-371",
+    "id": "SEM-372",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-prop: A prop/parameter/identifier value reaches dangerouslySetInnerHTML with no sanitizer. If any of the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string), this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or render the value as text. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the prop or identifier reaching __html. Whether the value was already sanitized upstream — by the component's caller, a shared formatter, or at write time — is outside what this rule reads, so a correctly sanitized value can still appear here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11476,7 +11500,7 @@
     ]
   },
   {
-    "id": "SEM-372",
+    "id": "SEM-373",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-stored: A database-read value (Supabase select result) reaches dangerouslySetInnerHTML unsanitized — stored XSS (the payload was persisted by an earlier write, e.g. a comment body). Sanitize before rendering, or sanitize at write time. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the database-read value reaching the sink. Whether the WRITE that produced the stored value sanitized it is not something this rule can confirm, so a value already sanitized at write time will appear here too.",
     "severity": "High",
     "confidence": "Review",
@@ -11500,7 +11524,7 @@
     ]
   },
   {
-    "id": "SEM-373",
+    "id": "SEM-374",
     "title": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml: Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11529,7 +11553,7 @@
     ]
   },
   {
-    "id": "SEM-374",
+    "id": "SEM-375",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html: A request-controlled value reaches dangerouslySetInnerHTML unsanitized — reflected/stored XSS. Sanitize (e.g. DOMPurify.sanitize) before it reaches __html, or render as text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11553,7 +11577,7 @@
     ]
   },
   {
-    "id": "SEM-375",
+    "id": "SEM-376",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-prop: A prop/parameter/identifier value reaches dangerouslySetInnerHTML with no sanitizer. If any of the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string), this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or render the value as text. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the prop or identifier reaching __html. Whether the value was already sanitized upstream — by the component's caller, a shared formatter, or at write time — is outside what this rule reads, so a correctly sanitized value can still appear here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11577,7 +11601,7 @@
     ]
   },
   {
-    "id": "SEM-376",
+    "id": "SEM-377",
     "title": "src.scan.rules.semgrep.harvey-public-bucket: This code creates a Supabase Storage bucket with public: true. A public bucket skips storage RLS for reads — every object in it is readable by anyone who knows or can guess the URL, regardless of policies. If it holds private/user data (documents, uploads, PII), this is a broken object-authorization exposure. Set the bucket private and serve via signed URLs, or confirm it only holds intentionally-public assets.",
     "severity": "High",
     "confidence": "Review",
@@ -11601,7 +11625,7 @@
     ]
   },
   {
-    "id": "SEM-377",
+    "id": "SEM-378",
     "title": "generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account: Google (GCM) Service account detected",
     "severity": "High",
     "confidence": "Review",
@@ -11629,7 +11653,7 @@
     ]
   },
   {
-    "id": "SEM-378",
+    "id": "SEM-379",
     "title": "generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account: Google (GCM) Service account detected",
     "severity": "High",
     "confidence": "Review",
@@ -11657,7 +11681,7 @@
     ]
   },
   {
-    "id": "SEM-379",
+    "id": "SEM-380",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11678,7 +11702,7 @@
     ]
   },
   {
-    "id": "SEM-380",
+    "id": "SEM-381",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11699,7 +11723,7 @@
     ]
   },
   {
-    "id": "SEM-381",
+    "id": "SEM-382",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11720,7 +11744,7 @@
     ]
   },
   {
-    "id": "SEM-382",
+    "id": "SEM-383",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11741,7 +11765,7 @@
     ]
   },
   {
-    "id": "SEM-383",
+    "id": "SEM-384",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11765,7 +11789,7 @@
     ]
   },
   {
-    "id": "SEM-384",
+    "id": "SEM-385",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11789,7 +11813,7 @@
     ]
   },
   {
-    "id": "SEM-385",
+    "id": "SEM-386",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11813,7 +11837,7 @@
     ]
   },
   {
-    "id": "SEM-386",
+    "id": "SEM-387",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11837,7 +11861,7 @@
     ]
   },
   {
-    "id": "SEM-387",
+    "id": "SEM-388",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11861,7 +11885,7 @@
     ]
   },
   {
-    "id": "SEM-388",
+    "id": "SEM-389",
     "title": "src.scan.rules.semgrep.harvey-lib-command-injection: An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.",
     "severity": "Critical",
     "confidence": "Review",
@@ -11885,7 +11909,7 @@
     ]
   },
   {
-    "id": "SEM-389",
+    "id": "SEM-390",
     "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
     "severity": "High",
     "confidence": "Review",
@@ -11909,7 +11933,7 @@
     ]
   },
   {
-    "id": "SEM-390",
+    "id": "SEM-391",
     "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
     "severity": "High",
     "confidence": "Review",
@@ -11933,7 +11957,7 @@
     ]
   },
   {
-    "id": "SEM-391",
+    "id": "SEM-392",
     "title": "src.scan.rules.semgrep.harvey-dangerously-allow-browser: An LLM client is constructed with dangerouslyAllowBrowser: true — this runs in the browser and exposes the API key to every visitor (the key is inlined into the bundle). Call the LLM from a server-side route/function and keep the key server-only; never ship it to the client.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11957,7 +11981,7 @@
     ]
   },
   {
-    "id": "SEM-392",
+    "id": "SEM-393",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -11981,7 +12005,7 @@
     ]
   },
   {
-    "id": "SEM-393",
+    "id": "SEM-394",
     "title": "src.scan.rules.semgrep.harvey-vite-service-role-in-client: A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to a server-side function and keep only the anon/publishable key in the client. SCOPE OF THIS CHECK: it fires on a VITE_-prefixed variable whose NAME reads as a service-role key. A privileged key inlined under a name this rule does not recognise is not assessed.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -12005,7 +12029,7 @@
     ]
   },
   {
-    "id": "SEM-394",
+    "id": "SEM-395",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -12029,7 +12053,7 @@
     ]
   },
   {
-    "id": "SEM-395",
+    "id": "SEM-396",
     "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
     "severity": "High",
     "confidence": "Review",
@@ -12053,7 +12077,7 @@
     ]
   },
   {
-    "id": "SEM-396",
+    "id": "SEM-397",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the READ of a role field off the request. Code that reads the field only to reject it is a benign shape this rule does not distinguish from a trusting one, so a defensive check will appear here too.",
     "severity": "High",
     "confidence": "Review",
@@ -12077,7 +12101,7 @@
     ]
   },
   {
-    "id": "SEM-397",
+    "id": "SEM-398",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the interpolated value reaching res.send(). It is not evidence that no escaping or sanitizer ran on that value earlier — in a helper, in middleware, or at write time — so confirm none did before treating this as unmitigated.",
     "severity": "High",
     "confidence": "Review",
@@ -12101,7 +12125,7 @@
     ]
   },
   {
-    "id": "SEM-398",
+    "id": "SEM-399",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12130,7 +12154,7 @@
     ]
   },
   {
-    "id": "SEM-399",
+    "id": "SEM-400",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the READ of a role field off the request. Code that reads the field only to reject it is a benign shape this rule does not distinguish from a trusting one, so a defensive check will appear here too.",
     "severity": "High",
     "confidence": "Review",
@@ -12154,7 +12178,7 @@
     ]
   },
   {
-    "id": "SEM-400",
+    "id": "SEM-401",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the interpolated value reaching res.send(). It is not evidence that no escaping or sanitizer ran on that value earlier — in a helper, in middleware, or at write time — so confirm none did before treating this as unmitigated.",
     "severity": "High",
     "confidence": "Review",
@@ -12178,7 +12202,7 @@
     ]
   },
   {
-    "id": "SEM-401",
+    "id": "SEM-402",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12207,7 +12231,7 @@
     ]
   },
   {
-    "id": "SEM-402",
+    "id": "SEM-403",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the READ of a role field off the request. Code that reads the field only to reject it is a benign shape this rule does not distinguish from a trusting one, so a defensive check will appear here too.",
     "severity": "High",
     "confidence": "Review",
@@ -12231,7 +12255,7 @@
     ]
   },
   {
-    "id": "SEM-403",
+    "id": "SEM-404",
     "title": "src.scan.rules.semgrep.harvey-hpp-query-cast: HTTP parameter pollution: req.query.<param> is cast `as string`, then tested with .includes()/.indexOf(). Express turns a repeated query parameter into a string[], so a value like ?role=user&role=admin makes the cast a lie and silently changes the check from substring containment to array membership. Normalize first (Array.isArray(v) ? v[0] : v, or a schema parse) before testing.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12255,7 +12279,7 @@
     ]
   },
   {
-    "id": "SEM-404",
+    "id": "SEM-405",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the interpolated value reaching res.send(). It is not evidence that no escaping or sanitizer ran on that value earlier — in a helper, in middleware, or at write time — so confirm none did before treating this as unmitigated.",
     "severity": "High",
     "confidence": "Review",
@@ -12279,7 +12303,7 @@
     ]
   },
   {
-    "id": "SEM-405",
+    "id": "SEM-406",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12308,7 +12332,7 @@
     ]
   },
   {
-    "id": "SEM-406",
+    "id": "SEM-407",
     "title": "src.scan.rules.semgrep.harvey-body-parser-no-limit: A body-parsing middleware has no `limit` option — the framework default applies and one request body can exhaust process memory. Set an explicit size limit (e.g. express.json({ limit: \"100kb\" })) sized to what the route legitimately needs. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reads this middleware call only — a presence check, not a certainty. A body-size limit enforced by a reverse proxy, an ingress, or the hosting platform in front of the app is invisible to a source scan; confirm none applies before treating the route as unbounded.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12329,7 +12353,7 @@
     ]
   },
   {
-    "id": "SEM-407",
+    "id": "SEM-408",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12350,7 +12374,7 @@
     ]
   },
   {
-    "id": "SEM-408",
+    "id": "SEM-409",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12371,7 +12395,7 @@
     ]
   },
   {
-    "id": "SEM-409",
+    "id": "SEM-410",
     "title": "src.scan.rules.semgrep.harvey-sensitive-response-cached: This handler reads an identity/session signal and marks its response publicly cacheable (Cache-Control: public / a positive max-age or s-maxage). A shared proxy or CDN can serve one user's response to the next requester. Use private, no-store (or no-cache) for any response that varies by identity. SCOPE OF THIS CHECK: the identity read and the Cache-Control write must be in the SAME handler. A route that caches publicly while its identity read happens indirectly — via a helper, middleware or layout — is not assessed.",
     "severity": "High",
     "confidence": "Review",
@@ -12392,7 +12416,7 @@
     ]
   },
   {
-    "id": "SEM-410",
+    "id": "SEM-411",
     "title": "src.scan.rules.semgrep.harvey-vm-unsafe-sandbox: vm.runInNewContext/runInThisContext evaluates a dynamically-built script. Node's own documentation is explicit that the vm module is NOT a security sandbox — treat any value reaching it as capable of reaching the host realm. Do not use vm to run untrusted or dynamically-assembled code.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -12413,7 +12437,7 @@
     ]
   },
   {
-    "id": "SEM-411",
+    "id": "SEM-412",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added). SCOPE OF THIS CHECK (#1342/#1237), so its silence elsewhere is not read as a clean bill of health: a spread object is treated as safe only when it passes an explicit allowlist test in one of three recognised spellings — Object.fromEntries over a .has/.includes filter, pick(), or a for-of copy whose keys come from a NAMED allowlist (for (const k of ALLOWED) safe[k] = raw[k]). Any other sanitizer — a custom filter function, a validation library, a schema parse — is not recognised, so a correctly filtered spread can still be reported here. The recognised test is a structural match on the filtering code, not evidence that the allowlist it uses is itself complete: MEASURED 2026-07-31, a loop whose allowlist is laundered through a local const off the untrusted object (const allowed = raw.fields; for (const k of allowed) ...) is NOT reported, the same one-hop indirection the .has/.includes arm has always had.",
     "severity": "High",
     "confidence": "Review",
@@ -12437,7 +12461,7 @@
     ]
   },
   {
-    "id": "SEM-412",
+    "id": "SEM-413",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added). SCOPE OF THIS CHECK (#1342/#1237), so its silence elsewhere is not read as a clean bill of health: a spread object is treated as safe only when it passes an explicit allowlist test in one of three recognised spellings — Object.fromEntries over a .has/.includes filter, pick(), or a for-of copy whose keys come from a NAMED allowlist (for (const k of ALLOWED) safe[k] = raw[k]). Any other sanitizer — a custom filter function, a validation library, a schema parse — is not recognised, so a correctly filtered spread can still be reported here. The recognised test is a structural match on the filtering code, not evidence that the allowlist it uses is itself complete: MEASURED 2026-07-31, a loop whose allowlist is laundered through a local const off the untrusted object (const allowed = raw.fields; for (const k of allowed) ...) is NOT reported, the same one-hop indirection the .has/.includes arm has always had.",
     "severity": "High",
     "confidence": "Review",
@@ -12461,7 +12485,7 @@
     ]
   },
   {
-    "id": "SEM-413",
+    "id": "SEM-414",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added). SCOPE OF THIS CHECK (#1342/#1237), so its silence elsewhere is not read as a clean bill of health: a spread object is treated as safe only when it passes an explicit allowlist test in one of three recognised spellings — Object.fromEntries over a .has/.includes filter, pick(), or a for-of copy whose keys come from a NAMED allowlist (for (const k of ALLOWED) safe[k] = raw[k]). Any other sanitizer — a custom filter function, a validation library, a schema parse — is not recognised, so a correctly filtered spread can still be reported here. The recognised test is a structural match on the filtering code, not evidence that the allowlist it uses is itself complete: MEASURED 2026-07-31, a loop whose allowlist is laundered through a local const off the untrusted object (const allowed = raw.fields; for (const k of allowed) ...) is NOT reported, the same one-hop indirection the .has/.includes arm has always had.",
     "severity": "High",
     "confidence": "Review",
@@ -12485,7 +12509,7 @@
     ]
   },
   {
-    "id": "SEM-414",
+    "id": "SEM-415",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added). SCOPE OF THIS CHECK (#1342/#1237), so its silence elsewhere is not read as a clean bill of health: a spread object is treated as safe only when it passes an explicit allowlist test in one of three recognised spellings — Object.fromEntries over a .has/.includes filter, pick(), or a for-of copy whose keys come from a NAMED allowlist (for (const k of ALLOWED) safe[k] = raw[k]). Any other sanitizer — a custom filter function, a validation library, a schema parse — is not recognised, so a correctly filtered spread can still be reported here. The recognised test is a structural match on the filtering code, not evidence that the allowlist it uses is itself complete: MEASURED 2026-07-31, a loop whose allowlist is laundered through a local const off the untrusted object (const allowed = raw.fields; for (const k of allowed) ...) is NOT reported, the same one-hop indirection the .has/.includes arm has always had.",
     "severity": "High",
     "confidence": "Review",
@@ -12509,7 +12533,7 @@
     ]
   },
   {
-    "id": "SEM-415",
+    "id": "SEM-416",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12533,7 +12557,7 @@
     ]
   },
   {
-    "id": "SEM-416",
+    "id": "SEM-417",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -12557,7 +12581,7 @@
     ]
   },
   {
-    "id": "SEM-417",
+    "id": "SEM-418",
     "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it recognises secrets by the PARAMETER NAME only. Names deliberately left out — `session`, `code`, and anything project-specific — are not assessed, so a credential carried under a different parameter name will not appear here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -12581,7 +12605,7 @@
     ]
   },
   {
-    "id": "SEM-418",
+    "id": "SEM-419",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it fires only when the fallback literal is SECRET-SHAPED — a known key-format prefix, or a long hex/base64 string. A hardcoded fallback credential that does not look like one (a short password, a project-specific token format) is not assessed by this rule.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -12605,7 +12629,7 @@
     ]
   },
   {
-    "id": "SEM-419",
+    "id": "SEM-420",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -12633,7 +12657,7 @@
     ]
   },
   {
-    "id": "SEM-420",
+    "id": "SEM-421",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -12662,7 +12686,7 @@
     ]
   },
   {
-    "id": "SEM-421",
+    "id": "SEM-422",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
