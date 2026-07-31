@@ -65,6 +65,7 @@ const pricingFaq = {
 };
 
 export default function Pricing() {
+  throw new Error("DELIBERATE BREAK: proving site-ci fails on the converted install path (#1597)");
   return (
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(pricingFaq) }} />
