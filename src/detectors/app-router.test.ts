@@ -1750,3 +1750,105 @@ describe("import resolution across a workspace (#1353)", () => {
     expect(graph.get(from)).toContain("packages/crypto/src/index.ts");
   });
 });
+
+// #1680 — a file-level `"use server"` marks that module's EXPORTED functions as RPC endpoints and
+// nothing else. All five of inbox-zero's `M1-boundary` rows (@2b78f2b3) were non-exported helpers
+// inside such a module, each called by an exported action whose middleware had already authorised
+// the caller. A helper the client has no route to is not "a public POST endpoint anyone can trigger".
+describe("Server Actions: only an EXPORTED function in a 'use server' module is an endpoint (#1680)", () => {
+  const AUTHZ = "M1 — Server Action missing authorization check";
+  const useServer = (body: string) => [{ path: "app/actions.ts", text: `"use server";\n\n${body}` }];
+
+  it("does not flag a non-exported helper in a 'use server' module", () => {
+    const findings = detectAppRouterFindings(
+      useServer(
+        `async function deleteCategoryHelper(id: string, emailAccountId: string) {\n  await db.category.delete({ where: { id, emailAccountId } });\n}\n\nexport async function deleteCategoryAction(id: string) {\n  const session = await auth();\n  if (!session) throw new Error("unauthorized");\n  await deleteCategoryHelper(id, session.emailAccountId);\n}\n`,
+      ),
+    );
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  it("does not flag a non-exported module-level arrow in a 'use server' module", () => {
+    const findings = detectAppRouterFindings(useServer(`const purge = async (id: string) => {\n  await db.category.delete({ where: { id } });\n};\n`));
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  // The failing direction: the narrowing must not turn into a blanket silence. Each of the three
+  // export spellings is an endpoint and must still fire.
+  it("still flags an unguarded `export async function`", () => {
+    const findings = detectAppRouterFindings(useServer(`export async function purge(id: string) {\n  await db.category.delete({ where: { id } });\n}\n`));
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+
+  it("still flags an unguarded `export const` arrow", () => {
+    const findings = detectAppRouterFindings(useServer(`export const purge = async (id: string) => {\n  await db.category.delete({ where: { id } });\n};\n`));
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+
+  it("still flags a function exported by a separate `export { … }` statement", () => {
+    const findings = detectAppRouterFindings(useServer(`async function purge(id: string) {\n  await db.category.delete({ where: { id } });\n}\n\nexport { purge };\n`));
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+
+  // The INLINE directive keeps its old meaning: such an action is commonly passed to a Client
+  // Component as a prop rather than exported, so export says nothing about its reachability.
+  it("still flags an inline 'use server' action that is never exported", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/page.tsx",
+        text: `export default function Page() {\n  async function purge(id: string) {\n    "use server";\n    await db.category.delete({ where: { id } });\n  }\n  return <form action={purge} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+});
+
+// #1681 — MUTATION_PATTERN is name-only, so any receiver with a `.delete()` satisfied it. carbon's
+// `apps/mes/app/routes/x+/proxy.$.tsx` has no database write at all and was reported as an
+// unguarded one because `headers.delete("host")` read as a data mutation.
+describe("route actions: a built-in collection's `.delete()` is not a data mutation (#1681)", () => {
+  const AUTHZ = "M1 — route action missing authorization check";
+  const route = (text: string) => detectAppRouterFindings([{ path: "app/routes/proxy.tsx", text }], "remix");
+
+  it("does not flag a pure proxy action whose only `.delete()` is on a locally-built Headers", () => {
+    const findings = route(
+      `export async function action({ request, params }: { request: Request; params: Record<string, string> }) {\n  const headers = new Headers(request.headers);\n  headers.delete("host");\n  headers.delete("origin");\n  return fetch(\`https://erp.example/\${params["*"]}\`, { method: request.method, body: request.body, headers });\n}\n`,
+    );
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  it("does not flag a `.delete()` on a URLSearchParams reached through a property", () => {
+    const findings = route(
+      `export async function action({ request }: { request: Request }) {\n  const url = new URL(request.url);\n  url.searchParams.delete("token");\n  return fetch(url);\n}\n`,
+    );
+    expect(taxonomies(findings)).not.toContain(AUTHZ);
+  });
+
+  // flori-web's `src/lib/logger.ts` keeps its dedup `new Map()` at MODULE scope, so a body-only scan
+  // of the receiver bindings misses it. MEASURED on the pinned clone, not invented.
+  it("does not flag a `.delete()` on a module-level Map used as an in-memory dedup cache", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\n\nconst recentErrors = new Map<string, number>();\n\nexport async function isDuplicate(key: string) {\n  const now = Date.now();\n  for (const [k, v] of recentErrors) {\n    if (now - v > 1000) recentErrors.delete(k);\n  }\n  recentErrors.set(key, now);\n  return false;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M1 — Server Action missing authorization check");
+  });
+
+  // The failing direction, and the reason the exclusion is per-CALL rather than per-file: an action
+  // that scrubs headers AND writes to the database is still an unguarded write.
+  it("still flags an action that scrubs headers and then mutates the database", () => {
+    const findings = route(
+      `import { db } from "../db";\nexport async function action({ request }: { request: Request }) {\n  const form = await request.formData();\n  const headers = new Headers(request.headers);\n  headers.delete("host");\n  await db.from("notes").delete().eq("id", form.get("id"));\n  return new Response("ok");\n}\n`,
+    );
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+
+  it("still flags a plain unguarded delete with no built-in collection anywhere", () => {
+    const findings = route(
+      `import { db } from "../db";\nexport async function action({ request }: { request: Request }) {\n  const form = await request.formData();\n  await db.from("notes").delete().eq("id", form.get("id"));\n  return new Response("ok");\n}\n`,
+    );
+    expect(taxonomies(findings)).toContain(AUTHZ);
+  });
+});

@@ -83,7 +83,7 @@ x-library-entry-point: &library_entry_point
 # (P-LIB-CMD-DENYLIST-GUARD), the `const` binding must be a declaration rather than a reassignable
 # one, and a throwing guard must not sit inside a try that could swallow it
 # (P-LIB-CMD-THROW-SWALLOWED). The blocks are verbatim copies of injection.yml's so the two
-# families cannot drift into different soundness.
+# families stay on one definition of soundness rather than drifting apart.
 x-lib-validator-guard: &lib_validator_guard
   by-side-effect: true
   patterns:

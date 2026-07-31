@@ -106,6 +106,63 @@ function isDbMutationChain(text: string): boolean {
   return MUTATION_PATTERN.test(text);
 }
 
+// #1681: MUTATION_PATTERN is name-only, so ANY receiver with a `.delete()` satisfies it — Headers,
+// Map, Set, URLSearchParams, FormData, localStorage. MEASURED 2026-07-31 on carbon @92e19c04:
+// `apps/mes/app/routes/x+/proxy.$.tsx` is a pure request proxy with no database write anywhere in
+// the file, and it was reported `M1 — route action missing authorization check` because
+// `headers.delete("host")` read as a data mutation.
+//
+// The narrowing is a SUBTRACTION, not a replacement: the text regex stays the primary gate and an
+// action is spared only when the AST can see EVERY mutation-named call in it landing on a built-in
+// collection. An action where the AST models no such call at all keeps firing, so a spelling this
+// walk does not understand can only over-report, never silently go dark.
+const BUILTIN_COLLECTION_CTOR = /^(Headers|Map|Set|WeakMap|WeakSet|URLSearchParams|FormData)$/;
+// A property whose value is one of those by platform definition (`request.headers`,
+// `url.searchParams`), plus the two Storage globals.
+const BUILTIN_COLLECTION_PROP = /^(headers|searchParams|localStorage|sessionStorage)$/;
+
+function builtinCollectionLocals(fn: ts.Node): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const init = n.initializer;
+      if (ts.isNewExpression(init) && ts.isIdentifier(init.expression) && BUILTIN_COLLECTION_CTOR.test(init.expression.text)) names.add(n.name.text);
+      else if (ts.isPropertyAccessExpression(init) && BUILTIN_COLLECTION_PROP.test(init.name.text)) names.add(n.name.text);
+    } else if (ts.isParameter(n) && ts.isIdentifier(n.name) && n.type && ts.isTypeReferenceNode(n.type) && ts.isIdentifier(n.type.typeName) && BUILTIN_COLLECTION_CTOR.test(n.type.typeName.text)) {
+      names.add(n.name.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  return names;
+}
+
+function isBuiltinCollectionReceiver(recv: ts.Expression, locals: ReadonlySet<string>): boolean {
+  if (ts.isIdentifier(recv)) return locals.has(recv.text) || BUILTIN_COLLECTION_PROP.test(recv.text);
+  return ts.isPropertyAccessExpression(recv) && BUILTIN_COLLECTION_PROP.test(recv.name.text);
+}
+
+/**
+ * True when the AST sees at least one mutation-named call and every one lands on a built-in
+ * collection. The receiver names are collected from the whole MODULE, not just the action body:
+ * flori-web's `src/lib/logger.ts` keeps its dedup `new Map()` at module scope and calls
+ * `recentErrors.delete(k)` inside the function, which a body-only scan of the bindings misses.
+ */
+function onlyBuiltinCollectionMutations(sf: ts.SourceFile, fn: ts.Node): boolean {
+  const locals = builtinCollectionLocals(sf);
+  let seen = 0;
+  let builtin = 0;
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && MUTATION_PATTERN.test(`.${n.expression.name.text}(`)) {
+      seen++;
+      if (isBuiltinCollectionReceiver(n.expression.expression, locals)) builtin++;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  return seen > 0 && seen === builtin;
+}
+
 export function makeFinding(
   nextId: NextId,
   input: {
@@ -536,16 +593,57 @@ function bodyStartsWithUseServer(body: ts.Block | undefined): boolean {
   return !!first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use server";
 }
 
+// #1680: a file-level `"use server"` directive marks that module's EXPORTED functions as RPC
+// endpoints — nothing else. A non-exported helper in the same file is ordinary server code, not
+// reachable by a client at all, so "missing authorization check" is a category error on it: the
+// authorization lives in the exported action that calls it.
+//
+// MEASURED 2026-07-31 against inbox-zero @2b78f2b3: ALL FIVE of its `M1-boundary` rows were this
+// shape — `deleteCategory`/`upsertCategory` (utils/actions/categorize.ts), `acceptInvitation`
+// (organization.ts) and two nested `deleteRule`/`upsertRule` closures (rule.ts), every one called
+// by an exported `actionClient(...).action(...)` whose middleware supplies an already-authorised
+// `ctx.emailAccountId` that scopes the Prisma call.
+//
+// The requirement is deliberately NOT applied to the INLINE spelling (`"use server"` as the first
+// statement of a function body). That form creates an action object which is commonly passed to a
+// Client Component as a prop rather than exported, so export tells you nothing about its
+// reachability — the two directives place the boundary in different places and collapsing them
+// would silence a real class.
+//
+// The re-export spelling counts: `function f() {}` followed by `export { f }` is an endpoint.
+function reExportedNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const stmt of sf.statements) {
+    if (ts.isExportDeclaration(stmt) && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+      for (const spec of stmt.exportClause.elements) names.add((spec.propertyName ?? spec.name).text);
+    } else if (ts.isExportAssignment(stmt) && ts.isIdentifier(stmt.expression)) {
+      names.add(stmt.expression.text);
+    }
+  }
+  return names;
+}
+
+function isModuleExport(decl: ts.FunctionDeclaration | ts.VariableDeclaration, reExported: Set<string>): boolean {
+  if (ts.isFunctionDeclaration(decl)) {
+    if (decl.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) return true;
+    return decl.name !== undefined && reExported.has(decl.name.text);
+  }
+  const stmt = ts.findAncestor(decl, ts.isVariableStatement);
+  if (stmt?.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) return true;
+  return ts.isIdentifier(decl.name) && reExported.has(decl.name.text);
+}
+
 function collectServerActions(sf: ts.SourceFile): ServerAction[] {
   const fileLevel = leadingDirective(sf) === "use server";
+  const reExported = fileLevel ? reExportedNames(sf) : new Set<string>();
   const actions: ServerAction[] = [];
   const visit = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.body && (fileLevel || bodyStartsWithUseServer(node.body))) {
+    if (ts.isFunctionDeclaration(node) && node.body && (bodyStartsWithUseServer(node.body) || (fileLevel && isModuleExport(node, reExported)))) {
       actions.push({ node, name: node.name?.text ?? "<anonymous>" });
     } else if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
       const fn = node.initializer;
       const body = ts.isBlock(fn.body) ? fn.body : undefined;
-      if ((fileLevel || bodyStartsWithUseServer(body)) && ts.isIdentifier(node.name)) {
+      if ((bodyStartsWithUseServer(body) || (fileLevel && isModuleExport(node, reExported))) && ts.isIdentifier(node.name)) {
         actions.push({ node: fn, name: node.name.text });
       }
     }
@@ -1206,7 +1304,8 @@ function detectServerActionAuthAndValidation(
   for (const [path, sf] of sources) {
     for (const action of mutationsFor(path, sf)) {
       const text = stripLiteralsAndComments(sf, action.node);
-      if (!isDbMutationChain(text)) continue; // scope to mutating actions per the brief
+      // scope to mutating actions per the brief; #1681 subtracts the built-in-collection `.delete()`
+      if (!isDbMutationChain(text) || onlyBuiltinCollectionMutations(sf, action.node)) continue;
 
       // The client-supplied-owner-id detector already fired on this no-auth action with a
       // strictly more specific finding (its evidence carries the no-auth fact) — one code
