@@ -515,11 +515,10 @@ const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
       {
         what: "`src/cli/pentest.ts --mode=coverage` reaches assertComplete (src/pentest/targets.ts) and fails loud on any enumerated target `--tested` did not list (#352)",
         invokes: "src/cli/pentest.ts",
-        // MEASURED 2026-07-28: `grep -rn "mode=coverage" .github/workflows/ package.json` returns
-        // nothing, and no workflow names pentest at all. The check works in both directions; it just
-        // runs only when a human remembers. Wiring it into a venue is a supervised
-        // .github/workflows/ edit, so it is DISCLOSED here and relayed on #1483 rather than done.
-        cadence: { kind: "none", issue: 1483 },
+        // Wired 2026-07-31 (#1483, workflow edits authorised for this session): heavy-cli shard 3
+        // now runs `pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested app:root` on
+        // every PR. This module's row can no longer stand on an undisclosed "someone remembers".
+        cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 3", when: "every PR + daily schedule (#1483)" },
       },
       {
         what: "the M2 conservation plant in src/audit-conservation.ts, asserted by src/cli/validate-conservation.ts (#1155)",
