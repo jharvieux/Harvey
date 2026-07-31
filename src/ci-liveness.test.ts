@@ -248,6 +248,18 @@ describe("the registry — a new gate job cannot join without a liveness assert"
     }
   });
 
+  // The producer and the asserter have to agree about WHERE the receipt is. `recordMeasured` writes
+  // nothing when `HARVEY_LIVENESS_RECEIPT` is unset (it is silent off CI by design) while the bash
+  // asserter falls back to `$RUNNER_TEMP` — so a job missing the env var asserts against an empty
+  // file and fails a run that scored perfectly. MEASURED 2026-07-31: five workflows landed without
+  // it and all five went red on their first real CI run. A drill cannot catch this — the drill
+  // expects a red job.
+  it("every gate's job pins the receipt path, or its producer and its asserter disagree about the file", () => {
+    for (const gate of registry.gates) {
+      expect(text(gate.workflow), `${gate.workflow} sets a job-level HARVEY_LIVENESS_RECEIPT`).toMatch(/^\s+HARVEY_LIVENESS_RECEIPT:\s*\S+/m);
+    }
+  });
+
   it("every gate carries the run that PROVED it can fail, or a pendingProof hatch with a tracker", () => {
     for (const gate of registry.gates) {
       const { provenBy, pendingProof } = gate;

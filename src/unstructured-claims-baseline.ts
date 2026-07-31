@@ -532,6 +532,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/ci-liveness.test.ts": [
     "// own list of nine did not think to name. A proxy cannot be widened into exhaustiveness; it has",
+    "// it and all five went red on their first real CI run. A drill cannot catch this — the drill",
   ],
   "src/ci-liveness.ts": [
     "* cannot mistake it for a scoring run. Omitting it instead would be the silent omission — a run",

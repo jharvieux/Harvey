@@ -84,6 +84,14 @@ jobs:
       issues: read
       pull-requests: read
     timeout-minutes: 10
+    # The receipt every record step and every gate CLI in this job writes to. A literal path, not
+    # ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block. Without
+    # it `recordMeasured` writes NOTHING (it is silent off CI by design) while the bash asserter
+    # falls back to $RUNNER_TEMP — producer and asserter then disagree about the path and the assert
+    # fails on a job that scored fine. MEASURED 2026-07-31 on PR #1697's first run, in all five
+    # workflows this landed in.
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
