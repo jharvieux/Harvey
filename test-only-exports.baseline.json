@@ -19,8 +19,7 @@
     "src/pentest/session-lifecycle.ts:SESSION_LIFECYCLE_PROBE_IDS",
     "src/pentest/upload-attack.ts:UPLOAD_ATTACK_PROBE_IDS",
     "src/pentest/verify.ts:applyVerifyResults",
-    "src/quality-scan.ts:matchesJscpdIgnoreGlob",
-    "src/recorded-reasons.ts:collectReasons"
+    "src/quality-scan.ts:matchesJscpdIgnoreGlob"
   ],
   "types": []
 }
