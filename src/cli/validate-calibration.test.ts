@@ -13,6 +13,8 @@
 // always fails would satisfy it.
 
 import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -39,9 +41,9 @@ if (!MECHANICAL_BINARIES_PRESENT) {
 
 // Awaited spawn, never execFileSync: the standing constraint for every file in HEAVY_CLI_TESTS is
 // that no single blocking window may approach vitest's hardcoded 60s worker→main ack (#1120/#1134).
-function run(args: string[]): Promise<{ code: number; out: string }> {
+function run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; out: string }> {
   return new Promise((res, rej) => {
-    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"], env: env ?? process.env });
     let out = "";
     child.stdout.on("data", (d: Buffer) => (out += d));
     child.stderr.on("data", (d: Buffer) => (out += d));
@@ -68,5 +70,30 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-calibration exits 1 on a
     expect(out).toContain(`GATE FAIL — review-tier positives not caught by any rule (#1628): ${seeded}`);
     expect(out).not.toContain("GATE PASS");
     expect(code).toBe(1);
+  }, 180000);
+
+  // #1664: the wiring of the SCAN-DID-NOT-RUN halt, proven through the process like the two runs
+  // above — the unit tests on scanDidNotRun cover the predicate, and #1407's lesson is that a
+  // library-level proof leaves the CLI's own call unguarded. The shim replays the live crash shape
+  // (valid empty envelope on stdout, non-zero exit, `semgrep-core exited with -10!` in errors[]):
+  // before the halt, that run rendered a full recall table reading "113 rules have never been shown
+  // to work" over a scan that never ran.
+  it("exits 2 and renders NO recall table when semgrep crashes instead of completing (#1664)", async () => {
+    const shimDir = mkdtempSync(join(tmpdir(), "harvey-semgrep-shim-"));
+    try {
+      writeFileSync(
+        join(shimDir, "semgrep"),
+        '#!/bin/bash\necho \'{"version":"1.164.0","results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"semgrep-core exited with -10!"}],"paths":{"scanned":[],"skipped":[]}}\'\nexit 2\n',
+        { mode: 0o755 },
+      );
+      const { code, out } = await run([], { ...process.env, PATH: `${shimDir}:${process.env.PATH ?? ""}` });
+      expect(out).toContain("THE SCAN DID NOT RUN");
+      expect(out).toContain("semgrep-core exited with -10!");
+      expect(out, "a gate that cannot measure must not report a measurement").not.toContain("Calibration coverage matrix");
+      expect(out).not.toContain("GATE PASS");
+      expect(code).toBe(2);
+    } finally {
+      rmSync(shimDir, { recursive: true, force: true });
+    }
   }, 180000);
 });

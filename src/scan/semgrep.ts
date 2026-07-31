@@ -344,8 +344,8 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
     return { result: JSON.parse(out) as SemgrepOutput };
   } catch {
     // Measured adjacent shape (#1664): a crashed run can leave literal `<ERROR: missing output>` on
-    // stdout. On a zero exit this should be unreachable — but a scan we cannot read must degrade to
-    // a disclosed failure, never to an uncaught SyntaxError or a false clean.
+    // stdout (observed at exit 2, not at exit 0). Whatever the exit, unparseable scanner output
+    // degrades to a disclosed failure rather than an uncaught SyntaxError or a false clean.
     return { result: {}, failure: "semgrep exited 0 but printed something other than its JSON envelope — treated as an incomplete run, never as a clean scan" };
   }
 }
