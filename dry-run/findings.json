@@ -12199,7 +12199,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-lib-command-injection",
-    "location": "src/lib/job-runner.ts:25",
+    "location": "src/lib/job-runner.ts:30",
     "status": "Open",
     "evidence": "An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.\n",
     "impact": "An exported library function's parameter flows into a shell command (child_process exec/ execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and validate the argument against an allowlist.\n",
@@ -12223,7 +12223,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-lib-path-traversal",
-    "location": "src/lib/job-runner.ts:29",
+    "location": "src/lib/job-runner.ts:34",
     "status": "Open",
     "evidence": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
     "impact": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
@@ -12247,7 +12247,7 @@
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-lib-path-traversal",
-    "location": "src/lib/job-runner.ts:33",
+    "location": "src/lib/job-runner.ts:38",
     "status": "Open",
     "evidence": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
     "impact": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
@@ -15112,6 +15112,30 @@
     ]
   },
   {
+    "id": "AUTH-upload-no-limit-src-owasp-react-client-hook-url-param-tsx",
+    "title": "src/owasp-react/client-hook-url-param.tsx writes an upload to storage with no size/MIME limit",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Upload to storage with no size/MIME limit",
+    "location": "src/owasp-react/client-hook-url-param.tsx",
+    "status": "Open",
+    "evidence": "Heuristic \"upload-no-limit\" matched a storage .upload() with no content-length/MIME guard in src/owasp-react/client-hook-url-param.tsx.",
+    "impact": "An attacker can store arbitrarily large or executable content, or exhaust the storage quota.",
+    "fix": "Enforce a content-length cap and a MIME allowlist before the storage write.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-434: Unrestricted Upload of File with Dangerous Type"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
     "id": "RACE-read-modify-write-counters-pages-api-counter-increment-js",
     "title": "pages/api/counter/increment.js — non-atomic read-modify-write on `counters`",
     "severity": "Medium",
@@ -15783,6 +15807,30 @@
     "location": "src/owasp-mt/storage-path-no-tenant.ts:13",
     "status": "Open",
     "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).download(filename, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
+    "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
+    "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "STORAGE-path-no-tenant-upload-src-owasp-react-client-hook-url-param-tsx-1931",
+    "title": "src/owasp-react/client-hook-url-param.tsx — storage upload() path has no tenant prefix or ownership check",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Storage object path without a tenant prefix (cross-tenant object read/overwrite)",
+    "location": "src/owasp-react/client-hook-url-param.tsx:30",
+    "status": "Open",
+    "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).upload(fileName, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
     "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
     "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
     "value": 4,

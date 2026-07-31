@@ -118,6 +118,35 @@ describe("canonical request-taint source block (#1221)", () => {
     expect(canonical, "the `$RSCPROP = ...` not-inside is what makes a NAME-matched source safe — it must not be dropped").toContain("$RSCPROP = ...");
   });
 
+  // #1544: the block used to reach the name WITHOUT its binding form, on a recorded semgrep OSS
+  // capability bound that was ASSUMED and measured false. The binding is now a required conjunct:
+  // an access is a request source only inside a scope that destructures the name out of an object.
+  // Dropping it is what re-opens the three shapes N-RSC-PARAM-NON-PARAM-BINDING covers, none of
+  // which the not-insides above can see — a for-of loop variable, an array destructure, an import.
+  it("requires the RSC prop to be BOUND BY DESTRUCTURING, not merely named", () => {
+    const canonical = anchorBlock("base.yml")!;
+    for (const pattern of [
+      "function $RSCFN(..., { ..., $RSCBIND, ... }, ...) { ... }",
+      "function $RSCFN(..., { ..., $RSCBIND, ... }: $T, ...) { ... }",
+      "(..., { ..., $RSCBIND, ... }, ...) => ...",
+      "(..., { ..., $RSCBIND, ... }: $T, ...) => ...",
+      "const { ..., $RSCBIND, ... } = $SRC;",
+    ]) {
+      expect(
+        canonical,
+        `the canonical block lost the \`${pattern}\` binding shape — without every one of them the ` +
+          "source is name-only again for that spelling (#1544). The typed and untyped spellings are " +
+          "both needed: the pattern must carry the annotation to reach a typed parameter.",
+      ).toContain(pattern);
+    }
+    // $RSCBIND is deliberately NOT unified with $RSCPROP: a metavariable unified with the outer
+    // access stops at the first field of a multi-key object pattern, so `{ children, params }` — an
+    // App Router layout — went unmatched. It is regex-filtered to the same names instead.
+    expect(canonical, "the $RSCBIND binding must be constrained to the RSC prop names").toMatch(
+      /metavariable: \$RSCBIND\n\s+regex: \^\(params\|searchParams\)\$/,
+    );
+  });
+
   it("is used by every server-side taint rule that is not narrow by design", () => {
     const offenders = ruleFiles()
       .flatMap(parseRules)

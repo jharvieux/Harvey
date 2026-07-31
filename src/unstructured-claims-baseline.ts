@@ -1434,8 +1434,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "# that reads it only to reject it is a benign shape a single-file rule can't tell apart, so it is",
   ],
   "src/scan/rules/semgrep/base.yml": [
-    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
-    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
     "# a number cannot carry SQL metacharacters, so the interpolation is safe. Deterministically",
     "# rule cannot see an allowlist check that may live elsewhere.",
     "# single-file taint cannot span — but the wrapper CALL in the route is same-file with the source,",
@@ -1450,14 +1448,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/scan/rules/semgrep/headers.yml": [
     "# with `semgrep --config headers.yml` before being wired in (a Semgrep AST rule can't express",
-    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
-    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
     "# legitimately be set at the CDN/hosting layer this repo scan can't see (same caveat as CSP).",
     "# Origin check anywhere in the function. Review — a heuristic (can't see a global CSRF",
   ],
   "src/scan/rules/semgrep/injection.yml": [
-    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
-    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
     "# cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.",
     "# rule can't prove the value wasn't cast/escaped, and blast radius is the queried collection.",
     "# segment cannot pollute a prototype on its own. `$U.searchParams`, `cookies()` and `headers()`",
@@ -1477,8 +1471,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "# successful write — `{ error: null }`, no affected-row count. The caller cannot tell \"I took the",
   ],
   "src/scan/rules/semgrep/xss.yml": [
-    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
-    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
     "# dangerouslySetInnerHTML unsanitized. Review — a static rule can't confirm whether the write",
     "# metavariable-pattern). Review tier (MEDIUM): a static rule can't prove the value was sanitized",
     "# javascript: URL XSS via a native <a href>. Review — a static rule can't see whether a scheme",

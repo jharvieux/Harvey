@@ -50,16 +50,40 @@ x-request-source: &request_source
     # the SSRF facet (P-OWASP-REACT-RSC-SSRF), but the gap was never SSRF's: the shared block did not
     # model the source, so all 21 rules missed it.
     #
-    # Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS
-    # (TRIED 2026-07-27, semgrep 1.164.0 — `function $C({ ..., $P, ... }, ...) { ... }` and three
-    # variants matched nothing on a file the equivalent name-based rule matched twice). The
-    # `pattern-not-inside` is what makes the name safe: a locally-ASSIGNED `params`/`searchParams` is
-    # an options bag, a URLSearchParams the module built itself, or a Map alias — never a request
-    # prop, because a destructured parameter is never assigned. MEASURED against five benign probes
-    # (options object, axios config, locally-built URLSearchParams, Map alias, RPC argument bag): the
-    # bare name-constrained access fired on THREE of five; with the not-inside it fires on none,
-    # while all four RSC positives still fire. `await $RSCPROP` carries the Next 15 shape, where
-    # `params` is a Promise the component awaits before destructuring.
+    # #1544: an earlier version of this comment gave a semgrep OSS capability bound — that a
+    # destructured object parameter is unmatchable in JS/TS — as the reason the name is matched
+    # WITHOUT its binding form. That bound was ASSUMED, it was copied into five venues, and it is
+    # false. MEASURED 2026-07-31, semgrep 1.164.0: both spellings below match the repo's own RSC
+    # fixture. The real constraint is a pattern-authoring detail, and it is why the block reads the
+    # way it does — the pattern must carry the type annotation to reach a TYPED parameter (so both
+    # spellings are listed), and a metavariable unified with the OUTER access stops at the first
+    # field of a multi-key object pattern like a layout's `{ children, params }` (so the binding is
+    # bound by its own $RSCBIND and regex-filtered instead).
+    #
+    # The binding form is therefore REQUIRED, not inferred: the access is a request source only
+    # inside a scope that destructures `params`/`searchParams` out of an object. MEASURED 2026-07-31
+    # over 20 probes — 8 real RSC binding shapes (typed/untyped destructured function parameter,
+    # typed/untyped destructured arrow, route-handler second parameter, Next 15 awaited `params`,
+    # in-body `const { params } = props`, multi-key layout) and 12 benign `params`/`searchParams`
+    # shapes. Against the pre-#1544 block: RSC shapes 8/8 before and 8/8 after, NOTHING newly
+    # caught, and three benign shapes no longer read as request input — a for-of loop variable over
+    # DB rows, an array-destructured `const [params] = useState()`, and an imported module constant.
+    # The three not-insides could not see any of those: on all three the pre-#1544 block fired
+    # exactly as the unguarded bare name did. They are kept because they only ever narrow further,
+    # which makes this block a strict subset of what the name alone reports.
+    #
+    # THE COST, over the whole reachable population rather than the probes: all 17 pinned corpus
+    # repos (`pnpm corpus-pins`), scanned with the pre- and post-#1544 rule files, 456 findings ->
+    # 454. ONE row is this change (carbon JobBillOfProcess.tsx:655 — a client component's
+    # `const [params] = useUrlParams()` reaching a storage upload path, a true positive the pre-#1544
+    # block reached for the same unsound reason it reached a scheduler's DB rows); the other delta
+    # reproduced as semgrep nondeterminism under BOTH rule sets. That row is planted as the
+    # P-CLIENT-HOOK-URL-PARAM measured gap and tracked on #1708, so the cost is in the gate.
+    #
+    # `await $RSCPROP` carries the Next 15 shape, where `params` is a Promise the component awaits
+    # before destructuring. Corpus: P-OWASP-REACT-RSC-SSRF must keep firing;
+    # N-RSC-PARAM-PLAIN-PARAMETER keeps the not-insides falsifiable; N-RSC-PARAM-NON-PARAM-BINDING
+    # keeps the destructuring requirement falsifiable.
     - patterns:
         - pattern-either:
             - pattern: $RSCPROP.$RSCFIELD
@@ -67,22 +91,38 @@ x-request-source: &request_source
         - metavariable-regex:
             metavariable: $RSCPROP
             regex: ^(params|searchParams)$
+        - pattern-either:
+            - pattern-inside: |
+                function $RSCFN(..., { ..., $RSCBIND, ... }, ...) { ... }
+            - pattern-inside: |
+                function $RSCFN(..., { ..., $RSCBIND, ... }: $T, ...) { ... }
+            - pattern-inside: |
+                (..., { ..., $RSCBIND, ... }, ...) => ...
+            - pattern-inside: |
+                (..., { ..., $RSCBIND, ... }: $T, ...) => ...
+            - pattern-inside: |
+                const { ..., $RSCBIND, ... } = $SRC;
+                ...
+        - metavariable-regex:
+            metavariable: $RSCBIND
+            regex: ^(params|searchParams)$
+        # A locally-ASSIGNED `params`/`searchParams` is an options bag, a URLSearchParams the module
+        # built itself, or a Map alias — never a request prop. This still earns its place under the
+        # binding requirement above: inside a real RSC page, `const searchParams = new
+        # URLSearchParams(...)` sits in a scope that DOES destructure `params`, so without this line
+        # the module's own URLSearchParams would read as request input. MEASURED 2026-07-31.
         - pattern-not-inside: |
             $RSCPROP = ...
             ...
-        # #1344: the assignment guard above was the ONLY exclusion, and a name arriving as an
-        # ordinary FUNCTION PARAMETER is never assigned — so `function runJob(params: JobSpec)`,
-        # a scheduler argument bag with no request anywhere near it, was read as request input.
-        # MEASURED 2026-07-27 on two byte-identical files differing only in the parameter name:
-        # `params`/`searchParams` produced 6 findings including harvey-command-injection at
-        # Critical/precisionTier=high (GRADED), `opts`/`spec` produced 3. That falsified this
-        # block's own recorded measurement, which claimed an "RPC argument bag" probe fired on
-        # none — all five probes must have bound the name by local assignment.
-        #
-        # The discriminator is the BINDING FORM, which is also what makes the name safe at all: an
-        # RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured
-        # object parameter (the reason this source is name-based in the first place). So a plain
-        # identifier parameter is excludable precisely because the real shape is not.
+        # #1344: `function runJob(params: JobSpec)`, a scheduler argument bag with no request
+        # anywhere near it, was read as request input, because the assignment guard above was the
+        # only exclusion and a function parameter is never assigned. MEASURED 2026-07-27 on two
+        # byte-identical files differing only in the parameter name: `params`/`searchParams`
+        # produced 6 findings including harvey-command-injection at Critical/precisionTier=high
+        # (GRADED), `opts`/`spec` produced 3. That falsified this block's own recorded measurement,
+        # which claimed an "RPC argument bag" probe fired on none — all five probes must have bound
+        # the name by local assignment. The binding requirement above now spares this shape too, so
+        # these two lines are a second, independent narrowing rather than the sole discriminator.
         - pattern-not-inside: |
             function $F(..., $RSCPROP, ...) { ... }
         - pattern-not-inside: |
