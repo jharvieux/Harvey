@@ -21,7 +21,8 @@
 // independently confirms exploitability in the scanned codebase (not just a version overlap), set
 // exploitabilityVerified: true on that finding so it grades correctly.
 
-import type { Finding, Severity } from "../findings.js";
+import type { Finding, PrecisionTier, Severity } from "../findings.js";
+import { collectDependencies } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 
 function parseVersion(v: string): [number, number, number] {
@@ -101,12 +102,114 @@ const RSC_RCE_FIXED_BY_MINOR: Record<string, string> = {
 // before reporting as a hard fact.
 const EOL_BELOW_MAJOR = 14;
 
+// #1471 — WHERE the version number came from, because "Installed next@14.2.5" was printed for a
+// number nothing had installed. Three provenances, three different claims:
+//   resolved   a lockfile records the version that actually resolves — the only one that earns
+//              the word "installed", and the only one an exact-CVE match is HIGH-confidence about.
+//   pinned     the manifest declares a bare version with no range, so any install lands there.
+//   range      the manifest declares a range and no lockfile resolves it. The number is the
+//              range's FLOOR, an install can land on either side of the fix, and the finding is
+//              a conditional claim about the declared range — review tier, not high.
+type VersionProvenance =
+  | { kind: "resolved"; source: string }
+  | { kind: "pinned" }
+  | { kind: "range"; declared: string };
+
+interface VersionClaim {
+  version: string;
+  provenance: VersionProvenance;
+}
+
+// A resolved dependency tree, keyed by package name. `source` is the lockfile it was parsed from,
+// which the finding cites so a client can check the provenance rather than take "installed" on
+// faith. Built by resolvedTree() below; undefined when the target ships no parseable lockfile.
+export interface ResolvedTree {
+  versions: ReadonlyMap<string, string>;
+  source: string;
+}
+
+const EXACT_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+
+// Caret and tilde only — the two operators whose floor is unambiguous AND whose upper bound stays
+// inside one major, which the EOL row below relies on. A specifier outside those two shapes
+// (`latest`, `*`, `>=14 <15`, a git URL, `workspace:`) yields no claim at all: the same silence as
+// before, since parseVersion read those as 0.0.0 and matched no range.
+function declaredFloor(declared: string): string | undefined {
+  const stripped = declared.trim().replace(/^[\^~]/, "").trim();
+  return EXACT_VERSION.test(stripped) ? stripped.replace(/^v/, "") : undefined;
+}
+
+function versionClaim(declared: string | undefined, resolved: ResolvedTree | undefined, name: string): VersionClaim | undefined {
+  const fromLock = resolved?.versions.get(name);
+  if (fromLock) return { version: fromLock, provenance: { kind: "resolved", source: resolved!.source } };
+  if (declared === undefined) return undefined;
+  if (EXACT_VERSION.test(declared.trim())) return { version: declared.trim().replace(/^v/, ""), provenance: { kind: "pinned" } };
+  const floor = declaredFloor(declared);
+  return floor ? { version: floor, provenance: { kind: "range", declared: declared.trim() } } : undefined;
+}
+
+// The subject of every evidence sentence below. The BODY ("is below the fixed version …") is
+// identical across provenances; only the subject and the tier change, so a wording drift never
+// makes one branch quietly assert more than another.
+function subject(claim: VersionClaim, pkg: string): string {
+  switch (claim.provenance.kind) {
+    case "resolved":
+      return `Installed ${pkg}@${claim.version} (resolved from ${claim.provenance.source})`;
+    case "pinned":
+      return `Installed ${pkg}@${claim.version}`;
+    case "range":
+      return `package.json declares ${pkg}@${claim.provenance.declared}, whose range floor ${claim.version}`;
+  }
+}
+
+const UNRESOLVED_CAVEAT =
+  " No lockfile in this repo resolves it, so an install can land on either side of the fix — this is a claim about the DECLARED RANGE, not a measured installed version.";
+const UNRESOLVED_FIX = " Commit a lockfile as well, so the version that actually resolves is auditable.";
+
+function unresolved(claim: VersionClaim): boolean {
+  return claim.provenance.kind === "range";
+}
+
+function evidenceFor(claim: VersionClaim, pkg: string, body: string): string {
+  return `${subject(claim, pkg)} ${body}${unresolved(claim) ? UNRESOLVED_CAVEAT : ""}`;
+}
+
+// A vulnerable range FLOOR is not a version match, and `precisionTier` on this whole family is
+// documented (file header) as confidence in the VERSION MATCH itself. Severity is left alone:
+// it states the weakness's impact if present, which the provenance does not change.
+function tierFor(claim: VersionClaim, matchedTier: PrecisionTier): PrecisionTier {
+  return unresolved(claim) ? "review" : matchedTier;
+}
+
+function titleFor(claim: VersionClaim, pkg: string, rest: string): string {
+  return unresolved(claim)
+    ? `${pkg}@${(claim.provenance as { declared: string }).declared} (declared range, unresolved) may be vulnerable to ${rest}`
+    : `${pkg}@${claim.version} vulnerable to ${rest}`;
+}
+
+// Parses the target's lockfile into a name → resolved-version map. Returns undefined when there is
+// no lockfile: collectDependencies falls back to the MANIFEST in that case, whose "versions" are
+// declared ranges, and treating those as resolved is the exact defect #1471 reports.
+export function resolvedTree(dir: string): ResolvedTree | undefined {
+  const deps = collectDependencies(dir);
+  if (deps.source === "package.json") return undefined;
+  const versions = new Map<string, string>();
+  for (const c of deps.components) if (c.version && !versions.has(c.name)) versions.set(c.name, c.version);
+  return { versions, source: deps.source };
+}
+
 // `manifestPath` is the manifest's path relative to the scanned root ("package.json" for the
 // root manifest, "fixtures/<app>/package.json" for a secondary manifest), so a finding's
 // location identifies WHICH manifest it came from — needed once more than one manifest is
 // scanned (e.g. the calibration corpus's EOL/supported app fixtures).
-export function checkNextVersionCVEs(installedVersion: string, manifestPath = "package.json"): Finding[] {
+//
+// `declared` is the RAW manifest specifier ("^14.2.5"), not a pre-stripped floor: stripping it at
+// the call site is what threw the provenance away (#1471).
+export function checkNextVersionCVEs(declared: string, manifestPath = "package.json", resolved?: ResolvedTree): Finding[] {
+  const claim = versionClaim(declared, resolved, "next");
+  if (!claim) return [];
   const findings: Finding[] = [];
+  const installedVersion = claim.version;
   const [major, minor] = parseVersion(installedVersion);
   const nextLocation = `${manifestPath} (next)`;
 
@@ -115,16 +218,16 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     findings.push(
       mechanicalFinding({
         id: "DEP-CVE-2025-29927",
-        title: `next@${installedVersion} vulnerable to CVE-2025-29927 (middleware auth bypass)`,
+        title: titleFor(claim, "next", "CVE-2025-29927 (middleware auth bypass)"),
         severity: "Critical",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: nextLocation,
         dependency: "next",
-        evidence: `Installed next@${installedVersion} is below the fixed version ${middlewareFix} for the ${major}.x line. The x-middleware-subrequest header skips middleware entirely (GHSA-f82v-jwr5-mffw).`,
+        evidence: evidenceFor(claim, "next", `is below the fixed version ${middlewareFix} for the ${major}.x line. The x-middleware-subrequest header skips middleware entirely (GHSA-f82v-jwr5-mffw).`),
         impact: "If auth is enforced only in middleware.ts (the dominant pattern in vibe-coded apps) and the app is self-hosted (not Vercel, which is auto-patched), this is a full authorization bypass.",
-        fix: `Upgrade next to >= ${middlewareFix}.`,
-        precisionTier: "high",
+        fix: `Upgrade next to >= ${middlewareFix}.${unresolved(claim) ? UNRESOLVED_FIX : ""}`,
+        precisionTier: tierFor(claim, "high"),
       }),
     );
   }
@@ -134,16 +237,16 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     findings.push(
       mechanicalFinding({
         id: "DEP-CVE-2025-55182",
-        title: `next@${installedVersion} vulnerable to CVE-2025-55182 (React Server Components RCE)`,
+        title: titleFor(claim, "next", "CVE-2025-55182 (React Server Components RCE)"),
         severity: "Critical",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: nextLocation,
         dependency: "next",
-        evidence: `Installed next@${installedVersion} is below the fixed version ${rscFix} for the ${major}.${minor} line (GHSA-9qr9-h5gf-34mp, CVSS 10, CISA KEV added 2025-12-05).`,
+        evidence: evidenceFor(claim, "next", `is below the fixed version ${rscFix} for the ${major}.${minor} line (GHSA-9qr9-h5gf-34mp, CVSS 10, CISA KEV added 2025-12-05).`),
         impact: "Pre-authentication remote code execution: Server Function endpoints unsafely deserialize an attacker-supplied React-flight payload. Affects App Router apps on the vulnerable range.",
-        fix: `Upgrade next to >= ${rscFix} (and react-server-dom-* to the matching fixed release).`,
-        precisionTier: "high",
+        fix: `Upgrade next to >= ${rscFix} (and react-server-dom-* to the matching fixed release).${unresolved(claim) ? UNRESOLVED_FIX : ""}`,
+        precisionTier: tierFor(claim, "high"),
       }),
     );
   }
@@ -155,16 +258,16 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     findings.push(
       mechanicalFinding({
         id: "DEP-CVE-2026-44578",
-        title: `next@${installedVersion} vulnerable to CVE-2026-44578 (WebSocket-upgrade SSRF)`,
+        title: titleFor(claim, "next", "CVE-2026-44578 (WebSocket-upgrade SSRF)"),
         severity: "High",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: nextLocation,
         dependency: "next",
-        evidence: `Installed next@${installedVersion} falls in a vulnerable range for CVE-2026-44578 (GHSA-c4j6-fc7j-m34r, CVSS 8.6).`,
+        evidence: evidenceFor(claim, "next", "falls in a vulnerable range for CVE-2026-44578 (GHSA-c4j6-fc7j-m34r, CVSS 8.6)."),
         impact: "Framework-level SSRF via WebSocket upgrade handling; self-hosted Node deployments only.",
-        fix: "Upgrade next to >= 15.5.16 (15.x line) or >= 16.2.5 (16.x line).",
-        precisionTier: "high",
+        fix: `Upgrade next to >= 15.5.16 (15.x line) or >= 16.2.5 (16.x line).${unresolved(claim) ? UNRESOLVED_FIX : ""}`,
+        precisionTier: tierFor(claim, "high"),
       }),
     );
   }
@@ -179,16 +282,16 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     findings.push(
       mechanicalFinding({
         id: "DEP-CVE-2026-27978",
-        title: `next@${installedVersion} vulnerable to CVE-2026-27978 (Server Actions null-origin CSRF)`,
+        title: titleFor(claim, "next", "CVE-2026-27978 (Server Actions null-origin CSRF)"),
         severity: "Medium",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: nextLocation,
         dependency: "next",
-        evidence: `Installed next@${installedVersion} falls in the CVE-2026-27978 range (>=16.0.1 <16.1.7, GHSA-mq59-m269-xvcx).`,
+        evidence: evidenceFor(claim, "next", "falls in the CVE-2026-27978 range (>=16.0.1 <16.1.7, GHSA-mq59-m269-xvcx)."),
         impact: "A cross-site request with an absent (null) Origin header bypasses the Server Actions origin check, letting an attacker invoke authenticated Server Actions cross-site (CSRF).",
-        fix: "Upgrade next to >= 16.1.7.",
-        precisionTier: "high",
+        fix: `Upgrade next to >= 16.1.7.${unresolved(claim) ? UNRESOLVED_FIX : ""}`,
+        precisionTier: tierFor(claim, "high"),
       }),
     );
   }
@@ -197,13 +300,15 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     findings.push(
       mechanicalFinding({
         id: "DEP-NEXT-EOL",
-        title: `next@${installedVersion} is on an end-of-life major version line`,
+        title: `next@${unresolved(claim) ? (claim.provenance as { declared: string }).declared : installedVersion} is on an end-of-life major version line`,
         severity: "Medium",
         category: "Dependency CVE",
         taxonomy: "EOL framework version",
         location: nextLocation,
         dependency: "next",
-        evidence: `Installed next major ${major} is below the ${EOL_BELOW_MAJOR}.x line still receiving security patches.`,
+        // No unresolved-range caveat here, unlike the CVE rows above: a caret/tilde range stays
+        // inside one major, so the major this row concludes from holds whichever version resolves.
+        evidence: `${subject(claim, "next")} is on major ${major}, below the ${EOL_BELOW_MAJOR}.x line still receiving security patches.`,
         impact: "No security patches for newly-discovered CVEs on this line; confirm current EOL status before treating as a hard commitment.",
         fix: `Upgrade to a supported next major (>= ${EOL_BELOW_MAJOR}).`,
         precisionTier: "review",
@@ -475,12 +580,16 @@ export const CURATED_CLAIMS: CuratedClaim[] = [
   ),
 ];
 
-export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestPath = "package.json"): Finding[] {
+// #1471 — same provenance discipline as checkNextVersionCVEs: a lockfile-resolved version wins
+// over the declared specifier (the caller used to prefer the DECLARED range, so a manifest
+// declaring ^1.7.2 against a lockfile resolving a patched 1.8.2 drew a High "vulnerable" row for a
+// version nothing installs), and a range floor with no lockfile drops to review tier.
+export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestPath = "package.json", resolved?: ResolvedTree): Finding[] {
   const findings: Finding[] = [];
   for (const cve of CURATED_DEP_CVES) {
-    const declared = deps[cve.name];
-    if (!declared) continue;
-    const version = declared.replace(/^[\^~]/, "");
+    const claim = versionClaim(deps[cve.name], resolved, cve.name);
+    if (!claim) continue;
+    const version = claim.version;
     // The ranges are disjoint, so at most one matches — the matching one names the fix to cite.
     const hit = cve.ranges.find((r) => (r.introduced ? gte(version, r.introduced) : true) && lt(version, r.fixed));
     if (!hit) continue;
@@ -491,16 +600,16 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
     findings.push(
       mechanicalFinding({
         id: `DEP-${cve.id}`,
-        title: `${cve.name}@${version} vulnerable to ${cve.id}`,
+        title: titleFor(claim, cve.name, cve.id),
         severity: cve.severity,
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: `${manifestPath} (${cve.name})`,
         dependency: cve.name,
-        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${hit.introduced ? `>= ${hit.introduced} ` : ""}< ${hit.fixed}), per ${cve.source}.${disclosure}`,
+        evidence: evidenceFor(claim, cve.name, `falls in the ${cve.id} affected range (${hit.introduced ? `>= ${hit.introduced} ` : ""}< ${hit.fixed}), per ${cve.source}.${disclosure}`),
         impact: cve.summary,
-        fix: cve.fix,
-        precisionTier: cve.tier,
+        fix: `${cve.fix}${unresolved(claim) ? UNRESOLVED_FIX : ""}`,
+        precisionTier: tierFor(claim, cve.tier),
       }),
     );
   }

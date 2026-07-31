@@ -1,0 +1,9 @@
+{
+  "name": "b25-next-pinned-vuln-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#1471). A standalone project root that PINS an exact vulnerable next (14.2.5, below the 14.2.25 middleware-bypass fix) with no lockfile. An exact pin is the one manifest-only provenance that still earns a high-tier, Confirmed CVE row: whatever installs is that version. Home of P-NEXT-CVE-29927, which used to score off the root target — whose lockfile resolves a PATCHED next@14.2.35, so that row was a Critical false positive. Declared as DATA ONLY — NEVER installed.",
+  "dependencies": {
+    "next": "14.2.5"
+  }
+}
