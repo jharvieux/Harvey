@@ -33,7 +33,10 @@ describe("runCommand", () => {
     const ok = runCommand(`${node} -e "console.log('built ok')"`, process.cwd());
     expect(ok.exitCode).toBe(0);
     expect(ok.outputTail).toContain("built ok");
-    expect(ok.durationMs).toBeGreaterThanOrEqual(0);
+    // `>= 0` has no failing direction: every unsigned elapsed time satisfies it, and so does a hardcoded 0.
+    // Spawning a node process is never free, so `> 0` is the form that goes red if `durationMs`
+    // ever stops being a measurement (#1674).
+    expect(ok.durationMs).toBeGreaterThan(0);
 
     const bad = runCommand(`${node} -e "process.exit(3)"`, process.cwd());
     expect(bad.exitCode).toBe(3);

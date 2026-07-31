@@ -99,9 +99,9 @@ export interface CorpusEntry {
   // the entry's `note` with the reason it is acceptable noise rather than a rule to narrow.
   reviewTierHits?: readonly string[];
   // #1248 — REVIEW-TIER POSITIVES ONLY. Marks a row as a SOUNDNESS guard rather than a recall
-  // aspiration, making its miss FATAL. Review-tier misses are non-fatal by design in
-  // validate-calibration.ts, because review recall is allowed standing gaps that nobody claims to
-  // catch. (The three rows this comment used to name — P-MW-SOLE-AUTHZ, P-HOST-HEADER-URL,
+  // aspiration. It USED to be what made such a row's miss fatal, because review-tier misses were
+  // non-fatal by design in validate-calibration.ts; #1628 (2026-07-31) made every review-tier miss
+  // fatal, so this field now selects the failure MESSAGE rather than the verdict. (The three rows this comment used to name — P-MW-SOLE-AUTHZ, P-HOST-HEADER-URL,
   // P-CLIENT-RENDER-AUTHZ — stopped being examples on 2026-07-31: #1366 ruled on them
   // individually, graduating P-HOST-HEADER-URL to a real rule with `mustCatch` and moving the other
   // two to `expectedTier: "none"` + gapKind "measured-gap", where a graduation fails loud. A named

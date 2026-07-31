@@ -338,3 +338,71 @@ describe("#1435 a finding's own words survive the render seam", () => {
     expect(breaches.some((b) => b.kind === "miscounted-rollup")).toBe(true);
   });
 });
+
+// #1627 — the check's IDENTITY MODEL, which every fixture above happens not to exercise. `finding()`
+// gives each row `evidence for ${id}: …`, so no two findings in the fixtures above share an evidence
+// string and the collision below has a population of ZERO there. It is not rare in the field: a
+// finding's text is a template over its SHAPE, so two permissive-RLS-policy rows on two different
+// tables are byte-identical, and the same is true of the M4 duplication and M7 index families.
+//
+// MEASURED 2026-07-31 on a real ten-module deliverable over targets/calibration — shape
+// `M1 — Multi-tenant security High`, 11 members — the checker scored 5 absent against the renderer's
+// correct 6 and reported a MISCOUNTED-ROLLUP that did not exist. The renderer was right throughout.
+describe("#1627 rendered-ness is decided per FINDING, not per evidence string", () => {
+  // The real shape, reproduced: ONE rolled-up group in which most members carry their own text and
+  // exactly one PAIR is byte-identical — a representative and a withheld row. That pair is the whole
+  // defect, and a fixture where every member collides would not show it (the checker then finds no
+  // absentees at all and reports nothing, which is a different failure).
+  const TWIN_EVIDENCE = "the policy is `using (true)`, so every row is readable by every tenant";
+  const twin = (i: number): Finding =>
+    finding({
+      id: `SB-RLS-POLICY-public.t${i}.t${i}_read`,
+      title: "Permissive RLS policy",
+      taxonomy: "M1 — Multi-tenant security",
+      severity: "High",
+      location: `supabase/policies/t${i}.sql:1`,
+      evidence: i === 0 || i === 11 ? TWIN_EVIDENCE : `the policy on t${i} restricts to auth.uid() but not to the tenant`,
+    });
+  const members = Array.from({ length: 12 }, (_, i) => twin(i));
+  const doc = assembleEngagementDocument(RECORDED, ENV, [...members], META);
+  const html = buildHtml(doc);
+  const withheldBlock = /<div class="group-rest">[\s\S]*?<\/details>/.exec(html)?.[0] ?? "";
+
+  it("the fixture actually collides — one evidence string across a rendered row AND a withheld one", () => {
+    expect(doc.findings.filter((f) => f.taxonomy === "M1 — Multi-tenant security")).toHaveLength(12);
+    // 12 members, 5 rendered in full ⇒ 7 withheld. The count is the renderer's, and it is correct.
+    expect(html).toContain("7 more High finding(s) of this shape are not individually rendered");
+    // t0 renders a full card; t11 is withheld — and they share one evidence string, so a text search
+    // over the whole document reads t11 as rendered, because t0's card carries the same words.
+    expect(withheldBlock).toContain("SB-RLS-POLICY-public.t11.t11_read");
+    expect(withheldBlock).not.toContain("SB-RLS-POLICY-public.t0.t0_read");
+    expect(members[0]?.evidence).toBe(members[11]?.evidence);
+  });
+
+  it("scores no breach when the renderer discloses the right count", () => {
+    // Pre-#1627 this reported MISCOUNTED-ROLLUP: t11 counted as rendered because t0's card carries
+    // its words, so six absentees were scored against a correctly-disclosed seven.
+    expect(renderFidelityBreaches(doc, html)).toEqual([]);
+  });
+
+  it("still catches a withheld count that understates what was withheld", () => {
+    // The failing direction, so the line above is not vacuous. Seven ARE withheld; the report says three.
+    const broken = html.replace("7 more High finding(s)", "3 more High finding(s)");
+    expect(broken, "the control must actually change the disclosed count").not.toBe(html);
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.map((b) => b.kind)).toEqual(["miscounted-rollup"]);
+    expect(breaches[0]?.detail).toContain("7 finding(s) of shape \"M1 — Multi-tenant security High\"");
+    expect(breaches[0]?.detail).toContain("the report discloses 3");
+  });
+
+  it("CONTROL — the shared evidence string does not save a twin dropped from the withheld list", () => {
+    // Identity by region must not become a way to LOSE a finding. t11's row is removed from the
+    // <details> list; its words are still in the document, on t0's card. Nothing is attributed to
+    // t11, so it is an undisclosed omission — and a text search over the whole document reports none.
+    const broken = html.replace(/<div><span class="fid">SB-RLS-POLICY-public\.t11\.t11_read<\/span>[\s\S]*?<\/div>/, "");
+    expect(broken, "the control must actually remove the row").not.toBe(html);
+    expect(broken).toContain(esc(TWIN_EVIDENCE));
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.some((b) => b.kind === "undisclosed-omission" && b.id.includes("SB-RLS-POLICY-public.t11.t11_read"))).toBe(true);
+  });
+});

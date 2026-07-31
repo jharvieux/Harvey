@@ -427,15 +427,20 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   const claimsOf = (census: Record<string, string[]>) =>
     Object.entries(census).flatMap(([file, texts]) => texts.map((text, i) => ({ file, line: i + 1, text })));
 
-  it("passes when every file's claims are a subset of its baseline", () => {
-    expect(claimDrift({ "a.md": ["x", "y", "z"], "b.md": ["q"] }, claimsOf({ "a.md": ["x", "y", "z"] }))).toEqual([]);
+  it("passes when every file's claims match its baseline exactly", () => {
+    expect(claimDrift({ "a.md": ["x", "y", "z"], "b.md": ["q"] }, claimsOf({ "a.md": ["x", "y", "z"], "b.md": ["q"] }))).toEqual([]);
   });
 
   // The negative control. A per-file baseline is the point: a single global total is satisfied by
-  // deleting a claim here and adding one there, leaving the population untouched.
+  // deleting a claim here and adding one there, leaving the population untouched. Since #1685 the
+  // swap breaches on BOTH files — the gained one for its new line, the lost one for the row it left
+  // behind — where before it named only the gain.
   it("fails on one added claim line, and on a swap that leaves the total unchanged", () => {
     expect(claimDrift({ "a.md": ["x"] }, claimsOf({ "a.md": ["x", "new"] })).map((d) => d.file)).toEqual(["a.md"]);
-    expect(claimDrift({ "a.md": ["x", "y"], "b.md": ["q"] }, claimsOf({ "a.md": ["x"], "b.md": ["q", "r"] })).map((d) => d.file)).toEqual(["b.md"]);
+    const swap = claimDrift({ "a.md": ["x", "y"], "b.md": ["q"] }, claimsOf({ "a.md": ["x"], "b.md": ["q", "r"] }));
+    expect(swap.map((d) => d.file).sort()).toEqual(["a.md", "b.md"]);
+    expect(swap.find((d) => d.file === "b.md")?.added.map((c) => c.text)).toEqual(["r"]);
+    expect(swap.find((d) => d.file === "a.md")?.dropped).toEqual(["y"]);
   });
 
   // #1399's fourth criterion, and the experiment its verifier ran and watched PASS. The count is
@@ -451,9 +456,29 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
     expect(after[0]?.dropped).toEqual(["the pass cannot run with no live DB"]);
   });
 
-  // Retiring a claim is the direction the ratchet exists to allow, and it must not read as a reword.
-  it("stays green when a claim is deleted outright", () => {
-    expect(claimDrift({ "a.md": ["x", "y"] }, claimsOf({ "a.md": ["x"] }))).toEqual([]);
+  // #1685 — retiring a claim is the direction the ratchet exists to ALLOW, but it has to be
+  // performed: the baseline row goes with it. Left behind it fails nothing and tells nobody, while
+  // the backlog number the gate prints keeps counting a claim that no longer exists. It must not
+  // read as a reword either, which is what the empty `added` here pins.
+  it("fails on a DEAD baseline row when a claim is deleted outright, and does not call it a reword", () => {
+    const drift = claimDrift({ "a.md": ["x", "y"] }, claimsOf({ "a.md": ["x"] }));
+    expect(drift.map((d) => d.file)).toEqual(["a.md"]);
+    expect(drift[0]?.added).toEqual([]);
+    expect(drift[0]?.dropped).toEqual(["y"]);
+  });
+
+  // The other direction of that pair, so the row above is not simply always-on: an untouched claim
+  // produces neither half.
+  it("stays green when the surviving claims still match, so the dead-row check is not always-on", () => {
+    expect(claimDrift({ "a.md": ["x", "y"] }, claimsOf({ "a.md": ["x", "y"] }))).toEqual([]);
+  });
+
+  // A baseline file deleted outright is the same defect at file scale — every one of its rows is now
+  // watching nothing, and before #1685 the file simply vanished from the gate's attention.
+  it("fails when a whole baselined file is gone", () => {
+    const drift = claimDrift({ "gone.md": ["x", "y"], "a.md": ["k"] }, claimsOf({ "a.md": ["k"] }));
+    expect(drift.map((d) => d.file)).toEqual(["gone.md"]);
+    expect(drift[0]?.dropped).toEqual(["x", "y"]);
   });
 
   it("gives a file absent from the baseline a budget of zero, so a new doc full of claims breaches", () => {
@@ -504,6 +529,26 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
     expect(row?.dropped).toEqual([original]);
   });
 
+  // #1685's criterion 3 against the REAL repo and the REAL committed baseline: delete a claim this
+  // repo actually carries and require the gate to go red on the row it leaves behind. This is the
+  // experiment that used to pass — the shape found incidentally during #1675, where a stale row in
+  // src/quick-scan.ts had been carried with no live claim behind it and nothing had flagged it.
+  it("fires when a real baselined claim is deleted from a real repo file", () => {
+    const target = "src/recorded-reasons.ts";
+    const recorded = CLAIM_BASELINE[target] ?? [];
+    expect(recorded.length, `${target} carries baselined claims to delete`).toBeGreaterThan(0);
+    const original = recorded[0] as string;
+
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
+    const planted = sources.map((s) => (s.file === target ? { ...s, text: s.text.replace(original, "// (claim removed)") } : s));
+    const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === target);
+
+    expect(row?.added, "a deletion is not a reword — nothing replaced it").toEqual([]);
+    expect(row?.dropped).toEqual([original]);
+    expect(row?.now).toBe((row?.baseline ?? 0) - 1);
+  });
+
   // The scale trap #1347 asks to decide first: `.ts` carries 767 claim-shaped lines to `.md`'s 274,
   // but 270 of them are error-message strings and test titles. Pinned by an example of each so a
   // widening to whole-file `.ts` cannot happen quietly.
@@ -516,6 +561,9 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   it("holds the committed baseline over this repo right now", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const claims = untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    // Since #1685 this is the standing measurement of the DEAD-row population too: a baseline row
+    // with no live claim behind it comes back in `dropped` and reddens this line. It was 0 across
+    // 348 files / 906 rows when the failing direction landed.
     expect(claimDrift(CLAIM_BASELINE, claims)).toEqual([]);
     // A baseline that drifted to zero would pass the line above forever while measuring nothing.
     expect(claimTotal(claimCounts(CLAIM_BASELINE))).toBeGreaterThan(100);

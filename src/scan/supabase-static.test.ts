@@ -1099,11 +1099,13 @@ describe("checkMigrationPolicySemantics — USING(true) × M10 PII (#1183)", () 
 // 3 -> 2 (its bucket-insert half already read the broadened source; its storage.objects policy half
 // did not).
 //
-// This suite is the BLOCKING guard, and it exists because the corpus alone is not one: the six
-// matching entries in b13-supa.entries.ts are review-tier, and `validate-calibration` prints a
-// review-tier miss as a tracked non-fatal gap and still exits 0. MEASURED the same day: with
+// This suite was the ONLY blocking guard when it landed, because the corpus alone was not one: the
+// six matching entries in b13-supa.entries.ts are review-tier, and `validate-calibration` printed a
+// review-tier miss as a tracked non-fatal gap and still exited 0. MEASURED the same day: with
 // readMigrations reverted, the live gate listed all five newly-dark rows under "Review-tier recall
-// gaps" and exited 0. So the corpus makes the regression VISIBLE; this makes it FAIL.
+// gaps" and exited 0. #1628 made that fatal on 2026-07-31, so the corpus now fails too — this suite
+// remains the OFFLINE half of the pair, running under `pnpm verify` with no binaries at all, where
+// the calibration gate needs semgrep/trufflehog/gitleaks/osv-scanner and rides in heavy-cli.
 describe("root schema.sql feeds every static SQL check, not just the RLS one (#1323)", () => {
   let root: string;
   afterEach(() => rmSync(root, { recursive: true, force: true }));

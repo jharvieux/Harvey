@@ -203,9 +203,10 @@ export const owaspReactEntries: CorpusEntry[] = [
     // returns 0 matches on a block-bodied arrow and `=> { ... }` returns 1, so the whole real-world
     // population of the shape was silent — 40 occurrences in 33 files across the pinned corpus,
     // against ZERO occurrences of the expression-bodied form the shipped patterns could match.
-    // `mustCatch` because a review-tier miss is otherwise non-fatal: without it, deleting the arm
-    // these rows guard flips them to FAIL, adds them to the tracked review-gap list, and the gate
-    // still prints GATE PASS and exits 0 — the #1248 shape.
+    // `mustCatch` because a review-tier miss was otherwise non-fatal when this landed: without it,
+    // deleting the arm these rows guard flipped them to FAIL, added them to the tracked review-gap
+    // list, and the gate still printed GATE PASS and exited 0 — the #1248 shape. #1628 made every
+    // review-tier miss fatal on 2026-07-31; the flag now only marks these as soundness rows.
     id: "P-RSC-ARROW-TYPED-BINDING",
     kind: "positive",
     cls: "Route param interpolated into a server-side fetch URL inside a TYPED destructured arrow with a block body",
