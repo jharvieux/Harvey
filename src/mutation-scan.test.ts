@@ -1140,6 +1140,31 @@ describe("reRootReportToApp (#655)", () => {
     const { report } = reRootReportToApp(rawReport, "apps/foo");
     expect(report.files["src/a.ts"]).toBeDefined();
   });
+
+  // #1530: MEASURED live against a purpose-built root-scoped fixture — before this fix, the
+  // #504 scope check ("M8 mutate scope") read `report.config.mutate` FIRST and reported "covered
+  // 0 file(s) matched" for a run that had actually mutated and reported on every file in scope,
+  // because config.mutate still carried the ROOT-relative globs `files` had already been re-rooted
+  // away from. Without this rewrite, `report.config.mutate` here is still root-relative and would
+  // match neither `src/a.ts` nor `src/b.ts`.
+  it("re-roots config.mutate the same way it re-roots files, so the #504 scope check compares like with like", () => {
+    const appGlobs = scaffoldStrykerConfig("vitest", ["src"]).mutate as string[];
+    const rootGlobs = rootScopedMutateGlobs("apps/foo", appGlobs);
+    const rootReport: StrykerReport = { ...rawReport, config: { mutate: rootGlobs, testRunner: "vitest" } };
+    const { report } = reRootReportToApp(rootReport, "apps/foo");
+    const mutate = report.config?.mutate as string[];
+    expect(mutate[0]).toBe(appGlobs[0]); // "src/**/*.{...}", not "apps/foo/src/**/*.{...}"
+    expect(mutate.every((g) => !g.startsWith("apps/foo/"))).toBe(true);
+    // Non-mutate config keys and the negated excludes survive untouched.
+    expect(report.config?.testRunner).toBe("vitest");
+    expect(mutate.slice(1)).toEqual(appGlobs.slice(1));
+  });
+
+  it("leaves a report with no config (or a non-array mutate) alone rather than throwing", () => {
+    expect(reRootReportToApp(rawReport, "apps/foo").report.config).toBeUndefined();
+    const odd: StrykerReport = { ...rawReport, config: { mutate: "not-an-array" } };
+    expect(reRootReportToApp(odd, "apps/foo").report.config).toEqual({ mutate: "not-an-array" });
+  });
 });
 
 // #1045: the seam that was missing entirely — the CLI's --out artifact carried a real measurement
