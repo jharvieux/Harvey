@@ -19,11 +19,12 @@
 //   pnpm exec tsx src/cli/dry-run.ts --out dry-run   # produces dry-run/findings.json first
 //   pnpm exec tsx src/cli/dry-run-scorecard.ts --findings dry-run/findings.json --out dry-run
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type BugDetection, type GroundTruthBug, scoreCoverage, summarizeCoverage } from "../coverage-scorecard.js";
+import { type BugDetection, type GroundTruthBug, scoreCoverage, statusFromDynamicProbe, summarizeCoverage } from "../coverage-scorecard.js";
 import type { Finding } from "../findings.js";
+import type { DynamicScorecard } from "../pentest/scorecard.js";
 import { CORPUS, scoreEntry } from "../scan/calibration.js";
 
 // The engagement-rehearsal record for one GROUND-TRUTH.md planted bug. DETECTION is not decided
@@ -84,17 +85,38 @@ export const GROUND_TRUTH_BUGS: PlantedBug[] = [
     id: "ANON-PRIVILEGED-RPC",
     severity: "Critical",
     location: "supabase/migrations/20260710000002_dynamic_probes.sql",
-    ...m2("ANON-PRIVILEGED-RPC", "POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive)"),
+    ...m2("ANON-PRIVILEGED-RPC", "POSTs each DB-derived privileged RPC with only the anon key and proves the bug only when the body EXECUTED — a 2xx, or an engine-raised SQLSTATE (class 22/23) from a statement the body issued. A plpgsql P0001 the function RAISED itself is a self-guarding function refusing the caller, so it is reported and never asserted (side-effecting, so it additionally needs allowDestructive)"),
   },
 ];
 
-// Resolve a planted bug's detection from the single gated answer key. Dynamic bugs return null
-// (requires-live-run). Static bugs are scored by the gated corpus entry — a missing corpusId throws
-// (the FK-integrity guard that makes drift structurally impossible), and the "none" tier maps its
-// accepted no-mechanical-rule gap to a "missed" (gap held) that flips to caught only if the corpus
-// gate is already failing on a graduated rule.
-export function resolveDetection(bug: PlantedBug, findings: Finding[]): BugDetection | null {
-  if (bug.replayId) return null;
+// Resolve a planted bug's detection from the single gated answer key. Static bugs are scored by the
+// gated corpus entry — a missing corpusId throws (the FK-integrity guard that makes drift
+// structurally impossible), and the "none" tier maps its accepted no-mechanical-rule gap to a
+// "missed" (gap held) that flips to caught only if the corpus gate is already failing on a
+// graduated rule.
+//
+// #1310 — a DYNAMIC (M2) bug resolves against a committed pen-test scorecard when one is supplied,
+// which is the whole point of #347: the `requires-live-run` deferral points at a real recorded
+// outcome instead of a memory. `statusFromDynamicProbe` owns that mapping (it is the module that
+// knows a `cleared` probe is a MISS, not a deferral) and had no production caller until this. With
+// no scorecard, or a scorecard that recorded no verdict for this replay, the row stays
+// requires-live-run — never a guess that something ran.
+export function resolveDetection(bug: PlantedBug, findings: Finding[], dynamic?: DynamicScorecard): BugDetection | null {
+  if (bug.replayId) {
+    const probe = dynamic?.probes.find((p) => p.findingId === bug.replayId);
+    if (!probe) return null;
+    const status = statusFromDynamicProbe(probe.status);
+    if (status === "requires-live-run") return null;
+    return {
+      caught: status === "caught",
+      // A live replay either exhibited the bug against a running stack or it did not — that is an
+      // asserted verdict, not a shape surfaced for a human to adjudicate.
+      ...(status === "caught" ? { tier: "high" as const } : {}),
+      note:
+        `M2 replay ${bug.replayId} scored "${probe.status}" against ${dynamic!.target} in the pen-test scorecard ` +
+        `generated ${dynamic!.generatedAt}: ${probe.evidence}`,
+    };
+  }
   const entry = CORPUS.find((e) => e.id === bug.corpusId);
   if (!entry) {
     throw new Error(
@@ -126,18 +148,33 @@ function arg(flag: string, fallback: string): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
+// #1310 — the committed M2 record the dynamic rows resolve against. Default path so a regeneration
+// picks it up with no extra flag once a live run has deposited one; an explicitly-named file that
+// is missing is a hard error, because silently falling back to requires-live-run is exactly the
+// "unstated limitation reads as a clean bill of health" failure.
+function loadDynamicScorecard(): DynamicScorecard | undefined {
+  const explicit = process.argv.includes("--dynamic-scorecard");
+  const path = arg("--dynamic-scorecard", "dry-run/dynamic-scorecard.json");
+  if (!existsSync(path)) {
+    if (explicit) throw new Error(`--dynamic-scorecard ${path} does not exist; produce it with \`pentest.ts --mode=verify … --scorecard ${path}\``);
+    return undefined;
+  }
+  return JSON.parse(readFileSync(path, "utf8")) as DynamicScorecard;
+}
+
 function main(): void {
   const findingsPath = arg("--findings", "dry-run/findings.json");
   const outDir = arg("--out", "dry-run");
 
   const findings = JSON.parse(readFileSync(findingsPath, "utf8")) as Finding[];
+  const dynamic = loadDynamicScorecard();
 
   const bugs: GroundTruthBug[] = GROUND_TRUTH_BUGS.map((b) => ({
     id: b.id,
     severity: b.severity,
     location: b.location,
     expectedModule: b.expectedModule,
-    detection: resolveDetection(b, findings),
+    detection: resolveDetection(b, findings, dynamic),
   }));
   const scored = scoreCoverage(bugs);
   const summary = summarizeCoverage(scored);
@@ -147,6 +184,13 @@ function main(): void {
   console.log(
     `Coverage scorecard: ${summary.asserted} asserted, ${summary["surfaced-for-review"]} surfaced for review, ` +
       `${summary.missed} missed, ${summary["requires-live-run"]} require a live run (of ${scored.length} planted bugs)`,
+  );
+  // Where the M2 rows' verdicts came from. Silence here would make "no live record" and "a live
+  // record that resolved them" print identically — the exact ambiguity #347/#1310 exist to end.
+  console.log(
+    dynamic
+      ? `  M2 dynamic rows resolved against ${dynamic.probes.length} probe(s) recorded on ${dynamic.generatedAt} against ${dynamic.target}`
+      : "  M2 dynamic rows: no pen-test scorecard supplied — every replay stays requires-live-run (produce one with `pentest.ts --mode=verify … --scorecard dry-run/dynamic-scorecard.json`)",
   );
   // A caught bug prints its tier so a review-tier surfacing is never read as an asserted verdict.
   for (const b of scored) {

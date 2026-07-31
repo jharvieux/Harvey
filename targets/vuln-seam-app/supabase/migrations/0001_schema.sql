@@ -10,11 +10,17 @@ create table public.tenants (
   created_at timestamptz not null default now()
 );
 
+-- #1278: `role` carries a THREE-value CHECK allow-list on purpose. resolveGuestSurface
+-- (src/pentest/guest-probe.ts) refuses to invent a third principal — it needs the schema to
+-- enumerate a legal role the two-tenant seed did not already use for its admin and member, and a
+-- column with no allow-list is a disclosed not-applicable. Without a third value here the guest
+-- seeding block in live-standup.ts is unreachable, which is how it shipped never having executed as
+-- written. 'guest' is the value; the seed uses 'admin' (A) and 'member' (B).
 create table public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   tenant_id uuid not null references public.tenants (id) on delete cascade,
   email text,
-  role text not null default 'member',
+  role text not null default 'member' check (role in ('admin', 'member', 'guest')),
   created_at timestamptz not null default now()
 );
 

@@ -163,9 +163,44 @@ that the dropped policy is not reported *even at review tier* — is pinned by t
 
 **Still not covered (carried forward, not dropped):** the two planted bugs #895 could not seed live
 (`posts_select_leaky`, `family_members_select_all` — the generic seeder cannot satisfy
-`posts_family_id_fkey` / `family_members_family_id_fkey`) and the storage bugs (public bucket, missing
-`storage.objects` policies, which have no M2 probe) remain unexercised at the M2 tier. #937/#938 close
-the M1-static half of the paired target; the M2-seeding half is unchanged and stays an open follow-up.
+`posts_family_id_fkey` / `family_members_family_id_fkey`) remain unexercised at the M2 tier.
+#937/#938 close the M1-static half of the paired target. **The STORAGE half is now closed too — see
+below.**
+
+## Step 4 — the storage bugs, probed live on the paired target (#1274, 2026-07-31)
+
+When this doc was written the storage bugs "were not probed at all — Harvey's M2 tier has no
+storage-object probe." #956/PR #1004 then built one (`src/pentest/storage-probe.ts`), but its only
+evidence was an in-process fixture whose bucket was *named* `family-media` with a hand-supplied
+`public: true` — a test asserting a probe fires on a bucket the test itself marked public, which is
+the self-confirming shape this repo refuses. #1274 is that gap; this is the live run that closes it.
+
+Both variants rebuilt from the same pinned clone into scratch (never committed — licence NONE), and
+run through Harvey's own autonomous stand-up:
+
+```
+pnpm dynamic-validate <variant> --execute --out <variant>-report
+```
+
+| | broken | fixed |
+|---|---|---|
+| `M2-STORAGE-PUBLIC-family-media` (Medium) | **fires** | — |
+| `M2-STORAGE-SCOPE` verdict for `family-media` | `vulnerable` | `requires-live-run` (bucket empty) |
+| total findings | 29 | 19 |
+
+**The probe discriminates the pair.** The finding is derived from a REAL bucket listing — the
+service-role oracle enumerating `/storage/v1/bucket` on the running stack — not from a fixture flag,
+which is exactly what #1274 asked for. On the fixed variant (`update storage.buckets set public =
+false where id = 'family-media'`) the public-bucket finding is absent, so the probe is not simply
+always-firing.
+
+Note what the fixed variant does NOT claim: its `M2-STORAGE-SCOPE` row reads `requires-live-run`,
+because the oracle listed **0 objects**, which leaves the probe nothing to attempt a cross-tenant or
+anon read against. The object-authorization half of the storage class therefore has no verdict on
+the fixed variant, and the row says so instead of reporting zero findings. The in-process fixture
+supplies its own bucket flag and object count, so it exercises a different branch. The
+`storage.objects` per-object `metadata->>'user_id'` policies the fix adds therefore remain
+unexercised: seeding real objects into the bucket is the follow-up.
 
 ## What is now pinned
 
