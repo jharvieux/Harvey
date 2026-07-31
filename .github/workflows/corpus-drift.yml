@@ -96,7 +96,7 @@ jobs:
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
   #
-  # Three, from the per-target cost measured in #1586 (runs 30584076405 and 30588890377, in
+  # Three, from the per-target cost measured in #1586 (runs 30584074986 and 30588890377, in
   # agreement): carbon is 564-587s of a ~1290s total and is indivisible, so the longest shard is
   # carbon's own and a 4th shard buys nothing. The split itself lives in src/scan/corpus-shards.ts,
   # which asserts it is exhaustive and disjoint — a target silently dropped from the partition would
@@ -197,7 +197,7 @@ jobs:
               # (tracked by #1578). Read by no part of the clone-and-score pipeline, exactly like the
               # Claude-side originals two entries along. #1584: they were missing from this list, so a
               # PR touching only them fell through to *) and paid a full 22m12s score (run
-              # 30584076405) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
+              # 30584074986) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
               .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
               AGENTS.md|CLAUDE.md|README.md|SESSION.md) ;;
               *) relevant=true; manifest_only=false ;;
@@ -432,8 +432,14 @@ jobs:
       # failures are already visible on the PR — but `workflow_dispatch` is now permanently in the
       # condition (#1287), because this path had never executed once and a cron-only alert cannot be
       # proven to work.
+      #
+      # EXCLUDED on a liveness drill (#1586 criterion 4, #1569). The two drills each switch off the
+      # other's machinery: `alert_drill` skips the liveness assert above, and `liveness_drill` skips
+      # this alert. Without this clause, proving the liveness guard under `workflow_dispatch` opens a
+      # REAL `ci-corpus-drift-alert` issue — a false alarm indistinguishable from a genuine corpus
+      # failure — which is why #1586's criterion 4 was left unproven rather than dispatched.
       - name: Open or update the drift tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-corpus-drift-alert

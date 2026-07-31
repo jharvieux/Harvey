@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { readNamesSafe } from "./fs-walk.js";
 import { recordMeasured } from "./ci-liveness.js";
 
@@ -21,8 +22,14 @@ const SCRIPT = join(REPO_ROOT, ".github", "actions", "gate-liveness", "gate-live
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
 
 interface Registry {
-  gates: { workflow: string; expect: string[]; note: string }[];
-  exempt: { workflow: string; reason: string }[];
+  gates: {
+    workflow: string;
+    expect: string[];
+    note: string;
+    provenBy?: { run: string; at: string };
+    pendingProof?: { why: string; tracking: number; since: string };
+  }[];
+  exempt: { workflow: string; measures: string; whyDistinguishable: string }[];
 }
 const registry = JSON.parse(readFileSync(join(REPO_ROOT, ".github", "gate-liveness.json"), "utf8")) as Registry;
 
@@ -162,18 +169,55 @@ describe("gate-liveness.sh — the three verdicts a reader has to tell apart", (
 });
 
 describe("the registry — a new gate job cannot join without a liveness assert", () => {
-  // A job heavy enough to install the scanner binaries is a job that can die in setup, which is the
-  // #1509 shape exactly. Comment lines are excluded: site-smoke.yml only MENTIONS the action.
-  const heavyWorkflows = readNamesSafe(WORKFLOWS)
+  // #1568 replaced a PROXY with the population. The rule used to be "workflows that install the
+  // mechanical binaries", chosen because that is what #1509 broke — and it left nine workflows
+  // outside the registry BY CONSTRUCTION, including two (semantic-freshness, site-ci) that #1568's
+  // own list of nine did not think to name. A proxy does not become exhaustive by being widened; it has
+  // to be replaced by it. Every workflow file is now a row, so a new one can only be CLASSIFIED,
+  // never omitted.
+  const allWorkflows = readNamesSafe(WORKFLOWS)
     .filter((f) => f.endsWith(".yml"))
-    .filter((f) => /^\s*(- )?uses:\s*\.\/\.github\/actions\/mechanical-binaries\s*$/m.test(readFileSync(join(WORKFLOWS, f), "utf8")))
     .map((f) => `.github/workflows/${f}`);
+  const text = (workflow: string): string => readFileSync(join(REPO_ROOT, workflow), "utf8");
 
-  it("every workflow that installs the mechanical binaries is registered or exempt with a reason", () => {
+  it("every workflow is either a registered gate or exempt with a reason", () => {
     const known = new Set([...registry.gates.map((g) => g.workflow), ...registry.exempt.map((e) => e.workflow)]);
-    expect(heavyWorkflows.length).toBeGreaterThan(0);
-    expect(heavyWorkflows.filter((w) => !known.has(w))).toEqual([]);
-    for (const e of registry.exempt) expect(e.reason.trim().length).toBeGreaterThan(40);
+    expect(allWorkflows.length).toBeGreaterThan(0);
+    expect(allWorkflows.filter((w) => !known.has(w)), "unregistered workflow(s)").toEqual([]);
+    // And in the other direction: a registry row for a workflow that has been deleted or renamed is
+    // a claim about a job that no longer exists.
+    const onDisk = new Set(allWorkflows);
+    expect([...known].filter((w) => !onDisk.has(w)), "registry row(s) with no workflow").toEqual([]);
+  });
+
+  // An exemption is a CLAIM — "a dead run here is distinguishable without a receipt" — and this is
+  // the half of it a test can settle. A step gated on an in-job filter output or a matrix
+  // conditional is exactly the shape (#1107's filter-moved-in-job) that turns a dead scoring phase
+  // GREEN, so an exempt row over one of those is refused rather than believed.
+  it("refuses an exemption for a workflow whose scoring can be short-circuited to a green no-op", () => {
+    const conditional = registry.exempt.filter((e) =>
+      text(e.workflow).split("\n").some((l) => /^\s*if:/.test(l) && /steps\.[A-Za-z0-9_-]+\.outputs|matrix\./.test(l)),
+    );
+    expect(conditional.map((e) => e.workflow), "exempt but carries a conditional step").toEqual([]);
+  });
+
+  it("an exempt row states BOTH what the job measures and why its death is visible without a receipt", () => {
+    expect(registry.exempt.length).toBeGreaterThan(0);
+    for (const e of registry.exempt) {
+      expect(e.measures?.trim().length, `${e.workflow} measures`).toBeGreaterThan(40);
+      expect(e.whyDistinguishable?.trim().length, `${e.workflow} whyDistinguishable`).toBeGreaterThan(40);
+    }
+  });
+
+  // The commonest `whyDistinguishable` is "it goes red and its alert path raises a tracking issue".
+  // That is checkable, and an exemption resting on an alarm that does not exist is worse than no
+  // exemption at all — it is a reason that reads settled.
+  it("a SCHEDULED exempt workflow really does carry the alert path its exemption rests on", () => {
+    for (const e of registry.exempt) {
+      const yml = text(e.workflow);
+      if (!/^\s*schedule:/m.test(yml)) continue;
+      expect(yml, `${e.workflow} is scheduled and exempt, so it must alert on failure`).toContain("./.github/actions/alert-issue");
+    }
   });
 
   it("every registered gate id is BOTH asserted by its workflow and produced by something", () => {
@@ -188,6 +232,74 @@ describe("the registry — a new gate job cannot join without a liveness assert"
       for (const id of gate.expect) {
         expect(asserted, `${gate.workflow} asserts ${id}`).toContain(id);
         expect(recorded.includes(id) || producers.includes(`recordMeasured("${id}"`), `${gate.workflow}: ${id} is produced by a record step or a gate CLI`).toBe(true);
+      }
+    }
+  });
+
+  // #1569, mirroring .github/alert-paths.json. A guard nobody has watched fail is indistinguishable
+  // from a guard with no failing direction — this repo shipped five of those in its alert paths and
+  // three marker labels that had never been created were the proof. The drill input is required
+  // FIRST, because scoping the proof rule to "workflows that happen to have a drill" would make
+  // deleting the input the way out.
+  it("every gate is drillable — its workflow declares a `liveness_drill` dispatch input", () => {
+    for (const gate of registry.gates) {
+      const yml = text(gate.workflow);
+      expect(yml, `${gate.workflow} declares liveness_drill`).toMatch(/^\s{6}liveness_drill:/m);
+      expect(yml, `${gate.workflow} has a step gated on liveness_drill`).toMatch(/if:.*liveness_drill/);
+    }
+  });
+
+  // The producer and the asserter have to agree about WHERE the receipt is. `recordMeasured` writes
+  // nothing when `HARVEY_LIVENESS_RECEIPT` is unset (it is silent off CI by design) while the bash
+  // asserter falls back to `$RUNNER_TEMP` — so a job missing the env var asserts against an empty
+  // file and fails a run that scored perfectly. MEASURED 2026-07-31: five workflows landed without
+  // it and all five went red on their first real CI run. A drill cannot catch this — the drill
+  // expects a red job.
+  // Scoped to the JOB THAT ASSERTS, not to the file. A file-wide `grep` passes when the pin sits on
+  // some OTHER job — corpus-drift.yml already has plan/shard/aggregate jobs, so the shape is present
+  // in this repo today — and the asserting job would still read an empty receipt while this check
+  // stayed green. That is the same "green and executed are different facts" failure the whole
+  // registry exists to close, so it may not sit inside the registry's own guard.
+  it("the job that ASSERTS liveness is the job that pins the receipt path", () => {
+    for (const gate of registry.gates) {
+      const doc = parse(text(gate.workflow)) as { env?: Record<string, unknown>; jobs: Record<string, { env?: Record<string, unknown>; steps?: { uses?: string; with?: { mode?: string } }[] }> };
+      const asserting = Object.entries(doc.jobs).filter(([, job]) => job.steps?.some((s) => s.uses?.includes("gate-liveness") && s.with?.mode === "assert"));
+      expect(asserting.length, `${gate.workflow} has no job running gate-liveness in assert mode`).toBeGreaterThan(0);
+      for (const [name, job] of asserting) {
+        const pinned = job.env?.HARVEY_LIVENESS_RECEIPT ?? doc.env?.HARVEY_LIVENESS_RECEIPT;
+        expect(pinned, `${gate.workflow} job \`${name}\` asserts liveness but does not pin HARVEY_LIVENESS_RECEIPT — it would assert against a file its own recorder never wrote`).toBeTruthy();
+      }
+    }
+  });
+
+  it("every gate carries the run that PROVED it can fail, or a pendingProof hatch with a tracker", () => {
+    for (const gate of registry.gates) {
+      const { provenBy, pendingProof } = gate;
+      expect(!!provenBy && !!pendingProof, `${gate.workflow}: a proven gate with an open exemption re-opens the door the proof closed`).toBe(false);
+      if (pendingProof) {
+        expect(pendingProof.why?.trim().length, `${gate.workflow} pendingProof.why`).toBeGreaterThan(40);
+        expect(pendingProof.tracking, `${gate.workflow} pendingProof.tracking`).toBeGreaterThan(0);
+        expect(pendingProof.since?.trim(), `${gate.workflow} pendingProof.since`).toBeTruthy();
+        continue;
+      }
+      // "PENDING" is refused explicitly: it is what a placeholder looks like, and a placeholder in
+      // this field is a gate recorded as proven by nothing.
+      expect(provenBy?.run, `${gate.workflow} has no recorded drill run — dispatch \`gh workflow run "<name>" -f liveness_drill=true\` and record it`).toMatch(/^https:\/\/github\.com\/.+\/actions\/runs\/\d+$/);
+      expect(provenBy?.at, `${gate.workflow} provenBy.at`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  // The liveness drill deliberately fails the job; the alert path fires on a workflow_dispatch
+  // failure. Wired naively, DRILLING THE GUARD OPENS A REAL ALARM — #1586's criterion 4 sat
+  // unproven for exactly that reason. Each drill must switch the other's machinery off.
+  it("a liveness drill cannot open a real alert issue", () => {
+    for (const gate of registry.gates) {
+      const yml = text(gate.workflow);
+      const alertConditions = yml
+        .split("\n")
+        .filter((l) => /^\s*if:.*failure\(\)/.test(l) && /workflow_dispatch/.test(l));
+      for (const c of alertConditions) {
+        expect(c, `${gate.workflow}: an alert step reachable on a liveness drill would raise a false alarm`).toContain("!inputs.liveness_drill");
       }
     }
   });

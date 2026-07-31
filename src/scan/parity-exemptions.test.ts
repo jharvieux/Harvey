@@ -126,15 +126,18 @@ describe("#1483 a substitute gate declares a cadence, and the cadence is checked
     expect(validateParityExemptions(undefined, inRepo, loadGateInputs())).toEqual([]);
   });
 
-  it("MEASURED — M2's pentest --mode=coverage gate runs on NO cadence, and says so rather than pretending", () => {
-    // The finding this issue is filed on, asserted in BOTH directions: if the gate gets wired into
-    // a venue, this test goes red and the row has to be re-declared with its new cadence.
+  // This test used to assert the OPPOSITE — that the gate ran on no cadence — and said so: "if the
+  // gate gets wired into a venue, this test goes red and the row has to be re-declared with its new
+  // cadence". It went red on 2026-07-31 when #1483 wired it, which is the mechanism working. What it
+  // asserts now is the same claim from the other side, and it is still checked in both directions:
+  // the workflow really does invoke the CLI, and the row really does name that venue.
+  it("MEASURED 2026-07-31 — M2's pentest --mode=coverage gate now runs in heavy-cli, and the row names that venue (#1483)", () => {
     const real = loadGateInputs();
-    expect(Object.values(real.workflows).some((w) => w.includes("mode=coverage"))).toBe(false);
+    expect(Object.values(real.workflows).some((w) => w.includes("mode=coverage"))).toBe(true);
     const m2 = parityVerdict(CORPUS).exempt.find((e) => e.module === "M2")?.exemption as ParityExemption;
     const pentest = m2.substituteGates.find((g) => g.invokes === "src/cli/pentest.ts") as SubstituteGate;
-    expect(pentest.cadence).toEqual({ kind: "none", issue: 1483 });
-    expect(describeCadence(pentest.cadence)).toContain("NO CADENCE");
+    expect(pentest.cadence).toEqual({ kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 3", when: "every code PR + daily schedule" });
+    expect(describeCadence(pentest.cadence)).not.toContain("NO CADENCE");
   });
 
   it("CONTROL — a gate declaring a workflow cadence that workflow no longer invokes is refused", () => {

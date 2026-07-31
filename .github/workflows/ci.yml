@@ -27,6 +27,10 @@ on:
         description: "Prove the ci-heavy-cli-alert path fires end-to-end (#1287). Fails shard 1 on purpose; opens, comments on and then closes a self-cleaning drill issue."
         type: boolean
         default: false
+      liveness_drill:
+        description: "Prove the gate-liveness guard fires (#1509/#1569). SKIPS the heavy tests and both scored gates, leaving a shard every one of whose steps succeeds — the guard is then the only thing that can turn it red."
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -203,6 +207,7 @@ jobs:
       # the record step below a real number instead of a claim. Three of these files gate blocks
       # behind skipIf(), so "the step succeeded" and "tests executed" are genuinely different facts.
       - name: Heavy CLI tests
+        if: ${{ !inputs.liveness_drill }}
         env:
           HARVEY_HEAVY_CLI_TESTS: "1"
         run: pnpm exec vitest run ${{ steps.shard.outputs.files }} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shard.json"
@@ -237,7 +242,7 @@ jobs:
       # installs the mechanical binaries. Shard 1 only: it is one run of one scan, not a sharded
       # test file, and three copies would just burn two runners.
       - name: Calibration gate (real binaries, scored against the corpus answer key)
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-calibration.ts
 
       # #1288: the same hole one gate over. `validate-source-recall` scores the app-layer
@@ -251,8 +256,24 @@ jobs:
       # 0 by design (it reports, it does not gate), so on a cadence it would spend network on a
       # number nothing can fail. The planted-fixture gate below is the one with a pass/fail.
       - name: Source-detector recall gate (real binaries, request→sink answer key)
-        if: matrix.shard == 2
+        if: matrix.shard == 2 && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-source-recall.ts
+
+      # #1483, and the relay #1481 owed. M2 carries the parity exemption whose substitute gates are
+      # the conservation plant (daily, required) and THIS — `assertComplete`, which throws naming any
+      # enumerated-but-untested M2 target. Until now it ran in no venue at all, so the exemption
+      # stood on a gate nothing invoked, which is the #1288/#1301 shape one level up. PR #1481
+      # declined the wiring as a supervised-path edit and proposed this exact step; the operator
+      # granted workflow edits for the 2026-07-31 sweep, so the relay is DISCHARGED rather than
+      # re-recorded.
+      #
+      # Shard 3, because shards 1 and 2 already carry a scored gate each. Offline and sub-second —
+      # MEASURED 2026-07-31: 0.9s wall, exit 0 on `--tested app:root`, exit 1 on `--tested bogus-id`
+      # ("Incomplete target coverage — 1 enumerated target(s) untested: app:root"). Both directions,
+      # so this is not a step that can only pass.
+      - name: M2 target-coverage gate (assertComplete over the discovered manifest)
+        if: matrix.shard == 3 && !inputs.liveness_drill
+        run: pnpm exec tsx src/cli/pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested app:root
 
       # #1544: shared-sources.test.ts asserted for months that the canonical request-source block
       # CONTAINED certain pattern strings. A pattern can be present and inert — the two block-bodied
@@ -260,10 +281,11 @@ jobs:
       # was green throughout. It now also EXECUTES the block against probes with real semgrep, which
       # means it skips in `verify` (that job installs no binaries) and this is the only job where it
       # can run. HARVEY_REQUIRE_SEMGREP=1 makes a missing binary red rather than a silent skip.
-      # Shard 3: shards 1 and 2 already carry a scored gate each, and this is one 3s vitest file.
+      # Shard 3 alongside the M2 coverage gate: shards 1 and 2 carry the two long scans, and this is
+      # one 3s vitest file, so it is the cheapest of the four to place.
       - name: Shared request-source block — patterns MATCH probes, not merely present
         id: shared-source-match
-        if: matrix.shard == 3
+        if: matrix.shard == 3 && !inputs.liveness_drill
         env:
           HARVEY_REQUIRE_SEMGREP: "1"
         run: |
@@ -273,7 +295,7 @@ jobs:
           ran=$(jq '(.numPassedTests // 0) + (.numFailedTests // 0)' "$RUNNER_TEMP/vitest-shared-sources.json")
           echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - name: Record the shared-source match gate's executed-probe count
-        if: matrix.shard == 3
+        if: matrix.shard == 3 && !inputs.liveness_drill
         uses: ./.github/actions/gate-liveness
         with:
           mode: record
@@ -316,7 +338,7 @@ jobs:
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
-          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }} ${{ matrix.shard == 3 && 'shared-source-match' || '' }}
+          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }} ${{ matrix.shard == 3 && 'm2-coverage-gate shared-source-match' || '' }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
@@ -324,7 +346,7 @@ jobs:
       # PR — but `workflow_dispatch` is now permanently in the condition (#1287): this path had never
       # executed once, and until this change the workflow had no manual trigger to prove it with.
       - name: Open or update the heavy-cli tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-heavy-cli-alert
