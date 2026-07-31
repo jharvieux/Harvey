@@ -794,7 +794,8 @@ function makeCalleeResolver(files: SourceInput[]): CalleeResolver {
     // whose `isAtLeastAsNew` comes `from "../helpers.js"` — was still spared with the hop in place.
     // Stripped here rather than in `resolveImport` itself: that function also backs M9's import
     // graph and #1344's reachability gate, so widening it moves baselines this change has not
-    // measured. Tracked for the shared resolver as a follow-up.
+    // measured. Tracked for the shared resolver as #1659, whose first acceptance criterion is to
+    // measure that corpus-wide M9 movement BEFORE the fallback moves into `resolveImport`.
     const target = resolveImport(fromPath, specifier, allPaths, aliases) ?? resolveImport(fromPath, specifier.replace(/\.(m|c)?js$/, ""), allPaths, aliases);
     const sf = target === undefined ? undefined : sourceAt(target);
     const fn = sf && functionNamed(sf, name);
@@ -917,8 +918,17 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 // so inlining it is the wrong advice whether or not the module chose to export it.
 //
 // #1532 — the POPULATION #1447 shipped without. MEASURED 2026-07-30 by running detect-static over
-// the ten pinned corpus targets at their pinned commits with and without this exemption: it spares
-// 653 candidates, 26% of inbox-zero's whole M5-slop reading and 20% of tanstack-com's. A seeded
+// pinned corpus targets at their pinned commits with and without this exemption: it spares
+// 653 candidates, 26% of inbox-zero's whole M5-slop reading and 20% of tanstack-com's.
+// The pin count this paragraph originally gave ("ten") is NOT reproducible and has been removed
+// rather than corrected: `src/scan/external-corpus.ts` carried FOURTEEN M5-slop baselines at
+// dfff5a8/5c983ea when the 653 was drawn and carries SEVENTEEN now (#1524 added cravab, flori-web
+// and effective on 2026-07-30), so "ten" describes neither, and the measuring script was not
+// committed, so the repo does not record which subset the 653 / 592 / 380 actually cover.
+// Re-deriving them is a re-run, not a recovery: clone the pins and diff the detector with and
+// without the exemption, which is how the async-caller figures below were re-measured.
+// Pinning those three totals to a stated population is part of #1660. The async-caller figures
+// below ARE re-derived here and carry their own scope. A seeded
 // random sample of 50 (mulberry32, seed 20260730, over the population sorted by
 // target|file|line|helper) was read at source and graded against the exemption's own premise —
 // "a pure helper whose sole caller does the I/O". 45 held. 5 did not, and all 5 failed the SAME
@@ -929,7 +939,12 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 //
 // Two sub-populations are COUNTED AND LEFT, not silently accepted — the sample says neither is
 // reliably a defect, and disclosing a measured number beats narrowing on a hunch:
-//   * 401 of 653 have a caller whose awaits never touch the helper's result. The sample drew 36 of
+//   * 401 of 653 have a caller whose awaits never touch the helper's result. THE PREDICATE BEHIND
+//     THIS FIGURE IS NOT STATED ANYWHERE and it is inherited from #1532 rather than re-derived: an
+//     independently written predicate measures 411 on the same 653 rows, and the one this file's
+//     `evidence` string ships measures 380 on the narrowed population. Which definition the sentence
+//     means is UNDECIDED — tracked as #1660, which also has to make the two sites agree. Do not
+//     treat any of the three as settled. The sample drew 36 of
 //     them; 3 were among the 5 defects above and now fire, and every one of the 33 that REMAIN
 //     spared was a genuine seam. So this shape is not itself the error — the caller is entangled
 //     with I/O either way, so extracting the pure half still buys what the brief asks for. This is
@@ -942,8 +957,21 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 //     hop) to a function that is itself not async, awaits nothing, and returns only such values.
 //     Everything it does not resolve — a method call, a parameter, a package outside the repo —
 //     stays spared, so the firing direction is the one that has to be earned.
-//     MEASURED 2026-07-31 over the same ten pins: 14 of the 39 now fire, 25 stay spared, and every
-//     one of the 14 was read at source. The three rows the class was named for come out right:
+//     RE-MEASURED 2026-07-31, by running the detector over each pinned clone three times — as
+//     shipped, with this class forced to spare, and with it forced to fire — so the class is sized
+//     by difference rather than by inspection. Over the fourteen pins this bullet's siblings were
+//     measured on: the class is 38, of which 14 now fire and 24 stay spared. An earlier draft of
+//     this line said "14 of the 39 … 25 stay spared": 39 was the population BEFORE #1532's
+//     `doesOwnIo`, which had already recovered one of those rows on its own (inbox-zero
+//     apps/web/scripts/eval-report/generate-eval-report.ts:78 `findWorkspaceRoot` calls
+//     `fs.existsSync` in its own body at :83), so the subtraction was stale by one and disagreed
+//     with the 24 the `evidence` string below correctly ships.
+//     SCOPE, stated rather than assumed: `src/scan/external-corpus.ts` carries SEVENTEEN M5-slop
+//     baselines today, not fourteen — #1524 added cravab, flori-web and effective on 2026-07-30,
+//     after this population was drawn. They are deliberately NOT folded into the figures above,
+//     which would mix two populations across one bullet list; measured separately, they add 10 to
+//     the class (cravab 9, flori-web 1) of which 9 fire, for 48 / 23 / 25 across all seventeen.
+//     Every one of the 14 was read at source. The three rows the class was named for come out right:
 //     mvp-boilerplate app/api/og/route.tsx:15 fires (`return new ImageResponse(…)`), inbox-zero
 //     utils/outlook/mail.ts:408 stays spared (`return sendEmailWithHtml(…)`, a local async), and
 //     saas-lite app/sitemap.xml/route.ts:24 stays spared — that third one CORRECTS #1533's body,
@@ -999,7 +1027,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, 
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31, ten pinned corpus repos): it spares 592 helpers, down from 653 before the purity test was widened. Of those 592, 380 have a caller whose awaits never touch the helper's result and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous — so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31 against pinned commits of real open-source repositories; the subset these totals cover is stated in this file's source comment, and reconciling it against the full pinned corpus is tracked as #1660): it spares 592 helpers, down from 653 before the purity test was widened. Of those 592, 380 have a caller whose awaits never touch the helper's result — a count produced by this pass's own predicate, which is NOT the (unstated) predicate behind the 401 previously recorded for the same quantity, so read it as one reading of that phrase rather than a settled figure; reconciling the two is tracked as #1660 — and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous, so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,
