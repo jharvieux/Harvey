@@ -47,14 +47,18 @@ export interface ProvenBy {
   at?: string;
 }
 
-// REASON: a brand-new alerting workflow's drill is not dispatchable until the workflow file is on the DEFAULT branch, so its alert path has no way to be proven before it merges — which is why `pendingProof` exists at all rather than every new path simply being drilled first
-// KIND: empirical
-// PROVENANCE: TRIED 2026-07-28 — `gh workflow run secbench.yml --ref feature/secbench-cadence -f alert_drill=true` against the pushed-but-unmerged branch, three ways (by file, by name, and raw `POST .../workflows/secbench.yml/dispatches`). GitHub answers verbatim: `HTTP 404: workflow secbench.yml not found on the default branch`. Operator ruling the same day: land the path unproven, drill immediately after merge, record the run id and delete the hatch.
-// FALSIFIER: command -v gh >/dev/null 2>&1 || exit 127; gh api repos/jharvieux/Harvey >/dev/null 2>&1 || exit 127; gh api "repos/jharvieux/Harvey/contents/.github/workflows/secbench.yml?ref=main" >/dev/null 2>&1 && exit 0 || exit 1
-// TOUCHES: .github/alert-paths.json .github/workflows/secbench.yml
+// A REASON block sat here from #1288 until 2026-07-31 (#1422), recording why `pendingProof` exists:
+// GitHub refuses `workflow_dispatch` for a workflow file that is not yet on the DEFAULT branch
+// (TRIED 2026-07-28, three ways — `HTTP 404: workflow secbench.yml not found on the default
+// branch`), so a brand-new alerting workflow's drill has to wait for its own merge. Its falsifier
+// was deliberately self-retiring — it exited 0 the day `secbench.yml` landed on main — and the
+// remedy it named has been PERFORMED: drill run 30376371298 (2026-07-28), drill issue #1430 under
+// the `ci-secbench-alert` marker, recorded below as that path's `provenBy`. So the block is
+// discharged rather than weakened.
 //
-// The falsifier above is deliberately self-retiring: the day secbench.yml lands on main it exits 0,
-// reasons-drift reports this row STALE, and the remedy is the drill run this hatch was opened for.
+// The durable fact it recorded is not lost: `_why` in .github/alert-paths.json states it for the
+// registry, and `PendingProof.why` is a REQUIRED field, so every future hatch restates it at its own
+// site with its own tracking issue rather than inheriting this one's text.
 //
 /**
  * The one disclosed way an alert path may sit on `main` unproven (#1288, operator ruling

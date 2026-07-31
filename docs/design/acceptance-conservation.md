@@ -247,30 +247,28 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   because there is nothing left unassessed. Population at the time of the change: **0** of the last
   60 merged PRs carried such a reference — the row was disclosing a limit nobody had hit, which is
   precisely how a false one survives.
-- The gate reads the PR **body**. A criterion met by a bare click — closing the issue in the GitHub UI
-  or from the Development sidebar, with no closing keyword to parse — never reaches it. Tracked as
-  **#1341**; not addressed here.
+- ~~The gate reads the PR **body**. A criterion met by a bare click — closing the issue in the GitHub
+  UI or from the Development sidebar, with no closing keyword to parse — never reaches it.~~
+  **SETTLED 2026-07-28 by #1341**, and the reason block that used to sit here was deleted on
+  2026-07-31 by #1422. `.github/workflows/acceptance-close.yml` runs `validate-acceptance
+  --closed-issue` on `issues: [closed]`, so both non-PR paths now reach a gate: the bare click, and
+  the Development-sidebar link, which was MEASURED 2026-07-28 against a live probe (issue #1384 /
+  PR #1386, a PR carrying no keyword) to populate `closedByPullRequestsReferences` — the field the
+  CLI already read — so the sidebar path is covered by the same code as the keyword path. The
+  disposition venue for a non-PR close is an issue COMMENT in the `ACCEPTANCE` format.
 
-  <!--
-  REASON: does a Development-sidebar link close an issue on merge with no closing keyword in the PR body, so that the gate never runs against it?
-  KIND: empirical
-  PROVENANCE: ASSUMED 2026-07-27 — recorded in #1341 from reading GitHub's documented behaviour. Nobody has linked an issue by the sidebar and merged to watch what the gate does, which is the whole reason it is written here as a question.
-  FALSIFIER: gh issue view 1341 --json state --jq .state > /tmp/harvey-1341.state 2>/dev/null || exit 127; grep -qix closed /tmp/harvey-1341.state && exit 0 || exit 1
-  TOUCHES: src/acceptance-conservation.ts
-  -->
+  The block's falsifier — `gh issue view 1341 … grep -qix closed` — fired on 2026-07-28 exactly as
+  designed and then sat unremoved for three days, which is worth recording because of WHY nobody saw
+  it: `reasons-drift`'s own check step piped into `tee` under `bash -e`, so it printed `✗ STALE` and
+  exited 0 (#1422). A self-retiring falsifier only retires anything if the job reading it can fail.
 
-  The falsifier above is deliberately weak and says so: it fires when **#1341 itself is closed**,
-  which is the event that means somebody went and settled the question. There is no offline command
-  that observes GitHub's merge-time close behaviour, and inventing one that re-tests nothing is the
-  #1246 failure this convention exists to prevent.
-
-  It shipped in a form that could never fire, and that is worth recording rather than quietly
-  correcting: it read the state through `gh api …/issues/1341 --jq .state`, which returns lowercase
+  The falsifier's earlier life is the other half of the lesson. It shipped in a form that could never
+  fire: it read the state through `gh api …/issues/1341 --jq .state`, which returns lowercase
   `closed`, and tested it with a case-sensitive `grep -q CLOSED`. Exercised in both directions on
   2026-07-27 the broken form exits 1 against the OPEN #1341 **and** exits 1 against the CLOSED
   #1340 — so it sat inside a green `--revalidate` run re-testing nothing, which is the exact #1246
   shape this document's own bounds list cites. `gh issue view --json state` returns `CLOSED`
-  uppercase; the `-i` makes the check independent of which of the two APIs answers. Every falsifier
+  uppercase; the `-i` made the check independent of which of the two APIs answers. Every falsifier
   written for this program was then re-run against a state where its blocker is GONE, because one
   case-sensitivity bug getting through is evidence about the batch, not about the line.
 

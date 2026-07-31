@@ -23,8 +23,14 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Same defect as reasons-drift.yml's check step (#1422): a `run:` with no `shell:` key is
+      # `bash -e {0}` with NO pipefail, so `… | tee` exits with tee's 0 whatever the CLI said. Here it
+      # also disabled the step BELOW, whose `steps.check.outcome == 'failure'` guard could never be
+      # true — this job's only way of reporting drift.
       - id: check
-        run: pnpm osv-staleness 2>&1 | tee osv-staleness.log
+        run: |
+          pnpm osv-staleness 2>&1 | tee osv-staleness.log
+          exit "${PIPESTATUS[0]}"
       - name: Open an issue on drift
         if: failure() && steps.check.outcome == 'failure'
         uses: actions/github-script@v7
