@@ -235,8 +235,18 @@ export function isNotRun(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m
 // #300: M8 on the targets WITH a real suite now runs for real, in .github/workflows/corpus-m8.yml —
 // a per-target install (npm until #1268, the target's own lockfile-implied package manager since),
 // a vendored Stryker config (src/scan/m8-corpus.ts), and a timeout that matches the actual cost.
-// Two of the four are scored; two remain blocked, each for a MEASURED
-// reason below rather than the generic "no config" this constant used to assert for all four.
+// RE-DERIVED 2026-07-31 (#1693) from this file's own 17 entries, because the sentence here counted
+// "5 suite-carrying targets" and then named seven, and the en-route fix that was meant to correct
+// it wrote THREE in front of four names. The split, by what actually measures each target's M8:
+// FIVE carry an M8_CORPUS_CONFIGS entry and are mutation-scored by corpus-m8.yml — proposit,
+// boxyhq, inbox-zero, rallly (#1268 added the latter two) and multi-tenant-starter, the only one
+// that does NOT score the target's own suite (#1496's vendored DB-free suite, below). SIX record an
+// M8 not-run with a measured reason and a falsifier: saas-lite, carbon, ghostfolio, tanstack-com,
+// cravab, flori-web — every one of them DOES carry a real suite, which is why "suite-carrying" was
+// never the line the old sentence drew. The remaining SIX have no percentage to report at all: a
+// finding IS their measurement (#224's M8-00 zero-coverage on five of them, #932's M8-04
+// workspace measurement-gap on documenso). Counts go stale — re-derive them from `modules.M8`
+// rather than quoting this comment.
 //
 // #277 predicted boxyhq was blocked by its Playwright E2E specs needing a built app + browser.
 // That was WRONG, and re-measuring rather than transcribing is what caught it: boxyhq's own
@@ -244,27 +254,26 @@ export function isNotRun(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m
 // never sees a Playwright spec. It scores 20% today (measured, 7/35). The targets WITHOUT a suite
 // are different again — they need no Stryker at all, because #224's zero-coverage finding IS the
 // measurement.
-// #1436 split this in two, because the old single sentence ran a FACT and a BUDGET RULING together
-// and gave the ruling the fact's authority. "a cost no CI budget justifies" is a claim about our
-// afternoon, not about the world (#1319), and no command re-tests it — while the mechanism it rests
-// on is an upstream fact that can dissolve at any time with nothing here noticing, which is exactly
-// #1436's complaint. So the mechanism is empirical and watched; the ruling is decisional and owned.
 //
-// REASON: multi-tenant-starter's only suite starts a throwaway Docker Postgres container in its own `before()` hook and stops it in `after()`, so every whole-suite invocation is one container start — and Stryker's command runner re-invokes the whole suite per mutant
+// #1436 split multi-tenant-starter's old single not-run reason in two, because it ran a FACT and a
+// BUDGET RULING together and gave the ruling the fact's authority: the empirical half (its only
+// suite starts a Docker Postgres container per invocation, so Stryker's per-mutant re-invocation
+// means one container start per mutant) is still true and still watched — see rls.test.mjs's own
+// FALSIFIER below, unchanged. #1496 is where the DECISIONAL half was ASKED, and the 2026-07-31
+// operator ruling did not pick "pay it" or "decline it" — it picked REWORK: stub the DB layer so
+// mutants run without Docker at all, rather than scoring the RLS suite. src/scan/m8-corpus.ts's
+// `extraFiles` (a NEW field, #1496) vendors a standalone vitest suite for
+// lib/security/guards.ts's role-hierarchy authorization logic (requireAuth/requireTenantAccess/
+// requireTenantAdmin) into the disposable clone before Stryker runs, stubbing the two calls that
+// file makes into the DB layer (createServerSupabaseClient's .auth.getUser(), tenants.ts's
+// getUserTenantRole) — never a real Postgres connection. See this target's M8 baseline below for
+// the accepted trade and the measured numbers.
+//
+// REASON: multi-tenant-starter's ORIGINAL suite (test/rls.test.mjs) starts a throwaway Docker Postgres container in its own `before()` hook and stops it in `after()`, so every whole-suite invocation is one container start — Stryker's command runner would re-invoke the whole suite per mutant, which is why #1496's vendored suite (below) runs against a DIFFERENT, DB-free test file instead of this one
 // KIND: empirical
 // PROVENANCE: MEASURED 2026-07-28 — re-read at the pin (dcc147c) and at upstream HEAD. test/rls.test.mjs lines 16-53: a `docker()` helper wrapping `spawnSync('docker', ...)`, `before()` running `docker run --rm -d ... postgres:15-alpine`, `after()` running `docker stop`. package.json `test` is still `node --test test/rls.test.mjs` and it is still the repo's only test file.
 // FALSIFIER: sh -c 'command -v curl >/dev/null 2>&1 || exit 127; body=$(curl -fsS --max-time 20 https://raw.githubusercontent.com/Wallens11/supabase-multi-tenant-starter/HEAD/test/rls.test.mjs) || exit 127; case "$body" in *docker*) exit 1;; *) exit 0;; esac'
 // TOUCHES: src/scan/m8-corpus.ts
-//
-// REASON: paying one Docker Postgres start per mutant to score a single RLS test file is not worth the CI budget, so this target is left unscored even though it could be scored
-// KIND: decisional
-// PROVENANCE: MEASURED 2026-07-28 — the cost is real and re-measured (see the empirical block above); what is undecided is whether to pay it. Nobody has ever run it to find the actual mutant count, so the price tag is an estimate, and the honest framing is "not attempted", not "impossible".
-// OWNER: operator (jharvieux)
-// DECISION: #1496 — carries the measured cost and asks whether to pay it or to close the class as out of scope
-const M8_DOCKER_PER_MUTANT: ModuleNotRun = {
-  reason: "This target's only suite (test/rls.test.mjs, run via `node --test`) spawns a Docker Postgres container per run — re-verified 2026-07-28 at the pin AND at upstream HEAD (its `docker()` helper shells out to `docker run` in `before()`, `docker stop` in `after()`). Stryker re-runs the suite per mutant, so scoring it means one container start per mutant. Whether to pay that for a single RLS test file is a BUDGET RULING, not an impossibility — it is recorded as the decisional block above and asked on #1496, and the mutant count has never actually been measured. Recorded not-run rather than 0 — a 0 would read as 'no surviving mutants', the exact inversion of an unmeasured suite.",
-  falsifier: "sh -c 'command -v curl >/dev/null 2>&1 || exit 127; body=$(curl -fsS --max-time 20 https://raw.githubusercontent.com/Wallens11/supabase-multi-tenant-starter/HEAD/test/rls.test.mjs) || exit 127; case \"$body\" in *docker*) exit 1;; *) exit 0;; esac'",
-};
 
 // REASON: saas-lite has no unit suite for Stryker to mutate — every test file it ships is a Playwright E2E spec under apps/e2e, needing a built app, a browser and a live Supabase stack
 // KIND: empirical
@@ -478,6 +487,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     provenanceNote: "#413: leans professional — single-dump initial commit (a mild AI tell) but the cleanest code of the set, deliberate WHY-comments, no AI fingerprints/trailers. Genuinely ambiguous; recorded as unclear rather than forced into a tier.",
     securityVerdict: "1 Critical (any authed user self-joins any tenant as owner), 1 High (cross-tenant invitation tampering) — both confirmed dynamically against a local self-hosted clone",
     disclosureIssue: 217,
+    m8: M8_CORPUS_CONFIGS["multi-tenant-starter"],
     schemaPath: "supabase/migrations",
     modules: {
       "M1-boundary": { counted: 0, total: 0, note: "#1459: MEASURED ZERO 2026-07-28 via `pnpm exec tsx src/cli/static-detect.ts <clone>` over the pinned tree — the M9 boundary pass runs and produces no missing-auth / client-owner-id row here.  An FP FLOOR, and the point of scoring it: this class is High/Likely, so a widening that lights it up on a clean target fails here instead of shipping." },
@@ -488,7 +498,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       "M5-slop": { counted: 1, total: 1, note: "#1532: RE-MEASURED 2026-07-30 at 1/1 (was 2/2) — DRIFT -1, a PRECISION FIX taken against a NARROWED scanner. Same cause and method as proposit's M5-slop note (#370/#1447's `isTestabilitySeam`; #1532's `doesOwnIo` narrows it). The one spared row was read at source: `isPublicPath` (middleware.ts:12) is a pure `PUBLIC_PATHS.some(startsWith)` matcher whose sole caller awaits `supabase.auth.getUser()` — the textbook seam. This target's floor is now 1, and the old note's warning still stands: a jump beyond it is a new over-match. Command: `pnpm exec tsx src/cli/static-detect.ts <clone-of-dcc147c0> --out f.json`. Prior note: Re-measured 2026-07-17: 0->2 from #391's new classes — 1 'Unused import' (app/dashboard/page.tsx) + 1 'Single-use helper' (middleware.ts). Still near the floor this 3.1k-line repo reads everywhere else; a jump beyond this is a new over-match." },
       "M6-indicator": { counted: 0, total: 0, note: "#483: MEASURED zero 2026-07-17 — same FP-floor role as this target's M4-diverged/M7 zeros, a 3.1k-line repo too small to carry any of the 13 hand-rolled shapes. All Info/non-grading (#267); counted === total by construction (see the manifest's M6-indicator note)." },
       M7: { counted: 0, total: 0, note: "#1261: re-confirmed zero 2026-07-28 — the only corpus target with no M7 row to triage, so it contributes to neither numerator nor denominator of the field precision number. Prior note: MEASURED zero (re-confirmed 2026-07-17) — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
-      M8: M8_DOCKER_PER_MUTANT, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite (and #252's census agrees: the single spec has real assertions, so it is NOT a placeholder), so this needs Stryker too, and the per-mutant Docker cost is why #300 left it not-run rather than scoring it.
+      M8: { mutationScore: 95.7, killed: 22, valid: 23, coveredScope: ["lib/security/guards.ts"], note: "#1496: MEASURED 2026-07-31, reproduced identically across three consecutive runs — 95.7% (22/23 valid mutants). This target's ORIGINAL suite (test/rls.test.mjs) is still not what this score measures: it starts a Docker Postgres container per invocation, which Stryker's per-mutant re-invocation would pay for every mutant (#1436's M8_DOCKER_PER_MUTANT, still recorded above as the reason THIS suite isn't scored directly). The 2026-07-31 operator ruling on #1496 chose to REWORK rather than pay that cost or leave the target unscored: src/scan/m8-corpus.ts vendors a NEW, DB-free vitest suite (test/security-guards.vitest.test.ts, written into the disposable clone via the new `extraFiles` field, never committed upstream) covering lib/security/guards.ts's role-hierarchy authorization logic (requireAuth/requireTenantAccess/requireTenantAdmin) — the same file #226's M5-knip note already flags as the self-join Critical's fingerprint (exported, security-relevant, and until this suite, untested by ANYTHING). The DB layer is stubbed at exactly two call sites (createServerSupabaseClient's .auth.getUser(), tenants.ts's getUserTenantRole), never a real Postgres connection. COST, RE-MEASURED 2026-07-31 (#1693) because the `~3-6s` recorded here first named neither a phase nor a machine: three consecutive runs of the full production path (`pnpm corpus-drift --target multi-tenant-starter --install --m8`, i.e. network clone + install + Stryker) on one developer laptop took 17.5s / 10.5s / 9.8s end to end, the first paying a cold npm cache; Stryker's own mutation phase reported `Done in 1 second.` over 23 mutants on all three. The figure that actually sizes the monthly job is the RUNNER's, and it is ~3x the laptop's: MEASURED on a GitHub runner the same day (PR #1693, job 91187639590, the corpus-m8 step this target was wired into by #1692), the same command reported `multi-tenant-starter: 30s` and reproduced 95.7% (22/23). Quote the phase and the machine or re-run the command, do not quote a bare second-count from here. Either way it is nowhere near one Docker container start per mutant for the original suite. THE ACCEPTED TRADE (stated because a stubbed suite may score differently from the real one it stands in for, per the ruling): this measures how well 11 new hand-written tests exercise guards.ts's OWN logic, not how well the target's own test authors covered it — unlike every other M8 corpus entry, whose suite is the target's own. The 1 surviving mutant (StringLiteral, guards.ts:36 — requireTenantAccess's `minimumRole: TenantRole = 'guest'` default replaced with `''`) is LIKELY EQUIVALENT rather than a real test gap: `ROLE_RANK['']` is `undefined`, and `rank < undefined` is always `false` for every real TenantRole value, so a '' default and a 'guest' default (rank 1, the lowest real rank) are behaviorally identical for every value the type system allows through — not verified by exhausting every possible runtime value, just by this rank-table reasoning." },
       "M8-intent": { counted: 0, total: 0, note: "#372 test-intent pass, measured 2026-07-17 at the M8/M8-intent split: a measured zero — the one hand-rolled RLS spec drew no test-intent findings." },
       M9: { counted: 2, total: 4, note: "#1438/#1441: RE-MEASURED 2026-07-28 at 2/4 (was 2/3) — the #1441 waterfall scope row only, no detection change. MEASURED by a controlled before/after `static-detect` on the identical pinned clone, one variable (this PR's M9 diff): the before arm at e7e3d1e reprints 2/3. The +1 total is `M9 — Data-fetching waterfall — scope`, reading '1 of 1 adjacent query pair excluded by policy' — that pair is lib/supabase/tenants.ts:151, the duplicate-invitation FP #1292 correctly removed. The suppression is right; its SILENCE was not, and the row is what a client now reads instead of a bare zero. Info, so `counted` is unchanged. Prior note: #1262/#1292: RE-MEASURED 2026-07-28 at 2/3 (was 3/3) — one waterfall FALSE POSITIVE removed, plus the disclosure row. MEASURED by a controlled before/after `detect-static` on the identical pinned clone, one variable (this PR's M9 diff): the before arm at 564bded reprints 3/3. The -1 counted is #1292: lib/supabase/tenants.ts:151, where `if (existing) return existing` sits between the invitation lookup and the INSERT. No value flows, so the old single-hop test called the pair independent and told the client to run them in `Promise.all` — which would insert a duplicate invitation on every re-invite. A hard FP whose recommended fix was a bug. The +1 total is #1262's `M9-RETRY` scope row — a counted not-assessed row disclosing the three uncapped retry/fan-out sub-shapes the new AST detector does not reach, emitted on any target that has route/edge handlers at all. Info, so `counted` is unchanged. Prior note: 2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall' (re-confirmed 2026-07-17 — no #381 SSR-only hits here)." },
       M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (21 columns parsed, 1 PII-bearing table). tenant_invitations: Low (EMAIL) — the corpus's near-floor M10 reading, matching this target's otherwise-minimal M4/M7 surface." },

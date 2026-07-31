@@ -74,7 +74,7 @@ import {
   type DriftExplanation,
 } from "../scan/external-corpus.js";
 import { shardTargets } from "../scan/corpus-shards.js";
-import type { M8CorpusConfig } from "../scan/m8-corpus.js";
+import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -247,7 +247,12 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
   // clone discarded after this run, not the client's real repo (see mutation-scan.ts's --install
   // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
   withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...npmOnlyFlags(pm, cfg.installFlags)], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
-  writeFileSync(join(appDir, "stryker.conf.json"), `${JSON.stringify(cfg.config, null, 2)}\n`);
+
+  // #1496/#1693: the vendored Stryker config, plus (for a target whose own suite is unscoreable —
+  // multi-tenant-starter's Docker-per-mutant cost) the DB-free suite that config points at, written
+  // in before Stryker's dry run reads either. `appDir` is inside the disposable temp clone the rest
+  // of this function already writes into. Lives in m8-corpus.ts so it has a test.
+  materializeM8Config(appDir, cfg);
 
   const out = join(mkdtempSync(join(tmpdir(), "harvey-m8-")), "m8.json");
   execFileSync("pnpm", ["mutation-scan", appDir, "--out", out], {

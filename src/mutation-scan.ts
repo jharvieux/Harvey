@@ -678,7 +678,20 @@ export function reRootReportToApp(report: StrykerReport, appRelFromRoot: string)
     if (key.startsWith(prefix)) files[key.slice(prefix.length)] = val;
     else dropped.push(key);
   }
-  return { report: { ...report, files }, dropped };
+  // #1530: `report.config.mutate` is Stryker's own echoed-back EFFECTIVE config (#1076) — it still
+  // carries rootScopedMutateGlobs' ROOT-relative globs (e.g. "apps/foo/src/**") after this function
+  // re-roots `files` to app-relative keys ("src/**"). Left alone, mutation-scan.ts's #504 scope
+  // check reads config.mutate FIRST (configMutateGlobs, before the reference-config fallback) and
+  // compares it against the now app-relative file keys — every file fails to match its own scope's
+  // glob, so a real, fully-covered root-scoped run reports "covered 0 file(s) matched" as if it ran
+  // outside its own scope. MEASURED live (#1530): a purpose-built root-scoped fixture run showed
+  // exactly this — 2/2 files actually mutated and reported, #504 read 0. Strip the same prefix
+  // rootScopedMutateGlobs added, mirroring the `files` rewrite above.
+  const config = report.config ? { ...report.config } : report.config;
+  if (config && Array.isArray(config.mutate) && config.mutate.every((g) => typeof g === "string")) {
+    config.mutate = (config.mutate as string[]).map((g) => (g.startsWith("!") || !g.startsWith(prefix) ? g : g.slice(prefix.length)));
+  }
+  return { report: { ...report, files, ...(config ? { config } : {}) }, dropped };
 }
 
 // #503: a target's suite can pass ONLY under a specific process env (ATC: a timezone-sensitive
