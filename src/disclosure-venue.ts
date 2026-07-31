@@ -33,7 +33,7 @@
 //    REASON: a bound phrased outside the 15 marker phrases is still invisible to this gate's PASS/FAIL, so a green run is a statement about that vocabulary and not about the rule set; what it is not is SILENT, because the residual is counted and each residual rule triaged
 //    KIND: empirical
 //    PROVENANCE: MEASURED 2026-07-28 — `pnpm exec tsx src/cli/validate-disclosure-venue.ts --residual-count` reports 6 rules carrying bound-ish prose the markers do not recognise, against 40 rules the markers do recognise (up from 13 before this widening).
-//    FALSIFIER: test "$(pnpm exec tsx src/cli/validate-disclosure-venue.ts --residual-count 2>/dev/null | tail -1)" = "0" && exit 0 || exit 1
+//    FALSIFIER: test -f src/cli/validate-disclosure-venue.ts || exit 127; pnpm exec tsx src/cli/validate-disclosure-venue.ts --residual-count > /tmp/harvey-residual-count.txt 2>/dev/null || exit 127; test "$(tail -1 /tmp/harvey-residual-count.txt)" = "0" && exit 0 || exit 1
 //    TOUCHES: src/scan/rules/semgrep src/disclosure-venue.ts
 //
 // 2. CORRESPONDENCE IS APPROXIMATED, NOT JUDGED — a marker in the message PLUS at least one
@@ -77,7 +77,7 @@
 //    REASON: a bound written in a TS/AST detector's source comments is outside what any gate reads — this one parses `src/scan/rules/semgrep/*.yml` and src/conditional-scan.ts checks call-shape, not prose — so neither says anything about whether a detector's recorded limit reaches the finding it bounds
 //    KIND: empirical
 //    PROVENANCE: MEASURED 2026-07-28 — #1330's population grep re-run over src/scan + src/detectors still reports comment lines declaring a bound in files no disclosure gate parses; the conditional-omission half it also covered is now gated (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`).
-//    FALSIFIER: grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors | grep -qv '\.test\.ts$' && exit 1 || exit 0
+//    FALSIFIER: test -d src/scan || exit 127; test -d src/detectors || exit 127; grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors > /tmp/harvey-ts-bounds.txt 2>/dev/null; grep -qv '\.test\.ts$' /tmp/harvey-ts-bounds.txt && exit 1 || exit 0
 //    TOUCHES: src/scan src/detectors
 //
 // A lower bound on the defect, not a census of it.

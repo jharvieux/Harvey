@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import { CLAIM_BASELINE } from "./unstructured-claims-baseline.js";
 import {
   DEFAULT_ROOTS,
-  claimCensusByFile,
+  attributeClaim,
   claimCounts,
-  claimRatchetBreaches,
+  claimDrift,
   claimTotal,
   collectReasons,
   censusScope,
@@ -371,45 +371,85 @@ describe("the repo's own recorded reasons (the gate `pnpm verify` enforces)", ()
   });
 });
 
-describe("the claim ratchet (#1318) — the census may fall, never rise", () => {
-  it("passes when every file is at or under its baseline", () => {
-    expect(claimRatchetBreaches({ "a.md": 3, "b.md": 1 }, { "a.md": 3, "b.md": 0 })).toEqual([]);
+describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never gain a member", () => {
+  const claimsOf = (census: Record<string, string[]>) =>
+    Object.entries(census).flatMap(([file, texts]) => texts.map((text, i) => ({ file, line: i + 1, text })));
+
+  it("passes when every file's claims are a subset of its baseline", () => {
+    expect(claimDrift({ "a.md": ["x", "y", "z"], "b.md": ["q"] }, claimsOf({ "a.md": ["x", "y", "z"] }))).toEqual([]);
   });
 
   // The negative control. A per-file baseline is the point: a single global total is satisfied by
   // deleting a claim here and adding one there, leaving the population untouched.
   it("fails on one added claim line, and on a swap that leaves the total unchanged", () => {
-    expect(claimRatchetBreaches({ "a.md": 3 }, { "a.md": 4 })).toEqual([{ file: "a.md", baseline: 3, now: 4 }]);
-    expect(claimRatchetBreaches({ "a.md": 3, "b.md": 1 }, { "a.md": 2, "b.md": 2 })).toEqual([{ file: "b.md", baseline: 1, now: 2 }]);
+    expect(claimDrift({ "a.md": ["x"] }, claimsOf({ "a.md": ["x", "new"] })).map((d) => d.file)).toEqual(["a.md"]);
+    expect(claimDrift({ "a.md": ["x", "y"], "b.md": ["q"] }, claimsOf({ "a.md": ["x"], "b.md": ["q", "r"] })).map((d) => d.file)).toEqual(["b.md"]);
+  });
+
+  // #1399's fourth criterion, and the experiment its verifier ran and watched PASS. The count is
+  // identical either side of this edit; only the text moved.
+  it("fails on a REWORD that leaves the count untouched, and pairs the old text with the new", () => {
+    const before = claimDrift({ "a.md": ["the pass cannot run with no live DB"] }, claimsOf({ "a.md": ["the pass cannot run with no live DB"] }));
+    expect(before).toEqual([]);
+
+    const after = claimDrift({ "a.md": ["the pass cannot run with no live DB"] }, claimsOf({ "a.md": ["the pass cannot run lacking a live DB"] }));
+    expect(after).toHaveLength(1);
+    expect(after[0]?.baseline).toBe(after[0]?.now);
+    expect(after[0]?.added.map((c) => c.text)).toEqual(["the pass cannot run lacking a live DB"]);
+    expect(after[0]?.dropped).toEqual(["the pass cannot run with no live DB"]);
+  });
+
+  // Retiring a claim is the direction the ratchet exists to allow, and it must not read as a reword.
+  it("stays green when a claim is deleted outright", () => {
+    expect(claimDrift({ "a.md": ["x", "y"] }, claimsOf({ "a.md": ["x"] }))).toEqual([]);
   });
 
   it("gives a file absent from the baseline a budget of zero, so a new doc full of claims breaches", () => {
-    expect(claimRatchetBreaches({}, { "new.md": 2 })).toEqual([{ file: "new.md", baseline: 0, now: 2 }]);
+    expect(claimDrift({}, claimsOf({ "new.md": ["a", "b"] })).map((d) => d.added.length)).toEqual([2]);
   });
 
   // End-to-end over the real repo with a real claim-shaped line planted, rather than over a hand-
   // built census: proves the vocabulary, the census and the ratchet are actually wired to each other.
-  // toContainEqual, not toEqual: scored against the WHOLE breach list this reddens for any unrelated
-  // breach elsewhere in the repo, which is how it and the row below failed together in run
-  // 30313783920 and named neither cause. A control has to isolate the rule it names.
+  // Filtered to the planted file, not scored against the whole list: scored globally this reddens for
+  // any unrelated breach elsewhere in the repo, which is how it and the row below failed together in
+  // run 30313783920 and named neither cause. A control has to isolate the rule it names.
   it("fires when a claim-shaped comment is planted in a real repo file", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const planted = sources.map((s) => (s.file === "CLAUDE.md" ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
-    const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
-    const budget = CLAIM_BASELINE["CLAUDE.md"]?.length ?? 0;
-    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toContainEqual({ file: "CLAUDE.md", baseline: budget, now: budget + 1 });
+    const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === "CLAUDE.md");
+    expect(row?.added.map((c) => c.text)).toEqual(["This cannot be measured by any existing tier."]);
   });
 
   // #1347's fourth criterion, and the half the .md control above cannot speak to: the ratchet gated
   // prose only, so a claim planted in a source COMMENT moved nothing. Planted in a real `.ts` file
-  // under the real vocabulary, and scored against the whole breach list so only this file goes red.
+  // under the real vocabulary.
   it("fires when a claim-shaped comment is planted in a real .ts file", () => {
     const target = "src/alert-paths.ts";
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const planted = sources.map((s) => (s.file === target ? { ...s, text: `${s.text}\n// A planted claim: this cannot be measured by any existing tier.\n` } : s));
-    const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
-    const budget = CLAIM_BASELINE[target]?.length ?? 0;
-    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toContainEqual({ file: target, baseline: budget, now: budget + 1 });
+    const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === target);
+    expect(row?.added.map((c) => c.text)).toEqual(["// A planted claim: this cannot be measured by any existing tier."]);
+  });
+
+  // #1399's criterion 4 against the REAL repo and the REAL committed baseline, not a hand-built one:
+  // take a claim this repo actually has on the baseline, reword it in place, and require the gate to
+  // go red. This is the experiment that used to pass.
+  it("fires when a real baselined claim is reworded in place in a real repo file", () => {
+    const target = "src/recorded-reasons.ts";
+    const recorded = CLAIM_BASELINE[target] ?? [];
+    expect(recorded.length, `${target} carries baselined claims to reword`).toBeGreaterThan(0);
+    const original = recorded[0] as string;
+
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
+    const planted = sources.map((s) => (s.file === target ? { ...s, text: s.text.replace(original, `${original} — reworded in place`) } : s));
+    const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === target);
+
+    expect(row?.now, "the reword leaves the count identical").toBe(row?.baseline);
+    expect(row?.added.map((c) => c.text)).toEqual([`${original} — reworded in place`]);
+    expect(row?.dropped).toEqual([original]);
   });
 
   // The scale trap #1347 asks to decide first: `.ts` carries 767 claim-shaped lines to `.md`'s 274,
@@ -423,10 +463,39 @@ describe("the claim ratchet (#1318) — the census may fall, never rise", () => 
 
   it("holds the committed baseline over this repo right now", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
-    const census = claimCensusByFile(untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
-    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toEqual([]);
+    const claims = untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
+    expect(claimDrift(CLAIM_BASELINE, claims)).toEqual([]);
     // A baseline that drifted to zero would pass the line above forever while measuring nothing.
     expect(claimTotal(claimCounts(CLAIM_BASELINE))).toBeGreaterThan(100);
+  });
+
+  // #1401 — the breaching row says where it came from, because repo-wide scoring means it can sit in
+  // a file this branch never opened. The three states are distinguishable or the output is a guess.
+  describe("attributeClaim — a row this branch inherited is not a row it wrote", () => {
+    const claim = { file: "src/x.ts", line: 12, text: "// this cannot be measured" };
+    const blame = () => ({ sha: "aaa111", subject: "aaa111 an earlier commit" });
+
+    it("marks a row blamed to a commit on this branch as AUTHORED here", () => {
+      expect(attributeClaim(claim, blame, new Set(["aaa111"]))).toEqual({ known: true, sha: "aaa111", subject: "aaa111 an earlier commit", authoredHere: true });
+    });
+
+    it("marks a row blamed to a commit outside the branch range as INHERITED", () => {
+      expect(attributeClaim(claim, blame, new Set(["bbb222"]))).toEqual({ known: true, sha: "aaa111", subject: "aaa111 an earlier commit", authoredHere: false });
+    });
+
+    // A shallow checkout blames every line to one grafted commit, so it would report EVERY row as
+    // authored here — a confident wrong answer, which is worse than the stated absence.
+    it("refuses to attribute anything when the branch range is unknowable, and says why", () => {
+      const origin = attributeClaim(claim, blame, undefined);
+      expect(origin.known).toBe(false);
+      expect(origin.known === false && origin.why).toContain("shallow checkout");
+    });
+
+    it("says so when the line has no commit yet rather than inventing one", () => {
+      const origin = attributeClaim(claim, () => undefined, new Set(["aaa111"]));
+      expect(origin.known).toBe(false);
+      expect(origin.known === false && origin.why).toContain("src/x.ts:12");
+    });
   });
 
   // #1318's third criterion. A breach that reprints every claim in the file is the guessing game it

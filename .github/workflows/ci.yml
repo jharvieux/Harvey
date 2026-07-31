@@ -254,7 +254,32 @@ jobs:
         if: matrix.shard == 2
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
-      # #1509: the two scored gates above ride inside `if: matrix.shard == N`, and a condition that
+      # #1491 WITHDRAWN from this shard (2026-07-31), and the reason is recorded rather than left as
+      # an absent step. A `supabase/setup-cli@v1` + `supabase start -x vector,logflare` pair landed
+      # here to give `validate-connected` its first CI cadence, and the stack never came up:
+      #
+      #   failed to read file: open targets/calibration/supabase/functions/admin-refund/index.ts:
+      #   no such file or directory
+      #
+      # `targets/calibration/supabase/config.toml` declares `[functions.admin-refund]` (the
+      # P-EDGEFN-VERIFY-JWT-OFF plant, which is a config-only fixture by design — the detector reads
+      # config.toml, not the handler) and `[functions.user-profile]` (its negative control), and
+      # NEITHER has a directory in git. A current Supabase CLI refuses to start on a declared function
+      # with no source; the 2.102.0 on the authoring machine tolerates it, which is why this shipped
+      # green locally and red in CI.
+      #
+      # Fixing it properly means either adding two real Edge Function directories to the calibration
+      # fixture — which changes the scanned corpus, so it drags in a dry-run regeneration and a
+      # re-score of the plant it exists to serve — or pinning the CLI to a version chosen for
+      # tolerating a broken fixture. Neither belongs in a PR whose subject is alert paths, so the
+      # steps are removed rather than made `continue-on-error`: a live-stack gate that is allowed to
+      # fail is a green shard that measured nothing, which is the exact defect #1509's liveness
+      # assert below exists to catch. `validate-connected` is BACK to `cadence: none` in
+      # src/scored-gates.ts with the reason above and a falsifier, so `validate-scored-gates` reports
+      # NO CADENCE — the registry must not assert a venue that has never once executed. #1491 stays
+      # open with the measured cause on it.
+
+      # #1509: the scored gates above ride inside `if: matrix.shard == N`, and a condition that
       # stopped matching would retire them in complete silence — the shape #1301/#1288 found when each
       # ran in no workflow at all. `expect` is matrix-dependent for the same reason: shard 1 must
       # prove the calibration gate ran, shard 2 the source-recall gate, and neither can be satisfied
@@ -295,6 +320,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install actionlint
         run: |
+          set -euo pipefail
           curl -fsSL -o actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -

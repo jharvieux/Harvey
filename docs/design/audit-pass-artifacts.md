@@ -150,7 +150,7 @@ The four states the scope statement distinguishes, none of which is silence:
 > REASON: the M1 semantic pass (/vuln-scan → /triage) has no CLI Harvey's own code invokes — it is a Claude Code skill pair run interactively, not a subprocess any src/cli/*.ts can shell out to — so there is no producer file to add a self-emit branch to, and `pnpm record-pass --module M1 --pass semantic --findings triage.json --out <dir>` (the pre-existing generic path, #448) stays the only way to record it.
 > KIND: empirical
 > PROVENANCE: TRIED 2026-07-28 — surveyed every production caller of buildPassArtifact (src/prisma-dynamic.ts, src/dynamic-validate.ts, src/hotspot-scan.ts, src/m6-agreement.ts, src/cli/record-pass.ts); none is, or could mechanically become, a semantic-pass self-emitter, because the pass itself has no CLI entry point to attach one to.
-> FALSIFIER: grep -rl 'buildPassArtifact(' src --include='*.ts' | grep -vE 'record-pass\.ts|prisma-dynamic\.ts|dynamic-validate\.ts|hotspot-scan\.ts|m6-agreement\.ts|audit-pass-artifact\.ts|audit-conservation\.ts|\.test\.ts' | grep -q .
+> FALSIFIER: test -d src || exit 127; grep -rl 'buildPassArtifact(' src --include='*.ts' > /tmp/harvey-bpa-callers.txt 2>/dev/null || exit 127; grep -vE 'record-pass\.ts|prisma-dynamic\.ts|dynamic-validate\.ts|hotspot-scan\.ts|m6-agreement\.ts|audit-pass-artifact\.ts|audit-conservation\.ts|\.test\.ts' /tmp/harvey-bpa-callers.txt > /tmp/harvey-bpa-new.txt; grep -q . /tmp/harvey-bpa-new.txt
 > TOUCHES: src/cli, src/audit-pass-artifact.ts
 
 Exercised both directions 2026-07-28: exits 1 (non-zero) as committed; exits 0 against a planted

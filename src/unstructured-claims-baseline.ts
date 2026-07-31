@@ -182,7 +182,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/design/m6-simplification-eval.md": [
     "and a documented FP/negative class) — M6 just can't be scored by a tool the way a Semgrep rule",
-    "replacement to use — has no `Finding[]`-emitting scanner, so it cannot plug into",
     "| 4 | 2026-07-16 | Claude Fable 5 (a second, distinct fresh-context subagent), the packet as the sole input, against the seven-file corpus (M6-N-SEAM added, #325) | 4/4 | **2/3** | the new seam negative spared for the designed reason; `framework-adapter.ts` flagged on a new, self-rated-low-confidence argument the packet gave it no way to check — see §3.4 |",
     "This reviewer cannot certify which signal it actually used. Both the labels and the genuine",
     "so `InvoicePageAdapter` cannot be called by the framework at all, the interface has one",
@@ -240,6 +239,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "**What stays prose.** The rule also applies to PR bodies and issue comments, which this gate cannot",
     "is protected\"*) or the object of a prohibition (*\"cannot edit `<path>`\"*, *\"a supervised path like",
     "A live-only falsifier cannot hard-code its target: the crAPI gateway URL, the external SecBench",
+    "### A falsifier whose lookup CANNOT RUN exits **127**, never 1 and never 2 (#1426)",
+    "- a **pure existence test** (`test -f X`, `ls X`) has no cannot-run state distinct from its answer:",
+    "down: blocker holds → non-zero but not 127; blocker gone → 0; cannot run → 127. A falsifier nobody",
+    "has watched exit 0 is indistinguishable from one that cannot.",
     "`REASON: planted claim with no way to re-test it` / `PROVENANCE: ASSUMED 2026-07-27`, which tripped",
     "- The gate **counts** the empirical reasons drift cannot watch, and names them. Silence from a reason",
     "the gate cannot pass on an empty set (the `requires-live-run: 0` failure of #345). Each #1319 rule",
@@ -304,11 +307,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/free-tier-scope.md": [
     "The free (mechanical) tier produces **indicators, not verdicts.** It reads source and reports what the code *indicates* — it does not, and structurally cannot, prove that a finding is reachable or exploitable in production. That gap between **indicated** (free, mechanical) and **proved** (paid: semantic cross-file review, connected read-only confirmation, dynamic pen-test) is the product's spine, not a disclaimer to bury.",
-    "**What this means for how the free report reads:** a strong free result is a genuine head start; a thin free result on an evasive target is **not a clean bill of health** — it is exactly where the paid tiers earn their keep. The free scan's job is to be honestly useful and to make that boundary legible, so \"static analysis indicates X; confirm it by…\" is the natural bridge to paid confirmation, not a hedge. Where the free tier is silent on a whole class — cross-file authorization, live RLS effect, exploitability — it is silent because it could not look, and it says so (see the ceiling and reserved-for-paid sections below). **The mechanically-impossible classes are not gaps to apologize for; they are the paid tier's remit** — the concrete \"indicated vs proved\" upsell for each is spelled out in *Explicitly reserved for paid*.",
     "— so a module that did not run cannot disappear into \"no results.\" Prefer the `run-audit` form when",
     "## What source-only structurally cannot see (the mechanical ceiling)",
-    "**Not every mechanical miss is the ceiling, though.** Some are *closeable* rule gaps — a single-function shape a new detector could catch — and those are tracked as improvement issues, not framed as paid-only (measurement docs' per-target gap analyses distinguish the two; the closeable ones filed under #868 are the storage-bucket, PII-aware `USING(true)`, and verbose-error passes). The upsell is only for what an AST *structurally cannot decide* — intent, cross-file reachability, and live/exploitability — never for a mechanization we simply haven't shipped.",
-    "- **Cross-file authorization (the semantic pass):** the dataflow the mechanical tier structurally cannot follow — see the ceiling section above. *\"We read the route end to end, not one function at a time.\"*",
     "- **M8 mutation testing:** the free tier reads tests statically; the paid pass runs the suite against mutated code to find the tests that cannot fail. Needs a runnable suite, so it is not source-only.",
   ],
   "docs/go-no-go.md": [
@@ -437,11 +437,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "\"Don't know\" is itself a finding: unverified security posture. Tag it taxonomy `Config`, severity",
   ],
   "SESSION.md": [
+    "staleness, is why the claim cannot stand. Had 1.3x been right, a re-measure would have appeared to",
     "- **#1318's claim ratchet** failed `verify` on the word *\"cannot\"* in a comment defending that guard.",
     "invariant test varies only one linked PR, so it cannot see it. Population 2 of the last 100 closed.",
     "and **it cannot tell which.** The PR contains #1306 (\"N+1 still fires on seed/build scripts\"), so a −1",
     "6. M7's false-positive floor target scores **0% precision** — the control cannot fail in the",
-    "| **Site redeploy (#1520)** | **HOLD until the end of the sweep.** Nothing deploys before then. Consequence to remember: #742 cannot close and `site-smoke` against production stays red until it happens, both by design rather than by defect. |",
     "| **#1305 option (b)** (2026-07-30) | (b) asked for a ruling that the free tier stays M1-mechanical-only; the 2026-07-28 rulings answered in the OPPOSITE direction. Foreclosed in substance, unstated in words — and the acceptance gate reads it as an open criterion, so **#1305 cannot close until it is formally withdrawn.** Proposed wording on the issue. |",
     "- **PR #1406** (reason registry, `#1311`/`#1349`/`#1253`). **Never verified** — the operator halted new agents before its acceptance verifier was dispatched. **Do not merge on the executor's own claim**; every other PR this sweep had a verifier and 12 of 19 issue-verdicts moved as a result.",
   ],
@@ -478,8 +478,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/audit-coverage.ts": [
     "// The rule it enforces: a module that cannot run is recorded `partial`/`requires-live-run` WITH",
     "// reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).",
-    "// parity test is now that reader, so a wrong value cannot sit here waiting to be adopted as truth.",
-    "// production\"), a module whose MINIMUM environment is anything but \"source\" cannot be free — so",
     "// cannot claim full module coverage on the strength of a module that has never produced output.",
     "// recording a reason. This cannot be fixed by a reason; only by running the module.",
     "// we can't know which is true, so refuse to pick rather than let a \"ran\" mask a gap.",
@@ -540,7 +538,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/cli/dry-run-scorecard.ts": [
     "// WITH its reason — an unlisted bug can't appear in a tally. replayId is the replay registered in",
-    "// (the FK-integrity guard that makes drift structurally impossible), and the \"none\" tier maps its",
+    "// structurally impossible), and the \"none\" tier maps its accepted no-mechanical-rule gap to a",
   ],
   "src/cli/dry-run.ts": [
     "// answer; a migration-SQL-only feed cannot distinguish \"default, never touched\" from \"explicitly",
@@ -809,6 +807,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/epic-builder/session.ts": [
     "// story is ignored (it can't constrain ordering).",
+  ],
+  "src/falsifier-exit-codes.test.ts": [
+    "//   • a PURE EXISTENCE TEST (`test -f X`, `ls X`) has no cannot-run state distinct from its answer.",
   ],
   "src/findings.ts": [
     "// Shown verbatim in the deliverable — a higher severity the client cannot trace back to a table",
@@ -1554,7 +1555,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// the reviewer cannot tell them apart. What it cannot see is that another module ALREADY decided —",
   ],
   "src/scan/supabase.ts": [
-    "// That endpoint's exact request/response envelope was NOT independently re-verified against",
     "// auth config), which is not held in Postgres, so a local connection cannot answer their question.",
   ],
   "src/scan/supply-chain.ts": [

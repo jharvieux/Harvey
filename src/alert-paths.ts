@@ -45,16 +45,30 @@ export interface ProvenBy {
   run: string;
   issue: number;
   at?: string;
+  /**
+   * Git blob sha (`git rev-parse HEAD:.github/actions/alert-issue/find-or-update.sh`) of the
+   * shared `find_or_update` implementation at the moment this path was drilled (#1604). Every
+   * converted path's alert step runs through that one script, so a change to it — #1594 and
+   * #1602 both landed one without re-drilling the other six markers — makes every OTHER entry's
+   * `provenBy` a claim about code that no longer exists, with nothing to notice it. Optional
+   * because `unconverted` entries are inlined, not routed through the shared script, and older
+   * entries predate the field.
+   */
+  sourceSha?: string;
 }
 
-// REASON: a brand-new alerting workflow's drill is not dispatchable until the workflow file is on the DEFAULT branch, so its alert path has no way to be proven before it merges — which is why `pendingProof` exists at all rather than every new path simply being drilled first
-// KIND: empirical
-// PROVENANCE: TRIED 2026-07-28 — `gh workflow run secbench.yml --ref feature/secbench-cadence -f alert_drill=true` against the pushed-but-unmerged branch, three ways (by file, by name, and raw `POST .../workflows/secbench.yml/dispatches`). GitHub answers verbatim: `HTTP 404: workflow secbench.yml not found on the default branch`. Operator ruling the same day: land the path unproven, drill immediately after merge, record the run id and delete the hatch.
-// FALSIFIER: command -v gh >/dev/null 2>&1 || exit 127; gh api repos/jharvieux/Harvey >/dev/null 2>&1 || exit 127; gh api "repos/jharvieux/Harvey/contents/.github/workflows/secbench.yml?ref=main" >/dev/null 2>&1 && exit 0 || exit 1
-// TOUCHES: .github/alert-paths.json .github/workflows/secbench.yml
+// A REASON block sat here from #1288 until 2026-07-31 (#1422), recording why `pendingProof` exists:
+// GitHub refuses `workflow_dispatch` for a workflow file that is not yet on the DEFAULT branch
+// (TRIED 2026-07-28, three ways — `HTTP 404: workflow secbench.yml not found on the default
+// branch`), so a brand-new alerting workflow's drill has to wait for its own merge. Its falsifier
+// was deliberately self-retiring — it exited 0 the day `secbench.yml` landed on main — and the
+// remedy it named has been PERFORMED: drill run 30376371298 (2026-07-28), drill issue #1430 under
+// the `ci-secbench-alert` marker, recorded below as that path's `provenBy`. So the block is
+// discharged rather than weakened.
 //
-// The falsifier above is deliberately self-retiring: the day secbench.yml lands on main it exits 0,
-// reasons-drift reports this row STALE, and the remedy is the drill run this hatch was opened for.
+// The durable fact it recorded is not lost: `_why` in .github/alert-paths.json states it for the
+// registry, and `PendingProof.why` is a REQUIRED field, so every future hatch restates it at its own
+// site with its own tracking issue rather than inheriting this one's text.
 //
 /**
  * The one disclosed way an alert path may sit on `main` unproven (#1288, operator ruling
@@ -231,6 +245,42 @@ export function checkDisclosureTracking(registry: AlertPathRegistry, state: (iss
         : `${row.what}, tracked by #${row.tracking} — which is ${s}. The disclosure now points at nothing, so a scheduled failure here raises no alarm and appears in no tally. Give it an alert path or re-point the disclosure.`,
     }];
   });
+}
+
+/** The workflow name the synthetic hatch row carries, so a reader never mistakes it for a real one. */
+export const SYNTHETIC_HATCH = "(synthetic — no live hatch to seed)";
+
+/**
+ * `--seed-closed-tracking` is checkDisclosureTracking's negative control, and its POPULATION is the
+ * hatch rows — which are meant to trend to zero. #1333 emptied scheduledWithoutAlertPath and took
+ * that population from 7 to 1. At zero, seeding CLOSED over an empty list yields no violation, the
+ * CLI exits 0, and alert-paths.yml's control step reports "the control failed to fail" about a
+ * control that had nothing to fail on: a limit with a population of zero is a guess, not a limit.
+ *
+ * So the control supplies its own row rather than reading one. What it asserts — that a CLOSED
+ * tracker is rejected — is a property of the function, and holds whether or not a live hatch exists
+ * today. The caller is expected to say out loud when this fired, because a synthetic pass proves
+ * nothing about the current registry.
+ */
+export function seedClosedTrackingPopulation(registry: AlertPathRegistry): AlertPathRegistry {
+  const live = registry.scheduledWithoutAlertPath.length + registry.paths.filter((p) => p.pendingProof).length;
+  if (live > 0) return registry;
+  return { ...registry, scheduledWithoutAlertPath: [{ workflow: SYNTHETIC_HATCH, tracking: 1333 }] };
+}
+
+/**
+ * #1604's fifth acceptance line: make the staleness it found DETECTABLE rather than something a
+ * reviewer has to notice by reading `find-or-update.sh`'s own git log. Reported INFORMATIONALLY,
+ * not folded into `checkAlertPaths`'s violations — the operator decision recorded in #1604's PR
+ * body was to surface drift rather than block every future PR on a full re-drill of every
+ * marker (that would need `workflow_dispatch` on all six-plus paths before an unrelated
+ * find-or-update.sh change could merge). A path with no recorded `sourceSha` predates the field
+ * and is silently skipped, not reported stale.
+ */
+export function staleProofs(registry: AlertPathRegistry, currentSourceSha: string): { marker: string; recordedSha: string }[] {
+  return registry.paths
+    .filter((p): p is typeof p & { provenBy: ProvenBy & { sourceSha: string } } => !!p.provenBy?.sourceSha && p.provenBy.sourceSha !== currentSourceSha)
+    .map((p) => ({ marker: p.marker, recordedSha: p.provenBy.sourceSha }));
 }
 
 /**

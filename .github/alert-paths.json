@@ -16,65 +16,87 @@
     "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted.",
     "",
     "#1288 (2026-07-28) added `pendingProof` \u2014 the one disclosed way a path may sit here unproven.",
-    "A drill can only be dispatched against a workflow that is ALREADY on the default branch, so a",
-    "brand-new alerting workflow cannot be proven before it merges; without a hatch, no new alert",
-    "path could ever be added. It is built to fail loud, not open: `tracking` must name an OPEN",
-    "issue (re-read by --labels), the marker label is excluded from expectedLabels while pending",
-    "BECAUSE its absence is the evidence, and pendingProof and provenBy are mutually exclusive."
+    "It is built to fail loud, not open: `tracking` must name an OPEN issue (re-read by --labels),",
+    "the marker label is excluded from expectedLabels while pending BECAUSE its absence is the",
+    "evidence, and pendingProof and provenBy are mutually exclusive.",
+    "",
+    "#1333 (2026-07-31) NARROWED the reason above, which was too broad and had gone stale into a",
+    "standing excuse. It read: `a drill can only be dispatched against a workflow that is ALREADY on",
+    "the default branch, so a brand-new alerting workflow cannot be proven before it merges`. Only",
+    "the first clause survives measurement. What GitHub actually requires is that the workflow FILE",
+    "exist on the default branch (#1288's TRIED evidence is a 404 on a file that did not: `HTTP 404:",
+    "workflow secbench.yml not found on the default branch`). It does NOT require the INPUTS, JOBS or",
+    "STEPS to be there \u2014 a workflow_dispatch run executes the copy on the `--ref` you name, so a",
+    "newly-declared `alert_drill` input is dispatchable from the branch that declares it. MEASURED",
+    "2026-07-31, four times on an unmerged branch, each dispatch accepted and each run executing the",
+    "branch's copy of the drill step: runs 30605765391, 30605813952, 30605818422, 30605815019. The",
+    "422 recorded in alert-paths.yml's header (`Unexpected inputs provided: [\"alert_drill\"]`) did",
+    "not reproduce. Consequence: a NEW alert path in an EXISTING workflow file needs no hatch at all",
+    "\u2014 drill it on the branch before you ask for review. The hatch remains for the genuine case, a",
+    "workflow file that does not yet exist on main.",
+    "The same measurement discharged two hatches that had simply outlived their reason: free-recall",
+    "and semantic-freshness had both long since merged, so `cannot be proven before it merges` was",
+    "true when written and false when read. Both drilled 2026-07-31 and recorded below."
   ],
   "paths": [
     {
       "workflow": ".github/workflows/conservation.yml",
       "marker": "ci-conservation-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331405114",
-        "issue": 1390,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607129629",
+        "issue": 1634,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "marker": "ci-corpus-drift-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331544561",
-        "issue": 1393,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607137067",
+        "issue": 1635,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/reasons-drift.yml",
       "marker": "ci-reasons-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331546673",
-        "issue": 1392,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607140427",
+        "issue": 1636,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-heavy-cli-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331545597",
-        "issue": 1395,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607143343",
+        "issue": 1639,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "ci-owasp-watch-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30331547885",
-        "issue": 1394,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607146192",
+        "issue": 1637,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/secbench.yml",
       "marker": "ci-secbench-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30376371298",
-        "issue": 1430,
-        "at": "2026-07-28"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607149170",
+        "issue": 1638,
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
@@ -83,34 +105,71 @@
       "provenBy": {
         "run": "https://github.com/jharvieux/Harvey/actions/runs/30597869743",
         "issue": 1601,
-        "at": "2026-07-31"
+        "at": "2026-07-31",
+        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
       }
     },
     {
       "workflow": ".github/workflows/free-recall.yml",
       "marker": "ci-free-recall-alert",
-      "pendingProof": {
-        "why": "free-recall.yml is new in #1185 and a drill can only be dispatched against a workflow already on the default branch, so this path cannot be proven before it merges.",
-        "tracking": 1536,
-        "since": "2026-07-30"
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605913478",
+        "issue": 1626,
+        "at": "2026-07-31"
       }
     },
     {
       "workflow": ".github/workflows/semantic-freshness.yml",
       "marker": "ci-semantic-freshness-alert",
-      "pendingProof": {
-        "why": "semantic-freshness.yml is new in #1270 and a drill can only be dispatched against a workflow already on the default branch, so this path cannot be proven before it merges.",
-        "tracking": 1611,
-        "since": "2026-07-31"
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605914742",
+        "issue": 1625,
+        "at": "2026-07-31"
       }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
       "pendingProof": {
-        "why": "ci.yml's main-red job is new in #1507. The workflow FILE is already on the default branch, but a drill dispatched today runs main's copy of it, which has no main-red job — so this path still cannot be proven before it merges. One dispatch will prove it alongside ci-heavy-cli-alert.",
+        "why": "NOT ATTEMPTED this round, and the constraint is operational, not structural — the previous wording here ('a drill dispatched today runs main's copy of it, which has no main-red job') was measured FALSE on 2026-07-31: a workflow_dispatch run executes the copy on the ref you name, and main-red is on main in any case since #1507. What stops it is cost and timing, not capability: `alert_drill` on ci.yml fails heavy-cli shard 1 to reach main-red through `needs: [verify]`, so proving it means a full red ci.yml run, and #1333 ran during a live merge train where a red run on main is exactly the signal the operator is watching for. One command proves it at a quiet moment: `gh workflow run ci.yml --ref main -f alert_drill=true` — it proves ci-heavy-cli-alert in the same run.",
         "tracking": 1612,
         "since": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/dry-run-drift.yml",
+      "marker": "ci-dry-run-drift-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605818422",
+        "issue": 1622,
+        "at": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/osv-staleness.yml",
+      "marker": "ci-osv-staleness-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605813952",
+        "issue": 1621,
+        "at": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/corpus-m8.yml",
+      "marker": "ci-corpus-m8-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605815019",
+        "issue": 1623,
+        "at": "2026-07-31"
+      }
+    },
+    {
+      "workflow": ".github/workflows/alert-paths.yml",
+      "marker": "ci-alert-paths-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30605765391",
+        "issue": 1620,
+        "at": "2026-07-31"
       }
     }
   ],
@@ -125,22 +184,13 @@
       }
     }
   ],
-  "scheduledWithoutAlertPath": [
-    {
-      "workflow": ".github/workflows/alert-paths.yml",
-      "tracking": 1333
-    },
-    {
-      "workflow": ".github/workflows/dry-run-drift.yml",
-      "tracking": 1333
-    },
-    {
-      "workflow": ".github/workflows/osv-staleness.yml",
-      "tracking": 1333
-    },
-    {
-      "workflow": ".github/workflows/corpus-m8.yml",
-      "tracking": 1333
-    }
-  ]
+  "_scheduledWithoutAlertPath": [
+    "Empty since #1333 (2026-07-31), and that is the point of leaving the key here rather than",
+    "deleting it: this is the ONE hatch in this gate that fails OPEN. A scheduled workflow listed",
+    "here goes red on a branch nobody watches and raises nothing; only the tracking issue carries it,",
+    "which is why checkDisclosureTracking re-reads that issue and fails when it is closed. The four",
+    "workflows that sat here — alert-paths, dry-run-drift, osv-staleness, corpus-m8 — now alert and",
+    "are recorded above with their drill runs."
+  ],
+  "scheduledWithoutAlertPath": []
 }
