@@ -307,6 +307,111 @@ export function checkMigrationRlsBypass(dir: string): Finding[] {
   return findings;
 }
 
+// #1370 SB-RLS-CMDGAP-<table> — the permission MATRIX read off migration SQL: table × command × role.
+//
+// #1046 retired the free tier's advertised "permission-matrix gaps" capability with this sentence in
+// docs/free-tier-scope.md: "Whether the roles × resources matrix as a whole has a hole is a question
+// about intended authority, not about code shape". #1370 split it, and the split is the point.
+// WHICH CELLS THE MATRIX OUGHT TO CONTAIN is intended authority and stays with the semantic pass.
+// WHICH CELLS EXIST is pure code shape, and parseLivePolicies has already produced it on every
+// Supabase scan since #937: each policy carries `cmd` (the FOR clause, defaulting to ALL) and
+// `roles` (the TO clause, defaulting to ["public"]).
+//
+// WHAT THE HOLE ACTUALLY MEANS — and #1370's own issue body states this backwards, so read this
+// rather than it. A missing policy under RLS is FAIL-CLOSED: Postgres denies the command outright
+// for every non-owner, non-BYPASSRLS role. The table does not "look protected while being exposed".
+// The finding is the question that follows: if the application performs that command successfully,
+// it is reaching the table through a path these policies do not govern — a service-role connection,
+// a SECURITY DEFINER function, or the owning role (SB-RLS-NOFORCE-ROLLUP). Tenant isolation for that
+// path is then enforced in application code, which this RLS review does not read. That is worth
+// saying out loud and nothing in the report said it.
+//
+// WHICH EMPTY CELL IS WORTH REPORTING — narrowed 2026-07-31 after the first version cried wolf.
+// The first version reported ANY empty cell, and the corpus caught it: `corpus-drift` run
+// 30634899914 failed mvp-boilerplate's #227 don't-cry-wolf control ("must not accuse a sound repo
+// of a tenancy hole") on 5 tables. MEASURED against a fresh clone of devtodollars/mvp-boilerplate
+// @2aac5c2f: products/prices (`for select using (true)`, Stripe-synced catalogues), subscriptions/
+// checkout_sessions (`for select using (auth.uid() = user_id)`) and users (select + update, both
+// own-row) — every one of them a table whose READ is policed and whose WRITES are server-side by
+// design, which is the DOMINANT arrangement in Supabase apps, not a defect. targets/calibration
+// says the same thing about the population: of the 19 tables the first version reported, 17 were
+// SELECT-only and the other two (nocode_invoices, tautology_articles) were missing writes only.
+//
+// So an uncovered WRITE says nothing on its own: it is indistinguishable from "the client never
+// writes this table through PostgREST", and no migration text separates the two. What IS an
+// internal contradiction in the policy set is the READ direction — a table that grants the client
+// INSERT/UPDATE/DELETE and NO SELECT. Read is the weakest privilege in every model, so a set that
+// hands out a write while withholding it is either an oversight or a statement that reads happen
+// off a second connection; either answer is worth one question. That is the only cell this rule
+// reports, and the finding says so in its own text (#1317's rule: a bound in the comments is a
+// bound in the message).
+//
+// ONE ROW PER TABLE, not the rollup the first version emitted. The rollup existed because the broad
+// rule named 19 tables on targets/calibration alone; the narrowed rule names 0 there and 0 on
+// mvp-boilerplate, so the volume argument #935 makes is gone — and a rollup anchored at whichever
+// gapped table sorts first leaves the corpus with no failing direction: a benign fixture planted to
+// prove this rule stays quiet only ever sees the row if its own table happens to sort first. Each
+// row carries its table's own migration line, so the corpus negative fires on the table it names.
+const RLS_COMMANDS = ["SELECT", "INSERT", "UPDATE", "DELETE"] as const;
+const WRITE_COMMANDS = ["INSERT", "UPDATE", "DELETE"] as const;
+
+export function checkMigrationRlsCommandCoverage(dir: string): Finding[] {
+  const sources = readRlsSqlSources(dir);
+  if (sources.length === 0) return [];
+
+  const rlsOn = new Set([...resolveRlsState(sources).entries()].filter(([, t]) => t.on).map(([name]) => name));
+  const byTable = new Map<string, { cmds: Map<string, Set<string>>; at: string }>();
+  for (const p of parseLivePolicies(readMigrations(dir)).policies) {
+    if (p.schema.toLowerCase() !== "public") continue;
+    const table = p.table.toLowerCase();
+    if (!rlsOn.has(table)) continue;
+    const entry = byTable.get(table) ?? { cmds: new Map<string, Set<string>>(), at: `${p.file}:${p.line}` };
+    for (const cmd of p.cmd === "ALL" ? RLS_COMMANDS : [p.cmd]) {
+      const roles = entry.cmds.get(cmd) ?? new Set<string>();
+      for (const r of p.roles) roles.add(r);
+      entry.cmds.set(cmd, roles);
+    }
+    byTable.set(table, entry);
+  }
+
+  const withGap = [...byTable.entries()]
+    .map(([table, e]) => ({ table, e, missing: RLS_COMMANDS.filter((c) => !e.cmds.has(c)) }))
+    .filter((g) => g.missing.length > 0);
+  const inverted = withGap
+    .filter((g) => !g.e.cmds.has("SELECT") && WRITE_COMMANDS.some((c) => g.e.cmds.has(c)))
+    .sort((a, b) => a.table.localeCompare(b.table));
+  const writeOnlyGaps = withGap.length - inverted.length;
+
+  return inverted.map((g) =>
+    reviewFinding({
+      id: `SB-RLS-CMDGAP-${g.table}`,
+      title: `RLS on public.${g.table} grants the client a write policy but no SELECT policy`,
+      severity: "Medium",
+      category: "Multi-tenant security",
+      taxonomy: "RLS policy set grants a write with no read policy (static permission matrix)",
+      location: g.e.at,
+      evidence:
+        `Command x role for public.${g.table}, read from the live policy set at the end of migration history: ` +
+        RLS_COMMANDS.filter((c) => g.e.cmds.has(c))
+          .map((c) => `${c} (to ${[...g.e.cmds.get(c)!].sort().join(", ")})`)
+          .join("; ") +
+        ` — no policy for ${g.missing.join(", ")}.` +
+        ` SCOPE OF THIS RULE: only a table that grants a WRITE command with no SELECT policy is reported.` +
+        ` A table whose uncovered commands are writes only — read policed, writes server-side — is the standard Supabase arrangement and is not reported` +
+        (writeOnlyGaps > 0 ? `; ${writeOnlyGaps} table(s) in this schema are in that state.` : `.`),
+      question:
+        `Which connection READS public.${g.table}? The policy set lets the client write rows it has no policy to select, so either a read policy is missing by oversight, or reads run over a service-role connection, a SECURITY DEFINER function or the table owner — and that path's tenant scoping is application code this RLS pass does not read.`,
+      impact:
+        "Row security denies a command outright when no policy grants it, so the uncovered SELECT is not an exposure in itself — the rows are unreadable through PostgREST. The exposure question is the read path that must exist somewhere else: a service-role client returns every tenant's rows unless the application filters them, and nothing in these migrations says whether it does.",
+      fix: "Add the SELECT policy if the client is meant to read these rows back (scoped the same way the write policies are), or record that reads are deliberately server-only and confirm the code performing them scopes rows to the caller's tenant itself.",
+      okWhen:
+        "The client genuinely never reads this table — an append-only event or audit sink whose reads happen in server code that filters by tenant — and that filtering has been reviewed.",
+      notOkWhen:
+        "A user-facing route reads this table through the service-role key, or through a SECURITY DEFINER function with no caller check: those rows are not covered by any policy above, and whatever scopes them to one tenant is unreviewed by this pass.",
+    }),
+  );
+}
+
 // #1182 (cipherx CX-10) — storage buckets and storage.objects read policies declared in COMMITTED
 // migration SQL. checkPublicBucketsWithNoPolicies (supabase.ts) reads `select id, name, public from
 // storage.buckets` off a live database (connected tier) and the #560 semgrep rule reads

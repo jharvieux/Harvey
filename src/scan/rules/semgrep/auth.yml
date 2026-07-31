@@ -33,9 +33,15 @@
 # matched function's source), not an AST pattern-not-inside, because Semgrep's
 # metavariable-regex does not constrain which call a wildcard `$GUARD(...)` inside a
 # pattern-not-inside binds to (verified empirically — it suppresses ALL matches, guarded
-# or not). A helper name outside both buckets (e.g. `mustBeOwner()`) is still a false
-# negative here — same class of gap, just not the one evidenced on ATC; see #126 for the
-# `--auth-guards` per-engagement allowlist as a possible follow-up mitigation.
+# or not). A helper name outside both buckets (e.g. `mustBeOwner()`) used to leak through as
+# a FALSE POSITIVE — the route IS guarded and this reported it as unguarded, the same
+# direction as #126's own 122 ATC FPs. (This comment said "false negative" until #1300
+# MEASURED it 2026-07-30: pages/api/widgets/delete.js:4-8 guarded only by `await
+# mustBeOwner(req)` produced harvey-route-noauth. The two directions have opposite fixes, so
+# the wrong word was not cosmetic.) #1300 shipped both of #126's recommendations:
+# discoverAuthGuards (src/scan/auth-guard-discovery.ts) finds guard helpers in the TARGET's
+# own source, and `--auth-guards a,b` supplies names per engagement; both are folded into
+# this clearance test by partitionGuardTokenSuppressed (src/scan/semgrep.ts).
 #
 # #1066 — because those two guards are TEXT matches over the matched function's source, they used to
 # see COMMENTS and STRING LITERALS too: `// TODO: requireAdmin() before shipping` on an
@@ -475,6 +481,91 @@ rules:
       - metavariable-regex:
           metavariable: $FLAG
           regex: (?i)^(is_?admin|is_?superuser|is_?root|is_?owner|admin|superuser|role)$
+
+  # #1373: the PRICE / DISCOUNT / TRIAL-LENGTH members of the same taxonomy class as
+  # harvey-client-trusted-role above (briefs/scan-extras.txt:115 names "a client-supplied price,
+  # discount, trial length, role, or other" as ONE class, not four). Both
+  # docs/design/source-detector-recall.md and src/detectors/app-router.ts declined the whole class
+  # as needing "business context no AST pattern can distinguish" — while the role third had already
+  # shipped mechanically, two days after the comment was written, with none of the machinery the
+  # comment says the class requires. MEASURED 2026-07-31 (semgrep 1.164.0, this ruleset) on one
+  # probe handler carrying both shapes: `req.body.role` -> harvey-client-trusted-role; the three
+  # price/trial reads on the lines below it -> nothing.
+  #
+  # The stated obstacle was precision, and the role rule answers it in its own header: review tier
+  # "absorbs that ambiguity without touching the free count". Same tier, same answer.
+  #
+  # Vocabulary discipline, mirroring the role rule's "unambiguous privilege flag" gate: only fields
+  # a SERVER owns. Deliberately EXCLUDED — `coupon`/`promo_code` (the client is supposed to send the
+  # code and the server validates it), `plan`/`plan_id`/`tier` (the client picks the plan), `seats`/
+  # `quantity` (the client picks how many). Also excluded: bare `amount` and `total`, which are the
+  # canonical bug shape but carry too many benign meanings to name without a payment-sink gate this
+  # rule does not have. That exclusion is a recall bound, stated in the message below.
+  - id: harvey-client-trusted-price
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-602: Client-Side Enforcement of Server-Side Security"]
+      owasp: ["A04:2021 - Insecure Design"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      A price, discount or trial length is read directly from a client-supplied request field. If it
+      reaches a charge, subscription or entitlement write, any caller can set their own price or
+      extend their own trial by adding the field to the request. Re-read the value server-side from
+      the price/plan record identified by the request, never from the request body itself.
+      SCOPE OF THIS CHECK (#1373), so its silence elsewhere is not read as a clean bill of health:
+      it reports the READ of a named money/trial field off the request and does not trace it to a
+      payment sink, so a handler that reads the field only to compare or reject it appears here too.
+      It matches a fixed field vocabulary, so a codebase using other names for the same values is
+      not assessed; bare `amount`, `total` and `quantity` are deliberately outside that vocabulary
+      because they carry too many benign meanings to name without a payment-sink gate.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $REQ.body.$FIELD
+                  - pattern: $REQ.query.$FIELD
+                  - pattern: $REQ.params.$FIELD
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^(req|request)$
+          # The App Router spelling: the body is awaited into a local first, so there is no literal
+          # `req.body` anywhere. Same `pattern-inside` idiom harvey-mass-assignment-bare uses above.
+          - patterns:
+              - pattern: $BODY.$FIELD
+              - pattern-either:
+                  - pattern-inside: |
+                      const $BODY = await $REQ.json();
+                      ...
+                  - pattern-inside: |
+                      let $BODY = await $REQ.json();
+                      ...
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^(req|request|nextReq|nextRequest)$
+          # A "use server" module's exported function is an RPC endpoint, so EVERY parameter it
+          # receives is client-supplied by construction — there is no `req` anywhere and no taint
+          # source to trace, which is why the request-shaped arms above are blind to it. This is the
+          # spelling the one disclosed real-world instance of this class actually has (#215,
+          # vercel/nextjs-subscription-payments @bdd08132 `checkoutWithStripe(price: Price)` reading
+          # `price.trial_period_days`), recorded as a scored MISS in src/scan/real-source-recall.ts.
+          # A local bound inside the function (`const plan = await db…; plan.trial_period_days`) does
+          # NOT match: $P is bound to a parameter identifier by the pattern-inside.
+          - patterns:
+              - pattern: $P.$FIELD
+              - pattern-inside: |
+                  "use server";
+                  ...
+              - pattern-either:
+                  - pattern-inside: |
+                      function $F(..., $P, ...) { ... }
+                  - pattern-inside: |
+                      (..., $P, ...) => ...
+      - metavariable-regex:
+          metavariable: $FIELD
+          regex: (?i)^(price|unit_?price|unit_?amount|price_?cents|amount_?cents|discount|discount_?(percent|amount|rate)|trial_?(days|period_?days|end)|credits|balance)$
 
   # A full DB row (select('*')) is spread directly into a rendered component's props. In a Server
   # Component (no "use client" in this file), every column on that row serializes across the

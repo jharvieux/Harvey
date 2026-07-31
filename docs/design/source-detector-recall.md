@@ -131,11 +131,12 @@ clone). Each entry is one of THIS repo's own filed responsible-disclosure issues
 |---|---|---|---|
 | proposit (`JakeLeoDev/proposit`) | #214 High | invitation-accept `.insert()` trusts a client-supplied `userId` | **NO** |
 | saas-lite (`makerkit/nextjs-saas-starter-kit-lite`) | #219 Low | open redirect, source and sink in different monorepo packages | **NO** |
-| subscription-payments (`vercel/nextjs-subscription-payments`) | #215 Medium | checkout re-derives trial length from a client-supplied price object | **NO** |
+| subscription-payments (`vercel/nextjs-subscription-payments`) | #215 Medium | checkout re-derives trial length from a client-supplied price object | **YES** (review tier, since #1373) |
 
-**MEASURED 2026-07-24: 0/3 (0.0%)** — `pnpm exec tsx src/cli/validate-source-recall.ts --real` (needs
-network + the mechanical binaries). This is a genuinely low, honestly-reported number, and each gap has
-a named, distinct cause (never blended into one "hard" bucket):
+**MEASURED 2026-07-31: 1/3 (33.3%)** — `pnpm exec tsx src/cli/validate-source-recall.ts --real` (needs
+network + the mechanical binaries). It read **0/3 from 2026-07-24 until #1373**. Re-run it rather than
+quoting either figure. This is still a low, honestly-reported number, and each remaining gap has a
+named, distinct cause (never blended into one "hard" bucket):
 
 - proposit's BOLA is an `.insert()` whose tainted value arrives as a **Server Action function
   parameter**, not a `.eq()`-filtered read — outside `bola-owner.ts`'s current pattern. (The file also
@@ -145,13 +146,23 @@ a named, distinct cause (never blended into one "hard" bucket):
 - saas-lite's open redirect crosses a **monorepo package boundary** (the tainted read and the `redirect()`
   sink are two different `packages/`/`apps/` in the same Turborepo) — beyond same-file/same-function
   taint scope.
-- subscription-payments' trial-length trust needs "should this field be re-read server-side?" **business
-  context** no AST pattern can distinguish from the benign re-derivation this same code shape usually is
-  — already named as an open gap by the planted corpus's own `m9-authz.entries.ts` header.
+- subscription-payments' trial-length trust is **CAUGHT since #1373**, at review tier, by
+  `harvey-client-trusted-price` (`src/scan/rules/semgrep/auth.yml`). The sentence that stood here —
+  *"needs 'should this field be re-read server-side?' business context no AST pattern can distinguish
+  from the benign re-derivation this same code shape usually is"* — was **too wide, and was already
+  too wide when written**: the ROLE member of the same taxonomy class (`briefs/scan-extras.txt:115`
+  names price/discount/trial/role as one class) had shipped mechanically two days earlier as
+  `harvey-client-trusted-role`, a ~20-line single-file rule. What actually made the price/trial member
+  reachable was noticing that a `"use server"` module's exported function is an RPC endpoint, so every
+  parameter it receives is client-supplied BY CONSTRUCTION — no taint tracing and no business context
+  required. The precision objection the old sentence raised is real and is answered the same way the
+  role rule answers it: review tier, never the free count. The same claim is still carried, uncorrected,
+  by `src/scan/calibration/m9-authz.entries.ts`'s header — tracked separately, that file was locked by a
+  concurrent batch when this was written.
 
 Like the planted-fixture gate, a recall gap here is **the measurement, not a gate failure** — `--real`
 always exits 0 and reports; it does not fail a build. Distinct from every other number on this page:
-never blend 0/3 into 39/39, or either into the M1 mixed figure (218/221 as measured 2026-07-24 — a
+never blend the real-code figure into 39/39, or either into the M1 mixed figure (218/221 as measured 2026-07-24 — a
 number that moves with every detector that lands, so re-run `validate-calibration` rather than quoting
 it). The real value of this tier is turning
 "real code is presumably harder than what we planted" from an assumption into three itemized, re-testable,
@@ -181,7 +192,7 @@ second, parallel answer key — `M9_SOURCE_TIER_IDS` (5 entries: the 2 `server-c
 a module-tagged and a module-less entry, via `assertM9SourceTierResolvable()`), scored via
 `scoreM9SourceRecall()`, and reported by `validate-source-recall.ts` as its own
 **"M9 SOURCE-CODE (non-taint) recall"** section: distinct rows, distinct positives/negatives, distinct
-pass/fail gate, never blended into the 39/39 headline number or the real-code 0/3. `validate-source-recall.ts`
+pass/fail gate, never blended into the 39/39 headline number or the real-code figure. `validate-source-recall.ts`
 runs `detectAppRouterFindings` itself over the `server-client-leak` fixtures (the same load-and-prefix
 approach `calibration.test.ts`'s `#848` block uses) and merges those findings with the mechanical scan's
 before scoring, since the two detectors' findings come from two different passes.

@@ -24,6 +24,7 @@ import { join, relative } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
+import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-trust.js";
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
 // `<batch>.yml` here (no shared file → conflict-free parallel batches).
@@ -166,15 +167,22 @@ function composeFix(references: string[] | undefined, source: string | undefined
 }
 
 export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
-  return (output.results ?? []).map((r, i) => {
+  const results = output.results ?? [];
+  // #1295: #984's unbuilt half — a free-count tier that rests entirely on trusting a platform-set
+  // header lands at review tier instead, with the routing reason stated on the finding.
+  const headerRouted = platformHeaderTrusted(results);
+  return results.map((r, i) => {
     const meta = r.extra?.metadata;
     const severity = (meta?.harveySeverity as Severity | undefined) ?? severityFromSemgrep(r.extra?.severity);
-    const high = r.extra?.severity === "ERROR" && meta?.confidence === "HIGH" && !isAuditRule(r.check_id);
+    const trustedHeader = headerRouted.has(r);
+    const high =
+      r.extra?.severity === "ERROR" && meta?.confidence === "HIGH" && !isAuditRule(r.check_id) && !trustedHeader;
     const message = r.extra?.message?.trim().split("\n")[0] ?? "Semgrep match";
     // #996: a workflow-file finding is a fact about the CI pipeline, not the app — its own
     // fully-reported non-grading category, with the routing reason stated on the finding.
     const ciWorkflow = CI_WORKFLOW_PATH.test(r.path);
-    const impact = r.extra?.message ?? "See the rule's message for the specific risk.";
+    const base = r.extra?.message ?? "See the rule's message for the specific risk.";
+    const impact = trustedHeader ? base + PLATFORM_HEADER_IMPACT_SUFFIX : base;
     const references = strList(meta?.references);
     return mechanicalFinding({
       id: `SEM-${i + 1}`,
@@ -474,12 +482,33 @@ function isGuardedByToken(r: SemgrepResult, tokenRe: RegExp): boolean {
   return tokenRe.test(stripCommentsAndStrings(span));
 }
 
-export function partitionGuardTokenSuppressed(output: SemgrepOutput): { reported: SemgrepResult[]; guarded: SemgrepResult[] } {
+// #1300 / #126 option (1)+(2): guard helper names that belong to THIS target — discovered from its
+// own source by discoverAuthGuards, plus any supplied per engagement via --auth-guards. Both regexes
+// above are name lists, and a house style outside them (`mustBeOwner()`) produced a false positive
+// on a genuinely guarded route (MEASURED 2026-07-30, pages/api/widgets/delete.js:4-8). Anchored on
+// both sides so a supplied `auth` leaves `authorHistory(` alone.
+// The negative lookbehind is load-bearing, not defensive: without it `\bhandler\s*\(` matches the
+// DECLARATION `export default async function handler(req, res)`, so a route whose own entry point
+// was mistaken for a guard cleared ITSELF. MEASURED 2026-07-31 — that plus the unfiltered discovery
+// dropped 26 rows from the committed dry-run artifact, two of them planted positives.
+function projectGuardRe(names: readonly string[]): RegExp | undefined {
+  const safe = names.filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
+  return safe.length === 0 ? undefined : new RegExp(`(?<!\\bfunction\\s)(?<!\\bclass\\s)\\b(?:${safe.join("|")})\\s*\\(`);
+}
+
+export function partitionGuardTokenSuppressed(
+  output: SemgrepOutput,
+  projectGuards: readonly string[] = [],
+): { reported: SemgrepResult[]; guarded: SemgrepResult[] } {
   const reported: SemgrepResult[] = [];
   const guarded: SemgrepResult[] = [];
+  const projectRe = projectGuardRe(projectGuards);
   for (const r of output.results ?? []) {
     const rule = GUARD_TOKEN_RULES.find((g) => ruleIdMatches(r.check_id, g.ruleId));
-    (rule && isGuardedByToken(r, rule.tokenRe) ? guarded : reported).push(r);
+    const cleared =
+      rule !== undefined &&
+      (isGuardedByToken(r, rule.tokenRe) || (projectRe !== undefined && isGuardedByToken(r, projectRe)));
+    (cleared ? guarded : reported).push(r);
   }
   return { reported, guarded };
 }

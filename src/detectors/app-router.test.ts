@@ -1588,6 +1588,35 @@ describe("import resolution across a workspace (#1353)", () => {
     expect(resolveImport(from, "@acme/utils/src/slugify", allPaths, aliases)).toBe("packages/utils/src/slugify.ts");
   });
 
+  // #1501: #1353 read only `exports` keys carrying a `*`, because that is what rallly declares. An
+  // exports map of LITERAL keys is at least as common (crbnos/carbon's `packages/auth` has eleven)
+  // and resolved to nothing, which cost 107 false High `route action missing authorization check`
+  // rows on that target. Both halves are asserted: the literal key must resolve THROUGH the exports
+  // map (its target is not derivable from the specifier — `./auth.server` lives at
+  // `src/services/auth.server.ts`), and a key the map does not declare must stay unresolved.
+  it("resolves an EXACT, non-wildcard exports subpath through the exports map", () => {
+    const tree = [
+      {
+        path: "packages/auth/package.json",
+        text: JSON.stringify({
+          name: "@acme/auth",
+          main: "./src/index.ts",
+          exports: { ".": "./src/index.ts", "./auth.server": "./src/services/auth.server.ts" },
+        }),
+      },
+      { path: "packages/auth/src/index.ts", text: "export const a = 1;" },
+      { path: "packages/auth/src/services/auth.server.ts", text: "export function requirePermissions() {}" },
+      { path: "apps/web/app/routes/x.tsx", text: "" },
+    ];
+    const paths = new Set(tree.map((f) => f.path));
+    const treeAliases = collectPathAliases(tree);
+    const importer = "apps/web/app/routes/x.tsx";
+    expect(resolveImport(importer, "@acme/auth/auth.server", paths, treeAliases)).toBe("packages/auth/src/services/auth.server.ts");
+    expect(resolveImport(importer, "@acme/auth", paths, treeAliases)).toBe("packages/auth/src/index.ts");
+    // Not declared in `exports` and not present under the package dir — the fallback must not invent it.
+    expect(resolveImport(importer, "@acme/auth/session.server", paths, treeAliases)).toBeUndefined();
+  });
+
   it("does not resolve a third-party package that merely shares a member's prefix", () => {
     expect(resolveImport(from, "@acme/utils-external", allPaths, aliases)).toBeUndefined();
     expect(resolveImport(from, "react", allPaths, aliases)).toBeUndefined();
