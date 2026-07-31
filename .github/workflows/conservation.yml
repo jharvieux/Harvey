@@ -52,10 +52,20 @@
 #                seven checks): 10 of the last 50 commits ran all of them with no possible relevance.
 #                They now run on the daily schedule (which is what upstream drift is a function of)
 #                and on PRs only when the fixtures or their machinery actually move.
-# This also takes #1206's UNRESOLVED flake off the merge path. Its one real failure was in a drift
-# step, root cause still unnamed and un-reproduced in 85 local runs — and this job is now a
-# REQUIRED check, so a flaky step that carries no PR-relevant signal was sitting where it could
-# block a merge for reasons unrelated to the change.
+# This also takes #1206's flake off the merge path — and this job is now a REQUIRED check, so a
+# flaky step that carries no PR-relevant signal was sitting where it could block a merge for reasons
+# unrelated to the change. That flake was ROOT-CAUSED by #1703 (2026-07-31): git >= 2.54 detaches
+# `git maintenance run --auto` after every commit, and one of those background processes repacks and
+# unlinks the loose objects the vitals re-capture seed is still writing to. `src/__fixtures__/
+# vitals-recapture/seed.py` now disables auto maintenance in the throwaway corpus and asserts nothing
+# packed it; the 85 local runs that failed to reproduce it in 2026-07-27 were on git 2.43, which does
+# not detach at all.
+#
+# THE TWO TIERS RUN INDEPENDENTLY, AND THE GATE GOES FIRST (#1703). Steps below the `toolchain`
+# marker use `!cancelled()` rather than GitHub's default `success()`, so a failure in either tier can
+# no longer skip the other — the shape that let a vitals schema-drift failure suppress the gate this
+# context is NAMED for, plus both negative controls and four sibling drift checks, on run
+# 30644789486. Every step still fails the job; nothing is `continue-on-error`.
 
 name: conservation
 
@@ -210,10 +220,6 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/mechanical-binaries
 
-      - name: OSV-scanner fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/osv-fixture-drift.ts
-
       # M3's FULL tier is the `vitals` plugin. Without it hotspot-scan drops to the reduced
       # churn×complexity tier (#807), which computes a ranking but no knowledge-risk analysis — so
       # it structurally cannot produce M3's planted truck-factor-1 row and the gate correctly
@@ -245,43 +251,35 @@ jobs:
           set -euo pipefail
           vitals_cli.py version
 
-      # Captured-fixture schema-drift checks (#1130, mirroring the OSV step above): re-run each pinned
-      # tool against a reproducible seed and assert the FRESH output still satisfies the contract the
-      # committed fixture and its parser depend on (the #1063 invariant). jscpd/knip/lighthouse are
-      # node deps installed by pnpm; trufflehog/semgrep/gitleaks are installed by the mechanical-binaries
-      # action above; vitals is on PATH from the steps above; stryker installs the target's own dep
-      # tree via npx; lighthouse uses the runner's preinstalled Google Chrome via chrome-launcher.
-      # semgrep and gitleaks (#1266) closed the last gap in this family: FIXTURE-INVENTORY.md claimed
-      # "every CAPTURED fixture now has a drift check" while these two had none, because #1165
-      # recaptured them 24 minutes before #1170 landed this family. The two live-only fixtures
-      # (trufflehog VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
-      - name: jscpd fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool jscpd
-      - name: knip fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool knip
-      - name: trufflehog fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool trufflehog
-      - name: vitals fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals
-      - name: Stryker fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool stryker
-      - name: lighthouse fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool lighthouse
-      - name: semgrep fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool semgrep
-      - name: gitleaks fixture schema drift check
-        if: steps.filter.outputs.drift == 'true'
-        run: pnpm exec tsx src/cli/fixture-drift.ts --tool gitleaks
+      # #1703: THE TWO TIERS MUST NOT BE ABLE TO SKIP EACH OTHER, AND THE GATE GOES FIRST.
+      #
+      # Everything above this point is setup: a failure there means nothing below can say anything,
+      # so those steps keep GitHub's default `success()` semantics and correctly abort the job. This
+      # step is the boundary marker. Every step below it runs when the TOOLCHAIN is good, regardless
+      # of whether a sibling step failed — `!cancelled()` rather than `always()`, because this
+      # workflow sets `cancel-in-progress: true` and a superseded run must not spend 20 minutes.
+      #
+      # What this fixes: on run 30644789486 the vitals drift check failed and GitHub skipped
+      # `Conservation gate (must PASS)`, both negative controls, and four of the other eight drift
+      # checks. The required context is named `plant → deliverable, and the produced/delivered
+      # arithmetic` — so a TIME-based upstream schema drift was silently suppressing the CHANGE-based
+      # gate the context is named for, and the run reported red for a reason that had nothing to do
+      # with planting or arithmetic. The tiers are independent by construction (one is a function of
+      # an upstream release, the other of this diff); nothing about that independence survives if one
+      # can skip the other.
+      #
+      # Not separate jobs: the required context IS this job's name, so splitting would move the nine
+      # drift checks into a new context that is not registered as required — silently demoting nine
+      # gates to advisory, which is the #1509 shape. Not `continue-on-error`: that would make a real
+      # drift failure green. Ordering is now gate-then-drift so the 20-minute budget is spent on the
+      # named gate first (Stryker + lighthouse dominate the drift tier's runtime).
+      - id: toolchain
+        name: Toolchain ready — the tier boundary (#1703)
+        if: steps.filter.outputs.relevant == 'true'
+        run: echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Conservation gate (must PASS)
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && !inputs.liveness_drill }}
         run: pnpm exec tsx src/cli/validate-conservation.ts
 
       # #1105: the vitest wiring test for this gate (src/cli/validate-conservation.test.ts) is
@@ -290,21 +288,23 @@ jobs:
       # ("Timeout calling onTaskUpdate", exit 1 with zero failing tests). Run it here instead,
       # alone, with the toolchain already on PATH from the steps above.
       - name: Conservation gate — vitest wiring test (isolated from pnpm verify)
-        if: steps.filter.outputs.relevant == 'true'
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' }}
         env:
           HARVEY_CONSERVATION_E2E: "1"
         run: pnpm exec vitest run src/cli/validate-conservation.test.ts
 
-      - name: Negative control — a seeded producer loss must FAIL the gate
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+      - id: nc_loss
+        name: Negative control — a seeded producer loss must FAIL the gate
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && !inputs.liveness_drill }}
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-loss M7; then
             echo "::error::--seed-loss M7 discarded everything the M7 probe produced and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
             exit 1
           fi
 
-      - name: Negative control — a seeded unaccounted drop must FAIL the ledger
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+      - id: nc_unaccounted
+        name: Negative control — a seeded unaccounted drop must FAIL the ledger
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && !inputs.liveness_drill }}
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-unaccounted; then
             echo "::error::--seed-unaccounted removed a finding from the assembled deliverable with no disposition and the conservation ledger still exited 0. The arithmetic is not being asserted (#1096)."
@@ -316,14 +316,62 @@ jobs:
       # `if:` that quietly stopped matching would retire both controls in silence. Recorded here
       # rather than by the CLI because what is being asserted is that both steps EXECUTED — the CLI
       # runs are supposed to exit non-zero.
+      #
+      # #1703: conditioned on the two control steps BY ID, not on `success()`. `success()` meant "no
+      # earlier step in this job failed", so a drift check nine steps away could silently retire this
+      # record — which is exactly what happened on run 30644789486. By id it records when, and only
+      # when, both controls did their job.
       - name: Record that both negative controls executed
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: ${{ !cancelled() && steps.nc_loss.outcome == 'success' && steps.nc_unaccounted.outcome == 'success' }}
         uses: ./.github/actions/gate-liveness
         with:
           mode: record
           gate: conservation-negative-controls
           units: 2
           scope: "seeded producer loss (--seed-loss M7) + seeded unaccounted drop (--seed-unaccounted), both required to exit non-zero"
+
+      # Captured-fixture schema-drift checks (#1130): re-run each pinned tool against a reproducible
+      # seed and assert the FRESH output still satisfies the contract the committed fixture and its
+      # parser depend on (the #1063 invariant). jscpd/knip/lighthouse are node deps installed by
+      # pnpm; trufflehog/semgrep/gitleaks are installed by the mechanical-binaries action above;
+      # vitals is on PATH from the steps above; stryker installs the target's own dep tree via npx;
+      # lighthouse uses the runner's preinstalled Google Chrome via chrome-launcher.
+      # semgrep and gitleaks (#1266) closed the last gap in this family: FIXTURE-INVENTORY.md claimed
+      # "every CAPTURED fixture now has a drift check" while these two had none, because #1165
+      # recaptured them 24 minutes before #1170 landed this family. The two live-only fixtures
+      # (trufflehog VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
+      #
+      # Each check is independent of the other eight for the same reason it is independent of the
+      # gate: they watch nine DIFFERENT upstream tools. On run 30644789486 vitals failed and Stryker,
+      # lighthouse, semgrep and gitleaks were skipped, so that run is evidence about one tool and
+      # silence about four — the shape a drift check exists to prevent, reached through the CI graph.
+      - name: OSV-scanner fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/osv-fixture-drift.ts
+      - name: jscpd fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool jscpd
+      - name: knip fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool knip
+      - name: trufflehog fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool trufflehog
+      - name: vitals fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals
+      - name: Stryker fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool stryker
+      - name: lighthouse fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool lighthouse
+      - name: semgrep fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool semgrep
+      - name: gitleaks fixture schema drift check
+        if: ${{ !cancelled() && steps.toolchain.outputs.ready == 'true' && steps.filter.outputs.drift == 'true' }}
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool gitleaks
 
       # #1509: without this, a job that died in setup reports the same absence of drift as a job that
       # ran the whole pipeline and found none. `always()` so it still reports after an earlier step
@@ -341,9 +389,11 @@ jobs:
       # Still never fires on PR/push — those failures are already visible on the PR — but
       # `workflow_dispatch` is now permanently in the condition (#1287): an alert path that can only
       # run on a cron nobody can trigger is an alert path nobody can prove works, and this one had
-      # never executed once.
+      # never executed once. EXCLUDED on a liveness drill (#1569): that drill fails the job on
+      # purpose at the liveness assert, so without this clause it would open a REAL
+      # `ci-conservation-alert` issue rather than proving anything about conservation.
       - name: Open or update the conservation tracking issue
-        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-conservation-alert

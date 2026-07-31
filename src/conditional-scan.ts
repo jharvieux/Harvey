@@ -73,11 +73,13 @@ export const CONDITIONAL_SCANS: readonly ConditionalScan[] = [
         path: "scanLocal",
         rowId: "SB-SCOPE-00",
         emitter: "localScopeFinding",
-        omits: [
-          { fn: "checkExposedSchemas", namedInRow: "PostgREST-exposed schemas" },
-          { fn: "checkGraphqlIntrospection", namedInRow: "GraphQL introspection" },
-          { fn: "checkAuthConfig", namedInRow: "GoTrue auth configuration" },
-        ],
+        // #1494 — checkExposedSchemas/checkGraphqlIntrospection now appear in scanLocal's own body
+        // (a REST probe answers them without the Management API), so they are no longer omitted by
+        // this static, text-level definition; only checkAuthConfig (which genuinely needs the
+        // Management API) remains. The row still discloses the un-probed 3-class case at runtime —
+        // see localScopeFinding's `probed` branch in src/scan/supabase.ts — a runtime condition this
+        // static, text-level gate has no visibility into, unlike an omitted call.
+        omits: [{ fn: "checkAuthConfig", namedInRow: "GoTrue auth configuration" }],
       },
     ],
   },

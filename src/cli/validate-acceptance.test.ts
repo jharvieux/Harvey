@@ -177,6 +177,69 @@ describe("validate-acceptance --body-file discloses exactly what it did not cons
     // The defect: no clause may be false read alone.
     expect(out).not.toContain("and nothing else");
     // And the row still has to say what it DID read, or the fix trades one half-truth for another.
-    expect(out).toContain("Issue comments WERE read");
+    expect(out).toContain("Issue comments and every LINKED PR body WERE read");
+  });
+});
+
+// #1581. The library proves the venue set is collected in one place; these prove the CLI actually
+// FETCHES it. The wiring under test is the `closedByPullRequestsReferences` field on the issue
+// request, the `gh pr view` that turns each reference into a body, and the `selfPr` exclusion —
+// none of which the library suite travels. The stub honours `--json`, so dropping the field from
+// the CLI's request makes the second PR vanish here exactly as it would against real GitHub.
+describe("validate-acceptance CLI — an issue closed by TWO PRs is one venue set (#1581)", () => {
+  const dispositions = [
+    "ACCEPTANCE #700.1 met: src/cli/validate-acceptance.ts fetches every linked PR body",
+    "ACCEPTANCE #700.2 met: src/cli/validate-acceptance.test.ts drives the real CLI",
+  ];
+  const linked = (...numbers: number[]): Record<string, unknown> => ({
+    ...ISSUE_700,
+    closedByPullRequestsReferences: numbers.map((number) => ({ number })),
+  });
+
+  it("fails a PR whose criteria the OTHER linked closing PR also dispositions", () => {
+    const r = cli(["--pr", "910", "--repo", REPO], {
+      "pr-910": { body: `Closes #700\n\n${dispositions.join("\n")}\n`, closingIssuesReferences: [{ number: 700 }] },
+      "pr-911": { body: `Closes #700\n\n${dispositions.join("\n")}\n` },
+      "issue-700": linked(910, 911),
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("mapped 2 times");
+    expect(r.out).toContain("linked PR #911");
+  });
+
+  // NEGATIVE CONTROL for the case above: two linked PRs is not itself the failure — splitting the
+  // criteria between them is the normal, passing shape.
+  it("passes two linked PRs that disposition one criterion each", () => {
+    const r = cli(["--pr", "912", "--repo", REPO], {
+      "pr-912": { body: `Closes #700\n\n${dispositions[0]}\n`, closingIssuesReferences: [{ number: 700 }] },
+      "pr-913": { body: `Closes #700\n\n${dispositions[1]}\n` },
+      "issue-700": linked(912, 913),
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("every acceptance bullet");
+  });
+
+  // THE selfPr EXCLUSION, as a shipping line with a failing direction: this PR is one of its own
+  // issue's linked PRs, so without the exclusion its every criterion reads as mapped twice and a
+  // correct PR is rejected.
+  it("does not read the PR under test as its own linked venue", () => {
+    const r = cli(["--pr", "914", "--repo", REPO], {
+      "pr-914": { body: `Closes #700\n\n${dispositions.join("\n")}\n`, closingIssuesReferences: [{ number: 700 }] },
+      "issue-700": linked(914),
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("every acceptance bullet");
+  });
+
+  // The close path over the same fixtures, so the two CLI paths are watched agreeing rather than
+  // each being watched alone. This is the arrangement that broke: PR green, close red.
+  it("--closed-issue reaches the same verdict as --pr on the same state", () => {
+    const fixtures = {
+      "pr-910": { body: `Closes #700\n\n${dispositions.join("\n")}\n`, closingIssuesReferences: [{ number: 700 }] },
+      "pr-911": { body: `Closes #700\n\n${dispositions.join("\n")}\n` },
+      "issue-700": { ...linked(910, 911), author: { login: "jharvieux", is_bot: false } },
+    };
+    expect(cli(["--closed-issue", "700", "--repo", REPO], fixtures).code).toBe(1);
+    expect(cli(["--pr", "910", "--repo", REPO], fixtures).code).toBe(1);
   });
 });

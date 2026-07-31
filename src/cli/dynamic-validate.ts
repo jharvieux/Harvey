@@ -50,7 +50,12 @@ if (isUrl) {
     console.error("cloning a repo URL requires --pin <commit> (validation runs against a fixed commit)");
     process.exit(2);
   }
-  cloneAtPin(targetArg, pin, targetDir);
+  // #1385 — cloneAtPin always builds `https://github.com/${repo}` itself (every other caller passes
+  // a bare "owner/repo"); passing the full URL this CLI's own usage string invites double-prefixed
+  // it into a nonexistent remote (`https://github.com/https://github.com/owner/repo`). Found live
+  // while re-testing #1385's boxyhq stand-up — strip the URL down to the slug cloneAtPin expects.
+  const repoSlug = targetArg.replace(/^https?:\/\/github\.com\//, "").replace(/^git@github\.com:/, "").replace(/\.git$/, "").replace(/\/$/, "");
+  cloneAtPin(repoSlug, pin, targetDir);
 }
 
 // #759 — route by ORM. A Prisma/Postgres app has no PostgREST/RLS surface, so the Supabase

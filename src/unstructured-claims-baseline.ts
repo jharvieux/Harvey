@@ -101,6 +101,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "- **`typescript.react.security.audit.react-dangerouslySetInnerHTML`** — an `.audit.` rule (for human auditors, inherently noisy — `mechanical-toolchain.md` §2 says exclude `.audit.*` from the count). It flags `dangerouslySetInnerHTML` even when fed a **constant** or an already-`DOMPurify.sanitize()`-ed value, because single-file analysis can't see the sanitizer. *Harvey:* use the custom `harvey-dangerously-set-inner-html` rule instead, and gate it — a constant literal `__html` or a value returning from a known sanitizer (`DOMPurify.sanitize`, `sanitizeHtml`) is benign; only a taint-reachable non-constant is a finding. [ [semgrep-rules #2168](https://github.com/semgrep/semgrep-rules/issues/2168), [rule](https://semgrep.dev/r?q=typescript.react.security.audit.react-dangerouslysetinnerhtml) ]",
     "| POSITIVE | P-HARDCODED-KEY | Hardcoded provider secret in source | new `lib/ai.js` — `const key = \"sk-ant-api03-…\"` (fake but valid-shape) | TruffleHog (verify), gitleaks provider patterns | high (verified) / review (unverified) | [scan-gaps §1.3](https://github.com/gitleaks/gitleaks) |",
   ],
+  "docs/design/ci-gate-liveness.md": [
+    "`pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.",
+    "back to `$RUNNER_TEMP`, so producer and asserter disagreed about the file. A liveness DRILL cannot",
+  ],
   "docs/design/conservation-of-findings.md": [
     "(4) and (5) watch **ten rows**: the one finding planted per module. They cannot see the other 595.",
     "3. **The #1033 reason contract is structural.** A `NotAssessed` cannot be written without a",
@@ -525,6 +529,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// target's installed deps\". #810 (2026-07-23) built the very fallback that reason calls impossible",
     "// whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).",
   ],
+  "src/ci-liveness.test.ts": [
+    "// it and all five went red on their first real CI run. A drill cannot catch this — the drill",
+  ],
   "src/cli/corpus-drift.ts": [
     "// Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by",
     "// Prisma migrations this parser can't read) is skipped here and stays not-run in the manifest,",
@@ -662,6 +669,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// \"cannot\", \"impossible\", \"no way to\", \"unable to\" and friends, which nothing re-tests because",
     "// cannot be confused (#1246).",
     "// the number so it cannot be quietly ignored the way the advisory census was for months.",
+  ],
+  "src/cli/validate-supervised-declines.ts": [
+    "// path\", written in the same grammar as \"X is impossible\" — and reports every instance carrying no",
+    "// rather than 0, which is the three-valued design doing its job — but a scan that cannot read is",
   ],
   "src/cli/validate-test-only-exports.test.ts": [
     "// is indistinguishable from a gate that cannot fail (#1320).",
@@ -1566,6 +1577,13 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/supabase-write-probe.ts": [
     "// ever writing. If the table has NO required column we CANNOT guarantee non-persistence, so the probe",
+  ],
+  "src/supervised-declines.ts": [
+    "// is written in the same grammar as \"this is impossible\", so a reader cannot tell a permission ask",
+    "/** The paths whose grant is routine, with what the record says about each. Named in the report, because \"supervised\" is being used as a synonym for \"impossible\" and the antidote is the counter-example. */",
+    "// doctrine asks. A grant word list that cannot read the word \"permission\" is not a bound, it is a bug.",
+    "* Bounded so a body with no headings at all cannot become one section — an unbounded window would",
+    "* indistinguishable from one that cannot report anything — and this one scans real history, where",
   ],
   "src/test-only-exports.test.ts": [
     "// that only ever removes them cannot catch a regression; both directions have to fail.",

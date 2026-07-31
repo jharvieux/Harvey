@@ -66,6 +66,12 @@ interface CurlRequest {
   url: string;
   headers: Record<string, string>;
   body?: string; // an already-serialized request body
+  // #1673 — the body is not always JSON. Supabase Storage refuses an upload whose Content-Type is
+  // not in the bucket's allowed_mime_types and answers 415 invalid_mime_type, so a hardcoded
+  // application/json made every storage seed fail (MEASURED 2026-07-31: text/plain and
+  // application/octet-stream refused on a bucket listing {image/png,image/jpeg,application/pdf};
+  // image/png accepted).
+  contentType?: string;
   writeOut?: string; // curl's -w template, when the caller needs the status code appended
   maxTimeSeconds?: number;
 }
@@ -82,7 +88,7 @@ export function curlConfig(req: CurlRequest): { argv: string[]; input: string } 
   const lines = [`url = ${q(req.url)}`, `request = ${q(req.method)}`, "silent"];
   for (const [k, v] of Object.entries(req.headers)) lines.push(`header = ${q(`${k}: ${v}`)}`);
   if (req.body !== undefined) {
-    lines.push(`header = ${q("Content-Type: application/json")}`);
+    lines.push(`header = ${q(`Content-Type: ${req.contentType ?? "application/json"}`)}`);
     lines.push(`data = ${q(req.body)}`);
   }
   if (req.writeOut !== undefined) lines.push(`write-out = ${q(req.writeOut)}`, `output = ${q("-")}`);

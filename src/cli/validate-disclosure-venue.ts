@@ -26,6 +26,7 @@ import {
   unattributedBounds,
   type SemgrepRule,
 } from "../disclosure-venue.js";
+import { recordMeasured } from "../ci-liveness.js";
 
 // One seed per way the gate can fail. Seeding only the first would leave the correspondence half
 // unproven — a gate whose second branch has never been seen firing is a gate with one branch.
@@ -147,6 +148,11 @@ function main(): void {
     );
     process.exit(1);
   }
+
+  // #1568: this job short-circuits to a green no-op on an irrelevant diff, so "green" and "scored"
+  // are different facts here and the receipt is what tells them apart. Recorded AFTER the verdict,
+  // and only on the passing path — a run that exited above never reached its measuring phase.
+  recordMeasured("disclosure-venue", rules.length, `semgrep rules read for a comment-declared bound (${bounded.length} bounded)`);
 
   console.log(
     `\n✓ every rule with a recorded bound states it in its message, and every rule that had one still does.` +
