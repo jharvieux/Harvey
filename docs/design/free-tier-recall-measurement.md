@@ -94,7 +94,12 @@ pnpm validate:free-recall --clones-dir /tmp/fr        # run + score
 (`semgrep`, `trufflehog`, `osv-scanner`, `gitleaks`), 12s to clone + 60s to scan and score all five.
 The mechanical tier as run: `quick-scan --findings-out` + `detect-static --out`, merged.
 `pii-classify --schema` is not invoked separately — `quick-scan` already classifies the same
-migrations internally, and it emits a data map rather than findings, so a key has nothing to score.
+migrations internally. `pii-classify --out` DOES write report-schema `Finding[]` (the earlier claim
+that it "emits a data map rather than findings" was false, #1582), but every M10 finding's
+`location` is the bare table name, and `matches()` (`src/scan/semantic-corpus.ts`,
+`src/scan/free-recall-corpus.ts`) requires a finding's location to CONTAIN the entry's `locations`
+string — so an M10 finding can never satisfy these five corpora's path- or filename-keyed rows
+(MEASURED 2026-07-30/31, #1582).
 
 Clone SHAs scored: supatest `38da5060` (main), nocode-rescue `81350ee9` (**master**), vandyand
 `1ef96ab8` (main), cipherx `b6f0d9d7` (main), superredhat `104b81df` (vulnerable).
