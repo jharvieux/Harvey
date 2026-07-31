@@ -23,6 +23,13 @@ negative claim is self-sealing — "X works" fails loudly when it stops being tr
 fails silently forever. Harvey has many gates against overclaiming and, before this, none against
 underclaiming.
 
+**Going hunting for false declines? Read `docs/runbooks/false-decline-audit.md` first (#1548).** It
+carries the method from the #1377/#1378 audits: the populations with the commands that measure them,
+the **zero-population finding for PR reviews and PR review comments** (0 of both, repo-wide — that
+channel has never had a member, so do not re-hunt it), why a naive vocabulary grep over-counts
+genuine declines ~6x and why the next sweep should pair by **sibling issue** rather than closing PR,
+the two highest-yield one-line checks, and the unaudited remainder carried forward.
+
 ## The convention
 
 A recorded reason is a contiguous block of `FIELD: value` lines, readable through a `//` comment, an
