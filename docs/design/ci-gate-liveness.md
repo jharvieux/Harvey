@@ -151,6 +151,34 @@ ref=feature/sweep-ci-1545` returned **HTTP 404** on 2026-07-31 while ten sibling
 from that same branch the same hour all ran. `supervised-declines` therefore lands with a
 `pendingProof` tracked by #1688; every other gate is proven.
 
+## Every new gate id, MEASURED on a real run (#1568 criterion 3)
+
+Not "the step exists" — the receipt, with its unit count, off a real run. All of these are from
+PR #1697's own CI run (30639911394) unless stated.
+
+| gate id | units | run |
+| --- | ---: | --- |
+| `disclosure-venue` | 113 semgrep rules | job 91185487205 |
+| `conditional-scan` | 1 module with sibling scan paths | job 91185487205 |
+| `alert-paths` | 15 alert paths across 18 workflows | job 91185485326 |
+| `alert-paths-negative-controls` | 3 seeded controls | job 91185485326 |
+| `acceptance-selftest` | 12 hermetic cases | job 91185484982 |
+| `acceptance-pr` | 8 issues + remainders | job 91185484982 |
+| `m2-coverage-gate` | 1 enumerated M2 target | job 91185517613 |
+| `supervised-declines-selftest` | 9 hermetic cases | job 91185487911 |
+| `acceptance-close-selftest` | 8 hermetic cases | run 30640273614 |
+| `acceptance-close` | 1 closed issue over 3 surfaces | run 30640273614 |
+
+`supervised-declines` (the live scan) is the one id with no MEASURED run: it runs on no
+`pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.
+
+**The first attempt at this table failed, and the failure is the useful part.** All five newly-wired
+jobs went RED on PR #1697's first run while scoring perfectly: `recordMeasured` writes nothing when
+`HARVEY_LIVENESS_RECEIPT` is unset — it is silent off CI by design — while the bash asserter falls
+back to `$RUNNER_TEMP`, so producer and asserter disagreed about the file. A liveness DRILL cannot
+catch that, because a drill expects a red job. `src/ci-liveness.test.ts` now requires the job-level
+env of every registered gate, and that rule is proven in both directions.
+
 ## What this deliberately does not do
 
 - **It changes no required status check and does not touch branch protection.** Promoting

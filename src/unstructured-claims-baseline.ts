@@ -104,6 +104,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "docs/design/ci-gate-liveness.md": [
     "name (`semantic-freshness`, `site-ci`). A proxy cannot be widened into exhaustiveness; it has to be",
     "the required context failed with it, so a shard that scored nothing cannot pass the aggregate.",
+    "`pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.",
+    "back to `$RUNNER_TEMP`, so producer and asserter disagreed about the file. A liveness DRILL cannot",
   ],
   "docs/design/conservation-of-findings.md": [
     "(4) and (5) watch **ten rows**: the one finding planted per module. They cannot see the other 595.",
