@@ -403,12 +403,18 @@ export interface EvidenceWorld {
   testNames: ReadonlySet<string>;
 }
 
-// Order matters: JS regex alternation is first-match, not longest-match, so an extension that is a
-// PREFIX of another (js/json, ts/tsx) must be listed AFTER the longer one it would otherwise
-// truncate. MEASURED 2026-07-30: with `js` before `json`, `package-lock.json` matched as
-// `package-lock.js` — a real citation of an existing file reported as pointing at a nonexistent
-// one, on the acceptance-conservation gate's OWN evidence-checking path.
-const FILE_PATH = /[\w./-]+\.(?:tsx|ts|mjs|cjs|json|js|md|ya?ml|sql|sh|py|toml)(?::\d+)?/g;
+// JS regex alternation is first-match, not longest-match, so an extension that is a PREFIX of
+// another (js/json, ts/tsx, js/jsx, md/mdx) gets TRUNCATED — a real citation of an existing file is
+// then reported as pointing at a nonexistent one, on the acceptance gate's OWN evidence path.
+// #1266 fixed that by ORDERING, which fixes one pair at a time and left two live: MEASURED
+// 2026-07-31 against the real checkout, `targets/calibration/components/AdminPanel.jsx` (one of 26
+// tracked `.jsx` files) extracted as `AdminPanel.js`, and `docs/a.mdx` as `docs/a.md` (0 tracked
+// `.mdx` today — latent, not live). The `(?!\w)` boundary fixes the CLASS: a prefix match is
+// refused outright, so a future extension cannot reintroduce this by being added in the wrong
+// place. Order is kept longest-first anyway so the two mechanisms agree rather than one masking
+// the other.
+const FILE_PATH_SOURCE = String.raw`[\w./-]+\.(?:tsx|ts|jsx|js|mjs|cjs|json|mdx|md|ya?ml|sql|sh|py|toml)(?!\w)(?::\d+)?`;
+const FILE_PATH = new RegExp(FILE_PATH_SOURCE, "g");
 const BACKTICKED = /`([^`]+)`/g;
 const QUOTED_SPAN = /"([^"]{8,})"/g;
 
@@ -479,7 +485,9 @@ const EVIDENCE_SHAPES: { name: string; re: RegExp }[] = [
   // words and no longer matches HERE — it matches the command shape below, which is what it is.
   { name: "a backticked command, path or identifier", re: /`(?=[^`]{4,}`)(?:[^`\s]+|[^`]*[^`A-Za-z\s][^`]*)`/ },
   { name: "a command", re: /\b(?:pnpm|npm|npx|node|tsx|vitest|git|gh|semgrep|docker|make|curl|psql)\s+\S/ },
-  { name: "a file path", re: /[\w./-]+\.(?:ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh|py|toml)(?::\d+)?/ },
+  // Same source as FILE_PATH, so the shape check and the truth check can never disagree about what
+  // a path is — this line carried its OWN hand-copied alternation, still in the pre-#1266 order.
+  { name: "a file path", re: new RegExp(FILE_PATH_SOURCE) },
   { name: "a quoted test name", re: /"[^"]{8,}"/ },
   // The old /\b[0-9a-f]{7,40}\b/ matched ordinary English — "defaced", "accede", "facade" are all
   // 6-7 letters drawn from [a-f] — and any 7-digit number, so "run 90131391124 was green" read as a
