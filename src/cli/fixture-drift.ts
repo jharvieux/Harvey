@@ -54,9 +54,10 @@ import {
   checkLighthouseContract,
   checkSemgrepFixtureContract,
   checkGitleaksFixtureContract,
-  classifyVitalsGitScopeFailure,
+  VITALS_DRIFT_CONTRACT,
   type GitScopeSanity,
   type SemgrepContractOutput,
+  classifyFreshRun,
   type GitleaksContractResult,
 } from "../scan/fixture-drift-contracts.js";
 
@@ -108,16 +109,17 @@ async function runDrift<T>(o: DriftOptions<T>): Promise<never> {
   }
 
   const { parsed, summary } = await o.rerun();
-  const notRunReason = o.notRunIf?.(parsed);
-  if (notRunReason) {
-    console.log(`○ ${o.tool}-fixture-drift: NOT RUN — ${notRunReason}`);
+  // `o` whole, not `o.contract, o.notRunIf` spread out: dropping the classifier from the call is
+  // then a change to the OPTIONS OBJECT, which VITALS_DRIFT_CONTRACT's test sees (#1416.4).
+  const verdict = classifyFreshRun(o, parsed);
+  if (verdict.kind === "not-run") {
+    console.log(`○ ${o.tool}-fixture-drift: NOT RUN — ${verdict.reason}`);
     process.exit(0);
   }
-  const violations = o.contract(parsed);
-  if (violations.length > 0) {
+  if (verdict.kind === "drift") {
     fail(
       o.tool,
-      `a fresh ${o.tool} ${o.installedVersion} run no longer matches the schema the committed fixture assumes:\n  - ${violations.join("\n  - ")}\n` +
+      `a fresh ${o.tool} ${o.installedVersion} run no longer matches the schema the committed fixture assumes:\n  - ${verdict.violations.join("\n  - ")}\n` +
         `Re-capture the committed fixture (see its PROVENANCE.md) and re-verify the parser against the new shape.`,
     );
   }
@@ -284,14 +286,7 @@ async function vitalsDrift(): Promise<never> {
     tool: "vitals",
     pinnedVersion: VITALS_PINNED_VERSION,
     installedVersion: version,
-    fixturePaths: ["src/__fixtures__/vitals-report.json"],
-    parse: (raw) => {
-      const parsed = JSON.parse(raw) as VitalsReport & { _note?: string; _gitScopeSanity?: GitScopeSanity };
-      delete parsed._note;
-      return parsed;
-    },
-    contract: checkVitalsContract,
-    notRunIf: classifyVitalsGitScopeFailure,
+    ...VITALS_DRIFT_CONTRACT,
     rerun: async () => {
       const seed = join(repoRoot, "src/__fixtures__/vitals-recapture/seed.py");
       const outFile = join(mkdtempSync(join(tmpdir(), "harvey-vitals-drift-")), "vitals-report.json");

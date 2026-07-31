@@ -15,6 +15,8 @@ import {
   checkSemgrepFixtureContract,
   checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
+  classifyFreshRun,
+  VITALS_DRIFT_CONTRACT,
   type GitScopeSanity,
   type SemgrepContractOutput,
   type GitleaksContractResult,
@@ -152,6 +154,55 @@ describe("classifyVitalsGitScopeFailure", () => {
       _gitScopeSanity: { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true },
     };
     expect(classifyVitalsGitScopeFailure(partiallyEmptied)).toBeUndefined();
+  });
+});
+
+// #1416.4 — the notRunIf WIRING, which had no test at all: `fixture-drift.ts`'s call to it could be
+// deleted and nothing in the suite noticed, so the one thing classifyVitalsGitScopeFailure exists to
+// do (pre-empt the contract check) was unguarded while the classifier itself carried eight cases.
+// VITALS_DRIFT_CONTRACT is the real options object the CLI hands runDrift, imported here rather than
+// re-declared — a hand-built twin would prove the classifier works on a fixture, not that the CLI
+// consults it.
+//
+// STATED BOUND: what these five cases do NOT reach is runDrift's own mapping of the verdict onto
+// stdout and an exit code (`○ … NOT RUN`, exit 0). Inducing it needs vitals to return three empty
+// sections against a seeded repo where git succeeds, which no offline input can produce. The whole
+// CLI path was run live instead — `pnpm exec tsx src/cli/fixture-drift.ts --tool vitals`,
+// 2026-07-31, vitals 0.2.0, exit 0, `commits(90d window)=72 returncode=0 scopeMatchesToplevel=True`
+// — which exercises everything above the branch but not the branch.
+describe("classifyFreshRun — the notRunIf wiring (#1416)", () => {
+  const fixture = load<VitalsReport>("../__fixtures__/vitals-report.json");
+  const sanity: GitScopeSanity = { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true };
+  const swallowed = { ...fixture, hotspots: [], coupling: [], knowledge_risk: [], _gitScopeSanity: sanity };
+
+  it("reports the #1206 shape as NOT RUN through the CLI's own vitals options", () => {
+    const v = classifyFreshRun(VITALS_DRIFT_CONTRACT, swallowed);
+    expect(v.kind).toBe("not-run");
+    expect(v.kind === "not-run" && v.reason).toContain("72 commit(s)");
+  });
+
+  // The ordering IS the wiring. The #1206 shape violates checkVitalsContract too (three empty
+  // arrays), so a contract-first runDrift would report a schema drift for a git failure and never
+  // consult the classifier — the two verdicts are only distinguishable by which check runs first.
+  it("proves the order matters: the same input IS a contract violation when notRunIf is absent", () => {
+    expect(VITALS_DRIFT_CONTRACT.contract(swallowed).length).toBeGreaterThan(0);
+    expect(classifyFreshRun({ contract: VITALS_DRIFT_CONTRACT.contract }, swallowed).kind).toBe("drift");
+  });
+
+  it("falls through to the contract when notRunIf declines — a classifier is not a mute button", () => {
+    const notTheShape = { ...fixture, hotspots: [], coupling: [], knowledge_risk: [] };
+    expect(VITALS_DRIFT_CONTRACT.notRunIf(notTheShape)).toBeUndefined();
+    expect(classifyFreshRun(VITALS_DRIFT_CONTRACT, notTheShape).kind).toBe("drift");
+  });
+
+  it("passes a healthy fresh run, so `ok` is reachable and the two failure paths are not the only outcomes", () => {
+    expect(classifyFreshRun(VITALS_DRIFT_CONTRACT, fixture).kind).toBe("ok");
+  });
+
+  it("parses the committed fixture through the CLI's own parse, dropping the `_note` the contract does not model", () => {
+    const parsed = VITALS_DRIFT_CONTRACT.parse(readFileSync(new URL("../__fixtures__/vitals-report.json", import.meta.url), "utf8"));
+    expect(parsed).not.toHaveProperty("_note");
+    expect(VITALS_DRIFT_CONTRACT.contract(parsed)).toEqual([]);
   });
 });
 
