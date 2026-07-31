@@ -233,6 +233,27 @@ export function checkDisclosureTracking(registry: AlertPathRegistry, state: (iss
   });
 }
 
+/** The workflow name the synthetic hatch row carries, so a reader never mistakes it for a real one. */
+export const SYNTHETIC_HATCH = "(synthetic — no live hatch to seed)";
+
+/**
+ * `--seed-closed-tracking` is checkDisclosureTracking's negative control, and its POPULATION is the
+ * hatch rows — which are meant to trend to zero. #1333 emptied scheduledWithoutAlertPath and took
+ * that population from 7 to 1. At zero, seeding CLOSED over an empty list yields no violation, the
+ * CLI exits 0, and alert-paths.yml's control step reports "the control failed to fail" about a
+ * control that had nothing to fail on: a limit with a population of zero is a guess, not a limit.
+ *
+ * So the control supplies its own row rather than reading one. What it asserts — that a CLOSED
+ * tracker is rejected — is a property of the function, and holds whether or not a live hatch exists
+ * today. The caller is expected to say out loud when this fired, because a synthetic pass proves
+ * nothing about the current registry.
+ */
+export function seedClosedTrackingPopulation(registry: AlertPathRegistry): AlertPathRegistry {
+  const live = registry.scheduledWithoutAlertPath.length + registry.paths.filter((p) => p.pendingProof).length;
+  if (live > 0) return registry;
+  return { ...registry, scheduledWithoutAlertPath: [{ workflow: SYNTHETIC_HATCH, tracking: 1333 }] };
+}
+
 /**
  * A REQUIRED status check that shells out to `gh` couples every merge in the repo to GitHub API
  * availability — no other required context here does that. Retry the transient case before a blip

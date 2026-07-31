@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, seedClosedTrackingPopulation, SYNTHETIC_HATCH, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
 import { loadFacts, loadRegistry } from "./cli/validate-alert-paths.js";
 
 const PROVEN = { run: "https://github.com/o/r/actions/runs/1", issue: 7, at: "2026-07-27" };
@@ -154,6 +154,38 @@ describe("checkDisclosureTracking — the no-alarm hatch must not fail open", ()
   });
 });
 
+// #1333. The control above is only a control while it has something to check, and the registry it
+// reads is designed to empty out. MEASURED 2026-07-31 against the pre-fix CLI with the hatch
+// population driven to zero: `--seed-closed-tracking` contributed 0 violations, so the gate exited 0
+// and alert-paths.yml's step would have reported "the control failed to fail" — about a control with
+// nothing to fail on.
+describe("seedClosedTrackingPopulation — a negative control with no population is not a control", () => {
+  it("leaves a registry that already has a hatch alone, so the control tests the REAL row", () => {
+    const live = registry({ scheduledWithoutAlertPath: [{ workflow: "quiet.yml", tracking: 1333 }] });
+    expect(seedClosedTrackingPopulation(live)).toBe(live);
+    expect(seedClosedTrackingPopulation(live).scheduledWithoutAlertPath.map((w) => w.workflow)).toEqual(["quiet.yml"]);
+  });
+
+  it("counts a pendingProof as population too — it is the same hatch under a different key", () => {
+    const pending = registry({ paths: [{ workflow: "wf.yml", marker: "m-alert", pendingProof: { why: "w", tracking: 9, since: "2026-07-31" } }] });
+    expect(seedClosedTrackingPopulation(pending)).toBe(pending);
+  });
+
+  it("supplies a labelled synthetic row when nothing is left to seed, so the control still fails", () => {
+    const empty = registry();
+    const seeded = seedClosedTrackingPopulation(empty);
+    expect(seeded).not.toBe(empty);
+    expect(seeded.scheduledWithoutAlertPath.map((w) => w.workflow)).toEqual([SYNTHETIC_HATCH]);
+    // The point of the whole exercise: CLOSED must still produce a violation at zero population.
+    expect(checkDisclosureTracking(seeded, () => "CLOSED")).toHaveLength(1);
+    expect(checkDisclosureTracking(seeded, () => "OPEN")).toEqual([]);
+  });
+
+  it("does not touch the real registry's own hatch count", () => {
+    expect(seedClosedTrackingPopulation(registry()).paths).toEqual(registry().paths);
+  });
+});
+
 describe("retrying — a required check must not fail on one API blip", () => {
   const attempt = (statuses: (number | null)[]) => {
     let i = 0;
@@ -193,22 +225,24 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
   // retired the same day once its drill ran (run 30376371298, issue #1430). site-smoke-alert
   // (#1509/#1543) occupied it the same way and was retired 2026-07-31 once site-smoke.yml landed on
-  // main and its drill ran (run 30595915001, issue #1598). Three occupants today, all under the same
-  // circularity — a drill only dispatches against a workflow already on the DEFAULT branch:
-  // ci-free-recall-alert (#1185/#1536), ci-semantic-freshness-alert (#1270/#1611) and
-  // ci-main-red-alert (#1507/#1612). The last one is the interesting case: ci.yml IS on main, but
-  // its `main-red` JOB is not, so main's copy of the file has no such job and the drill would prove
-  // nothing — the hatch is about what the default branch can RUN, not about which file exists.
-  // Retire each the same way — drill it on main, record provenBy, drop pendingProof — and this list
-  // goes back to empty, which is the state it should normally be in. `pendingProof`'s own behaviour
-  // stays covered by the fixture tests above, so naming the current occupants here does not un-test
-  // the mechanism.
+  // main and its drill ran (run 30595915001, issue #1598).
+  //
+  // #1333 (2026-07-31) retired two more, and the reason matters more than the count. Both
+  // ci-free-recall-alert (#1185/#1536) and ci-semantic-freshness-alert (#1270/#1611) cited the same
+  // circularity — "a drill only dispatches against a workflow already on the DEFAULT branch" — which
+  // was true the day each was written and had since expired unread: both files had long since
+  // merged, so nothing was blocking either drill except nobody re-reading the reason. They drilled
+  // first try (runs 30605913478 / 30605914742). The comment that stood here also asserted the
+  // circularity was "about what the default branch can RUN, not about which file exists"; that was
+  // MEASURED FALSE the same day — a workflow_dispatch run executes the copy on the ref you name, so
+  // a job or input present only on a branch is dispatchable from it (see .github/alert-paths.json's
+  // `_why`). ONE occupant today, ci-main-red-alert (#1507/#1612), and its hatch now records an
+  // operational reason — a full red ci.yml run during a live merge train — not a structural one.
+  // Retire it the same way: drill it, record provenBy, drop pendingProof, and this list goes back to
+  // empty, which is the state it should normally be in. `pendingProof`'s own behaviour stays covered
+  // by the fixture tests above, so naming the current occupant here does not un-test the mechanism.
   it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
-      "ci-free-recall-alert",
-      "ci-main-red-alert",
-      "ci-semantic-freshness-alert",
-    ]);
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual(["ci-main-red-alert"]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 
