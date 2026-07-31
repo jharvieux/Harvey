@@ -15,6 +15,9 @@
 // is this suite at what it claims to test", which is M8's question. The cost of the choice is that
 // the score is not a whole-repo coverage claim, and the notes below say so.
 
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 export interface M8CorpusConfig {
   // Extra packages the target needs before Stryker can run: its own runner plugin, and anything
   // its install refuses without. Installed without persisting the addition to the target's own
@@ -35,8 +38,8 @@ export interface M8CorpusConfig {
   // suite lives at apps/web, not the pnpm-workspace root, so the config, the Stryker package
   // install, and the mutation-scan invocation all need to target that subdirectory.
   appPath?: string;
-  // #1496: files to write into appDir BEFORE the install/Stryker run, keyed by path relative to
-  // appDir. Every other target here mutation-scores a suite the clone already ships; this is for a
+  // #1496: files to write into appDir before the Stryker run (materializeM8Config below), keyed by
+  // path relative to appDir. Every other target here mutation-scores a suite the clone already ships; this is for a
   // target whose only suite carries a per-mutant Docker cost (multi-tenant-starter, #1436) and
   // needed a NEW, DB-free test file to get any mutation surface at all. The operator ruling on
   // #1496 accepted the trade this implies: a stubbed suite may score differently than the real
@@ -138,10 +141,21 @@ export const M8_CORPUS_CONFIGS: Record<string, M8CorpusConfig> = {
   // role-rank comparison), stubbing the two calls that file makes into the DB layer
   // (createServerSupabaseClient's .auth.getUser() and tenants.ts's getUserTenantRole) instead of
   // hitting a real database. MEASURED 2026-07-31 on the pin: 22/23 valid mutants killed (95.7%),
-  // reproduced identically on a second run, ~3-6s wall clock (vs. one Docker container start per
-  // mutant for the original suite). See external-corpus.ts's multi-tenant-starter M8 baseline for
-  // the accepted trade this implies (a stubbed suite can score differently from the suite it stands
-  // in for) and the one surviving mutant's disposition.
+  // reproduced identically across three consecutive runs.
+  //
+  // COST, RE-MEASURED 2026-07-31 (#1693) because the `~3-6s` first recorded here named no phase and
+  // no machine, and a bare second-count is what a future reader will size the monthly job with.
+  // Three consecutive runs of the FULL production path — `pnpm corpus-drift --target
+  // multi-tenant-starter --install --m8`, i.e. network clone + install + Stryker — on one developer
+  // laptop: 17.5s / 10.5s / 9.8s end to end (corpus-drift's own per-target banner: 16s / 9s / 8s;
+  // the first run pays a cold npm cache). Stryker's own mutation phase is the small part of that:
+  // it reported `Done in 1 second.` on all three, over 23 mutants. A CI runner is slower again, so
+  // quote the phase and the machine or re-run the command — not a number from this comment. Either
+  // way it is nowhere near the original suite's one-Docker-container-start-per-mutant.
+  //
+  // See external-corpus.ts's multi-tenant-starter M8 baseline for the accepted trade this implies
+  // (a stubbed suite can score differently from the suite it stands in for) and the one surviving
+  // mutant's disposition.
   "multi-tenant-starter": {
     installFlags: [],
     strykerPackages: ["@stryker-mutator/core@9", "@stryker-mutator/vitest-runner@9", "vitest@^2"],
@@ -270,3 +284,20 @@ describe("requireTenantAdmin", () => {
     },
   },
 };
+
+// #1693: the two writes that turn a disposable clone into something Stryker can run — the vendored
+// config, and (for a target using `extraFiles`) the suite that config points at. They belong
+// together because dropping either one alone fails SILENTLY in the same direction: a config naming
+// a suite nobody wrote finds no tests, and a suite written with no config is never invoked. Both
+// used to sit inline in src/cli/corpus-drift.ts's runMutationScan, which reads process.argv and
+// runs its whole corpus sweep at module load, so importing it from a test executes the sweep —
+// MEASURED 2026-07-31: deleting the `extraFiles` loop there turned nothing red in `pnpm verify`.
+// That is the gap this move closes; see m8-corpus.test.ts.
+export function materializeM8Config(appDir: string, cfg: M8CorpusConfig): void {
+  for (const [rel, content] of Object.entries(cfg.extraFiles ?? {})) {
+    const path = join(appDir, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+  writeFileSync(join(appDir, "stryker.conf.json"), `${JSON.stringify(cfg.config, null, 2)}\n`);
+}

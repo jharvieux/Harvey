@@ -47,7 +47,7 @@
 // a target are scope-invalid by construction.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
@@ -74,7 +74,7 @@ import {
   type DriftExplanation,
 } from "../scan/external-corpus.js";
 import { shardTargets } from "../scan/corpus-shards.js";
-import type { M8CorpusConfig } from "../scan/m8-corpus.js";
+import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -248,16 +248,11 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
   // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
   withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...npmOnlyFlags(pm, cfg.installFlags)], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
 
-  // #1496: a target whose only real suite is unscoreable (multi-tenant-starter's Docker-per-mutant
-  // cost) gets its DB-free vendored suite written in HERE, before Stryker's dry run reads it —
-  // `dir` is the same disposable temp clone the rest of this function already writes into.
-  for (const [rel, content] of Object.entries(cfg.extraFiles ?? {})) {
-    const path = join(appDir, rel);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-  }
-
-  writeFileSync(join(appDir, "stryker.conf.json"), `${JSON.stringify(cfg.config, null, 2)}\n`);
+  // #1496/#1693: the vendored Stryker config, plus (for a target whose own suite is unscoreable —
+  // multi-tenant-starter's Docker-per-mutant cost) the DB-free suite that config points at, written
+  // in before Stryker's dry run reads either. `appDir` is inside the disposable temp clone the rest
+  // of this function already writes into. Lives in m8-corpus.ts so it has a test.
+  materializeM8Config(appDir, cfg);
 
   const out = join(mkdtempSync(join(tmpdir(), "harvey-m8-")), "m8.json");
   execFileSync("pnpm", ["mutation-scan", appDir, "--out", out], {

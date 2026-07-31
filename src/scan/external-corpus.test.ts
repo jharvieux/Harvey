@@ -960,7 +960,13 @@ describe("#1436 — every recorded not-run carries a falsifier the reason regist
     // #1496: multi-tenant-starter/M8 left this list — it now carries a real MutationBaseline (a
     // vendored, DB-free suite), not a not-run reason. saas-lite and carbon still have no scoreable
     // suite at all and remain the population this test watches.
-    expect(notRuns.length).toBeGreaterThanOrEqual(4);
+    //
+    // #1693: this floor tracks the LIVE population — MEASURED 2026-07-31 at 6 (saas-lite,
+    // ghostfolio, carbon, tanstack-com, cravab, flori-web), and #1499 set it at exactly the
+    // population of the day (5 of 5) rather than leaving slack. It was briefly dropped to 4, which
+    // would have let two not-runs silently stop being watched. When a reason is retired, drop this
+    // by one in the same commit; when one is added, raise it.
+    expect(notRuns.length).toBeGreaterThanOrEqual(6);
     expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("saas-lite/M8");
     expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("carbon/M8");
   });
