@@ -62,6 +62,203 @@ x-library-entry-point: &library_entry_point
         - pattern: export default function ($P, ...) { ... }
     - focus-metavariable: $P
 
+# #1631: the (a2) VALIDATOR-GUARD sanitizers, ported to the library-taint family. Until now
+# `harvey-lib-command-injection` and `harvey-lib-code-injection` carried NO `pattern-sanitizers`
+# block at all and `harvey-lib-path-traversal` carried only `path.basename`, so every guarded shape
+# the request-taint side has cleared since #989/#1027/#1236/#1248/#1363 still drew a finding here —
+# and harvey-lib-command-injection is `harveySeverity: Critical`, so it is not a quiet over-report.
+#
+# MEASURED 2026-07-31 (semgrep 1.164.0, three identical runs, `--jobs 1 --timeout 0`, zero errors):
+# BEFORE, an exported `runReport(name)` with a correct anchored inline `.test()` guard and an early
+# return fired harvey-lib-command-injection, as did the hoisted-const and `Array.includes`
+# spellings; the eval and fs siblings fired identically on the same guard, so the gap was never
+# confined to one rule — the issue's fourth acceptance bullet, re-measured rather than assumed.
+#
+# WHY A LOCAL GUARD IS SOUND HERE TOO. The source model differs (an exported function's parameter,
+# not a request property) but the sanitizer does not depend on where the value came from: an
+# anchored, positive-class allowlist test whose failure branch exits the function makes the sink
+# unreachable with a rejected value, whatever bound the parameter. The soundness constraints
+# therefore carry over unchanged and unweakened, each with its own calibration positive that must
+# still fire: the regex must be ANCHORED (P-LIB-CMD-UNANCHORED-GUARD) and its class POSITIVE
+# (P-LIB-CMD-DENYLIST-GUARD), the `const` binding must be a declaration rather than a reassignable
+# one, and a throwing guard must not sit inside a try that could swallow it
+# (P-LIB-CMD-THROW-SWALLOWED). The blocks are verbatim copies of injection.yml's so the two
+# families cannot drift into different soundness.
+x-lib-validator-guard: &lib_validator_guard
+  by-side-effect: true
+  patterns:
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... return; }
+                - pattern: |
+                    if (!$RE.test($X)) return ...;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... return; }
+                - pattern: |
+                    if (!$RE.test($X)) return ...;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... return; }
+        - pattern: |
+            if (!$ARR.includes($X)) return ...;
+        - pattern: |
+            if (!$SET.has($X)) { ... return; }
+        - pattern: |
+            if (!$SET.has($X)) return ...;
+    - focus-metavariable: $X
+
+# The THROWING failure branch, with #1248's two try exclusions intact — a throw is an exit only if
+# nothing between the guard and the sink catches it.
+x-lib-throw-guard: &lib_throw_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... throw $E; }
+                - pattern: |
+                    if (!$RE.test($X)) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... throw $E; }
+        - pattern: |
+            if (!$ARR.includes($X)) throw $E;
+        - pattern: |
+            if (!$SET.has($X)) { ... throw $E; }
+        - pattern: |
+            if (!$SET.has($X)) throw $E;
+    - focus-metavariable: $X
+
+# The SCHEMA-validator spelling, returning branch — including the #1630 hoisted-const arm, so the
+# port does not land already carrying the defect #1630 has just removed from the request side.
+x-lib-schema-guard: &lib_schema_guard
+  patterns:
+    - pattern: $P.data
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $P = $Z.regex($RE).safeParse(...);
+                    ...
+                    if (!$P.success) { ... return; }
+                    ...
+                - pattern-inside: |
+                    $P = $Z.regex($RE).safeParse(...);
+                    ...
+                    if (!$P.success) return ...;
+                    ...
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    $P = $Z.regex($RE).safeParse(...);
+                    ...
+                    if (!$P.success) { ... return; }
+                    ...
+                - pattern-inside: |
+                    $P = $Z.regex($RE).safeParse(...);
+                    ...
+                    if (!$P.success) return ...;
+                    ...
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern-inside: |
+            $P = $Z.enum([...]).safeParse(...);
+            ...
+            if (!$P.success) { ... return; }
+            ...
+        - pattern-inside: |
+            $P = $Z.enum([...]).safeParse(...);
+            ...
+            if (!$P.success) return ...;
+            ...
+
+# The SCHEMA-validator spelling, throwing branch. `by-side-effect` on `$P` rather than a
+# `pattern-inside` region, for #1248's reason: semgrep's statement `...` matches DEEPLY, so a region
+# form would match a guard nested inside a try while the exclusions sat outside it.
+x-lib-throw-schema-guard: &lib_throw_schema_guard
+  by-side-effect: true
+  patterns:
+    - pattern-not-inside: |
+        try { ... }
+    - pattern-not-inside: |
+        try { ... } finally { ... }
+    - pattern-either:
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - patterns:
+            - pattern-inside: |
+                $P = $Z.enum([...]).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+    - focus-metavariable: $P
+
 rules:
   # Path traversal from a library entry point: a request-callback param (raw http/https server) or an
   # exported-function param joined into a filesystem path and read/written. path.basename confines it.
@@ -96,6 +293,10 @@ rules:
       - *library_entry_point
     pattern-sanitizers:
       - pattern: path.basename(...)
+      - *lib_validator_guard
+      - *lib_throw_guard
+      - *lib_schema_guard
+      - *lib_throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -128,6 +329,11 @@ rules:
       validate the argument against an allowlist.
     pattern-sources:
       - *library_entry_point
+    pattern-sanitizers:
+      - *lib_validator_guard
+      - *lib_throw_guard
+      - *lib_schema_guard
+      - *lib_throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -156,6 +362,11 @@ rules:
       evaluate an untrusted argument.
     pattern-sources:
       - *library_entry_point
+    pattern-sanitizers:
+      - *lib_validator_guard
+      - *lib_throw_guard
+      - *lib_schema_guard
+      - *lib_throw_schema_guard
     pattern-sinks:
       - patterns:
           - pattern-either:

@@ -264,6 +264,24 @@ x-throw-schema-guard: &throw_schema_guard
             - metavariable-regex:
                 metavariable: $RE
                 regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        # #1630: the hoisted-named-const twin, on the THROW spelling. The #1363 fix reached the
+        # `.test()` arms in both failure-branch spellings but no zod arm in either, so this one
+        # carried the same defect as the return spelling above.
+        - patterns:
+            - pattern-inside: |
+                const $RE = $LIT;
+                ...
+            - pattern-inside: |
+                $P = $Z.regex($RE).safeParse(...);
+                ...
+            - pattern-either:
+                - pattern: |
+                    if (!$P.success) { ... throw $E; }
+                - pattern: |
+                    if (!$P.success) throw $E;
+            - metavariable-regex:
+                metavariable: $LIT
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
         - patterns:
             - pattern-inside: |
                 $P = $Z.enum([...]).safeParse(...);
@@ -390,6 +408,31 @@ rules:
                           ...
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
@@ -524,6 +567,31 @@ rules:
                           ...
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
@@ -662,6 +730,31 @@ rules:
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...
@@ -795,6 +888,31 @@ rules:
                           ...
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
@@ -1160,6 +1278,31 @@ rules:
                           ...
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
@@ -1694,6 +1837,31 @@ rules:
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...
@@ -2039,6 +2207,31 @@ rules:
                           ...
                   - metavariable-regex:
                       metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              # #1630: the same SCHEMA guard with the regex HOISTED to a named constant — the zod
+              # twin of the #1363 `.test()` fix, which closed that spelling and left this one
+              # untouched, so byte-identical logic cleared or drew a Critical depending only on
+              # whether the regex was hoisted. Same construction and same reason: metavariable-regex
+              # reads a metavariable's matched TEXT, so `$RE` bound the identifier `OK` and the
+              # anchoring/positive-class constraint has to move to the literal the const binds.
+              # `const` deliberately, not a bare `$RE = $LIT` — see P-CMD-ZOD-REASSIGNED-GUARD.
+              - patterns:
+                  - pattern-inside: |
+                      const $RE = $LIT;
+                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $LIT
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
