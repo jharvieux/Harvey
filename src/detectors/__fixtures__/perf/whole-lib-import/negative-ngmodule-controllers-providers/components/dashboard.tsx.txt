@@ -1,0 +1,6 @@
+"use client";
+// A client entry, so "no client entry point reaches the service" is an answerable question here
+// too — this control is about the decorator identifier, not about reachability being undefined.
+export function Dashboard() {
+  return <div>dashboard</div>;
+}

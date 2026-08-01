@@ -687,7 +687,11 @@ process.exit(0);
         env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
       });
       let err = "";
-      child.stderr.on("data", (c: Buffer) => (err += c.toString()));
+      // setEncoding, never `err += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
+      // Buffer decodes THAT CHUNK in isolation, so a multi-byte character straddling a chunk
+      // boundary decodes to U+FFFD on both sides.
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (c: string) => (err += c));
       child.on("error", () => resolveP({ status: 1, stderr: err }));
       child.on("close", (code) => resolveP({ status: code ?? 1, stderr: err }));
     });

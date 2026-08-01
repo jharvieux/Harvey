@@ -923,12 +923,15 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 // The pin count this paragraph originally gave ("ten") is NOT reproducible and has been removed
 // rather than corrected: `src/scan/external-corpus.ts` carried FOURTEEN M5-slop baselines at
 // dfff5a8/5c983ea when the 653 was drawn and carries SEVENTEEN now (#1524 added cravab, flori-web
-// and effective on 2026-07-30), so "ten" describes neither, and the measuring script was not
-// committed, so the repo does not record which subset the 653 / 592 / 380 actually cover.
-// Re-deriving them is a re-run, not a recovery: clone the pins and diff the detector with and
-// without the exemption, which is how the async-caller figures below were re-measured.
-// Pinning those three totals to a stated population is part of #1660. The async-caller figures
-// below ARE re-derived here and carry their own scope. A seeded
+// and effective on 2026-07-30), so "ten" describes neither. The 653 / 592 / 380 are therefore kept
+// as HISTORY, not as current figures: each was drawn before the measuring step was a committed
+// mechanism, so the repo does not record which subset each covers. #1660 CLOSED that (PR #1796):
+// `pnpm exec tsx src/cli/measure-m5-caller-await.ts <target-dir> ...` is committed, and it prints
+// the target COUNT alongside every total — so the population travels with the figure instead of
+// being reconstructed later. The clones to pass it are `src/scan/external-corpus.ts`'s M5-slop
+// pins; the script does not read that file, the caller supplies the dirs. Its settled reading over
+// all seventeen is the 624 in the first bullet below — quote that run, dated, not these three.
+// A seeded
 // random sample of 50 (mulberry32, seed 20260730, over the population sorted by
 // target|file|line|helper) was read at source and graded against the exemption's own premise —
 // "a pure helper whose sole caller does the I/O". 45 held. 5 did not, and all 5 failed the SAME
@@ -939,16 +942,31 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 //
 // Two sub-populations are COUNTED AND LEFT, not silently accepted — the sample says neither is
 // reliably a defect, and disclosing a measured number beats narrowing on a hunch:
-//   * 401 of 653 have a caller whose awaits never touch the helper's result. THE PREDICATE BEHIND
-//     THIS FIGURE IS NOT STATED ANYWHERE and it is inherited from #1532 rather than re-derived: an
-//     independently written predicate measures 411 on the same 653 rows, and the one this file's
-//     `evidence` string ships measures 380 on the narrowed population. Which definition the sentence
-//     means is UNDECIDED — tracked as #1660, which also has to make the two sites agree. Do not
-//     treat any of the three as settled. The sample drew 36 of
-//     them; 3 were among the 5 defects above and now fire, and every one of the 33 that REMAIN
-//     spared was a genuine seam. So this shape is not itself the error — the caller is entangled
-//     with I/O either way, so extracting the pure half still buys what the brief asks for. This is
-//     the exemption's deliberate conservatism, now with a number on it.
+//   * #1660 SETTLED, 2026-07-31: "a caller whose awaits never touch the helper's result" had two
+//     candidate readings (401/653 inherited from #1532 with no stated predicate; 411/653 from an
+//     independently written predicate; 380/592 from the predicate PR #1654 shipped) — three
+//     unreconciled figures for one quantity, one of them client-facing. Settled on definition (b):
+//     DATAFLOW through a one-hop local binding, implemented as `callerAwaitTouchesHelperResult`
+//     below — the call expression, or an identifier a same-scope `const`/`let` binds to its result,
+//     is read inside an `await` operand. Chosen over the purely lexical "is the call syntactically
+//     inside an await" reading (a) because (a) calls `const x = helper(); await save(x)` a
+//     non-touch even though the awaited call's argument IS the helper's result, which is exactly
+//     the shape the three prior figures disagreed on. RE-MEASURED over ALL SEVENTEEN pinned
+//     M5-slop targets with THIS predicate, reproducible via
+//     `pnpm exec tsx src/cli/measure-m5-caller-await.ts` against `src/scan/external-corpus.ts`'s
+//     pins (a mechanism, not a one-off script — re-run it if this number is suspected stale): 624
+//     spared corpus-wide (not 592/653, both of which were measured over a ten/fourteen-target
+//     subset before cravab/flori-web/effective were pinned — see the SCOPE note below). Of those
+//     624: 599 have a caller that awaits SOMETHING, of which 407 never touch the helper's result
+//     and 192 do (spared anyway — this file's deliberate conservatism, see the next paragraph);
+//     25 have an async caller that awaits nothing (the next bullet's class). The 50-row sample
+//     below and its "36 of them" draw predate this re-measurement and are kept for their own
+//     finding (5 wrongly-spared defects, since fixed by `doesOwnIo`) — they are not re-drawn here,
+//     since #1660 is a definition/reconciliation fix, not a fresh precision audit.
+//     Of the sample's 36 drawn from the (then 653-row) caller-awaits population, 3 were among the
+//     5 `doesOwnIo` defects above and now fire, and every one of the 33 that REMAIN spared was a
+//     genuine seam. So this shape is not itself the error — the caller is entangled with I/O
+//     either way, so extracting the pure half still buys what the brief asks for.
 //   * 39 of 653 have a caller declared `async` with ZERO awaits. #1533 NARROWED this one rather
 //     than leaving it disclosed, using the cross-file resolver `buildImportGraph` is built on. An
 //     async caller that awaits nothing can only be doing I/O by RETURNING a promise, so the returns
@@ -970,33 +988,78 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 //     baselines today, not fourteen — #1524 added cravab, flori-web and effective on 2026-07-30,
 //     after this population was drawn. They are deliberately NOT folded into the figures above,
 //     which would mix two populations across one bullet list; measured separately, they add 10 to
-//     the class (cravab 9, flori-web 1) of which 9 fire, for 48 / 23 / 25 across all seventeen.
+//     the class (cravab 9, flori-web 1) of which 9 fire, for 48 / 23 / 25 across all seventeen —
+//     #1660's independent same-classifier re-measurement above reproduces this exactly (25 async-
+//     no-proof-sync across all seventeen), which cross-checks both measurements.
 //     Every one of the 14 was read at source. The three rows the class was named for come out right:
 //     mvp-boilerplate app/api/og/route.tsx:15 fires (`return new ImageResponse(…)`), inbox-zero
 //     utils/outlook/mail.ts:408 stays spared (`return sendEmailWithHtml(…)`, a local async), and
 //     saas-lite app/sitemap.xml/route.ts:24 stays spared — that third one CORRECTS #1533's body,
 //     which called its caller synchronous: it returns `getServerSideSitemap(…)` from `next-sitemap`,
 //     outside the repo and unreadable here, so it is a disclosed miss, not a proven seam.
-function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression, path: string, sf: ts.SourceFile, resolve: CalleeResolver): boolean {
-  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody, { path, sf, resolve })) return false; // the helper does the I/O — not a pure seam
-  let enclosing: ts.Node | undefined = callSite.parent;
-  while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
-  if (!enclosing) return false;
-  if (containsAwait(enclosing)) return true;
-  if (!isAsync(enclosing)) return false;
-  return !asyncCallerDoesNoAsyncWork(enclosing, path, sf, resolve);
+// #1660 — SETTLED definition of "the caller's awaits touch the helper's result": the helper's
+// call expression, or an identifier bound to its result by a same-scope `const`/`let` declared
+// in the caller (one hop — matching this file's existing one-hop local-binding convention in
+// `isProvablySynchronous`/`asyncCallerDoesNoAsyncWork`), is read inside an `await` expression's
+// operand. This is definition (b) from #1660's two candidates — dataflow through a direct local
+// binding — over definition (a), a purely lexical "is the call syntactically inside an await"
+// check: (a) would call `const x = helper(); await save(x)` a non-touch even though the awaited
+// call's argument IS the helper's result, which is the shape #1660 named as the reason the two
+// definitions diverge. `await helper()` directly, and `const x = helper(); await save(x)`, both
+// read as "touches"; `const x = helper(); await somethingElse()` does not.
+function callerAwaitTouchesHelperResult(enclosing: ts.Node, calleeName: string): boolean {
+  const boundNames = new Set<string>();
+  const isHelperCall = (n: ts.Node): boolean => ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === calleeName;
+  const mentionsHelper = (n: ts.Node): boolean => {
+    if (isHelperCall(n)) return true;
+    if (ts.isIdentifier(n) && boundNames.has(n.text)) return true;
+    return ts.forEachChild(n, mentionsHelper) ?? false;
+  };
+  let touches = false;
+  const visit = (n: ts.Node) => {
+    if (touches) return;
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && isHelperCall(n.initializer)) boundNames.add(n.name.text);
+    if (ts.isAwaitExpression(n) && mentionsHelper(n.expression)) {
+      touches = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(enclosing);
+  return touches;
 }
 
-function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, resolve: CalleeResolver): Finding[] {
-  const findings: Finding[] = [];
-  interface Candidate {
-    name: string;
-    node: ts.Node;
-    declNode: ts.Node;
-    body: ts.Node;
-    async: boolean;
-  }
-  const candidates: Candidate[] = [];
+type SeamOutcome = "fires-not-pure" | "fires-no-caller-await" | "fires-async-provably-sync" | "spared-caller-awaits" | "spared-async-no-proof-sync";
+const SPARED_OUTCOMES: ReadonlySet<SeamOutcome> = new Set(["spared-caller-awaits", "spared-async-no-proof-sync"]);
+
+// The one place that decides fire-vs-spare — `isTestabilitySeam` and the #1660 measurement CLI
+// (`src/cli/measure-m5-caller-await.ts`) both read this, so the number that ships in the finding's
+// `evidence` string can never diverge from what actually fires (the #1660 failure mode: two
+// independently typed literal numbers for one quantity).
+function helperSeamOutcome(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression, path: string, sf: ts.SourceFile, resolve: CalleeResolver): SeamOutcome {
+  if (isAsyncHelper || containsAwait(helperBody) || doesOwnIo(helperBody, { path, sf, resolve })) return "fires-not-pure"; // the helper does the I/O — not a pure seam
+  let enclosing: ts.Node | undefined = callSite.parent;
+  while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
+  if (!enclosing) return "fires-no-caller-await";
+  if (containsAwait(enclosing)) return "spared-caller-awaits";
+  if (!isAsync(enclosing)) return "fires-no-caller-await";
+  return asyncCallerDoesNoAsyncWork(enclosing, path, sf, resolve) ? "fires-async-provably-sync" : "spared-async-no-proof-sync";
+}
+
+function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression, path: string, sf: ts.SourceFile, resolve: CalleeResolver): boolean {
+  return SPARED_OUTCOMES.has(helperSeamOutcome(helperBody, isAsyncHelper, callSite, path, sf, resolve));
+}
+
+interface SingleUseHelperCandidate {
+  name: string;
+  node: ts.Node;
+  declNode: ts.Node;
+  body: ts.Node;
+  async: boolean;
+}
+
+function collectSingleUseHelperCandidates(sf: ts.SourceFile): SingleUseHelperCandidate[] {
+  const candidates: SingleUseHelperCandidate[] = [];
   for (const stmt of sf.statements) {
     const exported = ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
     if (exported) continue;
@@ -1016,7 +1079,44 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, 
       }
     }
   }
-  for (const c of candidates) {
+  return candidates;
+}
+
+// #1660's measurement CLI, exported so it reuses the exact classification `detectSingleUseHelper`
+// fires from — never a second, hand-rolled walk that could drift from production behaviour.
+interface SingleUseHelperClassification {
+  location: string;
+  name: string;
+  outcome: SeamOutcome;
+  awaitTouchesResult?: boolean; // set only when outcome === "spared-caller-awaits"
+}
+
+export function classifySingleUseHelperCandidates(files: SourceInput[]): SingleUseHelperClassification[] {
+  const resolve = makeCalleeResolver(files);
+  const out: SingleUseHelperClassification[] = [];
+  for (const f of files) {
+    if (!SOURCE_FILE.test(f.path)) continue;
+    const sf = parse(f.path, f.text);
+    for (const c of collectSingleUseHelperCandidates(sf)) {
+      const sites = callSites(sf, c.name, c.declNode);
+      if (sites.length !== 1) continue;
+      const outcome = helperSeamOutcome(c.body, c.async, sites[0]!, f.path, sf, resolve);
+      let enclosing: ts.Node | undefined = sites[0]!.parent;
+      while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
+      out.push({
+        location: `${f.path}:${lineOf(sf, c.node)}`,
+        name: c.name,
+        outcome,
+        awaitTouchesResult: outcome === "spared-caller-awaits" && enclosing ? callerAwaitTouchesHelperResult(enclosing, c.name) : undefined,
+      });
+    }
+  }
+  return out;
+}
+
+function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, resolve: CalleeResolver): Finding[] {
+  const findings: Finding[] = [];
+  for (const c of collectSingleUseHelperCandidates(sf)) {
     const sites = callSites(sf, c.name, c.declNode);
     if (sites.length !== 1) continue;
     if (isTestabilitySeam(c.body, c.async, sites[0]!, path, sf, resolve)) continue;
@@ -1027,7 +1127,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId, 
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated (re-measured 2026-07-31 against pinned commits of real open-source repositories; the subset these totals cover is stated in this file's source comment, and reconciling it against the full pinned corpus is tracked as #1660): it spares 592 helpers, down from 653 before the purity test was widened. Of those 592, 380 have a caller whose awaits never touch the helper's result — a count produced by this pass's own predicate, which is NOT the (unstated) predicate behind the 401 previously recorded for the same quantity, so read it as one reading of that phrase rather than a settled figure; reconciling the two is tracked as #1660 — and 24 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous, so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the original 653, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it exempts a helper that does no I/O of its own whose one caller is async or awaits — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape. What the exemption costs is MEASURED, not estimated: re-measured 2026-07-31 with the SETTLED #1660 predicate (dataflow through a one-hop local binding — see \`callerAwaitTouchesHelperResult\`) over ALL SEVENTEEN pinned M5-slop corpus targets (\`pnpm exec tsx src/cli/measure-m5-caller-await.ts\`, reproducible against \`src/scan/external-corpus.ts\`'s pins). It spares 624 helpers, of which 407 have a caller whose awaits never touch the helper's result under that settled predicate (192 do touch it and are spared anyway — the exemption's deliberate conservatism, see this file's source comment), and 25 have a caller declared async that awaits nothing and whose returns could not be shown to be synchronous — so a genuinely single-use helper sitting next to unrelated I/O is still spared with them. A 50-row seeded sample of the pre-#1532 population, read at source, put the wrongly-spared rate at 10% (95% CI 4.3–21.4%).`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,

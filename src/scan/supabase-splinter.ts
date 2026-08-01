@@ -126,26 +126,43 @@ export function parseSplinterOutput(raw: string): AdvisorsResponse {
   return { lints: splinterRowsToAdvisorLints(rows), unparsedRows };
 }
 
-// Not unit-tested — same as runSemgrep (src/scan/semgrep.ts): it shells out to a real external
-// binary against a real DB connection, so it's exercised by a live confirmation run instead
-// (docs/runbooks/dry-run-calibration.md §9). parseSplinterOutput above is the tested layer.
+// #1755 — the #1664/#1752 classification (execSemgrep/runOsvScanner) applied to psql. MEASURED
+// 2026-07-31 against psql 18.4 client / Postgres 16.14 server, docker-local: WITHOUT
+// `-v ON_ERROR_STOP=1` (the invocation this file shipped until now), a runtime error anywhere in
+// splinter.sql's single compound lint query — one `1857`-line statement, so any lint's failure
+// aborts the WHOLE statement — makes psql print only the SET/DO command-tag noise (0 lint rows,
+// not a partial list: Postgres does not stream rows from an aborted statement) and STILL EXIT 0.
+// A fully failed lint pass therefore read as "zero advisories, clean scan" with no exception ever
+// reaching this function's `catch`, on the paid tier where the client granted DB access
+// specifically for completeness. `-v ON_ERROR_STOP=1` (MEASURED same setup) turns that into exit
+// 3, so a script error now reaches this function as a thrown, classifiable failure instead of a
+// false-clean success. A separate multi-statement probe (two independent top-level SELECTs, the
+// first succeeding before the second fails) DID show a genuine partial row on stdout before the
+// non-zero exit — splinter.sql itself has no such second independent SELECT, but the classification
+// below refuses ANY non-zero exit's stdout regardless, so that shape is covered too if the vendored
+// file ever changes shape. `psql`'s own documented meaning: 0 = success, 1 = fatal error of its
+// own (bad option, failed to connect), 2 = connection to the server went bad mid-session, 3 = a script
+// error under ON_ERROR_STOP. None of 1/2/3, nor a signal, is treated as complete.
 export function runSplinter(connectionString: string): AdvisorsResponse {
-  let out: string;
   // #1297 — the connection string is the CLIENT's, so its password is a real credential of the
   // database being audited. libpq reads it from PGPASSWORD, keeping it out of the world-readable argv.
   const { conninfo, password } = splitPgPassword(connectionString);
-  const argv = [conninfo, "-t", "-A", "-F", FIELD_SEP, "-f", SPLINTER_SQL_PATH];
+  const argv = [conninfo, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", FIELD_SEP, "-f", SPLINTER_SQL_PATH];
   assertNoSecretInArgv("runSplinter", argv, [password]);
   try {
-    out = execFileSync("psql", argv, {
+    const out = execFileSync("psql", argv, {
       encoding: "utf8",
       env: password ? { ...process.env, PGPASSWORD: password } : process.env,
       maxBuffer: 1024 * 1024 * 64,
     });
+    return parseSplinterOutput(out);
   } catch (err) {
-    const e = err as { stdout?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else throw err;
+    const e = err as { code?: string; status?: number | null; signal?: string | null };
+    if (e.code === "ENOENT") return { lints: [], failure: "psql not found on PATH" };
+    const how = e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`;
+    // Never parse the caught stdout as the advisor set — under ON_ERROR_STOP a non-zero exit means
+    // the lint query did not run to completion, and #1755's own measurement shows a fully-failed
+    // run's stdout reads as a legitimate-looking empty result, not an obviously-truncated one.
+    return { lints: [], failure: `psql run did not complete (${how})` };
   }
-  return parseSplinterOutput(out);
 }

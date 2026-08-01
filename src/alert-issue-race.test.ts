@@ -91,7 +91,10 @@ function runRacer(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d));
+    // setEncoding, never `stderr += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
+    // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (d: string) => (stderr += d));
     child.on("close", (code) => (code === 0 ? res() : rej(new Error(`racer exited ${code}: ${stderr}`))));
   });
 }

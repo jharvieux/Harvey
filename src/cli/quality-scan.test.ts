@@ -68,7 +68,10 @@ function spawnCli(binPath: string, args: string[], cwd: string): Promise<void> {
   return new Promise((res, rej) => {
     const child = spawn(binPath, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
-    child.stderr.on("data", (d: Buffer) => (stderr += d));
+    // setEncoding, never `stderr += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
+    // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (d: string) => (stderr += d));
     child.on("error", rej);
     child.on("close", (code) => (code === 0 ? res() : rej(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`))));
   });

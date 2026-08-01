@@ -429,6 +429,33 @@ function unparsedSplinterFinding(unparsedRows: number): Finding[] {
   ];
 }
 
+// #1755 — same disclosure contract as SEM-00/DEP-OSV-00: a Splinter run that did not complete
+// must not read as "zero advisories, clean scan" on the paid connected tier where the client
+// granted DB access specifically for completeness. `unparsedSplinterFinding` above covers a
+// PARTIAL loss inside an otherwise-successful parse; this covers the run never producing a
+// parseable result at all.
+function splinterFailureFinding(reason: string): Finding[] {
+  return [
+    {
+      id: "SB-SPLINTER-FAIL-00",
+      title: "Supabase Advisor (Splinter) lint pass did not run to completion",
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — Supabase Advisor lints not assessed",
+      location: "(splinter.sql)",
+      status: "Open",
+      evidence: `The Splinter lint query failed to run to completion: ${reason}. No Supabase Advisor security/performance lint was assessed on this pass — the empty result is a disclosed coverage gap, not a finding of zero advisories.`,
+      impact: "Every rls_disabled_in_public, security_definer_view and other Advisor-sourced finding this pass would normally report is absent from this deliverable, and that absence is not evidence the underlying objects are clean.",
+      fix: "Re-run the connected scan against the same database — a transient connection issue or a locked catalog table usually clears on retry — and confirm the SB-SPLINTER-FAIL-00 row is gone.",
+      value: 1,
+      ease: 3,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
 async function scanLocal(
   connectionString: string = LOCAL_CONNECTION,
   splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter,
@@ -475,6 +502,7 @@ async function scanLocal(
       ...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason),
       ...localScopeFinding(restProbe),
       ...restScopeFindings,
+      ...(splinterResponse.failure ? splinterFailureFinding(splinterResponse.failure) : []),
       ...unparsedSplinterFinding(splinterResponse.unparsedRows ?? 0),
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),

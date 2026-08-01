@@ -23,6 +23,7 @@ import { assembleEngagementDocument } from "./audit-report.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { osvUnavailableFinding } from "./scan/dependencies.js";
+import { truffleHogUnavailableFinding } from "./scan/secrets.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { parseSemgrepFindings, semgrepUnavailableFinding } from "./scan/semgrep.js";
 import { toSarif } from "./sarif.js";
@@ -131,6 +132,10 @@ function deliverable(): FindingsDocument {
     // #1752: the incomplete-osv-scanner disclosure, produced by the real producer with the
     // exit/signal-naming reason runOsvScanner now returns — same seam, same proof as SEM-00 above.
     osvUnavailableFinding("osv-scanner run did not complete (killed by signal SIGKILL)"),
+    // #1754: the incomplete-trufflehog disclosure. Same seam again, and the one where a lost reason
+    // costs the most — the row it replaces is a secret scan, so silence here reads as "no
+    // credentials committed" rather than "the scan stopped after 116 of them".
+    truffleHogUnavailableFinding("trufflehog run did not complete (killed by signal SIGKILL)"),
     fixedFinding(),
     ...rolled,
   ];
@@ -143,7 +148,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
   const html = buildHtml(doc);
 
   it("the fixture actually exercises all three places content can be lost", () => {
-    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
+    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEC-TH-00", "SEM-00"]);
     expect(doc.findings.some((f) => f.severity === "Info" && f.confidence !== "N/A")).toBe(true);
     expect(html).toMatch(/not individually rendered/);
   });
@@ -167,7 +172,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
       html,
     );
     const breaches = renderFidelityBreaches(doc, broken);
-    expect(breaches.map((b) => b.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
+    expect(breaches.map((b) => b.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEC-TH-00", "SEM-00"]);
     expect(breaches.every((b) => b.kind === "reason-dropped")).toBe(true);
   });
 
@@ -414,6 +419,57 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     expect(broken).toContain(esc(TWIN_EVIDENCE));
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.some((b) => b.kind === "undisclosed-omission" && b.id.includes("SB-RLS-POLICY-public.t11.t11_read"))).toBe(true);
+  });
+});
+
+// #1730 — `reviewFlagSection` (report-template/render.mjs) used to emit a plain `<tr>` with no
+// `<span class="fid">`, so `renderFidelityBreaches`'s reviewFlagOnly loop had no per-finding region
+// to read and scored against the WHOLE document instead — the #1062 masking shape #1627 closed
+// everywhere else a finding's own words render. Two nested-PII rows sharing a location and a
+// column set covered for each other under that scoring.
+describe("#1730 the nested-PII review table is scored per row, not against the whole document", () => {
+  const reviewRow = (id: string): Finding =>
+    finding({
+      id,
+      title: "JSON column may hold nested PII",
+      confidence: "Review",
+      taxonomy: "M10 — Nested PII review",
+      category: "Data",
+      location: "supabase/tables/orders.sql:1",
+      reviewFlagOnly: true,
+      reviewFlagColumns: ["metadata"],
+      evidence: `evidence for ${id}: metadata is a JSON/JSONB column whose name suggests it may hold nested PII`,
+    });
+  // Twins: same location, same reviewFlagColumns — the exact collision shape #377/#459 name.
+  const twinA = reviewRow("M10-PII-01");
+  const twinB = reviewRow("M10-PII-02");
+  const doc = assembleEngagementDocument(RECORDED, ENV, [twinA, twinB], META);
+  const html = buildHtml(doc);
+
+  it("the fixture actually collides — two review-flag rows share BOTH location and columns", () => {
+    expect(twinA.location).toBe(twinB.location);
+    expect(twinA.reviewFlagColumns).toEqual(twinB.reviewFlagColumns);
+    expect(html.match(/supabase\/tables\/orders\.sql:1/g)?.length).toBe(2); // one per row, not deduped
+  });
+
+  it("both rows carry their own <span class=\"fid\"> marker", () => {
+    expect(html).toContain('<span class="fid">M10-PII-01</span>');
+    expect(html).toContain('<span class="fid">M10-PII-02</span>');
+  });
+
+  it("no breach when both rows render", () => {
+    expect(renderFidelityBreaches(doc, html)).toEqual([]);
+  });
+
+  it("CONTROL — removing ONE row is caught, even though its location and columns still appear (on the surviving twin's row)", () => {
+    const broken = html.replace(/<tr><td class="b"><span class="fid">M10-PII-02<\/span>[\s\S]*?<\/tr>/, "");
+    expect(broken, "the control must actually remove a row").not.toBe(html);
+    // The words are still IN the document (twinA's row), which is exactly why the old whole-
+    // document scoring missed this — proving the fixture is a real collision, not just an absence.
+    expect(broken).toContain("supabase/tables/orders.sql:1");
+    expect(broken).toContain("metadata");
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.some((b) => b.kind === "reason-dropped" && b.id === "M10-PII-02")).toBe(true);
   });
 });
 

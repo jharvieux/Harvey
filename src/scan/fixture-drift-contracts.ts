@@ -257,6 +257,36 @@ export function classifyFreshRun<T>(o: { contract: (p: T) => string[]; notRunIf?
   return violations.length > 0 ? { kind: "drift", violations } : { kind: "ok" };
 }
 
+interface DriftReport {
+  message: string;
+  stream: "log" | "error";
+  exitCode: 0 | 1;
+}
+
+/**
+ * The verdict → stdout/exit mapping, pulled out of `runDrift` (#1727) so it is a pure function with
+ * a test — only the actual `console.*`/`process.exit` calls stay unguarded in the CLI. Deleting the
+ * `"not-run"` branch here now breaks `fixture-drift-contracts.test.ts` directly, closing the gap
+ * #1416.4 left: the mapping used to live inline in `src/cli/fixture-drift.ts`, which imports and
+ * runs its argv dispatch at module load, so nothing there was reachable from a test without a live
+ * subprocess.
+ */
+export function renderDriftVerdict(tool: string, installedVersion: string, verdict: FreshRunVerdict, summary: string): DriftReport {
+  if (verdict.kind === "not-run") {
+    return { message: `○ ${tool}-fixture-drift: NOT RUN — ${verdict.reason}`, stream: "log", exitCode: 0 };
+  }
+  if (verdict.kind === "drift") {
+    return {
+      message:
+        `✗ ${tool}-fixture-drift: a fresh ${tool} ${installedVersion} run no longer matches the schema the committed fixture assumes:\n  - ${verdict.violations.join("\n  - ")}\n` +
+        `Re-capture the committed fixture (see its PROVENANCE.md) and re-verify the parser against the new shape.`,
+      stream: "error",
+      exitCode: 1,
+    };
+  }
+  return { message: `✓ ${tool}-fixture-drift: ${summary}, schema contract holds (committed fixture and fresh run both compliant).`, stream: "log", exitCode: 0 };
+}
+
 /**
  * Vitals' drift options minus the version/rerun half, which needs the plugin binary. It lives HERE
  * rather than beside `vitalsDrift()` for one reason: `src/cli/fixture-drift.ts` runs its argv

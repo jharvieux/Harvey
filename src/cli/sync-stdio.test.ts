@@ -72,18 +72,32 @@ function runPiped(file: string): Promise<{ code: number | null; out: string }> {
       if (chunk !== null) out += chunk;
     }, READ_TICK_MS);
 
+    // Resolve only once BOTH the exit code and the end of stdout are in hand. Waiting on `end`
+    // alone lost the code (`[1, null]`) and waiting on `exit` alone stranded a paused stream, which
+    // truncated the GUARDED run and made the guard look broken. Neither event orders reliably: the
+    // `end`-first interleaving never occurred in 20 local macOS runs and DID occur on Linux CI, so
+    // this is a barrier rather than a preference about which fires first.
     let code: number | null = null;
-    // Once the process is GONE the throttle has done its job — nothing more can be queued, so stop
-    // rate-limiting and take the rest at full speed. Resolving on the child's `close` instead would
-    // strand whatever is still sitting in a paused stream, which silently truncates the GUARDED run
-    // and makes the guard look broken.
+    let exited = false;
+    let ended = false;
+    const settle = (): void => {
+      if (exited && ended) res({ code, out });
+    };
+
     child.on("exit", (c) => {
       code = c;
+      exited = true;
+      // The process is gone, so nothing more can be queued — the throttle has done its job and the
+      // rest can come at full speed.
       clearInterval(pump);
       child.stdout.on("data", (d: string) => (out += d));
       child.stdout.resume();
+      settle();
     });
-    child.stdout.on("end", () => res({ code, out }));
+    child.stdout.on("end", () => {
+      ended = true;
+      settle();
+    });
     child.on("error", (e) => {
       clearInterval(pump);
       rej(e);

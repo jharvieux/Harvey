@@ -108,16 +108,31 @@ export function workspacePackages(manifests: { path: string; text: string }[]): 
   return out;
 }
 
-// The declared entry (main/module/exports["."]), extension-stripped, plus the src/index / index /
-// src/main fallbacks a source-only view of a built package needs — candidatePaths() appends the
-// extensions and /index, so a literal `main: "./dist/index.js"` never matches a source tree that
-// only has src/index.ts. Shared by workspacePackages above (import resolution, where the fallback
-// always applies — a bare workspace import has to resolve to SOMETHING) and by perf-code.ts's
-// own-declared-entry exclusion (#1526/#1542/#1554), which gates its USE of `bases` on whether
-// `declared` is non-empty: import resolution and "is this script building the package's own
-// entry" are different questions, and only the first wants a guess when nothing was declared.
+// The declared entry (main/module/exports["."], PLUS every literal — non-wildcard — exports
+// subpath), extension-stripped, plus the src/index / index / src/main fallbacks a source-only
+// view of a built package needs — candidatePaths() appends the extensions and /index, so a
+// literal `main: "./dist/index.js"` never matches a source tree that only has src/index.ts.
+// Shared by workspacePackages above (import resolution, where the fallback always applies — a
+// bare workspace import has to resolve to SOMETHING) and by perf-code.ts's own-declared-entry
+// exclusion (#1526/#1542/#1554), which gates its USE of `bases` on whether `declared` is
+// non-empty: import resolution and "is this script building the package's own entry" are
+// different questions, and only the first wants a guess when nothing was declared.
+//
+// #1641 — a package that declares ONLY subpath exports (no `"."` key, and often no main/module —
+// a `"files"`-only internal workspace member, e.g. `@carbon/dev`'s `{"./vite": "./src/vite.ts"}`)
+// used to read as `declared: []` here, because `exportsDot` only ever reads the `"."` key. That
+// silently reintroduced #1526's tooling-mask defect for exactly that shape: a `dev`/`build` script
+// building one of the package's own subpath targets was not recognised as "the package building
+// itself" and its whole import closure was wrongly swept into `devToolingModules`, dropping real
+// findings. MEASURED 2026-07-31 over the pinned M5-slop corpus (17 targets, every package.json,
+// not just `targets/**`, which had zero): 14 packages across 4 targets (saas-lite 6, carbon 5,
+// rallly 2, inbox-zero 1) declare `exports` with no `"."` key — non-zero, so this is restored
+// rather than left as a recorded gap. Every literal (non-wildcard) subpath target now joins
+// `declared` via `exportsExact`; a WILDCARD-only subpath (`@rallly/utils`'s `"./*": "./src/*.ts"`,
+// 1 of the 14) names a directory prefix, not a single file, so it still contributes nothing here —
+// there is no one entry for a script to "be building".
 export function entryBasesFor(pkg: { main?: unknown; module?: unknown; exports?: unknown }, dir: string): { declared: string[]; bases: string[] } {
-  const declared = [pkg.main, pkg.module, exportsDot(pkg.exports)].filter((e): e is string => typeof e === "string");
+  const declared = [pkg.main, pkg.module, exportsDot(pkg.exports), ...exportsExact(pkg.exports).map((e) => e.to)].filter((e): e is string => typeof e === "string" && e.length > 0);
   const bases = [...declared.map((e) => e.replace(/\.[cm]?[jt]sx?$/, "")), "src/index", "index", "src/main"];
   return { declared, bases: [...new Set(bases.map((b) => joinRepoPath(dir, b)))] };
 }
