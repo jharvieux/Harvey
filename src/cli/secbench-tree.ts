@@ -26,6 +26,7 @@
 // trap is identical in source mode: a missing node_modules/<pkg> drops that entry out of
 // scoreLibrarySource's `scanned` set the same way.
 
+import "./sync-stdio.js";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

@@ -12,6 +12,7 @@
 // It exits 0 whatever it finds. The census REPORTS a population; the gate is `validate-acceptance`,
 // which flags the same comments per-issue at the moment they could mislead a close.
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { supersedingAcceptanceComments } from "../acceptance-conservation.js";
 

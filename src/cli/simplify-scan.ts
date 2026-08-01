@@ -10,6 +10,7 @@
 // human-reviewed judgment (docs/design/m6-simplification-eval.md §5), and `pnpm verify` must stay
 // deterministic and offline. Feed the packet to a reviewer, then triage the writeup by hand.
 
+import "./sync-stdio.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";

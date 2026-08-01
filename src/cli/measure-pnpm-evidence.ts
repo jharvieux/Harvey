@@ -23,6 +23,7 @@
 // re-tested nothing (the #1246 shape). An unreadable or empty population is therefore UNVERIFIABLE,
 // never a measurement. Zero PRs counts as unreadable for the same reason a bound whose population
 // is zero is a guess rather than a limit.
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { parseBody } from "../acceptance-conservation.js";
 

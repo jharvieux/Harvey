@@ -13,6 +13,7 @@
 //
 // The gate's own scope, and the 4b half that is not built, are stated in src/disclosure-venue.ts.
 
+import "./sync-stdio.js";
 import {
   BOUND_MARKERS,
   BOUND_TRIAGE,

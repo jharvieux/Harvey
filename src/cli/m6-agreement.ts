@@ -16,6 +16,7 @@
 // (docs/design/m6-first-real-target-verdict.md). Splits are never included — they still need the
 // human adjudicator this report already sends them to.
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { writePassArtifact } from "../audit-pass-artifact.js";
 import { buildM6PassArtifact, compareReviewerPasses, parseReviewerPass, renderAgreementReport } from "../m6-agreement.js";

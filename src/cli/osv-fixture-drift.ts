@@ -15,6 +15,7 @@
 //
 //   pnpm exec tsx src/cli/osv-fixture-drift.ts
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

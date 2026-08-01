@@ -16,6 +16,7 @@
 // live against real Supabase projects (#815): parseAdvisorFindings() successfully parsed
 // 220-lint payload, endpoint path confirmed via published OpenAPI spec.
 
+import "./sync-stdio.js";
 import { writeFileSync } from "node:fs";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorReport } from "../perf-scan.js";

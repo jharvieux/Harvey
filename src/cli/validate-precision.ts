@@ -9,6 +9,7 @@
 //
 // Exit code: 1 if any planted positive is missed or any benign negative fires.
 
+import "./sync-stdio.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision, type HeuristicRow } from "../scan/heuristic-precision.js";
 

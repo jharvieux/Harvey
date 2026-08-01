@@ -12,6 +12,7 @@
 // Exit 1 on any breach: a finding whose own words did not reach the rendered report and whose
 // omission is not disclosed and counted.
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { buildHtml } from "../../report-template/render.mjs";
 import { renderFidelityBreaches } from "../render-fidelity.js";

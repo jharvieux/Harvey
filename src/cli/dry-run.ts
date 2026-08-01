@@ -14,6 +14,7 @@
 // /vuln-scan, /triage pass (needs the anthropics/defending-code-reference-harness skills),
 // and M2/M7/M8 (quality-scan, perf-scan, mutation-scan — need a live DB and/or a running app).
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

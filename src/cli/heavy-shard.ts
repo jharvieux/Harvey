@@ -8,6 +8,7 @@
 //
 // Exits non-zero on a bad index, and prints nothing but file paths on success — the workflow feeds
 // stdout straight to vitest, so any stray output would be read as a filename.
+import "./sync-stdio.js";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "../heavy-cli-tests.js";
 import { assertKnownFlags } from "./args.js";
 

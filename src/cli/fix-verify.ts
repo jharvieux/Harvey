@@ -25,6 +25,7 @@
 // but they are always printed with their reason and their tickets are never closed — a detector
 // that could not re-run is not a clean detector.
 
+import "./sync-stdio.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

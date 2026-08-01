@@ -9,6 +9,7 @@
 //
 // Thin I/O wrapper per the repo convention — the transform is the tested pure function in
 // src/scan-focus.ts.
+import "./sync-stdio.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { buildScanFocus, parseHotspots } from "../scan-focus.js";
 

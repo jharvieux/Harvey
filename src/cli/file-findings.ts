@@ -20,6 +20,7 @@
 // --interval/--max-retries (rate-limit pacing), and --auth-intake <tracker> (print the least-
 // privilege token setup and exit). Script alias: `pnpm file-findings`.
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { GitHubTracker } from "../trackers/github.js";
 import { JiraTracker } from "../trackers/jira.js";

@@ -8,6 +8,7 @@
 // that ships no D-091 catalog (the common case for a client repo) exits 0 with a note — nothing
 // to compare against.
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

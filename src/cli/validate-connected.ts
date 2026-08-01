@@ -43,6 +43,7 @@
 //   checkGraphqlIntrospection   -> exit 1, "FAIL P-GRAPHQL-INTROSPECTION"
 // Clean tree: exit 0, 3/3 scored. A gate nobody has watched fail is indistinguishable from a dead one.
 
+import "./sync-stdio.js";
 import { arg, assertKnownFlags } from "./args.js";
 import { buildCoverageMatrix, CORPUS, isLiveTier, LIVE_TIERS, type LiveTier, type MatrixRow } from "../scan/calibration.js";
 import { hasPgGraphql, LOCAL_REST_URL, probeExposedSchemas, runSupabaseScan } from "../scan/supabase.js";

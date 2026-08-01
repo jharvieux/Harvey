@@ -14,6 +14,7 @@
 // The gate's own scope is stated in src/fs-walk-guard.ts. The logic runs under `pnpm verify` via
 // src/fs-walk-guard.test.ts; this CLI is the human-readable and negative-control face of it.
 
+import "./sync-stdio.js";
 import {
   BANNED,
   DISCOVERY_ROOTS,

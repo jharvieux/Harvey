@@ -16,6 +16,7 @@
 // rule graduates onto it. See fatalRecallMisses() in src/scan/calibration.ts for the decision and
 // the two measurements behind it.
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";

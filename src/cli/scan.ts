@@ -26,6 +26,7 @@
 //
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
+import "./sync-stdio.js";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { arg, assertKnownFlags, targetDir } from "./args.js";

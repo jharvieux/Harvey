@@ -9,6 +9,7 @@
 // freshness window, or when there is no corpus to measure — a gate with nothing to assess must not
 // exit 0. `--now` is the negative control: move the clock past the window and the gate must go red.
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -7,6 +7,7 @@
 // Prints the shareable text summary to stdout; --out/--summary-out also write the JSON/Markdown.
 // Fail loud: an unreadable or non-findings-document input aborts the run rather than being skipped.
 
+import "./sync-stdio.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";

@@ -25,6 +25,7 @@
 // --out <artifacts-dir>` is still the write step that produces M1.pass.json; this flag just removes
 // the manual extraction in front of it.
 
+import "./sync-stdio.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import postgres from "postgres";
 import type { Finding } from "../findings.js";

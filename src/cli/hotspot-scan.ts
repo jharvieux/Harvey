@@ -34,6 +34,7 @@
 // Thin untested I/O wrapper per the repo convention — the transforms are the tested pure
 // functions in src/hotspot-scan.ts.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

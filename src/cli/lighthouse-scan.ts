@@ -48,6 +48,7 @@
 // the browser-resolution error routing (#556) IS tested as a child process — see
 // lighthouse-scan.test.ts.
 
+import "./sync-stdio.js";
 import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { existsSync, writeFileSync } from "node:fs";

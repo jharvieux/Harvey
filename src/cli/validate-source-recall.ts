@@ -28,6 +28,7 @@
 // already inside the same runMechanicalScan output) — printed and gated as its own section, never
 // blended into the request→sink SOURCE-DETECTOR RECALL number above.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { arg, assertKnownFlags } from "./args.js";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";

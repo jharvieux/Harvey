@@ -17,6 +17,7 @@
 // last run, so a standing backlog of historical instances never makes it permanently red. The
 // historical population is in the issue and in the report's own footer, not in this exit code.
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { recordDeclaredNoOp, recordMeasured } from "../ci-liveness.js";
 import { findSupervisedDeclines, judgeDecline, ROUTINELY_GRANTED, selftestCases, type IssueLike } from "../supervised-declines.js";

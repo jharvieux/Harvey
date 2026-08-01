@@ -42,6 +42,7 @@
 // --seed-drop-disposition / --seed-bare-evidence / --seed-remainder <n> plant the same violations
 // into a REAL body (--pr / --body-file), mirroring validate-conservation.ts's --seed-* flags.
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

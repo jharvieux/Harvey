@@ -41,6 +41,7 @@
 // --seed-misdeclared  SEED THE #1146 DISPOSITION VIOLATION: declare a finding `suppressed` that is
 //                 in fact still delivered. A disposition column credited against a fiction must fail.
 
+import "./sync-stdio.js";
 import { probeExec } from "../probe-exec.js";
 import { recordMeasured } from "../ci-liveness.js";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
