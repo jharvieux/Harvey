@@ -23,7 +23,7 @@ import { readEntriesSafe, readNamesSafe, type SafeDirEntry } from "./fs-walk.js"
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
-import { buildScopeLedger, type ScopeRow } from "./pentest/scope-ledger.js";
+import { buildScopeLedger, type AppBehaviorProbed, type ScopeRow } from "./pentest/scope-ledger.js";
 import { readDriftPassEvidence, type DriftPassEvidence } from "./scan/supabase-drift.js";
 import { buildTwoTenantSeed, type SeedSkip, type TwoTenantSeed } from "./pentest/two-tenant-seed.js";
 
@@ -376,7 +376,7 @@ export interface StandUpResult {
 export interface StandUpRunner {
   standUpDb: (targetDir: string, plan: ProvisioningPlan) => StandUpResult;
   runApp: (targetDir: string) => { ok: boolean; output: string; prunedDeps?: PrunedDep[] };
-  pentest: (targetDir: string, coverage: Coverage) => { ok: boolean; findings: Finding[]; output: string };
+  pentest: (targetDir: string, coverage: Coverage) => { ok: boolean; findings: Finding[]; output: string; appBehaviorProbed?: AppBehaviorProbed };
   clientSuite?: (targetDir: string, suite: ClientSecuritySuite) => { ok: boolean; output: string };
 }
 
@@ -492,6 +492,7 @@ function probeOneProject(opts: {
     rows: db.scopeRows ?? [],
     softDeleteProbed: db.softDeleteTables,
     driftPass,
+    appBehaviorProbed: pt.appBehaviorProbed, // #1686 — flips the race/business-logic/upload rows when probed
   });
   findings.push(scope.finding);
   limitations.push(...scope.limitations);

@@ -22,6 +22,8 @@ import {
   type StandUpRunner,
 } from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
+import { driveAppBehaviorSuite } from "./pentest/live-standup.js";
+import type { AppBehaviorProbed } from "./pentest/scope-ledger.js";
 
 const layout = (over: Partial<RepoLayout> = {}): RepoLayout => ({
   migrationDirs: ["/repo/supabase/migrations"],
@@ -609,6 +611,113 @@ describe("the connected drift pass reaches M2's scope statement (#1280)", () => 
     expect(scopeOf(written.findings).evidence).toMatch(/PROD-VS-MIGRATION DRIFT WAS OBSERVED ON THIS ENGAGEMENT/);
     expect(scopeOf(written.findings).evidence).toMatch(/1 drift finding\(s\)/);
     rmSync(multiDir, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
+});
+
+// #1686 follow-up — the SAME shape as the drift seam above, for the app-behaviour ledger rows.
+// Deleting `appBehaviorProbed: pt.appBehaviorProbed` from probeOneProject left 49 files / 771 tests
+// green (MEASURED on this branch before this describe existed): the property is optional on the
+// ledger input, so tsc accepts the omission and scope-ledger.test.ts only exercises the pure
+// function. Without the wiring the three rows silently fall back to the not-invoked wording — a run
+// that DID probe them reads exactly like one that never ran them.
+describe("the stand-up's app-behaviour states reach M2's scope statement (#1686)", () => {
+  const now = () => "2026-07-17T12:00:00.000Z";
+  const scopeOf = (findings: Finding[]): Finding => findings.find((f) => f.id === "M2-SCOPE-RECONSTRUCTION")!;
+
+  const runWithStates = (appBehaviorProbed: AppBehaviorProbed): Finding => {
+    const artifacts = mkdtempSync(join(tmpdir(), "harvey-dynval-appbehavior-"));
+    const repo = mkdtempSync(join(tmpdir(), "harvey-dynval-appbehavior-repo-"));
+    const mig = join(repo, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001_init.sql"), "create table tenants (id uuid primary key, name text not null);\ncreate table docs (id uuid primary key, tenant_id uuid not null, body text);");
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: layout({ migrationDirs: [mig] }), artifactsDir: artifacts, now,
+      makeProject: () => ({
+        runner: runner({ pentest: () => ({ ok: true, findings: [FINDING], output: "", appBehaviorProbed }) }),
+        stop: () => undefined,
+      }),
+    });
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    rmSync(artifacts, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+    return scopeOf(written.findings);
+  };
+
+  it("flips the three rows to [probed] in the WRITTEN artifact when the stand-up probed them", () => {
+    const scope = runWithStates({ concurrency: "probed", businessLogic: "probed", upload: "probed" });
+    expect(scope.evidence).toMatch(/\[probed] concurrency \/ TOCTOU/);
+    expect(scope.evidence).toMatch(/\[probed] business-logic abuse/);
+    expect(scope.evidence).toMatch(/\[probed] file-upload validation/);
+    // and it must NOT still be claiming the derivation was never invoked on this path
+    expect(scope.evidence).not.toMatch(/never invokes it/);
+  });
+
+  it("carries a CRASHED suite through to the artifact rather than as an absent target", () => {
+    const scope = runWithStates({ concurrency: "crashed", businessLogic: "derived-none", upload: "not-reached" });
+    const line = (prefix: string): string => scope.evidence.split("\n").find((l) => l.includes(prefix))!;
+    expect(line("race-toctou.ts")).toMatch(/subprocess FAILED before producing a verdict/);
+    expect(line("business-logic.ts")).toMatch(/derived NO case/);
+    expect(line("upload-attack.ts")).toMatch(/did not run because the app did not boot/);
+  });
+});
+
+// #1686 follow-up — the producer→deliverable seam for the three app-behaviour suites. MEASURED
+// against the executor's own delivered artifact (/tmp/m2-vsa2/M2.pass.json, 28 findings): only each
+// suite's PROVEN probes were there, and BIZLOGIC-VALUE / BIZLOGIC-WORKFLOW / BIZLOGIC-AUTHZ /
+// UPLOAD-SIZE-LIMIT / UPLOAD-STORED-XSS and the probed-and-cleared controls upload/safe,
+// api-upload-safe, RACE-TOCTOU:api-checkout each occurred 0 times — a cleared control read exactly
+// like one nobody ran. This drives the real suite reader over a real suite output file and asserts
+// every one of them lands in the WRITTEN M2.pass.json.
+describe("a suite's non-proven verdicts and cleared controls reach the written artifact (#1686)", () => {
+  const now = () => "2026-07-17T12:00:00.000Z";
+
+  it("carries requires-live-run classes and probed-clean controls all the way into M2.pass.json", () => {
+    const suiteDir = mkdtempSync(join(tmpdir(), "harvey-suite-out-"));
+    const out = join(suiteDir, "upload.json");
+    // The shape pentest.ts --mode=upload-attack emits: proven probes in `findings`, EVERY probe's
+    // verdict in `results`. The gap between the two is what used to be dropped.
+    writeFileSync(out, JSON.stringify({
+      mode: "upload-attack",
+      findings: [FINDING],
+      results: [
+        { id: "UPLOAD-DISGUISED-TYPE:route-api-upload", status: "vulnerable", reason: "a PHP payload was accepted as image/png" },
+        { id: "UPLOAD-SIZE-LIMIT", status: "requires-live-run", reason: "no target reported a size limit to test against" },
+        { id: "UPLOAD-STORED-XSS", status: "requires-live-run", reason: "no served URL was returned, so re-service could not be checked" },
+        { id: "UPLOAD-DISGUISED-TYPE:upload/safe", status: "not-vulnerable", reason: "the control route rejected the disguised type" },
+        { id: "UPLOAD-PATH-TRAVERSAL:api-upload-safe", status: "not-vulnerable", reason: "the control route sanitized the filename to a basename" },
+      ],
+      coverage: { status: "partial", reason: "2/5 file-upload probe(s) need a live step" },
+    }));
+    const suite = driveAppBehaviorSuite({
+      id: "M2-UPLOAD-COVERAGE", suite: "file-upload (upload-attack.ts, #635)",
+      derivation: "3 upload target(s) derived", appUrl: "http://127.0.0.1:3000",
+      run: { ok: true, output: "" }, out, derivedCases: 3,
+    });
+    expect(suite.state).toBe("probed");
+
+    const artifacts = mkdtempSync(join(tmpdir(), "harvey-dynval-suite-artifacts-"));
+    const repo = mkdtempSync(join(tmpdir(), "harvey-dynval-suite-repo-"));
+    const mig = join(repo, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001_init.sql"), "create table tenants (id uuid primary key, name text not null);\ncreate table docs (id uuid primary key, tenant_id uuid not null, body text);");
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: layout({ migrationDirs: [mig] }), artifactsDir: artifacts, now,
+      makeProject: () => ({
+        runner: runner({ pentest: () => ({ ok: true, findings: suite.findings, output: "", appBehaviorProbed: { concurrency: "derived-none", businessLogic: "derived-none", upload: suite.state } }) }),
+        stop: () => undefined,
+      }),
+    });
+    const written = readFileSync(r.artifactPath as string, "utf8");
+    // the two blocked classes, WITH their reasons — an unstated limit reads as a clean pass
+    expect(written).toContain("UPLOAD-SIZE-LIMIT");
+    expect(written).toContain("UPLOAD-STORED-XSS");
+    expect(written).toContain("no served URL was returned");
+    // and both negative controls, so probed-and-cleared is distinguishable from never-run
+    expect(written).toContain("upload/safe");
+    expect(written).toContain("api-upload-safe");
+    rmSync(suiteDir, { recursive: true, force: true });
+    rmSync(artifacts, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   });
 });
