@@ -140,6 +140,10 @@ const TIMEOUT_MS = 30_000;
 
 export default defineConfig({
   test: {
+    // #1695 — measures the longest uninterrupted block of each worker's event loop and names what
+    // was running, so the next `Timeout calling "onTaskUpdate"` attributes itself instead of naming
+    // nothing. Runs in every worker on every run; see the file for why it is not behind a flag.
+    setupFiles: ["./src/vitest-event-loop-probe.ts"],
     testTimeout: TIMEOUT_MS,
     hookTimeout: TIMEOUT_MS,
     exclude: heavyRun ? BASE_EXCLUDE : [...BASE_EXCLUDE, ...HEAVY_CLI_TESTS],
