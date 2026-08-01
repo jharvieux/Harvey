@@ -8,8 +8,10 @@
 // day one, gets silenced, and the guard is gone). Narrow costs the other direction: a real
 // graduation whose wording the key did not anticipate slips past silently.
 //
-// MEASURED 2026-07-31, `runMechanicalScan` over targets/calibration: 6 `none` rows, 3 of them on a
-// fixture where another class already fires. This is the contract that replaces the tuning:
+// MEASURED 2026-07-31, `runMechanicalScan` over targets/calibration: 5 `none` rows, 2 of them on a
+// fixture where another class already fires (#1708 re-tiered the sixth, P-CLIENT-HOOK-URL-PARAM,
+// out of this population once harvey-path-traversal graduated onto it). This is the contract that
+// replaces the tuning:
 //
 //   • The graduation set is EVERY finding on the fixture — the entry's `match` keys are not
 //     consulted — MINUS the taxonomies the entry declares in `neighbourTaxonomies`.

@@ -293,6 +293,61 @@ x-throw-schema-guard: &throw_schema_guard
                     if (!$P.success) throw $E;
     - focus-metavariable: $P
 
+# #1708: the CLIENT URL PARAM source, for the three sinks in this file that a "use client"
+# component can call directly with no server hop (a supabase-js call ships in the browser bundle):
+# Supabase Storage object keys (harvey-path-traversal), `.rpc(...)` (harvey-sql-injection-rpc) and
+# `.or`/`.filter`/`.textSearch` (harvey-postgrest-filter-injection). Judgment for every rule that
+# consumes `*request_source` is recorded in shared-sources.test.ts's CLIENT_URL_PARAM_* maps.
+#
+# THIS IS A NARROWING OF xss.yml's `x-dom-source`, NOT A COPY OF IT, and the difference is the whole
+# point. xss.yml can afford a receiver-agnostic `$SP.get(...)` / `$RT.query.$K` because its sinks
+# (innerHTML, document.write, dangerouslySetInnerHTML) exist ONLY in a browser, so the receiver is
+# overwhelmingly a URLSearchParams. The three sinks here run on BOTH sides of the boundary, so the
+# bare arms fire on every server-side `.get()` and every `.query.` property access — which is
+# precisely what base.yml's canonical request block records as the reason IT carries no bare
+# `$SP.get(...)`: "measured to fire on Map/Headers/config/FormData `.get()`".
+#
+# MEASURED 2026-08-01, semgrep 1.164.0, five benign server-side probes with no request, no DOM and
+# no URL anywhere in the module — a module-level `config.get("reportFn")` into `.rpc()`, a
+# `Headers.get("x-tenant")` into `.or()`, a `Map` row-bag `.get("path")` into `storage.download()`,
+# a Drizzle `db.query.invoices` read into `.rpc()`, and a server-built `FormData.get("key")` into
+# `storage.upload()`. Bare arms: 5 findings, TWO of them harvey-sql-injection-rpc at
+# ERROR/confidence HIGH, which src/scan/semgrep.ts maps to precisionTier "high" — the GRADED free
+# count that sets a client's letter grade. Bound arms below: 0. The receiver is therefore bound to a
+# URL-parameter-shaped name here.
+#
+# What the binding costs, MEASURED on carbon (crbnos/carbon@92e19c04417e, 5 repeats per arm) rather
+# than assumed: eleven `harvey-path-traversal` rows, every one of them `formData.get(...)`-derived
+# and every one read against source. They are genuine request-body taint — but they are the REQUEST
+# class, not the client-URL-param class. `*request_source` deliberately does not model a bare
+# `.get()`, and widening it to reach FormData is a change to the block 22 rules share, moving
+# corpus-drift baselines on 17 targets; carrying it here would also make this rule's own carbon
+# delta unattributable to one variable. Relative to `main` nothing is lost — `main` reported none of
+# the eleven — so this is an accidental half-closure withdrawn, not a regression. Tracked with the
+# eleven file:line rows and their acceptance criteria as #1814.
+x-client-url-source: &client_url_source
+  pattern-either:
+    - pattern: location.hash
+    - pattern: location.search
+    # The pages-router `router.query.x`, with the receiver bound: a bare `$RT.query.$K` reads
+    # Drizzle's relational builder (`db.query.invoices`) as a URL parameter, measured above.
+    - patterns:
+        - pattern: $RT.query.$K
+        - metavariable-regex:
+            metavariable: $RT
+            regex: ^_?(router|nextRouter|appRouter|Router)$
+    # The receiver names a URLSearchParams. `params` is in the list because it is the idiomatic
+    # array-destructured spelling every React Router / Next client component uses
+    # (`const [params] = useSearchParams()`), and it is the shape P-CLIENT-HOOK-URL-PARAM models.
+    # This is a name test, so a Map deliberately named `searchParams` still reads as a source; the
+    # claim is that the name is evidence of intent, not that it is a type.
+    - patterns:
+        - pattern: $SP.get(...)
+        - metavariable-regex:
+            metavariable: $SP
+            regex: ^_?(searchParams|search_params|params|urlParams|url_params|queryParams|query_params|qs)$
+    - pattern: useSearchParams()
+
 rules:
   # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
   # execute / run_sql style RPCs run a raw SQL string, so any request-tainted argument is a SQLi
@@ -313,8 +368,12 @@ rules:
     message: >
       Request input reaches a raw-SQL-executor RPC (exec_sql/execute/run_sql). The value is run as
       SQL text, not a bound parameter — SQL injection. Use a parameterized RPC or bind arguments.
+    # #1708: the sink is a supabase-js `.rpc(...)` call, which ships in the client bundle and is
+    # called directly from client components exactly like the storage sink below — so a client URL
+    # param is in class here too, not only a server request accessor.
     pattern-sources:
       - *request_source
+      - *client_url_source
     pattern-sanitizers:
       # #986: numeric coercion (the (a1) transformation-sanitizer subset) — a value cast to a number
       # cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.
@@ -949,8 +1008,11 @@ rules:
     message: >
       Request input is interpolated into a PostgREST string filter (.or/.filter/.textSearch). An
       attacker can inject extra filter clauses. Pass discrete column/operator/value arguments.
+    # #1708: `.or`/`.filter`/`.textSearch` are supabase-js client methods, callable directly from a
+    # client component with no server hop — the same reachability as the RPC sink above.
     pattern-sources:
       - *request_source
+      - *client_url_source
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -1177,8 +1239,14 @@ rules:
       (2) A resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248)
       only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard
       whose resolve is itself wrapped in try/catch is reported here rather than cleared.
+    # #1708: the Supabase Storage sink is a supabase-js call, callable directly from a client
+    # component — the real instance that opened this issue (carbon's JobBillOfProcess.tsx, a
+    # `useUrlParams()` read reaching `storage.from(...).upload(...)`). The other two sinks (node
+    # `fs`, express `res.sendFile`/`res.download`) stay server-only regardless — this only adds a
+    # SOURCE, and neither sink is reachable from a "use client" file's own scope.
     pattern-sources:
       - *request_source
+      - *client_url_source
     pattern-sanitizers:
       - pattern: path.basename(...)
       # #1240: A VALUE USED AS A QUERY FILTER DOES NOT TAINT THE QUERY'S RESULT. Once the Server
