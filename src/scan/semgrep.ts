@@ -350,12 +350,34 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
   }
 }
 
+// #1710 — the invocation is PINNED for determinism and recall, because semgrep 1.164.0's default
+// mode silently loses findings. MEASURED 2026-07-31 (semgrep 1.164.0, the version
+// .github/actions/mechanical-binaries pins — full tables in docs/design/semgrep-determinism.md):
+//   * default (shared-memory threads, -j 9, --timeout 5): EVERY one of 10 full scans of the pinned
+//     carbon tree was missing 17-29 of the 530 findings the single-threaded run produces — all
+//     taint-mode rows (harvey-log-injection, harvey-unchecked-mutation) on 1500+-line files, and
+//     most of the losses left NO trace in errors[], paths.skipped or stderr. Not jitter around a
+//     mean: a silent recall loss. The 5s per-rule-per-file timeout adds a second, load-dependent
+//     loss mode on top (which rules cross 5s varies run to run; those ARE recorded in errors[]).
+//   * --x-parmap (the pre-thread process-based parallelism) with --timeout 0: byte-identical
+//     result sets across every repeat (7/7 on carbon, 6/6 on documenso), at or below default-mode
+//     runtime on every measured repo — process isolation removes whatever the threaded engine's
+//     shared state loses, and --timeout 0 removes the load-dependent timeout draw. `-j 1` alone is
+//     NOT enough: 1 of 6 single-threaded runs still dropped one taint finding.
+//   * --x-parmap is ALSO deprecated/internal, so the fallback attempt pins `-j 1 --timeout 0`
+//     (the best measured non-internal combination) rather than semgrep's default mode — a version
+//     that drops --x-parmap must degrade to "slower and near-deterministic", never to "silently
+//     lossy". The corpus-drift gate scores real quick-scans of six pinned trees, so a determinism
+//     regression in either mode surfaces there as free-tier drift.
 export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
   const args = [
     ...REGISTRY_PACKS.flatMap((p) => ["--config", p]),
     "--config", CUSTOM_RULES,
     "--exclude", "node_modules",
     "--disable-nosem",
+    // #1710: no per-rule-per-file 5s wall-clock kill — a timed-out rule is a silent per-file recall
+    // gap that varies with machine load (and at --timeout-threshold 3 starts skipping whole files).
+    "--timeout", "0",
     "--json",
     // #1077: --verbose (not --quiet — the two are mutually exclusive) so paths.skipped is
     // populated; the extra diagnostic text it also prints goes to stderr, which this call never
@@ -363,8 +385,8 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
     "--verbose",
     dir,
   ];
-  let run = execSemgrep(["--x-ignore-semgrepignore-files", ...args]);
-  if ("failure" in run && !run.enoent) run = execSemgrep(args);
+  let run = execSemgrep(["--x-ignore-semgrepignore-files", "--x-parmap", ...args]);
+  if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
   if ("failure" in run) return { result: {}, failure: run.failure };
   return parseEnvelope(run.out);
 }

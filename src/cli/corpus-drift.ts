@@ -243,9 +243,11 @@ function installTargetDeps(dir: string, flags: readonly string[]): void {
 //     full. The largest single install is documenso's 23.2s.
 //   * Caching scan results per (target sha, scanner version, rule set), option 2. Ceiling 657.6s
 //     (77%) and the only one with real headroom, which is what #1574 already suspected. Every input
-//     is pinned; the work is deriving a key that a semgrep rule edit invalidates, and #1710 makes
-//     the correctness bar higher than it looks — semgrep returned 47/62/70 findings across three
-//     identical carbon runs, so a cache would be pinning one draw from a distribution.
+//     is pinned; the work is deriving a key that a semgrep rule edit invalidates. #1710's original
+//     blocker here — semgrep returned 47/62/70 findings across three identical carbon runs, so a
+//     cache would have pinned one draw from a distribution — is CLOSED: runSemgrep now pins
+//     `--x-parmap --timeout 0` (measured byte-identical across 7/7 carbon repeats, 2026-07-31,
+//     semgrep 1.164.0; docs/design/semgrep-determinism.md), so a cache key is sound again.
 //   * Bounding the per-target scan, option 3. carbon is 343s of 854s; bounding it to the corpus
 //     mean would buy ~290s and cost the corpus its only large target, which is the one that finds
 //     things the others do not. It would also need a counted not-assessed row naming what it

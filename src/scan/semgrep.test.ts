@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,14 +45,17 @@ function captured(suffix: string): SemgrepResult {
 // #950: semgrep absent from PATH must degrade to a disclosed coverage gap, not an uncaught
 // ENOENT crash (mirrors the osv-scanner pattern, #512). Only "semgrep" is faked here — every
 // other execFileSync call (there are none elsewhere in this file) would pass through untouched.
+// #1710: the thrown code is hoisted state so the invocation-pin tests below can exercise the
+// non-ENOENT fallback attempt too; every test leaves it at "ENOENT".
+const semgrepMock = vi.hoisted(() => ({ errCode: "ENOENT" }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
       if (bin === "semgrep") {
-        const err = new Error("spawnSync semgrep ENOENT") as NodeJS.ErrnoException;
-        err.code = "ENOENT";
+        const err = new Error(`spawnSync semgrep ${semgrepMock.errCode}`) as NodeJS.ErrnoException;
+        err.code = semgrepMock.errCode;
         throw err;
       }
       return actual.execFileSync(bin, args, opts as never);
@@ -315,6 +319,45 @@ describe("runSemgrep degrades on a missing binary (#950)", () => {
     const { result, failure } = runSemgrep("/some/target");
     expect(failure).toBe("semgrep not found on PATH");
     expect(result).toEqual({});
+  });
+});
+
+// #1710: the whole-tree invocation is PINNED — semgrep 1.164.0's default threaded parallelism
+// silently lost 17-29 of 530 carbon findings on every one of 10 measured runs, and the 5s
+// per-rule-per-file timeout adds a load-dependent second loss mode. The pin (--x-parmap
+// --timeout 0, fallback -j 1 --timeout 0) is the measured deterministic combination; see the
+// runSemgrep comment and docs/design/semgrep-determinism.md. These tests hold the CONTRACT: a
+// refactor that drops either flag, or lets the fallback revert to the lossy default mode, fails
+// here rather than silently reintroducing a nondeterministic required gate.
+describe("runSemgrep pins the deterministic invocation (#1710)", () => {
+  const semgrepArgvs = (): string[][] =>
+    vi
+      .mocked(execFileSync)
+      .mock.calls.filter((c) => c[0] === "semgrep")
+      .map((c) => c[1] as string[]);
+
+  it("first attempt runs process-based parallelism with the per-rule timeout disabled", () => {
+    vi.mocked(execFileSync).mockClear();
+    runSemgrep("/some/target");
+    const argvs = semgrepArgvs();
+    expect(argvs).toHaveLength(1); // ENOENT: binary absent, so no second attempt
+    expect(argvs[0]).toContain("--x-parmap");
+    expect(argvs[0]?.join(" ")).toContain("--timeout 0");
+  });
+
+  it("the fallback attempt (internal flag dropped upstream) pins -j 1 --timeout 0, never the lossy threaded default", () => {
+    semgrepMock.errCode = "EPERM";
+    try {
+      vi.mocked(execFileSync).mockClear();
+      runSemgrep("/some/target");
+      const argvs = semgrepArgvs();
+      expect(argvs).toHaveLength(2);
+      expect(argvs[1]).not.toContain("--x-parmap");
+      expect(argvs[1]?.join(" ")).toContain("-j 1");
+      expect(argvs[1]?.join(" ")).toContain("--timeout 0");
+    } finally {
+      semgrepMock.errCode = "ENOENT";
+    }
   });
 });
 
