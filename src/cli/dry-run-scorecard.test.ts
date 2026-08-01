@@ -119,7 +119,7 @@ describe("dynamic (M2) rows resolve against a committed pen-test scorecard (#131
     generatedAt: "2026-07-31T08:27:46.786Z",
     allowDestructive: true,
     probes,
-    summary: { caught: 0, cleared: 0, "not-applicable": 0, "not-run": 0 },
+    summary: { caught: 0, cleared: 0, "not-applicable": 0, "not-run": 0, "not-assessed": 0 },
   });
   const probe = (findingId: string, status: DynamicScorecard["probes"][number]["status"]) =>
     ({ findingId, status, severity: "High", evidence: `${findingId} scored ${status}` }) as DynamicScorecard["probes"][number];
@@ -187,7 +187,7 @@ describe("dry-run-scorecard reads the recorded pen-test scorecard through its ow
       generatedAt: "2026-07-31T00:00:00.000Z",
       allowDestructive: true,
       probes: [{ findingId: "ANON-PRIVILEGED-RPC", status: "caught", severity: "Critical", evidence: "HARVEY_CLI_FLAG_PROOF" }],
-      summary: { caught: 1, cleared: 0, "not-applicable": 0, "not-run": 0 },
+      summary: { caught: 1, cleared: 0, "not-applicable": 0, "not-run": 0, "not-assessed": 0 },
     };
     const cardPath = join(dir, "dynamic.json");
     writeFileSync(cardPath, JSON.stringify(card));

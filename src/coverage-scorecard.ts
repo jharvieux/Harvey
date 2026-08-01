@@ -18,7 +18,9 @@ type CoverageStatus = "caught" | "missed" | "requires-live-run";
 // NO-RATE-LIMIT, CACHE-CROSS-USER, ANON-PRIVILEGED-RPC) can point at a real recorded outcome
 // instead of a memory. Maps the probe's own status: `caught` proved the bug live; `cleared` means
 // the probe ran and the bug was absent (a miss on a target where it was planted);
-// `not-applicable`/`not-run` recorded no live verdict, so the row stays requires-live-run.
+// `not-applicable`/`not-run`/`not-assessed` recorded no live verdict, so the row stays
+// requires-live-run — in particular `not-assessed` (#1721) is a probe that ran but never exercised
+// its target, so it must NOT be scored `missed` the way a genuine `cleared` is.
 export function statusFromDynamicProbe(status: ProbeScore["status"]): CoverageStatus {
   switch (status) {
     case "caught":
