@@ -5,10 +5,12 @@
 // on a repo that does not follow it, and a zero from an unread population is indistinguishable in
 // the output from a clean scan.
 //
-// MEASURED 2026-07-31 (#1269, re-measured for #1689): across the three pinned tenant-scope clones
-// `bola-owner` read 0 files and `job-tenant-scope` read 0 files, because none of those repos is a
-// Next.js app or ships a background-job directory. Both detectors contributed 0 findings on every
-// corpus-drift run, forever, with nothing saying they never looked.
+// MEASURED 2026-08-01, `pnpm exec tsx src/cli/path-scope-census.ts` over every pinned commit:
+// `bola-owner` reads 44 files across the 17 EXTERNAL_CORPUS targets and 0 on 15 of them;
+// `job-tenant-scope` reads 155 and 0 on 13. So the per-TARGET population is routinely zero while
+// the corpus-wide one is not — #1269's headline zeros were over three ad-hoc precision clones
+// (prisma-rls, zenstack, prisma-multi-tenant) that are not in EXTERNAL_CORPUS at all, and this
+// file's first draft repeated that as a corpus-wide fact. Re-run the census, never quote it.
 //
 // POPULATION AND HOW IT WAS ENUMERATED, so this is a rule rather than a pair of names. A detector
 // belongs here when its ENTRY POINT narrows the file set to a directory convention before doing
@@ -26,7 +28,7 @@ import type { SourceInput } from "../detectors/common.js";
 import { bolaOwnerScannedFiles } from "./bola-owner.js";
 import { jobTenantScopeScannedFiles } from "./job-tenant-scope.js";
 
-export interface PathScopedDetector {
+interface PathScopedDetector {
   /** Row id emitted when this detector's filter admits nothing. */
   rowId: string;
   detector: string;
@@ -55,7 +57,7 @@ export const PATH_SCOPED_DETECTORS: readonly PathScopedDetector[] = [
   },
 ];
 
-export interface PathScopeCensusRow {
+interface PathScopeCensusRow {
   rowId: string;
   detector: string;
   convention: string;

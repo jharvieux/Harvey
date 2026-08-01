@@ -35,7 +35,7 @@ function relevantFor(entry: CorpusEntry, findings: Finding[]): Finding[] {
   return findings.filter((f) => !remaining.has(f));
 }
 
-export interface GraduationRow {
+interface GraduationRow {
   id: string;
   location: string;
   /** Taxonomies on the fixture that the entry does not declare as a neighbour — a graduation. */

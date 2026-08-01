@@ -26,12 +26,18 @@
 //     service.ts's `searchParams.get('next')` returns to apps/web/app/auth/callback/route.ts's
 //     `redirect(nextPath)` two imports away) — beyond the same-file/same-function taint scope
 //     every current open-redirect rule assumes.
-//   - subscription-payments' client-trusted trial length needs "should this field be re-read
-//     server-side?" business context (recomputing trial_end from price.trial_period_days is a
-//     valid PATTERN in general; the bug is that THIS price object is client-supplied) — no AST
-//     pattern distinguishes the vulnerable call from a benign one on syntax alone. The b14/m9-authz
-//     corpus already names this exact gap for its planted twin (P-CLIENT-PAYMENT-AMOUNT's sibling
-//     note: "the price/trial variant needs ... business context no AST pass has").
+//   - subscription-payments' client-trusted trial length: CAUGHT since #1373, and this bullet used
+//     to be the third standing example of a gap that had already closed. It said the shape needs
+//     "should this field be re-read server-side?" business context and that no AST pattern separates
+//     the vulnerable call from a benign one on syntax alone, citing the b14/m9-authz corpus as
+//     corroboration — which was one guess quoted in two files, the exact laundering shape #1033
+//     warns about, since that note was the ORIGIN of the claim rather than an independent check.
+//     RE-MEASURED 2026-08-01 (#1684): semgrep 1.164.0 with src/scan/rules/semgrep/auth.yml over the
+//     pinned clone fires `harvey-client-trusted-price` at utils/stripe/server.ts:69 and :76 — the
+//     two lines P-REAL-SUBPAY-CLIENT-TRIAL's note names. What unlocked it was the RPC contract, not
+//     business context: a `"use server"` export is an endpoint, so its parameters are client-
+//     supplied by construction. The m9-authz header carrying the superseded sentence is corrected
+//     in the same change.
 //
 // A recall gap is the measurement, not a gate failure (same discipline as the planted corpus's
 // "none"-tier entries; source-recall.ts's own last gap, P-HOST-HEADER-URL, was closed by #1366 on
@@ -111,7 +117,7 @@ export const REAL_SOURCE_RECALL_TARGETS: RealSourceRecallTarget[] = [
         cls: "checkout trusts a client-supplied price object to derive the subscription trial length",
         location: "utils/stripe/server.ts",
         match: ["payment-amount", "client-payment", "trial"],
-        note: "#215 Medium: checkoutWithStripe (utils/stripe/server.ts:69,76 + utils/helpers.ts:52-68) trusts the client-supplied `price` object and re-derives trial_end from price.trial_period_days — a client can request an arbitrarily long free trial (the charge amount itself is not forgeable; Stripe validates the price id). MEASURED 2026-07-24: uncaught. CAUGHT at review tier since #1373 (MEASURED 2026-07-31, `validate-source-recall --real` 0/3 -> 1/3) by `harvey-client-trusted-price`. Its planted twin (P-CLIENT-PAYMENT-AMOUNT, b14-applogic.entries.ts) is a literal `amount: req.body.amount` grep shape; this real call has no req.* literal at the call site at all, which is what made it look unreachable. The key was not taint tracing but the RPC contract: a `\"use server\"` module's exported function is an endpoint, so `price` — an ordinary function PARAMETER — is client-supplied by construction. The m9-authz.entries.ts header still carries the superseded claim ('the price/trial variant needs \"should this field be re-read server-side?\" business context no AST pass has'); that file was locked by a concurrent batch when this was corrected.",
+        note: "#215 Medium: checkoutWithStripe (utils/stripe/server.ts:69,76 + utils/helpers.ts:52-68) trusts the client-supplied `price` object and re-derives trial_end from price.trial_period_days — a client can request an arbitrarily long free trial (the charge amount itself is not forgeable; Stripe validates the price id). MEASURED 2026-07-24: uncaught. CAUGHT at review tier since #1373 (MEASURED 2026-07-31, `validate-source-recall --real` 0/3 -> 1/3) by `harvey-client-trusted-price`. Its planted twin (P-CLIENT-PAYMENT-AMOUNT, b14-applogic.entries.ts) is a literal `amount: req.body.amount` grep shape; this real call has no req.* literal at the call site at all, which is what made it look unreachable. The key was not taint tracing but the RPC contract: a `\"use server\"` module's exported function is an endpoint, so `price` — an ordinary function PARAMETER — is client-supplied by construction. The m9-authz.entries.ts header carried the superseded claim ('the price/trial variant needs \"should this field be re-read server-side?\" business context no AST pass has') until #1684 corrected it on 2026-08-01, re-measuring against this same clone: `harvey-client-trusted-price` fires at utils/stripe/server.ts:69 and :76.",
       },
     ],
   },

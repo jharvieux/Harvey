@@ -1,15 +1,42 @@
 // #221 — server-side authorization & client-input-trust (broken function-level authz).
 //
-// The issue catalogued one class recurring four ways across the sweep. Only its first shape —
-// a server action mutating by a client-supplied owner id — proved mechanically detectable at
-// acceptable precision, and detectClientSuppliedOwnerId (src/detectors/app-router.ts) now
-// covers it. The other two shapes stay semantic/paid-tier and are already seeded in the corpus:
-//   - trusting client-supplied security-relevant values → P-CLIENT-PAYMENT-AMOUNT / P-CLIENT-
-//     PRIV-HEADER (b14-applogic.entries.ts); the price/trial variant needs "should this field
-//     be re-read server-side?" business context no AST pass has.
-//   - permission checks present only in the UI → P-CLIENT-RENDER-AUTHZ / P-MW-SOLE-AUTHZ
-//     (b15-nextjs-authz.entries.ts); needs whole-program route-vs-gate reasoning.
-// See docs/design/corpus-roadmap-to-100.md §4a for the tier rationale.
+// The issue catalogued one class recurring four ways across the sweep. Its first shape — a server
+// action mutating by a client-supplied owner id — was the first to become mechanical, and
+// detectClientSuppliedOwnerId (src/detectors/app-router.ts) covers it.
+//
+// #1684, 2026-08-01 — THE OTHER TWO SHAPES ARE NO LONGER ONE STORY, and this paragraph used to tell
+// them as one. As written it said both "stay semantic/paid-tier", and of the value half that it
+// "needs 'should this field be re-read server-side?' business context no AST pass has". RE-MEASURED
+// rather than reasoned about, and it is false:
+//   - trusting client-supplied security-relevant values → MECHANICAL, at review tier, on all three
+//     members. `pnpm exec tsx src/cli/validate-calibration.ts` (2026-08-01) prints PASS for
+//     P-CLIENT-TRUSTED-ROLE, P-CLIENT-TRUSTED-PRICE (the price/trial member, harvey-client-trusted-
+//     price, #1373), P-CLIENT-PAYMENT-AMOUNT and P-CLIENT-PRIV-HEADER, with N-SERVER-DERIVED-PRICE
+//     — the same fields re-read server-side — cleared. It is not corpus-only either: semgrep
+//     1.164.0 with src/scan/rules/semgrep/auth.yml over the pinned vercel/nextjs-subscription-
+//     payments clone (bdd08132) fires harvey-client-trusted-price at utils/stripe/server.ts:69 and
+//     :76 — the exact two lines src/scan/real-source-recall.ts records as this gap's real instance.
+//     What made the shape reachable was not business context; it was the RPC contract, that a
+//     `"use server"` module's exported function is an endpoint and its parameters are therefore
+//     client-supplied by construction.
+//   - permission checks present only in the UI → still uncaught, and this is the half that survives.
+//     It survives as a MEASURED GAP, not as a capability claim about AST passes: P-CLIENT-RENDER-
+//     AUTHZ and P-MW-SOLE-AUTHZ are `expectedTier: "none"` with gapKind "measured-gap" — planted,
+//     scanned, nothing of the class fired — which is OUTSTANDING WORK tracked on #1679.
+// See docs/design/corpus-roadmap-to-100.md §4a for the original tier rationale; that document has
+// NOT been re-read against the measurement above (docs are supervised for this batch), so treat its
+// §4a as carrying the same superseded claim until someone checks.
+//
+// REASON: the UI-only permission check has no mechanical rule — P-CLIENT-RENDER-AUTHZ and P-MW-SOLE-AUTHZ were planted and scanned and nothing of the class fired, and the discriminating signal is cross-file (a route's gate vs. the render that hides it), which nobody has built a pass for yet
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-01 — `pnpm exec tsx src/cli/validate-calibration.ts` prints `GAP` for both rows and `6/6 held` on the no-mechanical-rule line. Falsifier exercised both directions the same day: exit 1 as committed, exit 0 against a copy of the entry file with the row re-tiered to "review", exit 127 against a file with the row absent.
+// FALSIFIER: f=src/scan/calibration/b15-nextjs-authz.entries.ts; grep -q 'P-CLIENT-RENDER-AUTHZ' "$f" || exit 127; ! grep -q 'id: "P-CLIENT-RENDER-AUTHZ".*expectedTier: "none"' "$f"
+// TOUCHES: src/scan/calibration/b15-nextjs-authz.entries.ts
+//
+// It exits 0 on the RE-TIER rather than on a scan, deliberately and not as a proxy for convenience:
+// since #1677 a mechanical rule reaching either row fails the graduation guard by name, so the row
+// stops reading `none` the moment the class becomes detectable. The corpus tier is therefore a
+// faithful reading of the world, and the check needs no scanner binaries in the daily reasons job.
 //
 // These entries carry `module: "M9"` because the detector runs in the static-detect AST pass
 // (src/cli/static-detect.ts), NOT runMechanicalScan — the same arrangement M7/M10 use to stay
