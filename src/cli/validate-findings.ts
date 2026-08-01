@@ -1,6 +1,7 @@
 // Validate an engagement's findings.json before rendering the report.
 //   pnpm validate:findings <findings.json>
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { validateFindings } from "../findings.js";
 

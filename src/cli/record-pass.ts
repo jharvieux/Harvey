@@ -20,6 +20,7 @@
 // A stale, wrong-target or malformed artifact is named on the row as rejected, never ignored.
 //
 // Thin I/O wrapper per the repo convention — the schema/validation lives in src/audit-pass-artifact.ts.
+import "./sync-stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AUDIT_MODULES, type AuditModule } from "../audit-coverage.js";

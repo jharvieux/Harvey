@@ -32,6 +32,7 @@
 // Exit 1 when a free-count finding lands on a recorded non-vulnerability, or when NOTHING could be
 // scored. A LOW recall is the measurement, not a failure — see docs/design/free-tier-recall-measurement.md.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { recordMeasured } from "../ci-liveness.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";

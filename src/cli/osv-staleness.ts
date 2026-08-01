@@ -13,6 +13,7 @@
 // RCE asserted against a next@14.2.x that was never affected) that had been shipping to real
 // targets; every defect it found would have been caught mechanically by this check.
 
+import "./sync-stdio.js";
 import { CURATED_CLAIMS, type CuratedClaim } from "../scan/dependencies.js";
 
 interface OsvEvent {

@@ -4,6 +4,7 @@
 //
 //   pnpm exec tsx src/cli/fix-dry-run.ts <findings.json> <manifest.json>
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { validateFindings, type FindingsDocument } from "../findings.js";
 import { intake, type EngagementManifest, type ScreenedFinding } from "../fix/pipeline.js";

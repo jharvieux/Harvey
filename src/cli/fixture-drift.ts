@@ -22,6 +22,7 @@
 // --fixture <path> overrides the committed fixture path (the negative control points it at a
 // perturbed copy to prove the check fails loud).
 
+import "./sync-stdio.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

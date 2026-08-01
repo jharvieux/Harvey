@@ -46,6 +46,7 @@
 // the disagreement is recorded in the output, never silent, and cross-module comparisons on such
 // a target are scope-invalid by construction.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

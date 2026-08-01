@@ -28,6 +28,7 @@
 // timeout still guards a pathological tree: a jscpd that does hang is SIGKILL'd and disclosed as an
 // M4-99 gap, never a silent under-count.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

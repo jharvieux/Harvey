@@ -9,6 +9,7 @@
 // whose blast radius already fails the rails is emitted as rails-blocked so it is downgraded cheaply,
 // before a worktree ever spins up.
 
+import "./sync-stdio.js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { validateFindings, type FindingsDocument } from "../findings.js";

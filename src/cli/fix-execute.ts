@@ -17,6 +17,7 @@
 // merge rank 1. The batch path now runs the SAME two-halves gate the interactive path runs, by going
 // through ingestFixDiff — one contract, one implementation, no second definition of "verified".
 
+import "./sync-stdio.js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { validateFindings, type Finding, type FindingsDocument } from "../findings.js";

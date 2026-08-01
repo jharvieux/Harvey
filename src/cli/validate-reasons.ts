@@ -31,6 +31,7 @@
 //   HARVEY_FALSIFIER_SUPERREDHAT_CLONE=/clones/superredhat pnpm validate-reasons --revalidate --tier secbench
 // An unbound placeholder is reported UNVERIFIABLE and the command is not run (#1072).
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";

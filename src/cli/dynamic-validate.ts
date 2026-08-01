@@ -14,6 +14,7 @@
 //
 // The decision logic and emission are the tested pure functions in src/dynamic-validate.ts; this
 // wrapper is the untested I/O per the repo convention.
+import "./sync-stdio.js";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";

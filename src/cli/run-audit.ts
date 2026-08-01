@@ -83,6 +83,7 @@
 //
 // Exit 1 on any coverage gap, never-run module, or crashed runner.
 
+import "./sync-stdio.js";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";

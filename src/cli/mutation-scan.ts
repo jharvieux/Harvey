@@ -100,6 +100,7 @@
 // rewrite (planTsconfigRewrites, in src/mutation-scan.ts) in a disposable copy of the target, and
 // Stryker runs against the copy instead of the target itself whenever there's something to rewrite.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";

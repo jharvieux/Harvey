@@ -6,6 +6,7 @@
 // this CLI is the human-readable view plus the negative controls. Each --seed flag corrupts one
 // input and the run MUST go red, so the failing direction is exercised rather than assumed.
 
+import "./sync-stdio.js";
 import { assertKnownFlags } from "./args.js";
 import {
   MEASURED_OUTSIDE_DISCOVERY,

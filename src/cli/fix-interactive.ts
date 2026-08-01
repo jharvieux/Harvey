@@ -20,6 +20,7 @@
 // A finding is eligible only if intake() screened it `auto` — same gate as fix-execute. The finding's
 // FixPlan is produced here (producePlan), so emit and ingest agree on scope and approach.
 
+import "./sync-stdio.js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { validateFindings, type FindingsDocument } from "../findings.js";

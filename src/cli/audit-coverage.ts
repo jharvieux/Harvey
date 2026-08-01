@@ -14,6 +14,7 @@
 // CLAUDE.md's module table), and a gate that GUESSED a module ran would defeat its own purpose.
 // Wiring the runners themselves behind one command is the remainder of #229.
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, formatAuditCoverage, MODULES, type ModuleCoverage } from "../audit-coverage.js";
 

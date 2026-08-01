@@ -16,6 +16,7 @@
 //
 // The gate's own scope is stated in src/conditional-scan.ts.
 
+import "./sync-stdio.js";
 import {
   CONDITIONAL_SCANS,
   DISCOVERY_ROOTS,

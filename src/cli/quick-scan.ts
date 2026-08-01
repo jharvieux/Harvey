@@ -32,6 +32,7 @@
 // accepts, so the static RLS-tenancy review (SB-RLS-TENANCY-MODEL) can be told the app's tenancy
 // convention instead of only inferring it from a fixed candidate-column list.
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { arg, assertKnownFlags, targetDir } from "./args.js";

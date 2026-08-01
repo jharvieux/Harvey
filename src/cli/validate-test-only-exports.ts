@@ -14,6 +14,7 @@
 // Exit 1 on a NEW row or a STALE baseline row. Exit 0 prints the backlog COUNT anyway — an
 // unstated limitation reads as a clean bill of health (CLAUDE.md, "fail loud").
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

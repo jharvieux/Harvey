@@ -19,6 +19,7 @@
 // coverage doctrine): M1 semantic/live, M2 dynamic, M3 hotspot, M6 verdict, M7 advisors/Lighthouse,
 // M8 mutation, M10 live. This is the source/mechanical tier ONLY, by design.
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";

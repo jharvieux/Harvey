@@ -20,6 +20,7 @@
 // The two --seed flags are the negative controls. A gate only ever seen passing is indistinguishable
 // from one that cannot fail — which is the exact defect this gate exists to catch.
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

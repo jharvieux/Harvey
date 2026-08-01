@@ -13,6 +13,7 @@
 // pass reports a recorded non-vulnerability, or when NOTHING could be scored — an unrun gate must
 // not exit 0. Targets whose pass is missing/stale/wrong are printed as NOT SCORED with the reason.
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {

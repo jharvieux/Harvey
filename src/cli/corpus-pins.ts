@@ -12,6 +12,7 @@
 // the pin list with two bogus slugs). Every other CLI here that produces a machine-read artifact
 // already takes an explicit --out/--json path for the same reason; this one follows suit rather
 // than trusting a stdout redirect to stay clean.
+import "./sync-stdio.js";
 import { writeFileSync } from "node:fs";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 

@@ -8,6 +8,7 @@
 // The "AI" steps use the offline ScaffoldModelClient by default; wire a live model by swapping it.
 // Publishing needs GITHUB_TOKEN + GITHUB_OWNER + GITHUB_REPO (skipped for --dry-run).
 
+import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

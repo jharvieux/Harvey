@@ -14,6 +14,7 @@
 // This gate reports RECALL only. SecBench has no benign negatives, so precision/FPR are not
 // measurable from it — the vibe-dummy FP oracle stays the precision gate (the issue's guardrail).
 
+import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { arg, assertKnownFlags } from "./args.js";
 import { existsSync, readFileSync } from "node:fs";

@@ -18,6 +18,7 @@
 // It never submits a real lead: the readiness probe is a GET, and the validation probe is a body
 // the handler is required to reject before it sends anything.
 
+import "./sync-stdio.js";
 import { readFileSync } from "node:fs";
 import { evaluateSmoke, smokeFailed, type RouteProbe, type SmokeInput } from "../site-smoke.js";
 

@@ -17,6 +17,7 @@
 // detectors (perf and boundary findings in test code aren't audit findings) but ARE loaded
 // for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
+import "./sync-stdio.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { readNamesSafe } from "../fs-walk.js";
