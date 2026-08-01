@@ -374,7 +374,12 @@ export function limitationsSection(rows) {
 // a finding that ALSO has asserted columns stays in the asserted list but still lists its flagged
 // columns here, so no review-flag content is silently dropped from the report.
 function reviewFlagSection(items) {
-  const rows = items.map((x) => `<tr><td class="b">${esc(x.location)}</td>
+  // #1730 — a `<span class="fid">` per row, same convention as findingCard/groupCard/
+  // notApplicableSection, so render-fidelity.ts's `regionsById` has a region to attribute this
+  // row's text to. Before this, the loop scored against the whole document, so two rows sharing a
+  // location and column set covered for each other (the #1062 masking shape #1627 closed
+  // everywhere else this table's own siblings render).
+  const rows = items.map((x) => `<tr><td class="b"><span class="fid">${esc(x.id)}</span> ${esc(x.location)}</td>
     <td>${x.reviewFlagColumns.map(esc).join(", ")}</td>
     <td>${x.reviewFlagOnly ? "No" : "Yes — see Findings"}</td></tr>`).join("");
   return `<h2>Review for nested PII</h2>

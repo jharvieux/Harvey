@@ -417,6 +417,57 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
   });
 });
 
+// #1730 — `reviewFlagSection` (report-template/render.mjs) used to emit a plain `<tr>` with no
+// `<span class="fid">`, so `renderFidelityBreaches`'s reviewFlagOnly loop had no per-finding region
+// to read and scored against the WHOLE document instead — the #1062 masking shape #1627 closed
+// everywhere else a finding's own words render. Two nested-PII rows sharing a location and a
+// column set covered for each other under that scoring.
+describe("#1730 the nested-PII review table is scored per row, not against the whole document", () => {
+  const reviewRow = (id: string): Finding =>
+    finding({
+      id,
+      title: "JSON column may hold nested PII",
+      confidence: "Review",
+      taxonomy: "M10 — Nested PII review",
+      category: "Data",
+      location: "supabase/tables/orders.sql:1",
+      reviewFlagOnly: true,
+      reviewFlagColumns: ["metadata"],
+      evidence: `evidence for ${id}: metadata is a JSON/JSONB column whose name suggests it may hold nested PII`,
+    });
+  // Twins: same location, same reviewFlagColumns — the exact collision shape #377/#459 name.
+  const twinA = reviewRow("M10-PII-01");
+  const twinB = reviewRow("M10-PII-02");
+  const doc = assembleEngagementDocument(RECORDED, ENV, [twinA, twinB], META);
+  const html = buildHtml(doc);
+
+  it("the fixture actually collides — two review-flag rows share BOTH location and columns", () => {
+    expect(twinA.location).toBe(twinB.location);
+    expect(twinA.reviewFlagColumns).toEqual(twinB.reviewFlagColumns);
+    expect(html.match(/supabase\/tables\/orders\.sql:1/g)?.length).toBe(2); // one per row, not deduped
+  });
+
+  it("both rows carry their own <span class=\"fid\"> marker", () => {
+    expect(html).toContain('<span class="fid">M10-PII-01</span>');
+    expect(html).toContain('<span class="fid">M10-PII-02</span>');
+  });
+
+  it("no breach when both rows render", () => {
+    expect(renderFidelityBreaches(doc, html)).toEqual([]);
+  });
+
+  it("CONTROL — removing ONE row is caught, even though its location and columns still appear (on the surviving twin's row)", () => {
+    const broken = html.replace(/<tr><td class="b"><span class="fid">M10-PII-02<\/span>[\s\S]*?<\/tr>/, "");
+    expect(broken, "the control must actually remove a row").not.toBe(html);
+    // The words are still IN the document (twinA's row), which is exactly why the old whole-
+    // document scoring missed this — proving the fixture is a real collision, not just an absence.
+    expect(broken).toContain("supabase/tables/orders.sql:1");
+    expect(broken).toContain("metadata");
+    const breaches = renderFidelityBreaches(doc, broken);
+    expect(breaches.some((b) => b.kind === "reason-dropped" && b.id === "M10-PII-02")).toBe(true);
+  });
+});
+
 // #1661 — `Finding.cwe` is a list, and until now nothing followed a SECOND entry past the parser.
 // `harvey-cookie-insecure`'s `(?s)^[^;]*$` proves the cookie carries no attribute at all, which
 // determines CWE-614, CWE-1004 and CWE-1275 identically, and CWE-1275's OWASP category (A01) is not

@@ -157,18 +157,13 @@ export function renderFidelityBreaches(doc: FindingsDocument, html: string): Fid
   }
 
   // The renderer's own partition (buildHtml): reviewFlagOnly rows leave the findings body for the
-  // nested-PII table, which lists location + columns rather than evidence.
-  //
-  // This is the ONE path still scored against the whole document rather than the finding's own
-  // region, and it is a real residual, not an oversight: `reviewFlagSection` emits a plain `<tr>`
-  // with no `<span class="fid">`, so the report attributes nothing to a row's id and there is no
-  // region to read. Two nested-PII rows on the same location with the same columns would therefore
-  // still cover for each other. Closing it means adding the marker to that section — a renderer
-  // change, tracked by #1730. MEASURED on the same 895-finding deliverable: 11 rows reach this path
-  // and no two share a (location, columns) pair, so nothing is mis-scored today. A live path with no
-  // collision yet, not an empty one — the first draft of #1730 said "zero rows" and was wrong.
+  // nested-PII table, which lists location + columns rather than evidence. #1730 closed the last
+  // path that scored against the whole document rather than the finding's own region:
+  // `reviewFlagSection` now emits a `<span class="fid">` per row (same convention as
+  // findingCard/groupCard/notApplicableSection), so `region(f)` resolves to that row alone — two
+  // nested-PII rows sharing a location and column set no longer cover for each other.
   for (const f of doc.findings.filter((x) => x.reviewFlagOnly && x.confidence !== "N/A")) {
-    const missing = [f.location, ...(f.reviewFlagColumns ?? [])].filter((t) => !rendered(html, t));
+    const missing = [f.location, ...(f.reviewFlagColumns ?? [])].filter((t) => !rendered(region(f), t));
     if (missing.length > 0) {
       breaches.push({ id: f.id, kind: "reason-dropped", detail: `review-flagged row lost ${missing.join(", ")} — the reader is told a container may hold nested PII without being told which one` });
     }
