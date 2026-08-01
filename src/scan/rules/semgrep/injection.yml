@@ -293,6 +293,21 @@ x-throw-schema-guard: &throw_schema_guard
                     if (!$P.success) throw $E;
     - focus-metavariable: $P
 
+# #1708: byte-equal copy of xss.yml's canonical DOM/client source block (#1223) — same reason as
+# the copy above, YAML anchors do not cross documents. Three sinks in this file are reachable from a
+# CLIENT component (a supabase-js call ships in the browser bundle and is called directly from one):
+# Supabase Storage object keys (harvey-path-traversal), `.rpc(...)` (harvey-sql-injection-rpc) and
+# `.or`/`.filter`/`.textSearch` (harvey-postgrest-filter-injection). Judgment for every rule that
+# consumes `*request_source` is recorded in shared-sources.test.ts's CLIENT_URL_PARAM_* maps.
+x-dom-source: &dom_source
+  pattern-either:
+    - pattern: location.hash
+    - pattern: location.search
+    - pattern: router.query.$K
+    - pattern: $RT.query.$K
+    - pattern: $SP.get(...)
+    - pattern: useSearchParams()
+
 rules:
   # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
   # execute / run_sql style RPCs run a raw SQL string, so any request-tainted argument is a SQLi
@@ -313,8 +328,12 @@ rules:
     message: >
       Request input reaches a raw-SQL-executor RPC (exec_sql/execute/run_sql). The value is run as
       SQL text, not a bound parameter — SQL injection. Use a parameterized RPC or bind arguments.
+    # #1708: the sink is a supabase-js `.rpc(...)` call, which ships in the client bundle and is
+    # called directly from client components exactly like the storage sink below — so a client URL
+    # param is in class here too, not only a server request accessor.
     pattern-sources:
       - *request_source
+      - *dom_source
     pattern-sanitizers:
       # #986: numeric coercion (the (a1) transformation-sanitizer subset) — a value cast to a number
       # cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.
@@ -949,8 +968,11 @@ rules:
     message: >
       Request input is interpolated into a PostgREST string filter (.or/.filter/.textSearch). An
       attacker can inject extra filter clauses. Pass discrete column/operator/value arguments.
+    # #1708: `.or`/`.filter`/`.textSearch` are supabase-js client methods, callable directly from a
+    # client component with no server hop — the same reachability as the RPC sink above.
     pattern-sources:
       - *request_source
+      - *dom_source
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -1177,8 +1199,14 @@ rules:
       (2) A resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248)
       only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard
       whose resolve is itself wrapped in try/catch is reported here rather than cleared.
+    # #1708: the Supabase Storage sink is a supabase-js call, callable directly from a client
+    # component — the real instance that opened this issue (carbon's JobBillOfProcess.tsx, a
+    # `useUrlParams()` read reaching `storage.from(...).upload(...)`). The other two sinks (node
+    # `fs`, express `res.sendFile`/`res.download`) stay server-only regardless — this only adds a
+    # SOURCE, and neither sink is reachable from a "use client" file's own scope.
     pattern-sources:
       - *request_source
+      - *dom_source
     pattern-sanitizers:
       - pattern: path.basename(...)
       # #1240: A VALUE USED AS A QUERY FILTER DOES NOT TAINT THE QUERY'S RESULT. Once the Server

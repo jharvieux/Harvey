@@ -84,6 +84,53 @@ const CLIENT_RULES = [
 // emptied it, and it is kept as the landing slot for the next unexamined narrowing.
 const PENDING_JUDGMENT: Record<string, string> = {};
 
+// #1708: a DIFFERENT judgment from the two maps above. NARROW_BY_DESIGN/PENDING_JUDGMENT decide
+// whether a rule uses the canonical block AT ALL; the three maps below decide, for every rule that
+// already does, whether it should ALSO take `*dom_source` — i.e. whether a CLIENT component reading
+// a URL param and reaching this rule's sink is the same bug class as the server-request case. Every
+// rule that consumes `*request_source` is judged into exactly one of the three; leaving one
+// unjudged is what "judges every request-source rule" below exists to catch.
+//
+// IN_CLASS: the sink is a client-reachable call (chiefly supabase-js, which ships in the browser
+// bundle and is idiomatically called directly from a "use client" component) — `*dom_source` is
+// added alongside `*request_source`.
+const CLIENT_URL_PARAM_IN_CLASS: Record<string, string> = {
+  "harvey-path-traversal": "the Supabase Storage sink (storage.from(...).upload/download) is a supabase-js call reachable from a client component — the real instance that opened #1708 (carbon's JobBillOfProcess.tsx, useUrlParams() -> storage upload)",
+  "harvey-sql-injection-rpc": "the sink is a supabase-js .rpc(...) call, callable directly from a client component with no server hop",
+  "harvey-postgrest-filter-injection": "the sink (.or/.filter/.textSearch) is the same supabase-js client object as the two rules above",
+  "harvey-jsx-prop-spread-injection": "already carries both *dom_source and *request_source since #1237 — its sink spans both sides of the server/client boundary by design",
+};
+
+// OUT_OF_CLASS: the sink is a server-only object or a Node-only library with no browser build, so
+// widening the source leaves a client component with no path to it.
+const CLIENT_URL_PARAM_OUT_OF_CLASS: Record<string, string> = {
+  "harvey-sql-injection-template": "sink is a raw-SQL driver .query() call — a Node DB driver, never bundled for or callable from the browser",
+  "harvey-open-redirect": "sink is a server response object (res.redirect/NextResponse.redirect/res.writeHead/res.setHeader Location/res.location) — there is no response object in a client component",
+  "harvey-ssrf-fetch": "SSRF is defined by a SERVER crossing an internal-network trust boundary; a client component's own fetch() is the user's browser making the request, not the server, so the bug class does not apply",
+  "harvey-command-injection": "sink is child_process exec/execSync — a Node API absent from the browser",
+  "harvey-argument-injection": "sink is child_process execFile/spawn — a Node API absent from the browser",
+  "harvey-nosql-injection": "sink is a Mongo/Mongoose query operator — a server-side ODM, never bundled for the browser",
+  "harvey-unsafe-deserialization": "sink is node-serialize's unserialize()/$S.unserialize() — a Node-only package with no browser build",
+  "harvey-template-injection": "SSTI is inherently server-side template rendering; no server template engine (EJS/Pug/Nunjucks) runs in a browser",
+  "harvey-xpath-injection": "the message and CWE frame this against an XML-backed credential STORE reached server-side; the $D.evaluate arm could syntactically match document.evaluate() on the page's own DOM, but that has no separate store to query, so it is not the same bug shape reached client-side",
+  "harvey-ldap-injection": "requires the file to import ldapjs/ldapts — Node-only LDAP client libraries absent from the browser",
+  "harvey-log-injection": "the CWE-117 threat model is forging entries in a SERVER log a SIEM/audit pipeline parses; console.* in a client component writes to the user's own browser devtools console, which nothing downstream parses",
+  "harvey-dynamic-require": "sink is require($X) — CommonJS require is not a runtime capability of client-bundled code",
+  "harvey-html-template-literal": "sink is res.send() — a server response object, absent from a client component",
+  "harvey-crlf-header-injection": "sink is res.setHeader — a server response object; there is no HTTP response to set headers on from a client component",
+};
+
+// AWAITING_DECISION: the sink IS reachable from a client component, but whether this rule's bug
+// class or severity band still applies there is a genuine product call, not a mechanical fact —
+// recorded on #1708 with the exact proposed wording rather than decided here (CLAUDE.md: "a
+// supervised path stops the EDIT, never the CRITERION").
+const CLIENT_URL_PARAM_AWAITING_DECISION: Record<string, string> = {
+  "harvey-code-injection-eval": "eval()/new Function() are real browser APIs and a client component evaluating a URL param is a genuine DOM-based code-injection primitive, but the rule ships ERROR/HIGH confidence (free count, Critical) — whether that severity band is right for a browser-local execution (attacker controls their OWN client, not another tenant's) versus a server RCE is an operator call, not this PR's to make",
+  "harvey-xxe-parse": "the sink includes new DOMParser().parseFromString(...), a native browser API, but the WHATWG DOMParser spec does not resolve external DTD entities the way libxmljs does — whether flagging a client DOMParser call under an XXE taxonomy is still meaningful, or is a false framing this rule should exclude instead, is a judgment call this PR is not positioned to make",
+  "harvey-csv-formula-injection": "two of five serializer sink families (papaparse, SheetJS/XLSX) are commonly bundled and run directly in the browser for a client-side \"export to CSV\" button, unlike the other three (csv-stringify/fast-csv/json2csv, Node-only) — widening only the papaparse/XLSX arms would require splitting one rule's source list by sink family, which is a rule-shape decision",
+  "harvey-dynamic-dispatch": "obj[key]() dispatch is equally reachable and equally dangerous client- or server-side, but review-tier severity assumes a server-side blast radius (any property on a server object) that does not automatically carry over to a client component dispatching among its own local handlers — worth widening, but the severity read is a product call",
+};
+
 interface Rule {
   file: string;
   id: string;
@@ -105,21 +152,24 @@ function ruleFiles(): string[] {
   return readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
 }
 
-// The anchor definition block, from its key to the first line at column 0 that follows it.
-function anchorBlock(file: string): string | undefined {
+// The anchor definition block, from its key to the first line at column 0 that follows it. Takes
+// the anchor's declaration line so the same function serves x-request-source (#1221) AND
+// x-dom-source (#1223/#1708) — a second anchor duplicated across files is the identical drift risk
+// one level over, and #1708 gave injection.yml its own copy of x-dom-source for the first time.
+function anchorBlock(file: string, declLine: string): string | undefined {
   const text = readFileSync(join(RULES_DIR, file), "utf8");
-  const start = text.indexOf("x-request-source: &request_source\n");
+  const start = text.indexOf(`${declLine}\n`);
   if (start === -1) return undefined;
   const rest = text.slice(start);
-  const end = /\n(?=\S)/.exec(rest.slice("x-request-source: &request_source\n".length));
-  const block = end === null ? rest : rest.slice(0, "x-request-source: &request_source\n".length + end.index);
+  const end = /\n(?=\S)/.exec(rest.slice(`${declLine}\n`.length));
+  const block = end === null ? rest : rest.slice(0, `${declLine}\n`.length + end.index);
   return block.trimEnd();
 }
 
 describe("canonical request-taint source block (#1221)", () => {
   it("is byte-identical in every file that declares it", () => {
     const declared = ruleFiles()
-      .map((f) => [f, anchorBlock(f)] as const)
+      .map((f) => [f, anchorBlock(f, "x-request-source: &request_source")] as const)
       .filter((pair): pair is readonly [string, string] => pair[1] !== undefined);
 
     expect(declared.length).toBeGreaterThan(1);
@@ -130,7 +180,7 @@ describe("canonical request-taint source block (#1221)", () => {
   });
 
   it("carries the App Router shapes the drift had lost", () => {
-    const canonical = anchorBlock("base.yml");
+    const canonical = anchorBlock("base.yml", "x-request-source: &request_source");
     expect(canonical).toBeDefined();
     for (const pattern of ["await $REQ.json()", "$U.searchParams.get(...)", "$U.searchParams"]) {
       expect(canonical, `the canonical block lost ${pattern} — the shape #1221 exists to add`).toContain(pattern);
@@ -141,7 +191,7 @@ describe("canonical request-taint source block (#1221)", () => {
   });
 
   it("carries the Server Component request props, guarded by the not-inside that makes them safe", () => {
-    const canonical = anchorBlock("base.yml");
+    const canonical = anchorBlock("base.yml", "x-request-source: &request_source");
     for (const pattern of ["$RSCPROP.$RSCFIELD", "await $RSCPROP", "^(params|searchParams)$"]) {
       expect(canonical, `the canonical block lost ${pattern} — the RSC page shape #1240 exists to add`).toContain(pattern);
     }
@@ -156,7 +206,7 @@ describe("canonical request-taint source block (#1221)", () => {
   // Dropping it is what re-opens the three shapes N-RSC-PARAM-NON-PARAM-BINDING covers, none of
   // which the not-insides above can see — a for-of loop variable, an array destructure, an import.
   it("requires the RSC prop to be BOUND BY DESTRUCTURING, not merely named", () => {
-    const canonical = anchorBlock("base.yml")!;
+    const canonical = anchorBlock("base.yml", "x-request-source: &request_source")!;
     for (const pattern of [
       "function $RSCFN(..., { ..., $RSCBIND, ... }, ...) { ... }",
       "function $RSCFN(..., { ..., $RSCBIND, ... }: $T, ...) { ... }",
@@ -309,6 +359,21 @@ describe("canonical request-taint source block (#1221)", () => {
     }
   });
 
+  // #1708: injection.yml gained its own copy of x-dom-source (three of its sinks are supabase-js
+  // calls reachable from a client component) — the identical drift risk #1221 exists to catch, one
+  // anchor over. Same discipline: every copy must be byte-identical to xss.yml's.
+  it("is byte-identical in every file that declares the DOM source block (#1708)", () => {
+    const declared = ruleFiles()
+      .map((f) => [f, anchorBlock(f, "x-dom-source: &dom_source")] as const)
+      .filter((pair): pair is readonly [string, string] => pair[1] !== undefined);
+
+    expect(declared.length).toBeGreaterThan(1);
+    const [firstFile, canonical] = declared[0]!;
+    for (const [file, block] of declared.slice(1)) {
+      expect(block, `${file}'s copy of the DOM source block has drifted from ${firstFile}'s`).toBe(canonical);
+    }
+  });
+
   it("has no stale exemptions", () => {
     const taintIds = new Set(ruleFiles().flatMap(parseRules).filter((r) => r.taint).map((r) => r.id));
     const stale = [...Object.keys(NARROW_BY_DESIGN), ...Object.keys(PENDING_JUDGMENT), ...CLIENT_RULES].filter(
@@ -323,5 +388,50 @@ describe("canonical request-taint source block (#1221)", () => {
       .filter((r) => r.sources.includes("*request_source") && PENDING_JUDGMENT[r.id] !== undefined)
       .map((r) => r.id);
     expect(adopted, "these rules now use the canonical block — drop them from PENDING_JUDGMENT").toEqual([]);
+  });
+
+  // #1708: every rule that consumes *request_source must be judged in or out of class for client
+  // URL params — silently leaving one out is exactly the "unstated limitation reads as a clean bill
+  // of health" failure the rest of this repo's disclosure families exist to prevent.
+  it("judges every request-source rule in or out of class for client URL params (#1708)", () => {
+    const requestSourceRuleIds = ruleFiles()
+      .flatMap(parseRules)
+      .filter((r) => r.taint && r.sources.includes("*request_source"))
+      .map((r) => r.id);
+    const judged = new Set([
+      ...Object.keys(CLIENT_URL_PARAM_IN_CLASS),
+      ...Object.keys(CLIENT_URL_PARAM_OUT_OF_CLASS),
+      ...Object.keys(CLIENT_URL_PARAM_AWAITING_DECISION),
+    ]);
+    const unjudged = [...new Set(requestSourceRuleIds)].filter((id) => !judged.has(id));
+    expect(
+      unjudged,
+      "these request-source rules have no #1708 client-URL-param judgment recorded — add each to " +
+        "CLIENT_URL_PARAM_IN_CLASS, CLIENT_URL_PARAM_OUT_OF_CLASS or CLIENT_URL_PARAM_AWAITING_DECISION",
+    ).toEqual([]);
+  });
+
+  it("gives every #1708 IN_CLASS rule the DOM source block alongside the request source", () => {
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const missing = Object.keys(CLIENT_URL_PARAM_IN_CLASS).filter((id) => !byId.get(id)?.sources.includes("*dom_source"));
+    expect(missing, "these rules are recorded IN_CLASS but do not take *dom_source — the judgment and the rule have drifted apart").toEqual([]);
+  });
+
+  it("does not carry the DOM source block on a request-source rule with no #1708 IN_CLASS judgment", () => {
+    // The mirror-image check: a rule quietly gaining *dom_source without the judgment being
+    // recorded, which is exactly as silent a drift as the missing case above.
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const undeclared = Object.keys({ ...CLIENT_URL_PARAM_OUT_OF_CLASS, ...CLIENT_URL_PARAM_AWAITING_DECISION }).filter((id) => byId.get(id)?.sources.includes("*dom_source"));
+    expect(undeclared, "these rules take *dom_source but are recorded OUT_OF_CLASS or AWAITING_DECISION — move them to CLIENT_URL_PARAM_IN_CLASS or drop the pattern").toEqual([]);
+  });
+
+  it("has no stale #1708 client-URL-param judgments", () => {
+    const taintIds = new Set(ruleFiles().flatMap(parseRules).filter((r) => r.taint).map((r) => r.id));
+    const stale = [
+      ...Object.keys(CLIENT_URL_PARAM_IN_CLASS),
+      ...Object.keys(CLIENT_URL_PARAM_OUT_OF_CLASS),
+      ...Object.keys(CLIENT_URL_PARAM_AWAITING_DECISION),
+    ].filter((id) => !taintIds.has(id));
+    expect(stale, "these rules no longer exist or are no longer taint rules — drop their #1708 judgment").toEqual([]);
   });
 });
