@@ -65,8 +65,13 @@ function run(shimDir: string): Promise<{ code: number | null; out: string }> {
       { env: { ...process.env, PATH: `${shimDir}:${process.env.PATH ?? ""}` } },
     );
     let out = "";
-    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
-    child.stderr.on("data", (d: Buffer) => (out += d.toString()));
+    // setEncoding, never `out += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
+    // Buffer decodes THAT CHUNK in isolation, so a multi-byte character straddling a chunk boundary
+    // decodes to U+FFFD on both sides.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => (out += d));
+    child.stderr.on("data", (d: string) => (out += d));
     child.on("close", (code) => resolve({ code, out }));
   });
 }
