@@ -21,6 +21,9 @@
 // independently confirms exploitability in the scanned codebase (not just a version overlap), set
 // exploitabilityVerified: true on that finding so it grades correctly.
 
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { collectDependencies } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
@@ -636,6 +639,51 @@ export interface OsvScanResult {
       vulnerabilities?: OsvVulnerability[];
     }[];
   }[];
+}
+
+const OSV_LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
+
+// #1752 — the #1664 classification applied to osv-scanner (mirrors execSemgrep in semgrep.ts).
+// The old shape accepted ANY non-empty stdout as a complete report, discarding the exit code and
+// signal. MEASURED against osv-scanner 2.3.8 (2026-07-31): exit 1 is the one benign nonzero exit
+// (vulnerabilities found, complete report on stdout — the documented 0/1/127/128 table); a corrupt
+// lockfile, a dead network and a mid-scan connection loss all exit 127 with EMPTY stdout; but a
+// run killed while flushing its report leaves a NON-EMPTY TRUNCATED prefix on stdout (SIGKILL
+// mid-flush left 196,563 of 230,602 bytes; exceeding execFileSync's maxBuffer leaves 65,506 bytes
+// with signal SIGTERM and code ENOBUFS) — which the old shape accepted and then crashed on at
+// JSON.parse, taking the whole mechanical scan down. Classify by exit status first: anything other
+// than a clean exit 0/1 is an incomplete run and degrades to the #512 DEP-OSV-00 disclosure, and a
+// parse failure on accepted output degrades the same way instead of throwing.
+export function runOsvScanner(dir: string): { result: OsvScanResult; failure?: string } {
+  const lockfile = OSV_LOCKFILES.find((f) => existsSync(join(dir, f)));
+  // No lockfile is a target property, not a tool failure — checkLockfilePresence discloses it.
+  if (!lockfile) return { result: {} };
+  let out: string;
+  try {
+    out = execFileSync("osv-scanner", ["--format", "json", "--lockfile", join(dir, lockfile)], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 64,
+    });
+  } catch (err) {
+    const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
+    if (e.code === "ENOENT") return { result: {}, failure: "osv-scanner not found on PATH" };
+    if (e.signal || e.status !== 1) {
+      const how =
+        e.code === "ENOBUFS"
+          ? `report exceeded the 64 MiB stdout cap, killed by signal ${e.signal ?? "unknown"}`
+          : e.signal
+            ? `killed by signal ${e.signal}`
+            : `exited with code ${e.status ?? "unknown"}`;
+      return { result: {}, failure: `osv-scanner run did not complete (${how})` };
+    }
+    if (typeof e.stdout === "string" && e.stdout.trim().length > 0) out = e.stdout;
+    else return { result: {}, failure: "osv-scanner exited 1 (vulnerabilities found) but printed no report" };
+  }
+  try {
+    return { result: out.trim() ? (JSON.parse(out) as OsvScanResult) : {} };
+  } catch {
+    return { result: {}, failure: "osv-scanner printed something other than its JSON report — treated as an incomplete run, never as a clean scan" };
+  }
 }
 
 export interface OsvVulnerability {

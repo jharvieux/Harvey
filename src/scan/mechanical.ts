@@ -5,7 +5,6 @@
 //
 // CLI: `pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]`
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { enrichFindingsCwe } from "../cwe-map.js";
@@ -41,7 +40,7 @@ import { scanExpressPoweredBy } from "./express-powered-by.js";
 import { scanExpressSecurityHeaders } from "./express-security-headers.js";
 import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, runOsvScanner } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { checkWorkflowPermissions } from "./gha-permissions.js";
@@ -94,29 +93,6 @@ function readPackageJson(dir: string): PackageJson | null {
   const path = join(dir, "package.json");
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, "utf8")) as PackageJson;
-}
-
-const LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
-
-function runOsvScanner(dir: string): { result: OsvScanResult; failure?: string } {
-  const lockfile = LOCKFILES.find((f) => existsSync(join(dir, f)));
-  // No lockfile is a target property, not a tool failure — checkLockfilePresence discloses it.
-  if (!lockfile) return { result: {} };
-  let out: string;
-  try {
-    out = execFileSync("osv-scanner", ["--format", "json", "--lockfile", join(dir, lockfile)], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 64,
-    });
-  } catch (err) {
-    // osv-scanner exits 1 when it finds vulnerabilities — stdout still has the report.
-    const e = err as { stdout?: string; code?: string; message?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    // #512: a failure with no report (binary missing, crash) must not silently cost the
-    // engagement its CVE pass — surface the reason so the caller emits the disclosure finding.
-    else return { result: {}, failure: e.code === "ENOENT" ? "osv-scanner not found on PATH" : (e.message ?? "osv-scanner failed with no output") };
-  }
-  return { result: out.trim() ? (JSON.parse(out) as OsvScanResult) : {} };
 }
 
 interface MechanicalScanOptions {

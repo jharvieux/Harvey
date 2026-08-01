@@ -22,6 +22,7 @@ import { esc } from "../report-template/sections.mjs";
 import { assembleEngagementDocument } from "./audit-report.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { osvUnavailableFinding } from "./scan/dependencies.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { semgrepUnavailableFinding } from "./scan/semgrep.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
@@ -126,6 +127,9 @@ function deliverable(): FindingsDocument {
     // naming reason runSemgrep now returns — the "not-assessed row's OWN reason reaches the HTML"
     // assertion below is what proves a crashed scan reaches the client as a named gap, not silence.
     semgrepUnavailableFinding("semgrep run did not complete (killed by signal SIGBUS)"),
+    // #1752: the incomplete-osv-scanner disclosure, produced by the real producer with the
+    // exit/signal-naming reason runOsvScanner now returns — same seam, same proof as SEM-00 above.
+    osvUnavailableFinding("osv-scanner run did not complete (killed by signal SIGKILL)"),
     fixedFinding(),
     ...rolled,
   ];
@@ -138,7 +142,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
   const html = buildHtml(doc);
 
   it("the fixture actually exercises all three places content can be lost", () => {
-    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
+    expect(doc.findings.filter((f) => f.confidence === "N/A").map((f) => f.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
     expect(doc.findings.some((f) => f.severity === "Info" && f.confidence !== "N/A")).toBe(true);
     expect(html).toMatch(/not individually rendered/);
   });
@@ -162,7 +166,7 @@ describe("#1435 a finding's own words survive the render seam", () => {
       html,
     );
     const breaches = renderFidelityBreaches(doc, broken);
-    expect(breaches.map((b) => b.id).sort()).toEqual(["M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
+    expect(breaches.map((b) => b.id).sort()).toEqual(["DEP-OSV-00", "M1-EXT-00", "M10-ESCALATION-00", "SEM-00"]);
     expect(breaches.every((b) => b.kind === "reason-dropped")).toBe(true);
   });
 
