@@ -2325,10 +2325,38 @@ interface SsrCrossFileContext {
   allPaths: ReadonlySet<string>;
   aliases: PathAlias[];
   importedBy: ReadonlyMap<string, string[]>;
-  // `${declaringPath}#${exportedName}` -> every barrel path that re-exports it (#1500's `export
-  // { x } from "./barrel"` shape, one hop) — precomputed ONCE per run, not per candidate helper, so
-  // a target with thousands of files doesn't re-scan them per unresolved-in-file helper.
-  barrelsFor: ReadonlyMap<string, string[]>;
+  // Every barrel path that re-exports `(declaringPath, exportedName)` — #1500's
+  // `export { x } from "./barrel"` and, since #1717, `export * from "./barrel"` — to
+  // BARREL_CHASE_DEPTH hops. The re-export index behind it is built ONCE per run (not per candidate
+  // helper, so a target with thousands of files isn't re-scanned per unresolved helper) and this
+  // lookup memoises its own answers.
+  barrelsFor: (declaringPath: string, exportedName: string) => string[];
+}
+
+/**
+ * #1717: how many `export { x } from "./y"` hops the SSR cross-file caller search follows.
+ *
+ * #1500 set this at 1 and declined to widen it, on the reasoning that "a 2-hop special case would
+ * just move the wall". A bounded N-hop chase is the answer to that objection rather than an instance
+ * of it: it moves the wall once, to a stated place, and the number is here to be read.
+ *
+ * MEASURED 2026-08-01 over the 17 pinned corpus commits: at 3, the deepest chain that resolves is
+ * carbon's 2-hop `@carbon/tiptap` -> `./extensions` -> `./slash-command`, so the corpus has one hop
+ * of headroom and no target reaches the bound. What lies beyond it is a false NEGATIVE of the
+ * SUPPRESSION, not of the detection — an unresolvable caller leaves the finding flagged (the #1263
+ * property this rule already relies on), so the bound fails toward reporting, never toward silence.
+ */
+const BARREL_CHASE_DEPTH = 3;
+
+/** The modules a file re-exports wholesale — `export * from "./x"` (#1717). */
+function starReExportTargets(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): string[] {
+  const out: string[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || stmt.exportClause || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const target = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
+    if (target !== undefined) out.push(target);
+  }
+  return out;
 }
 
 function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, allPaths: ReadonlySet<string>, aliases: PathAlias[]): SsrCrossFileContext {
@@ -2342,15 +2370,82 @@ function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, a
       else importedBy.set(target, [importer]);
     }
   }
-  const barrelsFor = new Map<string, string[]>();
+  // #1717: a barrel that re-exports from ANOTHER barrel, to BARREL_CHASE_DEPTH hops. #1500 bounded
+  // this at one hop and #1502 inherited that bound, which left carbon's `handleCommandNavigation`
+  // unresolvable: `packages/tiptap/src/index.ts` re-exports it from `./extensions`, which re-exports
+  // it from `./slash-command`, and its real caller imports the outer barrel by package name.
+  //
+  // The frontier below carries the name each hop exports the symbol UNDER, because a barrel may
+  // rename (`export { a as b } from "./x"`) and the next hop out re-exports the renamed one. Keying
+  // the frontier on the original name would silently chase the wrong symbol.
+  //
+  // Bounded, not unbounded, and the bound is disclosed rather than assumed sufficient: 3 hops covers
+  // the deepest chain in the pinned corpus with one to spare. `visited` makes a cyclic barrel graph
+  // terminate rather than recurse.
+  // `${sourcePath}#${sourceName}` -> every barrel re-exporting it BY NAME, and the name it exports
+  // it under. Star re-exports are a separate index below: a star supplies every name, so it has no
+  // enumerable key here.
+  const oneHop = new Map<string, { barrelPath: string; exportedAs: string }[]>();
+  const addHop = (fromPath: string, fromName: string, barrelPath: string, exportedAs: string) => {
+    const key = `${fromPath}#${fromName}`;
+    const list = oneHop.get(key);
+    if (list) list.push({ barrelPath, exportedAs });
+    else oneHop.set(key, [{ barrelPath, exportedAs }]);
+  };
+  // #1717: `export * from "./x"` carries no export clause, so `collectReExports` skips it — and
+  // THAT, not the hop count, is what kept carbon's `handleCommandNavigation` unresolvable (MEASURED
+  // 2026-08-01: extending the chase alone moved NOTHING on any target; the middle barrel,
+  // packages/tiptap/src/extensions/index.ts:66, is a bare `export * from "./slash-command"`).
+  //
+  // Modelled as a PATH edge rather than a name list, because a star barrel declares no names of its
+  // own: enumerating `./x`'s exported names breaks the moment `./x` is itself a star barrel, which
+  // is the common `index.ts` shape and exactly carbon's. Every name flows through unchanged. The
+  // over-approximation is closed at the far end, not here: `crossFileCallSites` still requires the
+  // IMPORTER's own binding to name this barrel and this symbol, so a barrel that does not really
+  // re-export the name is never matched by anything.
+  //
+  // Kept out of `collectReExports` on purpose — #1500's gate resolver shares that function, and this
+  // widening is scoped to the SSR caller search, whose blast radius is the measurement above.
+  const starredBy = new Map<string, string[]>();
   for (const [barrelPath, barrelSf] of sources) {
-    for (const [, binding] of collectReExports(barrelSf, barrelPath, allPathsSet, aliases)) {
-      const key = `${binding.path}#${binding.name}`;
-      const list = barrelsFor.get(key);
+    for (const [exportedAs, binding] of collectReExports(barrelSf, barrelPath, allPathsSet, aliases)) {
+      addHop(binding.path, binding.name, barrelPath, exportedAs);
+    }
+    for (const target of starReExportTargets(barrelSf, barrelPath, allPathsSet, aliases)) {
+      const list = starredBy.get(target);
       if (list) list.push(barrelPath);
-      else barrelsFor.set(key, [barrelPath]);
+      else starredBy.set(target, [barrelPath]);
     }
   }
+  const hopsFrom = (path: string, name: string): { barrelPath: string; exportedAs: string }[] => [
+    ...(oneHop.get(`${path}#${name}`) ?? []),
+    // A star passes every name through unchanged, so the symbol keeps its name across the hop.
+    ...(starredBy.get(path) ?? []).map((barrelPath) => ({ barrelPath, exportedAs: name })),
+  ];
+  // Memoised per (path, name) rather than precomputed over every key: with stars in play the key set
+  // is not enumerable up front, and the callers ask about a handful of helpers per run.
+  const cache = new Map<string, string[]>();
+  const barrelsFor = (path: string, name: string): string[] => {
+    const key = `${path}#${name}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const reachable: string[] = [];
+    const visited = new Set<string>();
+    let frontier = hopsFrom(path, name);
+    for (let hop = 0; hop < BARREL_CHASE_DEPTH && frontier.length > 0; hop++) {
+      const next: { barrelPath: string; exportedAs: string }[] = [];
+      for (const step of frontier) {
+        const seenKey = `${step.barrelPath}#${step.exportedAs}`;
+        if (visited.has(seenKey)) continue;
+        visited.add(seenKey);
+        reachable.push(step.barrelPath);
+        next.push(...hopsFrom(step.barrelPath, step.exportedAs));
+      }
+      frontier = next;
+    }
+    cache.set(key, reachable);
+    return reachable;
+  };
   return { sources, allPaths, aliases, importedBy, barrelsFor };
 }
 
@@ -2360,7 +2455,7 @@ function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, a
 // name contributes nothing, which is the same "no evidence either way" outcome as an in-file zero.
 function crossFileCallSites(path: string, exportedName: string, ctx: SsrCrossFileContext): { node: ts.CallExpression; sf: ts.SourceFile }[] {
   const out: { node: ts.CallExpression; sf: ts.SourceFile }[] = [];
-  const viaPaths = [path, ...(ctx.barrelsFor.get(`${path}#${exportedName}`) ?? [])];
+  const viaPaths = [path, ...ctx.barrelsFor(path, exportedName)];
   for (const viaPath of viaPaths) {
     for (const importerPath of ctx.importedBy.get(viaPath) ?? []) {
       const importerSf = ctx.sources.get(importerPath);

@@ -375,6 +375,86 @@ describe("client-supplied owner id — house-style gate resolution (#1434)", () 
   });
 });
 
+// #1717 — #1502's cross-file SSR caller search followed ONE hop of `export { x } from "./barrel"`,
+// and carbon's `handleCommandNavigation` stayed flagged. Both #1717's body and carbon's own baseline
+// note diagnosed that as a DEPTH problem; MEASURED, it was not — extending the chase to 3 hops moved
+// nothing on any pinned target. The middle barrel is a bare `export * from "./slash-command"`, which
+// `collectReExports` skips because it has no export clause, so it was invisible at any depth.
+// Both halves ship, and this block gates both plus the bound itself.
+describe("SSR cross-file callers through a barrel chain (#1717)", () => {
+  const SSR = "M9 — SSR-only API misuse";
+  const HELPER = 'export function handleCommandNavigation(event: unknown) {\n  return document.activeElement;\n}\n';
+  // The caller is deferred to a useEffect, so it is OFF the render path: resolving it must SPARE the
+  // helper. That is what makes each assertion below a statement about resolution — an unresolved
+  // chain leaves the finding standing, so "flagged" and "chain not followed" are the same output.
+  const CALLER = (specifier: string) =>
+    `import { handleCommandNavigation } from "${specifier}";\nimport { useEffect } from "react";\n\nexport function SlashCommand() {\n  useEffect(() => {\n    handleCommandNavigation(null);\n  }, []);\n  return <div />;\n}\n`;
+  const ssrRows = (files: SourceInput[]) => detectAppRouterFindings(files).filter((f) => f.taxonomy === SSR);
+
+  it("follows a `export * from` barrel — the shape carbon actually has", () => {
+    const files = [
+      { path: "lib/slash-command.tsx", text: HELPER },
+      { path: "lib/index.ts", text: 'export * from "./slash-command";\n' },
+      { path: "app/component.tsx", text: CALLER("../lib/index") },
+    ];
+    expect(ssrRows(files)).toEqual([]);
+  });
+
+  it("follows TWO hops — a named barrel above a star barrel, carbon's exact chain", () => {
+    const files = [
+      { path: "lib/extensions/slash-command.tsx", text: HELPER },
+      { path: "lib/extensions/index.ts", text: 'export * from "./slash-command";\n' },
+      { path: "lib/index.ts", text: 'export { handleCommandNavigation } from "./extensions/index";\n' },
+      { path: "app/component.tsx", text: CALLER("../lib/index") },
+    ];
+    expect(ssrRows(files)).toEqual([]);
+  });
+
+  it("follows a RENAMING hop, resolving the symbol under the name each barrel exports it as", () => {
+    const files = [
+      { path: "lib/slash-command.tsx", text: HELPER },
+      { path: "lib/inner.ts", text: 'export { handleCommandNavigation as navigate } from "./slash-command";\n' },
+      { path: "lib/index.ts", text: 'export { navigate as handleCommandNavigation } from "./inner";\n' },
+      { path: "app/component.tsx", text: CALLER("../lib/index") },
+    ];
+    expect(ssrRows(files)).toEqual([]);
+  });
+
+  // THE ADVERSARIAL CONTROL AT THE BOUND, mirroring #1500's GATE_DEPTH one. A chain one hop deeper
+  // than BARREL_CHASE_DEPTH must leave the finding STANDING — the bound fails toward reporting, not
+  // toward silence. Raising the constant makes this test red, which is the point: the number is
+  // asserted, not merely written down.
+  it("stops at BARREL_CHASE_DEPTH — a chain one hop deeper stays FLAGGED, not silently spared", () => {
+    const files = [
+      { path: "lib/slash-command.tsx", text: HELPER },
+      { path: "lib/b1.ts", text: 'export * from "./slash-command";\n' },
+      { path: "lib/b2.ts", text: 'export * from "./b1";\n' },
+      { path: "lib/b3.ts", text: 'export * from "./b2";\n' },
+      { path: "lib/b4.ts", text: 'export * from "./b3";\n' },
+      { path: "app/component.tsx", text: CALLER("../lib/b4") },
+    ];
+    const rows = ssrRows(files);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.location).toContain("lib/slash-command.tsx");
+    // …and exactly one hop shallower DOES resolve, so the assertion above is about the bound and
+    // not about some unrelated reason the chain never worked.
+    const withinBound = files.filter((f) => f.path !== "lib/b4.ts").map((f) => (f.path === "app/component.tsx" ? { ...f, text: CALLER("../lib/b3") } : f));
+    expect(ssrRows(withinBound)).toEqual([]);
+  });
+
+  // A star barrel must not become a wildcard that spares anything: the helper's name has to really
+  // be exported by the module the star points at.
+  it("does not resolve a name the starred module does not export", () => {
+    const files = [
+      { path: "lib/slash-command.tsx", text: HELPER },
+      { path: "lib/other.ts", text: "export function unrelated() {}\n" },
+      { path: "lib/index.ts", text: 'export * from "./other";\n' },
+      { path: "app/component.tsx", text: CALLER("../lib/index") },
+    ];
+    expect(ssrRows(files)).toHaveLength(1);
+  });
+});
+
 // #1652 — the two policy exclusions in detectClientSuppliedOwnerId used to `continue` in silence,
 // so a target where every client-owner-id site was set aside reported zero rows of the class and
 // nothing said a class had been set aside. Both exclusions now emit into one counted N/A row, the
