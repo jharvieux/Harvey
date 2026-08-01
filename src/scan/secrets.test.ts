@@ -3,12 +3,17 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDirectorySafe } from "../fs-walk.js";
+import type { Finding } from "../findings.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // #950: trufflehog/gitleaks absent from PATH must degrade to a disclosed coverage gap, not an
 // uncaught ENOENT crash (mirrors the osv-scanner pattern, #512). Only those two binary names are
 // faked here — every other execFileSync call (notably "git", used both by isGitRepoRoot and by
 // this file's own test setup below) passes through to the real implementation untouched.
+// #1754: trufflehog moved to spawnSync (the exit status and signal are what classify a run, and
+// execFileSync only reports them through a thrown error), so the fake has to cover both entry
+// points — otherwise this suite silently runs the REAL trufflehog on any machine that has it and
+// stops testing the degradation path at all.
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -20,6 +25,14 @@ vi.mock("node:child_process", async (importOriginal) => {
         throw err;
       }
       return actual.execFileSync(bin, args, opts as never);
+    }),
+    spawnSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
+      if (bin === "trufflehog" || bin === "gitleaks") {
+        const err = new Error(`spawnSync ${bin} ENOENT`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        return { error: err, status: null, signal: null, stdout: null, stderr: null, pid: 0, output: [] };
+      }
+      return actual.spawnSync(bin, args, opts as never);
     }),
   };
 });
@@ -502,6 +515,85 @@ describe("scanSecrets degrades when trufflehog/gitleaks are absent from PATH (#9
     // TruffleHog) — the redundant second invocation is skipped once the first fails.
     expect(findings.filter((f) => f.id === "SEC-TH-00")).toHaveLength(1);
     expect(findings.filter((f) => f.id === "SEC-GL-00")).toHaveLength(1);
+  });
+});
+
+// #1754 — the crashed-scan classification. The stdout in every case below is the SAME real
+// captured trufflehog output, re-serialised to the NDJSON the tool actually streams: identical
+// bytes, and the only thing that separates "a complete report with 2 secrets in it" from "a scan
+// that died after emitting 2 of them" is the exit status. That is the whole defect — line-wise
+// NDJSON parsing means a truncated stream has no syntax error to trip over.
+//
+// MEASURED 2026-07-31 (trufflehog 3.96.0, production argv `filesystem --only-verified --json`, a
+// 152 MB tree with 500 planted credentials verified against a local endpoint; a complete run yields
+// 253-268 records). Each shape below is a real spawnSync result from that probe:
+//   SIGTERM mid-scan   status 255, error ETIMEDOUT   73,802 bytes, 116/116 records parsed clean
+//   SIGKILL mid-scan   status null, signal SIGKILL   160,166 bytes, 252/252 records parsed clean
+//   maxBuffer overflow status 255, error ENOBUFS      20,299 bytes,  32/32 records parsed clean
+describe("an incomplete trufflehog run is never a complete secret report (#1754)", () => {
+  // The one field not from the tool, disclosed for the same reason the #1078 block above discloses
+  // it: an offline capture carries Verified:false, and parseTruffleHogFindings keeps only hits the
+  // tool confirmed live — so without the override the "accepted" direction would report zero
+  // findings for a reason unrelated to this change, and every assertion below would be vacuous.
+  const ndjson = capturedTruffleHog.map((r) => JSON.stringify({ ...r, Verified: true })).join("\n") + "\n";
+  const err = (code: string): NodeJS.ErrnoException => Object.assign(new Error(`spawnSync trufflehog ${code}`), { code });
+
+  /** Runs scanSecrets against a throwaway (non-git) dir with trufflehog's FIRST pass faked. */
+  const scanWith = async (result: Record<string, unknown>): Promise<Finding[]> => {
+    const cp = await import("node:child_process");
+    vi.mocked(cp.spawnSync).mockImplementationOnce(((bin: string) => {
+      expect(bin).toBe("trufflehog");
+      return { stderr: "", pid: 1, output: [], ...result };
+    }) as never);
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secrets-crash-"));
+    try {
+      return scanSecrets(dir, dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const secrets = (findings: Finding[]): Finding[] =>
+    findings.filter((f) => f.category === "Secret exposure" && f.confidence !== "N/A");
+
+  it("the fixture is not vacuous — with status 0, these same bytes DO deliver secret findings", async () => {
+    const findings = await scanWith({ status: 0, signal: null, stdout: ndjson });
+    expect(secrets(findings).length).toBe(capturedTruffleHog.length);
+    expect(secrets(findings).length).toBeGreaterThan(0);
+    expect(findings.find((f) => f.id === "SEC-TH-00")).toBeUndefined();
+  });
+
+  // Each case below hands scanSecrets the SAME bytes as the pass above and only changes the exit
+  // status — which is the defect in one line: a truncated NDJSON stream is byte-for-byte a shorter
+  // complete one, so the exit status is the only thing that can tell them apart.
+  it.each([
+    ["SIGTERM mid-scan (116/116 records parsed clean)", { status: 255, signal: null, error: err("ETIMEDOUT") }, "exited with code 255"],
+    ["SIGKILL mid-scan (252/252 records parsed clean)", { status: null, signal: "SIGKILL", error: err("ETIMEDOUT") }, "killed by signal SIGKILL"],
+    ["maxBuffer overflow (32/32 records parsed clean)", { status: 255, signal: null, error: err("ENOBUFS") }, "exceeded the 64 MiB stdout cap"],
+  ])("%s is disclosed as SEC-TH-00, and its records are not delivered", async (_name, shape, reason) => {
+    const findings = await scanWith({ ...shape, stdout: ndjson });
+    expect(findings.find((f) => f.id === "SEC-TH-00")?.evidence).toContain(reason);
+    expect(secrets(findings)).toEqual([]);
+  });
+
+  it("still reports a missing binary as a missing binary, not as a crash (#950)", async () => {
+    const findings = await scanWith({ status: null, signal: null, stdout: null, error: err("ENOENT") });
+    expect(findings.find((f) => f.id === "SEC-TH-00")?.evidence).toContain("trufflehog not found on PATH");
+  });
+
+  it("degrades rather than throwing when an exit-0 stream is not JSON", async () => {
+    const findings = await scanWith({ status: 0, signal: null, stdout: "<ERROR: missing output>" });
+    expect(findings.find((f) => f.id === "SEC-TH-00")?.evidence).toContain("did not parse");
+    expect(secrets(findings)).toEqual([]);
+  });
+
+  it("CONTROL — the shipped predicate, reconstructed, accepts all three crashed streams", async () => {
+    // `if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;` — the exact line
+    // this change replaces, applied to the same bytes the three cases above are refused on. It
+    // yields a full record set every time, which is what reached the deliverable as a secret report.
+    const shipped = (stdout: string): TruffleHogResult[] =>
+      stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l) as TruffleHogResult);
+    expect(shipped(ndjson).length).toBe(capturedTruffleHog.length);
+    expect(shipped(ndjson).every((r) => r.Verified)).toBe(true);
   });
 });
 

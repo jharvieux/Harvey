@@ -1,8 +1,9 @@
 // Secret exposure: TruffleHog (--only-verified) + gitleaks (custom Supabase rules).
 //
 // Both are external CLI binaries this module shells out to — neither is an npm dependency.
-// Install: `brew install trufflehog gitleaks` (or see their GitHub releases). Requires each
-// binary on PATH; runTruffleHog/runGitleaks throw if the binary is missing.
+// Install: `brew install trufflehog gitleaks` (or see their GitHub releases). Requires each binary
+// on PATH; since #950 a missing binary is a disclosed coverage gap (SEC-TH-00/SEC-GL-00), not a
+// throw, and since #1754 so is a run that started and did not finish.
 //
 // Invocations (three passes each — source tree, git history, built bundle):
 //   trufflehog filesystem --only-verified --json <dir>
@@ -23,7 +24,7 @@
 // dropped here, both COUNTED into SEC-GL-ALLOW-00. `scanSecrets` also emits SEC-SCOPE-00 stating
 // the sweep's actual scope (verified-only, working-tree pattern pass) on every run.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -343,30 +344,51 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
 // trufflehog binary must degrade to a disclosed coverage gap, never an uncaught ENOENT that
 // hard-exits the whole quick-scan CLI. `failure` set ⇒ the caller substitutes the tool's
 // unavailable-finding instead of treating an empty result as "zero secrets found".
-function runJson<T>(bin: string, args: string[]): { results: T[]; failure?: string } {
-  let out: string;
-  try {
-    out = execFileSync(bin, args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
-  } catch (err) {
-    const e = err as { stdout?: string; code?: string; message?: string };
-    // trufflehog/gitleaks exit non-zero when findings exist — stdout still has the report.
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else return { results: [], failure: e.code === "ENOENT" ? `${bin} not found on PATH` : (e.message ?? `${bin} failed with no output`) };
+//
+// #1754 — the #1664 classification, applied to the shape where it costs the most. The previous
+// catch accepted ANY non-empty stdout from a FAILED run as a complete report, on the stated premise
+// that "trufflehog/gitleaks exit non-zero when findings exist". MEASURED 2026-07-31 (trufflehog
+// 3.96.0) with the exact production argv below: that premise is FALSE for every call site here —
+// `--fail` is the only flag that makes a completed run exit non-zero on findings, and none of these
+// invocations passes it (a completed scan of 253 verified hits exited 0). What the premise licensed
+// instead was accepting a CRASHED scan's prefix, and trufflehog streams NDJSON, so the prefix is
+// individually valid line by line — a truncated secret report is byte-for-byte indistinguishable
+// from a complete one with fewer secrets in it. Measured against a 152 MB tree (500 planted
+// credentials verified against a local endpoint; a complete run yields 253-268 records):
+//   SIGTERM mid-scan   status 255, error ETIMEDOUT   73,802 bytes, 116/116 records parsed clean
+//   SIGKILL mid-scan   signal SIGKILL                160,166 bytes, 252/252 records parsed clean
+//   maxBuffer overflow status 255, error ENOBUFS      20,299 bytes,  32/32 records parsed clean
+// All three were accepted by the old code as complete secret reports. Classify by exit status
+// first: any signal, any non-zero exit, or any spawn error is an incomplete run and degrades to the
+// #950 SEC-TH-00 disclosure, and a parse failure on ACCEPTED output degrades the same way instead
+// of throwing out of the mechanical scan.
+function classifyTruffleHogRun(r: {
+  error?: Error & { code?: string };
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string | null;
+}): { results: TruffleHogResult[]; failure?: string } {
+  if (r.error?.code === "ENOENT") return { results: [], failure: "trufflehog not found on PATH" };
+  if (r.signal) return { results: [], failure: `trufflehog run did not complete (killed by signal ${r.signal})` };
+  if (r.status !== 0) {
+    const why = r.error?.code === "ENOBUFS" ? "report exceeded the 64 MiB stdout cap" : `exited with code ${r.status ?? "unknown"}`;
+    return { results: [], failure: `trufflehog run did not complete (${why})` };
   }
-  if (!out.trim()) return { results: [] };
-  // trufflehog emits newline-delimited JSON; gitleaks emits a single JSON array.
-  const trimmed = out.trim();
-  if (trimmed.startsWith("[")) return { results: JSON.parse(trimmed) as T[] };
-  return {
-    results: trimmed
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as T),
-  };
+  if (r.error) return { results: [], failure: `trufflehog run did not complete (${r.error.code ?? r.error.message})` };
+  const lines = (r.stdout ?? "").split("\n").filter((line) => line.trim().length > 0);
+  try {
+    return { results: lines.map((line) => JSON.parse(line) as TruffleHogResult) };
+  } catch (err) {
+    return { results: [], failure: `trufflehog exited 0 but its JSON stream did not parse: ${(err as Error).message}` };
+  }
+}
+
+function runTruffleHogJson(args: string[]): { results: TruffleHogResult[]; failure?: string } {
+  return classifyTruffleHogRun(spawnSync("trufflehog", args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 }));
 }
 
 function runTruffleHogFilesystem(dir: string): { results: TruffleHogResult[]; failure?: string } {
-  return runJson<TruffleHogResult>("trufflehog", ["filesystem", "--only-verified", "--json", dir]);
+  return runTruffleHogJson(["filesystem", "--only-verified", "--json", dir]);
 }
 
 // trufflehog's git pass clones the target as a repo, so it only works when the scan target is a
@@ -390,7 +412,7 @@ export function isGitRepoRoot(dir: string): boolean {
 }
 
 function runTruffleHogGitHistory(repoDir: string): { results: TruffleHogResult[]; failure?: string } {
-  return runJson<TruffleHogResult>("trufflehog", ["git", "--only-verified", "--json", `file://${repoDir}`]);
+  return runTruffleHogJson(["git", "--only-verified", "--json", `file://${repoDir}`]);
 }
 
 // Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00: a visible not-assessed row, never a silent
@@ -547,7 +569,17 @@ function bundleScanUnavailableFinding(reason: string): Finding {
 
 // gitleaks writes its report to a file (no stdout JSON mode), so scan into a scratch dir
 // and read the report back. #950: a missing/crashing gitleaks binary degrades to a disclosed
-// coverage gap (failure set) rather than an uncaught ENOENT, mirroring runJson above.
+// coverage gap (failure set) rather than an uncaught ENOENT, mirroring runTruffleHogJson above.
+//
+// #1754 asked whether gitleaks shares trufflehog's partial-output hazard. MEASURED 2026-07-31
+// (gitleaks 8.30.1, this exact argv, a 152 MB tree whose full scan takes ~28s): a run SIGKILLed at
+// 5s leaves NO report file at all — gitleaks writes the report once, at the end — so the truncated-
+// prefix shape trufflehog has is not reachable here, and the absent file already lands in the catch
+// below as a disclosed failure. Its own silent-clean shape is different and NOT reachable from this
+// module: pointed at a path that does not exist, gitleaks exits 0 and writes a valid empty `[]`
+// report. Both call sites below pass a directory this process created or one `resolveBundleScan`
+// put through existsSync, so that population is zero today; a caller that ever passes a path it has
+// not checked needs an existence check here rather than trusting the empty report.
 function runGitleaks(dir: string): { results: GitleaksResult[]; failure?: string } {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-gitleaks-"));
   const reportPath = join(scratch, "report.json");
