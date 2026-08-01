@@ -8,11 +8,16 @@
 #
 # This job runs the OFFLINE half only: no `--live`/`--tier`, so every falsifier tagged
 # FALSIFIER-TIER (m2-stack, lighthouse, secbench, supabase-labs, #1167) is SKIPPED-LIVE — disclosed
-# in the log, not silently dropped — and every other empirical falsifier actually executes. As of
-# this writing every non-tier-gated falsifier is a local, offline command (grep/test/ls/node/tsx
-# against files already in this checkout) — no mechanical scanner binaries required — so this needs
-# nothing beyond `pnpm install` and the runner's preinstalled `gh`, unlike
-# dry-run-drift.yml/conservation.yml.
+# in the log, not silently dropped — and every other empirical falsifier actually executes. Most are
+# local offline commands (grep/test/ls/node/tsx against files already in this checkout), but TWO
+# shell out to `semgrep` — src/scan/__fixtures__/semgrep/PROVENANCE.md:85 and
+# docs/design/interprocedural-roi-1289.md:125 — so this job installs the mechanical binaries, like
+# dry-run-drift.yml/conservation.yml. It did NOT until 2026-08-01, and this comment asserted the
+# opposite; the cost was not a skipped check. Each of those falsifiers correctly exited 127 =
+# UNVERIFIABLE, and the CLI fails on STALE || UNVERIFIABLE, so the job went red for an ENVIRONMENT
+# GAP wearing a decayed claim's exit code (#1822, MEASURED on run 30694879524). A falsifier that
+# could not run has not passed — but it is not a stale reason either, and a job that cannot tell
+# those apart makes its own red uninformative.
 #
 # `--issues` is on this cadence too (#1246): `collectReasons` reads FILES, so a blocker recorded in a
 # GitHub issue body or comment is gated by nothing at all — and #1254 found one (on #1163) that the
@@ -105,6 +110,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # Two falsifiers shell out to `semgrep` (src/scan/__fixtures__/semgrep/PROVENANCE.md:85 runs
+      # build-corpus.mjs, which needs it; docs/design/interprocedural-roi-1289.md:125 runs
+      # `semgrep --pro`). Without the binary each correctly exits 127 = UNVERIFIABLE, which fails
+      # this gate for a missing tool rather than a decayed claim (#1822). Note the second stays
+      # non-zero WITH the OSS binary present — `--pro` is unsupported there, and "the blocker still
+      # holds" is the right verdict for that reason. It is the missing BINARY, not the missing Pro
+      # engine, that was turning it into a 127.
+      - uses: ./.github/actions/mechanical-binaries
 
       # `exit "${PIPESTATUS[0]}"` is not decoration — WITHOUT it this step could not fail (#1422).
       # A `run:` with no `shell:` key gets `bash -e {0}`, NOT `bash -eo pipefail {0}` (the run log
