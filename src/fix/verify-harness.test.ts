@@ -95,12 +95,12 @@ describe("extractCiRunSteps", () => {
 
 describe("buildVerificationEvidence", () => {
   const commands: DiscoveredCommand[] = [{ command: "pnpm run verify", workspace: "", source: "package.json (root)" }];
-  const okRun = (command: string, cwd: string): CommandRun => ({ command, cwd, exitCode: 0, durationMs: 5, outputTail: "ok" });
-  const failRun = (command: string, cwd: string): CommandRun => ({ command, cwd, exitCode: 1, durationMs: 5, outputTail: "boom" });
+  const okRun = async (command: string, cwd: string): Promise<CommandRun> => ({ command, cwd, exitCode: 0, durationMs: 5, outputTail: "ok" });
+  const failRun = async (command: string, cwd: string): Promise<CommandRun> => ({ command, cwd, exitCode: 1, durationMs: 5, outputTail: "boom" });
 
-  it("is green when the detector is clean and the client check passes — green is decided, not asserted", () => {
-    const baseline = runBaseline(commands, "/base", okRun);
-    const ev = buildVerificationEvidence(
+  it("is green when the detector is clean and the client check passes — green is decided, not asserted", async () => {
+    const baseline = await runBaseline(commands, "/base", okRun);
+    const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
       "/fixed",
       okRun,
@@ -109,9 +109,9 @@ describe("buildVerificationEvidence", () => {
     expect(ev.clientChecks[0]!.cwd).toBe("/fixed");
   });
 
-  it("is not green when the detector did not run, even with the client check passing", () => {
-    const baseline = runBaseline(commands, "/base", okRun);
-    const ev = buildVerificationEvidence(
+  it("is not green when the detector did not run, even with the client check passing", async () => {
+    const baseline = await runBaseline(commands, "/base", okRun);
+    const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: { detectorId: "d", fired: false, output: "", notRun: "no resolver" }, commands, baseline },
       "/fixed",
       okRun,
@@ -119,9 +119,9 @@ describe("buildVerificationEvidence", () => {
     expect(ev.green).toBe(false);
   });
 
-  it("carries a pre-existing baseline failure as skipped, never attributing it to the fix", () => {
-    const baseline = runBaseline(commands, "/base", failRun); // failed on the pinned commit
-    const ev = buildVerificationEvidence(
+  it("carries a pre-existing baseline failure as skipped, never attributing it to the fix", async () => {
+    const baseline = await runBaseline(commands, "/base", failRun); // failed on the pinned commit
+    const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
       "/fixed",
       okRun,
@@ -130,9 +130,9 @@ describe("buildVerificationEvidence", () => {
     expect(ev.green).toBe(true); // ambient failure does not sink the fix
   });
 
-  it("records a needs-ci command as skipped and does not count it against green", () => {
+  it("records a needs-ci command as skipped and does not count it against green", async () => {
     const baseline = new Map();
-    const ev = buildVerificationEvidence(
+    const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline, needsCi: () => true },
       "/fixed",
       failRun, // would fail if actually run — proves it is NOT run
@@ -141,9 +141,9 @@ describe("buildVerificationEvidence", () => {
     expect(ev.green).toBe(true);
   });
 
-  it("is not green when a runnable client check fails in the fixed worktree", () => {
-    const baseline = runBaseline(commands, "/base", okRun);
-    const ev = buildVerificationEvidence(
+  it("is not green when a runnable client check fails in the fixed worktree", async () => {
+    const baseline = await runBaseline(commands, "/base", okRun);
+    const ev = await buildVerificationEvidence(
       { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
       "/fixed",
       failRun,
@@ -177,13 +177,13 @@ describe("detectRunner — the client's own runner, read off the lockfile (#1272
 });
 
 describe("withBaselineWorktree — the §2.1 step-3 baseline root (#1272)", () => {
-  it("hands the caller a real checkout of the PINNED commit, not the target's working tree, and disposes it", () => {
+  it("hands the caller a real checkout of the PINNED commit, not the target's working tree, and disposes it", async () => {
     const c = materialize({ "a.txt": "baseline\n" });
     try {
       writeFileSync(join(c.dir, "a.txt"), "the operator moved on\n"); // a dirty client checkout
       let seen = "";
       let root = "";
-      withBaselineWorktree(c.dir, c.commit, (r) => {
+      await withBaselineWorktree(c.dir, c.commit, async (r) => {
         root = r;
         seen = readFileSync(join(r, "a.txt"), "utf8");
       });
@@ -196,7 +196,7 @@ describe("withBaselineWorktree — the §2.1 step-3 baseline root (#1272)", () =
 });
 
 describe("linkNodeModules — the client's installed tree is linked, never consumed", () => {
-  it("survives the worktree's disposal: `git worktree remove --force` + rmSync take the LINK, not the target", () => {
+  it("survives the worktree's disposal: `git worktree remove --force` + rmSync take the LINK, not the target", async () => {
     // The destructive risk worth proving rather than assuming: the harness symlinks the client's own
     // node_modules into a disposable worktree, and that worktree is then force-removed. If either
     // removal followed the link, an engagement would end with the client's dependencies deleted.
@@ -205,7 +205,7 @@ describe("linkNodeModules — the client's installed tree is linked, never consu
       mkdirSync(join(c.dir, "node_modules"), { recursive: true });
       writeFileSync(join(c.dir, "node_modules", "keep.txt"), "installed\n");
       let linked = false;
-      withBaselineWorktree(c.dir, c.commit, (root) => {
+      await withBaselineWorktree(c.dir, c.commit, async (root) => {
         linked = readFileSync(join(root, "node_modules", "keep.txt"), "utf8") === "installed\n";
       });
       expect(linked).toBe(true); // the commands really could have run against it

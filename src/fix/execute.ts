@@ -11,8 +11,9 @@
 // touched, and src/trackers/fix-diff.ts verifySuggestedFix owns apply/effect/revert. The rails run
 // BEFORE a worktree exists, so a denylisted or oversized diff never reaches git at all.
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
@@ -56,37 +57,47 @@ interface ExecuteOptions {
   // re-run the finding's own detector against the FIXED source. The interactive implementer (#1056)
   // uses this to score green from the same disposable worktree — the untrusted operator diff has to
   // make the detector stop firing, not just apply. Absent ⇒ apply-clean is the whole gate.
-  detectorAfter?: (worktreeDir: string) => DetectorRun;
+  detectorAfter?: (worktreeDir: string) => DetectorRun | Promise<DetectorRun>;
   // Optional §2.1/§2.2 client-verification pass (#1272): once the diff is applied into the worktree
   // and the detector has re-run, assemble the FULL verification evidence there — discovered client
   // commands actually executed against the fixed source, scored against a baseline. Runs only when
   // `detectorAfter` also ran, because green needs both halves and the assembler takes the detector
   // result as an input. Absent ⇒ the client half was not gathered and `evidence` is absent with it.
-  evidence?: (worktreeDir: string, detectorAfter: DetectorRun) => VerificationEvidence;
+  evidence?: (worktreeDir: string, detectorAfter: DetectorRun) => VerificationEvidence | Promise<VerificationEvidence>;
 }
+
+const execFileAsync = promisify(execFile);
 
 // stderr is piped, not inherited: the client repo's git chatter ("Preparing worktree…", a failed
 // rev-parse) is this module's control flow, not the operator's report.
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  return stdout.trim();
 }
 
-function gitCommonDir(dir: string): string {
-  const out = git(dir, ["rev-parse", "--git-common-dir"]);
+async function gitCommonDir(dir: string): Promise<string> {
+  const out = await git(dir, ["rev-parse", "--git-common-dir"]);
   return realpathSync(isAbsolute(out) ? out : join(dir, out));
 }
 
 // Harvey must never be its own fix target: a diff scoped to a client repo that lands here would be
 // a self-modification with no operator gate in front of it. Worktrees share --git-common-dir with
 // their primary checkout, so this also catches "target is a Harvey worktree".
-function assertNotHarveyItself(targetDir: string): void {
-  const self = gitCommonDir(dirname(fileURLToPath(import.meta.url)));
-  if (gitCommonDir(targetDir) === self) {
+async function assertNotHarveyItself(targetDir: string): Promise<void> {
+  const self = await gitCommonDir(dirname(fileURLToPath(import.meta.url)));
+  if ((await gitCommonDir(targetDir)) === self) {
     throw new Error(`refusing to execute a fix against Harvey's own repository (${targetDir})`);
   }
 }
 
-export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOptions): FixExecution {
+// #1464: async end to end. Every child process this reaches — the git worktree calls here,
+// verifySuggestedFix's `git apply`, and the client's own suite under the evidence hook — is now
+// spawned rather than spawnSync'd, so an independent fix running in another slot makes progress
+// while this one waits on the OS. The detector-after hook is awaited too, so a resolver that is
+// itself async plugs in without changing this signature; today's resolvers are in-process AST
+// engines plus an execFileSync semgrep replay (src/scan/semgrep.ts), so that ONE step still
+// occupies the loop while it runs. Both facts are reported by the CLI, never assumed.
+export async function executeFixDiff(findingId: string, diff: string, opts: ExecuteOptions): Promise<FixExecution> {
   const facts = parseDiffFacts(diff);
   const base: FixExecution = {
     findingId,
@@ -107,27 +118,27 @@ export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOpt
     return { ...base, outcome: "rails-blocked", railViolations: (rails.violation ?? "").split("; ") };
   }
 
-  assertNotHarveyItself(opts.targetDir);
+  await assertNotHarveyItself(opts.targetDir);
   try {
-    git(opts.targetDir, ["rev-parse", "--verify", `${opts.baselineCommit}^{commit}`]);
+    await git(opts.targetDir, ["rev-parse", "--verify", `${opts.baselineCommit}^{commit}`]);
   } catch {
     return { ...base, abortReason: `baseline commit ${opts.baselineCommit} not found in ${opts.targetDir}` };
   }
 
   const worktree = mkdtempSync(join(tmpdir(), "harvey-fix-"));
   try {
-    git(opts.targetDir, ["worktree", "add", "--detach", worktree, opts.baselineCommit]);
-    const result = verifySuggestedFix(diff, { targetDir: worktree, effectCommand: opts.effectCommand });
+    await git(opts.targetDir, ["worktree", "add", "--detach", worktree, opts.baselineCommit]);
+    const result = await verifySuggestedFix(diff, { targetDir: worktree, effectCommand: opts.effectCommand });
     if (!result.verified) return { ...base, outcome: "verify-failed", verification: result.detail };
     // Detector-after (§2.3): verifySuggestedFix only `git apply --check`s, so the worktree is still at
     // baseline. Apply the diff for real, then re-run the detector against the fixed source. The worktree
     // is disposed in the finally, so no revert is needed.
     let detectorAfter: DetectorRun | undefined;
     if (opts.detectorAfter) {
-      execFileSync("git", ["-C", worktree, "apply", "-"], { input: diff, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      detectorAfter = opts.detectorAfter(worktree);
+      await applyDiff(worktree, diff);
+      detectorAfter = await opts.detectorAfter(worktree);
     }
-    const evidence = detectorAfter && opts.evidence ? opts.evidence(worktree, detectorAfter) : undefined;
+    const evidence = detectorAfter && opts.evidence ? await opts.evidence(worktree, detectorAfter) : undefined;
     return {
       ...base,
       outcome: "diff-verified",
@@ -136,17 +147,34 @@ export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOpt
       ...(evidence ? { evidence } : {}),
     };
   } finally {
-    disposeWorktree(opts.targetDir, worktree);
+    await disposeWorktree(opts.targetDir, worktree);
   }
 }
 
-function disposeWorktree(targetDir: string, worktree: string): void {
+function applyDiff(worktree: string, diff: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", ["-C", worktree, "apply", "-"], { encoding: "utf8" }, (err) => (err ? reject(err) : resolve()));
+    child.stdin?.end(diff);
+  });
+}
+
+// #1464 — a hazard this async conversion CREATED, recorded here because it is real and unproven
+// either way. `worktree add` above and the `prune` below both mutate the shared `.git` of the
+// CLIENT checkout (`targetDir`), which every concurrent worker shares. While runCommand was
+// spawnSync the event loop was blocked for each verify, so two workers never reached these lines at
+// the same instant and git's own index locking was never exercised; with the async runner and §4's
+// maxClientChecks semaphore admitting several workers at once, they genuinely overlap — one
+// worker's `prune` can run while a sibling is mid-`add`. Status: MEASURED green on macOS and on
+// Linux CI at the concurrency this pipeline runs today, and no test forces contention, so the
+// overlap is disclosed rather than demonstrated safe. If a `.git/worktrees` lock error ever surfaces
+// here, this is the seam.
+async function disposeWorktree(targetDir: string, worktree: string): Promise<void> {
   try {
-    git(targetDir, ["worktree", "remove", "--force", worktree]);
+    await git(targetDir, ["worktree", "remove", "--force", worktree]);
   } catch {
     // `worktree add` may have failed before registering the path; the rm + prune below still
     // clean up, and swallowing here keeps the original failure as the thrown error.
   }
   rmSync(worktree, { recursive: true, force: true });
-  git(targetDir, ["worktree", "prune"]);
+  await git(targetDir, ["worktree", "prune"]);
 }

@@ -29,8 +29,8 @@ describe("discoverVerifyCommands", () => {
 });
 
 describe("runCommand", () => {
-  it("captures a real exit code and output — it never trusts a claim of green", () => {
-    const ok = runCommand(`${node} -e "console.log('built ok')"`, process.cwd());
+  it("captures a real exit code and output — it never trusts a claim of green", async () => {
+    const ok = await runCommand(`${node} -e "console.log('built ok')"`, process.cwd());
     expect(ok.exitCode).toBe(0);
     expect(ok.outputTail).toContain("built ok");
     // `>= 0` has no failing direction: every unsigned elapsed time satisfies it, and so does a hardcoded 0.
@@ -38,7 +38,7 @@ describe("runCommand", () => {
     // ever stops being a measurement (#1674).
     expect(ok.durationMs).toBeGreaterThan(0);
 
-    const bad = runCommand(`${node} -e "process.exit(3)"`, process.cwd());
+    const bad = await runCommand(`${node} -e "process.exit(3)"`, process.cwd());
     expect(bad.exitCode).toBe(3);
   });
 });
@@ -117,9 +117,36 @@ describe("computeGreen", () => {
 });
 
 describe("runCommand — the timeout bound", () => {
-  it("kills a command that overruns and reports the kill in its own output, never a silent 0", () => {
-    const slow = runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+  // Both cases assert ELAPSED time, not just the exit code and the banner. Without that they pass on
+  // a runner that never actually bounds anything: `timedOut` is set by the timer regardless of
+  // whether the kill landed, so the banner and the non-zero exit still show up — five seconds late.
+  // That is exactly how the broken bound shipped.
+  it("kills a command that overruns and reports the kill in its own output, never a silent 0", async () => {
+    const start = Date.now();
+    const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
     expect(slow.exitCode).not.toBe(0);
     expect(slow.outputTail).toContain("exceeded the client-check timeout");
-  });
+  }, 20_000);
+
+  // The simple case above is the one that stayed green while the bound was broken on macOS: a shell
+  // handed a single command execs itself away, so killing the wrapper pid happens to kill the work.
+  // A COMPOUND line leaves the shell resident and the grandchild unreached — and compound is what
+  // arrives in practice, since extractCiRunSteps emits a multi-line `run: |` block as one command
+  // and client scripts chain with `&&`. Reverting `detached` + the group kill in runCommand turns
+  // this red at ~5s.
+  it("bounds a COMPOUND command too — the kill reaches the grandchild, not just the shell wrapper", async () => {
+    const start = Date.now();
+    const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)" ; true`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(slow.exitCode).not.toBe(0);
+    expect(slow.outputTail).toContain("exceeded the client-check timeout");
+  }, 20_000);
+
+  it("bounds an && chain, the shape a client verify script actually uses", async () => {
+    const start = Date.now();
+    const slow = await runCommand(`true && ${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(slow.exitCode).not.toBe(0);
+  }, 20_000);
 });

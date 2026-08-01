@@ -5,11 +5,12 @@
 // VerificationEvidence whose `green` is DECIDED by computeGreen — no caller asserts it. Paired with the
 // detector re-run (§2.3, src/fix/detector-rerun.ts): green needs both halves.
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { readNamesSafe } from "../fs-walk.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   computeGreen,
   runCommand,
@@ -27,7 +28,9 @@ export interface DiscoveredCommand {
   source: string; // e.g. "package.json (root)", "package.json (apps/web)", "ci-workflow (ci.yml)"
 }
 
-type Runner = (command: string, cwd: string) => CommandRun;
+type Runner = (command: string, cwd: string) => Promise<CommandRun>;
+
+const execFileAsync = promisify(execFile);
 
 function readScripts(dir: string): Record<string, string> | undefined {
   const p = join(dir, "package.json");
@@ -48,8 +51,13 @@ export const cmdKey = (c: Pick<DiscoveredCommand, "command" | "workspace">) => `
  * batch that discover the same command get the same answer (#1529). The commit and the checkout are
  * in the key so a cache reused across batches, or across two engagements in one process, keeps each
  * target's baseline to its own target.
+ *
+ * It holds the IN-FLIGHT PROMISE, not the finished run (#1464). Once the ingest is async, two
+ * components genuinely overlap, and a map of finished runs is only populated after the first one
+ * returns — so a second worker entering the same window would find it empty and run the client's
+ * own suite a second time, silently undoing #1529's saving.
  */
-export type BaselineCache = Map<string, CommandRun>;
+export type BaselineCache = Map<string, Promise<CommandRun>>;
 
 export const baselineCacheKey = (targetDir: string, baselineCommit: string, c: Pick<DiscoveredCommand, "command" | "workspace">): string =>
   `${targetDir}\u0000${baselineCommit}\u0000${cmdKey(c)}`;
@@ -170,9 +178,12 @@ function stripQuotes(s: string): string {
 }
 
 // Baseline run on the pinned commit (§2.1 step 3), keyed so the fixed run can look each command up.
-export function runBaseline(commands: DiscoveredCommand[], baselineRoot: string, run: Runner = runCommand): Map<string, CommandRun> {
+// Serial WITHIN one baseline root on purpose: these commands share a single worktree (and its linked
+// node_modules), so overlapping them would have two builds writing the same caches. Cross-component
+// overlap is the scheduler's job (§4 maxClientChecks), not this loop's.
+export async function runBaseline(commands: DiscoveredCommand[], baselineRoot: string, run: Runner = runCommand): Promise<Map<string, CommandRun>> {
   const m = new Map<string, CommandRun>();
-  for (const c of commands) m.set(cmdKey(c), run(c.command, join(baselineRoot, c.workspace)));
+  for (const c of commands) m.set(cmdKey(c), await run(c.command, join(baselineRoot, c.workspace)));
   return m;
 }
 
@@ -197,21 +208,21 @@ export function linkNodeModules(fromDir: string, toDir: string): void {
 // Run `fn` against a disposable worktree of `targetDir` pinned at `commit` — the §2.1 step-3 baseline
 // root. It is a real checkout of the pinned commit, never the operator's working tree, so a dirty or
 // moved-on client checkout never leaks into the baseline the fix is measured against.
-export function withBaselineWorktree<T>(targetDir: string, commit: string, fn: (root: string) => T): T {
-  const git = (args: string[]) => execFileSync("git", ["-C", targetDir, ...args], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+export async function withBaselineWorktree<T>(targetDir: string, commit: string, fn: (root: string) => Promise<T>): Promise<T> {
+  const git = (args: string[]) => execFileAsync("git", ["-C", targetDir, ...args], { encoding: "utf8" });
   const root = mkdtempSync(join(tmpdir(), "harvey-baseline-"));
   try {
-    git(["worktree", "add", "--detach", root, commit]);
+    await git(["worktree", "add", "--detach", root, commit]);
     linkNodeModules(targetDir, root);
-    return fn(root);
+    return await fn(root);
   } finally {
     try {
-      git(["worktree", "remove", "--force", root]);
+      await git(["worktree", "remove", "--force", root]);
     } catch {
       // `worktree add` may have failed before registering the path; the rm + prune still clean up.
     }
     rmSync(root, { recursive: true, force: true });
-    git(["worktree", "prune"]);
+    await git(["worktree", "prune"]);
   }
 }
 
@@ -232,7 +243,7 @@ interface EvidenceInputs {
 // the baseline is recorded once as skipped:"pre-existing-failure-on-baseline" and never re-attributed to
 // the fix; a needs-ci command is recorded skipped:"needs-ci" and not run locally. `green` is DECIDED by
 // computeGreen — every output is already secrets-scrubbed by runCommand.
-export function buildVerificationEvidence(inputs: EvidenceInputs, fixedRoot: string, run: Runner = runCommand): VerificationEvidence {
+export async function buildVerificationEvidence(inputs: EvidenceInputs, fixedRoot: string, run: Runner = runCommand): Promise<VerificationEvidence> {
   const clientChecks: CommandRun[] = [];
   for (const c of inputs.commands) {
     const cwd = join(fixedRoot, c.workspace);
@@ -245,7 +256,7 @@ export function buildVerificationEvidence(inputs: EvidenceInputs, fixedRoot: str
       clientChecks.push({ command: c.command, cwd, exitCode: 0, durationMs: 0, outputTail: "", skipped: "needs-ci" });
       continue;
     }
-    clientChecks.push(run(c.command, cwd));
+    clientChecks.push(await run(c.command, cwd));
   }
 
   const evidence: Omit<VerificationEvidence, "green"> = {

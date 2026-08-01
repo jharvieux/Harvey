@@ -166,7 +166,7 @@ interface IngestResult {
 // this never asserts it. A non-green result is REJECTED with a reason; only a green result should reach
 // deliverFix (the caller's transport step). The detector re-run rides inside executeFixDiff's single
 // worktree, so the same applied source both clears the apply gate and answers "does it still fire".
-export function ingestFixDiff(input: IngestInput): IngestResult {
+export async function ingestFixDiff(input: IngestInput): Promise<IngestResult> {
   const facts = parseDiffFacts(input.diff);
   const commands = discoverClientCommands(
     input.targetDir,
@@ -189,37 +189,49 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
   let baselineRequested = 0;
   let baselineExecuted = 0;
   let baselineMs = 0;
-  const baseline = (): Map<string, CommandRun> => {
+  const baseline = async (): Promise<Map<string, CommandRun>> => {
     if (baselineRuns) return baselineRuns;
     const cache = input.baselineCache;
-    const missing = cache ? commands.filter((c) => !cache.has(baselineCacheKey(input.targetDir, input.baselineCommit, c))) : commands;
+    const cacheKey = (c: DiscoveredCommand) => baselineCacheKey(input.targetDir, input.baselineCommit, c);
+    const missing = cache ? commands.filter((c) => !cache.has(cacheKey(c))) : commands;
     baselineRequested = commands.length;
     baselineExecuted = missing.length;
     const started = Date.now();
-    const fresh = missing.length === 0
-      ? new Map<string, CommandRun>()
-      : withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(missing, root));
-    baselineMs = Date.now() - started;
-    if (!cache) return (baselineRuns = fresh);
-    for (const c of missing) {
-      const run = fresh.get(cmdKey(c));
-      if (run) cache.set(baselineCacheKey(input.targetDir, input.baselineCommit, c), run);
+    if (!cache) {
+      const fresh = missing.length === 0
+        ? new Map<string, CommandRun>()
+        : await withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(missing, root));
+      baselineMs = Date.now() - started;
+      return (baselineRuns = fresh);
     }
-    return (baselineRuns = new Map(
-      commands.flatMap((c) => {
-        const run = cache.get(baselineCacheKey(input.targetDir, input.baselineCommit, c));
-        return run ? [[cmdKey(c), run] as const] : [];
-      }),
-    ));
+    // The cache entries are registered BEFORE the first await (#1464): once the ingest is async, a
+    // sibling component sharing this cache reaches here while the worktree run is still in flight,
+    // and a map populated only on completion would send it off to run the same suite again.
+    if (missing.length > 0) {
+      const fresh = withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(missing, root));
+      for (const c of missing) {
+        cache.set(
+          cacheKey(c),
+          fresh.then((m) => {
+            const run = m.get(cmdKey(c));
+            if (!run) throw new Error(`baseline produced no result for \`${c.command}\` — refusing to score a fix against a baseline that did not run`);
+            return run;
+          }),
+        );
+      }
+    }
+    const settled = await Promise.all(commands.map(async (c) => [cmdKey(c), await cache.get(cacheKey(c))] as const));
+    baselineMs = Date.now() - started;
+    return (baselineRuns = new Map(settled.flatMap(([k, run]) => (run ? [[k, run] as const] : []))));
   };
 
-  const execution = executeFixDiff(input.finding.id, input.diff, {
+  const execution = await executeFixDiff(input.finding.id, input.diff, {
     targetDir: input.targetDir,
     baselineCommit: input.baselineCommit,
     allowlist: input.allowlist,
     diffCap: input.diffCap,
     detectorAfter: (worktree) => rerunDetector(input.finding, worktree),
-    evidence: (worktree, detectorAfter) => {
+    evidence: async (worktree, detectorAfter) => {
       linkNodeModules(input.targetDir, worktree);
       return buildVerificationEvidence(
         {
@@ -229,7 +241,7 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
           detectorBefore: detectorBefore(input.finding),
           detectorAfter,
           commands,
-          baseline: baseline(),
+          baseline: await baseline(),
           needsCi,
           attempts: input.attempts ?? 1,
         },

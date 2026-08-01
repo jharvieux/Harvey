@@ -121,6 +121,29 @@ describe("runScheduled — concurrency caps are enforced, not documented", () =>
     expect(DEFAULT_CAPS).toEqual({ maxSlots: 4, maxClientChecks: 2 });
   });
 
+  // #1464. src/cli/fix-execute.ts relies on this to keep §4's merge advice stable: once components
+  // genuinely overlap, COMPLETION order is arbitrary, and the late-conflict pass names which fix the
+  // client should merge FIRST. So the CLI's worker returns its rows and the CLI flattens the result
+  // — which only restores schedule order if runScheduled itself is order-preserving. It is, because
+  // it resolves Promise.all over `components`. Here the workers finish in exactly REVERSE order, so
+  // a completion-ordered implementation would return ["F5" … "F0"] and this goes red.
+  it("returns results in COMPONENT order even when the workers finish in reverse", async () => {
+    const comps = scheduleFixes(Array.from({ length: 6 }, (_, i) => node(`F${i}`, [`src/${i}.ts`])));
+    const finished: string[] = [];
+    const results = await runScheduled(
+      comps,
+      async (component) => {
+        const id = component.findingIds[0] as string;
+        await new Promise((r) => setTimeout(r, (6 - Number(id.slice(1))) * 20));
+        finished.push(id);
+        return id;
+      },
+      { maxSlots: 6, maxClientChecks: 6 },
+    );
+    expect(finished).toEqual(["F5", "F4", "F3", "F2", "F1", "F0"]); // completion order really is reversed
+    expect(results).toEqual(comps.map((c) => c.findingIds[0])); // …and the returned order is not
+  });
+
   // The NEGATIVE CONTROL for the two assertions above (#1272). `peak <= cap` is only evidence if it
   // can fail, and a peak measurement that never rises would satisfy it while proving nothing. Same
   // workload, same instrument, semaphore removed: the peak goes straight past the cap. So the two

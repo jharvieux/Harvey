@@ -44,57 +44,57 @@ const CORRECT_DIFF = [
 const EFFECT = ["node", "-e", "process.exit(require('./calc.js').add(2, 3) === 5 ? 0 : 1)"];
 
 describe("verifySuggestedFix", () => {
-  it("verifies a diff that applies cleanly and achieves its stated effect (mutant killed)", () => {
-    const res = verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
+  it("verifies a diff that applies cleanly and achieves its stated effect (mutant killed)", async () => {
+    const res = await verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
     expect(res.verified).toBe(true);
     expect(res.detail).toContain("effect confirmed");
   });
 
-  it("leaves the target untouched after the effect check (diff reverted)", () => {
-    verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
+  it("leaves the target untouched after the effect check (diff reverted)", async () => {
+    await verifySuggestedFix(CORRECT_DIFF, { targetDir: dir, effectCommand: EFFECT });
     const status = execFileSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" });
     expect(status.trim()).toBe("");
   });
 
-  it("rejects a diff that applies but does NOT achieve the effect", () => {
+  it("rejects a diff that applies but does NOT achieve the effect", async () => {
     const wrong = CORRECT_DIFF.replace("a + b", "a * b"); // applies, but add(2,3)=6 ≠ 5
-    const res = verifySuggestedFix(wrong, { targetDir: dir, effectCommand: EFFECT });
+    const res = await verifySuggestedFix(wrong, { targetDir: dir, effectCommand: EFFECT });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("effect check failed");
   });
 
-  it("rejects a diff that does not apply cleanly", () => {
+  it("rejects a diff that does not apply cleanly", async () => {
     const stale = CORRECT_DIFF.replace("a - b", "a / b"); // context no longer matches the file
-    const res = verifySuggestedFix(stale, { targetDir: dir, effectCommand: EFFECT });
+    const res = await verifySuggestedFix(stale, { targetDir: dir, effectCommand: EFFECT });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("does not apply cleanly");
   });
 
-  it("verifies apply-clean alone when no effect command is given", () => {
-    const res = verifySuggestedFix(CORRECT_DIFF, { targetDir: dir });
+  it("verifies apply-clean alone when no effect command is given", async () => {
+    const res = await verifySuggestedFix(CORRECT_DIFF, { targetDir: dir });
     expect(res.verified).toBe(true);
     expect(res.detail).toContain("applies cleanly");
   });
 
   // #928: the path/size rails run before git — a diff that WOULD apply cleanly is still refused when
   // it touches a denylisted path or blows the diff cap, so it can never be marked verified.
-  it("refuses a diff touching a denylisted path even though it applies cleanly", () => {
+  it("refuses a diff touching a denylisted path even though it applies cleanly", async () => {
     const envDiff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
-    const res = verifySuggestedFix(envDiff, { targetDir: dir });
+    const res = await verifySuggestedFix(envDiff, { targetDir: dir });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("denylisted");
   });
 
-  it("refuses a diff that exceeds the engagement diff cap", () => {
+  it("refuses a diff that exceeds the engagement diff cap", async () => {
     const bigDiff = ["--- a/calc.js", "+++ b/calc.js", "@@ -1 +1,5 @@", "-module.exports.add = (a, b) => a - b;", "+module.exports.add = (a, b) => a + b;", "+// 1", "+// 2", "+// 3", "+// 4", ""].join("\n");
-    const res = verifySuggestedFix(bigDiff, { targetDir: dir, diffCap: { maxLines: 2, maxFiles: 10 } });
+    const res = await verifySuggestedFix(bigDiff, { targetDir: dir, diffCap: { maxLines: 2, maxFiles: 10 } });
     expect(res.verified).toBe(false);
     expect(res.detail).toContain("diff cap");
   });
 
-  it("a denylisted diff cannot reach a ticket body — its verified flag stays false", () => {
+  it("a denylisted diff cannot reach a ticket body — its verified flag stays false", async () => {
     const envDiff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
-    const { verified } = verifySuggestedFix(envDiff, { targetDir: dir });
+    const { verified } = await verifySuggestedFix(envDiff, { targetDir: dir });
     const f: Finding = {
       id: "F-env", title: "leaked secret", severity: "High", confidence: "Confirmed",
       category: "Secrets", taxonomy: "secret_committed", location: ".env:1", status: "open",

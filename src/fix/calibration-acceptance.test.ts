@@ -52,17 +52,15 @@ function track(c: MaterializedCorpus): MaterializedCorpus {
   return c;
 }
 
-// #1134: every test in this file is fully synchronous — runFixAcceptance/rerunDetector/materialize
-// shell out to git and semgrep via execFileSync *inside production code* (src/scan/semgrep.ts,
-// materialize-calibration.ts, execute.ts), not as a CLI child process the test file itself spawns.
-// Converting those call chains to async, unlike the four src/cli/*.test.ts files in the same sweep,
-// would ripple through the fix pipeline and the scanner core that other callers depend on — out of
-// scope for a test-infra change. So this file takes the threshold-check option #1134 offers instead
-// of conversion: each test's own synchronous execution IS the single blocking window (nothing in the
-// body yields to the event loop), so timing beforeEach->afterEach measures exactly that window and
-// fails loud, naming the elapsed time, if it drifts anywhere near vitest's hardcoded 60s worker-RPC
-// ack window (see vitest.config.ts's HEAVY_CLI_TESTS comment). MEASURED 2026-07-26: the slowest test
-// in this file runs in ~5.3s, so 30s leaves ample margin while still catching real drift long before
+// #1134's threshold check, RE-SCOPED by #1464. The note here used to read "every test in this file
+// is fully synchronous", and that half is no longer true: since #1464 the git worktree calls,
+// `git apply` and the client's own suite are spawned, so `executeFixDiff`/`ingestFixDiff` yield.
+// What still blocks the worker is the DETECTOR RE-RUN — the in-process AST engines and
+// src/scan/semgrep.ts's execFileSync replay — and materialize-calibration.ts's git calls. So this
+// timer now measures ELAPSED time, of which the blocking part is a subset; that keeps the guard
+// conservative (it can only fire early, never late) against vitest's hardcoded 60s worker-RPC ack
+// window (see vitest.config.ts's HEAVY_CLI_TESTS comment). MEASURED 2026-07-26: the slowest test in
+// this file runs in ~5.3s, so 30s leaves ample margin while still catching real drift long before
 // it becomes the #1120/#1133 failure mode (exit 1, zero failing tests, nothing named).
 const BLOCKING_WINDOW_MS = 30_000;
 let __blockingWindowStart = 0;
@@ -95,11 +93,11 @@ const CLASS3_FILE = "pages/api/verbose.js"; // class 3: raw error egress (harvey
 const SQLI_FILE = "pages/api/search.js"; // planted bug #4: SQLi via template literal (harvey-sql-injection-template)
 
 describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (M5)", () => {
-  it("yields GREEN: the mechanical fix applies clean, clears the rails, and the detector-after is clean", () => {
+  it("yields GREEN: the mechanical fix applies clean, clears the rails, and the detector-after is clean", async () => {
     const src = readCalibration(M5_FILE);
     const fixed = m5Fixed(src);
     expect(fixed).not.toEqual(src); // the planted signature was actually present
-    const r = runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed }, { allowlist: ["app/**"] });
+    const r = await runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed }, { allowlist: ["app/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]); // §8 clause 3: zero rail events on the clean path
     expect(r.detectorAfter.fired).toBe(false);
@@ -107,7 +105,7 @@ describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (
     expect(r.green).toBe(true);
   });
 
-  it("the detector-after gate genuinely discriminates — it FIRES on the unfixed source", () => {
+  it("the detector-after gate genuinely discriminates — it FIRES on the unfixed source", async () => {
     // Proves green isn't an always-clean detector: re-run against the UNFIXED corpus and it must fire.
     const baseline = track(materialize({ [M5_FILE]: readCalibration(M5_FILE) }));
     const before = rerunDetector(m5Finding(), baseline.dir);
@@ -115,12 +113,12 @@ describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (
     expect(before.notRun).toBeUndefined();
   });
 
-  it("does NOT go green if the 'fix' leaves the detector still firing (a no-op edit)", () => {
+  it("does NOT go green if the 'fix' leaves the detector still firing (a no-op edit)", async () => {
     // A cosmetic edit that keeps the unused param: applies clean, but detector-after still fires ⇒ not green.
     const src = readCalibration(M5_FILE);
     const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
     expect(noop).not.toEqual(src);
-    const r = runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed: noop }, { allowlist: ["app/**"] });
+    const r = await runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed: noop }, { allowlist: ["app/**"] });
     expect(r.execution.outcome).toBe("diff-verified"); // it applied
     expect(r.detectorAfter.fired).toBe(true); // but the bug is still there
     expect(r.green).toBe(false); // so the §8 gate refuses to call it green
@@ -145,7 +143,7 @@ const SEMGREP_PRESENT = hasBinary("semgrep");
 const SEMGREP_TIMEOUT_MS = 30_000;
 
 describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the semgrep-detected classes (#1009)", () => {
-  it("class 4 (open redirect) reaches GREEN: the redirect target becomes a literal picked by an enum key", () => {
+  it("class 4 (open redirect) reaches GREEN: the redirect target becomes a literal picked by an enum key", async () => {
     const src = readCalibration(CLASS4_FILE);
     const fixed = src
       .replace("  url: z.string().url(),", '  dest: z.enum(["home", "settings"]),')
@@ -155,7 +153,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
       );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-REDIRECT", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:18` });
-    const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]); // §8 clause 3
     expect(r.detectorAfter.notRun).toBeUndefined(); // the rule really re-ran
@@ -164,7 +162,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
     expect(resolvesToDetector("harvey-open-redirect")).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("class 4 does NOT go green on a host-allowlist `.refine()` the rule still flags — the gate follows the DETECTOR, not the intent", () => {
+  it("class 4 does NOT go green on a host-allowlist `.refine()` the rule still flags — the gate follows the DETECTOR, not the intent", async () => {
     // A plausible-looking fix (a zod .refine host check) that harvey-open-redirect's taint path still
     // reaches. Whether the rule is over-strict here is a detector question; what matters for §8 is that
     // the gate reports what the detector says, never what the fix author meant.
@@ -175,13 +173,13 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
     );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-REDIRECT-REFINE", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:18` });
-    const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified"); // it applies + clears the rails
     expect(r.detectorAfter.fired).toBe(true);
     expect(r.green).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("class 3 (raw error egress) reaches GREEN: the stack is logged server-side and the client gets a generic error", () => {
+  it("class 3 (raw error egress) reaches GREEN: the stack is logged server-side and the client gets a generic error", async () => {
     const src = readCalibration(CLASS3_FILE);
     const fixed = src.replace(
       "    res.status(500).json({ ok: false, stack: err.stack });",
@@ -189,14 +187,14 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
     );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-VERBOSE", taxonomy: "harvey-verbose-error", location: `${CLASS3_FILE}:8` });
-    const r = runFixAcceptance(finding, { file: CLASS3_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS3_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]);
     expect(r.detectorAfter.notRun).toBeUndefined();
     expect(r.green).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("the SQLi class reaches GREEN once the tainted value is a bound parameter instead of SQL text", () => {
+  it("the SQLi class reaches GREEN once the tainted value is a bound parameter instead of SQL text", async () => {
     const src = readCalibration(SQLI_FILE);
     const fixed = src.replace(
       "  const sql = `select id, tenant_id, title from documents where title ilike '%${q}%'`;\n\n  const { rows } = await pool.query(sql);",
@@ -204,7 +202,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
     );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-SQLI", taxonomy: "harvey-sql-injection-template", location: `${SQLI_FILE}:9` });
-    const r = runFixAcceptance(finding, { file: SQLI_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: SQLI_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.detectorAfter.notRun).toBeUndefined();
     expect(r.green).toBe(true);
@@ -222,7 +220,7 @@ const REGISTRY_FILE = "components/LocationNav.jsx";
 const REGISTRY_RULE = "javascript.browser.security.open-redirect.js-open-redirect";
 
 describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a semgrep REGISTRY-pack class (#1368)", () => {
-  it("reaches GREEN: the registry pack replays live and the rule stops firing after the fix", () => {
+  it("reaches GREEN: the registry pack replays live and the rule stops firing after the fix", async () => {
     const src = readCalibration(REGISTRY_FILE);
     const fixed = src.replace(
       'window.location = params.get("to");',
@@ -230,7 +228,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a se
     );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-REG", taxonomy: REGISTRY_RULE, location: `${REGISTRY_FILE}:10` });
-    const r = runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed }, { allowlist: ["components/**"] });
+    const r = await runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed }, { allowlist: ["components/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]);
     expect(r.detectorAfter.notRun).toBeUndefined(); // the rule really re-ran — LIVE, over the network
@@ -239,12 +237,12 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a se
     expect(resolvesToDetector(REGISTRY_RULE)).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("does NOT go green on a cosmetic edit that leaves the sink in place — the gate follows the live rule, not the diff", () => {
+  it("does NOT go green on a cosmetic edit that leaves the sink in place — the gate follows the live rule, not the diff", async () => {
     const src = readCalibration(REGISTRY_FILE);
     const noop = src.replace("export default function LocationNav() {", "export default function LocationNav() { // touched");
     expect(noop).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-REG-NOOP", taxonomy: REGISTRY_RULE, location: `${REGISTRY_FILE}:10` });
-    const r = runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed: noop }, { allowlist: ["components/**"] });
+    const r = await runFixAcceptance(finding, { file: REGISTRY_FILE, original: src, fixed: noop }, { allowlist: ["components/**"] });
     expect(r.detectorAfter.notRun).toBeUndefined();
     expect(r.detectorAfter.fired).toBe(true);
     expect(r.green).toBe(false);
@@ -261,7 +259,7 @@ const CLASS2_FILE = "pages/api/subscribe.js"; // class 2: awaited insert whose {
 const CLASS5_FILE = "pages/api/receipt.js"; // class 5: void-prefixed async in a handler (harvey-void-async)
 
 describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 classes 1, 2 and 5 (#1021)", () => {
-  it("class 1 (zero-row update) reaches GREEN: the CAS chains .select() and the handler asserts the row count", () => {
+  it("class 1 (zero-row update) reaches GREEN: the CAS chains .select() and the handler asserts the row count", async () => {
     const src = readCalibration(CLASS1_FILE);
     const fixed = src
       .replace('  await admin\n    .from("payouts")', '  const { data, error } = await admin\n    .from("payouts")')
@@ -271,7 +269,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
       );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-ZERO-ROW", taxonomy: "harvey-zero-row-update", location: `${CLASS1_FILE}:7` });
-    const r = runFixAcceptance(finding, { file: CLASS1_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS1_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]);
     expect(r.detectorAfter.notRun).toBeUndefined();
@@ -279,7 +277,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
     expect(r.green).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("class 2 (unchecked mutation) reaches GREEN once { error } is destructured and returned on", () => {
+  it("class 2 (unchecked mutation) reaches GREEN once { error } is destructured and returned on", async () => {
     const src = readCalibration(CLASS2_FILE);
     const fixed = src.replace(
       "  await admin.from(",
@@ -290,7 +288,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
     );
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-UNCHECKED", taxonomy: "harvey-unchecked-mutation", location: `${CLASS2_FILE}:7` });
-    const r = runFixAcceptance(finding, { file: CLASS2_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS2_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]);
     expect(r.detectorAfter.notRun).toBeUndefined();
@@ -298,12 +296,12 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
     expect(r.green).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("class 5 (void-prefixed async) reaches GREEN once the background work is awaited", () => {
+  it("class 5 (void-prefixed async) reaches GREEN once the background work is awaited", async () => {
     const src = readCalibration(CLASS5_FILE);
     const fixed = src.replace("  void writeReceiptAudit(req.body.orderId);", "  await writeReceiptAudit(req.body.orderId);");
     expect(fixed).not.toEqual(src);
     const finding = m5Finding({ id: "CAL-VOID", taxonomy: "harvey-void-async", location: `${CLASS5_FILE}:12` });
-    const r = runFixAcceptance(finding, { file: CLASS5_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    const r = await runFixAcceptance(finding, { file: CLASS5_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified");
     expect(r.execution.railViolations).toEqual([]);
     expect(r.detectorAfter.notRun).toBeUndefined();
@@ -311,7 +309,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
     expect(r.green).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("none of the three goes green on a cosmetic edit — each detector still fires on the unfixed shape", () => {
+  it("none of the three goes green on a cosmetic edit — each detector still fires on the unfixed shape", async () => {
     // The green results above are only worth something if the detectors discriminate. A comment-only
     // edit applies clean and clears the rails, so the ONLY thing that can refuse it is detector-after.
     const cases: [string, string, string][] = [
@@ -323,14 +321,14 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
       const src = readCalibration(file);
       const noop = src.replace(anchor, `${anchor} // touched`);
       expect(noop, file).not.toEqual(src);
-      const r = runFixAcceptance(m5Finding({ id: `CAL-NOOP-${taxonomy}`, taxonomy, location: `${file}:7` }), { file, original: src, fixed: noop }, { allowlist: ["pages/**"] });
+      const r = await runFixAcceptance(m5Finding({ id: `CAL-NOOP-${taxonomy}`, taxonomy, location: `${file}:7` }), { file, original: src, fixed: noop }, { allowlist: ["pages/**"] });
       expect(r.execution.outcome, file).toBe("diff-verified");
       expect(r.detectorAfter.fired, file).toBe(true);
       expect(r.green, file).toBe(false);
     }
   }, SEMGREP_TIMEOUT_MS * 3);
 
-  it("each rule stays silent on its committed safe negative — the corpus pair, checked live", () => {
+  it("each rule stays silent on its committed safe negative — the corpus pair, checked live", async () => {
     // GROUND-TRUTH §B21's negatives, re-run through the same resolver. N-ZERO-ROW-TENANT-SCOPE is the
     // load-bearing one: it has D-091's literal sketch shape (update + two .eq(), no .select()) but
     // scopes by tenant rather than guarding a literal state, so flagging it would make the rule fire
@@ -357,7 +355,7 @@ describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrade
     enabledCategories: ["Maintainability"], allowlist: ["**"], operator: "t",
   };
 
-  it("RLS-off (needs a DB migration, not an enabled category) is screened recommend-only, not auto", () => {
+  it("RLS-off (needs a DB migration, not an enabled category) is screened recommend-only, not auto", async () => {
     const doc: FindingsDocument = {
       meta,
       findings: [{
@@ -376,29 +374,29 @@ describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrade
 });
 
 describe("fix §8 acceptance — rails + in-place refusal (unchanged from #885/#930)", () => {
-  it("the calibration target and its planted class-4 source exist (the recorded #9 blocker is stale)", () => {
+  it("the calibration target and its planted class-4 source exist (the recorded #9 blocker is stale)", async () => {
     expect(readFileSync(`${CALIBRATION_ROOT}/${CLASS4_FILE}`, "utf8")).toContain("z.string().url()");
   });
 
-  it("cannot run through executeFixDiff in place — the corpus lives inside Harvey's own repo", () => {
+  it("cannot run through executeFixDiff in place — the corpus lives inside Harvey's own repo", async () => {
     const diff = ["--- a/pages/api/redirect.js", "+++ b/pages/api/redirect.js", "@@ -9 +9 @@", "-  url: z.string().url(),", "+  url: safeUrl(),", ""].join("\n");
-    expect(() =>
+    await expect(
       executeFixDiff("CAL-REDIRECT", diff, { targetDir: CALIBRATION_ROOT, baselineCommit: "HEAD", allowlist: ["**"] }),
-    ).toThrow(/Harvey's own repository/);
+    ).rejects.toThrow(/Harvey's own repository/);
   });
 
-  it("a fix diff touching a denylisted path is rails-blocked before any worktree", () => {
+  it("a fix diff touching a denylisted path is rails-blocked before any worktree", async () => {
     const c = track(materialize({ [CLASS4_FILE]: readCalibration(CLASS4_FILE), ".env": "SECRET=1\n" }));
     const patch = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
-    const result = executeFixDiff("CAL-ENV", patch, { targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"] });
+    const result = await executeFixDiff("CAL-ENV", patch, { targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"] });
     expect(result.outcome).toBe("rails-blocked");
     expect(result.railViolations.join(" ")).toContain("denylisted");
   });
 
-  it("a fix diff over the engagement diff cap is rails-blocked", () => {
+  it("a fix diff over the engagement diff cap is rails-blocked", async () => {
     const c = track(materialize({ [CLASS4_FILE]: readCalibration(CLASS4_FILE) }));
     const patch = [`--- a/${CLASS4_FILE}`, `+++ b/${CLASS4_FILE}`, "@@ -9 +9,4 @@", "-  url: z.string().url(),", "+  a", "+  b", "+  c", "+  d", ""].join("\n");
-    const result = executeFixDiff("CAL-BIG", patch, {
+    const result = await executeFixDiff("CAL-BIG", patch, {
       targetDir: c.dir, baselineCommit: c.commit, allowlist: ["pages/**"], diffCap: { maxLines: 2, maxFiles: 10 },
     });
     expect(result.outcome).toBe("rails-blocked");
@@ -426,7 +424,7 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
     verifyCommands: [], testPlan: "", tier: "cheap", risks: [],
   };
 
-  it("reaches GREEN: the emitted spec names the detector to silence, and the diff written to it clears both halves", () => {
+  it("reaches GREEN: the emitted spec names the detector to silence, and the diff written to it clears both halves", async () => {
     const src = readCalibration(M5_FILE);
     const c = track(materialize(clientRepo(src)));
 
@@ -439,7 +437,7 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
     const diff = capturePatch(c, M5_FILE, m5Fixed(src));
 
     // 3. INGEST — the pipeline's own gate, nothing hand-scored.
-    const ingest = ingestFixDiff({
+    const ingest = await ingestFixDiff({
       finding: m5Finding(), diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
     });
     expect(ingest.execution.outcome).toBe("diff-verified");
@@ -451,11 +449,11 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
     expect(ingest.rejected).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("and REFUSES the same class on a cosmetic diff — the loop's green is earned, not structural", () => {
+  it("and REFUSES the same class on a cosmetic diff — the loop's green is earned, not structural", async () => {
     const src = readCalibration(M5_FILE);
     const c = track(materialize(clientRepo(src)));
     const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
-    const ingest = ingestFixDiff({
+    const ingest = await ingestFixDiff({
       finding: m5Finding(), diff: capturePatch(c, M5_FILE, noop), targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
     });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it applied
@@ -464,9 +462,9 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
     expect(ingest.rejectReason).toContain("still fires");
   }, SEMGREP_TIMEOUT_MS);
 
-  it("runFixAcceptance reaches GREEN on the same planted class, and says what it did NOT score", () => {
+  it("runFixAcceptance reaches GREEN on the same planted class, and says what it did NOT score", async () => {
     const src = readCalibration(M5_FILE);
-    const r = runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed: m5Fixed(src) }, { allowlist: ["app/**"] });
+    const r = await runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed: m5Fixed(src) }, { allowlist: ["app/**"] });
     expect(r.green).toBe(true);
     // #1272: this gate scores the detector half only, and now SAYS so instead of passing an empty
     // clientChecks array into computeGreen and collecting a vacuous pass for the client half.

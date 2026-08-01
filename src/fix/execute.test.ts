@@ -44,9 +44,9 @@ describe("executeFixDiff", () => {
     return [`--- a/${file}`, `+++ b/${file}`, "@@ -1 +1 @@", `-${from}`, `+${to}`, ""].join("\n");
   }
 
-  it("verifies a diff against a disposable worktree and leaves the client tree untouched", () => {
+  it("verifies a diff against a disposable worktree and leaves the client tree untouched", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "export const a = 1;\n" });
-    const result = executeFixDiff("F-1", diffFor("src/a.ts", "export const a = 1;", "export const a = 2;"), {
+    const result = await executeFixDiff("F-1", diffFor("src/a.ts", "export const a = 1;", "export const a = 2;"), {
       targetDir: dir,
       baselineCommit: commit,
       allowlist,
@@ -58,9 +58,9 @@ describe("executeFixDiff", () => {
     expect(worktreeCount(dir)).toBe(1); // the disposable worktree is gone
   });
 
-  it("blocks a denylisted path before any worktree is created", () => {
+  it("blocks a denylisted path before any worktree is created", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "a\n", ".env": "SECRET=1\n" });
-    const result = executeFixDiff("F-2", diffFor(".env", "SECRET=1", "SECRET=2"), {
+    const result = await executeFixDiff("F-2", diffFor(".env", "SECRET=1", "SECRET=2"), {
       targetDir: dir,
       baselineCommit: commit,
       allowlist: ["**"],
@@ -71,9 +71,9 @@ describe("executeFixDiff", () => {
     expect(worktreeCount(dir)).toBe(1);
   });
 
-  it("blocks a path outside the engagement allowlist", () => {
+  it("blocks a path outside the engagement allowlist", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "a\n", "infra/deploy.ts": "x\n" });
-    const result = executeFixDiff("F-3", diffFor("infra/deploy.ts", "x", "y"), {
+    const result = await executeFixDiff("F-3", diffFor("infra/deploy.ts", "x", "y"), {
       targetDir: dir,
       baselineCommit: commit,
       allowlist,
@@ -83,10 +83,10 @@ describe("executeFixDiff", () => {
     expect(result.railViolations.join(" ")).toContain("outside engagement path allowlist");
   });
 
-  it("blocks a diff over the engagement diff cap", () => {
+  it("blocks a diff over the engagement diff cap", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "a\n" });
     const body = ["--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1,1 +1,5 @@", " a", "+1", "+2", "+3", "+4", ""].join("\n");
-    const result = executeFixDiff("F-4", body, {
+    const result = await executeFixDiff("F-4", body, {
       targetDir: dir,
       baselineCommit: commit,
       allowlist,
@@ -97,9 +97,9 @@ describe("executeFixDiff", () => {
     expect(result.railViolations.join(" ")).toContain("cap is 2");
   });
 
-  it("reports verify-failed — never verified — when the diff does not apply to the baseline", () => {
+  it("reports verify-failed — never verified — when the diff does not apply to the baseline", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "export const a = 1;\n" });
-    const result = executeFixDiff("F-5", diffFor("src/a.ts", "something else entirely", "fixed"), {
+    const result = await executeFixDiff("F-5", diffFor("src/a.ts", "something else entirely", "fixed"), {
       targetDir: dir,
       baselineCommit: commit,
       allowlist,
@@ -110,9 +110,9 @@ describe("executeFixDiff", () => {
     expect(worktreeCount(dir)).toBe(1);
   });
 
-  it("fails the fix when the effect command does not pass, and reverts the worktree", () => {
+  it("fails the fix when the effect command does not pass, and reverts the worktree", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "export const a = 1;\n" });
-    const result = executeFixDiff("F-6", diffFor("src/a.ts", "export const a = 1;", "export const a = 2;"), {
+    const result = await executeFixDiff("F-6", diffFor("src/a.ts", "export const a = 1;", "export const a = 2;"), {
       targetDir: dir,
       baselineCommit: commit,
       allowlist,
@@ -123,9 +123,9 @@ describe("executeFixDiff", () => {
     expect(result.verification).toContain("effect check failed");
   });
 
-  it("aborts when the pinned baseline commit is not in the target repo", () => {
+  it("aborts when the pinned baseline commit is not in the target repo", async () => {
     const { dir } = clientRepo({ "src/a.ts": "a\n" });
-    const result = executeFixDiff("F-7", diffFor("src/a.ts", "a", "b"), {
+    const result = await executeFixDiff("F-7", diffFor("src/a.ts", "a", "b"), {
       targetDir: dir,
       baselineCommit: "0".repeat(40),
       allowlist,
@@ -135,17 +135,17 @@ describe("executeFixDiff", () => {
     expect(result.abortReason).toContain("not found");
   });
 
-  it("refuses to fix Harvey's own repository", () => {
+  it("refuses to fix Harvey's own repository", async () => {
     const harvey = dirname(fileURLToPath(import.meta.url));
     const commit = git(harvey, ["rev-parse", "HEAD"]);
-    expect(() =>
+    await expect(
       executeFixDiff("F-8", diffFor("src/a.ts", "a", "b"), { targetDir: harvey, baselineCommit: commit, allowlist }),
-    ).toThrow(/Harvey's own repository/);
+    ).rejects.toThrow(/Harvey's own repository/);
   });
 
-  it("aborts a diff that declares no file changes", () => {
+  it("aborts a diff that declares no file changes", async () => {
     const { dir, commit } = clientRepo({ "src/a.ts": "a\n" });
-    const result = executeFixDiff("F-9", "no diff headers here\n", { targetDir: dir, baselineCommit: commit, allowlist });
+    const result = await executeFixDiff("F-9", "no diff headers here\n", { targetDir: dir, baselineCommit: commit, allowlist });
     expect(result.outcome).toBe("aborted");
     expect(result.abortReason).toContain("no file changes");
   });

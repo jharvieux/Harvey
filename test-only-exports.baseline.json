@@ -11,12 +11,6 @@
     "src/fix/escalation.ts:plansDisagree",
     "src/migration-sql-parse.ts:parseCheckInConstraints",
     "src/migration-sql-parse.ts:parseColumns",
-    "src/pentest/active-exploit.ts:ACTIVE_EXPLOIT_PROBE_IDS",
-    "src/pentest/auth-attack.ts:AUTH_ATTACK_PROBE_IDS",
-    "src/pentest/business-logic.ts:BUSINESS_LOGIC_PROBE_IDS",
-    "src/pentest/race-toctou.ts:RACE_TOCTOU_PROBE_ID",
-    "src/pentest/session-lifecycle.ts:SESSION_LIFECYCLE_PROBE_IDS",
-    "src/pentest/upload-attack.ts:UPLOAD_ATTACK_PROBE_IDS",
     "src/quality-scan.ts:matchesJscpdIgnoreGlob"
   ],
   "types": []
