@@ -113,17 +113,10 @@ describe("the corpus itself", () => {
     }
   });
 
-  // #1355's rule, reached through this corpus. selfMatchingMatchKeys() enforces it over
-  // calibration.ts's CorpusEntry; SemanticEntry was never covered, and this check found
-  // superredhat/F-09 matching "jwt" against its own location `lib/jwt.ts` — a key that accepts ANY
-  // finding planted in that file, mechanism unread. Collected rather than asserted one at a time,
-  // because a first-failure abort reports one row and hides the rest.
-  it("has no match key that is a substring of its own location — a key that self-matches accepts any finding planted there (#1355)", () => {
-    const vacuous = FREE_RECALL_CORPUS.flatMap((t) =>
-      t.entries.flatMap((e) =>
-        e.match.flatMap((key) => e.locations.filter((loc) => loc.toLowerCase().includes(key.toLowerCase())).map((loc) => `${t.slug}/${e.id}: match key "${key}" is contained in its own location "${loc}"`)),
-      ),
-    );
-    expect(vacuous).toEqual([]);
-  });
+  // #1355's vacuous-key rule USED to be checked here, and only here, for both this corpus and the
+  // semantic one — coverage by coincidence, since FREE_RECALL_CORPUS happens to contain all four
+  // semantic targets. #1560 moved it to src/scan/match-keyed-corpora.test.ts, over a registry that
+  // is discovery-backed, so no corpus depends on being a member of this list to be swept. It is NOT
+  // duplicated here: two copies of one rule drift, and the registry venue is the one that can say
+  // what it did not read.
 });

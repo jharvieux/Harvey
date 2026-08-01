@@ -1,10 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { committedScanFindings, freeCountCoverage, harveySemgrepRules, ruleCorpusPairings, type SemgrepRule } from "./rule-corpus-pairing.js";
+import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, stem, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS, type SemgrepRule } from "./rule-corpus-pairing.js";
 import { CORPUS } from "./calibration.js";
 import type { Finding } from "../findings.js";
 
 describe("#1301 rule ↔ corpus pairing (a rule may not enter the free count unvalidated)", () => {
-  it("every harvey-* semgrep rule is claimed by a positive it caught and a benign twin it stayed silent on", () => {
+  it("every harvey-* semgrep rule is claimed by a positive it caught — the half that is fatal", () => {
     const pairings = ruleCorpusPairings();
     expect(pairings.length).toBeGreaterThan(100);
     expect(pairings.filter((p) => p.unpaired).map((p) => `${p.rule}: ${p.unpaired}`)).toEqual([]);
@@ -25,10 +26,11 @@ describe("#1301 rule ↔ corpus pairing (a rule may not enter the free count unv
     // (3) a paired rule that starts firing on the only benign twin it has.
     const clean = ruleCorpusPairings([real], findings)[0]!;
     expect(clean.unpaired).toBeUndefined();
+    expect(clean.twinless).toBeUndefined();
     const soleTwin = CORPUS.filter((e) => e.kind === "positive" || e.id === clean.twin!.entry);
-    expect(ruleCorpusPairings([real], findings, soleTwin)[0]?.unpaired).toBeUndefined();
+    expect(ruleCorpusPairings([real], findings, soleTwin)[0]?.twinless).toBeUndefined();
     const onTwin: Finding = { ...findings[0]!, taxonomy: real.taxonomy, location: `${clean.twin!.fixture}:1` };
-    expect(ruleCorpusPairings([real], [...findings, onTwin], soleTwin)[0]?.unpaired).toMatch(/also carries a hit from this rule/);
+    expect(ruleCorpusPairings([real], [...findings, onTwin], soleTwin)[0]?.twinless).toMatch(/also carries a hit from this rule/);
   });
 
   it("resolves a rule that renames its taxonomy via metadata.harveyTaxonomy, which keying on the id alone would score as never firing", () => {
@@ -62,11 +64,41 @@ describe("#1414 free-count coverage of the pairing gate, and the per-rule gate p
     expect(freeCountCoverage().droppedByPerRuleGate).toEqual([]);
   });
 
+  // #1676: the total was already measured; the SPLIT is what makes it actionable, and what makes a
+  // brand-new engine entering the free count visible instead of absorbed into one percentage.
+  it("names WHICH engines the uncovered share comes from, not just how big it is", () => {
+    const byEngine = freeCountCoverage().byEngine;
+    expect(byEngine.length).toBeGreaterThan(2);
+    expect(byEngine.reduce((n, e) => n + e.findings, 0)).toBe(freeCountCoverage().outsidePairingGate);
+    expect(byEngine.map((e) => e.engine)).toContain("secret scanners (gitleaks/trufflehog)");
+    expect(byEngine.map((e) => e.engine)).toContain("dependency / supply-chain / licence checks");
+  });
+
+  // #1676 — the sum above holds over the committed artifact for a reason that is an accident: ids
+  // are unique there. The accumulator used to key on `f.id`, so on a LIVE run 78 findings outside
+  // the gate rendered as engine rows summing to 71. This asserts the arithmetic on an input where
+  // ids repeat, which is the only place the two implementations differ.
+  it("the engine rows still sum to the headline when two findings share an id", () => {
+    const findings = committedScanFindings();
+    const base = freeCountCoverage(findings);
+    const outsideTaxa = new Set(base.outsideTaxonomies);
+    const twin = findings.find((f) => f.precisionTier === "high" && outsideTaxa.has(f.taxonomy))!;
+    const c = freeCountCoverage([...findings, { ...twin, location: "src/elsewhere/same-id.ts:1" }]);
+    expect(c.outsidePairingGate).toBe(base.outsidePairingGate + 1);
+    expect(c.byEngine.reduce((n, e) => n + e.findings, 0)).toBe(c.outsidePairingGate);
+  });
+
   it("NEGATIVE CONTROL — the per-rule gate DOES withhold an unpaired rule's findings", () => {
     // Without this, "drops 0" is indistinguishable from a filter that drops nothing ever.
     const findings = committedScanFindings();
     const invented: SemgrepRule = { id: "harvey-invented-1414", file: "invented.yml", taxonomy: "src.scan.rules.semgrep.harvey-invented-1414" };
-    const hit: Finding = { ...findings.find((f) => f.precisionTier === "high")!, id: "INVENTED-1", taxonomy: invented.taxonomy };
+    // #1676: the location matters. This used to reuse the first high-tier finding's location
+    // (`[source] .env:9`), which IS scored by P-ENV-COMMITTED — so the rule read as unpaired only
+    // because the old empty-string `stem` made its own fixture its only twin candidate. Once that
+    // collision was fixed the rule reads as twinless-but-positively-claimed, a DIFFERENT state that
+    // is correctly not withheld. Plant it where no corpus positive scores it, which is what
+    // "unvalidated" is meant to mean.
+    const hit: Finding = { ...findings.find((f) => f.precisionTier === "high")!, id: "INVENTED-1", taxonomy: invented.taxonomy, location: "src/nowhere/orphan-1414.ts:1" };
     const rules = [...harveySemgrepRules(), invented];
     const withHit = [...findings, hit];
     const c = freeCountCoverage(withHit, rules, ruleCorpusPairings(rules, withHit));
@@ -74,5 +106,71 @@ describe("#1414 free-count coverage of the pairing gate, and the per-rule gate p
     // ...and the same finding is NOT in the uncovered set, because its rule IS enumerated — the two
     // measurements answer different questions and must not collapse into one.
     expect(c.outsideTaxonomies).not.toContain(invented.taxonomy);
+  });
+});
+
+// #1676 — the pairing-equivalent gate for the engines OUTSIDE `harvey-*`, and the ratchet over the
+// negative half that fixing `.npmrc` exposed.
+//
+// #1414's stated reason for stopping at a measurement was that these engines have "different notions
+// of positive and benign twin, and none of them is a rule id you can pair against a corpus row".
+// Re-tested: false of the predicate as written. `pairUnits` keys on taxonomy and derives twins from
+// fixture names; only the ENUMERATION was semgrep-shaped.
+describe("#1676 outside-engine pairing, and the twin ratchet", () => {
+  const outside = (): ReturnType<typeof pairUnits> => pairUnits(freeCountOutsideUnits());
+
+  it("pairs the outside engines with the SAME predicate, and every one of them is either paired or disclosed", () => {
+    const rows = outside();
+    expect(rows.length).toBeGreaterThan(10);
+    // Nothing is silently unaccounted: a row is paired, on the twin backlog, or on the unscored list.
+    const unscored = new Set(UNSCORED_OUTSIDE_UNITS.map((u) => u.unit));
+    const backlog = new Set(TWIN_BACKLOG);
+    const unaccounted = rows.filter((r) => (r.unpaired && !unscored.has(r.rule)) || (r.twinless && !backlog.has(r.rule)));
+    expect(unaccounted.map((r) => `${r.rule}: ${r.unpaired ?? r.twinless}`)).toEqual([]);
+    // ...and the gate is not vacuous: some outside units genuinely pair on both halves today.
+    expect(rows.filter((r) => r.twin !== undefined).length).toBeGreaterThan(0);
+  });
+
+  it("holds every UNSCORED_OUTSIDE_UNITS row to a real reason, and a row that gained a positive fails as STALE", () => {
+    const rows = outside();
+    for (const u of UNSCORED_OUTSIDE_UNITS) {
+      expect(u.reason, u.unit).toMatch(/MEASURED \d{4}-\d{2}-\d{2}/);
+      // The stale direction: an entry here claims nothing scores this taxonomy. If something does
+      // now, the disclosure is a lie and must be deleted rather than left standing.
+      expect(rows.find((r) => r.rule === u.unit)?.unpaired, `${u.unit} now HAS a scoring positive`).toBeDefined();
+    }
+  });
+
+  // The ratchet, in both directions. A green list that can only ever be read is not a gate.
+  it("TWIN_BACKLOG can only shrink — every id on it is still twinless, and nothing twinless is off it", () => {
+    const rows = [...ruleCorpusPairings(), ...outside()];
+    const twinless = new Set(rows.filter((r) => r.twinless).map((r) => r.rule));
+    expect([...twinless].filter((id) => !TWIN_BACKLOG.includes(id)).sort()).toEqual([]);
+    expect(TWIN_BACKLOG.filter((id) => !twinless.has(id)).sort()).toEqual([]);
+    // The population, stated beside the list so its size is part of the assertion.
+    expect(TWIN_BACKLOG.length).toBe(twinless.size);
+  });
+
+  // #1676's core finding, re-derived rather than asserted from a comment: the OLD `stem` mapped a
+  // bare dotfile to "", and "" is a prefix of every string, so `.npmrc` was a candidate twin for
+  // every rule and passed the silence half for all of them. This is the guard against reintroducing
+  // that — it fails if any tracked calibration fixture reduces to an empty stem under the shipped
+  // regex.
+  //
+  // It imports `stem` rather than restating the regex, and that is load-bearing: the version that
+  // declared its own `const shippedStem = ...` copy was a duplicate of the thing it guarded, and
+  // reverting the production line left it GREEN (MEASURED 2026-08-01, 1 failed / 10 passed — the
+  // failure was `TWIN_BACKLOG can only shrink`, catching it by accident). A guard that restates its
+  // subject tests the restatement.
+  it("EMPTY_STEM_IS_A_UNIVERSAL_TWIN — no calibration fixture reduces to the empty string", () => {
+    const tracked = execFileSync("git", ["ls-files", "targets/calibration"], { encoding: "utf8" }).trim().split("\n");
+    expect(tracked.length).toBeGreaterThan(100);
+    expect(tracked.filter((f) => stem(f.replace(/^targets\/calibration\//, "")) === "")).toEqual([]);
+    // ...and the OLD regex DID produce one, so this guard has a subject rather than a population of zero.
+    const oldStem = (p: string): string => p.replace(/\.[a-z]+$/i, "");
+    const oldEmpty = tracked.filter((f) => oldStem(f.replace(/^targets\/calibration\//, "")) === "");
+    // `.npmrc` is the one that mattered: the only empty-stem file tracked under a NEGATIVE entry's
+    // location (N-NPM-TOKEN-ENV), which is what made it a candidate twin for every rule at all.
+    expect(oldEmpty).toContain("targets/calibration/.npmrc");
   });
 });

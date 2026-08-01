@@ -61,7 +61,7 @@ import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
-  explainDrift,
+  driftExplanationLines,
   FLOOR_CLAIM_TRIAGE,
   floorClaimingNotes,
   fpFloorViolations,
@@ -75,7 +75,6 @@ import {
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
-  type DriftExplanation,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { shardTargets } from "../scan/corpus-shards.js";
@@ -94,8 +93,8 @@ const keep = args.includes("--keep");
 // #1564: a prior run's OWN --json output (this run's shape also now writes one — see
 // `findingsBySlug` below), so a drift can be EXPLAINED — which rows moved, not just how many —
 // without a second scan. Optional: absent on a target's first-ever run, or a local ad-hoc
-// invocation; explainDrift then falls back to naming the module's current findings instead of a
-// true added/removed split, disclosed as exactly that rather than silently saying nothing.
+// invocation; driftExplanationLines then falls back to naming the module's current findings instead
+// of a true added/removed split, disclosed as exactly that rather than silently saying nothing.
 const baselineFindingsPath = flag("--baseline-findings");
 // #251/#300: both opt-in because both cost real minutes of install per target. The scheduled jobs
 // pass them (corpus-drift.yml --install, corpus-m8.yml --install --m8); a local run stays fast and
@@ -351,9 +350,9 @@ interface Row {
   pass: boolean;
   detail: string;
   // Set only on a count-baseline row (scoreExternalBaseline's output) — the module name, so a
-  // failed row can be explained (explainDrift) against this run's own current findings without
+  // failed row can be explained (driftExplanationLines) against this run's own current findings without
   // re-parsing it out of `check`. Absent on every other row kind (free tier, M8 mutation, a stale
-  // not-run reason): those aren't a finding-count drift and explainDrift has nothing to say about
+  // not-run reason): those aren't a finding-count drift and driftExplanationLines has nothing to say about
   // them.
   module?: string;
 }
@@ -598,32 +597,21 @@ if (failed.length === 0 && unscored.length === 0 && floorBreaches.length === 0) 
   console.error(`\n✓ ${rows.length} checks pass — every module reproduces its baseline and the free-tier invariant holds.`);
   process.exit(0);
 }
-const EXPLAIN_CAP = 20;
-function printExplainRows(label: string, driftRows: { location: string; taxonomy: string; severity: string }[]): void {
-  if (driftRows.length === 0) return;
-  const shown = Math.min(EXPLAIN_CAP, driftRows.length);
-  const suffix = driftRows.length > EXPLAIN_CAP ? ` (showing ${shown} of ${driftRows.length})` : ` (${driftRows.length})`;
-  console.error(`    ${label}${suffix}:`);
-  for (const r of driftRows.slice(0, EXPLAIN_CAP)) console.error(`      ${r.location}  ${r.taxonomy} [${r.severity}]`);
-}
 // On by default, not behind a flag: the data is already in memory from this same run (`current`),
 // costs nothing extra to print, and the reader who most needs the exact rows that moved is the one
 // who did not know to ask for them (both 2026-07-30 incidents this exists for were resolved only by
 // someone cloning the target and diffing by hand — 20+ minutes each).
-function printExplain(r: Row): void {
-  if (!r.module) return; // not a count-baseline row (free tier / M8 mutation / stale not-run reason) — explainDrift has nothing to add
-  const explanation: DriftExplanation = explainDrift(r.module, findingsBySlug[r.slug] ?? [], priorFindingsBySlug?.[r.slug]);
-  if (!explanation.hasBaseline) {
-    console.error(`    no prior findings snapshot for ${r.slug} — pass --baseline-findings <path> (a previous run's --json output) for a true added/removed diff; showing the current ${r.module} finding(s) instead:`);
-    printExplainRows("CURRENT", explanation.current);
-    return;
-  }
-  printExplainRows("ADDED", explanation.added);
-  printExplainRows("REMOVED", explanation.removed);
-}
+//
+// #1580: the lines come from driftExplanationLines() rather than being printed here, because the
+// case that mattered — a standing drift whose row diff is empty — used to print nothing at all, and
+// a `void` printer inside a CLI is reachable by no test. The loop below is now thin enough that what
+// it prints is what that function returns.
 for (const r of failed) {
   console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
-  printExplain(r);
+  // Not a count-baseline row (free tier / M8 mutation / stale not-run reason) — explainDrift has
+  // nothing to add.
+  if (!r.module) continue;
+  for (const line of driftExplanationLines(r.module, r.slug, findingsBySlug[r.slug] ?? [], priorFindingsBySlug?.[r.slug], baselineFindingsPath)) console.error(line);
 }
 for (const e of unscored) console.error(`\n✗ NOT SCORED ${e.slug} / free-tier invariant — the check never ran, which is not a pass.`);
 process.exit(1);

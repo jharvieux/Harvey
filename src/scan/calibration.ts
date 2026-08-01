@@ -170,23 +170,55 @@ function relevantFindings(entry: CorpusEntry, findings: Finding[]): Finding[] {
 // On a NEGATIVE the vacuity runs the safe way — a wider relevant set can only make the row fail —
 // but the key is still a lie about what the entry discriminates, and the honest spelling is no
 // `match` at all. Both kinds are reported so the corpus stays free of the shape.
-interface SelfMatchingKeyRow {
+//
+// #1560 — THE CHECK FOLLOWS THE SHAPE, NOT ONE CORPUS'S TYPE. Until 2026-07-31 this was typed over
+// `CorpusEntry`, and CLAUDE.md's "0 vacuous keys" read as repo-wide while `SemanticEntry`
+// (semantic-corpus.ts) carried the identical location+keyword pair, an identical matcher, and had
+// never been swept — #1185 found 6 live vacuous keys there, one of which scored a plpgsql-SQLi
+// finding as a catch for an unrelated entry and inflated a measured recall figure. The rule is a
+// property of the SHAPE, so the checker takes the shape: `MatchKeyedRow`. The registry of every
+// corpus carrying it is `match-keyed-corpora.ts`, which is discovery-backed — a THIRD declaration of
+// the shape that nobody registers fails loud instead of joining SemanticEntry in the dark.
+export interface MatchKeyedRow {
   id: string;
-  kind: CorpusEntry["kind"];
+  kind: "positive" | "negative";
+  /** Any-of, as both consumers use it: a finding is relevant if its location contains one of these. */
+  locations: string[];
+  match?: string[];
+}
+
+export interface SelfMatchingKeyRow {
+  id: string;
+  kind: MatchKeyedRow["kind"];
   location: string;
   keys: string[];
 }
 
-export function selfMatchingMatchKeys(corpus: CorpusEntry[] = CORPUS): SelfMatchingKeyRow[] {
-  const rows: SelfMatchingKeyRow[] = [];
-  for (const e of corpus) {
+export function selfMatchingKeys(rows: readonly MatchKeyedRow[]): SelfMatchingKeyRow[] {
+  const out: SelfMatchingKeyRow[] = [];
+  for (const e of rows) {
     if (!e.match) continue;
-    const raw = e.location.toLowerCase();
-    const hyphenated = raw.replace(/[^a-z0-9]+/g, "-");
-    const keys = e.match.filter((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase()));
-    if (keys.length) rows.push({ id: e.id, kind: e.kind, location: e.location, keys });
+    const offending = new Map<string, string[]>(); // location -> keys it swallows
+    for (const location of e.locations) {
+      const raw = location.toLowerCase();
+      const hyphenated = raw.replace(/[^a-z0-9]+/g, "-");
+      const keys = e.match.filter((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase()));
+      if (keys.length) offending.set(location, keys);
+    }
+    if (offending.size === 0) continue;
+    out.push({
+      id: e.id,
+      kind: e.kind,
+      location: [...offending.keys()].join(", "),
+      keys: [...new Set([...offending.values()].flat())],
+    });
   }
-  return rows;
+  return out;
+}
+
+/** A `CorpusEntry` in the shape the checker takes. One location; `SemanticEntry` supplies several. */
+export function corpusMatchKeyedRows(corpus: readonly CorpusEntry[] = CORPUS): MatchKeyedRow[] {
+  return corpus.map((e) => ({ id: e.id, kind: e.kind, locations: [e.location], match: e.match }));
 }
 
 // #1388: the remediation text is HALF the gate. "Delete the `match` list" is correct for a NEGATIVE

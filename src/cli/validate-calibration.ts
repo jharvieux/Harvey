@@ -24,7 +24,8 @@ import { dirname, join } from "node:path";
 import { unnamedRecallMisses } from "../calibration-verdict.js";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type CorpusEntry, type MatrixRow } from "../scan/calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, unkeyedPositives, validateParityExemptions, type CorpusEntry, type MatrixRow } from "../scan/calibration.js";
+import { allSelfMatchingKeys, undeclaredMatchKeyedShapes } from "../scan/match-keyed-corpora.js";
 import { misplacedNeighbourDeclarations, scoreGraduationGuards } from "../scan/calibration/graduation.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
@@ -35,7 +36,7 @@ import { checkKnownDependencyCVEs, checkNextVersionCVEs, resolvedTree } from "..
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { scanDidNotRun } from "../scan/semgrep.js";
-import { freeCountCoverage, harveySemgrepRules, ruleCorpusPairings } from "../scan/rule-corpus-pairing.js";
+import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS } from "../scan/rule-corpus-pairing.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
 const FLAGS = [
@@ -402,9 +403,17 @@ console.log(`REVIEW-TIER RECALL GATE (#1628, ${matrix.rows.filter((r) => r.kind 
 // while the detection it exists to score goes silent. Enforced under `pnpm verify` too
 // (calibration.test.ts); reported here so the number a client's report stands on is visibly
 // scored against an answer key whose keys still discriminate.
-const selfMatching = selfMatchingMatchKeys(CORPUS);
-console.log(`\nCORPUS SELF-MATCH (#1355): ${selfMatching.length === 0 ? `0 of ${CORPUS.filter((e) => e.match?.length).length} keyed entries carry a key that is a substring of their own location` : `${selfMatching.length} vacuous entr(ies)`}`);
+//
+// #1560: swept over EVERY corpus carrying the location+keyword shape, not just this one. The
+// per-corpus row count prints beside the verdict because a corpus that stopped being read reports
+// the same clean zero as one that was read and found clean.
+const sweptCorpora = allSelfMatchingKeys();
+const selfMatching = sweptCorpora.flatMap((c) => c.rows);
+console.log(`\nCORPUS SELF-MATCH (#1355/#1560): ${selfMatching.length} vacuous entr(ies) across ${sweptCorpora.length} match-keyed corpora`);
+for (const c of sweptCorpora) console.log(`  ${c.rows.length === 0 ? "clean" : `${c.rows.length} VACUOUS`} — ${c.label}, ${c.scanned} rows read (${c.source})`);
 if (selfMatching.length) console.log(formatSelfMatchingKeys(selfMatching).replace(/^/gm, "  "));
+const undeclaredShapes = undeclaredMatchKeyedShapes();
+if (undeclaredShapes.length) console.log(`  UNREGISTERED SHAPE: ${undeclaredShapes.join(", ")} declare(s) a \`match: string[]\` answer-key field that match-keyed-corpora.ts does not sweep.`);
 
 // #1388, the omission half of the same masking shape, and the COVERAGE of the withholding check that
 // scores it. Printed as a fraction on purpose: the check's population used to be "positives with a
@@ -493,9 +502,35 @@ console.log(`\nPARITY NEGATIVE CONTROL (#1314): ${parityControl.detail}`);
 // free under `pnpm verify`; here it is scored against THIS run's live findings, which is the
 // stronger reading — the artifact could be stale, a live scan cannot be.
 const pairings = ruleCorpusPairings(harveySemgrepRules(), findings);
-const unpaired = pairings.filter((p) => p.unpaired);
-console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
-for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
+// #1676: the two halves are printed separately because until 2026-08-01 they were reported as one
+// number that was true of only one of them — a bare dotfile stemmed to the empty string, so
+// `.npmrc` was a benign-twin candidate for EVERY rule and 82 of 114 "stayed silent on their twin"
+// against it.
+//
+// The POSITIVE half stays scored against THIS RUN's live findings, as #1301 wrote it. The NEGATIVE
+// half's ratchet is scored against the COMMITTED artifact instead, and that is a deliberate split,
+// not an oversight: a twin is a fixture the unit did NOT fire on, so the more findings a population
+// holds the fewer clean twins exist, and the two populations legitimately disagree (MEASURED
+// 2026-08-01: 75 twinless over dry-run/findings.json, 124 over the live scan of the same tree). A
+// ratchet spanning two populations is two numbers wearing one name. TWIN_BACKLOG is pinned to the
+// deterministic one — the artifact the required `dry-run-drift` check keeps honest, and the one
+// `pnpm verify` scores — and the live figure is REPORTED beside it rather than dropped.
+const outsidePairings = pairUnits(freeCountOutsideUnits(findings, harveySemgrepRules()), findings);
+const allPairings = [...pairings, ...outsidePairings];
+const unpaired = allPairings.filter((p) => p.unpaired && !UNSCORED_OUTSIDE_UNITS.some((u) => u.unit === p.rule));
+const committed = committedScanFindings();
+const ratchetPairings = [...ruleCorpusPairings(harveySemgrepRules(), committed), ...pairUnits(freeCountOutsideUnits(committed, harveySemgrepRules()), committed)];
+const twinless = ratchetPairings.filter((p) => p.twinless);
+const newTwinless = twinless.filter((p) => !TWIN_BACKLOG.includes(p.rule));
+const staleTwinBacklog = TWIN_BACKLOG.filter((id) => !twinless.some((p) => p.rule === id) && ratchetPairings.some((p) => p.rule === id));
+console.log(`\nRULE ↔ CORPUS PAIRING (#1301/#1676), scored against this run: ${allPairings.length} unit(s) across ${new Set(allPairings.map((p) => p.engine)).size} engine(s)`);
+console.log(`  POSITIVE half (fatal, THIS RUN): ${allPairings.length - allPairings.filter((p) => p.unpaired).length}/${allPairings.length} are claimed by a corpus positive they caught`);
+console.log(`  NEGATIVE half (ratcheted, COMMITTED dry-run artifact): ${ratchetPairings.length - twinless.length}/${ratchetPairings.length} also have a benign twin they stayed silent on; ${twinless.length} do not and are enumerated in TWIN_BACKLOG`);
+console.log(`  NEGATIVE half on THIS RUN, reported not ratcheted: ${allPairings.filter((p) => p.twinless).length}/${allPairings.length} twinless — a larger population leaves fewer un-hit fixtures to serve as twins, so this number is expected to be higher and is NOT the ratchet's subject`);
+for (const p of unpaired) console.log(`  UNPAIRED  [${p.engine}] ${p.rule} — ${p.unpaired}`);
+for (const p of newTwinless) console.log(`  NEW TWINLESS  [${p.engine}] ${p.rule} — ${p.twinless}`);
+for (const id of staleTwinBacklog) console.log(`  STALE TWIN_BACKLOG  ${id} — it now HAS a benign twin; delete the row so the list keeps shrinking`);
+for (const u of UNSCORED_OUTSIDE_UNITS) console.log(`  DISCLOSED, NO SCORING POSITIVE  [${u.engine}] ${u.unit} — ${u.reason.slice(0, 140)}…`);
 
 // #1414 — the BOUND of the line above, printed beside it rather than left to be inferred. The gate
 // enumerates `harvey-*` semgrep rules and nothing else, while `precisionTier: "high"` is also set by
@@ -506,6 +541,9 @@ console.log(
   `FREE-COUNT COVERAGE OF THAT GATE (#1414): ${coverage.coveredByPairingGate}/${coverage.highTier} high-tier findings on this run come from an enumerated harvey-* rule; ` +
     `${coverage.outsidePairingGate} (${((coverage.outsidePairingGate / coverage.highTier) * 100).toFixed(1)}%) come from detectors it does not enumerate and therefore does not validate — ${coverage.outsideTaxonomies.slice(0, 6).join("; ")}${coverage.outsideTaxonomies.length > 6 ? `; +${coverage.outsideTaxonomies.length - 6} more` : ""}`,
 );
+for (const e of coverage.byEngine) {
+  console.log(`  UNPAIRED-BY-ENGINE (#1676): ${String(e.findings).padStart(3)} finding(s) / ${e.taxonomies} taxonomy(ies) — ${e.engine}`);
+}
 console.log(
   `PER-RULE FREE-COUNT GATE, prototyped and measured (#1414): a free count gated on VALIDATION STATUS rather than the self-declared precisionTier tag would withhold ${coverage.droppedByPerRuleGate.length} finding(s) today` +
     `${coverage.droppedByPerRuleGate.length ? `: ${coverage.droppedByPerRuleGate.join(", ")}` : " — zero, and zero by construction, because the pairing gate above fails `pnpm verify` on an unpaired rule so one cannot reach `main`"}`,
@@ -517,14 +555,17 @@ console.log(
 // the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
-const gatePass = graduationBroken.length === 0 && misplacedNeighbours.length === 0 && graduationControl.ok && neighbourControl.ok && unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;
+const gatePass = graduationBroken.length === 0 && misplacedNeighbours.length === 0 && graduationControl.ok && neighbourControl.ok && unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && newTwinless.length === 0 && staleTwinBacklog.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && undeclaredShapes.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;
 if (!gatePass) {
   if (mustCatchMisses.length) console.log(`\nGATE FAIL — soundness positive not caught (#1248): ${mustCatchMisses.map((r) => r.id).join(", ")}. These rows are adversarial fixtures planted to prove a sanitizer's exclusions still work, not review-recall aspirations — a miss means a guard was widened into clearing a live bug, never "we don't catch that yet".`);
   if (reviewMisses.length) console.log(`\nGATE FAIL — review-tier positives not caught by any rule (#1628): ${reviewMisses.map((r) => r.id).join(", ")}. A review-tier row is a claim that this class IS detected, at review confidence; the tier for a gap we accept is \`expectedTier: "none"\` with a gapKind. Re-tier the row with its tracking issue, or restore the detection.`);
   if (!m6.ok) console.log(`\nGATE FAIL — M6 indicator corpus (#1371): ${m6.uncovered.length ? `${m6.uncovered.length} declared indicator class(es) with no positive row (${m6.uncovered.join(", ")}); ` : ""}${m6.rows.filter((r) => !r.pass || r.severityMismatch).map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
-  if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
+  if (unpaired.length) console.log(`\nGATE FAIL — unvalidated detector (#1301/#1676): ${unpaired.map((p) => `${p.rule} [${p.engine}] (${p.unpaired})`).join(", ")}. A detector with no corpus positive can enter a client's free count and grade with no evidence it works.`);
+  if (newTwinless.length) console.log(`\nGATE FAIL — new twinless detector (#1676): ${newTwinless.map((p) => `${p.rule} [${p.engine}]`).join(", ")}. Nothing shows it staying silent on the benign form of what it flags. Add a benign twin fixture; TWIN_BACKLOG is a shrinking record of the pre-existing ones, not a place to park a new one.`);
+  if (staleTwinBacklog.length) console.log(`\nGATE FAIL — stale TWIN_BACKLOG row (#1676): ${staleTwinBacklog.join(", ")} now HAVE a benign twin. Delete the row — a backlog that never shrinks is a list, not a ratchet.`);
   if (unkeyed.length) console.log(`\nGATE FAIL — unkeyed positive (#1388): ${unkeyed.map((e) => e.id).join(", ")} — a positive with no \`match\` list accepts every finding at its own location, so the detection it exists to score can go silent while the row stays green. Give it a key from the taxonomy vocabulary of the finding it scores.`);
-  if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
+  if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355/#1560): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
+  if (undeclaredShapes.length) console.log(`\nGATE FAIL — unregistered match-keyed corpus (#1560): ${undeclaredShapes.join(", ")} declare(s) a \`match: string[]\` answer-key field, so it carries location+keyword rows this sweep never reads. Register it in src/scan/match-keyed-corpora.ts — that is how SemanticEntry stayed unswept while the rule read as repo-wide.`);
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (negReviewDrift.length) console.log(`GATE FAIL — review-tier regression on planted negatives (#1344): ${negReviewDrift.map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (!heuristic.ok) console.log(`GATE FAIL — M7/M8 heuristic precision corpus (#823): ${heuristic.rows.filter((r) => !r.pass).map((r) => r.id).join(", ")} — run pnpm exec tsx src/cli/validate-precision.ts`);
