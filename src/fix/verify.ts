@@ -112,7 +112,14 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
   liveClientCommands++;
   peakClientCommands = Math.max(peakClientCommands, liveClientCommands);
   return new Promise<CommandRun>((resolve) => {
-    const child = spawn(command, { cwd, shell: true });
+    // `detached` puts the shell at the head of its own process group so the timeout below can kill
+    // the GROUP. Killing the /bin/sh wrapper alone does not bound anything: the shell only
+    // exec-optimises itself away for a single simple command, so for a compound line the grandchild
+    // outlives the wrapper, holds the inherited pipes open, and `close` waits for it. MEASURED on
+    // this branch before the fix — a 300ms bound over `node -e "setTimeout(()=>{},5000)" ; true`
+    // returned after 5047ms. That is the live shape, not a contrived one: extractCiRunSteps emits a
+    // multi-line `run: |` block as ONE command and client scripts routinely chain with `&&`.
+    const child = spawn(command, { cwd, shell: true, detached: true });
     let captured = "";
     let timedOut = false;
     let settled = false;
@@ -123,7 +130,14 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
     child.stderr.on("data", capture);
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      try {
+        // Negative pid = the whole group. Guarded: a spawn that never got a pid, and a group that
+        // has already exited (ESRCH), both fall back to killing the wrapper directly.
+        if (child.pid === undefined) child.kill("SIGKILL");
+        else process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
     }, timeoutMs);
     const finish = (exitCode: number) => {
       if (settled) return;

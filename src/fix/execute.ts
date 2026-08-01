@@ -158,6 +158,16 @@ function applyDiff(worktree: string, diff: string): Promise<void> {
   });
 }
 
+// #1464 — a hazard this async conversion CREATED, recorded here because it is real and unproven
+// either way. `worktree add` above and the `prune` below both mutate the shared `.git` of the
+// CLIENT checkout (`targetDir`), which every concurrent worker shares. While runCommand was
+// spawnSync the event loop was blocked for each verify, so two workers never reached these lines at
+// the same instant and git's own index locking was never exercised; with the async runner and §4's
+// maxClientChecks semaphore admitting several workers at once, they genuinely overlap — one
+// worker's `prune` can run while a sibling is mid-`add`. Status: MEASURED green on macOS and on
+// Linux CI at the concurrency this pipeline runs today, and no test forces contention, so the
+// overlap is disclosed rather than demonstrated safe. If a `.git/worktrees` lock error ever surfaces
+// here, this is the seam.
 async function disposeWorktree(targetDir: string, worktree: string): Promise<void> {
   try {
     await git(targetDir, ["worktree", "remove", "--force", worktree]);

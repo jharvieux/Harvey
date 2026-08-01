@@ -117,9 +117,36 @@ describe("computeGreen", () => {
 });
 
 describe("runCommand — the timeout bound", () => {
+  // Both cases assert ELAPSED time, not just the exit code and the banner. Without that they pass on
+  // a runner that never actually bounds anything: `timedOut` is set by the timer regardless of
+  // whether the kill landed, so the banner and the non-zero exit still show up — five seconds late.
+  // That is exactly how the broken bound shipped.
   it("kills a command that overruns and reports the kill in its own output, never a silent 0", async () => {
+    const start = Date.now();
     const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
     expect(slow.exitCode).not.toBe(0);
     expect(slow.outputTail).toContain("exceeded the client-check timeout");
-  });
+  }, 20_000);
+
+  // The simple case above is the one that stayed green while the bound was broken on macOS: a shell
+  // handed a single command execs itself away, so killing the wrapper pid happens to kill the work.
+  // A COMPOUND line leaves the shell resident and the grandchild unreached — and compound is what
+  // arrives in practice, since extractCiRunSteps emits a multi-line `run: |` block as one command
+  // and client scripts chain with `&&`. Reverting `detached` + the group kill in runCommand turns
+  // this red at ~5s.
+  it("bounds a COMPOUND command too — the kill reaches the grandchild, not just the shell wrapper", async () => {
+    const start = Date.now();
+    const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)" ; true`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(slow.exitCode).not.toBe(0);
+    expect(slow.outputTail).toContain("exceeded the client-check timeout");
+  }, 20_000);
+
+  it("bounds an && chain, the shape a client verify script actually uses", async () => {
+    const start = Date.now();
+    const slow = await runCommand(`true && ${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(slow.exitCode).not.toBe(0);
+  }, 20_000);
 });
