@@ -51,6 +51,7 @@
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
     "genai-admission-census": "tsx src/cli/genai-admission-census.ts",
     "detector-census": "tsx src/cli/detector-census.ts",
+    "relay-census": "tsx src/cli/relay-census.ts",
     "brief-freshness": "tsx src/cli/brief-freshness.ts",
     "audit-coverage": "tsx src/cli/audit-coverage.ts",
     "record-pass": "tsx src/cli/record-pass.ts",
