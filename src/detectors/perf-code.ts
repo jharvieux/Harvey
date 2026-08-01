@@ -17,7 +17,7 @@ import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
 import { entryBasesFor } from "../workspaces.js";
-import { buildImportGraph, collectPathAliases, importClosure } from "./app-router.js";
+import { buildImportGraph, collectPathAliases, collectValueImports, importClosure, type PathAlias } from "./app-router.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import { SOURCE_FILE } from "./load-sources.js";
 
@@ -1753,11 +1753,77 @@ function isExportedFunctionLike(n: ts.Node): boolean {
 // an UNAVAILABLE signal must not read as a negative one — that is the fail-quiet this module's own
 // coverage rows exist to prevent. So the filter applies only when there is something to be reachable
 // FROM; otherwise the tier keeps #1203's behaviour and says in the evidence that it could not check.
+// #1666 — a NestJS provider wired ONLY through `@Module({ providers: [...] })` registration is a
+// real request-path dependency (NestJS's DI container instantiates it for whatever in the same
+// module asks for it), but the ordinary import graph has the edge backwards: the MODULE file
+// imports both its controllers and its providers — nothing points FROM a controller TO a sibling
+// provider it never names directly — so REQUEST_ENTRY_PATH's forward walk from a controller can
+// never reach it. MEASURED 2026-07-31 on ghostfolio @7bd6ca6d, controlled before/after
+// `static-detect` over all seventeen pinned M5-slop targets: this SAME-`@Module` edge recovers
+// `services/data-provider/{eod-historical-data,financial-modeling-prep,yahoo-finance}/*.service.ts`
+// (each co-registered with a controller in its own module) — 3 of the 4 originally-named misses,
+// the ghostfolio M7 note in external-corpus.ts carries the exact split. `services/twitter-bot/
+// twitter-bot.service.ts` is NOT recovered: its owning module declares no `controllers` at all and
+// is wired in through a NESTED `imports: [...]` chain instead — a distinct shape this same-module
+// edge does not reach, filed as #1795 rather than silently left in this fix's scope. Zero effect
+// measured elsewhere in the corpus (sync-I/O tier, dev-tooling subtraction): byte-identical output
+// before/after on all seventeen targets outside these three rows.
+//
+// Anchored to the `.module.ts` path convention (the same style REQUEST_ENTRY_PATH already
+// commits to) AND to the `@Module(...)` decorator identifier specifically — never a bare
+// filename match. Angular's `@NgModule` decorator lives on the identical filename convention
+// (ghostfolio's own `apps/client/src/app/app.module.ts`) and is a DIFFERENT identifier; a fixture
+// proves it is not swept in (perf-code.test.ts, "Angular @NgModule on a .module.ts path is not
+// read as a Nest @Module").
+const NEST_MODULE_PATH = /\.module\.[cm]?[jt]sx?$/;
+
+function nestModuleDecoratorArgs(sf: ts.SourceFile): ts.ObjectLiteralExpression | undefined {
+  for (const stmt of sf.statements) {
+    if (!ts.isClassDeclaration(stmt) || !ts.canHaveDecorators(stmt)) continue;
+    for (const d of ts.getDecorators(stmt) ?? []) {
+      if (!ts.isCallExpression(d.expression) || !ts.isIdentifier(d.expression.expression) || d.expression.expression.text !== "Module") continue;
+      const arg = d.expression.arguments[0];
+      if (arg && ts.isObjectLiteralExpression(arg)) return arg;
+    }
+  }
+  return undefined;
+}
+
+function decoratorArrayIdentifiers(obj: ts.ObjectLiteralExpression, propName: string): string[] {
+  const prop = obj.properties.find((p) => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === propName) as ts.PropertyAssignment | undefined;
+  if (!prop || !ts.isArrayLiteralExpression(prop.initializer)) return [];
+  return prop.initializer.elements.filter(ts.isIdentifier).map((id) => id.text);
+}
+
+// Every `controller -> provider` edge this file's `@Module({...})` decorators declare, resolved
+// through the SAME identifier -> file mapping (`collectValueImports`) the rest of this graph uses
+// — never a second hand-rolled import reader that could name a different file for the same
+// specifier.
+function nestModuleProviderEdges(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
+  const edges = new Map<string, string[]>();
+  for (const [path, sf] of sources) {
+    if (!NEST_MODULE_PATH.test(path)) continue;
+    const decoratorArg = nestModuleDecoratorArgs(sf);
+    if (!decoratorArg) continue;
+    const controllerNames = decoratorArrayIdentifiers(decoratorArg, "controllers");
+    const providerNames = decoratorArrayIdentifiers(decoratorArg, "providers");
+    if (controllerNames.length === 0 || providerNames.length === 0) continue;
+    const bindings = collectValueImports(sf, path, allPaths, aliases);
+    const resolve = (names: string[]) => [...new Set(names.map((n) => bindings.get(n)?.path).filter((p): p is string => !!p))];
+    const controllerPaths = resolve(controllerNames);
+    const providerPaths = resolve(providerNames);
+    for (const c of controllerPaths) edges.set(c, [...(edges.get(c) ?? []), ...providerPaths]);
+  }
+  return edges;
+}
+
 function requestReachableModules(files: SourceInput[], sources: Map<string, ts.SourceFile>): Map<string, string> | undefined {
   const allPaths = new Set(sources.keys());
   const entries = [...allPaths].filter((p) => REQUEST_ENTRY_PATH.test(p));
   if (entries.length === 0) return undefined;
-  const graph = buildImportGraph(sources, allPaths, collectPathAliases(files));
+  const aliases = collectPathAliases(files);
+  const graph = buildImportGraph(sources, allPaths, aliases);
+  for (const [from, to] of nestModuleProviderEdges(sources, allPaths, aliases)) graph.set(from, [...(graph.get(from) ?? []), ...to]);
   const reached = new Map<string, string>();
   for (const entry of entries) {
     for (const p of importClosure([entry], graph)) if (!reached.has(p)) reached.set(p, entry);

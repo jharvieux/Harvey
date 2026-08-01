@@ -1,0 +1,11 @@
+// Reached ONLY through orders.module.ts's `providers: [OrdersService]` registration — no
+// controller or other reachable file imports this class by name. #1666's shape.
+import { Injectable } from "@nestjs/common";
+import { isEmpty } from "lodash";
+
+@Injectable()
+export class OrdersService {
+  totals() {
+    return isEmpty({}) ? [] : [1];
+  }
+}

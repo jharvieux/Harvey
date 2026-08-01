@@ -1,0 +1,13 @@
+// Same import shape (including the server-runtime import) as the Nest positive fixture, but the
+// ONLY thing that references this class by name is an `@NgModule` (not `@Module`) below, spoofing
+// `controllers`/`providers` keys Angular's real decorator does not carry — #1666's negative
+// control on the DECORATOR IDENTIFIER, not on the server-runtime-import guard.
+import { Injectable } from "@nestjs/common";
+import { isEmpty } from "lodash";
+
+@Injectable()
+export class OrdersService {
+  totals() {
+    return isEmpty({}) ? [] : [1];
+  }
+}
