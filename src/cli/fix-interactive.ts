@@ -147,15 +147,10 @@ if (interactive) {
 // INDEPENDENTLY-DRAFTED plans, and this path drafts exactly one (producePlan is deterministic, so
 // drafting it twice compares a plan to itself and can only ever agree).
 //
-// REASON: §5 trigger 4 (plan self-disagreement) is not evaluated on the interactive path.
-// KIND: decisional
-// PROVENANCE: TRIED 2026-07-28 — ran producePlan twice on one screened finding against targets/calibration and fed both to plansDisagree: identical plans, disagreement false. Two LOCAL drafts can only ever agree.
-// OWNER: operator
-// DECISION: the 2026-07-26 no-SDK/no-key ruling recorded on issue #1056 removes the second independent draft the trigger compares; relayed again on #1272.
-// TOUCHES: src/fix/escalation.ts, src/fix/produce-plan.ts
-//
-// plansDisagree stays a PARAMETER of planningTriggers, so an implementer that does draft twice
-// supplies the flag without touching this file.
+// The reason for threading `false` is recorded next to plansDisagree itself in src/fix/escalation.ts
+// — that is the file its test-only-exports row names, and the gate binds a row to a reason in its own
+// file (#1547). plansDisagree stays a PARAMETER of planningTriggers, so an implementer that does draft
+// twice supplies the flag without touching this file.
 const triggers = planningTriggers(finding, { enabledCategories: manifest.enabledCategories, sensitivePaths: manifest.sensitivePaths }, false);
 const startTier = initialTier(plan.tier, triggers);
 

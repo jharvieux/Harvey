@@ -25,6 +25,19 @@ function higher(a: EscalationTier, b: EscalationTier): EscalationTier {
 // §5 trigger 4 is a REAL comparison, not an assumption: two plans drafted with independent contexts
 // are compared on their file set and their approach. Agreement is a cheap consistency check;
 // disagreement means the fix isn't mechanical and planning+implementation escalate to standard.
+//
+// It has no production caller, and the reason is recorded HERE, in the file the
+// test-only-exports.baseline.json row names, rather than at the call site that threads the flag —
+// reasonTriaged (src/test-only-exports.ts) binds a row to a reason living in the row's own file, so
+// the same block written next to planningTriggers' caller left this row reading as untriaged (#1547,
+// corrected on #1272 after PR #1662's verifier caught it; the binding predicate itself is #1648).
+//
+// REASON: plansDisagree — §5 trigger 4, plan self-disagreement — is not evaluated on the interactive path, which drafts one plan.
+// KIND: decisional
+// PROVENANCE: TRIED 2026-07-28 — ran producePlan twice on one screened finding against targets/calibration and fed both to plansDisagree: identical plans, disagreement false. Two LOCAL drafts can only ever agree.
+// OWNER: operator
+// DECISION: the 2026-07-26 no-SDK/no-key ruling recorded on issue #1056 removes the second independent draft the trigger compares; a HOLD-or-RETIRE ruling is relayed on #1272 and is the one criterion still open there.
+// TOUCHES: src/fix/escalation.ts, src/fix/produce-plan.ts
 export function plansDisagree(a: FixPlan, b: FixPlan): boolean {
   const fileSet = (p: FixPlan) => [...p.blastRadius.files, ...p.blastRadius.createdFiles].sort().join("|");
   if (fileSet(a) !== fileSet(b)) return true;
