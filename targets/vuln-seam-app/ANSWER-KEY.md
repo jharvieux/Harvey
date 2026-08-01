@@ -104,6 +104,28 @@ each route is probed alone (`src/pentest/vuln-seam-app.test.ts`), the way the se
   data (`email`, `tenant_id`, `role`) with no caller-identity check. Anon `GET` → `200` + a body
   carrying non-trivial keys ⇒ `bodyExposesData` true ⇒ **proven**.
 
+### 6. app-behaviour attack suites — auto-driven from the route surface (#1686)
+
+The live stand-up derives the three app-behaviour suites' inputs from the discovered routes/schema
+(`src/pentest/app-behavior-seeds.ts`) and drives them after the verify pass, so this fixture also
+scores race/TOCTOU, business-logic and file-upload — not just the four seams.
+
+- **`RACE-TOCTOU` (High) — `POST /api/coupon/redeem`**. The unbounded redeem is a once-only
+  `code-reuse` action; a concurrent burst over-permits ⇒ **proven** (`M2-RACE-TOCTOU-api-coupon-redeem`).
+  `POST /api/checkout` (per-process token bucket) serializes the burst to one accept ⇒ not-vulnerable.
+- **`BIZLOGIC-LIMIT` (Medium) — `POST /api/coupon/redeem`**. The same single-use flow is a
+  `coupon-stacking` limit case; the (cap+1)th sequential redeem is accepted ⇒ **proven**
+  (`M2-BIZLOGIC-LIMIT-coupon-api-coupon-redeem`). The sequential sibling of the race probe above.
+- **`UPLOAD-DISGUISED-TYPE` (Medium) + `UPLOAD-PATH-TRAVERSAL` (High) — `POST /api/upload`**
+  (`app/api/upload/route.js`). Accepts HTML bytes declared `image/png` and echoes a `../` filename
+  verbatim as the stored key ⇒ both **proven**. **Negative control — `POST /api/upload/safe`**
+  (`app/api/upload/safe/route.js`) validates magic bytes, sanitizes the filename to a basename, and
+  forces `Content-Disposition: attachment` ⇒ not-vulnerable.
+
+Live-validated 2026-08-01 (`dynamic-validate targets/vuln-seam-app --execute`): all three suites
+render `[probed]` in the M2 scope ledger, the four proven findings above appear, and the two controls
+(`/api/checkout`, `/api/upload/safe`) stayed clean.
+
 ## Scoring
 
 | Probe | Vulnerable route | Expected | Control route | Expected |
