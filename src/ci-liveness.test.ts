@@ -220,6 +220,17 @@ describe("the registry — a new gate job cannot join without a liveness assert"
     }
   });
 
+  // #1716. A gate id is matched as a WHOLE TOKEN, not as a substring. MEASURED 2026-07-31 on the
+  // substring form this replaces: renaming a workflow's `expect: genai-admission-census` to
+  // `…-censuss` left all 17 tests green, while renaming it to an unrelated id went red — so the
+  // check could see the far miss a reviewer catches anyway and not the near miss a typo produces.
+  // The boundary excludes `-` as well as word characters, because every id here is hyphenated:
+  // `corpus-drift-extra` must not satisfy `corpus-drift` either.
+  const declaredIds = (yml: string, key: "expect" | "gate"): Set<string> => {
+    const lines = yml.match(new RegExp(String.raw`^\s*${key}:.*$`, "gm"))?.join("\n") ?? "";
+    return new Set(lines.match(/[A-Za-z0-9][A-Za-z0-9-]*/g) ?? []);
+  };
+
   it("every registered gate id is BOTH asserted by its workflow and produced by something", () => {
     const producers = readNamesSafe(join(REPO_ROOT, "src", "cli"))
       .filter((f) => f.endsWith(".ts"))
@@ -227,13 +238,36 @@ describe("the registry — a new gate job cannot join without a liveness assert"
       .join("\n");
     for (const gate of registry.gates) {
       const yml = readFileSync(join(REPO_ROOT, gate.workflow), "utf8");
-      const asserted = yml.match(/^\s*expect:.*$/gm)?.join("\n") ?? "";
-      const recorded = yml.match(/^\s*gate:.*$/gm)?.join("\n") ?? "";
+      const asserted = declaredIds(yml, "expect");
+      const recorded = declaredIds(yml, "gate");
       for (const id of gate.expect) {
-        expect(asserted, `${gate.workflow} asserts ${id}`).toContain(id);
-        expect(recorded.includes(id) || producers.includes(`recordMeasured("${id}"`), `${gate.workflow}: ${id} is produced by a record step or a gate CLI`).toBe(true);
+        expect(asserted.has(id), `${gate.workflow} asserts ${id}`).toBe(true);
+        expect(recorded.has(id) || producers.includes(`recordMeasured("${id}"`), `${gate.workflow}: ${id} is produced by a record step or a gate CLI`).toBe(true);
       }
     }
+  });
+
+  // The failing direction, over the REAL registry rather than a fixture: extend each id by one
+  // character in a copy of its own workflow and both halves must stop recognising it. Under the
+  // substring form every one of these assertions passed, which is the whole defect.
+  it("a one-character extension of a gate id is not accepted for it", () => {
+    let checkedAsserted = 0;
+    let checkedRecorded = 0;
+    for (const gate of registry.gates) {
+      const yml = readFileSync(join(REPO_ROOT, gate.workflow), "utf8");
+      for (const id of gate.expect) {
+        const typo = yml.replaceAll(id, `${id}s`);
+        expect(declaredIds(typo, "expect").has(id), `${gate.workflow}: ${id}s satisfies expect ${id}`).toBe(false);
+        checkedAsserted++;
+        if (declaredIds(yml, "gate").has(id)) {
+          expect(declaredIds(typo, "gate").has(id), `${gate.workflow}: ${id}s satisfies gate ${id}`).toBe(false);
+          checkedRecorded++;
+        }
+      }
+    }
+    // A control that scored nothing proves nothing — both halves must have had a population.
+    expect(checkedAsserted).toBeGreaterThan(0);
+    expect(checkedRecorded).toBeGreaterThan(0);
   });
 
   // #1569, mirroring .github/alert-paths.json. A guard nobody has watched fail is indistinguishable
