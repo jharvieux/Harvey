@@ -109,8 +109,13 @@ function runGate(args: string[]): Promise<{ code: number; output: string }> {
   return new Promise((res, rej) => {
     const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
-    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
+    // setEncoding, never `output += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
+    // Buffer decodes THAT CHUNK in isolation, so a multi-byte character straddling a chunk boundary
+    // decodes to U+FFFD on both sides.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (output += chunk));
+    child.stderr.on("data", (chunk: string) => (output += chunk));
     child.on("error", rej);
     child.on("close", (code) => res({ code: code ?? -1, output }));
   });

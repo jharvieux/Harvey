@@ -123,9 +123,16 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
     let captured = "";
     let timedOut = false;
     let settled = false;
-    const capture = (chunk: Buffer) => {
-      if (captured.length < MAX_CAPTURED_BYTES) captured += chunk.toString("utf8");
+    // setEncoding, never `chunk.toString("utf8")` per chunk (#1759): that decodes THAT CHUNK in
+    // isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD on both
+    // sides — real risk here, since a client's own CI output is exactly the kind of text this
+    // captures. setEncoding installs a StringDecoder per stream that holds an incomplete trailing
+    // sequence back until the next chunk completes it.
+    const capture = (chunk: string) => {
+      if (captured.length < MAX_CAPTURED_BYTES) captured += chunk;
     };
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
     const timer = setTimeout(() => {
@@ -150,7 +157,7 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
       resolve({ command, cwd, exitCode, durationMs: Date.now() - start, outputTail: scrubSecrets(tail(combined, 50)) });
     };
     child.on("error", (err) => {
-      capture(Buffer.from(err.message));
+      capture(err.message);
       finish(1);
     });
     child.on("close", (code, signal) => finish(code ?? (signal !== null ? 1 : 0)));

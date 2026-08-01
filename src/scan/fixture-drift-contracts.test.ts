@@ -16,6 +16,7 @@ import {
   checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
   classifyFreshRun,
+  renderDriftVerdict,
   VITALS_DRIFT_CONTRACT,
   type GitScopeSanity,
   type SemgrepContractOutput,
@@ -164,12 +165,12 @@ describe("classifyVitalsGitScopeFailure", () => {
 // re-declared — a hand-built twin would prove the classifier works on a fixture, not that the CLI
 // consults it.
 //
-// STATED BOUND: what these five cases do NOT reach is runDrift's own mapping of the verdict onto
-// stdout and an exit code (`○ … NOT RUN`, exit 0). Inducing it needs vitals to return three empty
-// sections against a seeded repo where git succeeds, which no offline input can produce. The whole
-// CLI path was run live instead — `pnpm exec tsx src/cli/fixture-drift.ts --tool vitals`,
-// 2026-07-31, vitals 0.2.0, exit 0, `commits(90d window)=72 returncode=0 scopeMatchesToplevel=True`
-// — which exercises everything above the branch but not the branch.
+// FORMER STATED BOUND (#1416.4, closed by #1727): these five cases did not reach runDrift's own
+// mapping of the verdict onto stdout and an exit code (`○ … NOT RUN`, exit 0) — inducing it live
+// needs vitals to return three empty sections against a seeded repo where git succeeds, which no
+// offline input can produce. #1727 pulled that mapping into `renderDriftVerdict` (a pure function
+// `src/cli/fixture-drift.ts` now calls, leaving only the actual print/exit unguarded), so the
+// mapping itself is exercised directly below rather than needing the #1206 live shape.
 describe("classifyFreshRun — the notRunIf wiring (#1416)", () => {
   const fixture = load<VitalsReport>("../__fixtures__/vitals-report.json");
   const sanity: GitScopeSanity = { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true };
@@ -203,6 +204,40 @@ describe("classifyFreshRun — the notRunIf wiring (#1416)", () => {
     const parsed = VITALS_DRIFT_CONTRACT.parse(readFileSync(new URL("../__fixtures__/vitals-report.json", import.meta.url), "utf8"));
     expect(parsed).not.toHaveProperty("_note");
     expect(VITALS_DRIFT_CONTRACT.contract(parsed)).toEqual([]);
+  });
+});
+
+// #1727 — `renderDriftVerdict` is the mapping `src/cli/fixture-drift.ts`'s runDrift() delegates to
+// for what to print and which exit code to use. Fed the vitals swallowed-input verdict directly
+// (rather than a hand-built one) so this proves the CLI's real not-run path, not just a shape a
+// test invented independently.
+describe("renderDriftVerdict — the verdict → stdout/exit mapping (#1727)", () => {
+  const fixture = load<VitalsReport>("../__fixtures__/vitals-report.json");
+  const sanity: GitScopeSanity = { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true };
+  const swallowed = { ...fixture, hotspots: [], coupling: [], knowledge_risk: [], _gitScopeSanity: sanity };
+
+  it("prints NOT RUN on stdout and exits 0 for a not-run verdict", () => {
+    const verdict = classifyFreshRun(VITALS_DRIFT_CONTRACT, swallowed);
+    const out = renderDriftVerdict("vitals", "0.2.0", verdict, "vitals 0.2.0 over the seeded corpus");
+    expect(out.message.startsWith("○ vitals-fixture-drift: NOT RUN — ")).toBe(true);
+    expect(out.message).toContain("72 commit(s)");
+    expect(out.stream).toBe("log");
+    expect(out.exitCode).toBe(0);
+  });
+
+  it("prints an error and exits 1 for a drift verdict, naming the violations", () => {
+    const out = renderDriftVerdict("jscpd", "4.2.5", { kind: "drift", violations: ["missing field: duplicates"] }, "unused");
+    expect(out.message).toContain("✗ jscpd-fixture-drift: a fresh jscpd 4.2.5 run no longer matches the schema");
+    expect(out.message).toContain("missing field: duplicates");
+    expect(out.stream).toBe("error");
+    expect(out.exitCode).toBe(1);
+  });
+
+  it("prints the pass summary on stdout and exits 0 for an ok verdict", () => {
+    const out = renderDriftVerdict("knip", "5.88.1", { kind: "ok" }, "knip 5.88.1 over a rebuilt seed — 1 dead file(s)");
+    expect(out.message).toBe("✓ knip-fixture-drift: knip 5.88.1 over a rebuilt seed — 1 dead file(s), schema contract holds (committed fixture and fresh run both compliant).");
+    expect(out.stream).toBe("log");
+    expect(out.exitCode).toBe(0);
   });
 });
 

@@ -51,7 +51,10 @@ function run(args: string[]): Promise<{ stdout: string }> {
   return new Promise((res, rej) => {
     const child = spawn("node_modules/.bin/tsx", args, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"] });
     let stdout = "";
-    child.stdout.on("data", (d: Buffer) => (stdout += d));
+    // setEncoding, never `stdout += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
+    // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => (stdout += d));
     child.on("error", rej);
     child.on("close", (code) => (code === 0 ? res({ stdout }) : rej(new Error(`quick-scan ${args.join(" ")} exited ${code}`))));
   });
