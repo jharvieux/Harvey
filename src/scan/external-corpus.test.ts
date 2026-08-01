@@ -166,9 +166,13 @@ describe("scoreExternalBaseline", () => {
     // every `M1 — … missing authorization check` row and leaves the M9 count untouched. Before this
     // key, that produced NO failing row anywhere in the manifest.
     // #1500 zeroed tanstack-com's own M1-boundary baseline (6 -> 0, its whole family was cleared),
-    // so this control moved to inbox-zero, whose 5 counted rows are ALL this same taxonomy (see
-    // that baseline's note) rather than a mix with the owner-id class.
-    const rows = scoreExternalBaseline(target("inbox-zero"), []);
+    // so the control moved to inbox-zero; #1680 then zeroed inbox-zero's (5 -> 0, all five were
+    // non-exported helpers). It now sits on carbon, whose 5 counted rows are ALL this same taxonomy
+    // — MEASURED 2026-07-31, every one `M1 — route action missing authorization check` — rather
+    // than a mix with the owner-id class (proposit, the only other non-zero target, is such a mix).
+    // A control that keeps moving is the point of the key: it only ever lands on a target that
+    // still has a population, so the guard goes vacuous only by failing this test first.
+    const rows = scoreExternalBaseline(target("carbon"), []);
     expect(rows.find((r) => r.module === "M1-boundary")).toMatchObject({ pass: false, drift: -5 });
     expect(rows.find((r) => r.module === "M1-boundary")!.detail).toContain("DRIFT -5");
   });

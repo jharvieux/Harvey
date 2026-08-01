@@ -16,19 +16,24 @@
 # CLI reads the union of every linked PR body and every issue comment, so a PR that already carries
 # its dispositions passes here unchanged and nothing is written twice.
 #
-# WHAT IT DOES ON FAILURE, stated here and demonstrated end-to-end on 2026-07-28 against issue #1384
-# under an authenticated `gh` (all four branches, in order): comment naming the unaccounted criteria,
-# add the `acceptance-unaccounted` label, and RE-OPEN — once. The label is the memory: on a second
-# close it comments and re-labels but does not re-open, so a human who closes deliberately is not in
-# a fight with a bot, and the label stays as the standing record. When a later run passes, the label
-# is REMOVED, because a label asserting an unaccounted criterion on an accounted-for issue is a false
-# statement about the issue.
+# WHAT IT DOES ON FAILURE: comment naming the unaccounted criteria, add the `acceptance-unaccounted`
+# label, and RE-OPEN — EVERY time, one terminal state for a failed close (#1696). It used to re-open
+# only once ("the label is the memory"), so a repeat failure stood CLOSED with the label as its only
+# trace — a state that reads as completed to `gh issue list` and to every reader not on the issue
+# page. MEASURED 2026-07-31: all 10 issues then closed carrying the label were in that state, every
+# one still failing the gate when re-run, so the standing record had reached nobody ten out of ten
+# times. The way out of a re-open is one disposition line per criterion, not a second click. When a
+# later run passes, the label is REMOVED, because a label asserting an unaccounted criterion on an
+# accounted-for issue is a false statement about the issue. The first-failure and pass branches were
+# demonstrated live against #1384 on 2026-07-28; the repeat-failure re-open is proven at the CLI
+# layer against a recording stub `gh` and awaits its live drill (#1750, the #1348 pattern).
 #
 # A NEGATIVE CONTROL RUNS ON EVERY INVOCATION (step 2), the same posture acceptance.yml takes:
-# `--selftest-close` scores eight hermetic cases — bare click with and without a disposition record,
+# `--selftest-close` scores nine hermetic cases — bare click with and without a disposition record,
 # sidebar close with and without, a partial record, a hollowed-out `met`, the same dispositions in
-# BOTH the linked PR body and an issue comment, and the bot exemption. It needs no network, so a
-# green run means "this gate passed AND it can still fail" even on a close it had nothing to object to.
+# BOTH the linked PR body and an issue comment, a near-miss `met —` separator (#1696), and the bot
+# exemption. It needs no network, so a green run means "this gate passed AND it can still fail" even
+# on a close it had nothing to object to.
 #
 # SINCE #1562 acceptance.yml EVALUATES THE SAME THING this gate does — same venues, same close set —
 # so a PR that goes green there does not get re-opened here. That parity was reached by tightening

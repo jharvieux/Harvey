@@ -45,8 +45,16 @@ function run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; o
   return new Promise((res, rej) => {
     const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"], env: env ?? process.env });
     let out = "";
-    child.stdout.on("data", (d: Buffer) => (out += d));
-    child.stderr.on("data", (d: Buffer) => (out += d));
+    // setEncoding, never `out += <Buffer>`: string-concatenating a Buffer decodes THAT CHUNK in
+    // isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD on both
+    // sides and the assembled string no longer contains it. Every verdict this file asserts on
+    // carries an em dash. MEASURED 2026-07-31: one em dash lost out of 40000 across 36 chunks with
+    // the concat form, zero with a decoder. Not established as the cause of any observed failure —
+    // recorded here because the corruption is real and the fix is the correct spelling either way.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => (out += d));
+    child.stderr.on("data", (d: string) => (out += d));
     child.on("error", rej);
     child.on("close", (code) => res({ code: code ?? -1, out }));
   });
@@ -67,7 +75,20 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-calibration exits 1 on a
     // for its own reasons can never be read as the regression it was meant to plant.
     expect(code, `--seed-dark-review could not plant a victim:\n${out.slice(-2000)}`).not.toBe(2);
     expect(seeded, "the seeded run must name the row it darkened").toBeTruthy();
-    expect(out).toContain(`GATE FAIL — review-tier positives not caught by any rule (#1628): ${seeded}`);
+    // Two assertions, because the one below reports its two failure modes identically and the
+    // difference between them is the whole diagnosis. The seeded row is ALWAYS first — every stage
+    // from mechanicalCorpus() through buildCoverageMatrix() to fatalRecallMisses() is order-
+    // preserving and the victim is the first caught review-tier positive in corpus order — so a
+    // missing substring never means "the gate named a different row". It means the verdict line was
+    // not printed at all: the run ended between its measuring phase and its verdict. MEASURED
+    // 2026-07-31 (run 30672048114, shard 2/3): red, then GREEN on a re-run of the identical commit,
+    // while the bare `toContain` reported only `expected 'Scoring 719/965…' to contain 'GATE FAIL…'`
+    // — which reads as a wrong verdict and cost an investigation hours before the run-ended-early
+    // reading was reached. Logged per docs/runbooks/flaky-test-policy.md ("log the failure and watch
+    // for repeat"); NOT quarantined — one failure plus one green re-run is not yet flaky.
+    const verdict = "GATE FAIL — review-tier positives not caught by any rule (#1628)";
+    expect(out, `the gate exited ${code} without printing a "${verdict}" line at all — it did not reach its verdict. Last 2000 chars of its output:\n${out.slice(-2000)}`).toContain(verdict);
+    expect(out).toContain(`${verdict}: ${seeded}`);
     expect(out).not.toContain("GATE PASS");
     expect(code).toBe(1);
   }, 180000);
