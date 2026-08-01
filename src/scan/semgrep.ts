@@ -314,9 +314,13 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
 // behind #1664 made validate-calibration read "113 rules have never been shown to work" off a scan
 // that never ran. There is no benign non-zero exit to spare, so every one is INCOMPLETE, named by
 // its observed exit code or signal.
-function execSemgrep(argv: string[]): { out: string } | { failure: string; enoent: boolean } {
+// #1756: exported for `src/cli/validate-secbench.ts`, which invoked semgrep raw with the pre-#1664
+// swallow — copy-pasting the classifier is how the two drift apart. `maxBufferMb` is a parameter for
+// the same reason: that gate scans ~600 SecBench entries in one pass and had already raised its own
+// cap to 256 MB, and silently halving it here would turn a working run into a disclosed failure.
+export function execSemgrep(argv: string[], maxBufferMb = 128): { out: string } | { failure: string; enoent: boolean } {
   try {
-    return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 }) };
+    return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * maxBufferMb }) };
   } catch (err) {
     const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
     if (e.code === "ENOENT") return { failure: "semgrep not found on PATH", enoent: true };

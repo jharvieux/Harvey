@@ -15,7 +15,6 @@
 // measurable from it — the vibe-dummy FP oracle stays the precision gate (the issue's guardrail).
 
 import "./sync-stdio.js";
-import { execFileSync } from "node:child_process";
 import { arg, assertKnownFlags } from "./args.js";
 import { existsSync, readFileSync } from "node:fs";
 import type { OsvScanResult } from "../scan/dependencies.js";
@@ -23,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { readNamesSafe, statSafe } from "../fs-walk.js";
+import { execSemgrep } from "../scan/semgrep.js";
 import {
   indexOsvByEntry,
   loadSecbenchCorpus,
@@ -73,6 +73,31 @@ if (entries.length === 0 || missingClasses.length) {
 // The full mechanical semgrep config (harvey-* custom rules + the registry security packs), the
 // same set runMechanicalScan runs. Read a precomputed JSON if given, else run it live.
 interface SemgrepJson { results?: { check_id?: string; path?: string }[] }
+
+// #1756 — a gate must never SCORE a scan that did not run. The two semgrep invocations in this file
+// carried the pre-#1664 swallow (`if (e.stdout.length > 0) out = e.stdout`), so a semgrep-core crash
+// with a partial envelope on stdout was read as a completed pass with fewer hits, and its recall
+// numbers were then printed as measurements and quoted as capability facts. Both now go through
+// `execSemgrep` — the same classifier the engagement path uses, imported rather than re-implemented
+// — and an incomplete run stops the gate here instead of producing a table.
+function semgrepOrDie(args: string[], what: string, maxBufferMb: number): SemgrepJson {
+  const run = execSemgrep(args, maxBufferMb);
+  if ("failure" in run) {
+    console.error(
+      `✗ SCAN DID NOT RUN — ${what}: ${run.failure}.\n` +
+        `  Every recall number below this line would be a measurement of a scan that did not happen, so\n` +
+        `  none is printed. Fix the semgrep run (or install the binary) and re-run the gate.`,
+    );
+    process.exit(2);
+  }
+  try {
+    return JSON.parse(run.out) as SemgrepJson;
+  } catch {
+    console.error(`✗ SCAN DID NOT RUN — ${what}: semgrep exited 0 but printed something other than its JSON envelope.`);
+    process.exit(2);
+  }
+}
+
 function runSemgrepOverClasses(root: string): SemgrepJson {
   const customRules = new URL("../scan/rules/semgrep/", import.meta.url).pathname;
   const classDirs = SECBENCH_CLASSES.map((c) => `${root}/${c}`).filter(existsSync);
@@ -81,15 +106,7 @@ function runSemgrepOverClasses(root: string): SemgrepJson {
     "--config", "p/owasp-top-ten", "--config", "p/secrets", "--config", "p/security-audit",
     "--config", customRules, "--exclude", "node_modules", "--json", "--quiet", ...classDirs,
   ];
-  let out: string;
-  try {
-    out = execFileSync("semgrep", args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 256 });
-  } catch (err) {
-    const e = err as { stdout?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else throw err;
-  }
-  return JSON.parse(out) as SemgrepJson;
+  return semgrepOrDie(args, "the SecBench source-pattern sweep", 256);
 }
 
 const semgrepJsonPath = arg("--semgrep-json");
@@ -185,15 +202,11 @@ if (libTree && existsSync(libTree)) {
     const pkgDir = join(libTree, e.cls, e.slug, "node_modules", ...e.pkg.split("/"));
     if (!existsSync(pkgDir)) continue;
     scannedKeys.add(e.key);
-    let out: string;
-    try {
-      out = execFileSync("semgrep", ["--config", libRules, "--exclude", "node_modules", "--json", "--quiet", pkgDir], { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
-    } catch (err) {
-      const se = err as { stdout?: string };
-      if (typeof se.stdout === "string" && se.stdout.length > 0) out = se.stdout;
-      else throw err;
-    }
-    const rules = [...new Set(((JSON.parse(out) as SemgrepJson).results ?? []).map((r) => (r.check_id ?? "").split(".").pop() ?? "").filter(Boolean))];
+    // Per-entry, so a crash here is arguably survivable — but `scannedKeys` has already counted this
+    // entry as SCANNED, so swallowing it would put a crashed entry in the recall denominator as a
+    // measured miss. Same refusal as the sweep above.
+    const json = semgrepOrDie(["--config", libRules, "--exclude", "node_modules", "--json", "--quiet", pkgDir], `the library-source pass over ${e.key}`, 128);
+    const rules = [...new Set((json.results ?? []).map((r) => (r.check_id ?? "").split(".").pop() ?? "").filter(Boolean))];
     if (rules.length > 0) libHits.set(e.key, rules);
   }
   const lib = scoreLibrarySource(entries, scannedKeys, libHits);
