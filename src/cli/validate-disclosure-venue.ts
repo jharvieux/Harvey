@@ -10,6 +10,8 @@
 // --seed-violation  the negative control: appends a synthetic bounded rule with a bound-free
 //              message to the parsed set. It MUST exit non-zero. A gate only ever seen passing is
 //              indistinguishable from one that cannot fail (#350/#1065).
+// --seed-dead-arm   the same, for the #1665 half: appends the pre-#1657 harvey-ldap-injection shape
+//              (one block-level focus over a four-arm disjunction) and MUST exit non-zero.
 //
 // The gate's own scope, and the 4b half that is not built, are stated in src/disclosure-venue.ts.
 
@@ -24,10 +26,28 @@ import {
   loadSemgrepRuleFiles,
   loadSemgrepRules,
   residualBoundish,
+  tsDetectorFilesRead,
   unattributedBounds,
   type SemgrepRule,
 } from "../disclosure-venue.js";
+import { auditRuleReach, unreachedMessageTokens } from "../rule-claim-reach.js";
 import { recordMeasured } from "../ci-liveness.js";
+
+// #1665's negative control, and the defect it reconstructs: harvey-ldap-injection as it stood before
+// #1657, where one block-level `focus-metavariable: $OPTS` sat over four arms and only `search`
+// bound it — so bind/compare/modify matched nothing while the message enumerated all four.
+const SEEDED_DEAD_ARM_DOC = `rules:
+  - id: harvey-seeded-dead-arm
+    message: >
+      A seeded finding whose message enumerates four call sites its patterns do not all reach.
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.search($BASE, $OPTS, ...)
+              - pattern: $C.bind($DN, ...)
+              - pattern: $C.modify($DN, $CHANGE, ...)
+          - focus-metavariable: $OPTS
+`;
 
 // One seed per way the gate can fail. Seeding only the first would leave the correspondence half
 // unproven — a gate whose second branch has never been seen firing is a gate with one branch.
@@ -68,6 +88,14 @@ function main(): void {
   // 0 exactly when the vocabulary's residual reaches zero.
   if (process.argv.includes("--residual-count")) {
     console.log(residual.length);
+    return;
+  }
+
+  // #1714. Bare number, for the same reason: the recorded blocker in src/disclosure-venue.ts says a
+  // TS/AST detector's bound comments are read by no gate, so its falsifier reads THIS — the count of
+  // TS detector sources on the gate's own scan surface — instead of the population of such comments.
+  if (process.argv.includes("--ts-detector-surface")) {
+    console.log(tsDetectorFilesRead(loadSemgrepRuleFiles()).length);
     return;
   }
 
@@ -146,6 +174,36 @@ function main(): void {
         "\n  a SCOPE sentence naming what the rule does NOT assess, so its silence elsewhere is not read as a" +
         "\n  clean bill of health. Deleting the comment is not a fix; it moves the limitation from an unread" +
         "\n  venue to no venue at all.",
+    );
+    process.exit(1);
+  }
+
+  // #1665, the other direction: gate 4 above asks whether a bound in the COMMENTS reached the
+  // message. This asks whether a capability the MESSAGE advertises is reachable by the patterns —
+  // the direction that reaches the client, because it over-claims rather than under-claims.
+  const ruleFiles = new Map(loadSemgrepRuleFiles());
+  if (process.argv.includes("--seed-dead-arm")) ruleFiles.set(`${RULES_DIR}/__seeded__.yml`, SEEDED_DEAD_ARM_DOC);
+  const reach = auditRuleReach(ruleFiles);
+  const unreachedTokens = unreachedMessageTokens(ruleFiles);
+  console.log(
+    `\nRule-claim reach (#1665) — ${reach.focusBlocks} \`patterns\` blocks carry a focus-metavariable;` +
+      ` ${reach.dead.length} arm(s) can never bind it.`,
+  );
+  console.log(
+    `  Reported, not gated: ${unreachedTokens.reduce((n, h) => n + h.tokens.length, 0)} backticked identifier(s) in a` +
+      ` message are absent from that rule's own patterns, over ${unreachedTokens.length} rule(s) —` +
+      `\n  measured 2026-07-31 to be remediation text or a stated exclusion in 13 of 13 cases, so it names the fix,` +
+      `\n  not a gap. Read them when the count moves: ${unreachedTokens.map((h) => h.id).join(", ")}`,
+  );
+  if (reach.dead.length > 0) {
+    console.error(
+      `\n✗ ${reach.dead.length} pattern arm(s) sit under a \`focus-metavariable\` they never bind, with nothing else in` +
+        `\n  the conjunction binding it either — those arms match nothing while the rule's message advertises them.`,
+    );
+    for (const d of reach.dead) console.error(`  ${d.id} (${d.file})  focus ${d.focus}  dead arm: ${d.arm}`);
+    console.error(
+      "\nFix by giving each arm its own `focus-metavariable` on the argument that arm binds — the shape #1657 used" +
+        "\nfor harvey-ldap-injection, where bind/compare/modify had been dead for the rule's whole life.",
     );
     process.exit(1);
   }

@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { unnamedRecallMisses } from "../calibration-verdict.js";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type CorpusEntry, type MatrixRow } from "../scan/calibration.js";
@@ -41,6 +42,7 @@ const FLAGS = [
   "--target",
   "--json",
   "--seed-dark-review",
+  "--seed-untiered-miss",
 ] as const;
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -83,6 +85,19 @@ function scanManifestFixtures(targetDir: string): Finding[] {
   return findings;
 }
 
+// #1765's negative control, the --seed-dark-review shape one row over: an UNTIERED positive is
+// exactly the state the catch-all branch exists for — fatal under fatalRecallMisses, printed by
+// none of the tier branches. Its location is a path no fixture occupies, so it is never caught
+// and the seeded run must exit 1 NAMING it.
+const SEEDED_UNTIERED: CorpusEntry = {
+  id: "P-SEEDED-UNTIERED",
+  kind: "positive",
+  cls: "seeded control: a positive with no expectedTier (#1765)",
+  location: "fixtures/untiered-control/index.js",
+  match: ["untiered-control-token"],
+  note: "#1765 --seed-untiered-miss: a synthetic positive carrying no expectedTier, so it fails the gate through fatalRecallMisses while belonging to none of the printed subsets. Absent unless the flag is passed.",
+};
+
 // CORPUS also carries modules with their own live pipeline outside runMechanicalScan (e.g.
 // M10's name/type classifier, fed from parsed migration SQL — see calibration/m10.entries.ts and
 // src/cli/dry-run.ts). Score only the mechanical-scan modules here so this gate isn't spuriously
@@ -91,7 +106,9 @@ function scanManifestFixtures(targetDir: string): Finding[] {
 // can hold the ONE exclusion rule accountable — see its "#398 mechanicalCorpus" block, which
 // fails loud if a module-tagged entry ever leaks into this scored subset or drops out of the
 // per-module census below (the two things that make an exclusion silent instead of documented).
-const scoredCorpus = mechanicalCorpus(CORPUS);
+const scoredCorpus = process.argv.includes("--seed-untiered-miss")
+  ? [...mechanicalCorpus(CORPUS), SEEDED_UNTIERED]
+  : mechanicalCorpus(CORPUS);
 console.log(
   `Scoring ${scoredCorpus.length}/${CORPUS.length} corpus entries against runMechanicalScan (M1 mechanical); ` +
     `${CORPUS.length - scoredCorpus.length} module-tagged entries are excluded by design — see the per-module census below for where each is gated instead.`,
@@ -466,6 +483,19 @@ if (!gatePass) {
   if (!reviewRatchetControl.ok) console.log(`GATE FAIL — the #1344 review-tier ratchet did not fire on its negative control: ${reviewRatchetControl.detail} — a widened rule could light up a planted negative unseen again`);
   if (!reviewRecallControl.ok) console.log(`GATE FAIL — the #1628 review-tier recall gate did not fire on its negative control: ${reviewRecallControl.detail} — a review-tier detector could go dark and this gate would still print PASS, which is the state #1628 found`);
   if (!severityControl.ok) console.log(`GATE FAIL — severity-correctness negative control did not fire (#1157): ${severityControl.detail} — the check is not proven able to fail`);
+  // #1765, LAST so it reports only what the branches above left unnamed: the verdict gates on the
+  // whole of recallMisses while those branches cover three subsets of it, so a miss outside all
+  // three used to exit 1 having printed nothing at all.
+  const unnamedMisses = unnamedRecallMisses(recallMisses, [mustCatchMisses, reviewMisses, highMisses]);
+  if (unnamedMisses.length) {
+    console.log(
+      `\nGATE FAIL — recall miss with no tier-specific branch above (#1765): ` +
+        `${unnamedMisses.map((r) => `${r.id} (expectedTier ${r.expectedTier ?? "unset"}) — ${r.detail}`).join("; ")}. ` +
+        `A positive with no tier, or one carrying a live tier this run did score, fails the gate through ` +
+        `fatalRecallMisses but belongs to none of the printed subsets. Give the row an expectedTier, or add the ` +
+        `branch its tier deserves.`,
+    );
+  }
   process.exit(1);
 }
 console.log("\nGATE PASS — no free-count false positives; every high-tier rule fired on its positive; every annotated severity delivered as rated.");
