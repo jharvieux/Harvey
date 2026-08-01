@@ -74,11 +74,21 @@
 //    which is exactly the case a vocabulary check cannot reach.) What is STILL open is the other
 //    half: a bound written in a TS/AST DETECTOR's own source comments, which no gate reads.
 //
+//    #1714 REWROTE THE FALSIFIER BELOW, and the correction is the point of this paragraph. It used
+//    to be #1330's POPULATION grep — it exited 1 while any TS file under src/scan or src/detectors
+//    still carried a bound comment, and 0 only when the last such comment was deleted. That asks a
+//    different question from the claim: ship the gate tomorrow and the comments stay, so the
+//    falsifier would still read "blocked" with the blocker gone, and deleting the comments would
+//    read "unblocked" with nothing built. The claim is about the GATE'S SCAN SURFACE, so the
+//    falsifier now watches that surface — boundScanSurface() reports it from the loader itself, so
+//    widening the loader to read a TS detector moves the number the falsifier reads. The population
+//    figure keeps its place in PROVENANCE, where a measurement belongs.
+//
 //    REASON: a bound written in a TS/AST detector's source comments is outside what any gate reads — this one parses `src/scan/rules/semgrep/*.yml` and src/conditional-scan.ts checks call-shape, not prose — so neither says anything about whether a detector's recorded limit reaches the finding it bounds
 //    KIND: empirical
-//    PROVENANCE: MEASURED 2026-07-31 — #1330's population grep re-run over src/scan + src/detectors still reports 11 non-test files carrying comment lines that declare a bound no disclosure gate parses; the conditional-omission half it also covered is now gated (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`). The falsifier below was rewritten off `grep -qv` (#1646): under a Claude Code agent shell that form answered 0 — "blocker gone" — against the same tree `sh -c` answered 1 on, so which verdict you got depended on who ran it. Re-exercised both directions in three shells at the new form.
-//    FALSIFIER: test -d src/scan || exit 127; test -d src/detectors || exit 127; git grep -qE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' -- ':(glob)src/scan/**/*.ts' ':(glob)src/detectors/**/*.ts' ':(glob,exclude)src/**/*.test.ts' && exit 1 || exit 0
-//    TOUCHES: src/scan src/detectors
+//    PROVENANCE: MEASURED 2026-07-31 — `pnpm exec tsx src/cli/validate-disclosure-venue.ts --ts-detector-surface` reports 0: of the files this gate reads for bound-declaring comments, none is a TS/AST detector source file. The population it leaves unread, from #1330's grep re-run the same day, is 11 non-test files under src/scan + src/detectors carrying such comments. The conditional-omission half is gated separately (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`).
+//    FALSIFIER: test -f src/cli/validate-disclosure-venue.ts || exit 127; pnpm exec tsx src/cli/validate-disclosure-venue.ts --ts-detector-surface > /tmp/harvey-ts-surface.txt 2>/dev/null || exit 127; test "$(tail -1 /tmp/harvey-ts-surface.txt)" -gt 0 2>/dev/null && exit 0 || exit 1
+//    TOUCHES: src/scan src/detectors src/disclosure-venue.ts
 //
 // A lower bound on the defect, not a census of it.
 
@@ -395,6 +405,14 @@ export function loadSemgrepRuleFiles(): Map<string, string> {
       .sort()
       .map((f) => [`${RULES_DIR}/${f}`, readFileSync(resolve(dir, f), "utf8")]),
   );
+}
+
+// #1714. The surface this gate actually reads for bound-declaring comments, DERIVED from the loader
+// rather than asserted, so the reason above has something to be falsified by: the day a loader
+// widening puts a TS/AST detector's source in front of the marker vocabulary, this number moves and
+// the recorded blocker's falsifier exits 0.
+export function tsDetectorFilesRead(files: ReadonlyMap<string, string>): string[] {
+  return [...files.keys()].filter((f) => f.endsWith(".ts") && (f.startsWith("src/scan/") || f.startsWith("src/detectors/")));
 }
 
 export function boundedRatchet(rules: readonly SemgrepRule[]): string[] {

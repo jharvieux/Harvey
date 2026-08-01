@@ -10,6 +10,7 @@ import {
   parseSemgrepRules,
   residualBoundish,
   scopeSentence,
+  tsDetectorFilesRead,
   unattributedBounds,
   verdict,
   type SemgrepRule,
@@ -219,6 +220,22 @@ describe("the gate's own residual", () => {
 
     expect(residual).toEqual([...BOUND_TRIAGE.map((t) => t.id)].sort());
     expect(BOUND_TRIAGE.every((t) => t.disposition.length > 40)).toBe(true);
+  });
+
+  // #1714: the recorded blocker at src/disclosure-venue.ts says a TS/AST detector's bound comments
+  // are read by no gate, and its falsifier reads this number. Both directions, because a surface
+  // report that can only ever say 0 re-tests nothing — which is the defect #1714 was filed for.
+  it("reports the TS/AST detector sources on the gate's scan surface — none today, and it can say otherwise", () => {
+    expect(tsDetectorFilesRead(loadSemgrepRuleFiles())).toEqual([]);
+    expect(
+      tsDetectorFilesRead(
+        new Map([
+          ["src/scan/rules/semgrep/base.yml", "rules: []"],
+          ["src/scan/emitter-error.ts", "// SAME-FILE HEURISTIC ONLY"],
+          ["src/detectors/app-router.ts", "// LIMITATION: ..."],
+        ]),
+      ),
+    ).toEqual(["src/scan/emitter-error.ts", "src/detectors/app-router.ts"]);
   });
 
   it("counts and names the marker-bearing comment lines that belong to no rule", () => {

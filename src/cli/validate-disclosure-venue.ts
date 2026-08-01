@@ -26,6 +26,7 @@ import {
   loadSemgrepRuleFiles,
   loadSemgrepRules,
   residualBoundish,
+  tsDetectorFilesRead,
   unattributedBounds,
   type SemgrepRule,
 } from "../disclosure-venue.js";
@@ -87,6 +88,14 @@ function main(): void {
   // 0 exactly when the vocabulary's residual reaches zero.
   if (process.argv.includes("--residual-count")) {
     console.log(residual.length);
+    return;
+  }
+
+  // #1714. Bare number, for the same reason: the recorded blocker in src/disclosure-venue.ts says a
+  // TS/AST detector's bound comments are read by no gate, so its falsifier reads THIS — the count of
+  // TS detector sources on the gate's own scan surface — instead of the population of such comments.
+  if (process.argv.includes("--ts-detector-surface")) {
+    console.log(tsDetectorFilesRead(loadSemgrepRuleFiles()).length);
     return;
   }
 
