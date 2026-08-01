@@ -25,6 +25,7 @@ import { unnamedRecallMisses } from "../calibration-verdict.js";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, validateParityExemptions, type CorpusEntry, type MatrixRow } from "../scan/calibration.js";
+import { misplacedNeighbourDeclarations, scoreGraduationGuards } from "../scan/calibration/graduation.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
@@ -418,6 +419,61 @@ console.log(
       : ` — ${unkeyed.length} accept EVERY finding at their own location (relevantFindings short-circuits with no keys): ${unkeyed.map((e) => e.id).join(", ")}`),
 );
 
+// #1677 — the graduation guard, scoped by neighbour taxonomy instead of by `match`-key width. The
+// `none` branch of scoreEntry above is only as wide as the row's key, and 3 of the 6 `none` rows sit
+// on a fixture where another class already fires, so those keys had to stay narrow to avoid reading
+// the neighbour as a graduation. Here the key is not consulted at all: every finding on the fixture
+// counts except the declared neighbours, so a new rule graduating onto the class fires the row
+// whatever it calls itself, and a declared neighbour that stops firing fails as a decayed claim.
+const graduation = scoreGraduationGuards(scoredCorpus, findings);
+const graduationBroken = graduation.filter((r) => !r.pass);
+const misplacedNeighbours = misplacedNeighbourDeclarations(CORPUS);
+console.log(`\nGRADUATION GUARDS (#1677) — ${graduation.length} \`none\` row(s), ${graduation.filter((r) => r.confirmed.length).length} of them sharing a fixture with a declared neighbouring class:`);
+for (const r of graduation) console.log(`  ${r.pass ? "HELD" : "FAIL"}  ${r.id.padEnd(28)} ${r.detail}`);
+
+// Both directions, on the same row, from the one implementation the verdict uses. FORWARD: plant a
+// finding at a `none` row's fixture carrying a taxonomy nobody declared — the guard must fire.
+// REVERSE: strip a shared row's neighbour declaration and re-score against the UNTOUCHED live
+// findings — the guard must fire on the neighbour it no longer excludes, which is the false alarm
+// that would get the guard silenced. A control that only ran the first direction would pass just as
+// well against a guard that fails on everything.
+const graduationControl = (() => {
+  const victim = scoredCorpus.find((e) => e.expectedTier === "none" && graduation.find((r) => r.id === e.id)?.pass);
+  if (!victim) return { ok: false, detail: "no holding `none` row to plant on — the graduation guard is unproven on this run" };
+  const planted: Finding = {
+    id: "CONTROL-1677",
+    status: "Open",
+    category: "Security",
+    title: "Graduated rule (negative control)",
+    severity: "High",
+    confidence: "Review",
+    precisionTier: "review",
+    taxonomy: "src.scan.rules.semgrep.harvey-control-1677-undeclared",
+    location: `${victim.location}:1`,
+    evidence: "synthetic — #1677 negative control, never a real finding",
+    impact: "n/a",
+    fix: "n/a",
+    value: 1,
+    ease: 1,
+    safety: 1,
+  };
+  const fired = scoreGraduationGuards([victim], [...findings, planted]).some((r) => r.graduated.includes(planted.taxonomy));
+  return { ok: fired, detail: `entry ${victim.id}: planted an undeclared taxonomy on its fixture -> graduation guard ${fired ? "FIRED" : "DID NOT FIRE"}` };
+})();
+const neighbourControl = (() => {
+  const shared = scoredCorpus.find((e) => (graduation.find((r) => r.id === e.id)?.confirmed.length ?? 0) > 0);
+  if (!shared) return { ok: false, detail: "no `none` row with a declared neighbour firing on this run — the exclusion half is unproven" };
+  const withDeclaration = scoreGraduationGuards([shared], findings)[0];
+  const without = scoreGraduationGuards([{ ...shared, neighbourTaxonomies: undefined }], findings)[0];
+  const ok = withDeclaration?.pass === true && without?.pass === false;
+  return {
+    ok,
+    detail: `entry ${shared.id}: with its ${shared.neighbourTaxonomies?.length} declared neighbour(s) the row ${withDeclaration?.pass ? "HOLDS" : "FAILS"}; with the declaration removed it ${without?.pass ? "still HOLDS — the exclusion is doing nothing" : `FAILS on ${without?.graduated.join("; ")}`}`,
+  };
+})();
+console.log(`  FORWARD CONTROL: ${graduationControl.detail}`);
+console.log(`  EXCLUSION CONTROL: ${neighbourControl.detail}`);
+
 // #1314's negative control: delete a module's entries and prove the parity gate fails. It must be
 // a module that PASSES today, so the fixtures being removed are the only thing holding it up — the
 // exhaustive census is what makes the resulting zero visible at all (before it, the module simply
@@ -461,7 +517,7 @@ console.log(
 // the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
-const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;
+const gatePass = graduationBroken.length === 0 && misplacedNeighbours.length === 0 && graduationControl.ok && neighbourControl.ok && unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;
 if (!gatePass) {
   if (mustCatchMisses.length) console.log(`\nGATE FAIL — soundness positive not caught (#1248): ${mustCatchMisses.map((r) => r.id).join(", ")}. These rows are adversarial fixtures planted to prove a sanitizer's exclusions still work, not review-recall aspirations — a miss means a guard was widened into clearing a live bug, never "we don't catch that yet".`);
   if (reviewMisses.length) console.log(`\nGATE FAIL — review-tier positives not caught by any rule (#1628): ${reviewMisses.map((r) => r.id).join(", ")}. A review-tier row is a claim that this class IS detected, at review confidence; the tier for a gap we accept is \`expectedTier: "none"\` with a gapKind. Re-tier the row with its tracking issue, or restore the detection.`);
@@ -474,6 +530,10 @@ if (!gatePass) {
   if (!heuristic.ok) console.log(`GATE FAIL — M7/M8 heuristic precision corpus (#823): ${heuristic.rows.filter((r) => !r.pass).map((r) => r.id).join(", ")} — run pnpm exec tsx src/cli/validate-precision.ts`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
   if (noRuleBroken.length) console.log(`GATE FAIL — a mechanical rule now fires on a by-design no-rule gap (re-tier it): ${noRuleBroken.map((r) => r.id).join(", ")}`);
+  if (graduationBroken.length) console.log(`GATE FAIL — graduation guard (#1677): ${graduationBroken.map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
+  if (misplacedNeighbours.length) console.log(`GATE FAIL — neighbourTaxonomies declared where nothing reads it (#1677): ${misplacedNeighbours.map((e) => e.id).join(", ")}. The field scopes a \`none\` row's graduation guard; on any other row it is a claim with no venue.`);
+  if (!graduationControl.ok) console.log(`GATE FAIL — the #1677 graduation guard's forward control did not fire: ${graduationControl.detail} — a rule could graduate onto a recorded gap unseen`);
+  if (!neighbourControl.ok) console.log(`GATE FAIL — the #1677 graduation guard's exclusion control did not fire: ${neighbourControl.detail} — either the guard fails on everything, or the neighbour exclusion is inert`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427/#1314): ${parityThin.map((c) => `${c.module} has ${c.missing}`).join(", ")}. Add fixtures, or add a PARITY_EXEMPTIONS row naming the gate that covers the module instead.`);
   if (parity.stale.length) console.log(`GATE FAIL — stale parity exemption (#1314): ${parity.stale.join(", ")} now meet the minimum on real fixtures; the exemption is a claim that they cannot, and it is no longer true`);

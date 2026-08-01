@@ -98,6 +98,25 @@ export interface CorpusEntry {
   // src/scan/calibration.test.ts. ADDING a taxonomy from here on is a deliberate act and belongs in
   // the entry's `note` with the reason it is acceptable noise rather than a rule to narrow.
   reviewTierHits?: readonly string[];
+  // #1677 — `expectedTier: "none"` ROWS ONLY. The taxonomies MEASURED to already fire on this row's
+  // fixture for some OTHER class. `reviewTierHits` one tier over, and it exists for the mirror-image
+  // reason: a `none` row's graduation guard used to be exactly as wide as its `match` key, so a row
+  // sharing a fixture with an active detector had to keep the key deliberately narrow or read the
+  // neighbour's pre-existing finding as a graduation on day one. Narrow costs recall in the guard —
+  // a real graduation whose wording the key does not anticipate slips past — and no width of key
+  // resolves both directions at once.
+  //
+  // POPULATION, MEASURED 2026-07-31 (`scoreGraduationGuards` over a live `runMechanicalScan` of
+  // targets/calibration): 6 `none` rows exist and 3 of them share a fixture with a firing detector —
+  // P-MW-SOLE-AUTHZ, P-WEBHOOK-REPLAY-NO-RULE, P-CLIENT-HOOK-URL-PARAM. It is half the population,
+  // not one row.
+  //
+  // So the guard is scoped by EXCLUSION instead: `scoreGraduationGuards` (calibration/graduation.ts)
+  // takes every finding on the fixture, ignores the `match` key entirely, and fails on any taxonomy
+  // NOT listed here. A new detector graduating onto the class fires the row whatever it calls itself.
+  // A listed taxonomy that STOPS firing fails too, as a stale claim — this list is a measurement, and
+  // an un-retested measurement is how a guard silently widens back into accepting anything.
+  neighbourTaxonomies?: readonly string[];
   // #1248 — REVIEW-TIER POSITIVES ONLY. Marks a row as a SOUNDNESS guard rather than a recall
   // aspiration. It USED to be what made such a row's miss fatal, because review-tier misses were
   // non-fatal by design in validate-calibration.ts; #1628 (2026-07-31) made every review-tier miss
