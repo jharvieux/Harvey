@@ -2,7 +2,49 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-31 — **SWEEP WRAPPING UP.** 32 batches merged across rounds 3 and 4. **Tracker measured at 131 open** (`gh issue list --state open --limit 500`), down from 189. Ledger at `.git/issue-sweep-ledger.json`. Newest block first. The operator-directed session's final wrap is the 2026-08-01 block below._
+_Last updated: 2026-08-01 — **SWEEP COMPLETE, session closed.** 17 PRs merged, 44 issues closed. **Tracker measured at 117 open** (`gh issue list --state open --limit 400` — the default limit is 30 and truncates silently; do not use it). `main` green at `fa31608`, zero open PRs. Ledger RETAINED at `.git/issue-sweep-ledger.json` (phase `closed`) rather than deleted, because it holds what this file summarises. Newest block first._
+
+## 2026-08-01 (issue-sweep, CLOSED) — 17 PRs, 22 verifications, 22 findings CI could not see
+
+**Every PR got an independent acceptance verifier before merge, and nearly every one came back with something** — in green, well-tested PRs. That is the single most reusable result of the session: verification is where the defects were, not CI.
+
+### Owed to the operator — read this first
+
+1. **#1820 — five CLAUDE.md corrections, three `INVALIDATED`.** APPLIED 2026-08-01 for the three that had a CLAUDE.md anchor; two (`110/110`, `0/15 tail loss`) turned out **not to appear in CLAUDE.md at all** and are corrections to `src/scan/rule-corpus-pairing.ts` and #1758's record instead. #1820 stays open until each is ruled on individually.
+2. **Open decisions:** #1708 (4 taint rules, product judgment), #1679 (fixture contradicts its own premise), #779 (live `service_role` JWT in a public repo), #1770 (rotate three Supabase tokens visible in the process table), #1579 (AGENTS.md scope grant), #1791 (`ruled-unmet` acceptance grammar), #1817 (a negative control of mine that cannot fail), #1821, #1823, #1824, #1830, and the `/config/auth` authorisation question.
+3. **Fold-in round NOT run** — stopped for context budget. All 25 issues filed this sweep carry real acceptance criteria, so nothing rests on recollection.
+
+### The dominant defect shape, and it is worth internalising
+
+**An empty or absent value silently satisfying a predicate meant to require something.**
+
+- `stem(".npmrc") → ""` made the empty string a **universal benign twin**: 82 of 114 rules passed their pairing check against nothing, and the recorded `110/110 paired` was never true.
+- A negative control of mine was satisfied by `""` — it captured zero bytes in 24/24 runs and asserted `not.toContain(MARKER)`. Deterministically green, measuring nothing.
+- **Four separate guards turned out to be copies of the thing they guard**, including one that re-declared the function whose deletion it existed to catch, so it *passed* the reversion it was named for. #1738 shipped the mechanised version (Stryker census over guard registries, report-only per operator ruling).
+
+### Product-facing findings
+
+| Finding | Consequence |
+| --- | --- |
+| `runSplinter` without `ON_ERROR_STOP` | a failed **paid-tier** Advisor scan rendered as a clean bill of health — exit 0, zero rows, no exception |
+| `runJson` accepting truncated NDJSON | crashed secret scans read as complete reports, justified by a comment asserting the **inverse** of the truth |
+| widened taint source | a benign `config.get()` became a **Critical graded** finding — the tier that sets a client's letter grade |
+| `runCommand` timeout | silently stopped bounding compound commands: 5028 ms against a 300 ms cap |
+
+### Gates: what actually changed
+
+- **`reasons-drift` is green and PROVEN** — `workflow_dispatch` run `30697144538` on `main`: 37 empirical falsifiers re-validated, 7 live-only skipped, zero `✗` rows from the repo, **all four negative controls `success`**. Its previous green (run `30624414497`) was worthless: it printed three `✗ STALE` and one `✗ UNVERIFIABLE` and still reported success. The gate could not fail until #1613. **Do not read a green on that job from before 2026-07-31T12:40Z as evidence of anything.**
+- **`pnpm validate-entries-headers` (#1827) is new and rides inside `verify`** — it resolves prose claims in `*.entries.ts` against each module's own exported array. It found 5 contradictions in 3 files; two were never drift — `b7-auth.entries.ts` said "EVERY entry here is `review` tier" in the same commit (#645) that added a `high` row.
+- **`supervised-declines` caught this session's own PR #1809** for proposing CLAUDE.md wording without relaying the question to an issue. Correct catch. Its own defect — no way to record a triaged false positive, and a rolling 1-day window that ages real flags out — is #1821.
+
+### The mistake to not repeat
+
+**I broke `main` by merging #1826 on a green rollup.** Its `verify` job — a REQUIRED context — ran three steps (`Set up job`, `Gate on required jobs`, `Complete job`): no checkout, no tests. A workflows-only diff short-circuited the path filter, while `src/mechanical-binaries-cache.test.ts` globs `.github/workflows/` as its input. Fixed in #1829; the general hole is **#1830**. Required is not executed. Read the step list.
+
+### Housekeeping
+
+- **Worktrees:** all sweep worktrees removed 2026-08-01. Re-verify the primary checkout's toolchain after any removal (`pnpm exec tsx --version`) — pnpm symlinks break silently and present as a broken toolchain.
+- `gh issue list` defaults to `--limit 30`. Every count in this file uses `--limit 400`.
 
 ## 2026-08-01 (operator-directed session, COMPLETE) — four issues shipped incl. a 3-5% silent semgrep recall loss; close-gate grammar field-tested
 
