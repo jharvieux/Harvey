@@ -27,6 +27,7 @@ import { ingestFixDiff } from "../fix/interactive.js";
 import { intake, type EngagementManifest } from "../fix/pipeline.js";
 import { fileOfLocation } from "../fix/produce-plan.js";
 import { DEFAULT_CAPS, detectLateConflict, runScheduled, scheduleFixes, type ScheduleNode } from "../fix/schedule.js";
+import { observedClientCommandConcurrency } from "../fix/verify.js";
 import type { BaselineCache } from "../fix/verify-harness.js";
 
 const args = process.argv.slice(2);
@@ -125,14 +126,21 @@ let clientCheckMs = 0;
 // #1529. The whole batch is pinned to ONE baselineCommit against ONE checkout, so a baseline run is
 // identical for every finding that discovers the same command — and running it per finding made an
 // N-fix batch execute the client's own suite 2N times. One map, owned here for the run's lifetime,
-// so each distinct command is baselined once. Safe without a per-key promise while the ingest is
-// synchronous end to end (#1464): two workers never interleave inside `baseline()`.
+// so each distinct command is baselined once. Since #1464 the ingest is async and workers DO
+// interleave inside `baseline()`, so the map holds the in-flight promise rather than the finished run.
 const baselineCache: BaselineCache = new Map();
 let baselineRequested = 0;
 let baselineExecuted = 0;
-await runScheduled(
+// The worker RETURNS its rows rather than pushing into the shared arrays (#1464). Once components
+// genuinely overlap, push order is COMPLETION order, and §4's late-conflict pass is order-dependent:
+// it names which fix the client should merge FIRST, so a batch that finished out of order would flip
+// that advice run to run. runScheduled resolves Promise.all over `components`, which preserves
+// component order, so flattening the returns restores the scheduled — i.e. merge-priority — order.
+type ScheduledRow = { execution: ScoredExecution; outcome: FixOutcomeSummary };
+const scheduled = await runScheduled(
   components,
   async (component, clientCheck) => {
+    const rows: ScheduledRow[] = [];
     liveSlots++;
     peakSlots = Math.max(peakSlots, liveSlots);
     try {
@@ -147,7 +155,7 @@ await runScheduled(
           liveChecks++;
           peakClientChecks = Math.max(peakClientChecks, liveChecks);
           try {
-            return ingestFixDiff({
+            return await ingestFixDiff({
               finding,
               diff,
               targetDir,
@@ -168,15 +176,17 @@ await runScheduled(
         clientCheckMs += ingest.baseline.durationMs;
         baselineRequested += ingest.baseline.requested;
         baselineExecuted += ingest.baseline.executed;
-        executions.push(execution);
-        outcomes.push({
-          findingId,
-          severity: finding.severity,
-          bftb: bftb(finding),
-          files: [...execution.files, ...execution.createdFiles],
-          status: statusOf(execution),
-          verification: execution.verification,
-          reason: ingest.rejectReason ?? execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
+        rows.push({
+          execution,
+          outcome: {
+            findingId,
+            severity: finding.severity,
+            bftb: bftb(finding),
+            files: [...execution.files, ...execution.createdFiles],
+            status: statusOf(execution),
+            verification: execution.verification,
+            reason: ingest.rejectReason ?? execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
+          },
         });
         // A rail-blocked diff is never written out: the rails say it may not touch those paths, and a
         // .diff sitting in the artifacts dir is one `git apply` away from doing exactly that. Its file
@@ -188,10 +198,14 @@ await runScheduled(
     } finally {
       liveSlots--;
     }
-    return null;
+    return rows;
   },
   DEFAULT_CAPS,
 );
+for (const row of scheduled.flat()) {
+  executions.push(row.execution);
+  outcomes.push(row.outcome);
+}
 
 // §4 pre-push late-conflict check: each verified fix's ACTUAL changed-file set against every fix
 // already cleared in this run. Batch time saw only the finding's own file, so this is where an
@@ -215,25 +229,24 @@ for (const { finding, screen } of result.recommendOnly) {
 
 const handoff = assembleHandoff({ client: manifest.client, baselineCommit: manifest.baselineCommit, outcomes, notApproved: result.notApproved });
 
-// MEASURED 2026-07-30, and it CORRECTS what #1463 recorded here. That note read "peakSlots is 1 on
-// every run … the semaphore has nothing to hold back yet". Wiring the client-check gate below put a
-// real await inside the worker, so components are now genuinely in flight together: 2 components →
-// peakSlots 2, and 6 disjoint components → peakSlots 4, i.e. the cap is OBSERVED AT ITS LIMIT rather
-// than merely configured. The 4-slot cap binds.
+// BOTH caps now bind, and the numbers below are MEASURED per run, never asserted. #1464 converted
+// the ingest chain to async — spawn/execFile instead of spawnSync/execFileSync for the git worktree
+// calls, `git apply`, and the client's own suite — so two components hold the client-check semaphore
+// at the same wall-clock instant and peakClientChecks reaches maxClientChecks instead of 1.
 //
-// What is still bounded is the CLIENT-CHECK cap: ingestFixDiff never yields while holding that
-// semaphore (execFileSync git + verifySuggestedFix + the sync detector re-run + spawnSync client
-// checks), so no two client-check phases overlap in wall-clock and peakClientChecks is 1 whatever the
-// component count. Both numbers are REPORTED, never assumed, so a change in either is visible.
+// peakClientChecks and peakClientCommands are DIFFERENT facts and the artifact reports both, because
+// they read identically otherwise. peakClientChecks is semaphore OCCUPANCY — a worker holds that gate
+// through its git work too, so it reaches the cap even with a blocking client runner (MEASURED
+// 2026-07-31: reverting runCommand to spawnSync left it at 2). peakClientCommands is measured at the
+// spawn boundary in src/fix/verify.ts, so it is the one that answers "did two of the client's own
+// suites genuinely run at the same time".
 //
-// REASON: the 2-client-check cap is enforced but not yet binding — the ingest holds it without ever yielding, so no two client-check phases overlap.
-// KIND: empirical
-// PROVENANCE: MEASURED 2026-07-30 — six disjoint components through this CLI reported peakSlots 4 (the cap) and peakClientChecks 1; ingestFixDiff is execFileSync/spawnSync throughout.
-// FALSIFIER: test -f src/fix/execute.ts || exit 127; grep -q 'export async function executeFixDiff' src/fix/execute.ts
-// TOUCHES: src/fix/schedule.ts, src/fix/execute.ts, src/cli/fix-execute.ts
-// Tracked as #1464 — the async-executor conversion is a scanner-core change, not a fix-pipeline one.
+// The one step on this path that still occupies the event loop while it runs is the detector re-run
+// (src/fix/detector-rerun.ts): in-process AST engines, plus an execFileSync semgrep replay in
+// src/scan/semgrep.ts. `executeFixDiff` awaits that hook, so an async resolver plugs in without an
+// API change — but nothing is claimed about overlap there today.
 const CONCURRENCY_NOTE =
-  "caps enforced by the runScheduled semaphores; peakSlots reaches maxSlots once there are enough components, peakClientChecks stays 1 while the ingest is synchronous end to end (an async executor is the falsifier)";
+  "caps enforced by the runScheduled semaphores; peakSlots is slot occupancy, peakClientChecks is client-check-gate occupancy, and peakClientCommands is how many of the client's own commands were spawned at once — the ingest chain is async end to end (#1464), so the last number is real wall-clock overlap, not gate occupancy";
 
 writeFileSync(
   join(outDir, "fix-execution.json"),
@@ -242,7 +255,15 @@ writeFileSync(
       client: manifest.client,
       baselineCommit: manifest.baselineCommit,
       targetDir,
-      concurrency: { ...DEFAULT_CAPS, componentsScheduled: components.length, peakSlots, peakClientChecks, clientCheckMs, note: CONCURRENCY_NOTE },
+      concurrency: {
+        ...DEFAULT_CAPS,
+        componentsScheduled: components.length,
+        peakSlots,
+        peakClientChecks,
+        peakClientCommands: observedClientCommandConcurrency(),
+        clientCheckMs,
+        note: CONCURRENCY_NOTE,
+      },
       // #1529: `requested` is what the batch asked the baseline for, `executed` is what it actually
       // ran. Both are reported, so a regression that drops the shared cache shows up as the two
       // numbers converging rather than as a run that is quietly twice as long.
@@ -281,7 +302,9 @@ if (awaitingImplementer.length) {
 }
 console.log(
   `\nScheduling: ${components.length} independent component(s), caps ${DEFAULT_CAPS.maxSlots} slot(s)/${DEFAULT_CAPS.maxClientChecks} client-check(s),` +
-    ` peak slots observed ${peakSlots}, peak client checks observed ${peakClientChecks}, ${clientCheckMs}ms spent in the client's own suite (baseline + fixed) — ${CONCURRENCY_NOTE}.`,
+    ` peak slots observed ${peakSlots}, peak client checks observed ${peakClientChecks},` +
+    ` peak client commands actually spawned together ${observedClientCommandConcurrency()},` +
+    ` ${clientCheckMs}ms spent in the client's own suite (baseline + fixed) — ${CONCURRENCY_NOTE}.`,
 );
 console.log(
   `Baseline: ${baselineExecuted} of ${baselineRequested} requested command run(s) actually executed` +

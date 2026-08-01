@@ -67,18 +67,21 @@ interface EscalationResult {
 // returns whether it verified green; it is called at most MAX_ATTEMPTS_PER_TIER times per tier. When a
 // tier is exhausted the fix escalates (cheap → standard) or, if there is nowhere left to go, downgrades
 // to recommend-only with the reason naming the verification-failure trigger.
-export function runEscalation(
+// #1464: `attempt` may be async — the interactive path's attempt IS the whole ingest, which spawns
+// the client's own suite. The walk itself stays strictly sequential: a tier's next attempt must not
+// start until the previous one has been scored.
+export async function runEscalation(
   screened: EscalationTier,
   triggers: EscalationTrigger[],
-  attempt: (tier: EscalationTier) => boolean,
-): EscalationResult {
+  attempt: (tier: EscalationTier) => boolean | Promise<boolean>,
+): Promise<EscalationResult> {
   let tier = initialTier(screened, triggers);
   const tiersUsed: EscalationTier[] = [];
   for (;;) {
     if (!tiersUsed.includes(tier)) tiersUsed.push(tier);
     let verified = false;
     for (let i = 0; i < MAX_ATTEMPTS_PER_TIER; i++) {
-      if (attempt(tier)) {
+      if (await attempt(tier)) {
         verified = true;
         break;
       }

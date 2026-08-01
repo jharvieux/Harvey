@@ -29,8 +29,8 @@ describe("discoverVerifyCommands", () => {
 });
 
 describe("runCommand", () => {
-  it("captures a real exit code and output — it never trusts a claim of green", () => {
-    const ok = runCommand(`${node} -e "console.log('built ok')"`, process.cwd());
+  it("captures a real exit code and output — it never trusts a claim of green", async () => {
+    const ok = await runCommand(`${node} -e "console.log('built ok')"`, process.cwd());
     expect(ok.exitCode).toBe(0);
     expect(ok.outputTail).toContain("built ok");
     // `>= 0` has no failing direction: every unsigned elapsed time satisfies it, and so does a hardcoded 0.
@@ -38,7 +38,7 @@ describe("runCommand", () => {
     // ever stops being a measurement (#1674).
     expect(ok.durationMs).toBeGreaterThan(0);
 
-    const bad = runCommand(`${node} -e "process.exit(3)"`, process.cwd());
+    const bad = await runCommand(`${node} -e "process.exit(3)"`, process.cwd());
     expect(bad.exitCode).toBe(3);
   });
 });
@@ -117,8 +117,8 @@ describe("computeGreen", () => {
 });
 
 describe("runCommand — the timeout bound", () => {
-  it("kills a command that overruns and reports the kill in its own output, never a silent 0", () => {
-    const slow = runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+  it("kills a command that overruns and reports the kill in its own output, never a silent 0", async () => {
+    const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
     expect(slow.exitCode).not.toBe(0);
     expect(slow.outputTail).toContain("exceeded the client-check timeout");
   });

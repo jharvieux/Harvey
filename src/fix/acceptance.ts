@@ -37,12 +37,16 @@ interface AcceptanceResult {
 const CLIENT_CHECKS_OUT_OF_SCOPE =
   "not assessed: a materialized single-file corpus carries no package.json and no workflows, so there are no client verify commands to discover; the §8 gate scores the apply/rails + detector-after halves only";
 
-export function runFixAcceptance(finding: Finding, planted: PlantedClass, opts: { allowlist: string[]; diffCap?: DiffCap }): AcceptanceResult {
+export async function runFixAcceptance(
+  finding: Finding,
+  planted: PlantedClass,
+  opts: { allowlist: string[]; diffCap?: DiffCap },
+): Promise<AcceptanceResult> {
   const baseline = materialize({ [planted.file]: planted.original });
   const fixedRepo = materialize({ [planted.file]: planted.fixed });
   try {
     const patch = capturePatch(baseline, planted.file, planted.fixed);
-    const execution = executeFixDiff(finding.id, patch, {
+    const execution = await executeFixDiff(finding.id, patch, {
       targetDir: baseline.dir,
       baselineCommit: baseline.commit,
       allowlist: opts.allowlist,

@@ -112,13 +112,14 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
       expect(concurrency.componentsScheduled).toBe(2); // disjoint files ⇒ parallel-eligible components
       expect(concurrency.maxSlots).toBe(4);
       expect(concurrency.maxClientChecks).toBe(2);
-      // MEASURED, not asserted. Both numbers are real observations, and they differ: the slot count
-      // rises with the components because the ingest awaits inside the worker; the client-check count
-      // stays 1 because the ingest never yields while holding that semaphore.
+      // MEASURED, not asserted. Since #1464 the ingest chain is async, so BOTH numbers are real
+      // overlap: two components are in flight together and both are inside the client-check phase
+      // at the same instant. peakClientChecks used to read 1 here whatever the component count.
       expect(concurrency.peakSlots).toBe(2);
-      expect(concurrency.peakClientChecks).toBe(1);
-      expect(concurrency.note).toContain("synchronous");
+      expect(concurrency.peakClientChecks).toBe(2);
+      expect(concurrency.note).toContain("async end to end");
       expect(out).toContain("peak slots observed 2");
+      expect(out).toContain("peak client checks observed 2");
       expect(artifact.lateConflicts as unknown as unknown[]).toEqual([]); // control: no overlap here
     } finally {
       disposeCorpus(c);
@@ -126,20 +127,47 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
   }, 60_000);
 
   // #926's criterion was "concurrency caps are enforced and observable, not documented", and #1463
-  // could only record that the cap had nothing to hold back. It does now: six disjoint components
-  // would peak at 6 without the semaphore, and the observed number is the cap itself.
-  it("HOLDS AT THE CAP: six independent components peak at maxSlots, not at six", async () => {
+  // could only record that the cap had nothing to hold back. BOTH caps hold now: six disjoint
+  // components would peak at 6 slots and 6 client checks without the semaphores, and each observed
+  // number is its own cap. The client-check half is #1464's — it read 1 on every run until the
+  // ingest chain became async, because the worker held that semaphore without ever yielding.
+  it("HOLDS AT BOTH CAPS: six independent components peak at maxSlots and maxClientChecks, not at six", async () => {
     const names = ["a", "b", "c", "d", "e", "f"];
     const c = materialize(clientRepo(Object.fromEntries(names.map((n) => [`app/${n}.ts`, `const ${n} = 0;\n`]))));
     try {
       const cfg = engagement(c, names.map((n) => finding(`F-${n.toUpperCase()}`, `app/${n}.ts`, patch(n, 1))));
       const { code, artifact } = await run(cfg, c.dir);
       expect(code).toBe(0);
-      const concurrency = artifact.concurrency as unknown as { componentsScheduled: number; peakSlots: number; maxSlots: number; peakClientChecks: number };
+      const concurrency = artifact.concurrency as unknown as {
+        componentsScheduled: number; peakSlots: number; maxSlots: number; peakClientChecks: number; maxClientChecks: number;
+      };
       expect(concurrency.componentsScheduled).toBe(6);
       expect(concurrency.peakSlots).toBe(concurrency.maxSlots); // the cap is the binding constraint
       expect(concurrency.peakSlots).toBeLessThan(6); // and it is the semaphore doing it, not the workload
-      expect(concurrency.peakClientChecks).toBe(1); // the still-bounded half, stated rather than assumed
+      expect(concurrency.peakClientChecks).toBe(concurrency.maxClientChecks); // #1464: real wall-clock overlap
+      expect(concurrency.peakClientChecks).toBeLessThan(6); // …and the semaphore, not the workload, is what stopped it
+    } finally {
+      disposeCorpus(c);
+    }
+  }, 120_000);
+
+  // #1464, and it is a DIFFERENT fact from the assertion above. peakClientChecks is occupancy of the
+  // client-check gate, which a worker holds through its git work too — MEASURED 2026-07-31, it still
+  // reported 2 with runCommand reverted to spawnSync, so occupancy and overlap are separate readings.
+  // peakClientCommands is counted at the spawn boundary (src/fix/verify.ts), so it answers the
+  // question criterion 1 actually asks. The suite here sleeps 400ms so the window is not a race:
+  // with a blocking runner this reads 1, with the async one it reads the cap.
+  it("GENUINELY OVERLAPS: two of the client's own suites are spawned at the same time", async () => {
+    const names = ["a", "b", "c", "d"];
+    const slowSuite = "setTimeout(() => console.log('client suite ok'), 400);\n";
+    const c = materialize(clientRepo(Object.fromEntries(names.map((n) => [`app/${n}.ts`, `const ${n} = 0;\n`])), slowSuite));
+    try {
+      const cfg = engagement(c, names.map((n) => finding(`F-${n.toUpperCase()}`, `app/${n}.ts`, patch(n, 1))));
+      const { code, artifact, out } = await run(cfg, c.dir);
+      expect(code).toBe(0);
+      const concurrency = artifact.concurrency as unknown as { peakClientCommands: number; maxClientChecks: number };
+      expect(concurrency.peakClientCommands).toBe(concurrency.maxClientChecks); // 2 suites in flight at once
+      expect(out).toContain("peak client commands actually spawned together 2");
     } finally {
       disposeCorpus(c);
     }

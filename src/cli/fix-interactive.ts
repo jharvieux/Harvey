@@ -164,15 +164,15 @@ interface Attempt {
   diffPath: string;
   green: boolean;
   reason?: string;
-  ingest: ReturnType<typeof ingestFixDiff>;
+  ingest: Awaited<ReturnType<typeof ingestFixDiff>>;
 }
 const attempts: Attempt[] = [];
 let next = 0;
-const walk = runEscalation(plan.tier, triggers, (tier) => {
+const walk = await runEscalation(plan.tier, triggers, async (tier) => {
   const diffPath = applyDiffPaths[next];
   if (diffPath === undefined) return false; // out of operator attempts — the ladder ends here
   next++;
-  const result = ingestFixDiff({
+  const result = await ingestFixDiff({
     finding,
     diff: readFileSync(resolve(diffPath), "utf8"),
     targetDir,

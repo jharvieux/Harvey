@@ -94,12 +94,12 @@ describe("interactive fix — prompt emit", () => {
 });
 
 describe("interactive fix — diff ingest through the existing rails", () => {
-  it("a CORRECT diff clears computeGreen and reaches the draft-PR transport", () => {
+  it("a CORRECT diff clears computeGreen and reaches the draft-PR transport", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified");
     expect(ingest.evidence.detectorAfter.notRun).toBeUndefined(); // the detector really re-ran
     expect(ingest.evidence.detectorAfter.fired).toBe(false); // and it stopped firing
@@ -124,14 +124,14 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     expect(gh?.args.includes("merge")).toBe(false);
   });
 
-  it("a WRONG diff (applies clean but leaves the detector firing) is REJECTED, and the transport is never reached", () => {
+  it("a WRONG diff (applies clean but leaves the detector firing) is REJECTED, and the transport is never reached", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "ok"));
     const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
     expect(noop).not.toEqual(src);
     const diff = capturePatch(c, M5_FILE, noop);
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it DID apply
     expect(ingest.evidence.detectorAfter.fired).toBe(true); // but the bug is still there
     expect(ingest.green).toBe(false);
@@ -148,12 +148,12 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     expect(calls.some((x) => x.file === "gh")).toBe(false); // no PR command issued at all
   });
 
-  it("a diff touching a denylisted path is rails-blocked, the detector is never re-run, and the result is rejected", () => {
+  it("a diff touching a denylisted path is rails-blocked, the detector is never re-run, and the result is rejected", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus({ [M5_FILE]: src, ".env": "SECRET=1\n" });
     const diff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("rails-blocked");
     expect(ingest.evidence.detectorAfter.notRun).toBeDefined(); // fail loud: unrun ≠ clean
     expect(ingest.green).toBe(false);
@@ -166,12 +166,12 @@ describe("interactive fix — diff ingest through the existing rails", () => {
 // wiring every one of these ingests returned green: `clientChecks` was hardcoded `[]` and
 // `[].every(...)` is vacuously true, so "the detector stopped firing" was the whole decision.
 describe("interactive fix — the §2.1 client-check half (#1272)", () => {
-  it("REJECTS a fix that silences the detector but BREAKS the client's own suite", () => {
+  it("REJECTS a fix that silences the detector but BREAKS the client's own suite", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "contract"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it applies
     expect(ingest.evidence.detectorAfter.fired).toBe(false); // and the detector IS clean
     const check = ingest.evidence.clientChecks[0]!;
@@ -182,26 +182,26 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     expect(ingest.rejectReason).toContain("the client's own checks FAIL");
   });
 
-  it("does NOT go green when no client verify command can be discovered at all", () => {
+  it("does NOT go green when no client verify command can be discovered at all", async () => {
     // No package.json, no pull_request workflow: nothing to run. The old code called that green.
     const src = readCalibration(M5_FILE);
     const c = corpus({ [M5_FILE]: src });
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.evidence.detectorAfter.fired).toBe(false);
     expect(ingest.evidence.clientChecks).toEqual([]);
     expect(ingest.green).toBe(false);
     expect(ingest.rejectReason).toContain("no client verify command could be discovered");
   });
 
-  it("a check already RED at the pinned baseline is skipped, named, and does not cost the fix its green", () => {
+  it("a check already RED at the pinned baseline is skipped, named, and does not cost the fix its green", async () => {
     // §2.1 step 3: the baseline run exists so a pre-existing failure is never charged to the fix.
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "red"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     const check = ingest.evidence.clientChecks[0]!;
     expect(check.skipped).toBe("pre-existing-failure-on-baseline");
     expect(check.outputTail).toContain("client suite was already failing"); // visible, not swallowed
@@ -212,15 +212,15 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
   // for every finding in one batch — and running it per fix made an N-fix batch execute the client's
   // own suite 2N times. These two tests are the same workload with and without the shared map, so the
   // saving is a measured difference rather than an assertion about one run.
-  it("runs a distinct baseline command ONCE across two ingests that share a cache", () => {
+  it("runs a distinct baseline command ONCE across two ingests that share a cache", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
     const baselineCache: BaselineCache = new Map();
     const args = { finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache };
 
-    const first = ingestFixDiff(args);
-    const second = ingestFixDiff(args);
+    const first = await ingestFixDiff(args);
+    const second = await ingestFixDiff(args);
     expect(first.baseline).toMatchObject({ requested: 1, executed: 1 });
     expect(second.baseline).toMatchObject({ requested: 1, executed: 0 });
     // The saving is real time, not just a counter: the second ingest spends none of it on a baseline.
@@ -240,30 +240,51 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
 
   // NEGATIVE CONTROL for the test above: without the shared map the SAME workload runs the baseline
   // twice. If this ever reported 1 the assertion above would be measuring nothing.
-  it("NEGATIVE CONTROL: with no shared cache the same two ingests baseline the command twice", () => {
+  it("NEGATIVE CONTROL: with no shared cache the same two ingests baseline the command twice", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
     const args = { finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM };
 
-    const runs = [ingestFixDiff(args), ingestFixDiff(args)];
+    const runs = [await ingestFixDiff(args), await ingestFixDiff(args)];
     expect(runs.map((r) => r.baseline.executed)).toEqual([1, 1]);
     expect(runs.reduce((n, r) => n + r.baseline.executed, 0)).toBe(2);
   });
 
-  // A cache keyed only on (workspace, command) would serve one engagement's baseline to another.
-  it("keys the shared baseline on the checkout and the pinned commit, not on the command alone", () => {
+  // #1464. #1529's saving was written for a SERIAL batch: a map of finished runs is only populated
+  // once the first ingest returns, so the moment the ingest chain became async two overlapping
+  // ingests would both find it empty and both run the client's own suite. The cache holds the
+  // in-flight PROMISE, registered before the first await, which is what makes this hold. Reverting
+  // `cache.set(..., fresh.then(...))` in src/fix/interactive.ts to a post-await value write turns
+  // this red (executed reads [1, 1]) while the serial test above stays green.
+  it("runs a distinct baseline command ONCE across two CONCURRENT ingests that share a cache", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
     const baselineCache: BaselineCache = new Map();
-    ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache });
+    const args = { finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache };
+
+    const [first, second] = await Promise.all([ingestFixDiff(args), ingestFixDiff(args)]);
+    expect(first!.baseline.requested + second!.baseline.requested).toBe(2); // both asked for it
+    expect(first!.baseline.executed + second!.baseline.executed).toBe(1); // exactly one ran it
+    expect(first!.green).toBe(true);
+    expect(second!.green).toBe(true);
+    expect(second!.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test"]);
+  });
+
+  // A cache keyed only on (workspace, command) would serve one engagement's baseline to another.
+  it("keys the shared baseline on the checkout and the pinned commit, not on the command alone", async () => {
+    const src = readCalibration(M5_FILE);
+    const c = corpus(clientRepo(src, "ok"));
+    const diff = capturePatch(c, M5_FILE, dropParam(src));
+    const baselineCache: BaselineCache = new Map();
+    await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM, baselineCache });
     const key = [...baselineCache.keys()][0] as string;
     expect(key).toContain(c.commit);
     expect(key).toContain(c.dir);
   });
 
-  it("discovers a pull_request-triggered workflow's run: steps alongside the package.json scripts", () => {
+  it("discovers a pull_request-triggered workflow's run: steps alongside the package.json scripts", async () => {
     const src = readCalibration(M5_FILE);
     const c = corpus({
       ...clientRepo(src, "ok"),
@@ -272,7 +293,7 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     });
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
+    const ingest = await ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     // The PR-triggered step is in; the push-only workflow's failing step is NOT (it would have made
     // this red for a reason no pull request would ever have surfaced).
     expect(ingest.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test", "node client-test.js"]);

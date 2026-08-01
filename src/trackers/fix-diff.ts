@@ -9,7 +9,7 @@
 // is ever attached; an unverified proposal is dropped (fail loud — never file a patch we couldn't
 // confirm applies).
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { SuggestedFix } from "../findings.js";
 import { blastRadiusOf, checkDiffCap, isDenied, parseDiffFacts, type DiffCap } from "../fix/rails.js";
 
@@ -29,17 +29,18 @@ interface VerifyOptions {
 }
 
 type CmdResult = { ok: boolean; output: string };
-type Runner = (file: string, args: string[], input: string | undefined, cwd: string) => CmdResult;
+type Runner = (file: string, args: string[], input: string | undefined, cwd: string) => Promise<CmdResult> | CmdResult;
 
-const defaultRunner: Runner = (file, args, input, cwd) => {
-  try {
-    const output = execFileSync(file, args, { cwd, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-    return { ok: true, output };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    return { ok: false, output: e.stderr || e.stdout || e.message || "" };
-  }
-};
+// #1464: async so the whole ingest chain can yield — a caller running independent fixes under the §4
+// concurrency caps needs every child process on this path off the event loop, not just the long ones.
+const defaultRunner: Runner = (file, args, input, cwd) =>
+  new Promise<CmdResult>((resolve) => {
+    const child = execFile(file, args, { cwd, encoding: "utf8" }, (err, stdout, stderr) => {
+      if (!err) return resolve({ ok: true, output: stdout });
+      resolve({ ok: false, output: stderr || stdout || err.message || "" });
+    });
+    child.stdin?.end(input ?? "");
+  });
 
 // Mechanically verify a proposed diff: it must clear the §3 path/size rails, apply cleanly, and —
 // where an effect command is given — achieve its stated effect. The rails run FIRST and delegate to
@@ -48,7 +49,7 @@ const defaultRunner: Runner = (file, args, input, cwd) => {
 // ticket body (renderFixSection is gated on `verified`). The diff is fed to git on stdin
 // (`git apply -`), never written to the tree except transiently for the effect check, reverted in a
 // finally.
-export function verifySuggestedFix(diff: string, opts: VerifyOptions): VerifyResult {
+export async function verifySuggestedFix(diff: string, opts: VerifyOptions): Promise<VerifyResult> {
   const facts = parseDiffFacts(diff);
   const denied = [...facts.files, ...facts.createdFiles].filter(isDenied);
   if (denied.length) return { verified: false, detail: `refuses denylisted path(s) (secrets/CI/keys/git): ${denied.join(", ")}` };
@@ -58,23 +59,23 @@ export function verifySuggestedFix(diff: string, opts: VerifyOptions): VerifyRes
   const run = opts.run ?? defaultRunner;
   const git = (args: string[]) => run("git", args, diff, opts.targetDir);
 
-  const check = git(["apply", "--check", "-"]);
+  const check = await git(["apply", "--check", "-"]);
   if (!check.ok) return { verified: false, detail: `diff does not apply cleanly: ${check.output.trim() || "git apply --check failed"}` };
   if (!opts.effectCommand || opts.effectCommand.length === 0) {
     return { verified: true, detail: "applies cleanly (git apply --check)" };
   }
 
-  const applied = git(["apply", "-"]);
+  const applied = await git(["apply", "-"]);
   if (!applied.ok) return { verified: false, detail: `apply failed: ${applied.output.trim()}` };
   try {
     const [file = "", ...args] = opts.effectCommand; // guaranteed non-empty by the guard above
-    const effect = run(file, args, undefined, opts.targetDir);
+    const effect = await run(file, args, undefined, opts.targetDir);
     const cmd = opts.effectCommand.join(" ");
     return effect.ok
       ? { verified: true, detail: `applies cleanly; effect confirmed via \`${cmd}\`` }
       : { verified: false, detail: `applies cleanly but effect check failed (\`${cmd}\` exited non-zero)` };
   } finally {
-    git(["apply", "-R", "-"]); // leave the disposable checkout as we found it
+    await git(["apply", "-R", "-"]); // leave the disposable checkout as we found it
   }
 }
 

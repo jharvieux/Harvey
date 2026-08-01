@@ -4,7 +4,7 @@
 //
 // The harness runs commands itself; a subagent *claiming* green is worth nothing.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 export interface CommandRun {
   command: string;
@@ -91,15 +91,56 @@ export function discoverVerifyCommands(
 // A client suite that never terminates would hang the whole ingest, so every run is bounded. A
 // killed command reports a non-zero exit and says WHY in its own output tail — never a silent 0.
 const DEFAULT_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
+const MAX_CAPTURED_BYTES = 32 * 1024 * 1024;
 
-export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): CommandRun {
+// How many client commands were ever spawned AT ONCE, measured at the spawn boundary rather than at
+// the §4 semaphore. The two are different facts and read identically in an artifact: a worker can
+// occupy the maxClientChecks gate while doing git work, so `peakClientChecks` can reach the cap with
+// a spawnSync runner that never overlaps a single client suite (MEASURED 2026-07-31 — the six-
+// component CLI test still reported peakClientChecks 2 with runCommand reverted to spawnSync). This
+// counter is what goes red in that case.
+let liveClientCommands = 0;
+let peakClientCommands = 0;
+export const observedClientCommandConcurrency = (): number => peakClientCommands;
+
+// #1464: spawn, not spawnSync. This is the client's own suite — minutes of wall clock — and it is
+// the scarce resource the §4 maxClientChecks semaphore bounds. A spawnSync here blocks the event
+// loop for its whole duration, so two workers holding that semaphore could never actually overlap
+// and the cap was enforced over a workload that was serial anyway.
+export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): Promise<CommandRun> {
   const start = Date.now();
-  const res = spawnSync(command, { cwd, shell: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs });
-  const durationMs = Date.now() - start;
-  const timedOut = res.error !== undefined && (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
-  const combined = `${res.stdout ?? ""}${res.stderr ?? ""}${timedOut ? `\n[harvey] killed after ${timeoutMs}ms — command exceeded the client-check timeout` : ""}`;
-  const exitCode = res.status ?? (res.error ? 1 : 0);
-  return { command, cwd, exitCode, durationMs, outputTail: scrubSecrets(tail(combined, 50)) };
+  liveClientCommands++;
+  peakClientCommands = Math.max(peakClientCommands, liveClientCommands);
+  return new Promise<CommandRun>((resolve) => {
+    const child = spawn(command, { cwd, shell: true });
+    let captured = "";
+    let timedOut = false;
+    let settled = false;
+    const capture = (chunk: Buffer) => {
+      if (captured.length < MAX_CAPTURED_BYTES) captured += chunk.toString("utf8");
+    };
+    child.stdout.on("data", capture);
+    child.stderr.on("data", capture);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    const finish = (exitCode: number) => {
+      if (settled) return;
+      settled = true;
+      liveClientCommands--;
+      clearTimeout(timer);
+      const combined = timedOut
+        ? `${captured}\n[harvey] killed after ${timeoutMs}ms — command exceeded the client-check timeout`
+        : captured;
+      resolve({ command, cwd, exitCode, durationMs: Date.now() - start, outputTail: scrubSecrets(tail(combined, 50)) });
+    };
+    child.on("error", (err) => {
+      capture(Buffer.from(err.message));
+      finish(1);
+    });
+    child.on("close", (code, signal) => finish(code ?? (signal !== null ? 1 : 0)));
+  });
 }
 
 // The DETECTOR half of the §2 contract on its own: the finding's detector re-ran, and it is clean.

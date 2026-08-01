@@ -73,41 +73,41 @@ describe("initialTier", () => {
 });
 
 describe("runEscalation", () => {
-  it("records a single tier when the cheap attempt verifies first try", () => {
-    const r = runEscalation("cheap", [], () => true);
+  it("records a single tier when the cheap attempt verifies first try", async () => {
+    const r = await runEscalation("cheap", [], () => true);
     expect(r).toEqual({ tiersUsed: ["cheap"], outcome: "implementable" });
   });
 
-  it("records more than one tier when a verification failure escalates cheap → standard", () => {
+  it("records more than one tier when a verification failure escalates cheap → standard", async () => {
     let calls = 0;
     // fail both cheap attempts, then pass at standard
-    const r = runEscalation("cheap", [], () => ++calls > MAX_ATTEMPTS_PER_TIER);
+    const r = await runEscalation("cheap", [], () => ++calls > MAX_ATTEMPTS_PER_TIER);
     expect(r.tiersUsed).toEqual(["cheap", "standard"]);
     expect(r.outcome).toBe("implementable");
   });
 
-  it("starts at standard (observable second tier) when a planning trigger fired", () => {
-    const r = runEscalation("cheap", ["critical-or-high-severity"], () => true);
+  it("starts at standard (observable second tier) when a planning trigger fired", async () => {
+    const r = await runEscalation("cheap", ["critical-or-high-severity"], () => true);
     expect(r.tiersUsed).toEqual(["standard"]);
   });
 
-  it("downgrades and names the verification-failure trigger when standard is exhausted", () => {
-    const r = runEscalation("cheap", [], () => false);
+  it("downgrades and names the verification-failure trigger when standard is exhausted", async () => {
+    const r = await runEscalation("cheap", [], () => false);
     expect(r.outcome).toBe("downgrade");
     expect(r.tiersUsed).toEqual(["cheap", "standard"]);
     expect(r.downgradeReason).toContain("verification-failure");
     expect(r.downgradeReason).toContain("standard");
   });
 
-  it("does not retry below flagship in Phase 1 — a ≥2-trigger fix that fails downgrades", () => {
-    const r = runEscalation("cheap", ["critical-or-high-severity", "sensitive-path-or-keyword"], () => false);
+  it("does not retry below flagship in Phase 1 — a ≥2-trigger fix that fails downgrades", async () => {
+    const r = await runEscalation("cheap", ["critical-or-high-severity", "sensitive-path-or-keyword"], () => false);
     expect(r.tiersUsed).toEqual(["flagship"]);
     expect(r.outcome).toBe("downgrade");
   });
 
-  it("caps attempts per tier at MAX_ATTEMPTS_PER_TIER", () => {
+  it("caps attempts per tier at MAX_ATTEMPTS_PER_TIER", async () => {
     let calls = 0;
-    runEscalation("cheap", [], () => {
+    await runEscalation("cheap", [], () => {
       calls++;
       return false;
     });
