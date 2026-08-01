@@ -33,6 +33,33 @@ producing a question, while **no executor has ever recorded "asked the operator,
 grants are demonstrably routine (#1141 carries a verbatim *"Workflow changed approved"*). A blocker
 the operator could clear must become a question, not a silent close.
 
+### Completing a relay supersedes the `relayed` line (#1753)
+
+The relay flow *ends* with two live lines for one criterion: the executor's `relayed`, then the
+completing party's `met`/`split` once the operator has ruled and the edit has landed. Until
+2026-07-31 that state was a DUPLICATE — clearing it took three attempts on PR #1700, with the
+superseded line hand-neutralised in place — and it recurs every time the flow works as designed. So
+a **single `met` or `split` recorded over a single `relayed` for the same criterion resolves to the
+completing line**, and the report names the retired one (`ℹ RELAY COMPLETED (#1753): … supersedes
+the \`relayed\` line at <venue>, line <n>`), so the retirement is visible rather than silent. The
+duplicate diagnostic names the exception too, since the person hitting it is mid-fix and reasoning
+about their own line rather than the older one.
+
+Direction is fixed by **type, not time**: the venues carry no comparable timestamps (a PR body is
+edited at any point after a comment), so a `relayed` never wins over a completion whichever was
+written first — a reader who believes the relay should still govern neutralises the completing line
+instead, which the ℹ row makes findable. Everything else stays a duplicate: same-verdict copies,
+`met`+`split`, three or more lines, and two `relayed` copies (a repeat paste is not a completion).
+The superseding `met` is still held to the evidence bar, and a superseded `relayed` no longer
+requires a question on the issue — the relay is over.
+
+Sized before it was built (MEASURED 2026-07-31, census over the 48 PRs and 61 issues whose venues
+carry the word "relayed", read with the gate's own parser): **12** `relayed` dispositions were live
+across the gate's venues, **5** on CLOSED issues, **3** of them completed-but-unsuperseded
+(#1345.1, #1424.4, #1461.3) plus the hand-neutralised #1700 incident. A small population is why the
+mechanism is a resolution rule inside the existing duplicate check rather than a new `supersedes`
+grammar form nobody would learn for three cases a month.
+
 ### Gate 2 — remainder liveness (#1316)
 
 `split` is worthless unless the remainder is alive, so every `remainder: #X` and every `split` target

@@ -13,7 +13,9 @@ checklist), starting at 1. A bare "done" is not evidence and fails the gate.
 ONE VENUE PER CRITERION. The gate reads this body AND every comment on #<issue>, cumulatively, and
 a criterion may be dispositioned exactly once across all of them. So if you have already commented
 these lines on the issue, do not repeat them here (or neutralise the comment) — the same lines in
-two places is a double mapping, and it fails.
+two places is a double mapping, and it fails. The one exception (#1753): a single `met`/`split`
+over a single earlier `relayed` is a COMPLETED RELAY — it supersedes the `relayed` line
+automatically, so record the completion and leave the old line alone.
 
 Check it before you push:
   pnpm validate-acceptance --body-file <a file holding this body> --repo <owner/repo>
