@@ -205,6 +205,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-conditional-scan", why: "structural — checks a scan path discloses the checks its sibling runs" },
   { id: "validate-conservation", why: "plant-and-assert — a planted finding per module, pass/fail, not a score" },
   { id: "validate-disclosure-venue", why: "structural — checks a rule's recorded bound reaches its own message" },
+  { id: "validate-entries-headers", why: "structural — checks a *.entries.ts header's tier and count claims against its own rows (#1827); a violation count plus a disclosed unread-token ratchet, not a recall number. The standing gate is src/entries-header-drift.test.ts inside `pnpm verify`; this CLI is the human-readable venue for the same check" },
   { id: "validate-findings", why: "schema validation of a findings file" },
   { id: "validate-fs-walk", why: "structural — bans raw statSync/readdirSync outside src/fs-walk.ts; a violation count, not a recall number" },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },

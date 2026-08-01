@@ -1,8 +1,10 @@
 // M7 batch (#72, spec §M7) — Supabase performance-advisor corpus. Connected tier: Splinter's
 // performance lints (unindexed_foreign_keys, auth_rls_initplan, unused_index) only fire against
 // a LIVE schema (+ pg_stat_user_indexes usage history for unused_index), so — exactly like
-// P-RLS-DISABLED in the base corpus — the three positives below are `expectedTier: "connected"`:
-// N/A in a static run, validated in a live run. Fixtures:
+// P-RLS-DISABLED in the base corpus — the three positives below are `expectedTier: "local"`:
+// N/A in a static run, validated in a live run. #1499 re-tiered them when #1428 split the live
+// venues; a Postgres connection to a `supabase start` stack answers every advisor lint here, and
+// this header still said "connected" until #1827 derived the tier from the rows. Fixtures:
 // targets/calibration/supabase/migrations/20260708000004_perf_calibration.sql.
 //
 // parseAdvisorFindings (src/perf-scan.ts) already emits Finding[] with precisionTier: "high" for

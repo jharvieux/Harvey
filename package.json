@@ -67,6 +67,7 @@
     "validate-acceptance": "tsx src/cli/validate-acceptance.ts",
     "validate-disclosure-venue": "tsx src/cli/validate-disclosure-venue.ts",
     "validate-conditional-scan": "tsx src/cli/validate-conditional-scan.ts",
+    "validate-entries-headers": "tsx src/cli/validate-entries-headers.ts",
     "validate-scored-gates": "tsx src/cli/validate-scored-gates.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports && pnpm validate:precision",
     "guard-mutation-census": "tsx src/cli/guard-mutation-census.ts"

@@ -665,6 +665,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/cli/validate-disclosure-venue.ts": [
     "//              indistinguishable from one that cannot fail (#350/#1065).",
   ],
+  "src/cli/validate-entries-headers.ts": [
+    "//                   passing is indistinguishable from one that cannot fail (#350/#1065).",
+  ],
   "src/cli/validate-reasons.ts": [
     "// \"cannot\", \"impossible\", \"no way to\", \"unable to\" and friends, which nothing re-tests because",
     "// cannot be confused (#1246).",
@@ -812,6 +815,12 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// its cross-tenant isolation was NOT probed, so it can't read as a clean pass. The rest DID seed and",
     "// (run app) → pen-test → (bonus: the client's own suite) → emit M2.pass.json. A step that can't",
     "// ports); a project that can't stand up is recorded as an honest per-DB partial, never dropped, and",
+  ],
+  "src/entries-header-drift.test.ts": [
+    "// that is supposed to prove the checker works cannot pass by agreeing with the file it reads.",
+  ],
+  "src/entries-header-drift.ts": [
+    "// tells the two apart — a line-based reader cannot.",
   ],
   "src/epic-builder/model-scaffold.ts": [
     "// The scaffold cannot semantically revise. Per the §4.3 contract it never silently drops a",
