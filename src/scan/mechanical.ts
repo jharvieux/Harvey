@@ -47,6 +47,8 @@ import { checkWorkflowPermissions } from "./gha-permissions.js";
 import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
+import { walkSourceFiles } from "./common.js";
+import { pathScopeNotAssessedRows } from "./path-scope.js";
 import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
@@ -543,6 +545,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.
     findings.push(...scanJobTenantScope(scanDir));
+    // #1689 — the two detectors above whose scope is a DIRECTORY CONVENTION each read zero files on
+    // a repo that does not follow it, and a zero from an unread population reads exactly like a
+    // clean scan. One counted not-assessed row per detector that looked at nothing.
+    findings.push(...pathScopeNotAssessedRows(walkSourceFiles(scanDir)));
     // #680 — a static secret verified with a single equality/HMAC check and no dual-secret
     // rotation window (inter-service seams only; inert when no verify site exists).
     findings.push(...scanSecretRotation(scanDir));

@@ -134,10 +134,15 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 // #1269: the `pages/api/` prefix is not itself a shipping guarantee — a Next.js example app or an
 // e2e fixture tree carries the same segment (`examples/next-app/pages/api/…`, `e2e/pages/api/…`),
 // and MEASURED 2026-07-31 this detector fires identically there and at `pages/api/invoice.js`.
+// #1689 — exported so the zero-population disclosure row and the pinned-corpus census read this
+// detector's scope through the SAME predicate the detector scans with. A census that re-implements
+// the filter measures the re-implementation.
+export function bolaOwnerScannedFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((f) => PAGES_API_FILE.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path));
+}
+
 export function detectBolaOwnerFindings(files: SourceInput[]): Finding[] {
-  return files
-    .filter((f) => PAGES_API_FILE.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
-    .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  return bolaOwnerScannedFiles(files).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
 export function scanBolaOwner(projectDir: string): Finding[] {
