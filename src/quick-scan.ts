@@ -159,19 +159,34 @@ const isNonGrading = (f: Finding): boolean =>
 // `src/scan/rules/semgrep/*.yml` and nothing else, while `precisionTier: "high"` is also set by the
 // AST detectors, the secret scanners, the dependency and licence checks, and third-party semgrep
 // packs — none of which it can see, and none of which has an equivalent pairing gate.
-// MEASURED 2026-07-31 by `freeCountCoverage()` over the committed dry-run: of 157 high-tier
-// findings, 104 come from an enumerated harvey-* rule and **53 (33.8%) do not** — committed
+// MEASURED 2026-08-01 by `freeCountCoverage()` over the committed dry-run: of 164 high-tier
+// findings, 110 come from an enumerated harvey-* rule and **54 (32.9%) do not** — committed
 // credentials, the M1 object-level-authz detector, static-RLS migration checks, dependency/licence
 // checks and two third-party packs. Do not quote those figures: `pnpm validate:calibration` prints
 // the current split on every run (FREE-COUNT COVERAGE OF THAT GATE), because a bound nobody
 // re-measures becomes a belief.
 //
+// #1676 — THAT SHARE IS NO LONGER UNGATED, AND THE HALVES ARE NO LONGER ONE NUMBER. #1414's reason
+// for stopping at a measurement ("none of them is a rule id you can pair against a corpus row") was
+// re-tested and is false of the predicate as written: it keys on TAXONOMY, so the same pairing now
+// runs over the outside engines too (`freeCountOutsideUnits` + `pairUnits`). MEASURED 2026-08-01:
+// 19 outside taxonomies — 8 pair on both halves, 8 have a scoring positive but no benign twin, 3
+// have no scoring positive and are DISCLOSED per-unit in UNSCORED_OUTSIDE_UNITS.
+//
+// And the negative half of the WHOLE gate was smaller than it reported. `stem()` mapped a bare
+// dotfile to the empty string and every string starts with "", so `.npmrc` was a benign-twin
+// candidate for every rule: MEASURED 2026-08-01, 82 of 114 harvey-* rules were "paired" against it.
+// With that fixed, 67 of 114 harvey-* rules and 8 of 19 outside units have NO benign twin, all 75
+// enumerated in TWIN_BACKLOG as a ratchet. So read the covered share as a claim about the POSITIVE
+// half — "a corpus positive would notice if this stopped firing" — and read the silence half off
+// TWIN_BACKLOG, per unit, rather than off one percentage.
+//
 // AND WHEN YOU RUN IT, THE NUMBER WILL NOT MATCH THIS ONE — the two figures are over DIFFERENT
 // POPULATIONS, both correct, so a reader reconciling them is not looking at a drifted bound.
 // This comment: the COMMITTED dry-run artifact (`dry-run/findings.json`, the default argument of
-// `freeCountCoverage()`) — 157 high-tier, 53 outside (33.8%), MEASURED 2026-07-31. `validate-
-// calibration`: THIS RUN's LIVE findings — 181 high-tier, 77 outside (42.5%), same date, same
-// numerator of 104. The artifact is the smaller population by construction: the dry-run harness
+// `freeCountCoverage()`) — 164 high-tier, 54 outside (32.9%), MEASURED 2026-08-01. `validate-
+// calibration`: THIS RUN's LIVE findings, a larger population by construction and re-measured on
+// every run. The artifact is the smaller population by construction: the dry-run harness
 // deliberately pins off the inputs that are not deterministic (slopsquat, the licence check's
 // live-registry fallback, the built-bundle secret pass), and it is a snapshot besides. The live run
 // is the stronger reading of the same bound — an artifact goes stale; a live scan is this run.

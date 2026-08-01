@@ -4,7 +4,7 @@ import { join, relative, sep } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, unkeyedPositives, type CorpusEntry, type MatrixRow } from "./calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, darkenEntry, fatalRecallMisses, formatSelfMatchingKeys, isLiveTier, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingKeys, corpusMatchKeyedRows, unkeyedPositives, type CorpusEntry, type MatrixRow } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -1013,7 +1013,7 @@ describe("a corpus entry id cited in a source comment must exist (#1484's third 
 
 describe("#1355 self-matching `match` keys (a keyword that is a substring of its own fixture path)", () => {
   it("no corpus entry carries a key that is a substring of its own location", () => {
-    const rows = selfMatchingMatchKeys(CORPUS);
+    const rows = selfMatchingKeys(corpusMatchKeyedRows(CORPUS));
     expect(formatSelfMatchingKeys(rows)).toBe("");
     expect(rows).toEqual([]);
     // Canary: an empty corpus, or one that stopped using `match` at all, would pass vacuously.
@@ -1027,7 +1027,7 @@ describe("#1355 self-matching `match` keys (a keyword that is a substring of its
       entry({ id: "N-CONTROL", kind: "negative", cls: "c", location: "sqli-parseint-safe.js", match: ["sql"], note: "" }),
       entry({ id: "P-CONTROL-CLEAN", kind: "positive", cls: "c", location: "sqli-denylist-guard.js", match: ["sql-injection"], note: "" }),
     ];
-    const rows = selfMatchingMatchKeys(planted);
+    const rows = selfMatchingKeys(corpusMatchKeyedRows(planted));
     expect(rows.map((r) => r.id)).toEqual(["P-CONTROL-RAW", "P-CONTROL-HYPHEN", "N-CONTROL"]);
     expect(formatSelfMatchingKeys(rows)).toContain("Re-scope the key");
     expect(formatSelfMatchingKeys(rows)).toContain("Delete the `match` list");
@@ -1083,11 +1083,11 @@ describe("#1355 self-matching `match` keys (a keyword that is a substring of its
   });
 
   it("the remediation text does not tell a POSITIVE to delete its match list (#1388)", () => {
-    const positive = selfMatchingMatchKeys([entry({ id: "P-C", kind: "positive", cls: "c", location: "src/owasp-mt/client-supplied-tenant.ts", match: ["tenant"], note: "" })]);
+    const positive = selfMatchingKeys(corpusMatchKeyedRows([entry({ id: "P-C", kind: "positive", cls: "c", location: "src/owasp-mt/client-supplied-tenant.ts", match: ["tenant"], note: "" })]));
     expect(formatSelfMatchingKeys(positive)).not.toContain("Delete the `match` list");
     expect(formatSelfMatchingKeys(positive)).toContain("Do NOT delete the `match` list");
     // ...and still does for a negative, where a vacuous key was already equivalent to no key.
-    const negative = selfMatchingMatchKeys([entry({ id: "N-C", kind: "negative", cls: "c", location: "sqli-parseint-safe.js", match: ["sql"], note: "" })]);
+    const negative = selfMatchingKeys(corpusMatchKeyedRows([entry({ id: "N-C", kind: "negative", cls: "c", location: "sqli-parseint-safe.js", match: ["sql"], note: "" })]));
     expect(formatSelfMatchingKeys(negative)).toContain("Delete the `match` list");
   });
 });

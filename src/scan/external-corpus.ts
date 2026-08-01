@@ -1500,7 +1500,10 @@ export function moduleMatches(taxonomy: string, module: string): boolean {
 // Exported (not just counted) so a drift can be EXPLAINED, not just sized (#1564): the
 // same filtered list that decides `actual` is what explainDrift below diffs against a prior run's
 // snapshot to name which rows moved.
-export function countedFindingsFor(findings: Finding[], module: string): Finding[] {
+// #1580: deliberately NOT exported. Its only consumers are in this file, and knip's
+// `ignoreExportsUsedInFile: true` hides an export whose callers are all local — so the `export`
+// keyword was a claim of an outside consumer that has never existed.
+function countedFindingsFor(findings: Finding[], module: string): Finding[] {
   const includeInfo = module === "M6-indicator";
   return findings.filter((f) => moduleMatches(f.taxonomy, module) && (includeInfo || f.severity !== "Info"));
 }
@@ -1607,6 +1610,10 @@ export interface DriftExplanation {
   hasBaseline: boolean;
   added: DriftFindingRow[];
   removed: DriftFindingRow[];
+  // #1580: how many rows the snapshot actually held for this module. An empty added/removed pair is
+  // ambiguous without it — "the run reproduced the snapshot" and "the snapshot held nothing for this
+  // module" produce the identical empty diff.
+  baselineRows: number;
   // Always populated with the module's current counted findings — the fallback rendering when
   // hasBaseline is false, and available either way so a caller never has to re-derive it.
   current: DriftFindingRow[];
@@ -1627,7 +1634,7 @@ function driftRowKey(f: Finding): string {
 export function explainDrift(module: string, current: Finding[], baseline: Finding[] | undefined): DriftExplanation {
   const currentSet = countedFindingsFor(current, module);
   if (!baseline) {
-    return { hasBaseline: false, added: [], removed: [], current: currentSet.map(toDriftRow) };
+    return { hasBaseline: false, added: [], removed: [], baselineRows: 0, current: currentSet.map(toDriftRow) };
   }
   const baselineSet = countedFindingsFor(baseline, module);
   const currentKeys = new Set(currentSet.map(driftRowKey));
@@ -1636,6 +1643,46 @@ export function explainDrift(module: string, current: Finding[], baseline: Findi
     hasBaseline: true,
     added: currentSet.filter((f) => !baselineKeys.has(driftRowKey(f))).map(toDriftRow),
     removed: baselineSet.filter((f) => !currentKeys.has(driftRowKey(f))).map(toDriftRow),
+    baselineRows: baselineSet.length,
     current: currentSet.map(toDriftRow),
   };
+}
+
+// #1580 — THE EXPLANATION MUST NEVER BE SILENT, AND IT MUST NAME ITS TWO SOURCES.
+//
+// The count delta is measured against the COMMITTED manifest baseline (EXTERNAL_CORPUS above); the
+// row diff is measured against the PREVIOUS RUN's snapshot (`--baseline-findings`). Those are
+// different sources with different ages, so a standing, un-rebaselined drift diffs to nothing while
+// the count keeps failing. Before this, `printExplainRows` returned early on an empty list, so that
+// case printed a DRIFT line and then NOTHING — output indistinguishable from the pre-#1564
+// behaviour, on exactly the scheduled runs most likely to be read by someone who wasn't there for
+// the first one. An absent explanation never appears in a tally, so it reads as "nothing moved";
+// what it actually means is "nothing moved SINCE THE LAST RUN, and the baseline is still wrong".
+//
+// So the caller gets LINES, not a void print: every branch says whether a prior snapshot was
+// consulted and, when it was, which one and how many rows it held.
+const EXPLAIN_CAP = 20;
+
+function explainRowLines(label: string, rows: DriftFindingRow[]): string[] {
+  if (rows.length === 0) return [];
+  const suffix = rows.length > EXPLAIN_CAP ? ` (showing ${EXPLAIN_CAP} of ${rows.length})` : ` (${rows.length})`;
+  return [`    ${label}${suffix}:`, ...rows.slice(0, EXPLAIN_CAP).map((r) => `      ${r.location}  ${r.taxonomy} [${r.severity}]`)];
+}
+
+export function driftExplanationLines(module: string, slug: string, current: Finding[], baseline: Finding[] | undefined, snapshotSource: string | undefined): string[] {
+  const e = explainDrift(module, current, baseline);
+  if (!e.hasBaseline) {
+    return [
+      `    NO PRIOR SNAPSHOT CONSULTED for ${slug} — pass --baseline-findings <path> (a previous run's --json output) for a true added/removed diff; showing the current ${module} finding(s) instead:`,
+      ...explainRowLines("CURRENT", e.current),
+    ];
+  }
+  const header = `    prior snapshot CONSULTED for ${slug}: ${snapshotSource ?? "(supplied by the caller)"} — ${e.baselineRows} ${module} row(s) there vs ${e.current.length} in this run. The count delta above is measured against a DIFFERENT source, the committed manifest baseline in src/scan/external-corpus.ts.`;
+  if (e.added.length === 0 && e.removed.length === 0) {
+    return [
+      header,
+      `    NO ROW-LEVEL MOVEMENT: every ${module} row matches the snapshot on location+taxonomy, so this drift is STANDING, not new — it moved before the snapshot was taken and has not moved since. Re-baseline the manifest, or record why the committed count is still the right one.`,
+    ];
+  }
+  return [header, ...explainRowLines("ADDED", e.added), ...explainRowLines("REMOVED", e.removed)];
 }

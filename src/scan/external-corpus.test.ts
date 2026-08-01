@@ -17,6 +17,7 @@ import { parseRecordedReasons, validateRecordedReason } from "../recorded-reason
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
+  driftExplanationLines,
   explainDrift,
   FLOOR_CLAIM_TRIAGE,
   floorClaimingNotes,
@@ -405,6 +406,53 @@ describe("explainDrift (#1564)", () => {
     const current: typeof prior = [];
     const explanation = explainDrift("M6-indicator", current, prior);
     expect(explanation.removed).toEqual([{ location: "f.ts:1", taxonomy: "M6 — Indicator: email-shape regex", severity: "Info" }]);
+  });
+});
+
+// #1580 — the shipping call site, not the primitive. corpus-drift.ts's `for (const r of failed)` loop
+// prints exactly what driftExplanationLines returns, and the case that mattered was the one the loop
+// used to print NOTHING for: the count delta is measured against the COMMITTED manifest baseline
+// while the row diff is measured against the PREVIOUS RUN, so a standing, un-rebaselined drift
+// explains itself on the first run and is silent on every scheduled run after — the runs most likely
+// to be read by someone who was not there for the first one.
+describe("driftExplanationLines (#1580) — a consulted snapshot always says so", () => {
+  const row = (loc: string): Finding => finding("M5 — Else after return", "Low", loc);
+
+  it("states that a prior snapshot was consulted and produced NO row-level movement, instead of printing nothing", () => {
+    // The exact reproduction from #1580: feed a run its own previous --json output back. Identical
+    // rows => empty added/removed by construction (driftRowKey is location + taxonomy).
+    const current = [row("package.json:1"), row("src/a.ts:4")];
+    const lines = driftExplanationLines("M5-slop", "multi-tenant-starter", current, [...current], "run1.json");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.join("\n")).toContain("prior snapshot CONSULTED for multi-tenant-starter: run1.json");
+    expect(lines.join("\n")).toContain("NO ROW-LEVEL MOVEMENT");
+    // Both sources named, because they are different sources with different ages and conflating them
+    // is what made the silence read as "nothing moved".
+    expect(lines.join("\n")).toContain("src/scan/external-corpus.ts");
+    expect(lines.join("\n")).toContain("2 M5-slop row(s) there vs 2 in this run");
+  });
+
+  it("distinguishes a reproduced snapshot from a snapshot that held nothing for this module — the two produce the identical empty diff", () => {
+    const current = [row("package.json:1")];
+    // A snapshot carrying only ANOTHER module's rows: added/removed are non-empty here, so the count
+    // is what tells the reader the snapshot was thin for THIS module. Assert the count travels.
+    const lines = driftExplanationLines("M5-slop", "carbon", current, [finding("M7 — Nested-loop join", "Medium", "x.ts:1")], "run1.json");
+    expect(lines.join("\n")).toContain("0 M5-slop row(s) there vs 1 in this run");
+  });
+
+  it("still names the rows when they DID move, and still says which snapshot it read", () => {
+    const lines = driftExplanationLines("M5-slop", "carbon", [row("a.ts:1")], [row("b.ts:2")], "run1.json");
+    const text = lines.join("\n");
+    expect(text).toContain("prior snapshot CONSULTED");
+    expect(text).toContain("ADDED (1)");
+    expect(text).toContain("REMOVED (1)");
+    expect(text).not.toContain("NO ROW-LEVEL MOVEMENT");
+  });
+
+  it("says NO PRIOR SNAPSHOT CONSULTED when none was supplied, rather than leaving the reader to infer it", () => {
+    const text = driftExplanationLines("M5-slop", "carbon", [row("a.ts:1")], undefined, undefined).join("\n");
+    expect(text).toContain("NO PRIOR SNAPSHOT CONSULTED for carbon");
+    expect(text).toContain("CURRENT (1)");
   });
 });
 

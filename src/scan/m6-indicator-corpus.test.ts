@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { declaredIndicatorClasses, scoreM6IndicatorCorpus } from "./m6-indicator-corpus.js";
 import { m6HandrolledEntries } from "./calibration/m6-handrolled.entries.js";
-import { CORPUS, moduleCensus, parityVerdict, selfMatchingMatchKeys } from "./calibration.js";
+import { CORPUS, corpusMatchKeyedRows, moduleCensus, parityVerdict, selfMatchingKeys } from "./calibration.js";
 import type { CorpusEntry } from "./calibration/types.js";
 
 describe("M6 indicator corpus (#1371)", () => {
@@ -49,7 +49,7 @@ describe("M6 indicator corpus (#1371)", () => {
     for (const e of m6HandrolledEntries.filter((e) => e.kind === "positive")) {
       expect(e.match?.length, `${e.id} needs a narrow match key — without one it accepts any finding planted at its location`).toBeGreaterThan(0);
     }
-    expect(selfMatchingMatchKeys(m6HandrolledEntries)).toEqual([]);
+    expect(selfMatchingKeys(corpusMatchKeyedRows(m6HandrolledEntries))).toEqual([]);
   });
 
   // --- Negative controls: the corpus must be able to FAIL (#1428) ---
