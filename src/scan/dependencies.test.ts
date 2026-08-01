@@ -517,7 +517,7 @@ describe("parseOsvFindings over a captured osv-scanner report", () => {
     expect(finding?.evidence).toContain("carried NO machine-readable severity");
   });
 
-  it("degrades gracefully to no findings for a target with no lockfile (mechanical.ts's runOsvScanner returns {})", () => {
+  it("degrades gracefully to no findings for a target with no lockfile (runOsvScanner returns {})", () => {
     expect(parseOsvFindings({})).toEqual([]);
   });
 

@@ -50,10 +50,13 @@ function runOsvScanner(): OsvScanResult {
   try {
     out = execFileSync("osv-scanner", ["--format", "json", "--lockfile", lockfile], { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
   } catch (err) {
-    // osv-scanner exits 1 when it finds vulnerabilities — stdout still carries the report.
-    const e = err as { stdout?: string; message?: string };
+    // Exit 1 is vulnerabilities-found, the one benign nonzero exit; any other exit or signal is an
+    // incomplete run whose partial stdout must not stand in for a fresh capture (#1752 — a killed
+    // run can leave a truncated report on stdout, MEASURED against 2.3.8).
+    const e = err as { stdout?: string; status?: number | null; signal?: string | null; message?: string };
+    if (e.signal || e.status !== 1) fail(`osv-scanner run did not complete (${e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`})`);
     if (typeof e.stdout === "string" && e.stdout.trim().length > 0) out = e.stdout;
-    else fail(`osv-scanner produced no report: ${e.message ?? "unknown failure"}`);
+    else fail("osv-scanner exited 1 (vulnerabilities found) but printed no report");
   }
   return JSON.parse(out) as OsvScanResult;
 }
