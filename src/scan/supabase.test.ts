@@ -421,6 +421,34 @@ describe("runSupabaseScan", () => {
       expect(html).toContain(esc("3 Supabase Advisor lint row(s) this scan could not parse"));
       expect(html).toContain(esc("could not be split back into their ten columns"));
     });
+
+    // #1755's sibling row: a splinter pass that CRASHED returns an empty lint list, which is
+    // byte-identical to a database with no advisories. Same #1433/#1435 exposure — it is another
+    // confidence:"N/A" row, so it is followed to the rendered report rather than to a passing
+    // producer, and the assertion is that its OWN reason survives the trip, not the stock
+    // "Not applicable in context." substitution.
+    it("a crashed Splinter run reaches the rendered report carrying its own reason", async () => {
+      const findings = await runSupabaseScan({
+        local: true,
+        splinterImpl: () => ({ lints: [], failure: "psql run did not complete (exited with code 3)" }),
+      });
+      const row = findings.find((f) => f.id === "SB-SPLINTER-FAIL-00");
+      expect(row).toBeDefined();
+      expect(row?.confidence).toBe("N/A");
+
+      const doc = { meta: RENDER_META, findings } as FindingsDocument;
+      const html = buildHtml(doc);
+
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+      expect(html).toContain(esc("psql run did not complete (exited with code 3)"));
+      expect(html).toContain(esc("not a finding of zero advisories"));
+      expect(html).not.toContain(esc("Not applicable in context."));
+    });
+
+    it("stays silent when the Splinter pass completed, so the row means something when it appears", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl: () => ({ lints: [] }) });
+      expect(findings.some((f) => f.id === "SB-SPLINTER-FAIL-00")).toBe(false);
+    });
   });
 });
 

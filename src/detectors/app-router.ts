@@ -963,10 +963,13 @@ interface ImportedBinding {
 // A specifier that resolves outside the source set (a package) is absent, which is what keeps an
 // unresolvable gate a finding rather than a silent pass. `import * as guards` records the local
 // name against NAMESPACE_IMPORT, so `guards.ensureMember(…)` resolves through the module (#1439 —
-// #1263's original false positive survived for that idiom).
+// #1263's original false positive survived for that idiom). Exported since #1666: the NestJS
+// `@Module({controllers, providers})` edge builder in perf-code.ts needs the identical
+// identifier -> resolved-file mapping to resolve what a module's decorator array names, not a
+// second hand-rolled import reader that could drift from this one.
 const NAMESPACE_IMPORT = "*";
 
-function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): Map<string, ImportedBinding> {
+export function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): Map<string, ImportedBinding> {
   const out = new Map<string, ImportedBinding>();
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.importClause || stmt.importClause.isTypeOnly) continue;

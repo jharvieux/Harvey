@@ -1,0 +1,12 @@
+// A NestJS controller — the request entry point. Deliberately does NOT import OrdersService
+// directly: NestJS wires the provider through the module's DI container at runtime, which is
+// the #1666 shape (a provider reached only via `@Module({ providers: [...] })` registration).
+import { Controller, Get } from "@nestjs/common";
+
+@Controller("orders")
+export class OrdersController {
+  @Get()
+  list() {
+    return [];
+  }
+}

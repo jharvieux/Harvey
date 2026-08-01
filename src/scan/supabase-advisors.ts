@@ -31,6 +31,11 @@ export interface AdvisorsResponse {
   // into their 10 columns, so they are NOT in `lints`. Hosted mode reads JSON and never sets it.
   // Carried so scanLocal can disclose the loss (SB-SPLINTER-00) rather than return a short list.
   unparsedRows?: number;
+  // #1755 — local (Splinter/psql) mode only: set when the psql run did NOT complete (a script
+  // error under ON_ERROR_STOP, a lost connection, a missing binary). `lints` is always `[]` when
+  // this is set — scanLocal must disclose it (SB-SPLINTER-FAIL-00), never read the empty list as
+  // a clean result.
+  failure?: string;
 }
 
 // Severity for the lints the issue calls out by name, curated from the product's blast-radius

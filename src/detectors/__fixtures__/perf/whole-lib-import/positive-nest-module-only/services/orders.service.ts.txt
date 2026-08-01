@@ -1,0 +1,20 @@
+// Reached ONLY through orders.module.ts's `providers: [OrdersService]` registration — no
+// controller or other reachable file imports this class by name. #1666's shape.
+import { Injectable } from "@nestjs/common";
+import { readFileSync } from "node:fs";
+import { isEmpty } from "lodash";
+
+@Injectable()
+export class OrdersService {
+  totals() {
+    return isEmpty({}) ? [] : [1];
+  }
+}
+
+// The positive half of the NgModule control's discriminator (see the sibling fixture's copy of
+// this note): the sync-I/O tier consults `requestReachableModules` with no client-side term, so
+// this `readFileSync` is emitted — naming controllers/orders.controller.ts as the entry — only
+// because the `@Module` decorator built the synthetic controller -> provider edge.
+export function loadTotals() {
+  return readFileSync("totals.json", "utf8");
+}

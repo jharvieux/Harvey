@@ -1,0 +1,12 @@
+// Same request-entry shape as the Nest positive fixture's controller — a real REQUEST_ENTRY_PATH
+// match, so the reachability question below has something to be answered FROM. Does not import
+// OrdersService directly, same as the positive fixture.
+import { Controller, Get } from "@nestjs/common";
+
+@Controller("orders")
+export class OrdersController {
+  @Get()
+  list() {
+    return [];
+  }
+}

@@ -166,4 +166,63 @@ describe("runSplinter argv (#1297)", () => {
     const [, argv] = vi.mocked(execFileSync).mock.calls.at(-1) as [string, string[]];
     expect(argv[argv.indexOf("-F") + 1]).toBe("\u001f");
   });
+
+  // #1755 — a script error must surface as a non-zero exit, or a fully-failed lint pass reads as
+  // "0 advisories, clean". MEASURED 2026-07-31 (psql 18.4 / Postgres 16.14): WITHOUT this flag the
+  // same failure exits 0.
+  it("sets ON_ERROR_STOP=1 so a query error in splinter.sql cannot exit 0", () => {
+    vi.mocked(execFileSync).mockReturnValue("");
+    runSplinter("postgresql://postgres@localhost:54322/postgres");
+
+    const [, argv] = vi.mocked(execFileSync).mock.calls.at(-1) as [string, string[]];
+    expect(argv[argv.indexOf("-v") + 1]).toBe("ON_ERROR_STOP=1");
+  });
+});
+
+// #1755 — the #1664/#1752 classification (execSemgrep/runOsvScanner) applied to psql: a run that
+// did not complete must never be parsed as the advisor set, however plausible its caught stdout
+// looks. Each thrown shape mirrors what execFileSync actually raises for that failure mode.
+function execError(over: { status?: number | null; signal?: string | null; stdout?: string; code?: string }): Error {
+  const err = new Error("Command failed: psql") as Error & { status: number | null; signal: string | null; stdout: string | undefined; code?: string };
+  err.status = over.status ?? null;
+  err.signal = over.signal ?? null;
+  err.stdout = over.stdout;
+  if (over.code) err.code = over.code;
+  return err;
+}
+
+describe("runSplinter refuses an incomplete run (#1755)", () => {
+  it("exit 3 (ON_ERROR_STOP script error) is a failure naming the exit code, even with plausible-looking partial stdout", () => {
+    vi.mocked(execFileSync).mockImplementationOnce(() => {
+      throw execError({ status: 3, stdout: "SET\nDO\n" });
+    });
+    const response = runSplinter("postgresql://postgres@localhost:54322/postgres");
+    expect(response.failure).toBeDefined();
+    expect(response.failure).toContain("exited with code 3");
+    expect(response.lints).toEqual([]);
+  });
+
+  it("a signal-killed run (lost connection) is a failure naming the signal", () => {
+    vi.mocked(execFileSync).mockImplementationOnce(() => {
+      throw execError({ signal: "SIGTERM" });
+    });
+    const response = runSplinter("postgresql://postgres@localhost:54322/postgres");
+    expect(response.failure).toContain("killed by signal SIGTERM");
+    expect(response.lints).toEqual([]);
+  });
+
+  it("a missing psql binary is a failure, not an uncaught ENOENT", () => {
+    vi.mocked(execFileSync).mockImplementationOnce(() => {
+      throw execError({ code: "ENOENT" });
+    });
+    const response = runSplinter("postgresql://postgres@localhost:54322/postgres");
+    expect(response.failure).toBe("psql not found on PATH");
+  });
+
+  it("a completed run (exit 0) still parses and reports no failure", () => {
+    vi.mocked(execFileSync).mockReturnValueOnce(FIXTURE_RAW);
+    const response = runSplinter("postgresql://postgres@localhost:54322/postgres");
+    expect(response.failure).toBeUndefined();
+    expect(response.lints.length).toBeGreaterThan(0);
+  });
 });

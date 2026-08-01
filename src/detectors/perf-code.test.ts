@@ -513,6 +513,55 @@ describe("field FP families (#1475–#1480)", () => {
     expect(server[0]?.evidence).toContain("no client entry point does");
   });
 
+  // #1666 — a provider reached ONLY through `@Module({ providers: [...] })` registration (never
+  // imported directly by its controller, which is how NestJS actually wires DI) must still get
+  // the server-side reword: the ordinary import graph has this edge backwards (the module imports
+  // both the controller and the provider; nothing points controller -> provider), so a forward
+  // walk from the controller could never reach it before this fix.
+  it("#1666: a NestJS provider reached only via its module's `providers` registration still gets the server-only claim", () => {
+    const server = byTaxonomy("whole-lib-import/positive-nest-module-only", "M7 — Whole-library import");
+    expect(server).toHaveLength(1);
+    expect(server[0]?.location).toContain("services/orders.service.ts");
+    expect(server[0]?.impact).toContain("Server-side only");
+    expect(server[0]?.evidence).toContain("no client entry point does");
+  });
+
+  // #1666 negative control: an `@NgModule` on the identical `.module.ts` naming convention, with
+  // `controllers`/`providers` keys spoofed in, must NOT be read as a Nest `@Module` — only the
+  // decorator IDENTIFIER gates the synthetic edge, not the path or the property names.
+  //
+  // The control is read off the SYNC-I/O tier, not off the whole-library row, and that choice is
+  // what makes it discriminate. `serverOnlyModules` ANDs request-reachability with
+  // client-reachability, and a realistic Angular module imports `@angular/core` — which makes it a
+  // client entry whose closure covers its own providers — so the whole-library row stays
+  // unqualified no matter what the decorator gate does. MEASURED 2026-07-31: widening the gate at
+  // perf-code.ts to accept `"NgModule"` left an earlier whole-library-only version of this control
+  // at 81/81 green. `detectSyncIoInHandler` calls `requestReachableModules` on its own with no
+  // client-side term, so the fixture's exported `loadTotals` is flagged if and only if the
+  // synthetic controller -> provider edge was built. Re-measured with the same one-word widening:
+  // this assertion goes red, and green again on restore.
+  it("#1666 negative control: an Angular @NgModule spoofing `controllers`/`providers` does not create the Nest edge", () => {
+    const dir = "whole-lib-import/negative-ngmodule-controllers-providers";
+    // The discriminating half: no Nest edge, so the provider is not request-reachable and its
+    // blocking read is never attributed to the controller.
+    expect(byTaxonomy(dir, "M7 — Blocking sync I/O in request handler")).toHaveLength(0);
+    // And the whole-library row it does carry stays unqualified rather than claiming server-only.
+    const unqualified = byTaxonomy(dir, "M7 — Whole-library import");
+    expect(unqualified).toHaveLength(1);
+    expect(unqualified[0]?.location).toContain("services/orders.service.ts");
+    expect(unqualified[0]?.impact).not.toContain("Server-side only");
+    expect(unqualified[0]?.evidence).not.toContain("no client entry point does");
+  });
+
+  // The positive half of the same discriminator: under a real `@Module`, the provider IS
+  // request-reachable and the sync-I/O row names the controller it is reachable from.
+  it("#1666: the Nest module edge makes its provider request-reachable, naming the controller as the entry", () => {
+    const sync = byTaxonomy("whole-lib-import/positive-nest-module-only", "M7 — Blocking sync I/O in request handler");
+    expect(sync).toHaveLength(1);
+    expect(sync[0]?.location).toContain("services/orders.service.ts");
+    expect(sync[0]?.evidence).toContain("The request entry point controllers/orders.controller.ts imports it");
+  });
+
   it("#1479: with no client entry to answer from, the claim is left unqualified rather than asserted", () => {
     const unknown = byTaxonomy("whole-lib-import/positive", "M7 — Whole-library import");
     expect(unknown.length).toBeGreaterThan(0);
@@ -600,6 +649,31 @@ export async function POST(req: Request) {
     const hits = detectPerfCodeFindings(files).filter((f) => f.taxonomy === JOIN);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.location).toContain("src/join.tsx");
+  });
+
+  it("#1641: a subpath-only exports package (no `.` key, no main/module) still opens the own-entry gate", () => {
+    // @carbon/dev's real shape: `{"exports": {"./vite": "./src/vite.ts"}}`, no "." key and no
+    // main/module. Before #1641, entryBasesFor's `declared` read as [] for this manifest (exportsDot
+    // only ever reads the "." key), so the #1554 `declared.length > 0` gate never opened — even for
+    // the generic `src/index` fallback name the build script below actually names — and the build
+    // script was wrongly swept into the tooling closure, silencing join.tsx's finding (mirrors the
+    // #1526 `module: "./build/index.mjs"` case, where the gate opens via a DIFFERENT declared name
+    // than the one the script matches).
+    const manifest = { name: "@acme/dev", exports: { "./vite": "./src/vite.ts" }, scripts: { dev: "tsup src/index.ts --watch" } };
+    const hits = detectPerfCodeFindings(pkgSources(manifest)).filter((f) => f.taxonomy === JOIN);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toContain("packages/ee/src/join.tsx");
+  });
+
+  it("#1641 scope control: a WILDCARD-only exports package (no literal subpath) leaves the gate closed", () => {
+    // `"./*": "./src/*.ts"` names a directory prefix, not one file — exportsExact contributes
+    // nothing for it, so `declared` stays empty and the own-entry exclusion legitimately does not
+    // apply: the build script's own reference is (as before #1641) swept into tooling, masking the
+    // finding. Same manifest/script shape as the positive case above but for the wildcard form, so
+    // the only variable is whether `declared` ended up non-empty.
+    const manifest = { name: "@acme/wild", exports: { "./*": "./src/*.ts" }, scripts: { dev: "tsup src/index.ts --watch" } };
+    const hits = detectPerfCodeFindings(pkgSources(manifest)).filter((f) => f.taxonomy === JOIN);
+    expect(hits).toHaveLength(0);
   });
 
   it("#1526: the exclusion does not reach the `bin` arm — a CLI whose bin IS its main stays suppressed", () => {
