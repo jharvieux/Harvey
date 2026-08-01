@@ -39,12 +39,16 @@ function fixture(withGuard: boolean): string {
 }
 
 // A reader that does not drain immediately is what makes this deterministic, and it is also what
-// actually happens: the parent is a busy CI runner or a vitest worker, not an idle pipe. Attaching
-// the reader late guarantees the OS pipe buffer is full and the write queue non-empty at exit, so
-// the unguarded run loses its tail every time instead of most times. An earlier version of this
-// file read immediately and the negative control passed alone but went green under parallel load —
-// a flaky guard against a flaky test, which is worth nothing.
-const READ_AFTER_MS = 400;
+// actually happens: the parent is a busy CI runner or a vitest worker, not an idle pipe. Holding the
+// reader off keeps the OS pipe buffer full and the write queue non-empty at exit, so the unguarded
+// run loses its tail every time instead of most times.
+//
+// The delay is anchored to the child's FIRST BYTE, never to spawn. MEASURED 2026-07-31: anchoring it
+// to spawn made this file fail 3 runs in 6, because `tsx` takes 300-600ms to boot and the timer
+// routinely expired before the child had written anything — the reader was already draining, there
+// was no backpressure, and the negative control passed for the wrong reason. `once("readable")`
+// fires on real output, so tsx's startup variance drops out of the measurement entirely.
+const READ_AFTER_FIRST_BYTE_MS = 300;
 
 /** stdio exactly as validate-calibration.test.ts and every CI step spawn a gate. */
 function runPiped(file: string): Promise<{ code: number | null; out: string }> {
@@ -52,8 +56,11 @@ function runPiped(file: string): Promise<{ code: number | null; out: string }> {
     const child = spawn("node_modules/.bin/tsx", [file], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     child.stdout.setEncoding("utf8");
-    // Same protocol for both directions, so the only variable is the guard itself.
-    setTimeout(() => child.stdout.on("data", (d: string) => (out += d)), READ_AFTER_MS);
+    // Same protocol for both directions, so the only variable is the guard itself. Until the `data`
+    // handler attaches the stream stays paused, which is what applies the backpressure.
+    child.stdout.once("readable", () => {
+      setTimeout(() => child.stdout.on("data", (d: string) => (out += d)), READ_AFTER_FIRST_BYTE_MS);
+    });
     child.on("error", rej);
     child.on("close", (code) => res({ code, out }));
   });
