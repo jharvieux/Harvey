@@ -62,6 +62,9 @@ import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
   explainDrift,
+  FLOOR_CLAIM_TRIAGE,
+  floorClaimingNotes,
+  fpFloorViolations,
   FREE_TIER_EXPECTATIONS,
   isMutationBaseline,
   isNotRun,
@@ -573,8 +576,23 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 // run already computed, kept instead of discarded.
 if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug }, null, 2)}\n`);
 
+// #1485 — the manifest's declared false-positive FLOORS, checked here as well as in the unit suite,
+// because this is the job that watches the baselines move. A floor that starts producing graded rows
+// is a negative control that has saturated: it can no longer fail in the direction it exists to fail
+// in, and the drift row alone does not say so. The claim census is printed even on a pass — its net
+// is a hand-written vocabulary (`FLOOR_CLAIM_PHRASES`), so it is a ratchet over the phrasings this
+// repo has used, never a census of every floor a note might intend.
+const floorClaims = floorClaimingNotes();
+const floorBreaches = fpFloorViolations();
+console.error(
+  `\nFP-FLOOR CENSUS (#1485): ${floorClaims.length} note(s) claim a floor role — ` +
+    `${floorClaims.length - FLOOR_CLAIM_TRIAGE.length} declared \`fpFloor\`, ${FLOOR_CLAIM_TRIAGE.length} triaged as something else. ` +
+    `Vocabulary-bounded: a note inventing a new way to say "floor" is invisible to it.`,
+);
+for (const b of floorBreaches) console.error(`✗ SATURATED FLOOR ${b.slug} / ${b.module} — declared fpFloor, baseline carries ${b.counted} graded row(s)`);
+
 const failed = rows.filter((r) => !r.pass);
-if (failed.length === 0 && unscored.length === 0) {
+if (failed.length === 0 && unscored.length === 0 && floorBreaches.length === 0) {
   console.error(`\n✓ ${rows.length} checks pass — every module reproduces its baseline and the free-tier invariant holds.`);
   process.exit(0);
 }

@@ -42,7 +42,9 @@ describe("#975: every detector taxonomy has a CWE decision (fail loud on an uncl
     expect(c, `taxonomy "${taxonomy}" is unclassified — add it to SECURITY (with a CWE) or NO_CWE (with a reason) in src/cwe-map.ts`).toBeDefined();
     if (c?.kind === "cwe") {
       expect(c.cwe.length).toBeGreaterThan(0);
-      expect(c.cwe[0]).toMatch(/^CWE-\d+:/);
+      // #1661: every entry, not just the first — the field is a list and a second entry that was
+      // never shape-checked would reach the report and SARIF unvalidated.
+      for (const id of c.cwe) expect(id).toMatch(/^CWE-\d+:/);
     } else {
       expect(c?.kind).toBe("none");
       expect((c as { reason: string }).reason.length).toBeGreaterThan(0);

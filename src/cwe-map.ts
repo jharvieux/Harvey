@@ -2,8 +2,15 @@
 // stable `taxonomy` string. The harvey-* semgrep rules carry their own `metadata.cwe` (flowed to
 // the finding in src/scan/semgrep.ts); the TS/AST detectors do not, so this registry is where each
 // AST detector DECLARES its CWE — centralized by taxonomy rather than scattered across ~15 detector
-// files. It is a fixed lookup, not a report-time inference: a taxonomy maps to exactly one CWE, the
-// same way the semgrep metadata does.
+// files. It is a fixed lookup, not a report-time inference.
+//
+// #1661 made `metadata.cwe` genuinely multi-valued for a semgrep rule whose pattern determines
+// several weaknesses at once. THIS registry stays single-valued per taxonomy ON PURPOSE, and that
+// is a decision rather than an oversight: a semgrep rule's CWEs are determined by the PATTERN that
+// matched, so one pattern can prove three; a taxonomy string is the detector's own name for one
+// weakness, and giving it a second CWE would be a claim about findings the registry never saw. The
+// enrichment path below already writes `f.cwe = c.cwe` as a LIST, so a taxonomy that one day
+// genuinely determines two needs a longer array here and nothing else.
 //
 // The product principle it serves is the same as the coverage guard: a CWE-indexed consumer (GitHub
 // code scanning, an ASPM platform, a CWE-scored benchmark) must not silently under-credit a real
@@ -43,6 +50,7 @@ const CWE: Record<string, string> = {
   "798": "CWE-798: Use of Hard-coded Credentials",
   "807": "CWE-807: Reliance on Untrusted Inputs in a Security Decision",
   "837": "CWE-837: Improper Enforcement of a Single, Unique Action",
+  "841": "CWE-841: Improper Enforcement of Behavioral Workflow",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
   "79": "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
@@ -229,6 +237,15 @@ const SECURITY: Record<string, [string, string | null]> = {
   "SELECT-then-INSERT dedup with no unique constraint": ["362", null],
   "External send without a deterministic idempotency key": ["837", null],
   "Idempotency row written before the dispatched handler": ["754", null],
+  // #1352 / D-091 item 27. NOT a race (362): both deliveries are genuinely different events and
+  // neither read is stale — what is missing is the enforcement that they be APPLIED in the order
+  // the provider stamped them. MEASURED 2026-07-31 against MITRE's own CWE-841 page
+  // (cwe.mitre.org/data/definitions/841.html): "does not properly ensure that the actor performs
+  // the behaviors in the required sequence", with an extended description about invalid system
+  // states from actions executed in unexpected orders. Its Memberships place it under OWASP Top
+  // Ten 2021 A04:2021 - Insecure Design, so unlike its retry-safety siblings this one HAS a
+  // category and carries it.
+  "Webhook state applied without an ordering guard": ["841", "A04"],
   // #1204: X-Powered-By names the server framework to any caller. MEASURED against MITRE's own
   // CWE-200 page (cwe.mitre.org/data/definitions/200.html, 2026-07-27): Memberships lists "OWASP
   // Top Ten 2021 Category A01:2021 - Broken Access Control".
