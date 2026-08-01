@@ -28,3 +28,8 @@ dry-run/timing.json
 # Python bytecode — seed.py is imported by the fixture-drift harness and by ad-hoc probes.
 __pycache__/
 *.pyc
+
+# #1738 — Stryker's sandbox/backup copies of the tree, and the guard-mutation census report it writes.
+.stryker-tmp/
+reports/guard-mutation/
+stryker.probe.config.json

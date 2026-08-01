@@ -8,7 +8,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { formatGuardCensus, guardMutationCensus } from "./guard-mutation-census.js";
+import { formatGuardCensus, guardMutationCensus, guardSetIsFullyAccounted, NOT_MUTATED } from "./guard-mutation-census.js";
 import type { StrykerMutant, StrykerReport } from "./mutation-scan.js";
 
 const capture = (name: string): StrykerReport => JSON.parse(readFileSync(new URL(`./scan/__fixtures__/stryker/${name}`, import.meta.url), "utf8")) as StrykerReport;
@@ -72,5 +72,38 @@ describe("guardMutationCensus (#1738)", () => {
 
   it("says 'none' explicitly when nothing qualifies — an absent row cannot be argued with", () => {
     expect(formatGuardCensus(guardMutationCensus(capture("stryker-9.6.1-m8-calibration.json")))).toContain("(none — every scored guard");
+  });
+
+  it("reports the mutants nothing disproved, not only the extreme case", () => {
+    const out = formatGuardCensus(guardMutationCensus(capture("stryker-9.6.1-m8-calibration.json")));
+    // 6 of 25 in that capture. A census that printed only "0 guards with zero kills" would call
+    // this file clean.
+    expect(out).toContain("MUTANTS NOTHING DISPROVED: 6 of 25");
+  });
+});
+
+// #1738 criterion 1, enforced rather than asserted in prose: the declared guard set and what the
+// Stryker config actually mutates have to stay reconciled. Dropping a file from `mutate` to make a
+// run finish is exactly how a guard leaves the census while the census keeps printing a clean
+// number — the silent-omission shape, reached through a config file.
+describe("every declared guard is either mutated or disclosed (#1738)", () => {
+  const config = JSON.parse(readFileSync(new URL("../stryker.guards.config.json", import.meta.url), "utf8")) as { mutate: string[] };
+
+  it("the config's mutate list and NOT_MUTATED partition GUARD_SET", () => {
+    const { missing, doubleBooked } = guardSetIsFullyAccounted(config.mutate);
+    expect(missing, "these declared guards are neither mutated nor recorded in NOT_MUTATED, so they left the census silently").toEqual([]);
+    expect(doubleBooked, "these are both mutated and recorded as unmutatable — one of the two claims is stale").toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL: dropping a guard from mutate without recording why is caught", () => {
+    expect(guardSetIsFullyAccounted(config.mutate.filter((f) => f !== "src/ci-liveness.ts")).missing).toEqual(["src/ci-liveness.ts"]);
+    expect(guardSetIsFullyAccounted([...config.mutate, "src/recorded-reasons.ts"]).doubleBooked).toEqual(["src/recorded-reasons.ts"]);
+  });
+
+  it("every NOT_MUTATED reason names what was actually run, not an intuition", () => {
+    for (const [file, why] of Object.entries(NOT_MUTATED)) {
+      expect(why, `${file}'s NOT_MUTATED reason is not provenance-tagged`).toMatch(/MEASURED|TRIED/);
+      expect(why, `${file}'s NOT_MUTATED reason carries no falsifier`).toContain("Falsifier:");
+    }
   });
 });

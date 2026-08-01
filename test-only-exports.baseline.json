@@ -1,7 +1,8 @@
 {
   "files": [
     "src/fix/acceptance.ts",
-    "src/pentest/calibration-fixture.ts"
+    "src/pentest/calibration-fixture.ts",
+    "src/vitest-event-loop-probe.ts"
   ],
   "exports": [
     "src/audit-completeness.ts:completenessStatement",

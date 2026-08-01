@@ -23,24 +23,51 @@
     "    census into an hours-long run nobody will re-run.",
     "",
     "REPORT ONLY: nothing here fails a build. thresholds.break is null on purpose — see",
-    "src/guard-mutation-census.ts for the ruling and for why promotion is a separate decision."
+    "src/guard-mutation-census.ts for the ruling and for why promotion is a separate decision.",
+    "",
+    "inPlace: true because this repo's guards are DISCOVERY-BACKED — they run `git ls-files` and",
+    "`git grep` over the real tree (the #1330 conditional-scan registry, #1768's exiting-CLI ratchet,",
+    "#1715's timeout ratchet). Stryker's default sandbox is a copy with no .git, so the dry run dies",
+    "before a single mutant is scored. MEASURED 2026-08-01: the sandboxed dry run failed on",
+    "rule-corpus-pairing's negative control; in-place completes. Stryker restores the files when it",
+    "finishes, so run this on a clean tree and check `git status` after — a killed run leaves them",
+    "instrumented.",
+    "",
+    "src/recorded-reasons.ts is DECLARED in GUARD_SET but absent from `mutate`. It is not forgotten —",
+    "src/guard-mutation-census.ts's NOT_MUTATED carries the measured reason, the census prints it, and",
+    "guard-mutation-census.test.ts fails if this list and that one stop partitioning GUARD_SET."
   ],
+  "inPlace": true,
   "packageManager": "pnpm",
   "testRunner": "vitest",
-  "reporters": ["json", "clear-text", "progress"],
-  "jsonReporter": { "fileName": "reports/guard-mutation/mutation.json" },
+  "reporters": [
+    "json",
+    "clear-text",
+    "progress"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/guard-mutation/mutation.json"
+  },
   "coverageAnalysis": "perTest",
   "mutate": [
     "src/ci-liveness.ts",
     "src/alert-paths.ts",
     "src/scan/calibration.ts",
     "src/acceptance-conservation.ts",
-    "src/recorded-reasons.ts",
     "src/scored-gates.ts",
     "src/calibration-verdict.ts"
   ],
-  "vitest": { "configFile": "vitest.config.ts" },
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
   "timeoutMS": 60000,
   "concurrency": 4,
-  "thresholds": { "high": 100, "low": 0, "break": null }
+  "thresholds": {
+    "high": 100,
+    "low": 0,
+    "break": null
+  },
+  "plugins": [
+    "@stryker-mutator/vitest-runner"
+  ]
 }

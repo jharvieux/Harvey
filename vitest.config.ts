@@ -30,6 +30,10 @@ const BASE_EXCLUDE = [
   "site/.next/**",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
   ".claude/**",
+  // #1738: Stryker's sandbox is a full repo copy too, and a killed run leaves it behind. Without
+  // this the guard-mutation census's own tests get collected twice more, from stale copies whose
+  // assertions are whatever they were when the run died.
+  ".stryker-tmp/**",
 ];
 
 // #1120/#1125 — the heavy tail. These files drive real child processes (the tsx CLIs,

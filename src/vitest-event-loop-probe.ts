@@ -1,7 +1,7 @@
 // #1695 — attribute the RPC-ack starvation instead of inferring it.
 //
 // The flake: a heavy test file drives a child process through synchronous execFileSync, which
-// blocks its vitest worker's event loop. A blocked worker cannot service the birpc ack for the
+// blocks its vitest worker's event loop. A blocked worker never services the birpc ack for the
 // `onTaskUpdate` it already sent, so once a single blocking window outlasts vitest's hardcoded 60s
 // (`DEFAULT_TIMEOUT = 6e4`) the run reports `[vitest-worker]: Timeout calling "onTaskUpdate"` as an
 // Unhandled Error and exits 1 with ZERO failing tests.
@@ -12,14 +12,14 @@
 // move this repo keeps catching itself making.
 //
 // What this measures: the longest UNINTERRUPTED gap in the worker's own event loop, and what was
-// running when it happened. A 100ms unref'd heartbeat cannot tick while the loop is blocked, so the
+// running when it happened. A 100ms unref'd heartbeat stays unscheduled while the loop is blocked, so the
 // gap observed on the tick AFTER a block is that block's duration. That is the same quantity
 // vitest's ack window is racing, measured from inside the worker that would lose the race — and it
 // covers module load, hooks and teardown, which per-test durations do not.
 //
 // It reports on EVERY run rather than behind a flag, because the thing it exists to attribute
 // happens ~1 in 100 CI jobs: a probe nobody remembered to enable is indistinguishable from one that
-// cannot fire (#1287).
+// has been switched off (#1287).
 
 import { afterEach, beforeEach } from "vitest";
 
@@ -44,10 +44,16 @@ let current = IDLE;
 let currentFile = "";
 // MEASURED 2026-08-01, three heavy runs: the worst window was 26.7s / 28.6s / 42.2s and in all
 // three it spanned a WHOLE FILE of back-to-back synchronous tests, not one test. The heartbeat
-// cannot tick while the loop is blocked, so a file whose tests never await runs as ONE window; that
+// stays unscheduled while the loop is blocked, so a file whose tests never await runs as ONE window; that
 // is why #1695's 12-run sample found no test over 35.6s and still saw the 60s ack blow. Counting
 // the tests a window spans is what turns "which test" into the right question, "which FILE".
 let testsThisWindow = 0;
+
+// REASON: this module's exports have no production caller and are listed by the test-only-exports gate, because its ONLY caller is `setupFiles` in vitest.config.ts — a test-runner entry, which knip.production.json deliberately does not treat as production.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-01 — `pnpm test-only-exports` reported `file src/vitest-event-loop-probe.ts — every export unreachable: worstBlock, describeBlock`, i.e. it flags the FILE as unreachable rather than the symbols as unused. describeBlock has an in-file production caller (the heartbeat); worstBlock exists so the guard can prove, from inside the worker, that setupFiles still loads this module — the one fact no output check can establish when the module is absent.
+// FALSIFIER: test -f knip.production.json || exit 127; pnpm test-only-exports 2>&1 | grep -q "src/vitest-event-loop-probe.ts" && exit 1 || exit 0
+// TOUCHES: src/vitest-event-loop-probe.ts vitest.config.ts knip.production.json
 
 /** The worst block this worker has seen so far, and what was running. Read by the probe's guard. */
 export function worstBlock(): { ms: number; during: string } {
