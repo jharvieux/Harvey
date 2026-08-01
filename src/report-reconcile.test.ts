@@ -20,6 +20,7 @@ import { validateFindings } from "./findings.js";
 import type { Finding, FindingsDocument } from "./findings.js";
 import { buildHtml } from "../report-template/render.mjs";
 import { detectAppRouterFindings } from "./detectors/app-router.js";
+import { importGraphNotAssessedRows } from "./scan/import-graph-scope.js";
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
   id: "F-1", title: "A finding", severity: "High", confidence: "Confirmed",
@@ -205,6 +206,71 @@ describe("the M9 uncapped-retry scope row reaches the RENDERED report, sub-shape
     expect(html).toContain("route/edge handler");
     // #1440's requirement that the sub-shape list be EXHAUSTIVE is what the client actually reads.
     expect(html).toContain("FOUR sub-shapes were NOT fully assessed");
+    expect(html).not.toContain("Not applicable in context.");
+  });
+});
+
+// #1652 criterion 3, which names this file and these two blocks by construction. The row discloses
+// that the client-owner-id check set N of M sites aside by policy; if its population is replaced at
+// render by "Not applicable in context." the client reads a class that was never judged as one that
+// was judged clean, which is the whole failure #1433 found.
+describe("the M1 client-owner-id scope row reaches the RENDERED report, population intact (#1652)", () => {
+  // An OWNERSHIP_COLUMN write on the plain RLS client with no auth call — exclusion (2).
+  const scopeRow = detectAppRouterFindings([
+    {
+      path: "app/actions.ts",
+      text: `"use server";\nimport { createClient } from "@/lib/supabase";\n\nexport async function updateOrganisationLogo(input: { user_id: string; logo: string }) {\n  const supabase = createClient();\n  await supabase.from("profiles").update({ logo: input.logo }).eq("user_id", input.user_id);\n}\n`,
+    },
+  ]).find((f) => f.taxonomy === "M1 — Client-supplied owner id — scope");
+
+  it("the detector really emits it (so the render assertion below is about a live row)", () => {
+    expect(scopeRow).toBeDefined();
+    expect(scopeRow?.confidence).toBe("N/A");
+    expect(scopeRow?.title).toContain("1 of 1 site excluded by policy");
+  });
+
+  it("it is a valid finding — nothing rejects it before the renderer sees it", () => {
+    expect(validateFindings(doc([finding(), scopeRow!]))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("its per-class population survives into the HTML, and is NOT replaced by 'Not applicable in context.'", () => {
+    const document = doc([finding(), scopeRow!]);
+    const html = buildHtml(document);
+    expect(reconcileRender(document, html)).toEqual([]);
+    expect(html).toContain("row-level security still gates the write");
+    expect(html).toContain("EXCLUDED BY POLICY");
+    expect(html).not.toContain("Not applicable in context.");
+  });
+});
+
+// #1503 criterion 1, same three assertions as the two blocks above. The row this issue exists for
+// reports that the cross-file IMPORT GRAPH was partial — the condition that, undisclosed, let a
+// disconnected graph on ghostfolio read as a clean M7/M9 result and then get recorded as the
+// baseline. "Accounted for is not delivered": the row is emitted from src/cli/static-detect.ts, so
+// a green unit test on the emitter says nothing about whether the client ever reads the REASON.
+describe("the import-graph scope row reaches the RENDERED report, counts intact (#1503)", () => {
+  const scopeRow: Finding = importGraphNotAssessedRows([
+    { path: "tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }) },
+    { path: "src/lib/db.ts", text: "export const db = 1;" },
+    { path: "src/app/page.tsx", text: 'import { db } from "@/lib/db";\nimport { gen } from "@/generated/prisma/enums";\n' },
+  ])[0]!;
+
+  it("the detector really emits it (so the render assertion below is about a live row)", () => {
+    expect(scopeRow).toBeDefined();
+    expect(scopeRow.id).toBe("M1-IMPORTGRAPH-00");
+    expect(scopeRow.confidence).toBe("N/A");
+  });
+
+  it("it is a valid finding — nothing rejects it before the renderer sees it", () => {
+    expect(validateFindings(doc([finding(), scopeRow]))).toEqual({ ok: true, errors: [] });
+  });
+
+  it("its dropped-edge count survives into the HTML, and is NOT replaced by 'Not applicable in context.'", () => {
+    const document = doc([finding(), scopeRow]);
+    const html = buildHtml(document);
+    expect(reconcileRender(document, html)).toEqual([]);
+    expect(html).toContain("1 import specifier(s) resolved to nothing");
+    expect(html).toContain("@/generated/prisma/enums");
     expect(html).not.toContain("Not applicable in context.");
   });
 });

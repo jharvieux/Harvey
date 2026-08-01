@@ -375,6 +375,76 @@ describe("client-supplied owner id — house-style gate resolution (#1434)", () 
   });
 });
 
+// #1652 — the two policy exclusions in detectClientSuppliedOwnerId used to `continue` in silence,
+// so a target where every client-owner-id site was set aside reported zero rows of the class and
+// nothing said a class had been set aside. Both exclusions now emit into one counted N/A row, the
+// same shape #1441 gave the waterfall check.
+const OWNER_ID_SCOPE = "M1 — Client-supplied owner id — scope";
+describe("the two policy exclusions are counted, not silent (#1652)", () => {
+  // Exclusion 2: an OWNERSHIP_COLUMN site on the plain RLS client with no auth call. Written inline
+  // rather than reusing `client-owner-id/negative-rls-bareid`, which #1652's body names as this
+  // exclusion's instance and WHICH DOES NOT REACH IT (MEASURED: that fixture's column is `id`, and
+  // findClientOwnerSite only admits a bare `id` on a service-rooted chain, so no site is ever found
+  // and the `continue` at the exclusion never runs). The issue's claim is corrected on the issue.
+  const rlsFindings = detectAppRouterFindings([
+    {
+      path: "app/actions.ts",
+      text: `"use server";\nimport { createClient } from "@/lib/supabase";\n\nexport async function updateOrganisationLogo(input: { user_id: string; logo: string }) {\n  const supabase = createClient();\n  await supabase.from("profiles").update({ logo: input.logo }).eq("user_id", input.user_id);\n}\n`,
+    },
+  ]);
+  // Exclusion 1: a resolvable house-style gate that CAN deny, so auth is called and nothing bound.
+  const gateFindings = detectAppRouterFindings(loadFixtureDir("owner-id-helper-gate-logger/negative"));
+
+  it("emits the scope row for the RLS-client exclusion, with its population", () => {
+    const rows = rlsFindings.filter((f) => f.taxonomy === OWNER_ID_SCOPE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.confidence).toBe("N/A");
+    expect(rows[0]?.title).toContain("1 of 1 site excluded by policy");
+    expect(rows[0]?.evidence).toContain("row-level security still gates the write");
+    // The exclusion's own premise: the class stayed silent and the generic finding owns the defect.
+    expect(taxonomies(rlsFindings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+    expect(taxonomies(rlsFindings)).toContain(MISSING_AUTH);
+  });
+
+  it("emits it for the auth-called-but-nothing-bound exclusion too, naming that class instead", () => {
+    const rows = gateFindings.filter((f) => f.taxonomy === OWNER_ID_SCOPE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.evidence).toContain("binds no session value from it");
+    expect(rows[0]?.evidence).not.toContain("row-level security still gates the write");
+  });
+
+  // The failing direction, and the one that matters most: this row must NOT appear on a target where
+  // nothing was set aside, or it stops being a disclosure and becomes a status line printed on every
+  // report. Both fixtures below produce a real finding of the class, so the check ran and had a
+  // population — they are not zero-by-not-scanning.
+  it("is ABSENT when the check set nothing aside", () => {
+    for (const dir of ["client-owner-id/positive", "client-owner-id/positive-svc-bareid"]) {
+      const findings = detectAppRouterFindings(loadFixtureDir(dir));
+      expect(taxonomies(findings)).not.toContain(OWNER_ID_SCOPE);
+      expect(findings.some((f) => f.taxonomy === CLIENT_OWNER_ID || f.taxonomy === CLIENT_OWNER_ID_NOAUTH)).toBe(true);
+    }
+  });
+
+  // Counting the exclusions required moving both policy tests to AFTER findClientOwnerSite, so that
+  // the denominator is "sites that really had a client-supplied owner id" rather than "actions".
+  // That move must change no finding: this pins the emitted set across all nine fixtures, so a
+  // reordering that quietly widened or narrowed the class fails here rather than in a baseline.
+  it("changes no finding — every fixture's non-scope taxonomy set is what it was", () => {
+    const emitted = (dir: string) =>
+      [...new Set(detectAppRouterFindings(loadFixtureDir(`client-owner-id/${dir}`)).map((f) => f.taxonomy))].filter((t) => t !== OWNER_ID_SCOPE).sort();
+    const VALIDATION = "M9 — Server Action missing input validation";
+    expect(emitted("positive")).toEqual([CLIENT_OWNER_ID]);
+    expect(emitted("positive-delete")).toEqual([CLIENT_OWNER_ID]);
+    expect(emitted("positive-svc-bareid")).toEqual([CLIENT_OWNER_ID_NOAUTH, VALIDATION].sort());
+    expect(emitted("positive-svc-insert")).toEqual([CLIENT_OWNER_ID_NOAUTH, VALIDATION].sort());
+    expect(emitted("negative-rls-bareid")).toEqual([MISSING_AUTH, VALIDATION].sort());
+    expect(emitted("negative-session-derived")).toEqual([]);
+    expect(emitted("negative-ownership-compared")).toEqual([]);
+    expect(emitted("negative-svc-insert-session")).toEqual([VALIDATION]);
+    expect(emitted("negative-svc-compared-dbrow")).toEqual([MISSING_AUTH, VALIDATION].sort());
+  });
+});
+
 describe("Server Action missing input validation", () => {
   it("flags a 'use server' action that mutates from formData with no schema parse", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-validation/positive"));
@@ -1748,6 +1818,62 @@ describe("import resolution across a workspace (#1353)", () => {
   it("puts the shared package in the route's import closure", () => {
     const graph = buildImportGraph(new Map(files.filter((f) => /\.tsx?$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)])), allPaths, aliases);
     expect(graph.get(from)).toContain("packages/crypto/src/index.ts");
+  });
+});
+
+// #1659 — the ESM-TS convention writes `from "./helpers.js"` for a sibling `helpers.ts`, and
+// candidatePaths appended extensions VERBATIM (`./helpers.js.ts`, `./helpers.js.tsx`, …), so the
+// edge silently vanished. MEASURED over the 17 pinned corpus commits before the fix, in the scope
+// corpus-drift scans: 84 of 166 `.js`-suffixed specifiers resolved to nothing and resolve now, all
+// on carbon, zero on the other 16 (4,780 without stripping `vendoredSubtrees` — see the comment on
+// resolveImport). Exercised through `resolveImport` DIRECTLY — the fallback used to live at one call
+// site in src/detectors/slop.ts, so a test that reached it only through slop proved nothing about
+// the shared resolver every other consumer uses.
+describe("resolveImport: ESM-TS `./x.js` specifiers (#1659)", () => {
+  const tree = [
+    { path: "tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }) },
+    { path: "src/helpers.ts", text: "export function isAtLeastAsNew() {}" },
+    { path: "src/mod.mts", text: "export const m = 1;" },
+    { path: "src/lib/index.ts", text: "export const l = 1;" },
+    // A REAL committed .js next to a .ts of the same stem — the case the fallback must not steal.
+    { path: "src/twin.js", text: "export const fromJs = 1;" },
+    { path: "src/twin.ts", text: "export const fromTs = 1;" },
+    { path: "src/consumer.ts", text: "" },
+    { path: "src/aliased.ts", text: "" },
+  ];
+  const paths = new Set(tree.map((f) => f.path));
+  const aliases = collectPathAliases(tree);
+  const from = "src/consumer.ts";
+
+  it("resolves `./helpers.js` to the sibling helpers.ts", () => {
+    expect(resolveImport(from, "./helpers.js", paths, aliases)).toBe("src/helpers.ts");
+  });
+
+  it("resolves the .mjs/.cjs members of the family, and a directory index behind one", () => {
+    expect(resolveImport(from, "./mod.mjs", paths, aliases)).toBe("src/mod.mts");
+    expect(resolveImport(from, "./lib/index.js", paths, aliases)).toBe("src/lib/index.ts");
+  });
+
+  it("applies to an ALIASED specifier too, not only a relative one", () => {
+    expect(resolveImport("src/aliased.ts", "@/helpers.js", paths, aliases)).toBe("src/helpers.ts");
+  });
+
+  // The failing direction of the fallback's own precedence: it is a FALLBACK, so a real committed
+  // `twin.js` still wins over `twin.ts`. Deleting the `verbatim !== undefined` short-circuit — the
+  // obvious "simplification" — turns this red while every assertion above stays green.
+  it("does NOT re-point a specifier whose literal target exists", () => {
+    expect(resolveImport(from, "./twin.js", paths, aliases)).toBe("src/twin.js");
+  });
+
+  it("does not invent a target when neither the literal nor the stripped form exists", () => {
+    expect(resolveImport(from, "./absent.js", paths, aliases)).toBeUndefined();
+    expect(resolveImport(from, "@/absent.js", paths, aliases)).toBeUndefined();
+  });
+
+  it("puts the stripped edge in the import graph M9 and #1344 read", () => {
+    const withImport = tree.map((f) => (f.path === "src/consumer.ts" ? { ...f, text: 'import { isAtLeastAsNew } from "./helpers.js";\n' } : f));
+    const graph = buildImportGraph(new Map(withImport.filter((f) => /\.[cm]?tsx?$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)])), paths, aliases);
+    expect(graph.get(from)).toEqual(["src/helpers.ts"]);
   });
 });
 

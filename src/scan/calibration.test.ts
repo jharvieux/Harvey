@@ -1396,6 +1396,27 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     }
   });
 
+  // #1718 — M9C-TANSTACK-CLIENTONLY-POS matches TWO findings under one `match` key. It is an
+  // accepted exception to #1484's split rule (both come from ONE mechanism applied to two adjacent
+  // reads, so neither can regress alone) ON CONDITION that the narrower risk is guarded instead:
+  // BROWSER_GLOBALS is a shared Set of five names, and dropping ONE of them would leave the corpus
+  // row green on the survivor. This is that guard — it names each global the fixture reads, so a
+  // narrowing of the set for a single name fails here even though the entry itself still passes.
+  it("both browser globals in the TanStack fixture are named individually (#1718)", () => {
+    const findings = detectAppRouterFindings(
+      loadPrefixed("tanstack-client-only/positive", "m9-corpus/tanstack-client-only/positive"),
+      "tanstack-start",
+    );
+    const ssr = findings.filter((f) => f.taxonomy === "M9 — SSR-only API misuse");
+    for (const global of ["localStorage", "document"]) {
+      expect(
+        ssr.some((f) => f.title.includes(`\`${global}\``)),
+        `no SSR-only finding names \`${global}\` — if BROWSER_GLOBALS was narrowed, this class silently lost a member while M9C-TANSTACK-CLIENTONLY-POS stayed green on the other one`,
+      ).toBe(true);
+    }
+    expect(ssr, "the fixture must keep reading at least two distinct browser globals for this guard to mean anything").toHaveLength(2);
+  });
+
   it("keeps the whole M9-check class out of the free count (review tier only)", () => {
     // No M9 heuristic may inflate the security free count — every positive is review, not high.
     for (const { check, dir, framework } of CHECKS) {

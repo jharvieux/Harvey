@@ -788,15 +788,11 @@ function makeCalleeResolver(files: SourceInput[]): CalleeResolver {
     allPaths ??= new Set(files.map((f) => f.path));
     textByPath ??= new Map(files.map((f) => [f.path, f.text] as const));
     aliases ??= collectPathAliases(files);
-    // `resolveImport` appends extensions to the specifier verbatim, so the ESM-TS convention of
-    // importing `../helpers.js` from `helpers.ts` resolves to nothing. MEASURED 2026-07-31: that is
-    // why the very row this hop was built for — carbon `packages/dev/src/services/apps.ts:367`,
-    // whose `isAtLeastAsNew` comes `from "../helpers.js"` — was still spared with the hop in place.
-    // Stripped here rather than in `resolveImport` itself: that function also backs M9's import
-    // graph and #1344's reachability gate, so widening it moves baselines this change has not
-    // measured. Tracked for the shared resolver as #1659, whose first acceptance criterion is to
-    // measure that corpus-wide M9 movement BEFORE the fallback moves into `resolveImport`.
-    const target = resolveImport(fromPath, specifier, allPaths, aliases) ?? resolveImport(fromPath, specifier.replace(/\.(m|c)?js$/, ""), allPaths, aliases);
+    // #1659: the ESM-TS `../helpers.js` -> `helpers.ts` strip used to live HERE, duplicated, because
+    // widening the shared resolver would have moved baselines nobody had measured. It has been
+    // measured (17 pinned commits, before/after `static-detect`, byte-identical output) and now
+    // lives in `resolveImport` itself, so this call site is back to the plain one.
+    const target = resolveImport(fromPath, specifier, allPaths, aliases);
     const sf = target === undefined ? undefined : sourceAt(target);
     const fn = sf && functionNamed(sf, name);
     return fn ? { sf, fn } : undefined;

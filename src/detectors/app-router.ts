@@ -218,7 +218,13 @@ function normalizeRepoPath(p: string): string {
 
 // #1065: .js/.jsx/.mjs/.cjs are candidates too — on a plain-JavaScript app every cross-file
 // resolution (server→client leak, server-only guard) failed here before the extension was listed.
-const MODULE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
+// #1659: .mts/.cts joined them. `SOURCE_FILE` (src/detectors/load-sources.ts) has LOADED them since
+// #1065, so such a file was read by every pass and yet no import specifier could ever resolve TO it
+// — the same silent drop, one extension over. MEASURED 2026-08-01 across the 17 pinned corpus
+// commits: 7 such product-source files (ghostfolio 1, rallly 4, inbox-zero 1, carbon 1), all
+// vitest configs or a Prisma seed that nothing imports, so the corpus movement from this is nil —
+// it is here so the loader's file set and the resolver's candidate set stay in step.
+const MODULE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts"];
 function candidatePaths(base: string): string[] {
   return [base, ...MODULE_EXTS.map((e) => `${base}${e}`), ...MODULE_EXTS.map((e) => `${base}/index${e}`)];
 }
@@ -244,6 +250,13 @@ export interface PathAlias {
    * alias like `@/` is a prefix and is never itself a whole specifier).
    */
   entryBases?: string[];
+  /**
+   * #1503: set ONLY on the built-in `@/` → repo-root row pushed when no config declared anything.
+   * Marked rather than inferred from its shape: a repo that really does declare `"@/*": ["./*"]`
+   * with `baseUrl: "."` produces a byte-identical row, so the fallback was indistinguishable from a
+   * real alias — the empty `baseDir` satisfied the "is it the default?" test either way.
+   */
+  fallback?: true;
 }
 
 // Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
@@ -291,7 +304,7 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
       aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scope: cfgDir });
     }
   }
-  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "" });
+  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "", fallback: true });
   // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
   // tree, so it must not out-rank an enclosing package's own tsconfig alias.
   for (const pkg of workspacePackages(files)) {
@@ -337,8 +350,39 @@ function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set
   return undefined;
 }
 
+// #1659: the ESM-TS convention writes `from "./helpers.js"` for a sibling `helpers.ts`, and
+// candidatePaths appends extensions to the specifier VERBATIM — so the candidate set was
+// `./helpers.js`, `./helpers.js.ts`, `./helpers.js.tsx`, … and the edge silently vanished.
+// The verbatim attempt still runs FIRST, so a real committed `helpers.js` next to a `helpers.ts`
+// keeps winning; the strip is a fallback, never a re-interpretation.
+// MEASURED 2026-08-01 over the 17 pinned corpus commits with the production predicate (loadSources
+// + collectPathAliases + resolveImport, and buildImportGraph's own not-type-only filter), in the
+// scope corpus-drift actually scans — i.e. with `vendoredSubtrees` stripped: 73,890 import
+// specifiers, 166 of them `.js`/`.mjs`/`.cjs`-suffixed, of which 84 resolved to nothing before this
+// fallback and resolve after it, ALL of them on carbon (`packages/dev/src/**`), with a population of
+// ZERO on the other 16 targets.
+// Read the scope qualifier as load-bearing. WITHOUT stripping vendored trees the same command
+// reports 4,780 recovered, because joshcoolman/effective vendors a whole copy of the Effect library
+// under `repos/` and Effect is written in the ESM-TS style throughout. Those 4,696 edges are real —
+// a field engagement scanning that repo would resolve them — but corpus-drift deletes that subtree,
+// so quoting 4,780 against a baseline would be a number measured on a different tree than the gate.
+// Corpus-wide effect on findings: NONE. Before/after `static-detect` over all 17 clones, one
+// variable, produced BYTE-IDENTICAL output on 17 of 17 (carbon 1866 findings in both arms). A
+// zero-movement result recorded as MEASURED, not assumed: the restored edges are in a CLI package
+// no route reaches, so no reachability-gated check changed its mind.
+//
+// REMAINING BOUND, counted rather than assumed empty (see importGraphNotAssessedRows in
+// src/scan/import-graph-scope.ts, which reports the residual per target): a suffix strip does not
+// model a package's `exports` map subpath CONDITIONS (`import`/`require`/`types` branches),
+// `moduleResolution: "bundler"` extensionless directory rules beyond `index.*`, or any
+// loader/plugin-provided specifier (`?raw`, `virtual:`, framework aliases).
+const ESM_JS_SUFFIX = /\.(m|c)?js$/;
+
 export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  const verbatim = resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  if (verbatim !== undefined || !ESM_JS_SUFFIX.test(specifier)) return verbatim;
+  const stripped = specifier.replace(ESM_JS_SUFFIX, "");
+  return resolveRelativeImport(fromPath, stripped, allPaths) ?? resolveAliasedImport(fromPath, stripped, allPaths, aliases);
 }
 
 // An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
@@ -802,6 +846,9 @@ function detectClientSuppliedOwnerId(
   const findings: Finding[] = [];
   const subsumedNoAuthActions = new Set<ts.Node>();
   const gates = new GateResolver(sources, aliases);
+  let sitesExamined = 0;
+  let excludedAuthBoundNothing = 0;
+  let excludedRlsClientNoAuth = 0;
   for (const [path, sf] of sources) {
     for (const action of mutationsFor(path, sf)) {
       const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
@@ -813,11 +860,6 @@ function detectClientSuppliedOwnerId(
       const gate = inBodyAuth ? undefined : gates.gateIn(AUTH_PATTERN, path, action.node);
       const hasAuth = inBodyAuth || gate !== undefined;
       const sessionNames = collectSessionBoundNames(action.node, sf);
-      // Auth was called but nothing was bound from it (`await requireUser()` for its throw, or
-      // an `assertPermission(…)` role gate). Whether the client value is authorized then depends
-      // on code this AST pass can't see — stay silent, for every shape.
-      if (hasAuth && sessionNames.size === 0) continue;
-
       const paramRoots = collectParamRootNames(action.node);
       const clientNames = new Set([...paramRoots, ...collectDerivedClientNames(action.node, paramRoots)]);
       // Session precedence: `const session = await getServerSession(req)` is DERIVED from a
@@ -829,9 +871,27 @@ function detectClientSuppliedOwnerId(
       const serviceNames = collectServiceClientNames(action.node, sf);
       const site = findClientOwnerSite(action.node, sf, clientNames, serviceNames);
       if (!site) continue;
+      // #1652: the two policy exclusions below used to `continue` in silence, and BOTH are moved
+      // here — after the site is known — precisely so the count means what it says. Testing them
+      // earlier (where the first one used to sit) would count actions that never had a
+      // client-supplied owner id at all, i.e. a population inflated by the check's own scope. The
+      // intervening steps are pure lookups and `sessionNames` is empty on the first branch, so the
+      // move changes no finding; `the two policy exclusions are counted, not silent (#1652)` in
+      // app-router.test.ts pins the emitted set as unchanged.
+      sitesExamined++;
+      // Auth was called but nothing was bound from it (`await requireUser()` for its throw, or
+      // an `assertPermission(…)` role gate). Whether the client value is authorized then depends
+      // on code this AST pass can't see — stay silent, for every shape.
+      if (hasAuth && sessionNames.size === 0) {
+        excludedAuthBoundNothing++;
+        continue;
+      }
       // Without an in-body auth+session, only the service-role shapes are findings: on the RLS
       // client the missing-auth check owns the defect (RLS still gates the row).
-      if (!hasAuth && !site.service) continue;
+      if (!hasAuth && !site.service) {
+        excludedRlsClientNoAuth++;
+        continue;
+      }
       // A comparison against the session OR a row the server fetched itself (a token-exchange
       // flow) is the authorization check — clear.
       const serverNames = new Set([...sessionNames, ...collectDbBoundNames(action.node)]);
@@ -876,7 +936,54 @@ function detectClientSuppliedOwnerId(
       );
     }
   }
-  return { findings, subsumedNoAuthActions };
+  return {
+    findings: [...findings, ...ownerIdScopeNote(nextId, noun, sitesExamined, excludedAuthBoundNothing, excludedRlsClientNoAuth)],
+    subsumedNoAuthActions,
+  };
+}
+
+// The disclosure half of #1652, the same shape #1441 gave the waterfall check. The two exclusions
+// above are the right trades — one hands the defect to the generic missing-auth finding (#465's
+// measured precision boundary), the other refuses to guess about a gate whose authorization lives
+// where the AST does not reach. Both produced SILENCE: a target where every client-owner-id site was
+// set aside reported zero rows of this class and nothing said a class had been set aside, which is
+// the shape CLAUDE.md names as worse than a wrong status. Now the zero carries its population.
+function ownerIdScopeNote(nextId: NextId, noun: string, sitesExamined: number, authBoundNothing: number, rlsClientNoAuth: number): Finding[] {
+  const excluded = authBoundNothing + rlsClientNoAuth;
+  // Nothing was set aside — there is no limitation to disclose, and a "0 excluded" row on every
+  // target would dilute the family into a status line.
+  if (excluded === 0) return [];
+  const classes = [
+    ...(authBoundNothing
+      ? [
+          `${authBoundNothing} where the ${noun.toLowerCase()} DOES authenticate but binds no session value from it (\`await requireUser()\` called for its throw, an \`assertPermission(…)\` role gate) — with nothing bound, whether the client-supplied id is authorized depends on code outside this pass, so no finding is made either way`,
+        ]
+      : []),
+    ...(rlsClientNoAuth
+      ? [
+          `${rlsClientNoAuth} on the ordinary RLS client with no auth call, where row-level security still gates the write and the generic missing-authorization finding owns the defect (#465's measured precision boundary) — only the service-role shape is reported here`,
+        ]
+      : []),
+  ];
+  return [
+    {
+      id: nextId(),
+      title: `M1 partially assessed — client-supplied owner id (${excluded} of ${sitesExamined} site${sitesExamined === 1 ? "" : "s"} excluded by policy)`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Security",
+      taxonomy: "M1 — Client-supplied owner id — scope",
+      location: "(whole target)",
+      status: "Open",
+      evidence: `This check found ${sitesExamined} place(s) where a ${noun.toLowerCase()} scopes a database write by a value that came from its own arguments. ${excluded} of them ${excluded === 1 ? "was EXCLUDED BY POLICY and is" : "were EXCLUDED BY POLICY and are"} therefore absent from the findings above: ${classes.join("; ")}. Neither class was judged individually: each is set aside as a whole.`,
+      impact: `Those ${excluded} site(s) were NOT judged safe — they were not judged. A zero (or reduced) count for this class on this target is therefore a statement about the policy above, not about the code. Recorded so it reads as 'not assessed', not 'assessed and clean'.`,
+      fix: "Review the excluded sites by hand: confirm that the gate the action calls really authorizes the caller for THAT row (not merely that it is signed in), and that the RLS policy on the written table restricts the row to the caller's tenant.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      precisionTier: "high",
+    },
+  ];
 }
 
 // The action's source text with the INTERIOR of every string/template/regex literal and every

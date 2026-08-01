@@ -284,6 +284,11 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   { match: (t) => t === "Static secret verified with no rotation-pair acceptance window", reason: "key-rotation operational hygiene — no single code-level CWE identifies it" },
   { match: (t) => t === "Dangerous extension enabled", reason: "database-extension posture (Supabase advisor) — no single code-level CWE identifies it" },
   { match: (t) => t === "M1 — Multi-tenant security", reason: "module-summary label, not a specific weakness" },
+  // #1652. The M9 scope rows (`M9 — … — scope`) are already covered by the blanket `M9 —` rule
+  // above; this is the first such disclosure under an `M1 —` taxonomy, and M1 is a security module,
+  // so it needs its own decision rather than a prefix. Matched exactly, so a SECOND M1 scope row
+  // fails loud here instead of inheriting this one's reason.
+  { match: (t) => t === "M1 — Client-supplied owner id — scope", reason: "scope disclosure — counts the client-owner-id sites set aside by policy (auth called but nothing bound; RLS client with no auth). States what was NOT judged; the weakness class itself carries CWE-639 under its own taxonomy" },
   { match: (t) => t === "M10 — Data classification", reason: "data-classification (PII/PHI/PCI) label — a data-sensitivity row, not a vulnerability CWE" },
 ];
 
