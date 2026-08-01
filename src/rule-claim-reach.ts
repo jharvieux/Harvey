@@ -45,14 +45,14 @@
 
 import { parse } from "yaml";
 
-export type DeadArm = {
+type DeadArm = {
   readonly file: string;
   readonly id: string;
   readonly focus: string;
   readonly arm: string;
 };
 
-export type ReachReport = {
+type ReachReport = {
   readonly rules: number;
   readonly focusBlocks: number;
   readonly dead: readonly DeadArm[];

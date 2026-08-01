@@ -11,7 +11,7 @@
 // Wired into `pnpm validate:calibration` (src/cli/validate-calibration.ts) so a single operator
 // command regression-locks this class alongside the rest of the corpus.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,6 +67,8 @@ export interface TruffleHogGitResult {
   SourceMetadata?: { Data?: { Git?: { file?: string; commit?: string } } };
 }
 
+type TruffleHogGitRun = { readonly records: TruffleHogGitResult[]; readonly failure?: string };
+
 // --no-verification skips every live provider call (deterministic, no network — a fake token
 // could never verify anyway). --results=unverified surfaces the pattern match itself, which is
 // exactly the git-history-recovery capability under test.
@@ -84,23 +86,37 @@ export interface TruffleHogGitResult {
 // PROVENANCE: MEASURED 2026-07-26
 // OWNER: operator
 // DECISION: #1078 — gate proves history recovery; production's verified-only scope is disclosed via SEC-SCOPE-00 instead
-function runTruffleHogGitHistory(dir: string): TruffleHogGitResult[] {
-  let out: string;
+const TRUFFLEHOG_GIT_ARGS = (dir: string): string[] => [
+  "git",
+  "--no-verification",
+  "--results=unverified",
+  "--json",
+  `file://${dir}`,
+];
+
+// #1757 site 1 — the weakest guard in the #1664 family, and the one whose mitigation had a hole.
+// It used to take `e.stdout` from a FAILED run with no length check at all. An empty stdout then
+// scored as "positive MISSED" and did fail the gate loudly, which is what made this look benign;
+// the hole is the other end. trufflehog streams NDJSON, so a run that dies AFTER emitting the
+// planted secret but before finishing the walk leaves a PREFIX that scores identically to a clean
+// run — positive caught, negative clear, gate PASS, on a scan that proved less than it reported.
+//
+// So classify by exit status instead. MEASURED against trufflehog 3.96.0 on 2026-07-31, with the
+// exact argv above: a completed scan exits 0 (1 record over the fixture); a missing repo exits 1
+// with empty stdout; a maxBuffer overflow raises ENOBUFS with status 255; a SIGKILLed run reports
+// 137. None of these call sites passes `--fail`, the only flag that makes a COMPLETED run exit
+// non-zero, so any non-zero exit or signal here means the walk did not finish.
+export function runTruffleHogGitJson(dir: string): TruffleHogGitRun {
+  const r = spawnSync("trufflehog", TRUFFLEHOG_GIT_ARGS(dir), { encoding: "utf8", maxBuffer: 1024 * 1024 * 16 });
+  if (r.error) return { records: [], failure: `trufflehog could not be run: ${r.error.message}` };
+  if (r.signal) return { records: [], failure: `trufflehog was killed by signal ${r.signal}` };
+  if (r.status !== 0) return { records: [], failure: `trufflehog exited with code ${r.status ?? "unknown"}` };
+  const lines = (r.stdout ?? "").split("\n").filter((line) => line.trim().startsWith("{"));
   try {
-    out = execFileSync(
-      "trufflehog",
-      ["git", "--no-verification", "--results=unverified", "--json", `file://${dir}`],
-      { encoding: "utf8", maxBuffer: 1024 * 1024 * 16 },
-    );
+    return { records: lines.map((line) => JSON.parse(line) as TruffleHogGitResult) };
   } catch (err) {
-    const e = err as { stdout?: string };
-    if (typeof e.stdout === "string") out = e.stdout;
-    else throw err;
+    return { records: [], failure: `trufflehog exited 0 but its JSON stream did not parse: ${(err as Error).message}` };
   }
-  return out
-    .split("\n")
-    .filter((line) => line.trim().startsWith("{"))
-    .map((line) => JSON.parse(line) as TruffleHogGitResult);
 }
 
 interface GitHistoryGateResult {
@@ -127,12 +143,27 @@ export function scoreGitHistoryResults(results: TruffleHogGitResult[]): GitHisto
   return { pass: positiveCaught && negativeClear, positiveCaught, negativeClear, detail };
 }
 
+// #1757. An incomplete run is NOT SCORED, and says so — scoring its partial stream would report a
+// caught positive and a clear negative from a walk that stopped early.
+export function gateResultFromRun(run: TruffleHogGitRun): GitHistoryGateResult {
+  if (run.failure === undefined) return scoreGitHistoryResults(run.records);
+  return {
+    pass: false,
+    positiveCaught: false,
+    negativeClear: false,
+    detail:
+      `P-SECRET-GIT-HISTORY: NOT SCORED — the trufflehog run did not complete (${run.failure}).\n` +
+      `  Its output is a prefix of the NDJSON stream, so neither the positive nor the benign control\n` +
+      `  was measured. This is a gate failure, not a recall miss.`,
+  };
+}
+
 // Full live gate: build the fixture, run trufflehog against it, score, clean up. Requires
 // `trufflehog` on PATH (same requirement as the rest of the mechanical secret scan).
 export function runGitHistorySecretGate(): GitHistoryGateResult {
   const { dir, cleanup } = buildGitHistoryFixture();
   try {
-    return scoreGitHistoryResults(runTruffleHogGitHistory(dir));
+    return gateResultFromRun(runTruffleHogGitJson(dir));
   } finally {
     cleanup();
   }

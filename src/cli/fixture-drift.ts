@@ -37,7 +37,7 @@ import type { TruffleHogResult } from "../scan/secrets.js";
 import type { VitalsReport } from "../hotspot-scan.js";
 import type { StrykerReport } from "../mutation-scan.js";
 import type { LighthouseResult } from "../lighthouse.js";
-import { buildGitHistoryFixture } from "../scan/git-history-secret-gate.js";
+import { buildGitHistoryFixture, runTruffleHogGitJson } from "../scan/git-history-secret-gate.js";
 import {
   JSCPD_PINNED_VERSION,
   KNIP_PINNED_VERSION,
@@ -239,18 +239,16 @@ async function trufflehogDrift(): Promise<never> {
     rerun: async () => {
       const { dir, cleanup } = buildGitHistoryFixture();
       try {
-        let out: string;
-        try {
-          out = execFileSync("trufflehog", ["git", "--no-verification", "--results=unverified", "--json", `file://${dir}`], { encoding: "utf8", maxBuffer: 1024 * 1024 * 16 });
-        } catch (err) {
-          const e = err as { stdout?: string };
-          if (typeof e.stdout === "string" && e.stdout.trim().length > 0) out = e.stdout;
-          else throw err;
+        // #1757 site 2. The old shape accepted a crashed run's partial stdout and diffed it against
+        // the committed contract, so an incomplete run reported either a false SCHEMA DRIFT alarm —
+        // sending the responder after an upstream release that never happened — or, if the prefix
+        // happened to satisfy the contract, a silent pass. An incomplete run is now DID NOT RUN,
+        // named as such and distinct from both.
+        const run = runTruffleHogGitJson(dir);
+        if (run.failure !== undefined) {
+          fail("trufflehog", `the fresh run DID NOT RUN to completion (${run.failure}) — this is not schema drift, and its partial output was not diffed against the committed fixture.`);
         }
-        const results = out
-          .split("\n")
-          .filter((line) => line.trim().startsWith("{"))
-          .map((line) => JSON.parse(line) as TruffleHogResult);
+        const results = run.records as TruffleHogResult[];
         return { parsed: results, summary: `trufflehog ${version} over a git-history secret seed — ${results.length} record(s)` };
       } finally {
         cleanup();
