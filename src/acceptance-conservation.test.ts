@@ -211,6 +211,84 @@ describe("Gate 1 — `relayed` requires the question to be on the issue", () => 
   });
 });
 
+// #1753 — completing a relay used to CREATE a duplicate: the executor's `relayed` and the
+// completing `met` are both live, the criterion maps twice, and clearing it took hand-neutralising
+// the older line (three round trips on PR #1700). One lone `met`/`split` over one lone `relayed`
+// is that flow working, so it resolves to the completing line; every other multiple mapping stays
+// a duplicate, which is this rule's own failing direction.
+describe("Gate 1 — completing a relay supersedes the `relayed` line (#1753)", () => {
+  const relayedInComment = issue({
+    number: 40,
+    comments: ["Operator: may I apply the supervised edit? Proposed wording below.", "ACCEPTANCE #40.1 relayed: supervised path — the question is in the comment above"],
+  });
+  const completed = "Closes #40\n\nACCEPTANCE #40.1 met: src/foo.ts:9 now carries the ruled edit\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+
+  it("passes a `met` recorded over an earlier `relayed`, and reports which line it retired", () => {
+    const r = checkAcceptance(completed, lookupOf(relayedInComment));
+    expect(r.ok).toBe(true);
+    expect(r.issues[0]!.criteria[0]!.disposition).toBe("met");
+    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({ venue: "#40 comment 2", line: 1, detail: expect.stringContaining("supervised path") });
+    const out = formatAcceptance(r);
+    expect(out).toContain("RELAY COMPLETED (#1753)");
+    expect(out).toContain("#40 comment 2, line 1");
+  });
+
+  it("passes a `split` over a `relayed` — both completions supersede", () => {
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: #41\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+    const withRemainder = lookupOf(
+      issue({ number: 40, comments: [...relayedInComment.comments, "Remainder of the ruled half split out to #41."] }),
+      issue({ number: 41, body: "Remainder of #40." }),
+    );
+    const r = checkAcceptance(body, withRemainder);
+    expect(r.ok).toBe(true);
+    expect(r.issues[0]!.criteria[0]!.disposition).toBe("split");
+    expect(r.issues[0]!.criteria[0]!.superseded).toBeDefined();
+  });
+
+  // Direction is fixed by TYPE because the venues carry no comparable timestamps: whichever line
+  // was written first, a `relayed` never displaces a `met`/`split`.
+  it("resolves to the `met` in the REVERSE venue arrangement too — a `relayed` never wins over a completion", () => {
+    const metInComment = issue({ number: 40, comments: ["Operator ruled: yes, apply it.", "ACCEPTANCE #40.1 met: src/foo.ts:9 now carries the ruled edit"] });
+    const body = "Closes #40\n\nACCEPTANCE #40.1 relayed: asked on the issue — may I apply the edit?\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+    const r = checkAcceptance(body, lookupOf(metInComment));
+    expect(r.ok).toBe(true);
+    expect(r.issues[0]!.criteria[0]!.disposition).toBe("met");
+  });
+
+  it("does not apply the question-on-the-issue rule to a superseded `relayed` — the relay is over", () => {
+    // No comment on #40 contains a question mark, so a LONE `relayed` fails; superseded, it does not.
+    const noQuestion = issue({ number: 40, comments: ["ACCEPTANCE #40.1 relayed: supervised path, wording proposed in the PR"] });
+    expect(checkAcceptance(completed, lookupOf(noQuestion)).ok).toBe(true);
+    const lone = "Closes #40\n\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+    expect(problems(lone, lookupOf(noQuestion))).toEqual([expect.stringContaining("carries no comment containing a question")]);
+  });
+
+  it("NEGATIVE CONTROL: holds the superseding `met` to the evidence bar — completing a relay is not a free pass", () => {
+    const bare = "Closes #40\n\nACCEPTANCE #40.1 met: done\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+    expect(problems(bare, lookupOf(relayedInComment))).toEqual([expect.stringContaining("bare assertion")]);
+  });
+
+  it("NEGATIVE CONTROL: two `relayed` lines are a repeat paste, not a completion — still a duplicate", () => {
+    const twice = "Closes #40\n\nACCEPTANCE #40.1 relayed: recorded a second time\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+    expect(problems(twice, lookupOf(relayedInComment))).toEqual([expect.stringContaining("mapped 2 times")]);
+  });
+
+  it("NEGATIVE CONTROL: `met` over `met` still fails, and the duplicate message names the one exception", () => {
+    const metTwice = issue({ number: 40, comments: ["ACCEPTANCE #40.1 met: src/foo.ts:9 also covers it"] });
+    const p = problems(completed, lookupOf(metTwice));
+    expect(p).toEqual([expect.stringContaining("mapped 2 times")]);
+    expect(p[0]).toContain("COMPLETED RELAY");
+  });
+
+  it("NEGATIVE CONTROL: three lines — `relayed` plus two completions — are still a duplicate", () => {
+    const three = issue({
+      number: 40,
+      comments: [...relayedInComment.comments, "ACCEPTANCE #40.1 met: src/foo.ts:9 also covers it"],
+    });
+    expect(problems(completed, lookupOf(three))).toEqual([expect.stringContaining("mapped 3 times")]);
+  });
+});
+
 describe("evidence, not assertion", () => {
   it("accepts a command, a file path, a quoted test name and a sha", () => {
     for (const detail of [
@@ -530,9 +608,11 @@ describe("the hermetic self-test CI runs", () => {
     }
   });
 
-  it("covers a healthy case and at least three distinct seeded violations", () => {
+  it("covers the healthy cases and at least three distinct seeded violations", () => {
     const cases = selftestCases();
-    expect(cases.filter((c) => c.expect === "pass")).toHaveLength(1);
+    // Two passing cases: the healthy body, and #1753's completed relay — a state that must pass
+    // BECAUSE the gate once failed it, so it is pinned here as deliberate rather than drifted-in.
+    expect(cases.filter((c) => c.expect === "pass")).toHaveLength(2);
     expect(cases.filter((c) => c.expect === "fail").length).toBeGreaterThanOrEqual(3);
   });
 });

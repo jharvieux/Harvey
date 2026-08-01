@@ -664,6 +664,8 @@ interface CriterionVerdict {
   text: string;
   disposition?: Disposition;
   detail?: string;
+  /** #1753 — the `relayed` line this criterion's `met`/`split` retired by completing the relay. Reported, so the retirement is visible rather than silent. */
+  superseded?: { venue: string; line: number; detail: string };
   problems: string[];
 }
 
@@ -802,12 +804,31 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     if (matched.length === 0) {
       return { ...c, problems: [`UNMAPPED — no disposition. Add \`ACCEPTANCE #${issue}.${c.index} <met|split|relayed>: <detail>\``] };
     }
-    if (matched.length > 1) {
+    // #1753 — completing a relay SUPERSEDES the `relayed` line instead of duplicating it. The
+    // designed relay flow (executor records `relayed`, the operator rules, the completing party
+    // records `met`/`split`) leaves TWO live lines for one criterion, and the duplicate rule used
+    // to fail exactly that state until the older line was neutralised by hand — three round trips
+    // on PR #1700, and a recurrence every time the flow works as designed. So one lone `met`/`split`
+    // over one lone `relayed` resolves to the completing line, with the retired `relayed` named in
+    // the report. Direction is fixed by TYPE, not by time: the venues carry no comparable
+    // timestamps (a PR body is edited at any point after a comment), so a `relayed` never wins over
+    // a `met`/`split` whichever was written first — the completed state stands, and a reader who
+    // believes the relay should govern neutralises the completing line instead, which the ℹ row
+    // makes findable. Everything else — same-verdict copies, met+split, three or more lines — is
+    // still a duplicate, and two `relayed` copies stay one because a repeat paste is not a
+    // completion.
+    const relays = matched.filter((m) => m.disposition === "relayed");
+    const superseding = matched.length === 2 && relays.length === 1 ? matched.find((m) => m.disposition !== "relayed") : undefined;
+    if (matched.length > 1 && superseding === undefined) {
       const where = matched.map((m) => `${m.venue}, line ${m.line}`).join("; ");
-      return { ...c, problems: [`#${issue}.${c.index} is mapped ${matched.length} times — ${where} — and a criterion takes exactly one disposition. Every venue is read CUMULATIVELY (this body, every linked PR body, and every comment on #${issue}), so keep ONE copy and neutralise the other before merging`] };
+      return { ...c, problems: [`#${issue}.${c.index} is mapped ${matched.length} times — ${where} — and a criterion takes exactly one disposition. Every venue is read CUMULATIVELY (this body, every linked PR body, and every comment on #${issue}), so keep ONE copy and neutralise the other before merging. (The one exception: a single \`met\`/\`split\` recorded over a single \`relayed\` is a COMPLETED RELAY and supersedes it automatically, #1753 — this set is not that pair)`] };
     }
-    const d = matched[0]!;
+    const d = superseding ?? matched[0]!;
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
+    if (superseding !== undefined) {
+      const r = relays[0]!;
+      verdict.superseded = { venue: r.venue, line: r.line, detail: r.detail };
+    }
     if (d.disposition === "met") {
       const evidence = evidenceProblems(d.detail, world);
       verdict.problems.push(...evidence);
@@ -974,6 +995,9 @@ export function formatAcceptance(report: AcceptanceReport): string {
     for (const c of issue.criteria) {
       const label = c.disposition ? `${c.disposition}` : "—";
       out.push(`    ${c.problems.length === 0 ? "✓" : "✗"} ${issue.issue}.${c.index} [${label}] ${c.text.slice(0, 110)}`);
+      if (c.superseded) {
+        out.push(`        ℹ RELAY COMPLETED (#1753): this \`${c.disposition}\` supersedes the \`relayed\` line at ${c.superseded.venue}, line ${c.superseded.line} ("${c.superseded.detail.slice(0, 70)}") — the older line is retired, not a duplicate, and this is the disposition of record`);
+      }
       for (const p of c.problems) out.push(`        ✗ ${p}`);
     }
   }
@@ -1178,6 +1202,19 @@ const SELFTEST_ISSUES: IssueRecord[] = [
     ),
   },
   {
+    // The COMPLETED-RELAY control (#1753): an executor records `relayed` in a comment, the operator
+    // rules, and the completing `met` lands in the closing PR body. Two live lines for one
+    // criterion is the relay flow WORKING, not a duplicate — while two `relayed` copies, and the
+    // met-over-met twin (#9005), stay duplicates, which is the other direction of the same control.
+    number: 9007,
+    state: "OPEN",
+    body: ["## Acceptance", "- the supervised edit lands", "- the gate stays green"].join("\n"),
+    comments: said(
+      "Operator: may I apply the supervised edit? The proposed wording is quoted below.",
+      "ACCEPTANCE #9007.1 relayed: supervised path — the operator question is recorded in the comment above with the proposed wording",
+    ),
+  },
+  {
     // The TWO-LINKED-PR control (#1581): the same venue divergence one field over. The close path
     // read every linked PR body and the PR path read none of them, so an issue closed by two PRs
     // that both disposition it passed at merge time and failed at close time.
@@ -1258,6 +1295,23 @@ const SELFTEST_DOUBLE_VENUE_BODY = [
 // The Development sidebar: GitHub records the close, the body says nothing, and a body-only gate
 // green-no-ops on a PR that WILL close #9001 on merge.
 const SELFTEST_SIDEBAR_BODY = "Refactors the seeder. refs #9001\n";
+
+// #1753 both directions. The completing `met` in this body plus the `relayed` in #9007's comment 2
+// is a completed relay and must PASS; the second body repeats the `relayed` instead of completing
+// it, which is a duplicate and must FAIL.
+const SELFTEST_RELAY_COMPLETED_BODY = [
+  "Closes #9007",
+  "",
+  "ACCEPTANCE #9007.1 met: the ruled edit landed in src/acceptance-conservation.ts — supersedes the `relayed` in comment 2",
+  "ACCEPTANCE #9007.2 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+].join("\n");
+
+const SELFTEST_RELAY_REPEATED_BODY = [
+  "Closes #9007",
+  "",
+  "ACCEPTANCE #9007.1 relayed: the same relay recorded a second time — a repeat paste, not a completion",
+  "ACCEPTANCE #9007.2 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+].join("\n");
 
 interface SelftestCase {
   name: string;
@@ -1341,6 +1395,19 @@ export function closeSelftestCases(): CloseSelftestCase[] {
       ]),
       expect: "fail",
     },
+    {
+      // #1753, the shape #1696's second comment reported live: the executor relays 9001.3, the
+      // supervisor completes it with a `met` in a later comment. Two live lines for one criterion
+      // is the relay flow working — the completing line wins and the close passes without anyone
+      // hand-neutralising the older one. The met-over-met case above stays a failure.
+      name: "a relay completed by a later `met` comment — supersession, not a duplicate (#1753)",
+      input: { ...base },
+      lookup: commented([
+        ...dispositions,
+        "ACCEPTANCE #9001.3 met: the operator ruled and the edit landed in src/acceptance-conservation.ts — supersedes the `relayed` above",
+      ]),
+      expect: "pass",
+    },
     { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, lookup: SELFTEST_LOOKUP, expect: "pass" },
   ];
 }
@@ -1359,5 +1426,7 @@ export function selftestCases(): SelftestCase[] {
     { name: "an acceptance section whose bullets sit below a standalone bold line", body: SELFTEST_TRUNCATED_SECTION_BODY, expect: "fail" },
     { name: "a `met` citing a repo path that does not exist", body: SELFTEST_INVENTED_PATH_BODY, expect: "fail" },
     { name: "a `met` citing a `pnpm` script that is not in package.json", body: SELFTEST_INVENTED_SCRIPT_BODY, expect: "fail" },
+    { name: "a `met` over an earlier `relayed` — completing a relay supersedes it (#1753)", body: SELFTEST_RELAY_COMPLETED_BODY, expect: "pass" },
+    { name: "a `relayed` repeated instead of completed — still a duplicate (#1753)", body: SELFTEST_RELAY_REPEATED_BODY, expect: "fail" },
   ];
 }
