@@ -91,6 +91,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "M1 — SSRF via an uncurated cross-file fetch wrapper": ["918", "A10"],
   // Server trusting client-side security enforcement.
   "Client-side authorization decision": ["602", "A04"],
+  // #1679. Same weakness as the row above — the security decision is made where the attacker
+  // stands — reached through the RSC boundary rather than through a client-side branch: the
+  // privileged rows are serialized into the payload before the client component decides not to
+  // render them, so the "check" never had anything to protect.
+  "M1 — Authorization enforced only by a client-side conditional render": ["602", "A01"],
   "Client-supplied payment amount trusted by server": ["602", "A04"],
   // #135/#1366 — Host / X-Forwarded-Host used to build an absolute link. CWE-807 (Reliance on
   // Untrusted Inputs in a Security Decision) rather than CWE-601 (open redirect): nothing here

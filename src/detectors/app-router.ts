@@ -471,6 +471,131 @@ function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPa
   return imports;
 }
 
+// #1679 / B15 row P-CLIENT-RENDER-AUTHZ — "authz enforced only by a client-component conditional
+// render". #1366 ruled this a MEASURED GAP: planted, scanned, nothing of the class fired. The
+// recorded route to closing it was "extend the M9 server→client-leak AST detector, which already
+// resolves that boundary", and that is what this is.
+//
+// The discriminator is a TWO-FILE structural fact, and it has to be, because the plant and its
+// negative twin are the SAME two files minus one gate: `targets/calibration/app/admin/page.tsx`
+// queries `admin_metrics` and hands the rows to `<AdminDashboardClient isAdmin={…} metrics={…} />`,
+// whose whole gate is `if (!isAdmin) return null`; `page-safe.tsx` is byte-for-byte that flow with a
+// `getServerSession()` role check and a `redirect()` in front of the query. MEASURED 2026-08-01,
+// which is why an intra-file approximation is not enough: the existing `M9 — Server→client data
+// leak` check fires on BOTH files, so it separates neither.
+//
+// Three conditions, all of them present in the source rather than inferred:
+//   1. a raw (un-projected) query result crosses into an imported `"use client"` component — the
+//      same crossing detectServerClientLeak already resolves, so the data really is in the payload;
+//   2. the enclosing server component makes NO auth call, in its own body or in any helper the
+//      #1263 resolver can reach — the one thing page-safe.tsx has and page.tsx does not;
+//   3. the client child's only gate is a render-time conditional on one of its own props.
+// Condition 3 is what keeps this off the generic missing-auth class: without it the finding would be
+// "a server component queries without checking auth", which is a different (and much larger) claim.
+//
+// Review tier, never free-count, for the reason every M9 boundary heuristic is: the pass proves the
+// data crosses and that no gate is visible in what it can read, not that authorization is absent
+// from a layout, a middleware or a wrapper outside its reach.
+function detectClientRenderOnlyAuthz(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
+  const findings: Finding[] = [];
+  const allPaths = new Set(sources.keys());
+  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  if (clientPaths.size === 0) return findings;
+  const gates = new GateResolver(sources, aliases);
+
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths, aliases);
+    if (clientImports.size === 0) continue;
+    const rawRowNames = collectRawRowNames(sf);
+    if (rawRowNames.size === 0) continue;
+
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+        const tagName = node.tagName.getText(sf);
+        const childPath = clientImports.get(tagName);
+        if (childPath !== undefined) {
+          for (const attr of node.attributes.properties) {
+            if (!ts.isJsxAttribute(attr) || !attr.initializer || !ts.isJsxExpression(attr.initializer)) continue;
+            const inner = attr.initializer.expression;
+            if (!inner || !ts.isIdentifier(inner) || !rawRowNames.has(inner.text)) continue;
+            const enclosing = ts.findAncestor(node, (a) => ts.isFunctionDeclaration(a) || ts.isArrowFunction(a) || ts.isFunctionExpression(a));
+            if (!enclosing) continue;
+            if (AUTH_PATTERN.test(stripLiteralsAndComments(sf, enclosing)) || gates.gateIn(AUTH_PATTERN, path, enclosing) !== undefined) continue;
+            const gate = renderOnlyPropGate(sources.get(childPath), tagName);
+            if (gate === undefined) continue;
+            findings.push(
+              makeFinding(nextId, {
+                title: `Privileged data reaches <${tagName} /> with the only authorization check in its render`,
+                severity: "High",
+                confidence: "Likely",
+                category: "Security",
+                taxonomy: "M1 — Authorization enforced only by a client-side conditional render",
+                location: loc(path, sf, attr),
+                evidence: `\`${attr.name.getText(sf)}={${inner.text}}\` — \`${inner.text}\` is the un-projected result of a query this component runs with no auth/session call in its own body and none in any helper it calls that this pass could resolve. <${tagName} /> is a 'use client' component (${childPath}) whose only gate is \`${gate}\`, which decides what to RENDER after the data has already been serialized into the payload sent to the browser.`,
+                impact:
+                  "The query runs and its rows are serialized for every caller, authorized or not. A user the UI hides the panel from still receives the whole dataset and can read it from the RSC payload in devtools or view-source. The client-side conditional is a display decision, not an authorization boundary.",
+                fix: `Check the caller's role on the SERVER, before the query runs — return/redirect on failure — so an unauthorized request never causes the data to be fetched or serialized. Keep the \`${gate}\` render check if you like; it is a UI nicety once the server gate exists.`,
+                value: 5,
+                ease: 3,
+                safety: 4,
+              }),
+            );
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
+/**
+ * The render-time gate of a client component: an `if (<cond>) return null/undefined/<falsy JSX>`
+ * whose condition reads one of the component's OWN parameter props. Returns the gate's source text.
+ *
+ * A gate that reads anything else — a hook result, a context value, a module import — is NOT this
+ * class: the point of the plant is that the parent decided the caller's authority and passed the
+ * verdict down as data. Returning `undefined` leaves the finding unmade, so a shape this misses
+ * costs a detection, never a false one.
+ */
+function renderOnlyPropGate(childSf: ts.SourceFile | undefined, componentName: string): string | undefined {
+  if (!childSf) return undefined;
+  const fn = collectDeclaredFunctions(childSf).get(componentName);
+  if (!fn) return undefined;
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+  if (!body || !ts.isBlock(body)) return undefined;
+  const propNames = new Set<string>();
+  for (const param of (fn as ts.FunctionLikeDeclaration).parameters) {
+    if (ts.isIdentifier(param.name)) propNames.add(param.name.text);
+    else if (ts.isObjectBindingPattern(param.name)) {
+      for (const el of param.name.elements) if (ts.isIdentifier(el.name)) propNames.add(el.name.text);
+    }
+  }
+  if (propNames.size === 0) return undefined;
+  for (const stmt of body.statements) {
+    if (!ts.isIfStatement(stmt) || stmt.elseStatement) continue;
+    const then = ts.isBlock(stmt.thenStatement) ? stmt.thenStatement.statements[0] : stmt.thenStatement;
+    if (!then || !ts.isReturnStatement(then)) continue;
+    const returned = then.expression;
+    const returnsNothing =
+      returned === undefined ||
+      returned.kind === ts.SyntaxKind.NullKeyword ||
+      (ts.isIdentifier(returned) && returned.text === "undefined") ||
+      returned.kind === ts.SyntaxKind.FalseKeyword;
+    if (!returnsNothing) continue;
+    let readsProp = false;
+    const scan = (n: ts.Node) => {
+      if (ts.isIdentifier(n) && propNames.has(n.text)) readsProp = true;
+      ts.forEachChild(n, scan);
+    };
+    scan(stmt.expression);
+    if (readsProp) return `if (${stmt.expression.getText(childSf)}) return …`;
+  }
+  return undefined;
+}
+
 function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
@@ -3455,6 +3580,11 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     ? dataLayerNotAssessed(nextId, otherDataLayer)
     : [
         ...(S.has("server-client-leak") ? adapter.detectServerClientLeak(sources, nextId, files) : []),
+        // #1679 rides the `server-client-leak` capability rather than adding an M9Check of its own:
+        // it needs exactly that adapter's server→client crossing, so an adapter without the
+        // capability already emits a not-assessed row naming it, and a second row would say the
+        // same thing twice. Its OWN taxonomy is `M1 —`, so it is scored by the M1-boundary key.
+        ...(S.has("server-client-leak") ? detectClientRenderOnlyAuthz(sources, nextId, collectPathAliases(files)) : []),
         ...(S.has("cache-config") ? detectUnsafeCacheConfig(sources, nextId) : []),
         ...(S.has("data-waterfall") ? detectDataFetchingWaterfalls(sources, nextId, adapter.isClientContext, collectPathAliases(files)) : []),
       ];
