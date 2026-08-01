@@ -1,6 +1,7 @@
 // Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes seeded for the
-// semantic/whole-program tier (roadmap `docs/design/corpus-roadmap-to-100.md` §4a). Every entry is
-// `review` tier. Originally NONE had a matching mechanical rule; the #354 re-triage graduated TWO
+// semantic/whole-program tier (roadmap `docs/design/corpus-roadmap-to-100.md` §4a). Six of the
+// tiered rows are `review`; P-MW-SOLE-AUTHZ is the one `none` row (per-row rulings below).
+// Originally NONE had a matching mechanical rule; the #354 re-triage graduated TWO
 // to a leftover-auth grep (still review, not free-count): P-MW-MATCHER-EXCLUDES-API (the matcher's
 // api-lookahead is a textual fact) and P-DRAFTMODE-NO-SECRET (a shallow intra-file "enable with no
 // secret gate" check). #433 graduated a THIRD: P-BOLA-BODY-OWNER is now caught by the bola-owner
@@ -18,15 +19,22 @@
 //                         and the row is `mustCatch` so a regression is FATAL, not a tracked gap.
 //   P-MW-SOLE-AUTHZ       MEASURED GAP (`expectedTier: "none"`, gapKind "measured-gap") — outstanding
 //                         work, tracked on #1679. Not a boundary.
-//   P-CLIENT-RENDER-AUTHZ MEASURED GAP, same treatment, tracked on #1679, and the #1011 re-test
-//                         criterion #1366 asked for is recorded on the row itself.
-// #1366 is CLOSED; #1679 inherits both rows explicitly (each row's plant, its measured reason, and
-// what a detector would have to see), because a comment on a closed issue is not a tracker.
-// The two "none" rows leave the recall denominator and gain the fail-loud-on-graduation guard, which
-// review tier does not have: a rule STARTING to fire on a review-tier row is not a failure in either
-// direction, so nothing would have noticed the gap closing. (The other half of that sentence — that
-// a review-tier MISS was absorbed as a tracked non-fatal gap — stopped being true on 2026-07-31,
-// #1628.)
+//   P-CLIENT-RENDER-AUTHZ SUPERSEDED BY #1811 (2026-08-01), which graduated it to
+//                         `expectedTier: "review"` on detectClientRenderOnlyAuthz
+//                         (src/detectors/app-router.ts). #1366's measured-gap ruling and the #1011
+//                         re-test it asked for are retained on the row itself, as the record #1811
+//                         closes rather than as a live claim.
+// #1366 is CLOSED; #1679 still tracks P-MW-SOLE-AUTHZ (its plant, its measured reason, and what a
+// detector would have to see), because a comment on a closed issue is not a tracker.
+// The one `none` row leaves the recall denominator and gains the fail-loud-on-graduation guard,
+// which review tier does not have: a rule STARTING to fire on a review-tier row is not a failure in
+// either direction, so nothing would have noticed the gap closing. (The other half of that
+// sentence — that a review-tier MISS was absorbed as a tracked non-fatal gap — stopped being true
+// on 2026-07-31, #1628.)
+//
+// This header claimed TWO `none` rows for eleven hours after #1811 graduated one of them, which is
+// #1827 and why src/entries-header-drift.ts now derives these counts from the rows below instead of
+// trusting the prose above them.
 //
 // The acceptance bar for THIS batch is precision, not recall: zero free-count (high-tier) false
 // positives on the negatives. See GROUND-TRUTH.md §B15.

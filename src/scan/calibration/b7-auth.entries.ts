@@ -4,7 +4,10 @@
 // no-rate-limiter-hint check) and one reuse of its existing bypassAuth grep. Scheduled
 // deliberately LAST in the #71 fan-out: it has the HIGHEST negative-precision risk in the corpus
 // (a static tool cannot confirm an ownership/permission/rate-limit check is correct, only that
-// the shape is absent), so EVERY entry here is `review` tier — none feed the free count.
+// the shape is absent), so 27 of these entries are `review` tier and never feed the free count.
+// The one exception is P-CORS-REFLECTED-OBJLIT, added at `high` by #645: a reflected-origin CORS
+// header written as an object literal is an exact syntactic fact, not an absent shape. This header
+// read "EVERY entry here is `review` tier" from #71 until #1827 measured it against the rows.
 // P-DEBUG-ENDPOINT, P-TODO-AUTH (leftover-auth greps, base.entries.ts) and P-SRV-KEY-CLIENT
 // (harvey-service-role-in-client, base.yml) already ship — not duplicated here. See
 // GROUND-TRUTH.md §B7.

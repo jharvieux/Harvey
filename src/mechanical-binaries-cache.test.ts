@@ -144,19 +144,29 @@ describe("#1516 the save cannot be reached on an incomplete tree", () => {
   });
 });
 
-// #1516's fourth criterion is "the four consumers of this action still pass". MEASURED 2026-07-31:
-// there are SIX, not four — free-recall.yml (#1185) and ci.yml joined after the issue was written.
-// The count is enumerated here rather than quoted, because a consumer list in prose is exactly the
-// kind of recorded number that decays: this action's blast radius IS its consumer set, and a
-// seventh added silently would widen it with nobody re-reading the issue.
+// #1516's fourth criterion is "the four consumers of this action still pass". MEASURED 2026-08-01:
+// there are SEVEN, not four — free-recall.yml (#1185) and ci.yml joined after the issue was
+// written, and reasons-drift.yml joined in #1826 (61dd15d), which landed the seventh consumer
+// without updating this list and left `pnpm verify` red on `main`. That is the enumeration working:
+// the count is listed here rather than quoted, because a consumer list in prose is exactly the kind
+// of recorded number that decays — this action's blast radius IS its consumer set, and an eighth
+// added silently would widen it with nobody re-reading the issue.
 describe("#1516 the action's blast radius, enumerated rather than recalled", () => {
   const consumers = readNamesSafe(join(process.cwd(), ".github", "workflows"))
     .filter((f) => f.endsWith(".yml"))
     .filter((f) => readFileSync(join(process.cwd(), ".github", "workflows", f), "utf8").includes("./.github/actions/mechanical-binaries"))
     .sort();
 
-  it("is used by exactly these six workflows", () => {
-    expect(consumers).toEqual(["ci.yml", "conservation.yml", "corpus-drift.yml", "dry-run-drift.yml", "free-recall.yml", "secbench.yml"]);
+  it("is used by exactly these seven workflows", () => {
+    expect(consumers).toEqual([
+      "ci.yml",
+      "conservation.yml",
+      "corpus-drift.yml",
+      "dry-run-drift.yml",
+      "free-recall.yml",
+      "reasons-drift.yml",
+      "secbench.yml",
+    ]);
   });
 
   // The restore/save split changed the action's INSIDE. With no inputs declared and none passed,
