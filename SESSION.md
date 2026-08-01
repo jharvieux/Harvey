@@ -2,7 +2,18 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-31 — **SWEEP WRAPPING UP.** 32 batches merged across rounds 3 and 4. **Tracker measured at 131 open** (`gh issue list --state open --limit 500`), down from 189. Ledger at `.git/issue-sweep-ledger.json`. Newest block first._
+_Last updated: 2026-07-31 — **SWEEP WRAPPING UP.** 32 batches merged across rounds 3 and 4. **Tracker measured at 131 open** (`gh issue list --state open --limit 500`), down from 189. Ledger at `.git/issue-sweep-ledger.json`. Newest block first. A parallel operator-directed session added the 2026-07-31 block directly below._
+
+## 2026-07-31 (parallel operator-directed session) — #1749/#1751 merged, drill #1750 executed, swallow-shape sweep filed #1752–#1757
+
+**Context for other sessions:** this ran ALONGSIDE the main-red fix session and the sweep. It did NOT touch
+`src/cli/validate-reasons.test.ts` or `fix/main-red-ratchet-fixture` (owned elsewhere), and avoided PR #1744's held files.
+
+- **Merged: PR #1749** (#1664 — semgrep-core crashes now classified, `validate-calibration` halts with SCAN DID NOT RUN, SEM-00 widened to the deliverable; #1746 — review-tier corpus positives are now FATAL recall guards, ratifying #1732; measured 359/359, 229 rows fatal, 0 turned red). **PR #1751** (#1696 — acceptance-on-close gate now re-opens on EVERY failure; the old "re-open once, the label is the memory" rule was the real divergence driver; `parseBody` is now fence-aware so quoting a malformed line no longer poisons a venue). Both independently verified all-met before merge; both closes accepted by the gate; main green after each. #1751 breached the claim ratchet on its own comment ("cannot") — repaired in `0e89aaa`, the known #1401 pattern.
+- **Drill #1750 EXECUTED and closed**: run 30674282482 — gate step exit 1, log carries `RE-OPENED — the one terminal state of a failed close (#1696)`, and **#1348 is genuinely REOPENED** (label intact). Doc row updated in this PR. **#1348 now needs its criteria re-dispositioned** — first of the ten silently-failed closes measured in PR #1751 (#1348 #1347 #1342 #1341 #1308 #1302 #1301 #1297 #1296 #1285, all exit 1 read-only 2026-07-31).
+- **IN FLIGHT at write time (2 executors, cap held):** #1710 (semgrep nondeterminism — measurement across the pinned corpus, heavy, longest pole) and #1752 (osv-scanner swallow — measurement-first). **QUEUED:** #1753 (relay-neutralisation; was file-blocked behind PR #1751, now waits on a free slot).
+- **FILED:** #1752 (osv swallow — was PR #1749's UNFILED open question; the operator caught the non-filing; supervisor lesson recorded: an executor's "flagged but not filed" is a disposition to verify, and verifier briefs now cover report residuals), #1753 (operator's relay-completion suggestion split from #1696 so it survives the close), and the **#1749-shape sweep**: #1754 (trufflehog/gitleaks — partial NDJSON from a crashed scan parses clean line-by-line, WORST of the family, engagement path), #1755 (splinter psql partial rows on the paid connected tier), #1756 (validate-secbench still invokes semgrep RAW, bypassing the new `execSemgrep`), #1757 (git-history gate accepts even EMPTY stdout on error + both fixture-drift CLIs). All four: swallow shape MEASURED on origin/main 2026-07-31, per-tool crash capability deliberately unmeasured (first acceptance criterion each). Cleared as NOT the defect: Stryker runner (report file is ground truth), jscpd (discloses via gap row), pentest stand-ups/fix-diff (return ok:false).
+- **PARKED ON OPERATOR:** (1) dispatch the gate against the remaining NINE silently-closed issues — reopens all nine, the honest state but a queue-size call; (2) #1754–#1757 are filed but NOT dispatched — the operator asked for the check, not yet the fixes.
 
 ## NEXT SESSION — priority order (operator-set 2026-07-31)
 
