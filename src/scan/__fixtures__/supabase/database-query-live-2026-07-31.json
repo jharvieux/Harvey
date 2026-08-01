@@ -1,0 +1,77 @@
+[
+  {
+    "schema": "public",
+    "name": "table_01",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_02",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_03",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_04",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_05",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_06",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_07",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_08",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_09",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_10",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_11",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_12",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_13",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_14",
+    "rlsEnabled": true
+  },
+  {
+    "schema": "public",
+    "name": "table_15",
+    "rlsEnabled": true
+  }
+]

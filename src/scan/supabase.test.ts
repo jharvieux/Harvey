@@ -185,6 +185,72 @@ describe("runSupabaseScan", () => {
     await expect(runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl })).rejects.toThrow(/403/);
   });
 
+  // #1265 — every hosted assertion above this line feeds the scan a body a test author wrote. The
+  // envelope `managementApiQuery<T>` unwraps had never been seen: the endpoint's 201 is documented
+  // with no content schema at all, so "a bare row array" was inference from the vendor's client
+  // source. These two bodies are REAL: a 201 from `POST /database/query` carrying this module's own
+  // TABLES_SQL, and a 200 from `GET /config/auth` — both from an operator-owned project, both
+  // committed under __fixtures__/supabase with their provenance and their one disclosed transform.
+  describe("the hosted scan against REAL Management API response bodies (#1265/#1291)", () => {
+    const liveTables = JSON.parse(
+      readFileSync(new URL("./__fixtures__/supabase/database-query-live-2026-07-31.json", import.meta.url), "utf8"),
+    ) as { schema: string; name: string; rlsEnabled: boolean }[];
+    const liveAuth = JSON.parse(
+      readFileSync(new URL("./__fixtures__/supabase/config-auth-live-2026-07-31.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+
+    const liveFetch = (tables: unknown): typeof fetch =>
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        const u = url.toString();
+        if (u.includes("/advisors/security")) return new Response(JSON.stringify({ lints: [] }));
+        if (u.includes("/config/auth")) return new Response(JSON.stringify(liveAuth));
+        if (u.includes("/postgrest")) return new Response(JSON.stringify({ db_schema: "public,graphql_public" }));
+        if (u.includes("/database/query")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+          // The status the live endpoint actually answered. A narrowing to `=== 200` fails here.
+          if (body.query.includes("pg_tables") && !body.query.includes("realtime")) {
+            return new Response(JSON.stringify(tables), { status: 201 });
+          }
+          if (body.query.includes("realtime")) return new Response(JSON.stringify([{ rlsEnabled: true }]), { status: 201 });
+          if (body.query.includes("nspname = 'cron'")) return new Response(JSON.stringify([{ exists: false }]), { status: 201 });
+          return new Response(JSON.stringify([]), { status: 201 });
+        }
+        return new Response("not found", { status: 404 });
+      }) as unknown as typeof fetch;
+
+    it("the captured body really is the bare array the code unwraps, with a real JSON boolean", () => {
+      // Without this the run below could pass over a hand-shaped fixture — which is the substitution
+      // #1265 was filed about.
+      expect(Array.isArray(liveTables)).toBe(true);
+      expect(liveTables).toHaveLength(15);
+      expect(Object.keys(liveTables[0]!).sort()).toEqual(["name", "rlsEnabled", "schema"]);
+      expect(typeof liveTables[0]!.rlsEnabled).toBe("boolean");
+    });
+
+    it("consumes both live bodies end to end and grades from their values", async () => {
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(liveTables) });
+      // From the live auth body: HIBP off with the email provider on.
+      expect(findings.map((f) => f.id)).toContain("SB-AUTH-HIBP");
+      // From the live table body: all 15 rows carry rlsEnabled true, so nothing is auto-exposed.
+      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+    });
+
+    it("CONTROL — one row's rlsEnabled flipped to false is graded, so the pass above is not vacuous", async () => {
+      const flipped = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: false } : r));
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(flipped) });
+      expect(findings.filter((f) => f.taxonomy === "Auto-exposed public-schema table")).toHaveLength(1);
+    });
+
+    it("CONTROL — a driver that stringified the boolean would go silent, which is why the capture matters", async () => {
+      // "f" is truthy in JS, so a `t`/`f` wire format would make every RLS-disabled table read as
+      // enabled and the check would report nothing, forever, with no error anywhere. The live 201
+      // is what rules this out; this control states the cost of having assumed it.
+      const stringy = liveTables.map((r, i) => (i === 0 ? { ...r, rlsEnabled: "f" as unknown as boolean } : r));
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl: liveFetch(stringy) });
+      expect(findings.some((f) => f.taxonomy === "Auto-exposed public-schema table")).toBe(false);
+    });
+  });
+
   describe("pg_cron wiring", () => {
     it("does not query cron.job and reports no pg_cron findings when the cron schema is absent (N/A)", async () => {
       const fetchImpl = mockFetch({

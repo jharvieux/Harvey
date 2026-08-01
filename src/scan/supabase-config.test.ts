@@ -189,6 +189,57 @@ describe("AuthConfig conforms to the captured Management API response schema", (
   });
 });
 
+// #1291 — the same conformance question asked of the WIRE instead of the spec. Until now every
+// assertion in this file was against `AuthConfigResponse`, the vendor's own description of its
+// response, and #1291's whole finding is that the two differ. `config-auth-live-2026-07-31.json` is
+// a redacted 200 from a live project the operator owns (see __fixtures__/supabase/PROVENANCE.md for
+// the command, the redaction rule and the gitleaks/trufflehog check on the result).
+describe("AUTH_CONFIG_FIELDS against a LIVE response body, not the vendor spec (#1291)", () => {
+  const live = JSON.parse(
+    readFileSync(new URL("./__fixtures__/supabase/config-auth-live-2026-07-31.json", import.meta.url), "utf8"),
+  ) as Record<string, unknown>;
+  const schema = JSON.parse(
+    readFileSync(new URL("./__fixtures__/supabase/auth-config-response-schema-2026-07-26.json", import.meta.url), "utf8"),
+  ) as { properties: Record<string, unknown>; required: string[] };
+
+  it("the capture is a real body and not the schema by another name — 242 keys, and the two disagree", () => {
+    // Without this the assertions below could pass over a file that is just the spec re-serialised,
+    // which is the exact substitution #1291 found.
+    expect(Object.keys(live)).toHaveLength(242);
+    const onlyLive = Object.keys(live).filter((k) => !(k in schema.properties));
+    const onlySchema = Object.keys(schema.properties).filter((k) => !(k in live));
+    expect(onlyLive.sort()).toEqual([
+      "audit_log_disable_postgres",
+      "index_worker_ensure_user_search_indexes_exist",
+      "mailer_subjects_custom_contents",
+      "mailer_templates_custom_contents",
+      "mfa_allow_low_aal",
+      "security_update_password_require_current_password",
+    ]);
+    // The falsifying row: the schema lists it as `required`, the wire does not carry it.
+    expect(onlySchema).toEqual(["nimbus_oauth_email_optional"]);
+    expect(schema.required).toContain("nimbus_oauth_email_optional");
+  });
+
+  it.each(Object.entries(AUTH_CONFIG_FIELDS))("%s is present on the wire as %s", (field, type) => {
+    expect(Object.keys(live)).toContain(field);
+    const actual = typeof live[field];
+    expect(type === "integer" ? "number" : type).toBe(actual);
+  });
+
+  it("the real consumer runs against the real body and grades only what it received", () => {
+    // The first time checkAuthConfig has ever been handed a live Management API response. The one
+    // finding is derived from this project's actual settings: `password_hibp_enabled` is false with
+    // the email provider on. The OTP check stays SILENT because `mailer_otp_exp` is exactly 3600 —
+    // asserted below rather than left implied, because "the boundary value does not fire" is the
+    // half of a threshold nobody writes down and the reason this list is one row and not two.
+    expect(live.password_hibp_enabled).toBe(false);
+    expect(live.mailer_otp_exp).toBe(3600);
+    expect(checkAuthConfig(live).map((f) => f.id)).toEqual(["SB-AUTH-HIBP"]);
+    expect(checkAuthConfig({ ...live, mailer_otp_exp: 3601 }).map((f) => f.id).sort()).toEqual(["SB-AUTH-HIBP", "SB-AUTH-OTP-EXPIRY-EMAIL"]);
+  });
+});
+
 describe("checkDangerousExtensions", () => {
   it("flags pg_net when installed", () => {
     const findings = checkDangerousExtensions([{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }]);

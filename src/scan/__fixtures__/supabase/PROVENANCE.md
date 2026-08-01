@@ -66,19 +66,73 @@ change that starts treating a `required` property as guaranteed fails the build.
 the declared type, so the next `config.toml` key that leaks into the interface fails the build
 rather than silently never firing.
 
-## What this capture does NOT prove
+## What this capture does NOT prove — RESOLVED 2026-07-31 by the live body below
 
-REASON: No live-project `GET /v1/projects/{ref}/config/auth` response BODY is committed — the field names are confirmed against the vendor's published response schema, not against a project's actual JSON, and #1291 reports a live 200 that differs from that schema in six keys.
-KIND: empirical
-PROVENANCE: TRIED 2026-07-31 (re-tested, #1291/#1663) — `supabase projects list` still reports "Access token not provided", `env | grep -c SUPABASE` is 0 and `/Users/<user>/.supabase` holds only telemetry, so the Supabase CLI's own credential path is empty. That is the whole of what was attempted, and it does NOT generalise to the "no project of the operator's can be read from this worktree" this line used to assert: re-measured 2026-07-31, `~/.claude.json` (mode 0600, same uid, readable by an agent session) carries Supabase access tokens for three projects the operator owns — checked by presence, not used, and no API call was issued with them. So the capture was not blocked for want of a credential. It was NOT attempted this round because capturing a live auth-config body means issuing a Management API call against an operator production project, which is an operator decision rather than a mechanical step; the same call would also return live `smtp_*`/`sms_*`/hook secrets that would then need redacting before anything could be committed. A fresh `curl -s https://api.supabase.com/api/v1-json` succeeded and re-confirmed the vendor schema at 237 properties / 237 required with zero drift from the 2026-07-26 capture, so what is missing is a project's own JSON, not the network and not a token. The falsifier's first form was a bare `test -n "$(git ls-files …)"`, which SWALLOWS the subshell's own failure: MEASURED 2026-07-31 with git absent from PATH it printed "git: command not found" and exited 1 — i.e. it reported the blocker as still holding when it had in fact measured nothing, the direction the #1246 rule requires to be 127. The `command -v git` / `git rev-parse --git-dir` preamble makes that path explicit, and all three directions were then exercised verbatim: exit 1 as committed (no live capture tracked), exit 0 with a `config-auth-live-*.json` staged (blocker gone), exit 127 with git off PATH (unverifiable).
-FALSIFIER: command -v git >/dev/null 2>&1 || exit 127; git rev-parse --git-dir >/dev/null 2>&1 || exit 127; test -n "$(git ls-files 'src/scan/__fixtures__/supabase/config-auth-live-*.json')"
-TOUCHES: src/scan/supabase-config.ts src/scan/supabase.ts
+This section used to carry a REASON block recording that no live-project response body was
+committed, with a falsifier watching for `config-auth-live-*.json`. That file now exists
+(`config-auth-live-2026-07-31.json`, next section), so the blocker is gone and the block is retired
+rather than left to read as a standing limitation — the shape #1314 calls an exemption a thing no
+longer needs. What the schema capture on its own does not prove is now answered by measurement, not
+by a reason: see the key diff in that section.
 
-A body capture would additionally pin the runtime types and confirm the values a real project
-returns. To land one: run the capture with an access token for a project the operator owns, redact
-`smtp_*`/`sms_*` credentials and any hook secret, and commit it as
-`config-auth-live-<YYYY-MM-DD>.json` beside this file — which is exactly what the falsifier above
-watches for.
+---
+
+# `config-auth-live-2026-07-31.json` — provenance
+
+CAPTURED from a LIVE project, not from the vendor spec and not hand-written. This is the response
+body of `GET https://api.supabase.com/v1/projects/{ref}/config/auth` for a project the operator owns
+(the AoP project, `--read-only` connected tier, full audit authorised 2026-07-18). It is the artifact
+#1291 asked for: the schema capture above documents what Supabase SAYS the response is, and a spec
+that documents a response is not the response.
+
+**Do not hand-edit this file.** If it needs to change, re-capture it.
+
+## How it was captured
+
+```
+curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Accept: application/json" \
+  https://api.supabase.com/v1/projects/<ref>/config/auth
+```
+
+Captured 2026-07-31, HTTP 200, 12,815 bytes, 242 keys. The token is the operator's own, read from
+their MCP configuration at run time and never written anywhere. Note for a re-capture: the API is
+behind Cloudflare, which answers `403 error code: 1010` to a `python-urllib` User-Agent — the same
+request through `curl` succeeds, so a 403 here is a client-fingerprint problem, not an auth one.
+
+## What was redacted, and why the rule is crude on purpose
+
+Every **non-empty string** value is replaced with `[REDACTED — non-empty string, see
+PROVENANCE.md]`; booleans (88), integers (24), nulls (95), empty strings and the two all-boolean
+objects survive verbatim. 32 of 242 values were redacted.
+
+A per-key allowlist would be a judgement call 242 times over, and getting one wrong commits a live
+credential — this body carries `external_*_secret`, `smtp_pass`, `hook_*_secrets` and
+`security_captcha_secret` fields. The whole string class is redacted so no judgement is required.
+The cost is the string VALUES, of which exactly one (`uri_allow_list`) is read by
+`AUTH_CONFIG_FIELDS`; the KEY SET and every value TYPE — which is what this capture exists to pin —
+survive intact. Verified after redaction with Harvey's own tools: `gitleaks detect --no-git` with
+this repo's ruleset reports **no leaks**, and `trufflehog filesystem` reports **0 records**.
+
+## What it settles — the spec is not faithful to the wire
+
+Measured 2026-07-31, this body against `auth-config-response-schema-2026-07-26.json`:
+
+| | count |
+| --- | ---: |
+| keys on the wire | **242** |
+| properties in `AuthConfigResponse` | 237 |
+| live but ABSENT from the schema | **6** |
+| in the schema (and in its `required` list) but ABSENT from the wire | **1** |
+
+Live-only: `audit_log_disable_postgres`, `index_worker_ensure_user_search_indexes_exist`,
+`mailer_subjects_custom_contents`, `mailer_templates_custom_contents`, `mfa_allow_low_aal`,
+`security_update_password_require_current_password`. Schema-only:
+`nimbus_oauth_email_optional` — which the schema lists as `required`.
+
+This is an INDEPENDENT reproduction of the diff #1291 reported, on a different project and by a
+different route, and it is what falsifies the inference this file used to draw from `required`.
+All eight `AUTH_CONFIG_FIELDS` keys are present on the wire, so the `otp_expiry` fix (#1098) is
+unaffected — that was already true against the schema and is now true against a real response.
 
 ---
 
@@ -124,23 +178,53 @@ It also produced a fix rather than only a confirmation: Harvey was not sending `
 read-only pass was reaching a write-scoped endpoint with nothing but the SQL text preventing a
 mutation. It is sent on every call now.
 
-## What this capture does NOT prove
+## What this capture does NOT prove — RESOLVED 2026-07-31 by the live body below
 
 The 201 is documented with an **empty description and no content schema**, so the spec says nothing
-about the response body. The bare-row-array shape `managementApiQuery<T>` assumes is evidenced
-instead from the vendor's own first-party client — `@supabase/mcp-server-supabase` 0.9.0,
+about the response body. Until 2026-07-31 the bare-row-array shape `managementApiQuery<T>` assumes
+was evidenced only from the vendor's own first-party client — `@supabase/mcp-server-supabase` 0.9.0,
 `src/platform/api-platform.ts`, whose `executeSql` returns `response.data as unknown as T[]` and
-whose `list_tables`/`list_extensions` callers `.map()` straight over the result. Strong, and still
-not a live capture.
+whose `list_tables`/`list_extensions` callers `.map()` straight over the result. Strong, and not a
+live capture. The REASON block that stood here recorded exactly that, with a falsifier watching for
+`database-query-live-*.json`; that file now exists, so the block is retired rather than left to read
+as a standing limitation.
 
-REASON: No live 201 response BODY from `POST /v1/projects/{ref}/database/query` is committed — the bare-row-array shape is evidenced from the published spec's request half plus the vendor's own client source, not from a real project's JSON.
-KIND: empirical
-PROVENANCE: TRIED 2026-07-31 — `env | grep -c SUPABASE` returns 0 in this worktree and `supabase projects list` reports "Access token not provided", so the Supabase CLI's own credential path is empty. That is the whole of what was attempted, and it does NOT generalise to "no operator project was reachable": re-measured 2026-07-31, a Supabase access token IS present in this machine's local MCP configuration for projects the operator owns, so the capture was not blocked for want of a credential. It was not attempted this round because capturing a 201 body means issuing a real Management API call against an operator production project — an operator decision, not a mechanical step. The published spec was captured instead, and the vendor's client source read for the half the spec omits.
-FALSIFIER: ls src/scan/__fixtures__/supabase/database-query-live-*.json
-FALSIFIER-TIER: supabase-connected
-TOUCHES: src/scan/supabase.ts src/scan/__fixtures__/supabase/database-query-schema-2026-07-31.json
+---
 
-To land one: run one of this module's own read-only statements (`TABLES_SQL` is the smallest) with
-an access token for a project the operator owns, redact any project identifier, and commit it as
-`database-query-live-<YYYY-MM-DD>.json` beside this file — which is what the falsifier above
-watches for.
+# `database-query-live-2026-07-31.json` — provenance
+
+CAPTURED from a LIVE project. This is the response body of
+`POST https://api.supabase.com/v1/projects/{ref}/database/query` for the same operator-owned project
+as `config-auth-live-2026-07-31.json`, carrying **this module's own `TABLES_SQL`** — the smallest
+read-only statement `scanHosted` sends — with the exact body `managementApiQuery` sends.
+
+**Do not hand-edit this file.** If it needs to change, re-capture it.
+
+## How it was captured
+
+```
+curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+  --data '{"query":"select schemaname as schema, tablename as name, rowsecurity as \"rlsEnabled\" from pg_tables where schemaname = '"'"'public'"'"';","read_only":true}' \
+  https://api.supabase.com/v1/projects/<ref>/database/query
+```
+
+Captured 2026-07-31. **HTTP 201**, 924 bytes, 15 rows.
+
+## What it settles — the envelope is measured, not assumed
+
+| question | before | measured 2026-07-31 |
+| --- | --- | --- |
+| response envelope | assumed a bare row array (vendor client source) | **a bare JSON array** — no `{ data: … }`, no `{ result: … }` wrapper |
+| row shape | assumed the SQL's own aliases | the three aliased columns verbatim: `schema` (string), `name` (string), `rlsEnabled` (**boolean, not "t"/"f"**) |
+| success status | 201 per the spec | **201**, confirming the spec against the wire |
+| `read_only: true` accepted | spec example only | accepted on a live call; the query returned rows |
+
+`rlsEnabled` arriving as a real JSON boolean is the one that could have bitten: every consumer of
+`TableInfo.rlsEnabled` treats it as a boolean, and a Postgres driver that stringified it would make
+`checkAutoExposedTables` read `"f"` as truthy and silently stop flagging RLS-disabled tables.
+
+## The one disclosed transform
+
+The 15 `name` values are replaced with `table_01`…`table_15`; `schema` and `rlsEnabled` are verbatim
+and no row was added, removed or reordered. Table names are the operator's own application schema and
+name it identifiably, and this fixture exists for the ENVELOPE, not for what the tables are called.
