@@ -18,6 +18,9 @@ import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
   explainDrift,
+  FLOOR_CLAIM_TRIAGE,
+  floorClaimingNotes,
+  fpFloorViolations,
   FREE_TIER_EXPECTATIONS,
   isMutationBaseline,
   isNotRun,
@@ -132,6 +135,58 @@ describe("external corpus manifest", () => {
       const m6 = t.modules["M6-indicator"]!;
       if (!isNotRun(m6)) expect(m6.counted, t.slug).toBe(m6.total);
     }
+  });
+});
+
+// #1485. The corpus's false-positive floors were a CONVENTION written in prose: a target whose job
+// is to stay silent, so a widening rule lights it up. #1485 measured the M7 floor at 0% precision —
+// both of its graded rows false — which is a negative control that had already saturated and could
+// no longer fail in the direction it exists to fail in. These three tests are the mechanical form.
+describe("#1485: the false-positive floor role is asserted, not assumed", () => {
+  const withFloor = (slug: string, module: "M7" | "M9", counted: number): ExternalTarget[] => {
+    const t = target(slug);
+    return [{ ...t, modules: { ...t.modules, [module]: { counted, total: counted, fpFloor: true, note: "planted" } } }];
+  };
+
+  it("no declared floor in the manifest carries a graded row", () => {
+    expect(fpFloorViolations().map((v) => `${v.slug}:${v.module}=${v.counted}`)).toEqual([]);
+  });
+
+  it("FAILS on a declared floor that starts producing graded rows — the state #1485 found on subscription-payments' M7", () => {
+    expect(fpFloorViolations(withFloor("subscription-payments", "M7", 2))).toEqual([
+      { slug: "subscription-payments", module: "M7", counted: 2 },
+    ]);
+  });
+
+  // The escape hatch the issue names: "do not resolve this by removing the target's graded rows
+  // from the baseline". Raising `counted` to absorb a new row is what makes the drift check green
+  // again, and it is exactly what this refuses.
+  it("FAILS when a floor's baseline is RAISED to absorb the new rows, not only when the scan drifts", () => {
+    expect(fpFloorViolations(withFloor("effective", "M7", 1))).toHaveLength(1);
+  });
+
+  // The flag is only worth as much as its reconciliation with the prose, since "this target is the
+  // FP floor" has been written in notes since #360. Every note claiming the role must carry the
+  // flag or be triaged. NOTE the bound, stated where the number is: FLOOR_CLAIM_PHRASES is a
+  // hand-written vocabulary, so a note inventing a new way to say "floor" is invisible to it —
+  // this is a ratchet over the phrasings this repo has used, never a census of the intent.
+  it("every floor CLAIM in a note is either flagged or triaged, and no triage entry is stale", () => {
+    const claims = floorClaimingNotes();
+    const flagged = new Set(
+      EXTERNAL_CORPUS.flatMap((t) =>
+        Object.entries(t.modules)
+          .filter(([, b]) => b && !isMutationBaseline(b) && "counted" in b && b.fpFloor)
+          .map(([m]) => `${t.slug}:${m}`),
+      ),
+    );
+    const triaged = new Set(FLOOR_CLAIM_TRIAGE.map((e) => e.key));
+    const keys = claims.map((c) => `${c.slug}:${c.module}`);
+
+    expect(keys.filter((k) => !flagged.has(k) && !triaged.has(k)), "untriaged floor claim").toEqual([]);
+    expect([...triaged].filter((k) => !keys.includes(k) || flagged.has(k)), "stale triage entry").toEqual([]);
+    // The claim population itself, so a phrasing change that quietly shrinks the net shows up here
+    // rather than making the reconciliation vacuously true.
+    expect(claims.length).toBeGreaterThanOrEqual(34);
   });
 });
 

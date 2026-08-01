@@ -477,18 +477,27 @@ instead of becoming a permanent decline.
   multi-entity create handler in every codebase. Whether the rows form ONE invariant is a judgement
   about domain meaning, not an AST fact — the same unshippability that keeps item 20 at LLM tier.
 
-- Item 27 (webhook state-application ordering) — M1 semantic pass, mirroring item 20.
+- Item 27 (webhook state-application ordering) — **NO LONGER DECLINED. Shipped #1352, mechanical,
+  review tier** (`webhookOrdering` in `src/scan/idempotency.ts`, scored by `P-D091-WEBHOOK-ORDERING`).
 
-  > REASON: No mechanical rule for webhook ordering protection; the rule would have to prove the ABSENCE of a version/timestamp comparison anywhere reachable from the handler, including through an imported wrapper.
-  > KIND: decisional
-  > PROVENANCE: MEASURED 2026-07-27
-  > OWNER: Harvey product
-  > DECISION: #1230
-  > TOUCHES: targets/calibration/src/d091/webhook-ordering.ts
+  The decline above read: *"the rule would have to prove the ABSENCE of a version/timestamp
+  comparison anywhere reachable from the handler, including through an imported wrapper"*, with
+  item 20 cited as the precedent. #1350/#1352 falsified the argument, not the precedent: four
+  detectors in this same sweep prove an absence with the identical reach problem and answer it by
+  scoping to the function body and stating that bound in the emitted finding — `express-powered-by`,
+  `raw-body-limit`, `gha-permissions` and item 10's own `dedupBeforeDispatch`. Reach was never what
+  decided it.
 
-  Item 20 (`WEBHOOK-REPLAY`, #353/#425) is already a documented by-design LLM-tier gap for exactly
-  this reason, and 27 extends 20. Shipping a mechanical 27 while 20 stays at LLM tier would be
-  inconsistent, not thorough.
+  What the rule actually costs is recorded instead of guessed. MEASURED 2026-07-31 over all 17
+  pinned corpus repos (13,113 source files): 61,346 candidate functions, 176 with an event-derived
+  `.update`/`.upsert`, 6 of those in a webhook path, and **zero** whose parameter carries an
+  ordering field — no false positives and no true positives, so its FIELD precision is undefined
+  rather than clean, and the finding's own evidence says so. The measurement also earned a
+  narrowing before the rule shipped: 2 of the 6 were `crypto.createHmac(…).update(body)`, so the
+  write must resolve to a Supabase `.from(…)` table or a prisma-style model call.
+
+  Item 20 (`WEBHOOK-REPLAY`, #353/#425) remains an LLM-tier gap on its own merits; 27 shipping
+  ahead of it is not an inconsistency, because the two ask different questions.
 
 **Not covered — ATC-specific, not portable**: 9 (wrong `assertPermission` action for multi-
 operation routes) and 14 (`assertPermission` pair missing from `permission-grants.ts`) both name
