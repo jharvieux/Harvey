@@ -19,24 +19,27 @@
 //     What made the shape reachable was not business context; it was the RPC contract, that a
 //     `"use server"` module's exported function is an endpoint and its parameters are therefore
 //     client-supplied by construction.
-//   - permission checks present only in the UI → still uncaught, and this is the half that survives.
-//     It survives as a MEASURED GAP, not as a capability claim about AST passes: P-CLIENT-RENDER-
-//     AUTHZ and P-MW-SOLE-AUTHZ are `expectedTier: "none"` with gapKind "measured-gap" — planted,
-//     scanned, nothing of the class fired — which is OUTSTANDING WORK tracked on #1679.
+//   - permission checks present only in the UI → this half has since SPLIT too, and the paragraph
+//     that named both its rows was true for one day. #1811 GRADUATED P-CLIENT-RENDER-AUTHZ to
+//     `expectedTier: "review"` on detectClientRenderOnlyAuthz (src/detectors/app-router.ts).
+//     P-MW-SOLE-AUTHZ is the one member still `expectedTier: "none"` with gapKind "measured-gap" —
+//     planted, scanned, nothing of the class fired — OUTSTANDING WORK tracked on #1679.
 // See docs/design/corpus-roadmap-to-100.md §4a for the original tier rationale; that document has
 // NOT been re-read against the measurement above (docs are supervised for this batch), so treat its
 // §4a as carrying the same superseded claim until someone checks.
 //
-// REASON: the UI-only permission check has no mechanical rule — P-CLIENT-RENDER-AUTHZ and P-MW-SOLE-AUTHZ were planted and scanned and nothing of the class fired, and the discriminating signal is cross-file (a route's gate vs. the render that hides it), which nobody has built a pass for yet
+// REASON: the middleware-sole-authorization check has no mechanical rule — P-MW-SOLE-AUTHZ was planted and scanned and nothing of the class fired, and the discriminating signal is cross-file (does a middleware.ts exist, and does its matcher actually cover this route), which nobody has built a pass for yet
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-08-01 — `pnpm exec tsx src/cli/validate-calibration.ts` prints `GAP` for both rows and `6/6 held` on the no-mechanical-rule line. Falsifier exercised both directions the same day: exit 1 as committed, exit 0 against a copy of the entry file with the row re-tiered to "review", exit 127 against a file with the row absent.
-// FALSIFIER: f=src/scan/calibration/b15-nextjs-authz.entries.ts; grep -q 'P-CLIENT-RENDER-AUTHZ' "$f" || exit 127; ! grep -q 'id: "P-CLIENT-RENDER-AUTHZ".*expectedTier: "none"' "$f"
+// PROVENANCE: MEASURED 2026-08-01 — `pnpm exec tsx src/cli/validate-calibration.ts` prints `GAP P-MW-SOLE-AUTHZ` and `No-mechanical-rule gaps (excluded from recall): 4/4 held — 3 by design, 1 measured-gap`. This block covered TWO rows until #1811 graduated P-CLIENT-RENDER-AUTHZ, and its falsifier tested only the graduated one, so it exited 0 and reasons-drift correctly reported STALE (run 30694879524) — half a reason had died and taken the whole claim's re-test with it. Narrowed to the row whose blocker holds; the graduated row's claim is deleted, not left to rot. New falsifier exercised both directions the same day: exit 1 as committed, exit 0 against a copy of the entry file with P-MW-SOLE-AUTHZ re-tiered to "review", exit 127 against a copy with the row absent.
+// FALSIFIER: f=src/scan/calibration/b15-nextjs-authz.entries.ts; test -f "$f" || exit 127; grep -q 'id: "P-MW-SOLE-AUTHZ"' "$f" || exit 127; ! grep -q 'id: "P-MW-SOLE-AUTHZ".*expectedTier: "none"' "$f"
 // TOUCHES: src/scan/calibration/b15-nextjs-authz.entries.ts
 //
 // It exits 0 on the RE-TIER rather than on a scan, deliberately and not as a proxy for convenience:
-// since #1677 a mechanical rule reaching either row fails the graduation guard by name, so the row
+// since #1677 a mechanical rule reaching the row fails the graduation guard by name, so the row
 // stops reading `none` the moment the class becomes detectable. The corpus tier is therefore a
 // faithful reading of the world, and the check needs no scanner binaries in the daily reasons job.
+// It is scoped to ONE row on purpose: a falsifier covering N rows dies the moment any ONE of them
+// graduates, which is exactly how this block went stale.
 //
 // These entries carry `module: "M9"` because the detector runs in the static-detect AST pass
 // (src/cli/static-detect.ts), NOT runMechanicalScan — the same arrangement M7/M10 use to stay
@@ -51,7 +54,12 @@
 // exercising DIFFERENT surfaces (P-AUTHN-CLIENT-OWNER = update/user_id; P-AUTHN-CLIENT-OWNER-
 // DELETE = delete/account_id) let the census fail on a PARTIAL regression of either surface,
 // where a single positive fails only on a total outage. These are genuine distinct instances of
-// the one real class, not fabricated new classes — the other #221 shapes stay semantic/paid-tier.
+// the one real class, not fabricated new classes. This sentence used to end "— the other #221
+// shapes stay semantic/paid-tier", the same superseded claim the header above corrects and the one
+// PR #1683 flagged on 2026-07-31 and could not edit; RE-MEASURED 2026-08-01, the value shape is
+// mechanical (`validate-calibration` prints `PASS P-CLIENT-TRUSTED-PRICE review`, N-SERVER-DERIVED-
+// PRICE cleared) and the render shape is too (#1811), leaving P-MW-SOLE-AUTHZ as the only #221
+// shape with no mechanical rule.
 //
 // #465 widening (operator ruling, 2026-07-17): the detector now also fires on the three shapes
 // proposit's real instances take — bare `.eq("id", …)`, INSERT-value owner ids, and no-in-body-
