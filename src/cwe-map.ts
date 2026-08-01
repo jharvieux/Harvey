@@ -91,6 +91,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "M1 — SSRF via an uncurated cross-file fetch wrapper": ["918", "A10"],
   // Server trusting client-side security enforcement.
   "Client-side authorization decision": ["602", "A04"],
+  // #1679. Same weakness as the row above — the security decision is made where the attacker
+  // stands — reached through the RSC boundary rather than through a client-side branch: the
+  // privileged rows are serialized into the payload before the client component decides not to
+  // render them, so the "check" never had anything to protect.
+  "M1 — Authorization enforced only by a client-side conditional render": ["602", "A01"],
   "Client-supplied payment amount trusted by server": ["602", "A04"],
   // #135/#1366 — Host / X-Forwarded-Host used to build an absolute link. CWE-807 (Reliance on
   // Untrusted Inputs in a Security Decision) rather than CWE-601 (open redirect): nothing here
@@ -284,6 +289,11 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   { match: (t) => t === "Static secret verified with no rotation-pair acceptance window", reason: "key-rotation operational hygiene — no single code-level CWE identifies it" },
   { match: (t) => t === "Dangerous extension enabled", reason: "database-extension posture (Supabase advisor) — no single code-level CWE identifies it" },
   { match: (t) => t === "M1 — Multi-tenant security", reason: "module-summary label, not a specific weakness" },
+  // #1652. The M9 scope rows (`M9 — … — scope`) are already covered by the blanket `M9 —` rule
+  // above; this is the first such disclosure under an `M1 —` taxonomy, and M1 is a security module,
+  // so it needs its own decision rather than a prefix. Matched exactly, so a SECOND M1 scope row
+  // fails loud here instead of inheriting this one's reason.
+  { match: (t) => t === "M1 — Client-supplied owner id — scope", reason: "scope disclosure — counts the client-owner-id sites set aside by policy (auth called but nothing bound; RLS client with no auth). States what was NOT judged; the weakness class itself carries CWE-639 under its own taxonomy" },
   { match: (t) => t === "M10 — Data classification", reason: "data-classification (PII/PHI/PCI) label — a data-sensitivity row, not a vulnerability CWE" },
 ];
 

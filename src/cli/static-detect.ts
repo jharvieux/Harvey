@@ -37,6 +37,7 @@ import { scanPrismaAppPerf } from "../scan/prisma-app-perf.js";
 import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 import { checkUnreadSourceExtensions } from "../scan/ext-coverage.js";
+import { importGraphNotAssessedRows } from "../scan/import-graph-scope.js";
 import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
 
 const args = process.argv.slice(2);
@@ -135,6 +136,10 @@ try {
       scanDir,
       allSources.map((f) => f.path),
     ),
+    // #1503 — the same doctrine one level in: the files were read, and the EDGES between them were
+    // not resolved. `sources` is the exact set the boundary/perf passes hand to buildImportGraph,
+    // so the census counts the edges THIS run's graph is missing.
+    ...importGraphNotAssessedRows(sources),
   ];
   if (buildDirs.length === 0) {
     console.log(

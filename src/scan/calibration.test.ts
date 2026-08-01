@@ -1396,6 +1396,27 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     }
   });
 
+  // #1718 — M9C-TANSTACK-CLIENTONLY-POS matches TWO findings under one `match` key. It is an
+  // accepted exception to #1484's split rule (both come from ONE mechanism applied to two adjacent
+  // reads, so neither can regress alone) ON CONDITION that the narrower risk is guarded instead:
+  // BROWSER_GLOBALS is a shared Set of five names, and dropping ONE of them would leave the corpus
+  // row green on the survivor. This is that guard — it names each global the fixture reads, so a
+  // narrowing of the set for a single name fails here even though the entry itself still passes.
+  it("both browser globals in the TanStack fixture are named individually (#1718)", () => {
+    const findings = detectAppRouterFindings(
+      loadPrefixed("tanstack-client-only/positive", "m9-corpus/tanstack-client-only/positive"),
+      "tanstack-start",
+    );
+    const ssr = findings.filter((f) => f.taxonomy === "M9 — SSR-only API misuse");
+    for (const global of ["localStorage", "document"]) {
+      expect(
+        ssr.some((f) => f.title.includes(`\`${global}\``)),
+        `no SSR-only finding names \`${global}\` — if BROWSER_GLOBALS was narrowed, this class silently lost a member while M9C-TANSTACK-CLIENTONLY-POS stayed green on the other one`,
+      ).toBe(true);
+    }
+    expect(ssr, "the fixture must keep reading at least two distinct browser globals for this guard to mean anything").toHaveLength(2);
+  });
+
   it("keeps the whole M9-check class out of the free count (review tier only)", () => {
     // No M9 heuristic may inflate the security free count — every positive is review, not high.
     for (const { check, dir, framework } of CHECKS) {
@@ -1440,6 +1461,52 @@ describe("#1238 OWASP React RSC boundary (live detectAppRouterFindings over targ
     const findings = detectAppRouterFindings(loadReactFixtures());
     const leak = findings.find((f) => f.location.includes("rsc-boundary-full-object"));
     expect(leak?.evidence).toContain("user");
+  });
+});
+
+// #1679 — the same arrangement as the block above, for the same reason: `P-CLIENT-RENDER-AUTHZ`
+// graduated onto a detector that runs in the static-detect AST pass, not runMechanicalScan, so
+// validate-calibration's M1 gate excludes the pair (`module: "M9"`) and this is what scores it.
+// The fixtures stay in targets/calibration because the rest of B15 is measured by scanning it.
+describe("#1679 client-render-only authz (live detectAppRouterFindings over targets/calibration)", () => {
+  const CALIBRATION = fileURLToPath(new URL("../../targets/calibration/", import.meta.url));
+  // The whole flow, both arms: two server components, the one client child they share. Loading the
+  // child is not optional decoration — the rule's third condition is a fact about ITS body, so a
+  // run without it would score the pair on two of the three conditions.
+  const FLOW = ["app/admin/page.tsx", "app/admin/page-safe.tsx", "components/AdminDashboardClient.jsx"];
+  const files: SourceInput[] = FLOW.map((rel) => ({ path: rel, text: readFileSync(join(CALIBRATION, rel), "utf8") }));
+  const entries = b15NextjsAuthzEntries.filter((e) => e.id === "P-CLIENT-RENDER-AUTHZ" || e.id === "N-SERVER-ROLE-CHECK");
+
+  it("flags the render-gated flow and clears the server-role-checked twin", () => {
+    expect(entries.map((e) => e.id).sort()).toEqual(["N-SERVER-ROLE-CHECK", "P-CLIENT-RENDER-AUTHZ"]);
+    const findings = detectAppRouterFindings(files);
+    for (const entry of entries) {
+      const row = scoreEntry(entry, findings);
+      expect(row.pass, `${entry.id}: ${row.detail}`).toBe(true);
+    }
+    const pos = scoreEntry(entries.find((e) => e.kind === "positive")!, findings);
+    expect(pos.caughtTier, "an M9 boundary heuristic must never enter the free count").toBe("review");
+  });
+
+  // The discriminating condition, isolated. page-safe.tsx differs from page.tsx by ONE thing: the
+  // `getServerSession()` role check in front of the query. Delete the auth test from the detector
+  // and this goes red while the assertion above stays green on the positive — which is the whole
+  // reason the class needed a two-file rule rather than "a service-role read with no session hint",
+  // an approximation whose candidate surface on this target is 40 files.
+  it("the SERVER-side gate is what separates them, not the shape of the crossing", () => {
+    const findings = detectAppRouterFindings(files);
+    const rows = findings.filter((f) => f.taxonomy === "M1 — Authorization enforced only by a client-side conditional render");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.location).toContain("app/admin/page.tsx");
+    // Scope control: both files WERE scanned. A pair the loader never read reports the same zero.
+    const leaks = findings.filter((f) => f.taxonomy === "M9 — Server→client data leak").map((f) => f.location);
+    expect(leaks.some((l) => l.includes("page-safe.tsx"))).toBe(true);
+  });
+
+  it("names the client child's actual gate, so the evidence is checkable against the source", () => {
+    const row = detectAppRouterFindings(files).find((f) => f.taxonomy === "M1 — Authorization enforced only by a client-side conditional render");
+    expect(row?.evidence).toContain("if (!isAdmin) return");
+    expect(row?.evidence).toContain("components/AdminDashboardClient.jsx");
   });
 });
 

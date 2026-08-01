@@ -218,7 +218,13 @@ function normalizeRepoPath(p: string): string {
 
 // #1065: .js/.jsx/.mjs/.cjs are candidates too — on a plain-JavaScript app every cross-file
 // resolution (server→client leak, server-only guard) failed here before the extension was listed.
-const MODULE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
+// #1659: .mts/.cts joined them. `SOURCE_FILE` (src/detectors/load-sources.ts) has LOADED them since
+// #1065, so such a file was read by every pass and yet no import specifier could ever resolve TO it
+// — the same silent drop, one extension over. MEASURED 2026-08-01 across the 17 pinned corpus
+// commits: 7 such product-source files (ghostfolio 1, rallly 4, inbox-zero 1, carbon 1), all
+// vitest configs or a Prisma seed that nothing imports, so the corpus movement from this is nil —
+// it is here so the loader's file set and the resolver's candidate set stay in step.
+const MODULE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts"];
 function candidatePaths(base: string): string[] {
   return [base, ...MODULE_EXTS.map((e) => `${base}${e}`), ...MODULE_EXTS.map((e) => `${base}/index${e}`)];
 }
@@ -244,6 +250,13 @@ export interface PathAlias {
    * alias like `@/` is a prefix and is never itself a whole specifier).
    */
   entryBases?: string[];
+  /**
+   * #1503: set ONLY on the built-in `@/` → repo-root row pushed when no config declared anything.
+   * Marked rather than inferred from its shape: a repo that really does declare `"@/*": ["./*"]`
+   * with `baseUrl: "."` produces a byte-identical row, so the fallback was indistinguishable from a
+   * real alias — the empty `baseDir` satisfied the "is it the default?" test either way.
+   */
+  fallback?: true;
 }
 
 // Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
@@ -291,7 +304,7 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
       aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scope: cfgDir });
     }
   }
-  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "" });
+  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "", fallback: true });
   // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
   // tree, so it must not out-rank an enclosing package's own tsconfig alias.
   for (const pkg of workspacePackages(files)) {
@@ -337,8 +350,39 @@ function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set
   return undefined;
 }
 
+// #1659: the ESM-TS convention writes `from "./helpers.js"` for a sibling `helpers.ts`, and
+// candidatePaths appends extensions to the specifier VERBATIM — so the candidate set was
+// `./helpers.js`, `./helpers.js.ts`, `./helpers.js.tsx`, … and the edge silently vanished.
+// The verbatim attempt still runs FIRST, so a real committed `helpers.js` next to a `helpers.ts`
+// keeps winning; the strip is a fallback, never a re-interpretation.
+// MEASURED 2026-08-01 over the 17 pinned corpus commits with the production predicate (loadSources
+// + collectPathAliases + resolveImport, and buildImportGraph's own not-type-only filter), in the
+// scope corpus-drift actually scans — i.e. with `vendoredSubtrees` stripped: 73,890 import
+// specifiers, 166 of them `.js`/`.mjs`/`.cjs`-suffixed, of which 84 resolved to nothing before this
+// fallback and resolve after it, ALL of them on carbon (`packages/dev/src/**`), with a population of
+// ZERO on the other 16 targets.
+// Read the scope qualifier as load-bearing. WITHOUT stripping vendored trees the same command
+// reports 4,780 recovered, because joshcoolman/effective vendors a whole copy of the Effect library
+// under `repos/` and Effect is written in the ESM-TS style throughout. Those 4,696 edges are real —
+// a field engagement scanning that repo would resolve them — but corpus-drift deletes that subtree,
+// so quoting 4,780 against a baseline would be a number measured on a different tree than the gate.
+// Corpus-wide effect on findings: NONE. Before/after `static-detect` over all 17 clones, one
+// variable, produced BYTE-IDENTICAL output on 17 of 17 (carbon 1866 findings in both arms). A
+// zero-movement result recorded as MEASURED, not assumed: the restored edges are in a CLI package
+// no route reaches, so no reachability-gated check changed its mind.
+//
+// REMAINING BOUND, counted rather than assumed empty (see importGraphNotAssessedRows in
+// src/scan/import-graph-scope.ts, which reports the residual per target): a suffix strip does not
+// model a package's `exports` map subpath CONDITIONS (`import`/`require`/`types` branches),
+// `moduleResolution: "bundler"` extensionless directory rules beyond `index.*`, or any
+// loader/plugin-provided specifier (`?raw`, `virtual:`, framework aliases).
+const ESM_JS_SUFFIX = /\.(m|c)?js$/;
+
 export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  const verbatim = resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  if (verbatim !== undefined || !ESM_JS_SUFFIX.test(specifier)) return verbatim;
+  const stripped = specifier.replace(ESM_JS_SUFFIX, "");
+  return resolveRelativeImport(fromPath, stripped, allPaths) ?? resolveAliasedImport(fromPath, stripped, allPaths, aliases);
 }
 
 // An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
@@ -425,6 +469,131 @@ function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPa
     }
   }
   return imports;
+}
+
+// #1679 / B15 row P-CLIENT-RENDER-AUTHZ — "authz enforced only by a client-component conditional
+// render". #1366 ruled this a MEASURED GAP: planted, scanned, nothing of the class fired. The
+// recorded route to closing it was "extend the M9 server→client-leak AST detector, which already
+// resolves that boundary", and that is what this is.
+//
+// The discriminator is a TWO-FILE structural fact, and it has to be, because the plant and its
+// negative twin are the SAME two files minus one gate: `targets/calibration/app/admin/page.tsx`
+// queries `admin_metrics` and hands the rows to `<AdminDashboardClient isAdmin={…} metrics={…} />`,
+// whose whole gate is `if (!isAdmin) return null`; `page-safe.tsx` is byte-for-byte that flow with a
+// `getServerSession()` role check and a `redirect()` in front of the query. MEASURED 2026-08-01,
+// which is why an intra-file approximation is not enough: the existing `M9 — Server→client data
+// leak` check fires on BOTH files, so it separates neither.
+//
+// Three conditions, all of them present in the source rather than inferred:
+//   1. a raw (un-projected) query result crosses into an imported `"use client"` component — the
+//      same crossing detectServerClientLeak already resolves, so the data really is in the payload;
+//   2. the enclosing server component makes NO auth call, in its own body or in any helper the
+//      #1263 resolver can reach — the one thing page-safe.tsx has and page.tsx does not;
+//   3. the client child's only gate is a render-time conditional on one of its own props.
+// Condition 3 is what keeps this off the generic missing-auth class: without it the finding would be
+// "a server component queries without checking auth", which is a different (and much larger) claim.
+//
+// Review tier, never free-count, for the reason every M9 boundary heuristic is: the pass proves the
+// data crosses and that no gate is visible in what it can read, not that authorization is absent
+// from a layout, a middleware or a wrapper outside its reach.
+function detectClientRenderOnlyAuthz(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
+  const findings: Finding[] = [];
+  const allPaths = new Set(sources.keys());
+  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  if (clientPaths.size === 0) return findings;
+  const gates = new GateResolver(sources, aliases);
+
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths, aliases);
+    if (clientImports.size === 0) continue;
+    const rawRowNames = collectRawRowNames(sf);
+    if (rawRowNames.size === 0) continue;
+
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+        const tagName = node.tagName.getText(sf);
+        const childPath = clientImports.get(tagName);
+        if (childPath !== undefined) {
+          for (const attr of node.attributes.properties) {
+            if (!ts.isJsxAttribute(attr) || !attr.initializer || !ts.isJsxExpression(attr.initializer)) continue;
+            const inner = attr.initializer.expression;
+            if (!inner || !ts.isIdentifier(inner) || !rawRowNames.has(inner.text)) continue;
+            const enclosing = ts.findAncestor(node, (a) => ts.isFunctionDeclaration(a) || ts.isArrowFunction(a) || ts.isFunctionExpression(a));
+            if (!enclosing) continue;
+            if (AUTH_PATTERN.test(stripLiteralsAndComments(sf, enclosing)) || gates.gateIn(AUTH_PATTERN, path, enclosing) !== undefined) continue;
+            const gate = renderOnlyPropGate(sources.get(childPath), tagName);
+            if (gate === undefined) continue;
+            findings.push(
+              makeFinding(nextId, {
+                title: `Privileged data reaches <${tagName} /> with the only authorization check in its render`,
+                severity: "High",
+                confidence: "Likely",
+                category: "Security",
+                taxonomy: "M1 — Authorization enforced only by a client-side conditional render",
+                location: loc(path, sf, attr),
+                evidence: `\`${attr.name.getText(sf)}={${inner.text}}\` — \`${inner.text}\` is the un-projected result of a query this component runs with no auth/session call in its own body and none in any helper it calls that this pass could resolve. <${tagName} /> is a 'use client' component (${childPath}) whose only gate is \`${gate}\`, which decides what to RENDER after the data has already been serialized into the payload sent to the browser.`,
+                impact:
+                  "The query runs and its rows are serialized for every caller, authorized or not. A user the UI hides the panel from still receives the whole dataset and can read it from the RSC payload in devtools or view-source. The client-side conditional is a display decision, not an authorization boundary.",
+                fix: `Check the caller's role on the SERVER, before the query runs — return/redirect on failure — so an unauthorized request never causes the data to be fetched or serialized. Keep the \`${gate}\` render check if you like; it is a UI nicety once the server gate exists.`,
+                value: 5,
+                ease: 3,
+                safety: 4,
+              }),
+            );
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
+/**
+ * The render-time gate of a client component: an `if (<cond>) return null/undefined/<falsy JSX>`
+ * whose condition reads one of the component's OWN parameter props. Returns the gate's source text.
+ *
+ * A gate that reads anything else — a hook result, a context value, a module import — is NOT this
+ * class: the point of the plant is that the parent decided the caller's authority and passed the
+ * verdict down as data. Returning `undefined` leaves the finding unmade, so a shape this misses
+ * costs a detection, never a false one.
+ */
+function renderOnlyPropGate(childSf: ts.SourceFile | undefined, componentName: string): string | undefined {
+  if (!childSf) return undefined;
+  const fn = collectDeclaredFunctions(childSf).get(componentName);
+  if (!fn) return undefined;
+  const body = (fn as ts.FunctionLikeDeclaration).body;
+  if (!body || !ts.isBlock(body)) return undefined;
+  const propNames = new Set<string>();
+  for (const param of (fn as ts.FunctionLikeDeclaration).parameters) {
+    if (ts.isIdentifier(param.name)) propNames.add(param.name.text);
+    else if (ts.isObjectBindingPattern(param.name)) {
+      for (const el of param.name.elements) if (ts.isIdentifier(el.name)) propNames.add(el.name.text);
+    }
+  }
+  if (propNames.size === 0) return undefined;
+  for (const stmt of body.statements) {
+    if (!ts.isIfStatement(stmt) || stmt.elseStatement) continue;
+    const then = ts.isBlock(stmt.thenStatement) ? stmt.thenStatement.statements[0] : stmt.thenStatement;
+    if (!then || !ts.isReturnStatement(then)) continue;
+    const returned = then.expression;
+    const returnsNothing =
+      returned === undefined ||
+      returned.kind === ts.SyntaxKind.NullKeyword ||
+      (ts.isIdentifier(returned) && returned.text === "undefined") ||
+      returned.kind === ts.SyntaxKind.FalseKeyword;
+    if (!returnsNothing) continue;
+    let readsProp = false;
+    const scan = (n: ts.Node) => {
+      if (ts.isIdentifier(n) && propNames.has(n.text)) readsProp = true;
+      ts.forEachChild(n, scan);
+    };
+    scan(stmt.expression);
+    if (readsProp) return `if (${stmt.expression.getText(childSf)}) return …`;
+  }
+  return undefined;
 }
 
 function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
@@ -802,6 +971,9 @@ function detectClientSuppliedOwnerId(
   const findings: Finding[] = [];
   const subsumedNoAuthActions = new Set<ts.Node>();
   const gates = new GateResolver(sources, aliases);
+  let sitesExamined = 0;
+  let excludedAuthBoundNothing = 0;
+  let excludedRlsClientNoAuth = 0;
   for (const [path, sf] of sources) {
     for (const action of mutationsFor(path, sf)) {
       const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
@@ -813,11 +985,6 @@ function detectClientSuppliedOwnerId(
       const gate = inBodyAuth ? undefined : gates.gateIn(AUTH_PATTERN, path, action.node);
       const hasAuth = inBodyAuth || gate !== undefined;
       const sessionNames = collectSessionBoundNames(action.node, sf);
-      // Auth was called but nothing was bound from it (`await requireUser()` for its throw, or
-      // an `assertPermission(…)` role gate). Whether the client value is authorized then depends
-      // on code this AST pass can't see — stay silent, for every shape.
-      if (hasAuth && sessionNames.size === 0) continue;
-
       const paramRoots = collectParamRootNames(action.node);
       const clientNames = new Set([...paramRoots, ...collectDerivedClientNames(action.node, paramRoots)]);
       // Session precedence: `const session = await getServerSession(req)` is DERIVED from a
@@ -829,9 +996,27 @@ function detectClientSuppliedOwnerId(
       const serviceNames = collectServiceClientNames(action.node, sf);
       const site = findClientOwnerSite(action.node, sf, clientNames, serviceNames);
       if (!site) continue;
+      // #1652: the two policy exclusions below used to `continue` in silence, and BOTH are moved
+      // here — after the site is known — precisely so the count means what it says. Testing them
+      // earlier (where the first one used to sit) would count actions that never had a
+      // client-supplied owner id at all, i.e. a population inflated by the check's own scope. The
+      // intervening steps are pure lookups and `sessionNames` is empty on the first branch, so the
+      // move changes no finding; `the two policy exclusions are counted, not silent (#1652)` in
+      // app-router.test.ts pins the emitted set as unchanged.
+      sitesExamined++;
+      // Auth was called but nothing was bound from it (`await requireUser()` for its throw, or
+      // an `assertPermission(…)` role gate). Whether the client value is authorized then depends
+      // on code this AST pass can't see — stay silent, for every shape.
+      if (hasAuth && sessionNames.size === 0) {
+        excludedAuthBoundNothing++;
+        continue;
+      }
       // Without an in-body auth+session, only the service-role shapes are findings: on the RLS
       // client the missing-auth check owns the defect (RLS still gates the row).
-      if (!hasAuth && !site.service) continue;
+      if (!hasAuth && !site.service) {
+        excludedRlsClientNoAuth++;
+        continue;
+      }
       // A comparison against the session OR a row the server fetched itself (a token-exchange
       // flow) is the authorization check — clear.
       const serverNames = new Set([...sessionNames, ...collectDbBoundNames(action.node)]);
@@ -876,7 +1061,54 @@ function detectClientSuppliedOwnerId(
       );
     }
   }
-  return { findings, subsumedNoAuthActions };
+  return {
+    findings: [...findings, ...ownerIdScopeNote(nextId, noun, sitesExamined, excludedAuthBoundNothing, excludedRlsClientNoAuth)],
+    subsumedNoAuthActions,
+  };
+}
+
+// The disclosure half of #1652, the same shape #1441 gave the waterfall check. The two exclusions
+// above are the right trades — one hands the defect to the generic missing-auth finding (#465's
+// measured precision boundary), the other refuses to guess about a gate whose authorization lives
+// where the AST does not reach. Both produced SILENCE: a target where every client-owner-id site was
+// set aside reported zero rows of this class and nothing said a class had been set aside, which is
+// the shape CLAUDE.md names as worse than a wrong status. Now the zero carries its population.
+function ownerIdScopeNote(nextId: NextId, noun: string, sitesExamined: number, authBoundNothing: number, rlsClientNoAuth: number): Finding[] {
+  const excluded = authBoundNothing + rlsClientNoAuth;
+  // Nothing was set aside — there is no limitation to disclose, and a "0 excluded" row on every
+  // target would dilute the family into a status line.
+  if (excluded === 0) return [];
+  const classes = [
+    ...(authBoundNothing
+      ? [
+          `${authBoundNothing} where the ${noun.toLowerCase()} DOES authenticate but binds no session value from it (\`await requireUser()\` called for its throw, an \`assertPermission(…)\` role gate) — with nothing bound, whether the client-supplied id is authorized depends on code outside this pass, so no finding is made either way`,
+        ]
+      : []),
+    ...(rlsClientNoAuth
+      ? [
+          `${rlsClientNoAuth} on the ordinary RLS client with no auth call, where row-level security still gates the write and the generic missing-authorization finding owns the defect (#465's measured precision boundary) — only the service-role shape is reported here`,
+        ]
+      : []),
+  ];
+  return [
+    {
+      id: nextId(),
+      title: `M1 partially assessed — client-supplied owner id (${excluded} of ${sitesExamined} site${sitesExamined === 1 ? "" : "s"} excluded by policy)`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Security",
+      taxonomy: "M1 — Client-supplied owner id — scope",
+      location: "(whole target)",
+      status: "Open",
+      evidence: `This check found ${sitesExamined} place(s) where a ${noun.toLowerCase()} scopes a database write by a value that came from its own arguments. ${excluded} of them ${excluded === 1 ? "was EXCLUDED BY POLICY and is" : "were EXCLUDED BY POLICY and are"} therefore absent from the findings above: ${classes.join("; ")}. Neither class was judged individually: each is set aside as a whole.`,
+      impact: `Those ${excluded} site(s) were NOT judged safe — they were not judged. A zero (or reduced) count for this class on this target is therefore a statement about the policy above, not about the code. Recorded so it reads as 'not assessed', not 'assessed and clean'.`,
+      fix: "Review the excluded sites by hand: confirm that the gate the action calls really authorizes the caller for THAT row (not merely that it is signed in), and that the RLS policy on the written table restricts the row to the caller's tenant.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      precisionTier: "high",
+    },
+  ];
 }
 
 // The action's source text with the INTERIOR of every string/template/regex literal and every
@@ -2218,10 +2450,38 @@ interface SsrCrossFileContext {
   allPaths: ReadonlySet<string>;
   aliases: PathAlias[];
   importedBy: ReadonlyMap<string, string[]>;
-  // `${declaringPath}#${exportedName}` -> every barrel path that re-exports it (#1500's `export
-  // { x } from "./barrel"` shape, one hop) — precomputed ONCE per run, not per candidate helper, so
-  // a target with thousands of files doesn't re-scan them per unresolved-in-file helper.
-  barrelsFor: ReadonlyMap<string, string[]>;
+  // Every barrel path that re-exports `(declaringPath, exportedName)` — #1500's
+  // `export { x } from "./barrel"` and, since #1717, `export * from "./barrel"` — to
+  // BARREL_CHASE_DEPTH hops. The re-export index behind it is built ONCE per run (not per candidate
+  // helper, so a target with thousands of files isn't re-scanned per unresolved helper) and this
+  // lookup memoises its own answers.
+  barrelsFor: (declaringPath: string, exportedName: string) => string[];
+}
+
+/**
+ * #1717: how many `export { x } from "./y"` hops the SSR cross-file caller search follows.
+ *
+ * #1500 set this at 1 and declined to widen it, on the reasoning that "a 2-hop special case would
+ * just move the wall". A bounded N-hop chase is the answer to that objection rather than an instance
+ * of it: it moves the wall once, to a stated place, and the number is here to be read.
+ *
+ * MEASURED 2026-08-01 over the 17 pinned corpus commits: at 3, the deepest chain that resolves is
+ * carbon's 2-hop `@carbon/tiptap` -> `./extensions` -> `./slash-command`, so the corpus has one hop
+ * of headroom and no target reaches the bound. What lies beyond it is a false NEGATIVE of the
+ * SUPPRESSION, not of the detection — an unresolvable caller leaves the finding flagged (the #1263
+ * property this rule already relies on), so the bound fails toward reporting, never toward silence.
+ */
+const BARREL_CHASE_DEPTH = 3;
+
+/** The modules a file re-exports wholesale — `export * from "./x"` (#1717). */
+function starReExportTargets(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): string[] {
+  const out: string[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isExportDeclaration(stmt) || stmt.isTypeOnly || stmt.exportClause || !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const target = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
+    if (target !== undefined) out.push(target);
+  }
+  return out;
 }
 
 function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, allPaths: ReadonlySet<string>, aliases: PathAlias[]): SsrCrossFileContext {
@@ -2235,15 +2495,82 @@ function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, a
       else importedBy.set(target, [importer]);
     }
   }
-  const barrelsFor = new Map<string, string[]>();
+  // #1717: a barrel that re-exports from ANOTHER barrel, to BARREL_CHASE_DEPTH hops. #1500 bounded
+  // this at one hop and #1502 inherited that bound, which left carbon's `handleCommandNavigation`
+  // unresolvable: `packages/tiptap/src/index.ts` re-exports it from `./extensions`, which re-exports
+  // it from `./slash-command`, and its real caller imports the outer barrel by package name.
+  //
+  // The frontier below carries the name each hop exports the symbol UNDER, because a barrel may
+  // rename (`export { a as b } from "./x"`) and the next hop out re-exports the renamed one. Keying
+  // the frontier on the original name would silently chase the wrong symbol.
+  //
+  // Bounded, not unbounded, and the bound is disclosed rather than assumed sufficient: 3 hops covers
+  // the deepest chain in the pinned corpus with one to spare. `visited` makes a cyclic barrel graph
+  // terminate rather than recurse.
+  // `${sourcePath}#${sourceName}` -> every barrel re-exporting it BY NAME, and the name it exports
+  // it under. Star re-exports are a separate index below: a star supplies every name, so it has no
+  // enumerable key here.
+  const oneHop = new Map<string, { barrelPath: string; exportedAs: string }[]>();
+  const addHop = (fromPath: string, fromName: string, barrelPath: string, exportedAs: string) => {
+    const key = `${fromPath}#${fromName}`;
+    const list = oneHop.get(key);
+    if (list) list.push({ barrelPath, exportedAs });
+    else oneHop.set(key, [{ barrelPath, exportedAs }]);
+  };
+  // #1717: `export * from "./x"` carries no export clause, so `collectReExports` skips it — and
+  // THAT, not the hop count, is what kept carbon's `handleCommandNavigation` unresolvable (MEASURED
+  // 2026-08-01: extending the chase alone moved NOTHING on any target; the middle barrel,
+  // packages/tiptap/src/extensions/index.ts:66, is a bare `export * from "./slash-command"`).
+  //
+  // Modelled as a PATH edge rather than a name list, because a star barrel declares no names of its
+  // own: enumerating `./x`'s exported names breaks the moment `./x` is itself a star barrel, which
+  // is the common `index.ts` shape and exactly carbon's. Every name flows through unchanged. The
+  // over-approximation is closed at the far end, not here: `crossFileCallSites` still requires the
+  // IMPORTER's own binding to name this barrel and this symbol, so a barrel that does not really
+  // re-export the name is never matched by anything.
+  //
+  // Kept out of `collectReExports` on purpose — #1500's gate resolver shares that function, and this
+  // widening is scoped to the SSR caller search, whose blast radius is the measurement above.
+  const starredBy = new Map<string, string[]>();
   for (const [barrelPath, barrelSf] of sources) {
-    for (const [, binding] of collectReExports(barrelSf, barrelPath, allPathsSet, aliases)) {
-      const key = `${binding.path}#${binding.name}`;
-      const list = barrelsFor.get(key);
+    for (const [exportedAs, binding] of collectReExports(barrelSf, barrelPath, allPathsSet, aliases)) {
+      addHop(binding.path, binding.name, barrelPath, exportedAs);
+    }
+    for (const target of starReExportTargets(barrelSf, barrelPath, allPathsSet, aliases)) {
+      const list = starredBy.get(target);
       if (list) list.push(barrelPath);
-      else barrelsFor.set(key, [barrelPath]);
+      else starredBy.set(target, [barrelPath]);
     }
   }
+  const hopsFrom = (path: string, name: string): { barrelPath: string; exportedAs: string }[] => [
+    ...(oneHop.get(`${path}#${name}`) ?? []),
+    // A star passes every name through unchanged, so the symbol keeps its name across the hop.
+    ...(starredBy.get(path) ?? []).map((barrelPath) => ({ barrelPath, exportedAs: name })),
+  ];
+  // Memoised per (path, name) rather than precomputed over every key: with stars in play the key set
+  // is not enumerable up front, and the callers ask about a handful of helpers per run.
+  const cache = new Map<string, string[]>();
+  const barrelsFor = (path: string, name: string): string[] => {
+    const key = `${path}#${name}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const reachable: string[] = [];
+    const visited = new Set<string>();
+    let frontier = hopsFrom(path, name);
+    for (let hop = 0; hop < BARREL_CHASE_DEPTH && frontier.length > 0; hop++) {
+      const next: { barrelPath: string; exportedAs: string }[] = [];
+      for (const step of frontier) {
+        const seenKey = `${step.barrelPath}#${step.exportedAs}`;
+        if (visited.has(seenKey)) continue;
+        visited.add(seenKey);
+        reachable.push(step.barrelPath);
+        next.push(...hopsFrom(step.barrelPath, step.exportedAs));
+      }
+      frontier = next;
+    }
+    cache.set(key, reachable);
+    return reachable;
+  };
   return { sources, allPaths, aliases, importedBy, barrelsFor };
 }
 
@@ -2253,7 +2580,7 @@ function buildSsrCrossFileContext(sources: ReadonlyMap<string, ts.SourceFile>, a
 // name contributes nothing, which is the same "no evidence either way" outcome as an in-file zero.
 function crossFileCallSites(path: string, exportedName: string, ctx: SsrCrossFileContext): { node: ts.CallExpression; sf: ts.SourceFile }[] {
   const out: { node: ts.CallExpression; sf: ts.SourceFile }[] = [];
-  const viaPaths = [path, ...(ctx.barrelsFor.get(`${path}#${exportedName}`) ?? [])];
+  const viaPaths = [path, ...ctx.barrelsFor(path, exportedName)];
   for (const viaPath of viaPaths) {
     for (const importerPath of ctx.importedBy.get(viaPath) ?? []) {
       const importerSf = ctx.sources.get(importerPath);
@@ -3253,6 +3580,11 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     ? dataLayerNotAssessed(nextId, otherDataLayer)
     : [
         ...(S.has("server-client-leak") ? adapter.detectServerClientLeak(sources, nextId, files) : []),
+        // #1679 rides the `server-client-leak` capability rather than adding an M9Check of its own:
+        // it needs exactly that adapter's server→client crossing, so an adapter without the
+        // capability already emits a not-assessed row naming it, and a second row would say the
+        // same thing twice. Its OWN taxonomy is `M1 —`, so it is scored by the M1-boundary key.
+        ...(S.has("server-client-leak") ? detectClientRenderOnlyAuthz(sources, nextId, collectPathAliases(files)) : []),
         ...(S.has("cache-config") ? detectUnsafeCacheConfig(sources, nextId) : []),
         ...(S.has("data-waterfall") ? detectDataFetchingWaterfalls(sources, nextId, adapter.isClientContext, collectPathAliases(files)) : []),
       ];
