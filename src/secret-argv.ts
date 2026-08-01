@@ -12,25 +12,78 @@
 // Harvey is a security audit running on a client's machine, so a scan must not widen the attack
 // surface of the app it is auditing. The helpers here are the sanctioned ways to hand a secret to a
 // child: the child's environment, or its stdin.
+//
+// SCOPE — this invariant covers ARGV ONLY, deliberately (criterion 6 of #1413). "On disk" and "in a
+// log" are real secret surfaces but a different class: argv is world-readable by every local account
+// for the child's lifetime with no action required, whereas Harvey's disk writes go to operator-owned
+// temp dirs and its report output is already redaction-gated. Those two surfaces are not covered by
+// the argv rail below and are NOT claimed to be; extending the same structural treatment to them is
+// tracked as the #1413 remainder. Recording the boundary here so a reader does not mistake an
+// argv-clean run for a whole-secret-lifecycle guarantee.
 
 // Values that are never secrets even though they flow through the same call sites. A guard that
 // fires on the empty string (or on a placeholder a stand-up provisions as a non-secret) would be
 // disabled within a week, so the exclusions are named here rather than at each call site.
+// `postgres` is libpq's default user/db name and appears verbatim in every conninfo argv — a real
+// non-secret whose risk of exemption is nil (a live credential is never the literal `postgres`).
 const NON_SECRET = new Set(["", "postgres", "prisma-no-postgrest"]);
+
+// The minimum length a value must have to be WATCHED as a secret. Risk of the floor (criterion 3 of
+// #1413): a target-derived secret shorter than 8 chars would slip through un-watched. That
+// population is zero for what this system actually handles — session/app JWTs, Supabase anon &
+// service_role keys, DB passwords, minted bearer tokens and the seed password are all far longer.
+// The floor earns its keep the other way: a 1–4 char value (a git short-flag, a status code, `main`)
+// is a substring of countless benign argv elements, so watching it would fire everywhere and get the
+// guard deleted — the exact failure the NON_SECRET note above warns about. MEASURED 2026-07-31: the
+// shortest secret any caller registers is `harvey-pentest-pw-123456` (24 chars).
+const MIN_SECRET_LEN = 8;
+
+export function isWatchableSecret(v: string | undefined): v is string {
+  return typeof v === "string" && v.length >= MIN_SECRET_LEN && !NON_SECRET.has(v);
+}
+
+// A distinct error type so a spawn REFUSAL is never mistaken for a routine failure. The stand-ups
+// wrap sign-in / probe calls in try/catch that turn a bad response into `{ ok: false }`; a secret
+// leaking to argv must not read as "sign-in failed" and be swallowed (criterion 4 of #1413), so
+// those catches re-throw this class while still absorbing ordinary failures.
+export class SecretInArgvError extends Error {}
 
 // The enforcement point. Every spawn that has a secret ANYWHERE in scope calls this with the argv it
 // is about to pass and the secrets it holds; a secret that reached argv throws before the spawn
 // rather than being discovered by a later inspection. The message names the site and the argv index
 // but NEVER the secret — this throws into logs Harvey writes.
 export function assertNoSecretInArgv(site: string, argv: readonly string[], secrets: readonly (string | undefined)[]): void {
-  const watched = secrets.filter((s): s is string => typeof s === "string" && s.length >= 8 && !NON_SECRET.has(s));
+  const watched = secrets.filter(isWatchableSecret);
   for (const [i, arg] of argv.entries()) {
     if (watched.some((s) => arg.includes(s))) {
-      throw new Error(
+      throw new SecretInArgvError(
         `${site}: refusing to spawn — a secret appears in argv[${i}]. argv is world-readable via \`ps\`; ` +
           `pass the value in the child's environment or on its stdin (#1297).`,
       );
     }
+  }
+}
+
+// A per-run collection of every secret in scope, so a spawn choke point (`sh`) can screen its argv
+// against ALL of them without each call site re-declaring which parameter holds what. This is what
+// makes the guard STRUCTURAL rather than opt-in (#1413): a new `sh` caller is covered automatically,
+// and a secret embedded in an argv element the call site never thought of — a `-c` SQL string, a
+// request body interpolated into a URL — is caught because the registry, not the call site, decides
+// what a secret is.
+export class SecretRegistry {
+  private readonly secrets = new Set<string>();
+  register(...values: (string | undefined)[]): void {
+    for (const v of values) if (isWatchableSecret(v)) this.secrets.add(v);
+  }
+  clear(): void {
+    this.secrets.clear();
+  }
+  // Throws SecretInArgvError before the spawn if any registered secret is in argv.
+  assertArgvClean(site: string, argv: readonly string[]): void {
+    assertNoSecretInArgv(site, argv, [...this.secrets]);
+  }
+  get size(): number {
+    return this.secrets.size;
   }
 }
 

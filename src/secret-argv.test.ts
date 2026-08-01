@@ -1,11 +1,17 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { assertNoSecretInArgv, curlConfig, splitPgPassword } from "./secret-argv.js";
+import { assertNoSecretInArgv, curlConfig, isWatchableSecret, SecretInArgvError, SecretRegistry, splitPgPassword } from "./secret-argv.js";
 
 describe("assertNoSecretInArgv (#1297)", () => {
   it("throws when a secret is an argv element, naming the index but never the secret", () => {
     expect(() => assertNoSecretInArgv("site", ["-e", "x", "hunter2-hunter2"], ["hunter2-hunter2"])).toThrowError(/argv\[2\]/);
     expect(() => assertNoSecretInArgv("site", ["hunter2-hunter2"], ["hunter2-hunter2"])).not.toThrowError(/hunter2/);
+  });
+
+  it("throws a distinct SecretInArgvError so a refusal is not swallowed as a routine failure (#1413)", () => {
+    // The stand-ups' catch blocks turn ordinary failures into `{ ok: false }` but re-throw this type;
+    // if the guard threw a bare Error it would read as "sign-in failed" and vanish (criterion 4).
+    expect(() => assertNoSecretInArgv("site", ["hunter2-hunter2"], ["hunter2-hunter2"])).toThrow(SecretInArgvError);
   });
 
   it("throws when a secret is EMBEDDED in a larger argument, not only when it is the whole one", () => {
@@ -16,6 +22,47 @@ describe("assertNoSecretInArgv (#1297)", () => {
   it("passes when the secret is absent, and ignores undefined/short/known-non-secret values", () => {
     expect(() => assertNoSecretInArgv("site", ["-e", "const s = process.env.X"], ["hunter2-hunter2"])).not.toThrow();
     expect(() => assertNoSecretInArgv("site", ["postgres"], ["postgres", undefined, ""])).not.toThrow();
+  });
+});
+
+describe("isWatchableSecret — the length floor and non-secret allowlist (#1413 crit 3)", () => {
+  it("watches values >= 8 chars that are not on the non-secret allowlist", () => {
+    expect(isWatchableSecret("harvey-pentest-pw-123456")).toBe(true);
+    expect(isWatchableSecret("eyJhbGci-service-role")).toBe(true);
+  });
+  it("does NOT watch the sub-8-char floor, undefined, or the known non-secrets", () => {
+    // The floor's population of un-watched REAL secrets is zero — every credential this system
+    // handles is far longer; a short value would match countless benign argv substrings instead.
+    expect(isWatchableSecret("abc1234")).toBe(false); // 7 chars
+    expect(isWatchableSecret(undefined)).toBe(false);
+    expect(isWatchableSecret("postgres")).toBe(false); // libpq default user/db, appears in every conninfo
+    expect(isWatchableSecret("")).toBe(false);
+  });
+});
+
+describe("SecretRegistry — the structural spawn rail (#1413)", () => {
+  it("screens argv against EVERY registered secret, not just a per-call declaration", () => {
+    const reg = new SecretRegistry();
+    reg.register("harvey-pentest-pw-123456", "service-role-key-abcdefgh");
+    expect(reg.size).toBe(2);
+    // A secret embedded in a `-c` SQL string the call site never declared is still caught.
+    expect(() => reg.assertArgvClean("psql", ["conn", "-c", "select 'harvey-pentest-pw-123456'"])).toThrow(SecretInArgvError);
+  });
+
+  it("negative control: a clean argv and a sub-floor/non-secret value do not fire", () => {
+    const reg = new SecretRegistry();
+    reg.register("harvey-pentest-pw-123456", "abc1234", "postgres", undefined);
+    expect(reg.size).toBe(1); // only the long, non-allowlisted value was registered
+    expect(() => reg.assertArgvClean("psql", ["conn", "-c", "select 1"])).not.toThrow();
+    expect(() => reg.assertArgvClean("psql", ["postgres", "-c", "select 1"])).not.toThrow();
+  });
+
+  it("clear() empties the registry", () => {
+    const reg = new SecretRegistry();
+    reg.register("harvey-pentest-pw-123456");
+    reg.clear();
+    expect(reg.size).toBe(0);
+    expect(() => reg.assertArgvClean("psql", ["harvey-pentest-pw-123456"])).not.toThrow();
   });
 });
 
