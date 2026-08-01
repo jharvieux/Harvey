@@ -10,12 +10,21 @@
 //
 // WHAT THE NEGATIVE HALF DOES AND DOES NOT PROVE — the link between a rule and its boundary
 // negative is DERIVED FROM FIXTURE NAMES (`redos-regex.ts` ↔ `redos-regex-safe.ts`), not declared
-// in the answer key, because CorpusEntry has no rule-id field. MEASURED 2026-07-28: the derivation
-// resolves a twin for 110/110 rules. So it proves (a) a benign twin of this rule's own fixture
-// exists in the corpus and (b) the rule produced nothing on it. It does NOT prove the twin
-// exercises the specific sanitizer the rule implements — a declared rule↔entry link would, and is
-// tracked as follow-up work. A rule that fires on many fixtures has many candidate twins, so the
-// (a) half is weakest exactly where the rule is broadest.
+// in the answer key, because CorpusEntry has no rule-id field.
+//
+// The line that stood here until #1676 — "MEASURED 2026-07-28: the derivation resolves a twin for
+// 110/110 rules" — was an ARTEFACT of the `stem` bug fixed below: a bare dotfile collapsed to the
+// empty string, so `.npmrc` answered as a benign twin for every rule. RE-MEASURED 2026-08-01 with
+// the shipped predicate (`ruleCorpusPairings()`, counting rows carrying neither `unpaired` nor
+// `twinless`): **47 of 114** `harvey-*` rules pair on BOTH halves. 0 fail the positive half — that
+// half was never affected and stays fatal — and the remaining 67 are twinless, enumerated in
+// TWIN_BACKLOG below rather than summarised.
+//
+// Where a twin IS resolved it proves (a) a benign twin of this rule's own fixture exists in the
+// corpus and (b) the rule produced nothing on it. It does NOT prove the twin exercises the specific
+// sanitizer the rule implements — a declared rule↔entry link would, and is tracked as follow-up
+// work. A rule that fires on many fixtures has many candidate twins, so the (a) half is weakest
+// exactly where the rule is broadest.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -65,9 +74,16 @@ export function committedScanFindings(): Finding[] {
 // claim — was satisfied by the empty string for 72% of the rules it reports on.
 //
 // The lookbehind keeps a real basename: `lib/jwt.js` → `lib/jwt`, `.npmrc` → `.npmrc`,
-// `lib/.npmrc` → `lib/.npmrc`. A silent regression to the empty-string form fails a test:
-// `EMPTY_STEM_IS_A_UNIVERSAL_TWIN` in the test file re-derives it.
-const stem = (p: string): string => p.replace(/(?<=[^/])\.[a-z]+$/i, "");
+// `lib/.npmrc` → `lib/.npmrc`.
+//
+// EXPORTED FOR ONE REASON, and it is the same defect class this whole comment is about. The guard
+// named after this regex — `EMPTY_STEM_IS_A_UNIVERSAL_TWIN` in the test file — used to declare its
+// own copy of the pattern, so it was a duplicate of the thing it guarded rather than a test of it.
+// MEASURED 2026-08-01: reverting this line to the empty-string form left that test GREEN (1 failed
+// / 10 passed, and the one failure was `TWIN_BACKLOG can only shrink`, a different test catching it
+// by accident). It now imports THIS binding, so the same reversion reddens the test that claims to
+// catch it.
+export const stem = (p: string): string => p.replace(/(?<=[^/])\.[a-z]+$/i, "");
 const filePart = (location: string): string => location.replace(/^\[source\] /, "").split(":")[0] ?? location;
 const BENIGN_SUFFIX = /-(safe|fixed|guarded|scoped|allowlist)$/;
 
@@ -217,10 +233,12 @@ export const UNSCORED_OUTSIDE_UNITS: readonly { unit: string; engine: string; re
 //
 // It is measured here, on every run, rather than written down: `coveredByPairingGate` /
 // `outsidePairingGate` are counts over the committed scan, and a number that moves is the only kind
-// that stays true. MEASURED 2026-07-31 against dry-run/findings.json — 157 high-tier findings, 104
-// from an enumerated harvey-* rule, 53 (33.8%) from something else: committed credentials, the M1
-// object-level-authz AST detector, static-RLS migration checks, dependency and license checks, and
-// two third-party semgrep packs.
+// that stays true. RE-MEASURED 2026-08-01 against dry-run/findings.json, by calling
+// `freeCountCoverage()` — 164 high-tier findings, 110 from an enumerated harvey-* rule, 54 (32.9%)
+// from something else: committed credentials, the M1 object-level-authz AST detector, static-RLS
+// migration checks, dependency and license checks, and two third-party semgrep packs. (The
+// 157/104/53 figure recorded here through 2026-07-31 was stale against this same artifact; the
+// sibling comment in quick-scan.ts and this one now quote one measurement, not two.)
 //
 // `droppedByPerRuleGate` is #1414's requested prototype of the per-rule filter itself: the findings a
 // free count gated on VALIDATION STATUS (rather than on the self-declared `precisionTier` tag) would
@@ -239,7 +257,8 @@ interface FreeCountCoverage {
   droppedByPerRuleGate: string[]; // finding ids a per-rule validation gate would withhold today
   // #1676: the same population split by ENGINE, so "a third of the free count is ungated" can be
   // read as "WHICH third", and so a new engine appearing in a client's free count is visible rather
-  // than absorbed into one percentage.
+  // than absorbed into one percentage. `findings` counts FINDINGS, so the parts sum to
+  // `outsidePairingGate` on any input — see the comment at the accumulator below.
   byEngine: { engine: string; findings: number; taxonomies: number }[];
 }
 
@@ -253,11 +272,17 @@ export function freeCountCoverage(
   const outside = high.filter((f) => !ruleTaxonomies.has(f.taxonomy));
   const unpairedRules = new Set(pairings.filter((p) => p.unpaired).map((p) => p.rule));
   const unpairedTaxonomies = new Set(rules.filter((r) => unpairedRules.has(r.id)).map((r) => r.taxonomy));
-  const engines = new Map<string, { ids: Set<string>; taxa: Set<string> }>();
+  // #1676: count FINDINGS, not distinct ids. This accumulator deduplicated by `f.id`, which is
+  // invisible on the committed artifact (ids are unique there) and wrong on a live scan: MEASURED
+  // 2026-08-01, a live run reported 78 findings outside the gate while the five engine rows summed
+  // to 71 — ~7 absorbed by shared ids. This is the client-facing "which share of your free count is
+  // ungated" disclosure, so the parts have to sum to the whole; a row that quietly swallows seven
+  // findings is the silent-omission shape wearing a breakdown.
+  const engines = new Map<string, { findings: number; taxa: Set<string> }>();
   for (const f of outside) {
     const key = engineOfFinding(f);
-    const slot = engines.get(key) ?? { ids: new Set<string>(), taxa: new Set<string>() };
-    slot.ids.add(f.id);
+    const slot = engines.get(key) ?? { findings: 0, taxa: new Set<string>() };
+    slot.findings += 1;
     slot.taxa.add(f.taxonomy);
     engines.set(key, slot);
   }
@@ -267,7 +292,7 @@ export function freeCountCoverage(
     outsidePairingGate: outside.length,
     outsideTaxonomies: [...new Set(outside.map((f) => f.taxonomy))].sort(),
     droppedByPerRuleGate: high.filter((f) => unpairedTaxonomies.has(f.taxonomy)).map((f) => f.id),
-    byEngine: [...engines].map(([engine, s]) => ({ engine, findings: s.ids.size, taxonomies: s.taxa.size })).sort((a, b) => b.findings - a.findings),
+    byEngine: [...engines].map(([engine, s]) => ({ engine, findings: s.findings, taxonomies: s.taxa.size })).sort((a, b) => b.findings - a.findings),
   };
 }
 

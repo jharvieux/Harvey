@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS, type SemgrepRule } from "./rule-corpus-pairing.js";
+import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, stem, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS, type SemgrepRule } from "./rule-corpus-pairing.js";
 import { CORPUS } from "./calibration.js";
 import type { Finding } from "../findings.js";
 
@@ -74,6 +74,20 @@ describe("#1414 free-count coverage of the pairing gate, and the per-rule gate p
     expect(byEngine.map((e) => e.engine)).toContain("dependency / supply-chain / licence checks");
   });
 
+  // #1676 — the sum above holds over the committed artifact for a reason that is an accident: ids
+  // are unique there. The accumulator used to key on `f.id`, so on a LIVE run 78 findings outside
+  // the gate rendered as engine rows summing to 71. This asserts the arithmetic on an input where
+  // ids repeat, which is the only place the two implementations differ.
+  it("the engine rows still sum to the headline when two findings share an id", () => {
+    const findings = committedScanFindings();
+    const base = freeCountCoverage(findings);
+    const outsideTaxa = new Set(base.outsideTaxonomies);
+    const twin = findings.find((f) => f.precisionTier === "high" && outsideTaxa.has(f.taxonomy))!;
+    const c = freeCountCoverage([...findings, { ...twin, location: "src/elsewhere/same-id.ts:1" }]);
+    expect(c.outsidePairingGate).toBe(base.outsidePairingGate + 1);
+    expect(c.byEngine.reduce((n, e) => n + e.findings, 0)).toBe(c.outsidePairingGate);
+  });
+
   it("NEGATIVE CONTROL — the per-rule gate DOES withhold an unpaired rule's findings", () => {
     // Without this, "drops 0" is indistinguishable from a filter that drops nothing ever.
     const findings = committedScanFindings();
@@ -142,11 +156,16 @@ describe("#1676 outside-engine pairing, and the twin ratchet", () => {
   // every rule and passed the silence half for all of them. This is the guard against reintroducing
   // that — it fails if any tracked calibration fixture reduces to an empty stem under the shipped
   // regex.
+  //
+  // It imports `stem` rather than restating the regex, and that is load-bearing: the version that
+  // declared its own `const shippedStem = ...` copy was a duplicate of the thing it guarded, and
+  // reverting the production line left it GREEN (MEASURED 2026-08-01, 1 failed / 10 passed — the
+  // failure was `TWIN_BACKLOG can only shrink`, catching it by accident). A guard that restates its
+  // subject tests the restatement.
   it("EMPTY_STEM_IS_A_UNIVERSAL_TWIN — no calibration fixture reduces to the empty string", () => {
-    const shippedStem = (p: string): string => p.replace(/(?<=[^/])\.[a-z]+$/i, "");
     const tracked = execFileSync("git", ["ls-files", "targets/calibration"], { encoding: "utf8" }).trim().split("\n");
     expect(tracked.length).toBeGreaterThan(100);
-    expect(tracked.filter((f) => shippedStem(f.replace(/^targets\/calibration\//, "")) === "")).toEqual([]);
+    expect(tracked.filter((f) => stem(f.replace(/^targets\/calibration\//, "")) === "")).toEqual([]);
     // ...and the OLD regex DID produce one, so this guard has a subject rather than a population of zero.
     const oldStem = (p: string): string => p.replace(/\.[a-z]+$/i, "");
     const oldEmpty = tracked.filter((f) => oldStem(f.replace(/^targets\/calibration\//, "")) === "");
