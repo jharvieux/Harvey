@@ -215,14 +215,20 @@ function jobPathScopeRow(files: SourceInput[]): Finding[] {
   ];
 }
 
-export function detectJobTenantScopeFindings(files: SourceInput[]): Finding[] {
-  // #1269: the non-shipping exclusion prisma-tenant-scope carries since #896. `tests/jobs/…` and
-  // `examples/inngest/…` both match JOB_PATH, and MEASURED 2026-07-31 the detector fired on the
-  // planted shape at each of them exactly as it does in `src/inngest/`.
-  const scanned = files.filter(
+// #1269: the non-shipping exclusion prisma-tenant-scope carries since #896. `tests/jobs/…` and
+// `examples/inngest/…` both match JOB_PATH, and MEASURED 2026-07-31 the detector fired on the
+// planted shape at each of them exactly as it does in `src/inngest/`.
+//
+// #1689 — exported so the zero-population disclosure row and the pinned-corpus census read this
+// detector's scope through the SAME predicate the detector scans with.
+export function jobTenantScopeScannedFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter(
     (f) => JOB_PATH.test(f.path) && SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path),
   );
-  return [...scanned.flatMap((f) => detectFile(f.path, parse(f.path, f.text))), ...jobPathScopeRow(files)];
+}
+
+export function detectJobTenantScopeFindings(files: SourceInput[]): Finding[] {
+  return [...jobTenantScopeScannedFiles(files).flatMap((f) => detectFile(f.path, parse(f.path, f.text))), ...jobPathScopeRow(files)];
 }
 
 export function scanJobTenantScope(projectDir: string): Finding[] {
