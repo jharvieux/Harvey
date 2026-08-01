@@ -6,7 +6,7 @@ import { join, relative, sep } from "node:path";
 import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { detectSlopFindings } from "./slop.js";
+import { classifySingleUseHelperCandidates, detectSlopFindings } from "./slop.js";
 import type { SourceInput } from "./common.js";
 
 const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/slop/", import.meta.url));
@@ -174,13 +174,36 @@ describe("discrimination boundaries (regression locks)", () => {
     const evidence = pos.find((f) => f.title.includes("loadRate"))?.evidence ?? "";
     expect(evidence).toContain("exempts a helper that does no I/O of its own whose one caller is async or awaits");
     // #1532/#1345: the bound reaches the client WITH ITS POPULATION. #1447 disclosed the bound and
-    // shipped no number, which leaves a reader nothing to weigh it against. Re-measured 2026-07-31
-    // over the same ten pins: 592 spared (653 before #1532/#1533), 380 on an await that has nothing
-    // to do with the helper, 24 on an async caller this pass could not read.
-    expect(evidence).toContain("592");
-    expect(evidence).toContain("653");
-    expect(evidence).toContain("380");
-    expect(evidence).toContain("24");
+    // shipped no number, which leaves a reader nothing to weigh it against. #1660 settled the
+    // predicate behind "awaits never touch the helper's result" (definition (b), dataflow through
+    // a one-hop local binding — see `callerAwaitTouchesHelperResult`) and re-measured over ALL
+    // SEVENTEEN pinned M5-slop targets: 624 spared, 407 on an await that never touches the
+    // helper's result under that predicate, 192 that do touch it (spared anyway), 25 on an async
+    // caller this pass could not read.
+    expect(evidence).toContain("624");
+    expect(evidence).toContain("407");
+    expect(evidence).toContain("192");
+    expect(evidence).toContain("25");
+  });
+
+  // #1660 — the settled predicate itself, unit-tested directly so its semantics never silently
+  // drift back toward the rejected lexical reading (a): `const x = helper(); await save(x)` must
+  // read as "touches" even though the call isn't lexically inside the await.
+  it("classifySingleUseHelperCandidates: a bound-then-awaited result touches, an unrelated await does not, a direct await touches (#1660)", () => {
+    const seamSrc = (callerBody: string) => [{ path: "seam.ts", text: `function helper() { return 1; }\nasync function caller() {\n${callerBody}\n}\ncaller();\n` }];
+
+    const touching = classifySingleUseHelperCandidates(seamSrc("const x = helper();\nawait save(x);"));
+    const touchingRow = touching.find((r) => r.name === "helper");
+    expect(touchingRow?.outcome).toBe("spared-caller-awaits");
+    expect(touchingRow?.awaitTouchesResult).toBe(true);
+
+    const nonTouching = classifySingleUseHelperCandidates(seamSrc("const x = helper();\nawait somethingElse();"));
+    const nonTouchingRow = nonTouching.find((r) => r.name === "helper");
+    expect(nonTouchingRow?.outcome).toBe("spared-caller-awaits");
+    expect(nonTouchingRow?.awaitTouchesResult).toBe(false);
+
+    const direct = classifySingleUseHelperCandidates(seamSrc("await helper();"));
+    expect(direct.find((r) => r.name === "helper")?.awaitTouchesResult).toBe(true);
   });
 
   // #1533 — the `async` caller that awaits NOTHING. MEASURED 2026-07-31 over the same ten pins:
