@@ -528,15 +528,38 @@ describe("field FP families (#1475–#1480)", () => {
 
   // #1666 negative control: an `@NgModule` on the identical `.module.ts` naming convention, with
   // `controllers`/`providers` keys spoofed in, must NOT be read as a Nest `@Module` — only the
-  // decorator IDENTIFIER gates the synthetic edge, not the path or the property names. Also stands
-  // as the "a *.module.ts path does not become a request entry" control: no file in this fixture
-  // matches REQUEST_ENTRY_PATH except the real controller, and the module file itself never did.
+  // decorator IDENTIFIER gates the synthetic edge, not the path or the property names.
+  //
+  // The control is read off the SYNC-I/O tier, not off the whole-library row, and that choice is
+  // what makes it discriminate. `serverOnlyModules` ANDs request-reachability with
+  // client-reachability, and a realistic Angular module imports `@angular/core` — which makes it a
+  // client entry whose closure covers its own providers — so the whole-library row stays
+  // unqualified no matter what the decorator gate does. MEASURED 2026-07-31: widening the gate at
+  // perf-code.ts to accept `"NgModule"` left an earlier whole-library-only version of this control
+  // at 81/81 green. `detectSyncIoInHandler` calls `requestReachableModules` on its own with no
+  // client-side term, so the fixture's exported `loadTotals` is flagged if and only if the
+  // synthetic controller -> provider edge was built. Re-measured with the same one-word widening:
+  // this assertion goes red, and green again on restore.
   it("#1666 negative control: an Angular @NgModule spoofing `controllers`/`providers` does not create the Nest edge", () => {
-    const unqualified = byTaxonomy("whole-lib-import/negative-ngmodule-controllers-providers", "M7 — Whole-library import");
+    const dir = "whole-lib-import/negative-ngmodule-controllers-providers";
+    // The discriminating half: no Nest edge, so the provider is not request-reachable and its
+    // blocking read is never attributed to the controller.
+    expect(byTaxonomy(dir, "M7 — Blocking sync I/O in request handler")).toHaveLength(0);
+    // And the whole-library row it does carry stays unqualified rather than claiming server-only.
+    const unqualified = byTaxonomy(dir, "M7 — Whole-library import");
     expect(unqualified).toHaveLength(1);
     expect(unqualified[0]?.location).toContain("services/orders.service.ts");
     expect(unqualified[0]?.impact).not.toContain("Server-side only");
     expect(unqualified[0]?.evidence).not.toContain("no client entry point does");
+  });
+
+  // The positive half of the same discriminator: under a real `@Module`, the provider IS
+  // request-reachable and the sync-I/O row names the controller it is reachable from.
+  it("#1666: the Nest module edge makes its provider request-reachable, naming the controller as the entry", () => {
+    const sync = byTaxonomy("whole-lib-import/positive-nest-module-only", "M7 — Blocking sync I/O in request handler");
+    expect(sync).toHaveLength(1);
+    expect(sync[0]?.location).toContain("services/orders.service.ts");
+    expect(sync[0]?.evidence).toContain("The request entry point controllers/orders.controller.ts imports it");
   });
 
   it("#1479: with no client entry to answer from, the claim is left unqualified rather than asserted", () => {

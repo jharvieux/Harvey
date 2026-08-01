@@ -923,12 +923,15 @@ function asyncCallerDoesNoAsyncWork(caller: ts.Node, path: string, sf: ts.Source
 // The pin count this paragraph originally gave ("ten") is NOT reproducible and has been removed
 // rather than corrected: `src/scan/external-corpus.ts` carried FOURTEEN M5-slop baselines at
 // dfff5a8/5c983ea when the 653 was drawn and carries SEVENTEEN now (#1524 added cravab, flori-web
-// and effective on 2026-07-30), so "ten" describes neither, and the measuring script was not
-// committed, so the repo does not record which subset the 653 / 592 / 380 actually cover.
-// Re-deriving them is a re-run, not a recovery: clone the pins and diff the detector with and
-// without the exemption, which is how the async-caller figures below were re-measured.
-// Pinning those three totals to a stated population is part of #1660. The async-caller figures
-// below ARE re-derived here and carry their own scope. A seeded
+// and effective on 2026-07-30), so "ten" describes neither. The 653 / 592 / 380 are therefore kept
+// as HISTORY, not as current figures: each was drawn before the measuring step was a committed
+// mechanism, so the repo does not record which subset each covers. #1660 CLOSED that (PR #1796):
+// `pnpm exec tsx src/cli/measure-m5-caller-await.ts <target-dir> ...` is committed, and it prints
+// the target COUNT alongside every total — so the population travels with the figure instead of
+// being reconstructed later. The clones to pass it are `src/scan/external-corpus.ts`'s M5-slop
+// pins; the script does not read that file, the caller supplies the dirs. Its settled reading over
+// all seventeen is the 624 in the first bullet below — quote that run, dated, not these three.
+// A seeded
 // random sample of 50 (mulberry32, seed 20260730, over the population sorted by
 // target|file|line|helper) was read at source and graded against the exemption's own premise —
 // "a pure helper whose sole caller does the I/O". 45 held. 5 did not, and all 5 failed the SAME

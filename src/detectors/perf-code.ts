@@ -1772,9 +1772,20 @@ function isExportedFunctionLike(n: ts.Node): boolean {
 // Anchored to the `.module.ts` path convention (the same style REQUEST_ENTRY_PATH already
 // commits to) AND to the `@Module(...)` decorator identifier specifically — never a bare
 // filename match. Angular's `@NgModule` decorator lives on the identical filename convention
-// (ghostfolio's own `apps/client/src/app/app.module.ts`) and is a DIFFERENT identifier; a fixture
-// proves it is not swept in (perf-code.test.ts, "Angular @NgModule on a .module.ts path is not
-// read as a Nest @Module").
+// (ghostfolio's own `apps/client/src/app/app.module.ts`) and is a DIFFERENT identifier.
+//
+// The fixture proving it is not swept in is `whole-lib-import/negative-ngmodule-controllers-
+// providers`, and it is read off the SYNC-I/O tier — perf-code.test.ts, "#1666 negative control:
+// an Angular @NgModule spoofing `controllers`/`providers` does not create the Nest edge". Be
+// precise about what that fixture does and does not show, because the first version of it showed
+// nothing: the whole-library reword it originally asserted on is decided by `serverOnlyModules`,
+// which ANDs this walk with client-reachability, and a realistic Angular module imports
+// `@angular/core` — making it a client entry whose closure already covers its own providers. So
+// that row is spared for a reason unrelated to the decorator, and MEASURED 2026-07-31 the
+// whole-library-only control stayed 81/81 green with this gate widened to accept `"NgModule"`.
+// `detectSyncIoInHandler` consults `requestReachableModules` with no client-side term, so the
+// fixture's provider is flagged there if and only if the edge below was built — that assertion
+// does go red under the same widening.
 const NEST_MODULE_PATH = /\.module\.[cm]?[jt]sx?$/;
 
 function nestModuleDecoratorArgs(sf: ts.SourceFile): ts.ObjectLiteralExpression | undefined {

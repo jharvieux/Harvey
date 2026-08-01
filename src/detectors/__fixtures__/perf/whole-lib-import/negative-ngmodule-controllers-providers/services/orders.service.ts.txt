@@ -3,6 +3,7 @@
 // `controllers`/`providers` keys Angular's real decorator does not carry — #1666's negative
 // control on the DECORATOR IDENTIFIER, not on the server-runtime-import guard.
 import { Injectable } from "@nestjs/common";
+import { readFileSync } from "node:fs";
 import { isEmpty } from "lodash";
 
 @Injectable()
@@ -10,4 +11,15 @@ export class OrdersService {
   totals() {
     return isEmpty({}) ? [] : [1];
   }
+}
+
+// The DISCRIMINATING half of this control. The whole-library row above is decided by
+// `serverOnlyModules`, which ANDs request-reachability with client-reachability — and the
+// `@angular/core` import in orders.module.ts seeds the client closure with this file, so that row
+// stays unqualified whatever the decorator gate does. The sync-I/O tier reads
+// `requestReachableModules` on its own, with no client-side term, so this exported function's
+// `readFileSync` is emitted if and only if the synthetic controller -> provider edge was built.
+// Under `@NgModule` it must not be.
+export function loadTotals() {
+  return readFileSync("totals.json", "utf8");
 }
