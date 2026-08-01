@@ -86,18 +86,28 @@ const PENDING_JUDGMENT: Record<string, string> = {};
 
 // #1708: a DIFFERENT judgment from the two maps above. NARROW_BY_DESIGN/PENDING_JUDGMENT decide
 // whether a rule uses the canonical block AT ALL; the three maps below decide, for every rule that
-// already does, whether it should ALSO take `*dom_source` — i.e. whether a CLIENT component reading
+// already does, whether it should ALSO take a client source block — i.e. whether a CLIENT component reading
 // a URL param and reaching this rule's sink is the same bug class as the server-request case. Every
 // rule that consumes `*request_source` is judged into exactly one of the three; leaving one
 // unjudged is what "judges every request-source rule" below exists to catch.
 //
 // IN_CLASS: the sink is a client-reachable call (chiefly supabase-js, which ships in the browser
-// bundle and is idiomatically called directly from a "use client" component) — `*dom_source` is
-// added alongside `*request_source`.
+// bundle and is idiomatically called directly from a "use client" component) — a client source
+// block is added alongside `*request_source`.
+//
+// There are TWO such blocks and the difference is deliberate, not drift. A rule whose sink exists
+// only in a browser takes xss.yml's `*dom_source`, which can afford receiver-agnostic `.get()` and
+// `.query.` arms. A rule whose sink runs on BOTH sides takes injection.yml's `*client_url_source`,
+// which binds those receivers — the bare arms fire on every server-side Map/Headers/config `.get()`
+// and on Drizzle's `db.query.<table>`, two of them landing in the ERROR/HIGH graded free count.
+const CLIENT_SOURCE_ANCHORS = ["*dom_source", "*client_url_source"];
+const takesClientSource = (rule: Rule | undefined): boolean =>
+  CLIENT_SOURCE_ANCHORS.some((anchor) => rule?.sources.includes(anchor) === true);
+
 const CLIENT_URL_PARAM_IN_CLASS: Record<string, string> = {
-  "harvey-path-traversal": "the Supabase Storage sink (storage.from(...).upload/download) is a supabase-js call reachable from a client component — the real instance that opened #1708 (carbon's JobBillOfProcess.tsx, useUrlParams() -> storage upload)",
-  "harvey-sql-injection-rpc": "the sink is a supabase-js .rpc(...) call, callable directly from a client component with no server hop",
-  "harvey-postgrest-filter-injection": "the sink (.or/.filter/.textSearch) is the same supabase-js client object as the two rules above",
+  "harvey-path-traversal": "the Supabase Storage sink (storage.from(...).upload/download) is a supabase-js call reachable from a client component — the real instance that opened #1708 (carbon's JobBillOfProcess.tsx, useUrlParams() -> storage upload). Takes *client_url_source: the same rule's fs and res.sendFile sinks are server-only, so the receiver has to be bound",
+  "harvey-sql-injection-rpc": "the sink is a supabase-js .rpc(...) call, callable directly from a client component with no server hop. Takes *client_url_source — this rule is ERROR/HIGH, so an unbound receiver lands false positives in the graded free count",
+  "harvey-postgrest-filter-injection": "the sink (.or/.filter/.textSearch) is the same supabase-js client object as the two rules above; takes *client_url_source for the same reason",
   "harvey-jsx-prop-spread-injection": "already carries both *dom_source and *request_source since #1237 — its sink spans both sides of the server/client boundary by design",
 };
 
@@ -325,7 +335,7 @@ describe("canonical request-taint source block (#1221)", () => {
         (r) =>
           r.taint &&
           !r.sources.includes("*request_source") &&
-          !r.sources.includes("*dom_source") &&
+          !takesClientSource(r) &&
           NARROW_BY_DESIGN[r.id] === undefined &&
           PENDING_JUDGMENT[r.id] === undefined,
       )
@@ -359,18 +369,27 @@ describe("canonical request-taint source block (#1221)", () => {
     }
   });
 
-  // #1708: injection.yml gained its own copy of x-dom-source (three of its sinks are supabase-js
-  // calls reachable from a client component) — the identical drift risk #1221 exists to catch, one
-  // anchor over. Same discipline: every copy must be byte-identical to xss.yml's.
-  it("is byte-identical in every file that declares the DOM source block (#1708)", () => {
-    const declared = ruleFiles()
-      .map((f) => [f, anchorBlock(f, "x-dom-source: &dom_source")] as const)
-      .filter((pair): pair is readonly [string, string] => pair[1] !== undefined);
-
-    expect(declared.length).toBeGreaterThan(1);
-    const [firstFile, canonical] = declared[0]!;
-    for (const [file, block] of declared.slice(1)) {
-      expect(block, `${file}'s copy of the DOM source block has drifted from ${firstFile}'s`).toBe(canonical);
+  // #1708: injection.yml's client-URL-param source is a NARROWING of xss.yml's x-dom-source, not a
+  // copy of it, and this is the property that makes it one. xss.yml can afford a receiver-agnostic
+  // `$SP.get(...)` / `$RT.query.$K` because its sinks exist only in a browser; injection.yml's
+  // three widened sinks (supabase-js storage / .rpc / .or) run on both sides, so the bare arms fire
+  // on every server-side `.get()` and every `.query.` access. MEASURED 2026-08-01, semgrep 1.164.0,
+  // over targets/calibration/src/client-url-source: bare arms 5 findings (two at ERROR, i.e. the
+  // graded free count), bound arms 1 (the directory's scope control). The four negatives there are
+  // the scored gate; this test is the structural one, so a refactor that leaves the fixtures
+  // passing for some other reason still fails on the shape itself.
+  it("binds the receiver on injection.yml's client URL param source (#1708)", () => {
+    const block = anchorBlock("injection.yml", "x-client-url-source: &client_url_source");
+    expect(block, "injection.yml no longer declares x-client-url-source").toBeDefined();
+    for (const arm of ["$SP.get(...)", "$RT.query.$K"]) {
+      const armIndex = block!.indexOf(arm);
+      expect(armIndex, `x-client-url-source lost the ${arm} arm`).toBeGreaterThan(-1);
+      expect(
+        block!.slice(armIndex),
+        `${arm} is unbound in x-client-url-source — a receiver-agnostic arm fires on every ` +
+          "server-side Map/Headers/config .get() and on Drizzle's db.query.<table>, reaching the " +
+          "ERROR/HIGH graded free count through harvey-sql-injection-rpc",
+      ).toContain("metavariable-regex");
     }
   });
 
@@ -411,18 +430,18 @@ describe("canonical request-taint source block (#1221)", () => {
     ).toEqual([]);
   });
 
-  it("gives every #1708 IN_CLASS rule the DOM source block alongside the request source", () => {
+  it("gives every #1708 IN_CLASS rule a client source block alongside the request source", () => {
     const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
-    const missing = Object.keys(CLIENT_URL_PARAM_IN_CLASS).filter((id) => !byId.get(id)?.sources.includes("*dom_source"));
-    expect(missing, "these rules are recorded IN_CLASS but do not take *dom_source — the judgment and the rule have drifted apart").toEqual([]);
+    const missing = Object.keys(CLIENT_URL_PARAM_IN_CLASS).filter((id) => !takesClientSource(byId.get(id)));
+    expect(missing, `these rules are recorded IN_CLASS but take neither ${CLIENT_SOURCE_ANCHORS.join(" nor ")} — the judgment and the rule have drifted apart`).toEqual([]);
   });
 
-  it("does not carry the DOM source block on a request-source rule with no #1708 IN_CLASS judgment", () => {
-    // The mirror-image check: a rule quietly gaining *dom_source without the judgment being
+  it("does not carry a client source block on a request-source rule with no #1708 IN_CLASS judgment", () => {
+    // The mirror-image check: a rule quietly gaining a client source without the judgment being
     // recorded, which is exactly as silent a drift as the missing case above.
     const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
-    const undeclared = Object.keys({ ...CLIENT_URL_PARAM_OUT_OF_CLASS, ...CLIENT_URL_PARAM_AWAITING_DECISION }).filter((id) => byId.get(id)?.sources.includes("*dom_source"));
-    expect(undeclared, "these rules take *dom_source but are recorded OUT_OF_CLASS or AWAITING_DECISION — move them to CLIENT_URL_PARAM_IN_CLASS or drop the pattern").toEqual([]);
+    const undeclared = Object.keys({ ...CLIENT_URL_PARAM_OUT_OF_CLASS, ...CLIENT_URL_PARAM_AWAITING_DECISION }).filter((id) => takesClientSource(byId.get(id)));
+    expect(undeclared, `these rules take a client source block (${CLIENT_SOURCE_ANCHORS.join("/")}) but are recorded OUT_OF_CLASS or AWAITING_DECISION — move them to CLIENT_URL_PARAM_IN_CLASS or drop the pattern`).toEqual([]);
   });
 
   it("has no stale #1708 client-URL-param judgments", () => {
