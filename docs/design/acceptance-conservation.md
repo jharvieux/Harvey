@@ -455,7 +455,7 @@ One terminal state for a failed close, whatever failed and however many times (#
 
 | Situation | Action | Demonstrated |
 | --- | --- | --- |
-| Fails — first time or repeat | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | first-failure branch: #1384 went `CLOSED` → commented, labelled, `OPEN` (2026-07-28). Repeat-failure branch: CLI-layer proof against a stub `gh` (`src/cli/validate-acceptance.test.ts`); live workflow drill pending post-merge, tracked as #1750 |
+| Fails — first time or repeat | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | first-failure branch: #1384 went `CLOSED` → commented, labelled, `OPEN` (2026-07-28). Repeat-failure branch: CLI-layer proof against a stub `gh` (`src/cli/validate-acceptance.test.ts`); live workflow drill EXECUTED 2026-07-31: run 30674282482 (gate exit 1, `RE-OPENED` log line, #1348 reopened with label intact) — #1750 |
 | Passes, label present | **remove** the label | label removed, issue stayed `CLOSED`, exit 0 (#1384, 2026-07-28) |
 | Bot-opened issue | `NOT ASSESSED`, with the reason | #1340 (a `ci-heavy-cli-alert` drill) |
 
