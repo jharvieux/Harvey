@@ -38,13 +38,26 @@ function fixture(withGuard: boolean): string {
   return file;
 }
 
-// A reader that does not drain immediately is what makes this deterministic, and it is also what
-// actually happens: the parent is a busy CI runner or a vitest worker, not an idle pipe. Attaching
-// the reader late guarantees the OS pipe buffer is full and the write queue non-empty at exit, so
-// the unguarded run loses its tail every time instead of most times. An earlier version of this
-// file read immediately and the negative control passed alone but went green under parallel load —
-// a flaky guard against a flaky test, which is worth nothing.
-const READ_AFTER_MS = 400;
+// The reader must be SLOW, not ABSENT. That distinction is the whole history of this file.
+//
+// Backpressure needs a reader that drains more slowly than the child writes, so the OS pipe buffer
+// stays full and the write queue is non-empty when `process.exit()` fires. Two earlier designs got
+// this wrong in opposite directions, and both passed for the wrong reason:
+//
+//   1. DELAY FROM spawn() (#1768). `tsx` boots in 300-600ms, so the timer routinely expired before
+//      the child wrote anything; the reader was already draining and nothing was queued.
+//      MEASURED: 3 failures in 6 runs — an intermittently-wrong control.
+//   2. DELAY FROM THE FIRST BYTE (#1780's first fix). Worse: the unguarded child exits ~142ms after
+//      spawn, long before first-byte+300ms, so the parent captured ZERO bytes — 24/24 runs — and
+//      `not.toContain(MARKER)` was satisfied by the EMPTY STRING. Proved vacuous rather than merely
+//      indirect: with 100 filler lines (7107 bytes, entirely inside the 64KiB pipe buffer, so
+//      NOTHING is truncated) the control still passed. A deterministically-wrong control.
+//
+// So: keep the stream paused and pull a small chunk on an interval. The child is throttled, the
+// buffer stays full, and we still capture the early output — which is what lets the assertions below
+// tell a TRUNCATED capture from an ABSENT one.
+const READ_CHUNK_BYTES = 4096;
+const READ_TICK_MS = 5;
 
 /** stdio exactly as validate-calibration.test.ts and every CI step spawn a gate. */
 function runPiped(file: string): Promise<{ code: number | null; out: string }> {
@@ -52,10 +65,29 @@ function runPiped(file: string): Promise<{ code: number | null; out: string }> {
     const child = spawn("node_modules/.bin/tsx", [file], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     child.stdout.setEncoding("utf8");
-    // Same protocol for both directions, so the only variable is the guard itself.
-    setTimeout(() => child.stdout.on("data", (d: string) => (out += d)), READ_AFTER_MS);
-    child.on("error", rej);
-    child.on("close", (code) => res({ code, out }));
+    // No `data` handler: the stream stays paused and only this timer moves bytes, which is the
+    // throttle. Same protocol in both directions, so the only variable remains the guard itself.
+    const pump = setInterval(() => {
+      const chunk = child.stdout.read(READ_CHUNK_BYTES) as string | null;
+      if (chunk !== null) out += chunk;
+    }, READ_TICK_MS);
+
+    let code: number | null = null;
+    // Once the process is GONE the throttle has done its job — nothing more can be queued, so stop
+    // rate-limiting and take the rest at full speed. Resolving on the child's `close` instead would
+    // strand whatever is still sitting in a paused stream, which silently truncates the GUARDED run
+    // and makes the guard look broken.
+    child.on("exit", (c) => {
+      code = c;
+      clearInterval(pump);
+      child.stdout.on("data", (d: string) => (out += d));
+      child.stdout.resume();
+    });
+    child.stdout.on("end", () => res({ code, out }));
+    child.on("error", (e) => {
+      clearInterval(pump);
+      rej(e);
+    });
   });
 }
 
@@ -68,6 +100,14 @@ describe("sync-stdio — a verdict printed before process.exit() survives a pipe
     // failure while the sentence explaining it is gone, which reads as a crash.
     expect(runs.map((r) => r.code)).toEqual([1, 1]);
     for (const [i, r] of runs.entries()) {
+      // THIS ASSERTION IS THE POINT. `not.toContain` is satisfied by the empty string, so without a
+      // non-empty floor an ABSENT capture is indistinguishable from a TRUNCATED one — and a reader
+      // that never attached would score as proof of the very defect it failed to observe. #1780's
+      // first fix passed 24/24 that way. Truncation means we saw the head and lost the tail.
+      expect(
+        r.out.length,
+        `run ${i + 1} of the UNGUARDED fixture captured NOTHING. That is not truncation, it is a reader that never drained — the control would be green whether or not the defect exists. Fix the reader, do not relax this.`,
+      ).toBeGreaterThan(0);
       expect(
         r.out,
         `run ${i + 1} of the UNGUARDED fixture kept its final line. If this stops failing, the truncation this module exists to prevent is no longer reproducible here and the guarded test below proves nothing — investigate before deleting either.`,
