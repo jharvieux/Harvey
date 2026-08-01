@@ -1,0 +1,73 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": [
+    "#1738 — mutation testing pointed at HARVEY'S OWN GUARDS, report-only (operator ruling 2026-07-31).",
+    "",
+    "THE TARGET SET, and why it is this and not the repo. `mutate` is the registries and checkers that",
+    "decide whether some OTHER check is honest: ci-liveness (did a job reach its measuring phase),",
+    "alert-paths (is every alert path drilled), calibration (is the answer key still discriminating),",
+    "acceptance-conservation (did an issue close with a criterion nothing accounted for),",
+    "recorded-reasons (is a recorded blocker structurally falsifiable), scored-gates (does each",
+    "scored gate still have a cadence venue) and calibration-verdict (#1765's extracted verdict).",
+    "These are the files whose failure mode is silence: when one of them stops discriminating,",
+    "everything downstream keeps reporting green.",
+    "",
+    "DELIBERATELY EXCLUDED, so the omission is a stated decision and not a gap:",
+    "  - detectors and semgrep rules. They already have better instruments than mutation testing —",
+    "    a scored recall corpus (validate-calibration), a scored precision corpus (validate-precision)",
+    "    and the OWASP corpora we did not write. A mutant killed by a corpus fixture measures the",
+    "    fixture, and we already measure the fixture directly.",
+    "  - src/cli/*. Their logic lives in the modules above; a CLI is argv parsing plus a print.",
+    "  - everything else. A repo-wide `mutate` produces a BLENDED score, which CLAUDE.md warns is a",
+    "    number measuring something other than what it gets quoted for, and it turns a report-only",
+    "    census into an hours-long run nobody will re-run.",
+    "",
+    "REPORT ONLY: nothing here fails a build. thresholds.break is null on purpose — see",
+    "src/guard-mutation-census.ts for the ruling and for why promotion is a separate decision.",
+    "",
+    "inPlace: true because this repo's guards are DISCOVERY-BACKED — they run `git ls-files` and",
+    "`git grep` over the real tree (the #1330 conditional-scan registry, #1768's exiting-CLI ratchet,",
+    "#1715's timeout ratchet). Stryker's default sandbox is a copy with no .git, so the dry run dies",
+    "before a single mutant is scored. MEASURED 2026-08-01: the sandboxed dry run failed on",
+    "rule-corpus-pairing's negative control; in-place completes. Stryker restores the files when it",
+    "finishes, so run this on a clean tree and check `git status` after — a killed run leaves them",
+    "instrumented.",
+    "",
+    "src/recorded-reasons.ts is DECLARED in GUARD_SET but absent from `mutate`. It is not forgotten —",
+    "src/guard-mutation-census.ts's NOT_MUTATED carries the measured reason, the census prints it, and",
+    "guard-mutation-census.test.ts fails if this list and that one stop partitioning GUARD_SET."
+  ],
+  "inPlace": true,
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "reporters": [
+    "json",
+    "clear-text",
+    "progress"
+  ],
+  "jsonReporter": {
+    "fileName": "reports/guard-mutation/mutation.json"
+  },
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/ci-liveness.ts",
+    "src/alert-paths.ts",
+    "src/scan/calibration.ts",
+    "src/acceptance-conservation.ts",
+    "src/scored-gates.ts",
+    "src/calibration-verdict.ts"
+  ],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "timeoutMS": 60000,
+  "concurrency": 4,
+  "thresholds": {
+    "high": 100,
+    "low": 0,
+    "break": null
+  },
+  "plugins": [
+    "@stryker-mutator/vitest-runner"
+  ]
+}

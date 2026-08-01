@@ -30,6 +30,10 @@ const BASE_EXCLUDE = [
   "site/.next/**",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
   ".claude/**",
+  // #1738: Stryker's sandbox is a full repo copy too, and a killed run leaves it behind. Without
+  // this the guard-mutation census's own tests get collected twice more, from stale copies whose
+  // assertions are whatever they were when the run died.
+  ".stryker-tmp/**",
 ];
 
 // #1120/#1125 — the heavy tail. These files drive real child processes (the tsx CLIs,
@@ -105,8 +109,47 @@ if (!heavyRun) {
   );
 }
 
+// #1715 — ONE timeout for the whole suite, with the measurement beside it, instead of a literal
+// bolted onto each file that happens to red under load. Before this, four files had picked up an
+// ad-hoc `30_000` one incident at a time (#1646) while `src/fs-walk.test.ts` sat in the same class
+// with nothing, and the number in vitest's default was never measured against this suite at all.
+//
+// THE POPULATION, MEASURED (not sampled) on this branch, `pnpm exec vitest run --reporter=json`,
+// 5653 tests across 273 light-suite files. Max observed per-test wall time, by fraction of the
+// 5000 ms default:
+//
+//   condition                         >=100%  70-99%  40-69%  20-39%   slowest test
+//   near-idle (load avg 1.5-3.7, n=2)      0       2      16      24   4694 ms (94%)
+//   contended (12 spinners, peak 30)       0       7      25      15   4640 ms (93%)
+//
+// The slowest single test on an idle machine is already at 94% of the default, and #1715's own
+// capture at load average 81 shows the same files at ~2.2x their idle time (falsifier-exit-codes:
+// 2602/2796 ms here, 5597/6091 ms there — the two runs that FAILED in isolation). 4694 ms x 2.2 is
+// ~10.3 s, so 5 s is not a budget, it is a coin flip on machine load.
+//
+// `hookTimeout` moves with it and for the same reason, measured the same way: non-test time per
+// file (collection + hooks, an UPPER BOUND on any single hook) peaks at 6443 ms idle and 10512 ms
+// contended for src/cli/validate-reasons.test.ts — already past the 10000 ms hookTimeout default —
+// with src/scan/rules/semgrep/shared-sources.test.ts at 2518/2950 ms against ~0 ms of test time,
+// i.e. essentially one beforeAll.
+//
+// WHY 30 s and not more: #1120's standing constraint is that no single blocking window may approach
+// vitest's hardcoded 60 s worker->main RPC ack. 30 s keeps a runaway test inside that window while
+// giving 6.4x headroom over the idle maximum and ~2.9x over the load-81 projection. It costs
+// nothing on a green run — a timeout only bounds a test that has already gone wrong.
+//
+// The uniformity is enforced, not just intended: src/vitest-timeout-budget.test.ts fails on a new
+// per-test timeout literal in a light-suite file, and on a backlog row that no longer has one.
+const TIMEOUT_MS = 30_000;
+
 export default defineConfig({
   test: {
+    // #1695 — measures the longest uninterrupted block of each worker's event loop and names what
+    // was running, so the next `Timeout calling "onTaskUpdate"` attributes itself instead of naming
+    // nothing. Runs in every worker on every run; see the file for why it is not behind a flag.
+    setupFiles: ["./src/vitest-event-loop-probe.ts"],
+    testTimeout: TIMEOUT_MS,
+    hookTimeout: TIMEOUT_MS,
     exclude: heavyRun ? BASE_EXCLUDE : [...BASE_EXCLUDE, ...HEAVY_CLI_TESTS],
     // One file at a time: measured above, this set flakes on its own RPC channel when its members
     // run concurrently, with nothing else on the machine.

@@ -15,6 +15,7 @@ import {
   checkSemgrepFixtureContract,
   checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
+  churnOnlySwallowDiagnosis,
   classifyFreshRun,
   renderDriftVerdict,
   VITALS_DRIFT_CONTRACT,
@@ -155,6 +156,69 @@ describe("classifyVitalsGitScopeFailure", () => {
       _gitScopeSanity: { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true },
     };
     expect(classifyVitalsGitScopeFailure(partiallyEmptied)).toBeUndefined();
+  });
+});
+
+// #1618 — the CHURN-ONLY sub-shape, which the all-empty classifier above correctly declines and
+// which therefore reached CI as a bare `hotspots is empty — vitals scoring or seed drift?` (run
+// 30379062498). That text points at the two causes it is NOT: git had run fine and the seed was
+// intact. The whole value of this row is that it names the mechanism, so it is asserted on the
+// SENTENCE, not on the fact that something was returned.
+describe("churnOnlySwallowDiagnosis — hotspots empty, siblings populated (#1618)", () => {
+  const fixture = load<VitalsReport>("../__fixtures__/vitals-report.json");
+  const sanity: GitScopeSanity = { commits: 72, returncode: 0, stderr: null, scopeMatchesToplevel: true };
+  // Run 30379062498's exact shape: only the churn-driven section is gone.
+  const churnOnly = { ...fixture, hotspots: [], _gitScopeSanity: sanity };
+
+  it("does not fire on the committed fixture", () => {
+    expect(churnOnlySwallowDiagnosis(fixture)).toBeUndefined();
+  });
+
+  it("fires on the observed shape and names the mechanism, not just the symptom", () => {
+    const reason = churnOnlySwallowDiagnosis(churnOnly);
+    expect(reason).toContain("CHURN-ONLY swallow (#1618/#1705)");
+    expect(reason).toContain("--numstat");
+    expect(reason).toContain("assert_no_background_gc");
+    expect(reason).toContain("72 commit(s)");
+    // The hedge, asserted like #1206's: a genuine upstream scoring change produces the same
+    // symptom, and a sentence that stopped saying so would be an over-claim.
+    expect(reason).toContain("CONSISTENT WITH");
+    expect(reason).toContain("complexity scoring");
+  });
+
+  it("fires with knowledge_risk alone populated — either sibling is enough evidence git ran", () => {
+    expect(churnOnlySwallowDiagnosis({ ...churnOnly, coupling: [] })).toContain("knowledge_risk (1)");
+  });
+
+  it("does NOT fire when all three are empty — that is the #1206 shape, and it has its own classifier", () => {
+    expect(churnOnlySwallowDiagnosis({ ...fixture, hotspots: [], coupling: [], knowledge_risk: [], _gitScopeSanity: sanity })).toBeUndefined();
+  });
+
+  it("still fires without a sanity capture, but drops the corroboration it does not have", () => {
+    const reason = churnOnlySwallowDiagnosis({ ...fixture, hotspots: [] });
+    expect(reason).toContain("CHURN-ONLY swallow");
+    expect(reason).not.toContain("commit(s) with no git error");
+  });
+
+  it("REACHES THE CONTRACT: the drift output carries the named diagnosis instead of the generic line", () => {
+    const violations = checkVitalsContract(churnOnly);
+    expect(violations.join("\n")).toContain("CHURN-ONLY swallow");
+    expect(violations.join("\n")).not.toContain("vitals scoring or seed drift?");
+    // And the generic text is still what an unexplained empty table gets, so the branch above is a
+    // replacement rather than a rename.
+    expect(checkVitalsContract({ ...fixture, hotspots: [], coupling: [], knowledge_risk: [] }).join("\n")).toContain("vitals scoring or seed drift?");
+  });
+
+  it("IS NOT AN EXCUSE: a churn-only run is still a loud FAIL, never NOT RUN (#1618 criterion 2)", () => {
+    // The decision this test records: `classifyVitalsGitScopeFailure` is NOT widened to this
+    // sub-shape. Excusing it would hide both of its candidate causes — a seed corpus mutated by
+    // background git maintenance, and a real upstream change to vitals' complexity scoring — behind
+    // a green NOT RUN. Fed through the CLI's own options object, so this is the shipped path.
+    expect(VITALS_DRIFT_CONTRACT.notRunIf(churnOnly)).toBeUndefined();
+    const verdict = classifyFreshRun(VITALS_DRIFT_CONTRACT, churnOnly);
+    expect(verdict.kind).toBe("drift");
+    expect(verdict.kind === "drift" && verdict.violations.join("\n")).toContain("CHURN-ONLY swallow");
+    expect(renderDriftVerdict("vitals", "0.2.0", verdict, "").exitCode).toBe(1);
   });
 });
 

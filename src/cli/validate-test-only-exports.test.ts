@@ -83,9 +83,8 @@ describe("test-only-exports gate — negative control (#1307)", () => {
     // #1648: the block names TestOnlyType in its REASON:, which is the only field that counts now —
     // a PROVENANCE: or TOUCHES: mention no longer absolves, and neither does a substring.
   });
-  // The 30s is the measurement, not padding. Every assertion here drives the real CLI in a child
-  // process; the comment above says ~1.3s each and MEASURED 2026-07-31 they run 2.9-3.6s, straddling
-  // vitest's 5s default once the shared worker pool is loaded — this file timed out on `origin/main`
-  // with no local changes. A gate that goes red on scheduling noise gets re-run away, which is how a
-  // real regression in it would be lost. Well inside #1120's standing 60s ceiling.
-}, 30_000);
+  // Every assertion here drives the real CLI in a child process; the comment above says ~1.3s each
+  // and MEASURED 2026-07-31 they run 2.9-3.6s, which straddled vitest's old 5s default once the
+  // shared worker pool was loaded. #1715 moved the whole light suite to one measured 30s budget in
+  // vitest.config.ts, so this file no longer carries its own literal.
+});

@@ -141,7 +141,7 @@ export function checkTruffleHogContract(results: TruffleHogResult[]): string[] {
 // (the parseReport #94 invariant); each hotspot's file_path/risk_score/churn_label/health/changes and
 // churn_data.author_count; knowledge_risk truck_factor/author_count; provenance.has_data + ai_files.
 // The seed plants a ranked hotspot table, one truck-factor-1 row, one coupling edge, AI provenance.
-export function checkVitalsContract(report: VitalsReport): string[] {
+export function checkVitalsContract(report: VitalsReport & { _gitScopeSanity?: GitScopeSanity }): string[] {
   const v: string[] = [];
   for (const key of ["hotspots", "coupling", "knowledge_risk"] as const) {
     if (!Array.isArray(report[key])) v.push(`${key} is not an array — the #94-verified vitals shape parseReport requires`);
@@ -149,7 +149,7 @@ export function checkVitalsContract(report: VitalsReport): string[] {
   if (v.length > 0) return v;
 
   if (report.hotspots.length === 0) {
-    v.push("hotspots is empty — the seed corpus should produce a ranked table (vitals scoring or seed drift?)");
+    v.push(churnOnlySwallowDiagnosis(report) ?? "hotspots is empty — the seed corpus should produce a ranked table (vitals scoring or seed drift?)");
   }
   for (const [i, h] of report.hotspots.entries()) {
     const where = `hotspots[${i}]`;
@@ -212,6 +212,53 @@ export interface GitScopeSanity {
   // repo root but scopes against the handed path, so a mismatch empties the file scope with git
   // working perfectly. Absent on a capture taken before this field existed.
   scopeMatchesToplevel?: boolean;
+}
+
+/**
+ * The CHURN-ONLY sub-shape (#1618): `hotspots` empty while `coupling` and/or `knowledge_risk` are
+ * POPULATED. Distinct from the all-three-empty shape `classifyVitalsGitScopeFailure` handles, and it
+ * has to stay distinct, because the two have different causes and only one of them is excusable.
+ *
+ * This is a DIAGNOSIS, not an excuse, and it is deliberately NOT wired into `notRunIf`. Excusing it
+ * would hide the two live causes below behind a NOT RUN, which is the "unstated limitation reads as
+ * a clean bill of health" failure the drift checks exist to prevent. It replaces the generic
+ * `hotspots is empty` violation text with a named one and the run still FAILS.
+ *
+ * Why the populated siblings are the signature. Of the three sections, only `hotspots` needs the
+ * per-file CHURN table, which vitals 0.2.0 builds from `git log --numstat` — the one git invocation
+ * that reads blob CONTENT. `coupling` (`log --name-only`) and `knowledge_risk` (`log --format=%aN`)
+ * do not. So sibling sections that populated are positive evidence that git ran, the repo was in
+ * scope, and only the content-reading call failed — which `git_analysis._run_git` swallows into an
+ * empty churn table and therefore an empty `code_files`, and therefore no hotspots.
+ *
+ * Observed live in run 30379062498 (2026-07-28) and run 30635897491; root-caused by #1705 to git
+ * >= 2.54 detaching `maintenance run --auto` per commit and repacking the seed corpus out from
+ * under the reads. `seed.py` disables auto maintenance and `assert_no_background_gc` fails loud if
+ * a future git finds another route to it — this row is what makes a recurrence say so in the drift
+ * output instead of pointing at "vitals scoring or seed drift".
+ */
+export function churnOnlySwallowDiagnosis(report: VitalsReport & { _gitScopeSanity?: GitScopeSanity }): string | undefined {
+  if (report.hotspots.length > 0) return undefined;
+  const populated = [
+    ...(report.coupling.length > 0 ? [`coupling (${report.coupling.length})`] : []),
+    ...(report.knowledge_risk.length > 0 ? [`knowledge_risk (${report.knowledge_risk.length})`] : []),
+  ];
+  if (populated.length === 0) return undefined;
+  const sanity = report._gitScopeSanity;
+  const corroboration =
+    sanity && sanity.returncode === 0 && sanity.commits > 0
+      ? ` An independent \`git log --since=90.days.ago\` in the same seeded repo found ${sanity.commits} commit(s) with no git error.`
+      : "";
+  return (
+    `hotspots is empty while ${populated.join(" and ")} populated — the CHURN-ONLY swallow (#1618/#1705), not the ` +
+    `all-empty git-scope shape.${corroboration} Of the three sections only hotspots needs the per-file churn ` +
+    `table, which vitals 0.2.0 builds from \`git log --numstat\`, the one call that reads blob CONTENT; ` +
+    `git_analysis._run_git discards its stderr and returns [] on a non-zero exit. CONSISTENT WITH a missing ` +
+    `loose object in the seeded corpus (#1705: git >= 2.54 detaches \`maintenance run --auto\` per commit and ` +
+    `repacks it mid-build) — check seed.py's assert_no_background_gc and \`git --version\` on this runner FIRST. ` +
+    `The competing cause is a genuine upstream change to vitals' complexity scoring, which would empty hotspots ` +
+    `with the churn table intact; that one is real drift and needs a re-capture.`
+  );
 }
 
 export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScopeSanity?: GitScopeSanity }): string | undefined {

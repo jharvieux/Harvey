@@ -68,11 +68,14 @@
     "validate-disclosure-venue": "tsx src/cli/validate-disclosure-venue.ts",
     "validate-conditional-scan": "tsx src/cli/validate-conditional-scan.ts",
     "validate-scored-gates": "tsx src/cli/validate-scored-gates.ts",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports && pnpm validate:precision"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports && pnpm validate:precision",
+    "guard-mutation-census": "tsx src/cli/guard-mutation-census.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
     "@puppeteer/browsers": "^3.0.6",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^24.0.0",
     "eslint": "^9.30.0",
     "eslint-plugin-react-hooks": "^7.1.1",

@@ -12,6 +12,10 @@
         "src/**/*.ts",
         "report-template/*.mjs",
         "tools/*.mjs"
+      ],
+      "ignoreDependencies": [
+        "@stryker-mutator/core",
+        "@stryker-mutator/vitest-runner"
       ]
     },
     "site": {

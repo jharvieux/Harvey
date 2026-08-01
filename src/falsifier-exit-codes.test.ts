@@ -95,7 +95,7 @@ describe("a falsifier that cannot run exits 127, never 'the blocker holds' (#142
       .map((f) => ({ at: f.at, code: exitCodeInEmptyDir(f.command) }))
       .filter((r) => r.code !== 127);
     expect(wrong).toEqual([]);
-  }, 30_000);
+  });
 
   // Both arms have to be able to fail, and on the exact shapes that shipped — a bare grep (exit 2)
   // and an unguarded pipeline whose first stage dies (the last stage's exit 1 wins).
