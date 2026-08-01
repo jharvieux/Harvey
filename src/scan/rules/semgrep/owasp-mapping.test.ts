@@ -21,6 +21,12 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   "CWE-668": "A01:2021 - Broken Access Control",
   "CWE-862": "A01:2021 - Broken Access Control",
   "CWE-863": "A01:2021 - Broken Access Control",
+  // #1661, MEASURED 2026-07-31 against MITRE's own CWE-1275 Memberships section: MemberOf category
+  // 1345, "OWASP Top Ten 2021 Category A01:2021 - Broken Access Control". It sits in a DIFFERENT
+  // category from the two CWEs declared beside it on harvey-cookie-insecure, which is precisely why
+  // the mapping check below had to stop reading only `cwe[0]` — the second category was being
+  // dropped silently.
+  "CWE-1275": "A01:2021 - Broken Access Control",
   // A02 — Cryptographic Failures
   "CWE-319": "A02:2021 - Cryptographic Failures",
   "CWE-321": "A02:2021 - Cryptographic Failures",
@@ -59,6 +65,9 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   // A05 — Security Misconfiguration
   "CWE-611": "A05:2021 - Security Misconfiguration",
   "CWE-614": "A05:2021 - Security Misconfiguration",
+  // #1661, MEASURED 2026-07-31 against MITRE's own CWE-1004 Memberships section: MemberOf category
+  // 1349, "OWASP Top Ten 2021 Category A05:2021 - Security Misconfiguration".
+  "CWE-1004": "A05:2021 - Security Misconfiguration",
   "CWE-942": "A05:2021 - Security Misconfiguration",
   // A07 — Identification and Authentication Failures
   "CWE-295": "A07:2021 - Identification and Authentication Failures",
@@ -199,20 +208,33 @@ describe("#493/#975: harvey-* rule metadata.owasp matches OWASP's official 2021 
     expect(rulesWithCwe.length).toBe(allRules.length);
   });
 
-  it.each(rulesWithCwe.map((r): [string, RuleMeta] => [r.id, r]))("%s: cwe maps to its official OWASP category (or is a deliberate no-owasp CWE)", (_id, rule) => {
-    const cweId = rule.cwe![0]!.match(/^CWE-\d+/)?.[0];
-    expect(cweId, `${rule.id} (${rule.file}) has an unparseable cwe entry: ${rule.cwe![0]}`).toBeDefined();
+  // #1661: EVERY entry, not `cwe[0]`. A rule whose pattern determines several weaknesses equally
+  // may declare all of them (harvey-cookie-insecure is the case that forced this: `(?s)^[^;]*$`
+  // proves the cookie carries no attribute at all, which determines CWE-614, CWE-1004 and CWE-1275
+  // identically). Reading only the first entry meant a second CWE was neither checked nor allowed
+  // to contribute its OWASP category — and CWE-1275's category (A01) is not CWE-614's (A05), so
+  // the under-read was silently dropping a category the rule's own evidence supports.
+  it.each(rulesWithCwe.map((r): [string, RuleMeta] => [r.id, r]))("%s: every declared cwe maps to its official OWASP category (or is a deliberate no-owasp CWE)", (_id, rule) => {
+    const cweIds = rule.cwe!.map((c) => c.match(/^CWE-\d+/)?.[0]);
+    expect(cweIds.filter((c) => c === undefined), `${rule.id} (${rule.file}) has an unparseable cwe entry among: ${rule.cwe!.join(" | ")}`).toEqual([]);
 
-    if (NO_OWASP_CWES[cweId!]) {
-      // A CWE OWASP does not categorize: owasp must be ABSENT (forcing a bucket would be a wrong claim).
-      expect(rule.owasp, `${rule.id}: ${cweId} has no official OWASP Top-10-2021 category (${NO_OWASP_CWES[cweId!]}); owasp must be omitted`).toBeUndefined();
-      return;
+    // Categories the rule's CWEs actually earn, in declaration order, deduplicated. A CWE OWASP
+    // does not categorize contributes nothing rather than forcing a bucket, which is a wrong claim.
+    const earned: string[] = [];
+    for (const cweId of cweIds as string[]) {
+      if (NO_OWASP_CWES[cweId]) continue;
+      const category = OFFICIAL_CWE_TO_OWASP_2021[cweId];
+      expect(category, `${rule.id} uses ${cweId}, which is neither in the #493-verified mapping table nor the NO_OWASP_CWES set — add it to one before trusting this rule's metadata`).toBeDefined();
+      if (!earned.includes(category!)) earned.push(category!);
     }
 
-    const expectedCategory = OFFICIAL_CWE_TO_OWASP_2021[cweId!];
-    expect(expectedCategory, `${rule.id} uses ${cweId}, which is neither in the #493-verified mapping table nor the NO_OWASP_CWES set — add it to one before trusting this rule's metadata`).toBeDefined();
-
-    expect(rule.owasp, `${rule.id}: ${cweId} maps to "${expectedCategory}" per OWASP's official 2021 mapping`).toEqual([expectedCategory]);
+    if (earned.length === 0) {
+      expect(rule.owasp, `${rule.id}: no declared CWE has an official OWASP Top-10-2021 category; owasp must be omitted`).toBeUndefined();
+      return;
+    }
+    // FAIL LOUD on the divergent case rather than quietly keeping the first category: a rule whose
+    // CWEs span two categories has to carry both, in declaration order.
+    expect(rule.owasp, `${rule.id}: its CWEs (${(cweIds as string[]).join(", ")}) map to ${earned.length} OWASP category(ies) — ${earned.join(" + ")} — per OWASP's official 2021 mapping, so metadata.owasp must name all of them`).toEqual(earned);
   });
 });
 
@@ -304,6 +326,8 @@ const OFFICIAL_CWE_NAMES: Record<string, string> = {
   "CWE-636": "Not Failing Securely ('Failing Open')",
   "CWE-643": "Improper Neutralization of Data within XPath Expressions ('XPath Injection')",
   "CWE-614": "Sensitive Cookie in HTTPS Session Without 'Secure' Attribute",
+  "CWE-1004": "Sensitive Cookie Without 'HttpOnly' Flag",
+  "CWE-1275": "Sensitive Cookie with Improper SameSite Attribute",
   "CWE-639": "Authorization Bypass Through User-Controlled Key",
   "CWE-668": "Exposure of Resource to Wrong Sphere",
   "CWE-693": "Protection Mechanism Failure",
@@ -394,6 +418,11 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   // The cookie's ATTRIBUTES, not the noun: a CORS rule that mentions "the victim's cookies" is not
   // reporting a missing Secure flag.
   "CWE-614": /HttpOnly|Set-Cookie|res\.cookie|SameSite/i,
+  // #1661. Deliberately NARROW — each names its own attribute and nothing else, because the cookie
+  // SINK vocabulary already belongs to CWE-614 above and a second broad cookie regex would make
+  // every cookie rule confusable with every other one.
+  "CWE-1004": /HttpOnly/i,
+  "CWE-1275": /SameSite/i,
   "CWE-639": /\bIDOR\b|\bBOLA\b|user-controlled key|owner\/tenant|enumerat/i,
   "CWE-668": /public: ?true|public bucket|readable by anyone|wrong sphere/i,
   "CWE-693": /\bCSP\b|nosniff|sandbox|defeats|mitigation|protection mechanism/i,
@@ -507,6 +536,13 @@ const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
   // written, whoever wrote the rule: csv-stringify's `stringify`, fast-csv's `writeToString`,
   // papaparse's `unparse`, SheetJS's sheet builders.
   "CWE-1236": /stringifySync\(|writeToString\(|writeToBuffer\(|unparse\(|_to_sheet\(/,
+  // #1661. The HttpOnly and SameSite weaknesses occur on the same SINK as CWE-614's — writing a
+  // cookie — so the machine half that corroborates one corroborates all three. Without these two
+  // rows harvey-cookie-insecure would fall into PROSE_ONLY the moment it declared them, which
+  // would report "the machinery says nothing about this label" when the machinery is the identical
+  // cookie write in every case.
+  "CWE-1004": /Set-Cookie|res\.cookie/,
+  "CWE-1275": /Set-Cookie|res\.cookie/,
 };
 
 /** True when the rule's own machine half — never its prose — corroborates `cwe`. */
@@ -537,6 +573,15 @@ const UNDISCRIMINATED: string[] = [
   // from OWASP's tables. A swap to the sibling named at runtime would stay green. Disclosed rather
   // than smoothed over: the CWE is now right and the intra-bucket discrimination is now weaker.
   "harvey-fail-open",
+  // #1661 — JOINED, and its arrival is a real finding rather than bookkeeping. Putting CWE-1004 in
+  // use (on harvey-cookie-insecure, whose pattern determines it) made it a live A05 sibling, and
+  // this rule's message says "HttpOnly", so a swap of its CWE-614 to CWE-1004 would stay green.
+  // That ambiguity is genuine and points at the rule itself: harvey-cookie-insecure-express fires
+  // when ANY of httpOnly/secure/sameSite is missing, so its evidence does not determine CWE-614 in
+  // particular either — unlike its Set-Cookie sibling, whose `(?s)^[^;]*$` proves all three at
+  // once. Disclosed here rather than fixed by widening its label, because giving it all three CWEs
+  // would over-claim on the two-of-three case; the label question is #1777.
+  "harvey-cookie-insecure-express",
 ];
 
 /**
@@ -570,9 +615,13 @@ const PROSE_ONLY: string[] = [];
 describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns and message", () => {
   const files = readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
   const rules = files.flatMap(parseRuleMetadata);
-  const cweOf = (r: RuleMeta) => r.cwe![0]!.match(/^CWE-\d+/)![0];
+  // #1661: a rule may declare more than one CWE when its own evidence determines all of them
+  // equally, so every check below reads the whole list. The populations stay keyed on the RULE, and
+  // a multi-CWE rule qualifies only if EVERY one of its CWEs qualifies — which is the conservative
+  // direction: an unbound label is never masked by a bound sibling on the same rule.
+  const cwesOf = (r: RuleMeta) => r.cwe!.map((c) => c.match(/^CWE-\d+/)![0]);
   const categoryOf = (cwe: string) => OFFICIAL_CWE_TO_OWASP_2021[cwe] ?? NO_CATEGORY;
-  const inUse = [...new Set(rules.map(cweOf))];
+  const inUse = [...new Set(rules.flatMap(cwesOf))];
 
   it("both #1521 tables stay exhaustive over the CWEs actually in use", () => {
     const missing = inUse.filter((c) => !OFFICIAL_CWE_NAMES[c] || !CWE_EVIDENCE[c]);
@@ -587,18 +636,20 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
     expect(leaked.map((r) => r.id), "a rule's own cwe/owasp label reached the subject text — the check would be self-satisfying").toEqual([]);
   });
 
-  it.each(rules.map((r): [string, RuleMeta] => [r.id, r]))("%s: declares MITRE's official name for its CWE number", (_id, rule) => {
-    const cweId = cweOf(rule);
-    expect(rule.cwe![0], `${rule.id} (${rule.file}) declares ${cweId} under a name MITRE does not use`).toBe(`${cweId}: ${OFFICIAL_CWE_NAMES[cweId]}`);
+  it.each(rules.map((r): [string, RuleMeta] => [r.id, r]))("%s: declares MITRE's official name for every CWE number it carries", (_id, rule) => {
+    for (const [i, cweId] of cwesOf(rule).entries()) {
+      expect(rule.cwe![i], `${rule.id} (${rule.file}) declares ${cweId} under a name MITRE does not use`).toBe(`${cweId}: ${OFFICIAL_CWE_NAMES[cweId]}`);
+    }
   });
 
-  it.each(rules.map((r): [string, RuleMeta] => [r.id, r]))("%s: its own id/patterns/message carry the vocabulary of the CWE it declares", (_id, rule) => {
-    const cweId = cweOf(rule);
-    const evidence = CWE_EVIDENCE[cweId]!;
-    expect(
-      evidence.test(`${rule.machine}\n${rule.prose}`),
-      `${rule.id} (${rule.file}) declares ${cweId} — ${OFFICIAL_CWE_NAMES[cweId]} — but nothing in the rule's id, patterns or message reads as that weakness (looked for ${evidence}). Either the label is wrong or the rule describes what it matches in vocabulary this check does not know; check the label before widening CWE_EVIDENCE.`,
-    ).toBe(true);
+  it.each(rules.map((r): [string, RuleMeta] => [r.id, r]))("%s: its own id/patterns/message carry the vocabulary of every CWE it declares", (_id, rule) => {
+    for (const cweId of cwesOf(rule)) {
+      const evidence = CWE_EVIDENCE[cweId]!;
+      expect(
+        evidence.test(`${rule.machine}\n${rule.prose}`),
+        `${rule.id} (${rule.file}) declares ${cweId} — ${OFFICIAL_CWE_NAMES[cweId]} — but nothing in the rule's id, patterns or message reads as that weakness (looked for ${evidence}). Either the label is wrong or the rule describes what it matches in vocabulary this check does not know; check the label before widening CWE_EVIDENCE.`,
+      ).toBe(true);
+    }
   });
 
   it("the census of what this check CANNOT discriminate matches its disclosure, exactly", () => {
@@ -606,14 +657,22 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
     const singleton: string[] = [];
     const proseOnly: string[] = [];
     for (const rule of rules) {
-      const cweId = cweOf(rule);
-      const siblings = inUse.filter((c) => c !== cweId && categoryOf(c) === categoryOf(cweId));
-      if (siblings.length === 0) singleton.push(rule.id);
+      const declared = cwesOf(rule);
+      // #1661: a CWE the rule ALREADY declares is not a swap target — a swap onto a label the rule
+      // already carries changes nothing — so a rule's own list is excluded from its sibling set.
+      const siblingsOf = (cweId: string) => inUse.filter((c) => !declared.includes(c) && categoryOf(c) === categoryOf(cweId));
+      if (declared.every((c) => siblingsOf(c).length === 0)) singleton.push(rule.id);
       // #1540: a sibling counts as confusable if EITHER vocabulary reaches this rule — the machine
       // signature is folded in here too, so the ambiguity it adds is disclosed rather than hidden.
-      const confusable = siblings.filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`) || (CWE_MACHINE_EVIDENCE[c]?.test(rule.machine) ?? false));
+      const confusable = [
+        ...new Set(
+          declared.flatMap((cweId) =>
+            siblingsOf(cweId).filter((c) => CWE_EVIDENCE[c]!.test(`${rule.machine}\n${rule.prose}`) || (CWE_MACHINE_EVIDENCE[c]?.test(rule.machine) ?? false)),
+          ),
+        ),
+      ];
       if (confusable.length > 0) undiscriminated.set(rule.id, confusable);
-      if (!machineCorroborates(cweId, rule.machine)) proseOnly.push(rule.id);
+      if (declared.some((cweId) => !machineCorroborates(cweId, rule.machine))) proseOnly.push(rule.id);
     }
 
     // Printed on every run: these populations ARE the disclosure, and a disclosure nobody reads is
@@ -654,7 +713,7 @@ describe("#1521: a rule's declared CWE is bound to the rule's own id, patterns a
     const live = CWE_PARENT_OF.filter(([parent, child]) => inUseSet.has(parent) && inUseSet.has(child)).map(([p, c]) => `${p} -> ${c}`);
     const detail = live.map((pair) => {
       const [p, c] = pair.split(" -> ") as [string, string];
-      const named = (cwe: string) => rules.filter((r) => cweOf(r) === cwe).map((r) => r.id).join(", ");
+      const named = (cwe: string) => rules.filter((r) => cwesOf(r).includes(cwe)).map((r) => r.id).join(", ");
       return `${pair}: parent on [${named(p)}], child on [${named(c)}]`;
     });
     console.log(`#1294 parent/child CWE pairs live in the rule set: ${live.length}\n${detail.map((d) => `      ${d}`).join("\n")}`);

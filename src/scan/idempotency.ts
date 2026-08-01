@@ -1,6 +1,7 @@
-// #1230 / D-091 items 10, 22 and 24 — three retry-safety shapes that share one question: what does
-// a RETRY of this code do? #1230 filed all three as "cross-statement or cross-time dataflow, a poor
-// fit for the mechanical tier". Re-checked against the catalog: the cross-TIME part is the failure
+// #1230 / D-091 items 10, 22, 24 and (since #1352) 27 — four retry-safety shapes that share one
+// question: what does a RETRY of this code do? #1230 filed them as "cross-statement or cross-time
+// dataflow, a poor fit for the mechanical tier". Re-checked against the catalog: the cross-TIME
+// part is the failure
 // mode (a crash, a retry, an overlapping run), but the DEFECT is an ordering fact between two
 // statements in one function body, which is exactly what an AST can read. What no AST can read is
 // whether the retry actually happens — hence `review`, never free-count.
@@ -20,6 +21,10 @@
 //      call must be to an API whose idempotency contract we can name, either the Stripe SDK's
 //      `idempotencyKey` request option or one of the REST hosts below. An unrecognised host is
 //      silent: we do not know whether it dedups, and guessing would be noise.
+//
+// (27) WEBHOOK-ORDERING (#1352) — event-derived state written with no comparison against the last
+//      applied ordering field, so a STALE delivery overwrites newer state. Full rationale, and the
+//      corpus measurement that decided it, sit above `webhookOrdering` at the bottom of this file.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
@@ -207,8 +212,132 @@ function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile): Finding[
   return findings;
 }
 
+// (27) WEBHOOK-ORDERING — #1352. Replay dedup stops the SAME delivery twice; it does nothing about
+// a STALE delivery arriving after a fresher one under at-least-once, unordered delivery. The bug is
+// a handler that writes event-derived state without ever comparing the event's own ordering field
+// against what was last applied, so an older delivery overwrites newer state.
+//
+// #1230 declined this `by-design` on a REACH argument — an ordering comparison might live in an
+// imported wrapper, so the absence proof is out of an AST's range. #1350/#1352 falsified that
+// argument (see briefs/anti-patterns.md item 27 for the full record): the three checks above, plus
+// express-powered-by.ts / raw-body-limit.ts / gha-permissions.ts, prove an absence with the very
+// same range problem and answer it the same way — review tier, bound stated in the finding.
+//
+// FIELD PRECISION IS UNMEASURED, and that is the real bound. MEASURED 2026-07-31 by running this
+// predicate over all 17 pinned EXTERNAL_CORPUS clones (13,113 loadable source files): 61,346
+// functions with a first identifier parameter, 176 whose `.update`/`.upsert` payload derives from
+// it, 6 of those in a webhook-shaped path, and ZERO whose parameter carries an ordering field at
+// all. So the corpus produced no true positives AND no false positives — an FP rate over zero
+// firings is undefined, not zero, and the finding says so rather than implying a clean field
+// reading. The measurement did earn one narrowing: 2 of those 6 were `crypto.createHmac(…)
+// .update(rawBody)` — a signature digest, not a database write — so the write must be a Supabase
+// `.from(…)` chain or a `prisma`-style model call, never a bare `.update(...)`.
+const ORDERING_FIELD = /^(created|created_at|createdAt|timestamp|version|sequence|event_time|eventTime|occurred_at|occurredAt)$/;
+const ORM_ROOT = /^(prisma|db|tx|client)$/i;
+const RELATIONAL_FILTER = /^(gt|gte|lt|lte)$/;
+
+function orderingFieldOfParam(fn: ts.SignatureDeclarationBase, param: string): string | undefined {
+  const declared = fn.parameters[0]?.type;
+  if (declared && ts.isTypeLiteralNode(declared)) {
+    for (const m of declared.members) {
+      if (ts.isPropertySignature(m) && m.name && ts.isIdentifier(m.name) && ORDERING_FIELD.test(m.name.text)) return m.name.text;
+    }
+  }
+  let read: string | undefined;
+  const visit = (n: ts.Node) => {
+    if (read) return;
+    if (ts.isPropertyAccessExpression(n) && ORDERING_FIELD.test(n.name.text)) {
+      let base: ts.Node = n.expression;
+      while (ts.isPropertyAccessExpression(base) || ts.isElementAccessExpression(base)) base = base.expression;
+      if (ts.isIdentifier(base) && base.text === param) read = n.name.text;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  return read;
+}
+
+// A write to a data store, not any method that happens to be called `update` — see the createHmac
+// rows the corpus measurement turned up.
+function writeTarget(call: ts.CallExpression): string | undefined {
+  const table = tableOf(call);
+  if (table) return table;
+  if (ts.isPropertyAccessExpression(call.expression) && ts.isPropertyAccessExpression(call.expression.expression)) {
+    const model = call.expression.expression;
+    if (ts.isIdentifier(model.expression) && ORM_ROOT.test(model.expression.text)) return `${model.expression.text}.${model.name.text}`;
+  }
+  return undefined;
+}
+
+// The absence proof, scoped to the function body and disclosed as such in the finding.
+function comparesOrdering(fn: ts.Node): boolean {
+  const REL = new Set([ts.SyntaxKind.LessThanToken, ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.LessThanEqualsToken, ts.SyntaxKind.GreaterThanEqualsToken]);
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isBinaryExpression(n) && REL.has(n.operatorToken.kind)) found = true;
+    else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && RELATIONAL_FILTER.test(n.expression.name.text)) found = true;
+    else if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && RELATIONAL_FILTER.test(n.name.text)) found = true;
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
+  return found;
+}
+
+function webhookOrdering(path: string, sf: ts.SourceFile): Finding[] {
+  const findings: Finding[] = [];
+  const inFunction = (fn: ts.SignatureDeclarationBase & ts.Node): void => {
+    const first = fn.parameters[0];
+    if (!first || !ts.isIdentifier(first.name)) return;
+    const param = first.name.text;
+    const write = calls(fn).find(
+      (c) =>
+        ts.isPropertyAccessExpression(c.expression) &&
+        /^(update|updateMany|upsert)$/.test(c.expression.name.text) &&
+        writeTarget(c) !== undefined &&
+        c.arguments.some((a) => referencesBinding(a, param)),
+    );
+    if (!write) return;
+    const field = orderingFieldOfParam(fn, param);
+    if (!field || comparesOrdering(fn)) return;
+    findings.push(
+      mechanicalFinding({
+        id: `RETRY-webhook-ordering-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${write.getStart(sf)}`,
+        title: `${path} — webhook state applied with no ordering guard`,
+        severity: "Medium",
+        category: "Business logic",
+        taxonomy: "Webhook state applied without an ordering guard",
+        location: loc(path, sf, write),
+        evidence: `Heuristic "webhook-ordering" matched a handler whose event parameter \`${param}\` carries the ordering field \`${field}\`, writing event-derived state into \`${writeTarget(write)}\`, with no comparison against a stored last-applied value anywhere in this function. SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only. A comparison performed inside a wrapper in another module, a database trigger, or a conditional \`WHERE ${field} > …\` built elsewhere is OUTSIDE what this pass can see. FIELD PRECISION IS UNMEASURED: MEASURED 2026-07-31 over all 17 pinned corpus repos (61,346 candidate functions), this shape occurred ZERO times, so the rule has no true or false positives on real code yet — treat it as a prompt to check, not as a confirmed defect.`,
+        impact:
+          "Under at-least-once, unordered delivery a stale event arriving after a fresher one overwrites newer state — a cancelled subscription reactivated by a late `updated` delivery, a downgraded plan restored. Replay dedup does not prevent it: the two deliveries are genuinely different events.",
+        fix: `Compare the event's \`${field}\` against the last-applied value on the row and skip the write when it is not newer — a conditional update (\`... .gt("${field}", stored)\`, or \`WHERE ${field} < $new\`) keeps the check atomic with the write.`,
+        precisionTier: "review",
+      }),
+    );
+  };
+  const visit = (n: ts.Node) => {
+    if (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n)) inFunction(n);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+function referencesBinding(root: ts.Node, name: string): boolean {
+  if (ts.isIdentifier(root) && root.text === name) return true;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isIdentifier(n) && n.text === name) found = true;
+    else ts.forEachChild(n, visit);
+  };
+  visit(root);
+  return found;
+}
+
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
-  return [...claimBeforeSend(path, sf), ...dedupBeforeDispatch(path, sf), ...externalSendNoIdempotencyKey(path, sf)];
+  return [...claimBeforeSend(path, sf), ...dedupBeforeDispatch(path, sf), ...externalSendNoIdempotencyKey(path, sf), ...webhookOrdering(path, sf)];
 }
 
 export function detectIdempotencyFindings(files: SourceInput[]): Finding[] {

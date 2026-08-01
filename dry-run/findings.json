@@ -10765,15 +10765,15 @@
   },
   {
     "id": "SEM-339",
-    "title": "src.scan.rules.semgrep.harvey-cookie-insecure: Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. SCOPE OF THIS CHECK (#1294): the CWE this finding carries names the SECURE attribute only, because a finding carries one weakness id. The `(?s)^[^;]*$` match below proves the cookie has NO attribute at all, so the missing HttpOnly and SameSite are equally determined and are equally your problem — read the CWE as the narrowest of the three, not as the whole defect.",
+    "title": "src.scan.rules.semgrep.harvey-cookie-insecure: Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. The `(?s)^[^;]*$` match below proves the cookie carries no attribute at all, so all three weaknesses are determined by the same evidence and this finding names all three.",
     "severity": "High",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-cookie-insecure",
     "location": "pages/api/session.js:6",
     "status": "Open",
-    "evidence": "Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. SCOPE OF THIS CHECK (#1294): the CWE this finding carries names the SECURE attribute only, because a finding carries one weakness id. The `(?s)^[^;]*$` match below proves the cookie has NO attribute at all, so the missing HttpOnly and SameSite are equally determined and are equally your problem — read the CWE as the narrowest of the three, not as the whole defect.\n",
-    "impact": "Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. SCOPE OF THIS CHECK (#1294): the CWE this finding carries names the SECURE attribute only, because a finding carries one weakness id. The `(?s)^[^;]*$` match below proves the cookie has NO attribute at all, so the missing HttpOnly and SameSite are equally determined and are equally your problem — read the CWE as the narrowest of the three, not as the whole defect.\n",
+    "evidence": "Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. The `(?s)^[^;]*$` match below proves the cookie carries no attribute at all, so all three weaknesses are determined by the same evidence and this finding names all three.\n",
+    "impact": "Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests. The `(?s)^[^;]*$` match below proves the cookie carries no attribute at all, so all three weaknesses are determined by the same evidence and this finding names all three.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 4,
     "ease": 3,
@@ -10781,10 +10781,13 @@
     "mechanical": true,
     "precisionTier": "high",
     "cwe": [
-      "CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"
+      "CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute",
+      "CWE-1004: Sensitive Cookie Without 'HttpOnly' Flag",
+      "CWE-1275: Sensitive Cookie with Improper SameSite Attribute"
     ],
     "owasp": [
-      "A05:2021 - Security Misconfiguration"
+      "A05:2021 - Security Misconfiguration",
+      "A01:2021 - Broken Access Control"
     ]
   },
   {
@@ -16727,6 +16730,30 @@
     "precisionTier": "review",
     "cwe": [
       "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+    ]
+  },
+  {
+    "id": "RETRY-webhook-ordering-src-d091-webhook-ordering-ts-1092",
+    "title": "src/d091/webhook-ordering.ts — webhook state applied with no ordering guard",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Webhook state applied without an ordering guard",
+    "location": "src/d091/webhook-ordering.ts:16",
+    "status": "Open",
+    "evidence": "Heuristic \"webhook-ordering\" matched a handler whose event parameter `event` carries the ordering field `created`, writing event-derived state into `d091_subscriptions`, with no comparison against a stored last-applied value anywhere in this function. SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only. A comparison performed inside a wrapper in another module, a database trigger, or a conditional `WHERE created > …` built elsewhere is OUTSIDE what this pass can see. FIELD PRECISION IS UNMEASURED: MEASURED 2026-07-31 over all 17 pinned corpus repos (61,346 candidate functions), this shape occurred ZERO times, so the rule has no true or false positives on real code yet — treat it as a prompt to check, not as a confirmed defect.",
+    "impact": "Under at-least-once, unordered delivery a stale event arriving after a fresher one overwrites newer state — a cancelled subscription reactivated by a late `updated` delivery, a downgraded plan restored. Replay dedup does not prevent it: the two deliveries are genuinely different events.",
+    "fix": "Compare the event's `created` against the last-applied value on the row and skip the write when it is not newer — a conditional update (`... .gt(\"created\", stored)`, or `WHERE created < $new`) keeps the check atomic with the write.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-841: Improper Enforcement of Behavioral Workflow"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
     ]
   },
   {

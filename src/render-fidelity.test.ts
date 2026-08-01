@@ -24,7 +24,8 @@ import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { osvUnavailableFinding } from "./scan/dependencies.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
-import { semgrepUnavailableFinding } from "./scan/semgrep.js";
+import { parseSemgrepFindings, semgrepUnavailableFinding } from "./scan/semgrep.js";
+import { toSarif } from "./sarif.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
 import type { RunContext } from "./audit-runner.js";
 import type { EngagementEnv, ModuleCoverage } from "./audit-coverage.js";
@@ -413,5 +414,83 @@ describe("#1627 rendered-ness is decided per FINDING, not per evidence string", 
     expect(broken).toContain(esc(TWIN_EVIDENCE));
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.some((b) => b.kind === "undisclosed-omission" && b.id.includes("SB-RLS-POLICY-public.t11.t11_read"))).toBe(true);
+  });
+});
+
+// #1661 — `Finding.cwe` is a list, and until now nothing followed a SECOND entry past the parser.
+// `harvey-cookie-insecure`'s `(?s)^[^;]*$` proves the cookie carries no attribute at all, which
+// determines CWE-614, CWE-1004 and CWE-1275 identically, and CWE-1275's OWASP category (A01) is not
+// the other two's (A05). This runs the REAL chain — the rule file's own metadata, through the real
+// semgrep→Finding mapper, the real assembler, the real renderer and the real SARIF export — because
+// the issue's own criterion is that the check has to read the assembled document, not the parser.
+describe("#1661 every CWE a rule declares reaches the assembled deliverable", () => {
+  const RULES = join(fileURLToPath(new URL("./scan/rules/semgrep/", import.meta.url)), "headers.yml");
+
+  // Read the LIVE metadata out of headers.yml rather than restating it: a test that hard-codes the
+  // three ids passes after somebody deletes two of them from the rule.
+  const block = readFileSync(RULES, "utf8").split(/^ {2}- id: /m).find((b) => b.startsWith("harvey-cookie-insecure\n"))!;
+  const flowList = (key: string): string[] => JSON.parse(new RegExp(String.raw`^\s+${key}:\s*(\[.*\])\s*$`, "m").exec(block)![1]!) as string[];
+  const declaredCwe = flowList("cwe");
+  const declaredOwasp = flowList("owasp");
+
+  const produced = parseSemgrepFindings({
+    results: [
+      {
+        check_id: "harvey-cookie-insecure",
+        path: "app/api/login/route.ts",
+        start: { line: 12 },
+        extra: {
+          message: "Set-Cookie is written with no Secure/HttpOnly/SameSite attributes.",
+          severity: "ERROR",
+          metadata: { cwe: declaredCwe, owasp: declaredOwasp, confidence: "HIGH", harveySeverity: "High" },
+        },
+      },
+    ],
+  });
+
+  it("the rule really declares more than one CWE, so the rest of this block is not vacuous", () => {
+    expect(declaredCwe.length).toBeGreaterThan(1);
+    expect(declaredCwe.map((c) => c.match(/^CWE-\d+/)![0])).toEqual(["CWE-614", "CWE-1004", "CWE-1275"]);
+    // The two categories are the point: reading cwe[0] alone silently dropped A01.
+    expect(new Set(declaredOwasp).size).toBe(2);
+  });
+
+  it("the producer keeps every entry, not just the first", () => {
+    expect(produced[0]!.cwe).toEqual(declaredCwe);
+    expect(produced[0]!.owasp).toEqual(declaredOwasp);
+  });
+
+  it("all three CWEs and both OWASP categories reach the RENDERED report", () => {
+    const html = buildHtml(assembleEngagementDocument(RECORDED, ENV, produced, META));
+    for (const id of declaredCwe) expect(html, id).toContain(esc(id));
+    for (const cat of declaredOwasp) expect(html, cat).toContain(esc(cat));
+  });
+
+  it("CONTROL — a renderer that emits only the first CWE loses two of them and one whole category", () => {
+    // The pre-#1661 shape reconstructed: `cweOwaspLine` narrowed to `f.cwe[0]` / `f.owasp[0]`.
+    const doc = assembleEngagementDocument(RECORDED, ENV, produced, META);
+    const html = buildHtml({ ...doc, findings: doc.findings.map((f) => (f.id === produced[0]!.id ? { ...f, cwe: f.cwe?.slice(0, 1), owasp: f.owasp?.slice(0, 1) } : f)) });
+    expect(html).toContain(esc(declaredCwe[0]!));
+    expect(html).not.toContain(esc(declaredCwe[1]!));
+    expect(html).not.toContain(esc(declaredCwe[2]!));
+    expect(html).not.toContain(esc(declaredOwasp[1]!));
+  });
+
+  it("all three reach SARIF, as human strings AND as the machine external/cwe tags", () => {
+    const sarif = toSarif(produced, { coverageAbsent: "#1661 fixture: this block measures CWE threading, not the ledger." }) as { runs: { tool: { driver: { rules: { properties: { tags: string[] } }[] } } }[] };
+    const tags = sarif.runs[0]!.tool.driver.rules[0]!.properties.tags;
+    for (const id of declaredCwe) expect(tags, id).toContain(id);
+    for (const cat of declaredOwasp) expect(tags, cat).toContain(cat);
+    expect(tags).toContain("external/cwe/cwe-614");
+    expect(tags).toContain("external/cwe/cwe-1004");
+    expect(tags).toContain("external/cwe/cwe-1275");
+  });
+
+  it("CONTROL — dropping the tail of `cwe` costs SARIF both its human strings and its machine tags", () => {
+    const narrowed = produced.map((f) => ({ ...f, cwe: f.cwe?.slice(0, 1) }));
+    const sarif = toSarif(narrowed, { coverageAbsent: "#1661 fixture: this block measures CWE threading, not the ledger." }) as { runs: { tool: { driver: { rules: { properties: { tags: string[] } }[] } } }[] };
+    const tags = sarif.runs[0]!.tool.driver.rules[0]!.properties.tags;
+    expect(tags).not.toContain("external/cwe/cwe-1004");
+    expect(tags).not.toContain(declaredCwe[2]);
   });
 });

@@ -514,8 +514,13 @@ rules:
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
-      cwe: ["CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"]
-      owasp: ["A05:2021 - Security Misconfiguration"]
+      # #1661: THREE CWEs, because the `(?s)^[^;]*$` match proves the cookie has NO attribute at
+      # all and that determines all three equally — there is no CWE for "no cookie attribute", and
+      # naming any one of them was an under-claim in a different direction. CWE-1275 sits under a
+      # DIFFERENT OWASP category from the other two (A01, per MITRE's own Memberships), so `owasp`
+      # carries both categories rather than dropping the one the first CWE does not reach.
+      cwe: ["CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute", "CWE-1004: Sensitive Cookie Without 'HttpOnly' Flag", "CWE-1275: Sensitive Cookie with Improper SameSite Attribute"]
+      owasp: ["A05:2021 - Security Misconfiguration", "A01:2021 - Broken Access Control"]
       confidence: HIGH
       category: security
       harveySeverity: High
@@ -523,10 +528,8 @@ rules:
       Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie
       without HttpOnly is readable by any injected script (XSS → session theft); without
       Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests.
-      SCOPE OF THIS CHECK (#1294): the CWE this finding carries names the SECURE attribute only,
-      because a finding carries one weakness id. The `(?s)^[^;]*$` match below proves the cookie
-      has NO attribute at all, so the missing HttpOnly and SameSite are equally determined and are
-      equally your problem — read the CWE as the narrowest of the three, not as the whole defect.
+      The `(?s)^[^;]*$` match below proves the cookie carries no attribute at all, so all three
+      weaknesses are determined by the same evidence and this finding names all three.
     patterns:
       - pattern: $RES.setHeader("Set-Cookie", $V)
       - metavariable-regex:

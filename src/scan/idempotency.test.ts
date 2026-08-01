@@ -136,3 +136,69 @@ describe("external-send idempotency key (item 24)", () => {
     ).toEqual([]);
   });
 });
+
+// #1352 — item 27, the shape #1230 declined `by-design` on a reach argument. Each negative below is
+// a way a real handler already answers the ordering question, so a rule that fired on one would be
+// flagging the fix it recommends.
+describe("webhook-ordering (item 27)", () => {
+  const handler = (body: string, type = "{ id: string; created: number; status: string; ref: string }") =>
+    scan(`export async function apply(event: ${type}) {${body}}`, "src/app/api/webhooks/stripe/route.ts");
+
+  it("fires when event-derived state is written with no comparison against the last-applied value", () => {
+    const out = handler(`
+      await supabase.from("subscriptions").update({ status: event.status }).eq("ref", event.ref);
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.taxonomy).toBe("Webhook state applied without an ordering guard");
+    expect(out[0]!.severity).toBe("Medium");
+  });
+
+  it("names the ordering field and its own scope bound in the evidence, not only in a comment", () => {
+    const out = handler(`await supabase.from("subscriptions").update({ status: event.status }).eq("ref", event.ref);`);
+    expect(out[0]!.evidence).toContain("`created`");
+    expect(out[0]!.evidence).toContain("SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only");
+    expect(out[0]!.evidence).toContain("FIELD PRECISION IS UNMEASURED");
+  });
+
+  it("is silent when the handler compares the event's ordering field against stored state", () => {
+    expect(
+      handler(`
+        const { data: row } = await supabase.from("subscriptions").select("applied_at").eq("ref", event.ref).single();
+        if (row && row.applied_at > event.created) return;
+        await supabase.from("subscriptions").update({ status: event.status }).eq("ref", event.ref);
+      `),
+    ).toEqual([]);
+  });
+
+  it("is silent when the guard is the conditional write the fix recommends", () => {
+    expect(
+      handler(`
+        await supabase.from("subscriptions").update({ status: event.status, created: event.created }).eq("ref", event.ref).lt("created", event.created);
+      `),
+    ).toEqual([]);
+  });
+
+  it("is silent when nothing on the event names an ordering field — there is no staleness to compare", () => {
+    expect(
+      handler(`await supabase.from("subscriptions").update({ status: event.status }).eq("ref", event.ref);`, "{ id: string; status: string; ref: string }"),
+    ).toEqual([]);
+  });
+
+  // MEASURED over the pinned corpus: 2 of the 6 webhook-path `.update` calls whose argument derived
+  // from the handler's first parameter were HMAC digests. A bare `.update(...)` predicate would
+  // have graded both.
+  it("is silent for `crypto.createHmac(...).update(body)` — the FP the corpus measurement turned up", () => {
+    expect(
+      handler(`
+        const digest = crypto.createHmac("sha256", secret).update(\`\${event.created}.\${event.id}\`).digest("hex");
+        return digest;
+      `),
+    ).toEqual([]);
+  });
+
+  it("reads a prisma model write as well as a Supabase chain", () => {
+    const out = handler(`await prisma.subscription.updateMany({ where: { ref: event.ref }, data: { status: event.status } });`);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("prisma.subscription");
+  });
+});
