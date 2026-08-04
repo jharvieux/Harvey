@@ -565,8 +565,10 @@ describe("M8 manifest shape (#300)", () => {
     // the target's own enableGlobalVirtualStore) resolved the pnpm-workspace blocker that used to
     // leave both not-run. #1496: multi-tenant-starter joined through a DIFFERENT mechanism — its
     // own suite still isn't scored (Docker per mutant); m8-corpus.ts's `extraFiles` vendors a
-    // separate DB-free suite instead (see its M8 baseline note).
-    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "inbox-zero", "multi-tenant-starter", "proposit", "rallly"]);
+    // separate DB-free suite instead (see its M8 baseline note). #1818: Saas-Lite joined after
+    // upstream added two packages/ui Vitest suites and Harvey learned to bypass Stryker's TS7
+    // tsconfig preprocessor at Stryker core's actual module-resolution boundary.
+    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "inbox-zero", "multi-tenant-starter", "proposit", "rallly", "saas-lite"]);
   });
 
   it("carries a covered scope matching the Stryker mutate config on every mutation baseline (#319)", () => {
@@ -685,13 +687,12 @@ describe("per-module scan roots (#322)", () => {
 // findings), and stays quiet while the reason still holds. The signature defect this closes: a
 // stale excuse silently costing coverage that only someone stumbling into it would catch.
 describe("revalidateNotRunReasons (#321)", () => {
-  // saas-lite records M8 not-run — every test file it ships is a Playwright E2E spec, so there is
-  // no unit suite for Stryker to mutate at all (#1436's M8_E2E_ONLY_SUITE). (multi-tenant-starter,
-  // this block's prior example, gained a real mutation baseline under #1496 — a vendored, DB-free
-  // suite, not its own Docker-dependent one — so it no longer records M8 not-run.)
+  // Carbon records M8 not-run because its workspace tests require built shared Vitest config.
+  // Saas-Lite, this block's prior example, gained two unit suites and a real mutation baseline
+  // under #1818, so keeping it here would preserve the exact stale-excuse defect this gate catches.
   const notRunTarget = (): ExternalTarget => {
-    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite");
-    if (!t || !isNotRun(t.modules.M8!)) throw new Error("saas-lite/M8 is expected to be recorded not-run");
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "carbon");
+    if (!t || !isNotRun(t.modules.M8!)) throw new Error("carbon/M8 is expected to be recorded not-run");
     return t;
   };
   const m8Finding = (id: string): Finding => ({ ...finding("M8 — Survives implementation deletion", "Medium"), id });
@@ -744,11 +745,11 @@ describe("revalidateNotRunReasons (#321)", () => {
   });
 
   it("does not read a test-intent finding as evidence against an M8 MUTATION not-run reason", () => {
-    // The 2026-07-17 false alarm: saas-lite's M8 mutation tier is not-run (E2E-only suite), and
+    // The 2026-07-17 false alarm shape: carbon's M8 mutation tier is not-run, and
     // detect-static's #372 test-intent pass produced a real "M8 —" finding — a different
     // measurement that says nothing about whether Stryker can run. The M8/M8-intent split keeps
     // it from decaying the mutation reason.
-    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite")!;
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "carbon")!;
     expect(isNotRun(t.modules.M8)).toBe(true);
     const intent = finding("M8 — Happy-path-only tests on security-critical code", "Medium");
     expect(revalidateNotRunReasons(t, [intent]).filter((r) => r.module === "M8")).toEqual([]);
@@ -1090,16 +1091,15 @@ describe("#1436 — every recorded not-run carries a falsifier the reason regist
 
   it("finds the not-runs this test exists to watch, so it cannot pass by scoring an empty set", () => {
     // #1496: multi-tenant-starter/M8 left this list — it now carries a real MutationBaseline (a
-    // vendored, DB-free suite), not a not-run reason. saas-lite and carbon still have no scoreable
-    // suite at all and remain the population this test watches.
+    // vendored, DB-free suite), not a not-run reason. #1818: Saas-Lite left too after upstream
+    // added two unit suites; carbon remains in the population this test watches.
     //
-    // #1693: this floor tracks the LIVE population — MEASURED 2026-07-31 at 6 (saas-lite,
-    // ghostfolio, carbon, tanstack-com, cravab, flori-web), and #1499 set it at exactly the
+    // #1693: this floor tracks the LIVE population — MEASURED 2026-08-04 at 5 (ghostfolio,
+    // carbon, tanstack-com, cravab, flori-web), and #1499 set it at exactly the
     // population of the day (5 of 5) rather than leaving slack. It was briefly dropped to 4, which
     // would have let two not-runs silently stop being watched. When a reason is retired, drop this
     // by one in the same commit; when one is added, raise it.
-    expect(notRuns.length).toBeGreaterThanOrEqual(6);
-    expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("saas-lite/M8");
+    expect(notRuns.length).toBeGreaterThanOrEqual(5);
     expect(notRuns.map((n) => `${n.slug}/${n.module}`)).toContain("carbon/M8");
   });
 
@@ -1129,7 +1129,7 @@ describe("#1436 — every recorded not-run carries a falsifier the reason regist
   // not-run's falsifier lives in and the check must notice — otherwise this whole describe is
   // decorative, which is the shape #1436 exists to end.
   it("FAILS when the block a not-run's falsifier lives in is deleted", () => {
-    const victim = notRuns.find((n) => n.slug === "saas-lite" && n.module === "M8")!;
+    const victim = notRuns.find((n) => n.slug === "carbon" && n.module === "M8")!;
     const gutted = source.split("\n").filter((l) => !l.includes(`FALSIFIER: ${victim.notRun.falsifier.slice(0, 40)}`)).join("\n");
     const stillThere = new Set(parseRecordedReasons(gutted, "x").map((b) => b.fields.FALSIFIER));
     expect(stillThere.has(victim.notRun.falsifier), "removing the FALSIFIER: line must break the tie").toBe(false);

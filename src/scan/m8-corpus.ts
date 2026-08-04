@@ -49,6 +49,22 @@ export interface M8CorpusConfig {
 }
 
 export const M8_CORPUS_CONFIGS: Record<string, M8CorpusConfig> = {
+  "saas-lite": {
+    // #1818: upstream added two real Vitest suites under packages/ui. Its workspace resolves
+    // TypeScript 7, whose restructured compiler API crashes Stryker 9's tsconfig preprocessor;
+    // mutation-scan detects TypeScript from Stryker core's own module-resolution boundary and
+    // applies #773's JSON-config bypass without replacing the target's TS7/Vitest toolchain.
+    appPath: "packages/ui",
+    installFlags: [],
+    strykerPackages: ["@stryker-mutator/core@9", "@stryker-mutator/vitest-runner@9"],
+    config: {
+      testRunner: "vitest",
+      coverageAnalysis: "perTest",
+      reporters: ["json", "clear-text"],
+      plugins: ["@stryker-mutator/vitest-runner"],
+      mutate: ["src/hooks/use-async-dialog-state.ts", "src/lib/utils/is-route-active.ts"],
+    },
+  },
   proposit: {
     // react 19 vs @ai-sdk/react's peer range: npm refuses the install outright without this. Kept
     // even though this repo's own lockfile is pnpm's (so #1284 now resolves it to pnpm, which does

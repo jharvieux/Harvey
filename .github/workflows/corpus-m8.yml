@@ -24,18 +24,19 @@
 # this block used to carry ("4 of the corpus's 5 suite-carrying targets") were hand-written and had
 # gone stale, which is a version of the same defect #1692 was filed about:
 #
-#   * FIVE are scored here, and they are exactly the slugs carrying an M8_CORPUS_CONFIGS entry:
-#     proposit, boxyhq, inbox-zero, rallly (#1268) and multi-tenant-starter (#1496, wired in by
-#     #1692). Four of them mutation-score the target's OWN suite unmodified. multi-tenant-starter
+#   * SIX are scored here, and they are exactly the slugs carrying an M8_CORPUS_CONFIGS entry:
+#     saas-lite (#1818), proposit, boxyhq, inbox-zero, rallly (#1268) and multi-tenant-starter
+#     (#1496, wired in by #1692). Five of them mutation-score the target's OWN suite unmodified.
+#     multi-tenant-starter
 #     does NOT: its own suite starts a Docker Postgres container per invocation, which Stryker would
 #     pay per mutant (#1436's M8_DOCKER_PER_MUTANT, still recorded in external-corpus.ts as the
 #     reason THAT suite is unscored), so m8-corpus.ts's `extraFiles` vendors a standalone DB-free
 #     vitest suite into the disposable clone instead — see that target's M8 baseline note for the
 #     accepted trade. src/scan/m8-corpus.test.ts fails if this step and that config list disagree,
 #     which is exactly the drift that left #1496's new baseline re-measured by nobody.
-#   * SIX record an M8 not-run with a measured reason and no config yet: saas-lite (Playwright E2E
-#     only, so nothing is unit-mutable), carbon (its workspaces load a vitest config from a
-#     workspace package's BUILT output, which this job does not build), and ghostfolio,
+#   * FIVE record an M8 not-run with a measured reason and no config yet: carbon (its workspaces
+#     load a vitest config from a workspace package's BUILT output, which this job does not build),
+#     and ghostfolio,
 #     tanstack-com, cravab, flori-web (real suites detected; no measured `mutate` scope chosen yet).
 #     Each carries a falsifier that exits 0 the moment an M8_CORPUS_CONFIGS entry lands.
 #   * SIX are measured by corpus-drift.yml's source tier instead, where a FINDING is the
@@ -43,7 +44,7 @@
 #     supabase-security-labs and effective emit #224's M8-00 zero-coverage High, and documenso emits
 #     #932's M8-04 workspace measurement-gap.
 #
-# So none of the twelve unscored here is a silent skip (CLAUDE.md's coverage guard) — every one
+# So none of the eleven unscored here is a silent skip (AGENTS.md's coverage guard) — every one
 # carries its reason in external-corpus.ts. Re-derive these counts rather than quoting them.
 
 name: corpus-m8
@@ -60,6 +61,7 @@ on:
   pull_request:
     paths:
       - "src/scan/m8-corpus.ts"
+      - "src/scan/external-corpus.ts"
       - "src/mutation-scan.ts"
       - "src/cli/mutation-scan.ts"
       - "src/cli/corpus-drift.ts"
@@ -94,7 +96,7 @@ jobs:
       # nothing. Everything expensive still comes after the drill.
       - uses: actions/checkout@v4
 
-      # Before the four target installs and the Stryker runs on purpose: the drill proves the ALERT
+      # Before the six target installs and the Stryker runs on purpose: the drill proves the ALERT
       # path, not the mutation baselines, so it must not pay ~20 minutes to reach it.
       - name: Alert-path liveness drill — fail deliberately (#1287)
         if: inputs.alert_drill
@@ -131,6 +133,7 @@ jobs:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
         run: |
           set -euo pipefail
+          pnpm corpus-drift --target saas-lite --install --m8 --json corpus-m8-saas-lite.json
           pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json
           pnpm corpus-drift --target boxyhq --install --m8 --json corpus-m8-boxyhq.json
           pnpm corpus-drift --target inbox-zero --install --m8 --json corpus-m8-inbox-zero.json

@@ -777,9 +777,24 @@ process.exit(0);
 describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)", () => {
   const REAL_SPEC_TS7 = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
 
-  function writeFakeTypeScript7(repo: string): void {
+  function writeFakeTypeScript(repo: string, version: string): void {
     mkdirSync(join(repo, "node_modules", "typescript"), { recursive: true });
-    writeFileSync(join(repo, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version: "7.0.2" }));
+    writeFileSync(join(repo, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version }));
+  }
+
+  function writeFakeTypeScript7(repo: string): void {
+    writeFakeTypeScript(repo, "7.0.2");
+  }
+
+  // #1818: pnpm can expose a target-local Stryker binary whose core package physically lives at
+  // the workspace root. Model the important resolution split without needing a real pnpm install:
+  // the target sees TS5, while imports originating inside core see its nested TS7 package.
+  function writeFakeCoreResolvedTypeScript(repo: string, version: string): void {
+    const coreDir = join(repo, "node_modules", "@stryker-mutator", "core");
+    mkdirSync(join(coreDir, "node_modules", "typescript"), { recursive: true });
+    writeFileSync(join(coreDir, "package.json"), JSON.stringify({ name: "@stryker-mutator/core", version: "9.6.1", main: "index.cjs" }));
+    writeFileSync(join(coreDir, "index.cjs"), "module.exports = {};\n");
+    writeFileSync(join(coreDir, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version }));
   }
 
   // "succeed-if-bypassed" only writes a report when the config it's handed carries the bypass
@@ -816,6 +831,20 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     // summary here proves the patch was applied, not merely that nothing crashed.
     expect(parsed.summary?.overall.totalMutants).toBe(1);
     expect(parsed.moduleRecord).toBeUndefined(); // a normal full run, not a degraded verdict
+  });
+
+  it("detects TS7 from Stryker core's resolution boundary when the target itself resolves TS5 (#1818)", async () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFakeTypeScript(repo, "5.9.3");
+    writeFakeCoreResolvedTypeScript(repo, "7.0.2");
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/add.ts"] }));
+    writeFakeStrykerBinary(repo, "succeed-if-bypassed");
+
+    const { status, out } = await runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } }; moduleRecord?: unknown };
+    expect(parsed.summary?.overall.totalMutants).toBe(1);
+    expect(parsed.moduleRecord).toBeUndefined();
   });
 
   it("a TS7 target with a non-JSON Stryker config degrades immediately, naming the incompatibility, without ever invoking Stryker", async () => {

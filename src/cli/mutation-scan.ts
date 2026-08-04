@@ -104,6 +104,7 @@ import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
@@ -283,16 +284,30 @@ function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
   return readPackageJsonAt(targetDir);
 }
 
-// #773: the version Stryker's dynamic `import("typescript")` would actually resolve — read from
-// wherever Stryker will run from (the target for an ordinary run, the workspace root for a #655
-// root-scoped run), not from a declared semver range, which may not match what's installed.
-function readInstalledTypeScriptVersion(dir: string): string | undefined {
-  const pkgPath = join(dir, "node_modules", "typescript", "package.json");
+function readTypeScriptVersionAt(pkgPath: string): string | undefined {
   if (!existsSync(pkgPath)) return undefined;
   try {
     return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version;
   } catch {
     return undefined;
+  }
+}
+
+// #1818: resolve TypeScript from STRYKER CORE'S physical module location, not merely from the
+// directory Stryker is invoked in. pnpm can link an app-local `.bin/stryker` to core in the
+// workspace root; when the app also has its own TypeScript version, `app/node_modules/typescript`
+// and Stryker's dynamic `import("typescript")` are then different packages. Saas-Lite exposed the
+// consequence: the former was 5.9 while core imported 7.0 and still crashed in
+// parseConfigFileTextToJson. Resolving core first mirrors Node's lookup boundary without importing
+// or executing any target code. The direct path remains a fallback for PATH-provided/fake binaries.
+function readStrykerTypeScriptVersion(dir: string): string | undefined {
+  try {
+    const fromTarget = createRequire(join(dir, "package.json"));
+    const coreEntry = fromTarget.resolve("@stryker-mutator/core");
+    const fromCore = createRequire(coreEntry);
+    return readTypeScriptVersionAt(fromCore.resolve("typescript/package.json"));
+  } catch {
+    return readTypeScriptVersionAt(join(dir, "node_modules", "typescript", "package.json"));
   }
 }
 
@@ -613,7 +628,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   // #773: the reference config (rootCfg's mutate globs are read back from this for #504 scope
   // verification, not passed to Stryker) stays UNpatched — only the config Stryker actually runs
   // needs the bypass.
-  const tsVersion = readInstalledTypeScriptVersion(rootSuite.root);
+  const tsVersion = readStrykerTypeScriptVersion(rootSuite.root);
   const ts7 = isIncompatibleTypeScript7(tsVersion);
   const rootCfgForStryker = ts7 ? withTs7TsconfigBypass(rootCfg) : rootCfg;
   // #773: a TS7 root whose tsconfig chain reaches outside rootSuite.root needs Harvey's own
@@ -1030,7 +1045,7 @@ function degradeExit(reason: string): never {
 // safely rewritten without executing arbitrary code from the target, so that degrades immediately
 // instead of guaranteeing a crash a few lines later.
 function applyTs7BypassIfNeeded(cfgPath: string | undefined, cwd: string): string | undefined {
-  const tsVersion = readInstalledTypeScriptVersion(cwd);
+  const tsVersion = readStrykerTypeScriptVersion(cwd);
   if (!cfgPath || !isIncompatibleTypeScript7(tsVersion)) return cfgPath;
   const incompatibility = `the target's installed TypeScript is v${tsVersion} — Stryker's core sandbox tsconfig preprocessor (ts.parseConfigFileTextToJson) requires the classic TypeScript compiler API, which TypeScript 7's native/Go rewrite no longer exports (#773); this is a known Stryker/TS7 tooling incompatibility, not a defect in the target`;
   if (!cfgPath.endsWith(".json")) {
@@ -1113,7 +1128,7 @@ if (reportPath) {
   // #773: a TS7 target whose tsconfig chain reaches outside targetDir needs the chain rewritten in
   // a disposable copy BEFORE Stryker runs (stageTs7TsconfigFix) — falls back to targetDir itself
   // (the ordinary in-place invocation) when there's nothing to rewrite.
-  const runCwd = (isIncompatibleTypeScript7(readInstalledTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
+  const runCwd = (isIncompatibleTypeScript7(readStrykerTypeScriptVersion(targetDir)) && stageTs7TsconfigFix(targetDir, "target")) || targetDir;
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
   const run = runStryker(redirect.cfgPath, runCwd);
