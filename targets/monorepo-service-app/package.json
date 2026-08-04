@@ -1,0 +1,12 @@
+{
+  "name": "monorepo-service-app",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "node --check server.mjs",
+    "start": "node server.mjs"
+  }
+}
