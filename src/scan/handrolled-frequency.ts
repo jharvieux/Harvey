@@ -85,11 +85,20 @@ export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
   },
   {
     slug: "effective",
-    repo: "joshcoolman/effective",
-    commit: "52744674ef83306bc58ecfc607aa840092137132",
+    repo: "jharvieux/harvey-corpus-effective",
+    commit: "6c86752d118e262fa15e8c46d3f4d38f9b53b5ce",
     license: "MIT",
     provenance: "ai-assisted",
-    provenanceNote: "#413: CLAUDE.md + Co-Authored-By: Claude, but higher-skill Effect TS and a thin schema — a capable-dev-with-AI contrast to the vibe-coded repos. Large tree (~500k LOC); reported per-repo so it can't silently dominate the aggregate.",
+    provenanceNote: "#413/#1832: original joshcoolman/effective@5274467 had CLAUDE.md + Co-Authored-By: Claude, but higher-skill Effect TS and a thin schema. After upstream became inaccessible, the MIT-licensed recovery mirror pinned a synthetic root whose tree is byte-identical (tree 0307f493) without claiming unavailable ancestry. Reported per-repo so its large tree cannot silently dominate the aggregate.",
+    capturedHistory: {
+      snapshotRepo: "jharvieux/harvey-corpus-effective",
+      snapshotCommit: "6c86752d118e262fa15e8c46d3f4d38f9b53b5ce",
+      originalRepo: "joshcoolman/effective",
+      originalCommit: "52744674ef83306bc58ecfc607aa840092137132",
+      measuredAt: "2026-07-31",
+      sourceRun: 30658181195,
+      census: { commits: 16, productCommits: 10, trailerAdmitted: 14, proseOnlyAdmitted: 0, admittedProduct: 9, unadmittedProduct: 1 },
+    },
   },
   {
     slug: "teardown",
