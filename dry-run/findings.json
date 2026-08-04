@@ -944,6 +944,34 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-rgw5-rvv9-x895-brace-expansion@1.1.16",
+    "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation (fixed in 1.1.18 / 2.1.4 / 3.0.6 / 5.0.9)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (brace-expansion@1.1.16)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-rgw5-rvv9-x895 (aliases: CVE-2026-69152) against brace-expansion@1.1.16. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 1.1.18 / 2.1.4 / 3.0.6 / 5.0.9. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-69152.",
+    "impact": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation — The `maxLength` mitigation added in `5.0.8` for GHSA-mh99-v99m-4gvg / CVE-2026-14257 is incomplete. It bounds the accumulator where results are *combined*, but not the intermediate arrays that feed it. A ~25 KB input still crashes the Node process with an **uncatchable** out-of-memory error, so `try/catch` around `expand()` does not help.",
+    "fix": "Upgrade brace-expansion to 1.1.18 or later (see GHSA-rgw5-rvv9-x895).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-770"
+    ],
+    "dependency": "brace-expansion",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "brace-expansion is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg-braces@2.3.2",
     "title": "braces@2.3.2: Uncontrolled resource consumption in braces (fixed in 3.0.3)",
     "severity": "High",
@@ -2328,6 +2356,34 @@
     "cwe": [
       "CWE-200",
       "CWE-22"
+    ],
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-fxqj-rqcc-2cmp-postcss@8.4.31",
+    "title": "postcss@8.4.31: PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset (fixed in 8.5.23)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (postcss@8.4.31)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-fxqj-rqcc-2cmp (aliases: CVE-2026-69153) against postcss@8.4.31. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 8.5.23.",
+    "impact": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset — The fix for GHSA-6g55-p6wh-862q added a guard in `lib/previous-map.js` `PreviousMap.loadFile()` that restricts an attacker-controlled `sourceMappingURL` (from a CSS comment) to a `.map` extension and, for untrusted maps, rejects `..` traversal and absolute paths. The traversal/absolute rejection is nested inside `if (cssFile) { ... }`. When PostCSS is invoked without the `from` option, `cssFile` is falsy and that branch is skipped, leaving only the `.map` extension check.",
+    "fix": "Upgrade postcss to 8.5.23 or later (see GHSA-fxqj-rqcc-2cmp).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22",
+      "CWE-200"
     ],
     "dependency": "postcss",
     "reachability": {
