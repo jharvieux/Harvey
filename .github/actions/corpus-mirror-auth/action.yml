@@ -1,0 +1,35 @@
+name: Authenticate private corpus mirrors
+description: Configure read-only SSH access to Harvey's private, license-constrained corpus mirrors.
+
+inputs:
+  private-key:
+    description: Read-only deploy key for jharvieux/harvey-corpus-flori-web.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        CORPUS_MIRROR_DEPLOY_KEY: ${{ inputs.private-key }}
+      run: |
+        set -euo pipefail
+        test -n "$CORPUS_MIRROR_DEPLOY_KEY"
+
+        ssh_dir="$RUNNER_TEMP/harvey-corpus-ssh"
+        key="$ssh_dir/id_ed25519"
+        known_hosts="$ssh_dir/known_hosts"
+        install -d -m 700 "$ssh_dir"
+        printf '%s\n' "$CORPUS_MIRROR_DEPLOY_KEY" > "$key"
+        chmod 600 "$key"
+
+        # Read GitHub's currently published host keys over authenticated TLS instead of trusting
+        # an unauthenticated ssh-keyscan result. Fail loud if the metadata surface is unavailable.
+        curl -fsSL https://api.github.com/meta \
+          | jq -r '.ssh_keys[] | "github.com " + .' > "$known_hosts"
+        test -s "$known_hosts"
+
+        echo "GIT_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+        git config --global \
+          url."git@github.com:jharvieux/harvey-corpus-flori-web.git".insteadOf \
+          "https://github.com/jharvieux/harvey-corpus-flori-web"

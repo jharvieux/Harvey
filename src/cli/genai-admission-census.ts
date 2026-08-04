@@ -81,11 +81,25 @@ const WITH_DENSITY = process.argv.includes("--density");
 interface RepoCensus extends CommitCensus {
   slug: string;
   tier: string;
+  history: "live" | `captured:${number}`;
 }
 
 const targets = buildFrequencyTargets();
 const rows: RepoCensus[] = [];
 for (const t of targets) {
+  if (t.capturedHistory) {
+    const h = t.capturedHistory;
+    if (t.repo !== h.snapshotRepo || t.commit !== h.snapshotCommit) {
+      throw new Error(
+        `${t.slug}: captured history is bound to ${h.snapshotRepo}@${h.snapshotCommit}, but the corpus now pins ${t.repo}@${t.commit}; re-measure or explicitly re-bind the capture`,
+      );
+    }
+    console.error(
+      `=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} — captured history from ${h.originalRepo}@${h.originalCommit.slice(0, 8)} (run ${h.sourceRun}) ===`,
+    );
+    rows.push({ slug: t.slug, tier: t.tier, history: `captured:${h.sourceRun}`, ...h.census });
+    continue;
+  }
   const dir = mkdtempSync(join(tmpdir(), `harvey-admit-${t.slug}-`));
   console.error(`=== ${t.slug} [${t.tier}] ${t.repo}@${t.commit.slice(0, 8)} ===`);
   try {
@@ -93,7 +107,7 @@ for (const t of targets) {
     execFileSync("git", ["-C", dir, "remote", "add", "origin", `https://github.com/${t.repo}`], { stdio: "ignore" });
     execFileSync("git", ["-C", dir, "fetch", "-q", "--filter=blob:none", "origin", t.commit], { stdio: ["ignore", "ignore", "pipe"] });
     const log = execFileSync("git", ["-C", dir, "log", t.commit, "--no-merges", "--name-only", `--format=${CENSUS_FORMAT}`], { maxBuffer: 512 * 1024 * 1024 }).toString();
-    rows.push({ slug: t.slug, tier: t.tier, ...censusOfLog(log) });
+    rows.push({ slug: t.slug, tier: t.tier, history: "live", ...censusOfLog(log) });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -163,11 +177,11 @@ out.push(`Commit-level self-admitted-GenAI census over the pinned corpus (${rows
 out.push(`Product-source predicate: /\\.(ts|tsx|jsx|mjs)$/ minus NON_PRODUCT — identical to handrolled-frequency.ts.`);
 out.push(`Merge commits excluded. History read at each repo's PINNED commit, so this is reproducible.`);
 out.push("");
-out.push(`| Repo | Tier | Commits | Product-touching | Admitted (trailer) | Admitted (prose only) | Product+admitted | Product+unadmitted | Both arms >= ${MIN_ARM}? |`);
-out.push(`|---|---|---:|---:|---:|---:|---:|---:|---|`);
+out.push(`| Repo | Tier | History | Commits | Product-touching | Admitted (trailer) | Admitted (prose only) | Product+admitted | Product+unadmitted | Both arms >= ${MIN_ARM}? |`);
+out.push(`|---|---|---|---:|---:|---:|---:|---:|---:|---|`);
 for (const r of rows) {
   out.push(
-    `| ${r.slug} | ${r.tier} | ${r.commits} | ${r.productCommits} | ${r.trailerAdmitted} | ${r.proseOnlyAdmitted} | ${r.admittedProduct} | ${r.unadmittedProduct} | ${hasBothArms(r) ? "**YES**" : "no"} |`,
+    `| ${r.slug} | ${r.tier} | ${r.history} | ${r.commits} | ${r.productCommits} | ${r.trailerAdmitted} | ${r.proseOnlyAdmitted} | ${r.admittedProduct} | ${r.unadmittedProduct} | ${hasBothArms(r) ? "**YES**" : "no"} |`,
   );
 }
 
@@ -232,6 +246,12 @@ if (WITH_DENSITY && usable.length > 0) {
 
 out.push("");
 out.push("LIMITATIONS, stated so a number here is not read as more than it is:");
+out.push("  • A `captured:<run>` history row is not a fresh git-log read. Its upstream history became");
+out.push("    inaccessible, while the private mirror preserves only the pinned source tree. The committed");
+out.push("    census is the last successful measurement at that exact original pin; it is bound to the");
+out.push("    mirror snapshot and fails if the pin moves, but a future classifier change cannot reclassify");
+out.push("    that unavailable history. It stays counted and disclosed instead of becoming one synthetic");
+out.push("    unadmitted commit or silently disappearing from the population (#1832).");
 out.push("  • Self-admission is a BIASED sample. Xiao et al. (arXiv:2507.10422) Table 7 catalogues");
 out.push("    projects whose policies PROHIBIT GenAI contributions outright; those repos cannot");
 out.push("    produce an admission whatever their code contains. Absence of admission is not");

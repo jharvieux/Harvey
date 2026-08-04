@@ -90,6 +90,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Authenticate private corpus mirrors
+        uses: ./.github/actions/corpus-mirror-auth
+        with:
+          private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
+
       # No mechanical-binaries step: the census reads git history and runs the TS/AST hand-rolled
       # detector. Nothing here shells out to semgrep/trufflehog/osv-scanner/gitleaks.
       - name: Census the pinned corpus
