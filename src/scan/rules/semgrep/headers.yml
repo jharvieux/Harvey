@@ -536,10 +536,10 @@ rules:
           metavariable: $V
           regex: (?s)^[^;]*$
 
-  # Express-style res.cookie(name, value[, options]) with the security attributes missing (#988).
-  # BenchProctor and real Express code use the framework method, not a raw Set-Cookie string — the
-  # rule above scores 0% on it. Fires on the 2-arg form (no options at all) and on any options
-  # object that does not set httpOnly AND secure AND sameSite. The fully-hardened form is excluded.
+  # Express-style res.cookie(name, value[, options]) with a security attribute missing (#988/#1777).
+  # One rule per attribute keeps each finding's CWE determined by the property its own pattern-not
+  # proved absent. A two-argument cookie correctly produces all three findings; a two-of-three
+  # options object produces only the one weakness it actually has.
   - id: harvey-cookie-insecure-express
     languages: [javascript, typescript]
     severity: ERROR
@@ -550,15 +550,52 @@ rules:
       category: security
       harveySeverity: High
     message: >
-      An Express cookie is set with res.cookie() missing one or more of HttpOnly/Secure/SameSite.
-      Without HttpOnly it is readable by injected script (XSS → session theft); without Secure it
-      can ride plain HTTP; without SameSite it rides cross-site requests. Set all three.
+      An Express cookie is set with res.cookie() without Secure, so it can ride plain HTTP even
+      when the application otherwise uses HTTPS. Set secure: true.
     patterns:
       - pattern-either:
           - pattern: $RES.cookie($NAME, $VAL)
           - pattern: $RES.cookie($NAME, $VAL, $OPTS)
       - pattern-not: |
-          $RES.cookie($NAME, $VAL, { ..., httpOnly: true, ..., secure: true, ..., sameSite: $SS, ... })
+          $RES.cookie($NAME, $VAL, { ..., secure: true, ... })
+
+  - id: harvey-cookie-insecure-express-httponly
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: ["CWE-1004: Sensitive Cookie Without 'HttpOnly' Flag"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      An Express cookie is set with res.cookie() without HttpOnly, so injected browser script can
+      read and steal it. Set httpOnly: true.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.cookie($NAME, $VAL)
+          - pattern: $RES.cookie($NAME, $VAL, $OPTS)
+      - pattern-not: |
+          $RES.cookie($NAME, $VAL, { ..., httpOnly: true, ... })
+
+  - id: harvey-cookie-insecure-express-samesite
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: ["CWE-1275: Sensitive Cookie with Improper SameSite Attribute"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      An Express cookie is set with res.cookie() without SameSite, so it rides cross-site requests.
+      Set sameSite to strict, lax, or none according to the intended cross-site behavior.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.cookie($NAME, $VAL)
+          - pattern: $RES.cookie($NAME, $VAL, $OPTS)
+      - pattern-not: |
+          $RES.cookie($NAME, $VAL, { ..., sameSite: $SS, ... })
 
   # A caught error's .stack or .message is echoed straight into the JSON response — leaks stack
   # traces / internal paths / library versions to the client. Review — some apps intentionally

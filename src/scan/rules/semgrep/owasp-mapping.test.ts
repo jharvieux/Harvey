@@ -417,7 +417,7 @@ const CWE_EVIDENCE: Record<string, RegExp> = {
   "CWE-643": /\bXPath\b|selectNodes|selectSingleNode/i,
   // The cookie's ATTRIBUTES, not the noun: a CORS rule that mentions "the victim's cookies" is not
   // reporting a missing Secure flag.
-  "CWE-614": /HttpOnly|Set-Cookie|res\.cookie|SameSite/i,
+  "CWE-614": /\bSecure\b|plain HTTP|HTTPS session/i,
   // #1661. Deliberately NARROW — each names its own attribute and nothing else, because the cookie
   // SINK vocabulary already belongs to CWE-614 above and a second broad cookie regex would make
   // every cookie rule confusable with every other one.
@@ -536,13 +536,12 @@ const CWE_MACHINE_EVIDENCE: Record<string, RegExp> = {
   // written, whoever wrote the rule: csv-stringify's `stringify`, fast-csv's `writeToString`,
   // papaparse's `unparse`, SheetJS's sheet builders.
   "CWE-1236": /stringifySync\(|writeToString\(|writeToBuffer\(|unparse\(|_to_sheet\(/,
-  // #1661. The HttpOnly and SameSite weaknesses occur on the same SINK as CWE-614's — writing a
-  // cookie — so the machine half that corroborates one corroborates all three. Without these two
-  // rows harvey-cookie-insecure would fall into PROSE_ONLY the moment it declared them, which
-  // would report "the machinery says nothing about this label" when the machinery is the identical
-  // cookie write in every case.
-  "CWE-1004": /Set-Cookie|res\.cookie/,
-  "CWE-1275": /Set-Cookie|res\.cookie/,
+  // #1777: the raw Set-Cookie rule's no-semicolon regex proves all three attributes absent, while
+  // each Express sibling's pattern-not names exactly the one property it proves absent. Keeping
+  // these signatures attribute-specific is what makes a sibling-CWE swap fail.
+  "CWE-614": /regex: \(\?s\)\^\[\^;\]\*\$|secure: true/i,
+  "CWE-1004": /regex: \(\?s\)\^\[\^;\]\*\$|httpOnly: true/i,
+  "CWE-1275": /regex: \(\?s\)\^\[\^;\]\*\$|sameSite: \$SS/i,
 };
 
 /** True when the rule's own machine half — never its prose — corroborates `cwe`. */
@@ -573,15 +572,6 @@ const UNDISCRIMINATED: string[] = [
   // from OWASP's tables. A swap to the sibling named at runtime would stay green. Disclosed rather
   // than smoothed over: the CWE is now right and the intra-bucket discrimination is now weaker.
   "harvey-fail-open",
-  // #1661 — JOINED, and its arrival is a real finding rather than bookkeeping. Putting CWE-1004 in
-  // use (on harvey-cookie-insecure, whose pattern determines it) made it a live A05 sibling, and
-  // this rule's message says "HttpOnly", so a swap of its CWE-614 to CWE-1004 would stay green.
-  // That ambiguity is genuine and points at the rule itself: harvey-cookie-insecure-express fires
-  // when ANY of httpOnly/secure/sameSite is missing, so its evidence does not determine CWE-614 in
-  // particular either — unlike its Set-Cookie sibling, whose `(?s)^[^;]*$` proves all three at
-  // once. Disclosed here rather than fixed by widening its label, because giving it all three CWEs
-  // would over-claim on the two-of-three case; the label question is #1777.
-  "harvey-cookie-insecure-express",
 ];
 
 /**
