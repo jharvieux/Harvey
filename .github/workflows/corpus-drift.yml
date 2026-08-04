@@ -232,6 +232,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.filter.outputs.relevant == 'true'
 
+      - name: Authenticate private corpus mirrors
+        if: steps.filter.outputs.relevant == 'true'
+        uses: ./.github/actions/corpus-mirror-auth
+        with:
+          private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
+
       # The baseline modules (M4/M5/M7/M8/M9) run on this repo's own devDependencies, but #261's
       # free-tier invariant scores a real quick-scan, whose mechanical tier shells out to these.
       # Each scanner degrades to "found nothing" without its binary rather than failing loudly —
