@@ -31,7 +31,7 @@ export function cloneAtPin(repo: string, commit: string, into: string): void {
 // time for the one affected target, never a silently smaller corpus. CI's own preflight
 // (corpus-clone-cache's verify step) already hard-fails on this shape before any target is
 // scored; this check is what keeps a direct/local use of the cache dir just as safe.
-export function cloneAtPinCached(repo: string, commit: string, into: string, cacheDir?: string): void {
+export function cloneAtPinCached(repo: string, commit: string, into: string, cacheDir?: string, verifyRemote = false): void {
   if (!cacheDir) {
     cloneAtPin(repo, commit, into);
     return;
@@ -44,6 +44,11 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     // clean, so a leftover .git here would collide with a stale "origin". Clear it first.
     rmSync(cached, { recursive: true, force: true });
     cloneAtPin(repo, commit, cached);
+  }
+  if (verifyRemote) {
+    // A cache proves only that we fetched this commit once. Corpus drift must also prove the
+    // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
+    execFileSync("git", ["-C", cached, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
   }
   cpSync(cached, into, { recursive: true });
 }

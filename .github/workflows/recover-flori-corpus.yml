@@ -1,0 +1,35 @@
+name: recover-flori-corpus
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: corpus-cache
+        uses: ./.github/actions/corpus-clone-cache
+      - name: Export the inaccessible Flori pin from the private cache
+        env:
+          CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
+        run: |
+          set -euo pipefail
+          source="$CACHE_DIR/flori-ai-kr__web"
+          test -d "$source/.git"
+          git -C "$source" rev-parse --verify bead044955f069525edac4134696d0a8f1a3071b^{commit}
+          git -C "$source" bundle create flori-web.git bead044955f069525edac4134696d0a8f1a3071b
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flori-web-pinned-history
+          path: flori-web.git
+          if-no-files-found: error
