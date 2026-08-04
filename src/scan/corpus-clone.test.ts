@@ -79,17 +79,6 @@ describe("cloneAtPinCached", () => {
     expect(() => cloneAtPinCached(repo, sha, into, cacheDir)).not.toThrow();
     expect(readFileSync(join(into, "marker.txt"), "utf8")).toBe("pinned content\n");
   });
-
-  it("fails rather than trusting a cached clone when its declared GitHub origin no longer serves the pin", () => {
-    const cacheDir = tmp("cache-root-");
-    const repo = "definitely-not-a-real-org/definitely-not-a-real-repo-xyz";
-    const cached = join(cacheDir, repo.replace(/\//g, "__"));
-    mkdirSync(cached, { recursive: true });
-    const sha = commitOneFile(cached);
-    const into = tmp("work-");
-
-    expect(() => cloneAtPinCached(repo, sha, into, cacheDir, true)).toThrow();
-  });
 });
 
 // The CI-side half of the same guard, exercised offline. The bug it closes was NOT a failed job

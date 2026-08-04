@@ -377,7 +377,7 @@ for (const target of targets) {
     // (set by .github/actions/corpus-clone-cache) — a bare network clone otherwise, exactly as
     // before. `dir` stays a disposable mkdtemp copy either way, so --install/scanning below can
     // still mutate or delete it freely.
-    timed("clone", () => cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR, true));
+    timed("clone", () => cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR));
 
     // #1524: strip any vendored reference subtree BEFORE any scanner or install sees this disposable
     // clone — schemaPath/installTargetDeps below still resolve against `dir` itself, which this

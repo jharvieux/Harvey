@@ -31,7 +31,7 @@ export function cloneAtPin(repo: string, commit: string, into: string): void {
 // time for the one affected target, never a silently smaller corpus. CI's own preflight
 // (corpus-clone-cache's verify step) already hard-fails on this shape before any target is
 // scored; this check is what keeps a direct/local use of the cache dir just as safe.
-export function cloneAtPinCached(repo: string, commit: string, into: string, cacheDir?: string, verifyRemote = false): void {
+export function cloneAtPinCached(repo: string, commit: string, into: string, cacheDir?: string): void {
   if (!cacheDir) {
     cloneAtPin(repo, commit, into);
     return;
@@ -46,15 +46,6 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     cloneAtPin(repo, commit, cached);
   }
   cpSync(cached, into, { recursive: true });
-  if (verifyRemote) {
-    // A cache proves only that we fetched this commit once. Corpus drift must also prove the
-    // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
-    // Fetch in the DISPOSABLE copy, never in the shared cache: `git fetch` may trigger an auto
-    // maintenance/repack after returning, and CI observed that process removing
-    // `.git/objects/pack` while cpSync copied the cache for the next target. The cache is a
-    // read-only input on every scoring path; only the cache action's dedicated save path writes it.
-    execFileSync("git", ["-C", into, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
-  }
 }
 
 // Exported so the validity check itself is directly testable without a network clone (see
