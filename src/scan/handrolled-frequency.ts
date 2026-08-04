@@ -58,11 +58,11 @@ export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
   },
   {
     slug: "flori-web",
-    repo: "flori-ai-kr/web",
-    commit: "bead044955f069525edac4134696d0a8f1a3071b",
+    repo: "jharvieux/harvey-corpus-flori-web",
+    commit: "908eaff6fcf598c0fe1043faaaecb6a4083c90d5",
     license: "none (all rights reserved)",
     provenance: "ai-generated",
-    provenanceNote: "#413: Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. No license — clone-and-scan only, never vendor.",
+    provenanceNote: "#413/#1832: original flori-ai-kr/web@bead044 had Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. Upstream became inaccessible, so the private recovery mirror pins a synthetic root commit whose tree is byte-identical (tree 062ad8ac) without claiming the shallow cache recovered unavailable ancestry. No license — clone-and-scan only, never vendor.",
   },
   {
     slug: "effective",

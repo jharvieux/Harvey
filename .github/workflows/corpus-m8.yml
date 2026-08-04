@@ -109,6 +109,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Authenticate private corpus mirrors
+        uses: ./.github/actions/corpus-mirror-auth
+        with:
+          private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
+
       # #1571: same pin-keyed clone cache corpus-drift.yml uses — this job scores a SUBSET of the
       # same pinned targets (the SCOPE block above), so it rides corpus-drift's daily-warmed cache
       # entry rather than re-cloning cold every month.

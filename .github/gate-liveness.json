@@ -205,11 +205,6 @@
       "whyDistinguishable": "No conditional step and no failure-swallowing: a run that dies before Stryker exits non-zero and its `ci-corpus-m8-alert` path opens or updates a tracking issue. A partial run cannot report as clean either — the scorer fails on a target whose mutation run produced no report, rather than scoring it zero."
     },
     {
-      "workflow": ".github/workflows/recover-flori-corpus.yml",
-      "measures": "Runs the operator-authorized one-time #1832 recovery: restores the pin-keyed corpus cache, verifies the inaccessible Flori commit object, and exports that exact history as a Git bundle artifact.",
-      "whyDistinguishable": "Manual-only and fully linear: every recovery step is unconditional, `set -euo pipefail` plus explicit commit verification makes a missing cache/object red, and `if-no-files-found: error` makes a missing bundle red. There is no schedule, filter, matrix, no-op branch, or failure-swallowing path through which a run can turn green without producing the requested artifact."
-    },
-    {
       "workflow": ".github/workflows/osv-staleness.yml",
       "measures": "Reads the external OSV database's freshness and fails when the pinned advisory data has gone stale past its window.",
       "whyDistinguishable": "Every step runs unconditionally, and the check's own failure mode IS an unreadable database — a fetch that cannot complete exits non-zero rather than reporting a fresh result, and `ci-osv-staleness-alert` raises it. There is no green-having-read-nothing state for a receipt to disclose."
