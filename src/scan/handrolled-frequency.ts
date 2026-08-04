@@ -16,6 +16,7 @@
 
 import type { SourceInput } from "../detectors/common.js";
 import { EXTERNAL_CORPUS, type Provenance } from "./external-corpus.js";
+import type { CommitCensus } from "./genai-admission.js";
 
 // #413: AI-authored repos measured for M6 hand-rolled-frequency. The M6 frequency question — "do
 // the catalogue's 17 measured-zero YES shapes fire on genuinely AI-generated code?" — needs only
@@ -41,6 +42,15 @@ interface FrequencyTarget {
   license: string;
   provenance: Provenance;
   provenanceNote: string;
+  capturedHistory?: {
+    snapshotRepo: string;
+    snapshotCommit: string;
+    originalRepo: string;
+    originalCommit: string;
+    measuredAt: string;
+    sourceRun: number;
+    census: CommitCensus;
+  };
   // #413: intentionally-vulnerable / teaching repos are CURATED, not organic AI output — their
   // shape mix is authored to demonstrate bugs, so they must not dominate the organic-AI signal.
   // Measured and reported, but bucketed separately from the ai-generated/ai-assisted aggregate.
@@ -63,6 +73,15 @@ export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
     license: "none (all rights reserved)",
     provenance: "ai-generated",
     provenanceNote: "#413/#1832: original flori-ai-kr/web@bead044 had Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. Upstream became inaccessible, so the private recovery mirror pins a synthetic root commit whose tree is byte-identical (tree 062ad8ac) without claiming the shallow cache recovered unavailable ancestry. No license — clone-and-scan only, never vendor.",
+    capturedHistory: {
+      snapshotRepo: "jharvieux/harvey-corpus-flori-web",
+      snapshotCommit: "908eaff6fcf598c0fe1043faaaecb6a4083c90d5",
+      originalRepo: "flori-ai-kr/web",
+      originalCommit: "bead044955f069525edac4134696d0a8f1a3071b",
+      measuredAt: "2026-07-31",
+      sourceRun: 30658181195,
+      census: { commits: 145, productCommits: 127, trailerAdmitted: 128, proseOnlyAdmitted: 5, admittedProduct: 119, unadmittedProduct: 8 },
+    },
   },
   {
     slug: "effective",
@@ -91,6 +110,7 @@ interface FrequencyCorpusTarget {
   commit: string;
   provenance: Provenance;
   tier: FrequencyTier;
+  capturedHistory?: FrequencyTarget["capturedHistory"];
 }
 
 // #1524: three AI_FREQUENCY_CORPUS slugs (cravab, flori-web, effective) also gained a full
@@ -103,9 +123,24 @@ interface FrequencyCorpusTarget {
 // measurement already treats as canonical everywhere else.
 export function buildFrequencyTargets(): FrequencyCorpusTarget[] {
   const externalSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+  const frequencyBySlug = new Map(AI_FREQUENCY_CORPUS.map((t) => [t.slug, t]));
   return [
-    ...EXTERNAL_CORPUS.map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: t.provenance as FrequencyTier })),
-    ...AI_FREQUENCY_CORPUS.filter((t) => !externalSlugs.has(t.slug)).map((t) => ({ slug: t.slug, repo: t.repo, commit: t.commit, provenance: t.provenance, tier: (t.curated ? "curated" : t.provenance) as FrequencyTier })),
+    ...EXTERNAL_CORPUS.map((t) => ({
+      slug: t.slug,
+      repo: t.repo,
+      commit: t.commit,
+      provenance: t.provenance,
+      tier: t.provenance as FrequencyTier,
+      capturedHistory: frequencyBySlug.get(t.slug)?.capturedHistory,
+    })),
+    ...AI_FREQUENCY_CORPUS.filter((t) => !externalSlugs.has(t.slug)).map((t) => ({
+      slug: t.slug,
+      repo: t.repo,
+      commit: t.commit,
+      provenance: t.provenance,
+      tier: (t.curated ? "curated" : t.provenance) as FrequencyTier,
+      capturedHistory: t.capturedHistory,
+    })),
   ];
 }
 

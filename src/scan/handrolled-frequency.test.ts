@@ -97,6 +97,18 @@ describe("catalogue bookkeeping", () => {
         expect(bySlug.get(t.slug)?.tier, t.slug).toBe(t.provenance);
       }
     });
+
+    it("carries any captured-history disclosure through the overlap dedupe and binds it to the active snapshot", () => {
+      for (const t of buildFrequencyTargets()) {
+        if (!t.capturedHistory) continue;
+        expect(t.repo, t.slug).toBe(t.capturedHistory.snapshotRepo);
+        expect(t.commit, t.slug).toBe(t.capturedHistory.snapshotCommit);
+        expect(t.capturedHistory.originalRepo, t.slug).not.toBe(t.repo);
+        expect(t.capturedHistory.sourceRun, t.slug).toBeGreaterThan(0);
+        expect(t.capturedHistory.census.commits, t.slug).toBeGreaterThan(0);
+      }
+      expect(buildFrequencyTargets().filter((t) => t.capturedHistory).map((t) => t.slug)).toContain("flori-web");
+    });
   });
 
   it("shipped taxonomies exist in the real detector's output vocabulary", () => {
