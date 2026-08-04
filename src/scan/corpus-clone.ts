@@ -45,12 +45,16 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     rmSync(cached, { recursive: true, force: true });
     cloneAtPin(repo, commit, cached);
   }
+  cpSync(cached, into, { recursive: true });
   if (verifyRemote) {
     // A cache proves only that we fetched this commit once. Corpus drift must also prove the
     // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
-    execFileSync("git", ["-C", cached, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
+    // Fetch in the DISPOSABLE copy, never in the shared cache: `git fetch` may trigger an auto
+    // maintenance/repack after returning, and CI observed that process removing
+    // `.git/objects/pack` while cpSync copied the cache for the next target. The cache is a
+    // read-only input on every scoring path; only the cache action's dedicated save path writes it.
+    execFileSync("git", ["-C", into, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
   }
-  cpSync(cached, into, { recursive: true });
 }
 
 // Exported so the validity check itself is directly testable without a network clone (see

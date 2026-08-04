@@ -25,9 +25,14 @@ jobs:
         run: |
           set -euo pipefail
           source="$CACHE_DIR/flori-ai-kr__web"
+          pin="bead044955f069525edac4134696d0a8f1a3071b"
           test -d "$source/.git"
-          git -C "$source" rev-parse --verify bead044955f069525edac4134696d0a8f1a3071b^{commit}
-          git -C "$source" bundle create flori-web.git bead044955f069525edac4134696d0a8f1a3071b
+          git -C "$source" rev-parse --verify "HEAD^{commit}" | grep -Fx "$pin"
+          # A raw SHA names no advertised ref and makes `git bundle create` refuse an empty bundle.
+          # HEAD is detached at the pin verified above, so it exports that exact complete history.
+          # Use an absolute output path: -C otherwise writes the artifact into the cache checkout.
+          git -C "$source" bundle create "$GITHUB_WORKSPACE/flori-web.git" HEAD
+          git bundle verify "$GITHUB_WORKSPACE/flori-web.git"
       - uses: actions/upload-artifact@v4
         with:
           name: flori-web-pinned-history
