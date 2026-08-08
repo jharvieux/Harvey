@@ -1013,6 +1013,14 @@ rules:
     pattern-sources:
       - *request_source
       - *client_url_source
+    pattern-sanitizers:
+      # #1815: anchor the transformation at the strict ISO-8601 parser imported from its defining
+      # package. Sanitizing `.toString()` itself would also clear the raw-string sibling.
+      - patterns:
+          - pattern: parseDateTime(...)
+          - pattern-inside: |
+              import { ..., parseDateTime, ... } from "@internationalized/date";
+              ...
     pattern-sinks:
       - patterns:
           - pattern-either:
