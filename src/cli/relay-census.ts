@@ -111,8 +111,8 @@ for (const n of nodes) {
   for (const iv of report.issues) {
     if (iv.issue !== n.number) continue; // a self-referencing "Closes #N" only ever names this issue
     for (const c of iv.criteria) {
-      // A completed relay's `disposition` is the COMPLETING met/split, not `relayed` — the retired
-      // line is reported only in `superseded`. So "still live" and "already completed" are told
+      // A resolved relay's `disposition` is the terminal met/split/ruled-unmet, not `relayed` — the retired
+      // line is reported only in `superseded`. So "still live" and "already resolved" are told
       // apart by `superseded`, not by `disposition`, which the first cut of this tool got backwards.
       if (c.superseded) {
         rows.push({ issue: n.number, index: c.index, text: c.text, status: "superseded", venue: c.superseded.venue, line: c.superseded.line, detail: c.superseded.detail });
@@ -138,7 +138,7 @@ console.log("  venue set: EXACT match to the gate's own (checkAcceptance's venue
 console.log(`  population: ${nodes.length} issue(s), ${commentCount} comment(s), ${linkedPrCount} linked PR bodies read in full`);
 if (truncatedComments.length > 0) console.log(`  ⚠ ${truncatedComments.length} issue(s) carry more than 100 comments and were read only that far: ${truncatedComments.map((t) => `#${t.number}`).join(", ")}`);
 if (truncatedPrs.length > 0) console.log(`  ⚠ ${truncatedPrs.length} issue(s) carry more than 20 linked PRs and were read only that far: ${truncatedPrs.map((t) => `#${t.number}`).join(", ")}`);
-console.log(`  relayed dispositions found: ${rows.length} — ${live.length} still live (no superseding met/split in the gate's own venues), ${superseded.length} already completed (#1753)`);
+console.log(`  relayed dispositions found: ${rows.length} — ${live.length} still live (no superseding met/split/ruled-unmet in the gate's own venues), ${superseded.length} already resolved (#1753/#1791)`);
 for (const r of live) console.log(`    LIVE        #${r.issue}.${r.index} — ${r.detail?.slice(0, 90)}`);
 for (const r of superseded) console.log(`    SUPERSEDED  #${r.issue}.${r.index} — retired by a ${r.detail} at ${r.venue}, line ${r.line}`);
-console.log("\nA LIVE row is a `relayed` line the gate would still read as the disposition of record — it needs either a completing `met`/`split` in a LINKED PR or issue comment, or the operator ruling it as terminal (#1769).");
+console.log("\nA LIVE row is a `relayed` line the gate would still read as the disposition of record — it needs either a completing `met`/`split` or an attributed terminal `ruled-unmet` in a LINKED PR or issue comment (#1769/#1791).");

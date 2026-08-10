@@ -5,6 +5,7 @@ acceptance bullet of #N to be mapped below. Delete this block if the PR closes n
   ACCEPTANCE #<issue>.<n> met: <the command run and its output, the test name, or file:line>
   ACCEPTANCE #<issue>.<n> split: #<remainder>     ← must exist, be OPEN, and be cross-linked from #<issue>
   ACCEPTANCE #<issue>.<n> relayed: <the question — which must ALSO be a comment on #<issue>>
+  ACCEPTANCE #<issue>.<n> ruled-unmet: operator @<login> — <the terminal ruling>  ← accounted for, NOT delivered
   ACCEPTANCE #<issue> no-stated-criteria: <what the bar was>   ← only if #<issue> states none
 
 Bullets are numbered in the order they appear in the issue's `## Acceptance` section (or its
@@ -13,9 +14,9 @@ checklist), starting at 1. A bare "done" is not evidence and fails the gate.
 ONE VENUE PER CRITERION. The gate reads this body AND every comment on #<issue>, cumulatively, and
 a criterion may be dispositioned exactly once across all of them. So if you have already commented
 these lines on the issue, do not repeat them here (or neutralise the comment) — the same lines in
-two places is a double mapping, and it fails. The one exception (#1753): a single `met`/`split`
-over a single earlier `relayed` is a COMPLETED RELAY — it supersedes the `relayed` line
-automatically, so record the completion and leave the old line alone.
+two places is a double mapping, and it fails. The one exception (#1753/#1791): a single terminal
+`met`/`split`/`ruled-unmet` over a single earlier `relayed` supersedes the `relayed` line
+automatically, so record the resolution and leave the old line alone.
 
 Check it before you push:
   pnpm validate-acceptance --body-file <a file holding this body> --repo <owner/repo>
