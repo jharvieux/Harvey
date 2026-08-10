@@ -11,7 +11,7 @@
 #     is the field the CLI reads, so this path is covered by the same code as the keyword path.
 #
 # WHERE THE DISPOSITION LIVES on a non-PR close (#1341's second criterion): an issue COMMENT in the
-# same `ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>` format. It is the only venue that
+# same `ACCEPTANCE #<issue>.<n> <met|split|relayed|ruled-unmet>: <detail>` format. It is the only venue that
 # exists on every close path, it is where the operator already reads, and it survives the close. The
 # CLI reads the union of every linked PR body and every issue comment, so a PR that already carries
 # its dispositions passes here unchanged and nothing is written twice.
@@ -29,10 +29,9 @@
 # layer against a recording stub `gh` and awaits its live drill (#1750, the #1348 pattern).
 #
 # A NEGATIVE CONTROL RUNS ON EVERY INVOCATION (step 2), the same posture acceptance.yml takes:
-# `--selftest-close` scores nine hermetic cases — bare click with and without a disposition record,
-# sidebar close with and without, a partial record, a hollowed-out `met`, the same dispositions in
-# BOTH the linked PR body and an issue comment, a near-miss `met —` separator (#1696), and the bot
-# exemption. It needs no network, so a green run means "this gate passed AND it can still fail" even
+# `--selftest-close` scores the hermetic cases returned by `closeSelftestCases()` — both close paths
+# in both directions plus partial, malformed, duplicate, relay-completion and ruled-unmet controls.
+# It needs no network, so a green run means "this gate passed AND it can still fail" even
 # on a close it had nothing to object to.
 #
 # SINCE #1562 acceptance.yml EVALUATES THE SAME THING this gate does — same venues, same close set —

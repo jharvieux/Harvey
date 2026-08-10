@@ -10,17 +10,19 @@
 // "## Does NOT close #1206"; #743's contained a section headed "Why this stays open").
 //
 // The mechanism: a PR carrying a closing keyword must map EVERY acceptance bullet in the issue it
-// closes to exactly one of three dispositions, in the PR body:
+// closes to exactly one of four dispositions, in the PR body:
 //
 //   ACCEPTANCE #1315.1 met: <evidence — a command, a file path, or a test name>
 //   ACCEPTANCE #1315.2 split: #1400
 //   ACCEPTANCE #1315.3 relayed: <the operator question, which must also be recorded ON the issue>
+//   ACCEPTANCE #1315.4 ruled-unmet: operator @login — <the operator's terminal ruling>
 //   ACCEPTANCE #1315 no-stated-criteria: <what the bar was>   ← only when the issue states none
 //
 // An unmapped bullet fails. A `met` with no evidence shape fails — a bare "done" is an unmapped
 // bullet wearing a disposition. `relayed` is first-class because the audits found "supervised path"
-// TERMINATING issues rather than producing a question, while no executor has ever recorded "asked
-// the operator, was refused" and grants are demonstrably routine.
+// TERMINATING issues rather than producing a question, while no executor had an honest terminal
+// form after the operator refused. `ruled-unmet` is that terminal form: accounted for, explicitly
+// NOT delivered, and structurally attributed to the operator who made the ruling (#1791).
 //
 // Gate 2 (#1316) is the `split` disposition's liveness half, and is what makes `split` trustworthy:
 // deferring to an issue nobody checked was still open is indistinguishable in outcome from not
@@ -51,7 +53,7 @@
 // it is most expensive. The parity is achieved by TIGHTENING the PR check — never by loosening the
 // close check — and both now run the same `checkAcceptance` over the same venues.
 
-type Disposition = "met" | "split" | "relayed";
+type Disposition = "met" | "split" | "relayed" | "ruled-unmet";
 
 interface Criterion {
   /** 1-based, in order of appearance — the index a disposition line names. */
@@ -173,9 +175,11 @@ const CHECKLIST = /^\s*[-*+]\s+\[[ xX]\]\s+(\S.*)$/;
 // #1206") walk straight through it.
 const CLOSING = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+(?<ref>(?:[\w.-]+\/[\w.-]+)?#\d+|https?:\/\/\S+\/issues\/\d+)/gi;
 
-const DISPOSITION_LINE = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+(met|split|relayed)\s*:\s*(\S.*)$/i;
+const DISPOSITION_WORDS = "met|split|relayed|ruled-unmet";
+const DISPOSITION_LINE = new RegExp(`^ACCEPTANCE\\s+#(\\d+)\\.(\\d+)\\s+(${DISPOSITION_WORDS})\\s*:\\s*(\\S.*)$`, "i");
 const NO_CRITERIA_LINE = /^ACCEPTANCE\s+#(\d+)\s+no-stated-criteria\s*:\s*(\S.*)$/i;
 const REMAINDER_LINE = /^remainder\s*:\s*#(\d+)\b/i;
+const RULED_UNMET_DETAIL = /^operator\s+@[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?\s+[—–-]\s+(\S.*)$/i;
 
 const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
 const strip = (line: string): string => line.replace(DECORATION, "");
@@ -188,14 +192,14 @@ const strip = (line: string): string => line.replace(DECORATION, "");
  * to trip over it. Each one says what is wrong with THAT LINE.
  */
 function malformedDisposition(line: string): string {
-  const grammar = "expected `ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>` or `ACCEPTANCE #<issue> no-stated-criteria: <bar>`";
+  const grammar = "expected `ACCEPTANCE #<issue>.<n> <met|split|relayed|ruled-unmet>: <detail>` or `ACCEPTANCE #<issue> no-stated-criteria: <bar>`";
 
   const perCriterionNoCriteria = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+no-stated-criteria\b/i.exec(line);
   if (perCriterionNoCriteria) {
-    return `malformed ACCEPTANCE line — \`no-stated-criteria\` is a WHOLE-ISSUE declaration and takes no criterion number, so \`#${perCriterionNoCriteria[1]}.${perCriterionNoCriteria[2]}\` cannot carry it. Write \`ACCEPTANCE #${perCriterionNoCriteria[1]} no-stated-criteria: <what the bar was>\`, and only when the issue states no criteria at all — an issue that DOES state them needs one \`met|split|relayed\` line per bullet. Got: ${line}`;
+    return `malformed ACCEPTANCE line — \`no-stated-criteria\` is a WHOLE-ISSUE declaration and takes no criterion number, so \`#${perCriterionNoCriteria[1]}.${perCriterionNoCriteria[2]}\` cannot carry it. Write \`ACCEPTANCE #${perCriterionNoCriteria[1]} no-stated-criteria: <what the bar was>\`, and only when the issue states no criteria at all — an issue that DOES state them needs one \`met|split|relayed|ruled-unmet\` line per bullet. Got: ${line}`;
   }
 
-  const verdict = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+(met|split|relayed)\b\s*(.*)$/i.exec(line);
+  const verdict = new RegExp(`^ACCEPTANCE\\s+#(\\d+)\\.(\\d+)\\s+(${DISPOSITION_WORDS})\\b\\s*(.*)$`, "i").exec(line);
   if (verdict) {
     const [, issue, index, word, rest = ""] = verdict;
     const head = `ACCEPTANCE #${issue}.${index} ${word!.toLowerCase()}`;
@@ -214,7 +218,7 @@ function malformedDisposition(line: string): string {
 
   const unknownVerdict = /^ACCEPTANCE\s+#(\d+)\.(\d+)\s+([\w-]+)\b/i.exec(line);
   if (unknownVerdict) {
-    return `malformed ACCEPTANCE line — \`${unknownVerdict[3]}\` is not a disposition; the three are \`met\`, \`split\` and \`relayed\`. ${grammar}. Got: ${line}`;
+    return `malformed ACCEPTANCE line — \`${unknownVerdict[3]}\` is not a disposition; the four are \`met\`, \`split\`, \`relayed\` and \`ruled-unmet\`. ${grammar}. Got: ${line}`;
   }
 
   return `malformed ACCEPTANCE line — ${grammar}, got: ${line}`;
@@ -664,7 +668,7 @@ interface CriterionVerdict {
   text: string;
   disposition?: Disposition;
   detail?: string;
-  /** #1753 — the `relayed` line this criterion's `met`/`split` retired by completing the relay. Reported, so the retirement is visible rather than silent. */
+  /** #1753/#1791 — the `relayed` line a terminal disposition retired. Reported, so the retirement is visible rather than silent. */
   superseded?: { venue: string; line: number; detail: string };
   problems: string[];
 }
@@ -802,17 +806,18 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
   const verdicts = criteria.map((c): CriterionVerdict => {
     const matched = mine.filter((d) => d.index === c.index);
     if (matched.length === 0) {
-      return { ...c, problems: [`UNMAPPED — no disposition. Add \`ACCEPTANCE #${issue}.${c.index} <met|split|relayed>: <detail>\``] };
+      return { ...c, problems: [`UNMAPPED — no disposition. Add \`ACCEPTANCE #${issue}.${c.index} <met|split|relayed|ruled-unmet>: <detail>\``] };
     }
-    // #1753 — completing a relay SUPERSEDES the `relayed` line instead of duplicating it. The
+    // #1753/#1791 — completing or terminally ruling a relay SUPERSEDES the `relayed` line instead
+    // of duplicating it. The
     // designed relay flow (executor records `relayed`, the operator rules, the completing party
-    // records `met`/`split`) leaves TWO live lines for one criterion, and the duplicate rule used
+    // records `met`/`split`/`ruled-unmet`) leaves TWO live lines for one criterion, and the duplicate rule used
     // to fail exactly that state until the older line was neutralised by hand — three round trips
-    // on PR #1700, and a recurrence every time the flow works as designed. So one lone `met`/`split`
+    // on PR #1700, and a recurrence every time the flow works as designed. So one lone terminal disposition
     // over one lone `relayed` resolves to the completing line, with the retired `relayed` named in
     // the report. Direction is fixed by TYPE, not by time: the venues carry no comparable
     // timestamps (a PR body is edited at any point after a comment), so a `relayed` never wins over
-    // a `met`/`split` whichever was written first — the completed state stands, and a reader who
+    // a terminal disposition whichever was written first — the resolved state stands, and a reader who
     // believes the relay should govern neutralises the completing line instead, which the ℹ row
     // makes findable. Everything else — same-verdict copies, met+split, three or more lines — is
     // still a duplicate, and two `relayed` copies stay one because a repeat paste is not a
@@ -821,7 +826,7 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     const superseding = matched.length === 2 && relays.length === 1 ? matched.find((m) => m.disposition !== "relayed") : undefined;
     if (matched.length > 1 && superseding === undefined) {
       const where = matched.map((m) => `${m.venue}, line ${m.line}`).join("; ");
-      return { ...c, problems: [`#${issue}.${c.index} is mapped ${matched.length} times — ${where} — and a criterion takes exactly one disposition. Every venue is read CUMULATIVELY (this body, every linked PR body, and every comment on #${issue}), so keep ONE copy and neutralise the other before merging. (The one exception: a single \`met\`/\`split\` recorded over a single \`relayed\` is a COMPLETED RELAY and supersedes it automatically, #1753 — this set is not that pair)`] };
+      return { ...c, problems: [`#${issue}.${c.index} is mapped ${matched.length} times — ${where} — and a criterion takes exactly one disposition. Every venue is read CUMULATIVELY (this body, every linked PR body, and every comment on #${issue}), so keep ONE copy and neutralise the other before merging. (The one exception: a COMPLETED RELAY or terminally ruled relay — one \`met\`/\`split\`/\`ruled-unmet\` recorded over one \`relayed\` — supersedes that relay automatically, #1753/#1791. This set is not that pair)`] };
     }
     const d = superseding ?? matched[0]!;
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
@@ -849,6 +854,14 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
       // asked. Mechanically this proves a question was recorded, not that it is the RIGHT one.
       const asked = record.comments.some((c) => c.body.includes("?"));
       if (!asked) verdict.problems.push(`\`relayed\` but #${issue} carries no comment containing a question — record the question ON THE ISSUE, where the operator reads it, not in this PR body`);
+    }
+    if (d.disposition === "ruled-unmet") {
+      const attributed = RULED_UNMET_DETAIL.exec(d.detail);
+      if (!attributed) {
+        verdict.problems.push("`ruled-unmet` needs a machine-checkable operator attribution and ruling — write `ruled-unmet: operator @<login> — <the terminal ruling>`; naming an operator in free prose is not attribution the gate can verify structurally");
+      } else if (attributed[1]!.trim().length < 12) {
+        verdict.problems.push(`\`ruled-unmet\` carries a ruling of ${attributed[1]!.trim().length} characters — state what the operator declined or retired, not only who ruled`);
+      }
     }
     return verdict;
   });
@@ -996,7 +1009,11 @@ export function formatAcceptance(report: AcceptanceReport): string {
       const label = c.disposition ? `${c.disposition}` : "—";
       out.push(`    ${c.problems.length === 0 ? "✓" : "✗"} ${issue.issue}.${c.index} [${label}] ${c.text.slice(0, 110)}`);
       if (c.superseded) {
-        out.push(`        ℹ RELAY COMPLETED (#1753): this \`${c.disposition}\` supersedes the \`relayed\` line at ${c.superseded.venue}, line ${c.superseded.line} ("${c.superseded.detail.slice(0, 70)}") — the older line is retired, not a duplicate, and this is the disposition of record`);
+        out.push(c.disposition === "ruled-unmet"
+          ? `        ℹ RELAY TERMINATED AS RULED-UNMET (#1791): this operator ruling supersedes the \`relayed\` line at ${c.superseded.venue}, line ${c.superseded.line} ("${c.superseded.detail.slice(0, 70)}") — the older line is retired, this criterion remains NOT DELIVERED, and \`ruled-unmet\` is the disposition of record`
+          : `        ℹ RELAY COMPLETED (#1753): this \`${c.disposition}\` supersedes the \`relayed\` line at ${c.superseded.venue}, line ${c.superseded.line} ("${c.superseded.detail.slice(0, 70)}") — the older line is retired, not a duplicate, and this is the disposition of record`);
+      } else if (c.disposition === "ruled-unmet") {
+        out.push("        ℹ OPERATOR-RULED UNMET (#1791): dispositioned for conservation, explicitly NOT DELIVERED and never counted as `met`");
       }
       for (const p of c.problems) out.push(`        ✗ ${p}`);
     }
@@ -1122,7 +1139,8 @@ export function closeFailureComment(r: ClosedIssueReport): string {
     "",
     "Two ways to clear it, both one edit:",
     "",
-    `- Comment on this issue with one \`ACCEPTANCE #${r.issue}.<n> <met|split|relayed>: <detail>\` line per criterion, then close it again.`,
+    `- Comment on this issue with one \`ACCEPTANCE #${r.issue}.<n> <met|split|relayed|ruled-unmet>: <detail>\` line per criterion, then close it again.`,
+    "  For an operator-declined criterion, the exact terminal form is `ACCEPTANCE #<issue>.<n> ruled-unmet: operator @<login> — <the ruling>`; it is accounted for but remains explicitly not delivered.",
     "- Or close it through a PR whose body carries those lines, which Gate 1 already checks.",
     "",
     "Neither is a formality: an issue closed with an unmet criterion is the defect epic #1320 exists to close, and ~60 of 562 closed issues were found in exactly that state on 2026-07-27.",
@@ -1313,6 +1331,20 @@ const SELFTEST_RELAY_REPEATED_BODY = [
   "ACCEPTANCE #9007.2 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
 ].join("\n");
 
+const SELFTEST_RELAY_RULED_UNMET_BODY = [
+  "Closes #9007",
+  "",
+  "ACCEPTANCE #9007.1 ruled-unmet: operator @jharvieux — the supervised edit was declined and the criterion is retired",
+  "ACCEPTANCE #9007.2 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+].join("\n");
+
+const SELFTEST_RULED_UNMET_UNATTRIBUTED_BODY = [
+  "Closes #9007",
+  "",
+  "ACCEPTANCE #9007.1 ruled-unmet: the supervised edit was declined and the criterion is retired",
+  "ACCEPTANCE #9007.2 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+].join("\n");
+
 interface SelftestCase {
   name: string;
   body: string;
@@ -1408,6 +1440,24 @@ export function closeSelftestCases(): CloseSelftestCase[] {
       ]),
       expect: "pass",
     },
+    {
+      name: "a relay terminated by an attributed `ruled-unmet` comment — dispositioned but not delivered (#1791)",
+      input: { ...base },
+      lookup: commented([
+        ...dispositions,
+        "ACCEPTANCE #9001.3 ruled-unmet: operator @jharvieux — the requested edit was declined and the criterion is retired",
+      ]),
+      expect: "pass",
+    },
+    {
+      name: "an unattributed `ruled-unmet` comment — an author cannot retire their own criterion (#1791)",
+      input: { ...base },
+      lookup: commented([
+        ...dispositions,
+        "ACCEPTANCE #9001.3 ruled-unmet: the requested edit was declined and the criterion is retired",
+      ]),
+      expect: "fail",
+    },
     { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, lookup: SELFTEST_LOOKUP, expect: "pass" },
   ];
 }
@@ -1428,5 +1478,7 @@ export function selftestCases(): SelftestCase[] {
     { name: "a `met` citing a `pnpm` script that is not in package.json", body: SELFTEST_INVENTED_SCRIPT_BODY, expect: "fail" },
     { name: "a `met` over an earlier `relayed` — completing a relay supersedes it (#1753)", body: SELFTEST_RELAY_COMPLETED_BODY, expect: "pass" },
     { name: "a `relayed` repeated instead of completed — still a duplicate (#1753)", body: SELFTEST_RELAY_REPEATED_BODY, expect: "fail" },
+    { name: "an attributed `ruled-unmet` over an earlier `relayed` — terminal but not delivered (#1791)", body: SELFTEST_RELAY_RULED_UNMET_BODY, expect: "pass" },
+    { name: "an unattributed `ruled-unmet` over an earlier `relayed` — structurally invalid (#1791)", body: SELFTEST_RULED_UNMET_UNATTRIBUTED_BODY, expect: "fail" },
   ];
 }

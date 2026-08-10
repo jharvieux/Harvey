@@ -289,6 +289,64 @@ describe("Gate 1 — completing a relay supersedes the `relayed` line (#1753)", 
   });
 });
 
+describe("Gate 1 — an operator can terminally disposition an unmet criterion (#1791)", () => {
+  const relayedInComment = issue({
+    number: 40,
+    comments: [
+      "Operator: may I apply the supervised edit? Proposed wording below.",
+      "ACCEPTANCE #40.1 relayed: supervised path — the question is in the comment above",
+    ],
+  });
+  const terminal = "Closes #40\n\nACCEPTANCE #40.1 ruled-unmet: operator @jharvieux — the supervised edit was declined and the criterion is retired\nACCEPTANCE #40.2 met: src/bar.ts:4 covers it\n";
+
+  it("counts an attributed `ruled-unmet` as dispositioned and keeps the criterion explicitly NOT delivered", () => {
+    const r = checkAcceptance(terminal, lookupOf(issue({ number: 40 })));
+    expect(r.ok).toBe(true);
+    expect(r.issues[0]!.criteria[0]!.disposition).toBe("ruled-unmet");
+    expect(r.issues[0]!.criteria.filter((c) => c.disposition === "met")).toHaveLength(1);
+    const out = formatAcceptance(r);
+    expect(out).toContain("40.1 [ruled-unmet]");
+    expect(out).toContain("explicitly NOT DELIVERED");
+  });
+
+  it("supersedes one earlier `relayed` and reports terminal retirement rather than completion", () => {
+    const r = checkAcceptance(terminal, lookupOf(relayedInComment));
+    expect(r.ok).toBe(true);
+    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({
+      venue: "#40 comment 2",
+      line: 1,
+      detail: expect.stringContaining("supervised path"),
+    });
+    const out = formatAcceptance(r);
+    expect(out).toContain("RELAY TERMINATED AS RULED-UNMET (#1791)");
+    expect(out).toContain("criterion remains NOT DELIVERED");
+    expect(out).not.toContain("RELAY COMPLETED (#1753): this `ruled-unmet`");
+  });
+
+  it("NEGATIVE CONTROL: refuses a ruling with no machine-checkable operator attribution", () => {
+    const body = terminal.replace("operator @jharvieux — ", "");
+    expect(problems(body, lookupOf(relayedInComment))).toEqual([expect.stringContaining("operator @<login>")]);
+  });
+
+  it("NEGATIVE CONTROL: refuses an attributed ruling that says nothing substantive", () => {
+    const body = terminal.replace("the supervised edit was declined and the criterion is retired", "no");
+    expect(problems(body, lookupOf(relayedInComment))).toEqual([expect.stringContaining("ruling of 2 characters")]);
+  });
+
+  it("NEGATIVE CONTROL: does not let `ruled-unmet` silently win over a `met` without a relay", () => {
+    const metInComment = issue({ number: 40, comments: ["ACCEPTANCE #40.1 met: src/foo.ts:9 already delivered it"] });
+    expect(problems(terminal, lookupOf(metInComment))).toEqual([expect.stringContaining("mapped 2 times")]);
+  });
+
+  it("NEGATIVE CONTROL: three lines remain a duplicate even when one is the earlier relay", () => {
+    const three = issue({
+      number: 40,
+      comments: [...relayedInComment.comments, "ACCEPTANCE #40.1 met: src/foo.ts:9 also delivered it"],
+    });
+    expect(problems(terminal, lookupOf(three))).toEqual([expect.stringContaining("mapped 3 times")]);
+  });
+});
+
 describe("evidence, not assertion", () => {
   it("accepts a command, a file path, a quoted test name and a sha", () => {
     for (const detail of [
@@ -610,9 +668,9 @@ describe("the hermetic self-test CI runs", () => {
 
   it("covers the healthy cases and at least three distinct seeded violations", () => {
     const cases = selftestCases();
-    // Two passing cases: the healthy body, and #1753's completed relay — a state that must pass
-    // BECAUSE the gate once failed it, so it is pinned here as deliberate rather than drifted-in.
-    expect(cases.filter((c) => c.expect === "pass")).toHaveLength(2);
+    // Three passing cases: the healthy body, #1753's completed relay, and #1791's terminally ruled
+    // relay — states pinned as deliberate because the gate once had no honest way to pass them.
+    expect(cases.filter((c) => c.expect === "pass")).toHaveLength(3);
     expect(cases.filter((c) => c.expect === "fail").length).toBeGreaterThanOrEqual(3);
   });
 });
@@ -786,7 +844,7 @@ describe("a near-miss disposition line is reported as MALFORMED, naming the defe
   it("names an unrecognised verdict word rather than reciting the grammar at it", () => {
     const [first] = withLine("ACCEPTANCE #10.1 done: src/foo.ts:1 now throws");
     expect(first).toContain("`done` is not a disposition");
-    expect(first).toContain("`met`, `split` and `relayed`");
+    expect(first).toContain("`met`, `split`, `relayed` and `ruled-unmet`");
   });
 
   it("names an empty detail after the colon", () => {

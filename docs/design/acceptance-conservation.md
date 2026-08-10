@@ -22,6 +22,7 @@ acceptance bullet of each issue it would close to be mapped to exactly one dispo
 | `met` | evidence — a command, a `file.ts:line`, a quoted test name, or a commit sha |
 | `split` | a remainder issue that **exists, is OPEN, and is cross-linked from the original** |
 | `relayed` | a question recorded **as a comment on the issue**, not in the PR body |
+| `ruled-unmet` | `operator @<login> — <the terminal ruling>`; accounted for, explicitly **not delivered** |
 
 An unmapped bullet fails. A `met` reading "done" fails — it is an unmapped bullet wearing a label.
 An issue that states **no** criteria does not pass silently: it needs an explicit
@@ -33,15 +34,38 @@ producing a question, while **no executor has ever recorded "asked the operator,
 grants are demonstrably routine (#1141 carries a verbatim *"Workflow changed approved"*). A blocker
 the operator could clear must become a question, not a silent close.
 
+### A terminal operator ruling is not delivery (#1791)
+
+`relayed` used to have no honest terminal form when the operator declined the requested work. `met`
+was false, `split` invented a remainder after the decision was final, and leaving the relay open
+made the relay census report decided work forever. The exact terminal grammar is:
+
+```
+ACCEPTANCE #<issue>.<n> ruled-unmet: operator @<login> — <the ruling>
+```
+
+The attribution is deliberately structural: `operator @<login>` must lead the detail, followed by
+an em dash, en dash or hyphen and a substantive ruling. A free-prose claim that “the operator
+declined” is not machine-checkable attribution and fails. This proves that a ruler was named; it
+does not authenticate that the named account wrote or approved the line, which remains a review
+responsibility.
+
+`ruled-unmet` counts as dispositioned so conservation can close, but its disposition remains
+`ruled-unmet` in the report and API—it is never rewritten or tallied as `met`. The rendered row says
+`NOT DELIVERED`. One `ruled-unmet` over one earlier `relayed` retires the relay under the same
+single-terminal-line rule as `met`/`split`; duplicates and three-line combinations still fail.
+
 ### Completing a relay supersedes the `relayed` line (#1753)
 
 The relay flow *ends* with two live lines for one criterion: the executor's `relayed`, then the
-completing party's `met`/`split` once the operator has ruled and the edit has landed. Until
+completing party's `met`/`split` once the operator has ruled and the edit has landed—or the terminal
+`ruled-unmet` when the operator declines it. Until
 2026-07-31 that state was a DUPLICATE — clearing it took three attempts on PR #1700, with the
 superseded line hand-neutralised in place — and it recurs every time the flow works as designed. So
-a **single `met` or `split` recorded over a single `relayed` for the same criterion resolves to the
-completing line**, and the report names the retired one (`ℹ RELAY COMPLETED (#1753): … supersedes
-the \`relayed\` line at <venue>, line <n>`), so the retirement is visible rather than silent. The
+a **single `met`, `split` or `ruled-unmet` recorded over a single `relayed` for the same criterion
+resolves to the terminal line**, and the report names the retired one (`ℹ RELAY COMPLETED (#1753)`
+for delivered/split work or `ℹ RELAY TERMINATED AS RULED-UNMET (#1791)` for a declined criterion),
+including the `relayed` line's venue and line number, so the retirement is visible rather than silent. The
 duplicate diagnostic names the exception too, since the person hitting it is mid-fix and reasoning
 about their own line rather than the older one.
 
@@ -49,7 +73,7 @@ Direction is fixed by **type, not time**: the venues carry no comparable timesta
 edited at any point after a comment), so a `relayed` never wins over a completion whichever was
 written first — a reader who believes the relay should still govern neutralises the completing line
 instead, which the ℹ row makes findable. Everything else stays a duplicate: same-verdict copies,
-`met`+`split`, three or more lines, and two `relayed` copies (a repeat paste is not a completion).
+`met`+`split`, `met`+`ruled-unmet`, three or more lines, and two `relayed` copies (a repeat paste is not a completion).
 The superseding `met` is still held to the evidence bar, and a superseded `relayed` no longer
 requires a question on the issue — the relay is over.
 
@@ -408,7 +432,7 @@ Two paths, both measured live on 2026-07-28 rather than reasoned about:
 
 ### Where the disposition lives on a non-PR close
 
-**An issue comment, in the same `ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>` format.** It
+**An issue comment, in the same `ACCEPTANCE #<issue>.<n> <met|split|relayed|ruled-unmet>: <detail>` format.** It
 is the only venue that exists on *every* close path — there is no PR at all on a bare click — it is
 where the operator already reads, and it survives the close, which a PR body archived at merge does
 not.
@@ -514,11 +538,11 @@ measured above were exactly that. They state no criteria and are not work items.
 gh workflow run "acceptance on close" -f issue=1155
 ```
 
-Step 1 is the negative control (`--selftest-close`, nine hermetic cases — each close path in both
-directions, a partial record, a hollowed-out `met`, a double-venue record, a near-miss `met —`
-separator, and the bot exemption; this sentence read "seven" while the set held eight, so count them
-in `closeSelftestCases()` rather than here), so a green run means the gate passed **and can still
-fail** even on a close it had nothing to object to. Step 2 runs the check with `--act`.
+Step 1 is the negative control (`--selftest-close`, with the case set defined by
+`closeSelftestCases()` rather than duplicated as a stale number here): each close path runs in both
+directions, alongside partial, malformed, duplicate, relay-completion and ruled-unmet controls. A
+green run therefore means the gate passed **and can still fail** even on a close it had nothing to
+object to. Step 2 runs the check with `--act`.
 
 **The bound, stated because it is the #1287 shape:** a workflow on the `issues` event runs from the
 **default branch only**, so this trigger cannot fire until it is merged and has therefore **never

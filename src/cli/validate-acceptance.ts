@@ -6,8 +6,9 @@
 //   pnpm exec tsx src/cli/validate-acceptance.ts --selftest | --selftest-close
 //
 // Reads the PR body, finds every closing keyword, and asserts that each acceptance bullet of each
-// issue it would close is mapped to `met` (with evidence), `split` (to a live remainder) or
-// `relayed` (to a question recorded ON the issue). See src/acceptance-conservation.ts for why.
+// issue it would close is mapped to `met` (with evidence), `split` (to a live remainder),
+// `relayed` (to a question recorded ON the issue), or `ruled-unmet` (an attributed terminal
+// operator ruling that remains explicitly not delivered). See src/acceptance-conservation.ts.
 //
 // --pr and --closed-issue evaluate THE SAME THING (#1562/#1581): the same venues — the body, every
 // linked PR body (however many, minus the PR under test) and every comment on the issue, read
@@ -33,8 +34,8 @@
 // and holds that union to the same rules. `--act` runs the failure action — comment, label, re-open
 // once — and is what the acceptance-close workflow calls.
 //
-// --selftest runs the gate over the hermetic scenario in acceptance-conservation.ts: one healthy
-// body that must PASS and eight seeded violations that must each FAIL, against a STUB checkout so
+// --selftest runs the gate over the hermetic scenario in acceptance-conservation.ts: healthy and
+// violating bodies that must score in their declared directions, against a STUB checkout so
 // the evidence-truth rules are exercised without depending on the working tree. It needs no network and no
 // live issue state, so CI can prove the gate can still fail on a PR that closes nothing.
 // --selftest-close does the same for the close path, one case per close path in both directions.
