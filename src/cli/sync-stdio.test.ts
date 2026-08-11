@@ -16,6 +16,7 @@ import { afterAll, describe, expect, it } from "vitest";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SYNC_STDIO = pathToFileURL(join(REPO_ROOT, "src", "cli", "sync-stdio.ts")).href;
 const MARKER = "THE-VERDICT-LINE";
+const SYNC_STDIO_IMPORT = 'import "./sync-stdio.js";';
 // Comfortably past a 64 KiB pipe buffer, so the queue is guaranteed non-empty at exit. The volume
 // is what makes the negative control deterministic rather than a coin flip.
 const FILLER_LINES = 20000;
@@ -58,6 +59,14 @@ function fixture(withGuard: boolean): string {
 // tell a TRUNCATED capture from an ABSENT one.
 const READ_CHUNK_BYTES = 4096;
 const READ_TICK_MS = 5;
+
+function findUnguardedExitingClis(
+  files: readonly string[],
+  libraries: ReadonlySet<string>,
+  readSource: (file: string) => string,
+): string[] {
+  return files.filter((file) => !libraries.has(file) && !readSource(file).includes(SYNC_STDIO_IMPORT));
+}
 
 /** stdio exactly as validate-calibration.test.ts and every CI step spawn a gate. */
 function runPiped(file: string): Promise<{ code: number | null; out: string }> {
@@ -160,7 +169,7 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
     // the shape #1388/#1509 exist to prevent. The population is the measurement.
     expect(files.length, "no exiting CLI found at all — the discovery grep is broken, not the tree").toBeGreaterThan(20);
 
-    const unguarded = files.filter((f) => !LIBRARIES.has(f) && !readFileSync(join(REPO_ROOT, f), "utf8").includes('import "./sync-stdio.js";'));
+    const unguarded = findUnguardedExitingClis(files, LIBRARIES, (file) => readFileSync(join(REPO_ROOT, file), "utf8"));
     expect(
       unguarded,
       `these CLIs call process.exit() with a non-zero code but do not import ./sync-stdio.js, so whatever they print last can be discarded when stdout is a pipe (#1758). Add the import as the FIRST import, or add the file to LIBRARIES if it is not a program.`,
@@ -168,8 +177,20 @@ describe("every CLI that exits non-zero imports the guard (#1758)", () => {
   });
 
   it("NEGATIVE CONTROL: the sweep would notice an unguarded file", () => {
-    // Proves the assertion above is capable of failing — the filter, not just the list it produced.
-    const pretendUnguarded = ["src/cli/made-up-gate.ts"].filter((f) => !LIBRARIES.has(f) && !"a file with no guard import".includes('import "./sync-stdio.js";'));
-    expect(pretendUnguarded).toEqual(["src/cli/made-up-gate.ts"]);
+    // Exercise the SAME filter as the tree assertion with independent sources. Exact membership
+    // proves both directions: the bare program must be included, while a guarded program and the
+    // named library must be excluded. Returning [] or every input therefore reddens this test.
+    const bare = "src/cli/made-up-bare-gate.ts";
+    const guarded = "src/cli/made-up-guarded-gate.ts";
+    const library = "src/cli/args.ts";
+    const sources = new Map([
+      [bare, "process.exit(1);"],
+      [guarded, `${SYNC_STDIO_IMPORT}\nprocess.exit(1);`],
+      [library, "process.exit(1);"],
+    ]);
+
+    const pretendUnguarded = findUnguardedExitingClis([bare, guarded, library], LIBRARIES, (file) => sources.get(file) ?? "");
+
+    expect(pretendUnguarded).toEqual([bare]);
   });
 });
