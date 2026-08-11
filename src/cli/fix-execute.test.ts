@@ -187,7 +187,7 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
       }));
       const cfg = engagement(c, findings);
       const { code, artifact, out } = await run(cfg, c.dir);
-      expect(code).toBe(0);
+      expect(code, out).toBe(0);
       const concurrency = artifact.concurrency as unknown as { peakClientCommands: number; peakSemgrepCommands: number };
       expect(concurrency.peakSemgrepCommands).toBeGreaterThan(1);
       expect(concurrency.peakClientCommands).toBeGreaterThan(1);
