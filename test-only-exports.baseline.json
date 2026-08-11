@@ -5,14 +5,8 @@
     "src/vitest-event-loop-probe.ts"
   ],
   "exports": [
-    "src/audit-completeness.ts:completenessStatement",
-    "src/dynamic-validate.ts:runDynamicValidation",
-    "src/epic-builder/state-machine.ts:canTransition",
-    "src/fix/detector-rerun.ts:resolvesToDetector",
-    "src/fix/escalation.ts:plansDisagree",
     "src/migration-sql-parse.ts:parseCheckInConstraints",
-    "src/migration-sql-parse.ts:parseColumns",
-    "src/quality-scan.ts:matchesJscpdIgnoreGlob"
+    "src/migration-sql-parse.ts:parseColumns"
   ],
   "types": []
 }

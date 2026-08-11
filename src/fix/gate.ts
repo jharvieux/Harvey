@@ -57,7 +57,7 @@ interface GateOptions {
   prior?: GateReport; // previous gate run; enables regressed detection
   // Injection points for tests. rerun defaults to the real detector re-run (src/fix/detector-rerun);
   // sources defaults to one loadSources walk shared across all findings.
-  rerun?: (finding: Finding, targetDir: string, sources?: SourceInput[]) => DetectorRun;
+  rerun?: (finding: Finding, targetDir: string, sources?: SourceInput[]) => DetectorRun | Promise<DetectorRun>;
   sources?: SourceInput[];
 }
 
@@ -69,7 +69,7 @@ function targetCommit(targetDir: string): string {
   }
 }
 
-export function runGate(findings: Finding[], targetDir: string, opts: GateOptions = {}): GateReport {
+export async function runGate(findings: Finding[], targetDir: string, opts: GateOptions = {}): Promise<GateReport> {
   const engagement = opts.engagement ?? "harvey";
   const rerun = opts.rerun ?? rerunDetector;
   const sources = opts.sources ?? loadSources(targetDir);
@@ -82,7 +82,7 @@ export function runGate(findings: Finding[], targetDir: string, opts: GateOption
   for (const f of findings) {
     const identity = findingIdentity(f);
     const previousStatus = priorByIdentity.get(identity);
-    const run = rerun(f, targetDir, sources);
+    const run = await rerun(f, targetDir, sources);
 
     let status: GateStatus;
     if (run.notRun !== undefined) status = "unverifiable";

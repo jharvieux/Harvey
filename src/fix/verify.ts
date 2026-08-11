@@ -112,14 +112,12 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
   liveClientCommands++;
   peakClientCommands = Math.max(peakClientCommands, liveClientCommands);
   return new Promise<CommandRun>((resolve) => {
-    // `detached` puts the shell at the head of its own process group so the timeout below can kill
-    // the GROUP. Killing the /bin/sh wrapper alone does not bound anything: the shell only
-    // exec-optimises itself away for a single simple command, so for a compound line the grandchild
-    // outlives the wrapper, holds the inherited pipes open, and `close` waits for it. MEASURED on
-    // this branch before the fix — a 300ms bound over `node -e "setTimeout(()=>{},5000)" ; true`
-    // returned after 5047ms. That is the live shape, not a contrived one: extractCiRunSteps emits a
-    // multi-line `run: |` block as ONE command and client scripts routinely chain with `&&`.
-    const child = spawn(command, { cwd, shell: true, detached: true });
+    // Keep the suite in the caller's foreground process group so Ctrl-C reaches it naturally.
+    // The timeout does not wait for `close`: a self-detaching descendant can leave the wrapper's
+    // group while retaining its stdout/stderr fds, and `close` then waits until that descendant
+    // exits. The timer below stops waiting, closes Harvey's pipe readers, and settles the evidence
+    // row itself, settling the evidence at the timer boundary (#1797).
+    const child = spawn(command, { cwd, shell: true });
     let captured = "";
     let timedOut = false;
     let settled = false;
@@ -138,13 +136,14 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
     const timer = setTimeout(() => {
       timedOut = true;
       try {
-        // Negative pid = the whole group. Guarded: a spawn that never got a pid, and a group that
-        // has already exited (ESRCH), both fall back to killing the wrapper directly.
-        if (child.pid === undefined) child.kill("SIGKILL");
-        else process.kill(-child.pid, "SIGKILL");
-      } catch {
         child.kill("SIGKILL");
+      } catch {
+        // The timeout result stays truthful: Harvey stops waiting even when the OS refuses the kill.
       }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      finish(1);
     }, timeoutMs);
     const finish = (exitCode: number) => {
       if (settled) return;
@@ -152,7 +151,7 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
       liveClientCommands--;
       clearTimeout(timer);
       const combined = timedOut
-        ? `${captured}\n[harvey] killed after ${timeoutMs}ms — command exceeded the client-check timeout`
+        ? `${captured}\n[harvey] stopped waiting after ${timeoutMs}ms — command exceeded the client-check timeout`
         : captured;
       resolve({ command, cwd, exitCode, durationMs: Date.now() - start, outputTail: scrubSecrets(tail(combined, 50)) });
     };

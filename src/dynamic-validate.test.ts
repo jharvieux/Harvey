@@ -579,11 +579,10 @@ describe("the connected drift pass reaches M2's scope statement (#1280)", () => 
     rmSync(clean, { recursive: true, force: true });
   });
 
-  // `runDynamicValidation` above has no production caller (test-only-exports.baseline.json) —
-  // `src/cli/dynamic-validate.ts` drives the fleet via `runMultiProjectDynamicValidation` only. The
-  // wiring that actually ships this capability is ITS `probeOneProject` call, so it needs its own
-  // case: deleting `driftPass` there left the suite fully green with the case above alone (verified
-  // against feature/sweep-drift-1070 before this test existed).
+  // `runDynamicValidation` now has a production caller: `runMultiProjectDynamicValidation` uses it
+  // for the single-project path. The multi-project path still calls `probeOneProject` directly, so
+  // that separate wiring needs its own case: deleting `driftPass` there left the suite fully green
+  // with the cases above alone (verified against feature/sweep-drift-1070 before this test existed).
   it("also reaches the scope statement through runMultiProjectDynamicValidation, the path the CLI actually calls", () => {
     const multiDir = mkdtempSync(join(tmpdir(), "harvey-dynval-drift-multi-artifacts-"));
     const repo = mkdtempSync(join(tmpdir(), "harvey-dynval-drift-multi-repo-"));

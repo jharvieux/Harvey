@@ -21,6 +21,7 @@ export const HEAVY_CLI_TESTS = [
   "src/cli/quality-scan.test.ts",
   "src/cli/lighthouse-scan.test.ts",
   "src/cli/validate-calibration.test.ts",
+  "src/cli/fix-execute.test.ts",
 ];
 
 // Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
@@ -36,7 +37,8 @@ export const HEAVY_CLI_TESTS = [
 // shard to itself, so its variance stops pushing a second file's cost onto the critical path —
 // which is exactly what made that first sharded run land at 141s against a 104s prediction.
 const WEIGHT_HINT_SECONDS: Record<string, number> = {
-  "src/cli/run-audit.test.ts": 87.0,
+  // 100s is a scheduling reservation above the 87s high observation so the long pole stays alone.
+  "src/cli/run-audit.test.ts": 100.0,
   "src/fix/calibration-acceptance.test.ts": 37.7,
   "src/cli/quick-scan.test.ts": 28.4,
   "src/fix/detector-rerun.test.ts": 25.9,
@@ -44,6 +46,7 @@ const WEIGHT_HINT_SECONDS: Record<string, number> = {
   "src/cli/quality-scan.test.ts": 18.9,
   "src/cli/lighthouse-scan.test.ts": 15.0,
   "src/cli/validate-calibration.test.ts": 40.0,
+  "src/cli/fix-execute.test.ts": 23.3,
 };
 
 /**

@@ -42,12 +42,12 @@ function finding(o: Partial<Finding> = {}): Finding {
 const firedRun = (output = "still firing"): DetectorRun => ({ detectorId: "d", fired: true, output });
 const cleanRun = (output = "clean"): DetectorRun => ({ detectorId: "d", fired: false, output });
 
-describe("runGate — a fix is not closed until the re-audit stops detecting it", () => {
+describe("runGate — a fix is not closed until the re-audit stops detecting it", async () => {
   const planted = readFileSync(join(REPO_ROOT, "targets/calibration", PLANTED), "utf8");
 
-  it("reports persistent (NOT resolved) while the detector still fires, and plans no ticket close", () => {
+  it("reports persistent (NOT resolved) while the detector still fires, and plans no ticket close", async () => {
     const dir = scratch(PLANTED, planted); // "fix" claimed but nothing changed
-    const report = runGate([finding()], dir);
+    const report = await runGate([finding()], dir);
     expect(report.results[0]?.status).toBe("persistent");
     expect(report.counts).toEqual({ resolved: 0, persistent: 1, regressed: 0, unverifiable: 0 });
     const plan = planWriteback(report);
@@ -55,21 +55,21 @@ describe("runGate — a fix is not closed until the re-audit stops detecting it"
     expect(plan[0]?.reason).toContain("still detected");
   });
 
-  it("reports resolved only once the detector no longer fires, and plans the close", () => {
+  it("reports resolved only once the detector no longer fires, and plans the close", async () => {
     const fixed = planted.replace("export async function GET(request: Request) {", "export async function GET() {");
     expect(fixed).not.toEqual(planted);
     const dir = scratch(PLANTED, fixed);
-    const report = runGate([finding()], dir);
+    const report = await runGate([finding()], dir);
     expect(report.results[0]?.status).toBe("resolved");
     expect(planWriteback(report)[0]?.intent).toBe("closed");
   });
 
-  it("reports unverifiable — never resolved — for a taxonomy with no resolver of any kind, and never closes its ticket", () => {
+  it("reports unverifiable — never resolved — for a taxonomy with no resolver of any kind, and never closes its ticket", async () => {
     // Not an AST-engine prefix, not a harvey-* rule id, and not shaped like a registry-pack check_id
     // (src/fix/detector-rerun.ts's REGISTRY_RULE_SHAPE) — no resolver exists for this taxonomy at all.
     const dir = scratch(PLANTED, planted);
     const f = finding({ taxonomy: "Coverage — some external tool finding", location: "pages/api/redirect.js:9" });
-    const report = runGate([f], dir);
+    const report = await runGate([f], dir);
     expect(report.results[0]?.status).toBe("unverifiable");
     expect(report.results[0]?.detail).toContain("no detector re-run resolver");
     const plan = planWriteback(report);
@@ -81,42 +81,42 @@ describe("runGate — a fix is not closed until the re-audit stops detecting it"
   // semgrep replay, src/scan/semgrep.ts's runRegistryPacksOnFile) — but that resolver still checks
   // the finding's own file exists BEFORE ever shelling out, exactly like the harvey-* path above, so
   // this stays unverifiable-not-resolved with no live call and no network dependency in this test.
-  it("a registry-pack finding whose file is gone from the checkout is unverifiable, NOT resolved, with no live semgrep call", () => {
+  it("a registry-pack finding whose file is gone from the checkout is unverifiable, NOT resolved, with no live semgrep call", async () => {
     const dir = scratch(PLANTED, planted);
     const f = finding({ taxonomy: "javascript.browser.security.open-redirect.js-open-redirect", location: "pages/api/redirect.js:9" });
-    const report = runGate([f], dir);
+    const report = await runGate([f], dir);
     expect(report.results[0]?.status).toBe("unverifiable");
     expect(report.results[0]?.detail).toContain("does not exist");
     expect(planWriteback(report)[0]?.intent).toBe("none");
   });
 
-  it("a harvey-* finding whose file is gone from the checkout is unverifiable, NOT resolved (#1012)", () => {
+  it("a harvey-* finding whose file is gone from the checkout is unverifiable, NOT resolved (#1012)", async () => {
     // The failure mode the semgrep resolver must not have: a deleted/moved file makes the rule match
     // nothing. That is an unscanned file, not a fixed bug — the ticket stays open with the reason.
     const dir = scratch(PLANTED, planted);
     const f = finding({ taxonomy: "harvey-open-redirect", location: "pages/api/redirect.js:18" });
-    const report = runGate([f], dir);
+    const report = await runGate([f], dir);
     expect(report.results[0]?.status).toBe("unverifiable");
     expect(report.results[0]?.detail).toContain("does not exist");
     expect(planWriteback(report)[0]?.intent).toBe("none");
   });
 
-  it("stamps each result with the ticket marker findings-to-tickets filed under, per engagement namespace", () => {
+  it("stamps each result with the ticket marker findings-to-tickets filed under, per engagement namespace", async () => {
     const dir = scratch(PLANTED, planted);
-    const report = runGate([finding()], dir, { engagement: "acme-q3" });
+    const report = await runGate([finding()], dir, { engagement: "acme-q3" });
     expect(report.results[0]?.marker).toBe(findingMarker(finding(), "acme-q3"));
     expect(report.engagement).toBe("acme-q3");
   });
 });
 
-describe("runGate — prior-run deltas (the accumulated re-audit)", () => {
-  it("classifies a previously-resolved finding that fires again as regressed, planned as a reopen", () => {
+describe("runGate — prior-run deltas (the accumulated re-audit)", async () => {
+  it("classifies a previously-resolved finding that fires again as regressed, planned as a reopen", async () => {
     const f = finding();
     const dir = scratch("noop.ts", "export {};\n");
-    const prior = runGate([f], dir, { rerun: () => cleanRun() });
+    const prior = await runGate([f], dir, { rerun: () => cleanRun() });
     expect(prior.results[0]?.status).toBe("resolved");
 
-    const next = runGate([f], dir, { prior, rerun: () => firedRun("fires again at app/api/ar-cors-reflected-safe/route.ts:8") });
+    const next = await runGate([f], dir, { prior, rerun: () => firedRun("fires again at app/api/ar-cors-reflected-safe/route.ts:8") });
     expect(next.results[0]?.status).toBe("regressed");
     expect(next.results[0]?.previousStatus).toBe("resolved");
     const plan = planWriteback(next);
@@ -124,30 +124,30 @@ describe("runGate — prior-run deltas (the accumulated re-audit)", () => {
     expect(plan[0]?.comment).toContain("reintroduced");
   });
 
-  it("matches prior results by stable identity, not positional id, so re-numbered findings still carry their history", () => {
+  it("matches prior results by stable identity, not positional id, so re-numbered findings still carry their history", async () => {
     const dir = scratch("noop.ts", "export {};\n");
-    const prior = runGate([finding({ id: "F-07" })], dir, { rerun: () => cleanRun() });
+    const prior = await runGate([finding({ id: "F-07" })], dir, { rerun: () => cleanRun() });
     // Same finding, re-numbered by a later run (ids reshuffle per run — #457).
-    const next = runGate([finding({ id: "F-42" })], dir, { prior, rerun: () => firedRun() });
+    const next = await runGate([finding({ id: "F-42" })], dir, { prior, rerun: () => firedRun() });
     expect(next.results[0]?.status).toBe("regressed");
   });
 
-  it("does not re-close a finding already verified resolved by the prior run", () => {
+  it("does not re-close a finding already verified resolved by the prior run", async () => {
     const f = finding();
     const dir = scratch("noop.ts", "export {};\n");
-    const prior = runGate([f], dir, { rerun: () => cleanRun() });
-    const next = runGate([f], dir, { prior, rerun: () => cleanRun() });
+    const prior = await runGate([f], dir, { rerun: () => cleanRun() });
+    const next = await runGate([f], dir, { prior, rerun: () => cleanRun() });
     expect(next.results[0]?.status).toBe("resolved");
     const plan = planWriteback(next);
     expect(plan[0]?.intent).toBe("none");
     expect(plan[0]?.reason).toContain("already verified resolved");
   });
 
-  it("a persistent finding never becomes regressed without a prior resolved verification", () => {
+  it("a persistent finding never becomes regressed without a prior resolved verification", async () => {
     const f = finding();
     const dir = scratch("noop.ts", "export {};\n");
-    const prior = runGate([f], dir, { rerun: () => firedRun() }); // persistent, never resolved
-    const next = runGate([f], dir, { prior, rerun: () => firedRun() });
+    const prior = await runGate([f], dir, { rerun: () => firedRun() }); // persistent, never resolved
+    const next = await runGate([f], dir, { prior, rerun: () => firedRun() });
     expect(next.results[0]?.status).toBe("persistent");
   });
 });

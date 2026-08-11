@@ -602,6 +602,28 @@ export function runMultiProjectDynamicValidation(opts: {
 }): DynamicValidationResult {
   const { targetDir, layout, artifactsDir, now, makeProject } = opts;
   const projects = splitLayoutByProject(targetDir, layout);
+  if (projects.length === 1) {
+    const project = projects[0]!;
+    const plan = buildProvisioningPlan(project.layout, readSchemaSql(project.layout), project.appDir);
+    const made = makeProject(project, plan);
+    try {
+      const result = runDynamicValidation({
+        targetDir: project.appDir,
+        layout: project.layout,
+        plan,
+        artifactsDir,
+        now,
+        runner: made.runner,
+        clientSuite: made.clientSuite,
+      });
+      return {
+        ...result,
+        limitations: [`coverage=${result.coverage}${result.standUp ? "" : " (not stood up)"} — ${result.reason}`, ...result.limitations],
+      };
+    } finally {
+      made.stop();
+    }
+  }
   // Resolved once against the ENGAGEMENT's target, not per project: the connected pass is recorded
   // for the repo, while each project's scope statement is keyed on its own app dir.
   const driftPass = readDriftPassEvidence(artifactsDir, targetDir, Date.parse(now()));

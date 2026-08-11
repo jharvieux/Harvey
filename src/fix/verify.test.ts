@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { computeGreen, detectorHalfClean, discoverVerifyCommands, runCommand, scrubSecrets, type CommandRun, type DetectorRun } from "./verify.js";
 
 const node = process.execPath;
@@ -121,7 +125,7 @@ describe("runCommand — the timeout bound", () => {
   // a runner that never actually bounds anything: `timedOut` is set by the timer regardless of
   // whether the kill landed, so the banner and the non-zero exit still show up — five seconds late.
   // That is exactly how the broken bound shipped.
-  it("kills a command that overruns and reports the kill in its own output, never a silent 0", async () => {
+  it("bounds a command that overruns and reports the timeout in its own output, never a silent 0", async () => {
     const start = Date.now();
     const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
     expect(Date.now() - start).toBeLessThan(2000);
@@ -135,7 +139,7 @@ describe("runCommand — the timeout bound", () => {
   // arrives in practice, since extractCiRunSteps emits a multi-line `run: |` block as one command
   // and client scripts chain with `&&`. Reverting `detached` + the group kill in runCommand turns
   // this red at ~5s.
-  it("bounds a COMPOUND command too — the kill reaches the grandchild, not just the shell wrapper", async () => {
+  it("bounds a COMPOUND command too — inherited pipes cannot hold the verification open", async () => {
     const start = Date.now();
     const slow = await runCommand(`${node} -e "setTimeout(() => {}, 5000)" ; true`, process.cwd(), 300);
     expect(Date.now() - start).toBeLessThan(2000);
@@ -148,5 +152,64 @@ describe("runCommand — the timeout bound", () => {
     const slow = await runCommand(`true && ${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
     expect(Date.now() - start).toBeLessThan(2000);
     expect(slow.exitCode).not.toBe(0);
+  }, 20_000);
+
+  it("bounds a self-detaching descendant that keeps the inherited pipes open (#1797)", async () => {
+    const grandchild =
+      'const { spawn } = require("node:child_process"); ' +
+      'spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { detached: true, stdio: "inherit" }).unref();';
+    const start = Date.now();
+    const slow = await runCommand(`${node} -e ${JSON.stringify(grandchild)}`, process.cwd(), 300);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(slow.exitCode).not.toBe(0);
+    expect(slow.outputTail).toContain("exceeded the client-check timeout");
+  }, 20_000);
+
+  it("keeps the client suite in the caller's foreground process group so SIGINT reaches it (#1797)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-run-command-sigint-"));
+    const ready = join(dir, "ready");
+    const interrupted = join(dir, "interrupted");
+    const client =
+      `const fs=require("node:fs"); fs.writeFileSync(${JSON.stringify(ready)},String(process.pid)); ` +
+      `process.on("SIGINT",()=>{fs.writeFileSync(${JSON.stringify(interrupted)},"yes");process.exit(130)}); setTimeout(()=>{},5000);`;
+    const command = `${node} -e ${JSON.stringify(client)}`;
+    const moduleUrl = new URL("./verify.ts", import.meta.url).href;
+    const driver = `import { runCommand } from ${JSON.stringify(moduleUrl)}; void runCommand(${JSON.stringify(command)}, ${JSON.stringify(process.cwd())}, 5000);`;
+    const processGroup = spawn(resolve("node_modules/.bin/tsx"), ["-e", driver], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+    });
+    const waitFor = async (file: string, timeoutMs: number) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (existsSync(file)) return true;
+        await new Promise((done) => setTimeout(done, 10));
+      }
+      return false;
+    };
+    try {
+      expect(await waitFor(ready, 2000)).toBe(true); // clock starts after the client itself is ready
+      if (processGroup.pid === undefined) throw new Error("SIGINT test driver has no pid");
+      process.kill(-processGroup.pid, "SIGINT");
+      expect(await waitFor(interrupted, 2000)).toBe(true);
+    } finally {
+      if (existsSync(ready)) {
+        const clientPid = Number(readFileSync(ready, "utf8"));
+        try {
+          process.kill(clientPid, "SIGKILL");
+        } catch {
+          // The client already exited after receiving SIGINT.
+        }
+      }
+      if (processGroup.pid !== undefined) {
+        try {
+          process.kill(-processGroup.pid, "SIGKILL");
+        } catch {
+          // The driver already exited after the foreground-group SIGINT.
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 20_000);
 });
