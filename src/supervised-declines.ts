@@ -163,7 +163,7 @@ export interface IssueLike {
   comments: string[];
 }
 
-export interface SupervisedDeclineTriage {
+interface SupervisedDeclineTriage {
   pr: number;
   line: number;
   triagedBy: string;
@@ -174,7 +174,7 @@ export interface SupervisedDeclineTriage {
  * Exact-instance false-positive records. Detection stays unchanged: a body edit that moves the hit
  * to another line, or any new PR with the same prose, is unrecorded and fails until read itself.
  */
-export const SUPERVISED_DECLINE_TRIAGE: readonly SupervisedDeclineTriage[] = [
+const SUPERVISED_DECLINE_TRIAGE: readonly SupervisedDeclineTriage[] = [
   {
     pr: 1683,
     line: 36,

@@ -11,7 +11,7 @@ export interface RelayCensusNode {
   unlinkedPullRequests?: { number: number; body: string }[];
 }
 
-export interface RelayCensusRow {
+interface RelayCensusRow {
   issue: number;
   index: number;
   text: string;
@@ -21,7 +21,7 @@ export interface RelayCensusRow {
   retiredBy?: { venue: string; line: number; disposition: string; detail: string };
 }
 
-export interface DuplicateDispositionRow {
+interface DuplicateDispositionRow {
   issue: number;
   index: number;
   text: string;

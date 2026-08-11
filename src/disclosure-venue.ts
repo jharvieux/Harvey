@@ -199,7 +199,7 @@ export function residualBoundish(rules: readonly SemgrepRule[]): SemgrepRule[] {
 // every entry here must still be residual — the CLI fails on either mismatch, so a new rule with
 // bound-ish prose cannot join the set unread and a triaged rule cannot quietly stop being triaged.
 // "We looked and it was nothing" and "we never looked" are the same silence otherwise.
-export interface BoundTriage {
+interface BoundTriage {
   readonly id: string;
   /** A verbatim excerpt from the rule comments. This constrains the disposition to source text. */
   readonly sourceExcerpt: string;
