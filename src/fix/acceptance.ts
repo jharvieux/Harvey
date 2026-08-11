@@ -52,7 +52,7 @@ export async function runFixAcceptance(
       allowlist: opts.allowlist,
       diffCap: opts.diffCap,
     });
-    const after = rerunDetector(finding, fixedRepo.dir);
+    const after = await rerunDetector(finding, fixedRepo.dir);
     const green = execution.outcome === "diff-verified" && detectorHalfClean(after);
     return { findingId: finding.id, execution, detectorBefore: detectorBefore(finding), detectorAfter: after, green, clientChecksScope: CLIENT_CHECKS_OUT_OF_SCOPE };
   } finally {

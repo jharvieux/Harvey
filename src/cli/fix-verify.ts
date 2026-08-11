@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   const isAdditionalRescan = prior !== undefined;
   const paid = args.includes("--paid");
 
-  const report = runGate(doc.findings, targetDir, { engagement: flag(args, "--engagement"), prior });
+  const report = await runGate(doc.findings, targetDir, { engagement: flag(args, "--engagement"), prior });
   writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`);
 
   const c = report.counts;

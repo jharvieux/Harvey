@@ -37,6 +37,11 @@ interface AstEngine {
   run: (sources: SourceInput[], targetDir: string) => Finding[];
 }
 
+// REASON: AST_ENGINES stay in-process rather than pretending that an async function makes CPU work concurrent.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-11 (#1792) — a setImmediate scheduled before an M5 rerun was still pending when rerunDetector resolved; the same probe over the execFile-backed semgrep branch fired before resolution. `await` yields only after the synchronous engine returns, so overlap needs a worker thread or subprocess, not another Promise wrapper.
+// FALSIFIER: sh -c 'test -f src/fix/detector-rerun.ts || exit 127; pnpm exec tsx -e '\''import { rerunDetector } from "./src/fix/detector-rerun.ts"; void (async()=>{let yielded=false; setImmediate(()=>{yielded=true}); await rerunDetector({taxonomy:"M5 — Unused parameter",location:"x.ts:1"} as never,".",[{path:"x.ts",text:"export async function GET(request: Request) { return new Response() }"}]); process.exit(yielded?0:1)})()'\'''
+// TOUCHES: src/fix/detector-rerun.ts, src/detectors/slop.ts, src/detectors/handrolled.ts, src/detectors/perf-code.ts, src/detectors/app-router.ts
 const AST_ENGINES: AstEngine[] = [
   { matches: (t) => t.startsWith("M5 —"), run: (s) => detectSlopFindings(s) },
   { matches: (t) => t.startsWith("M6 —"), run: (s) => detectHandrolledFindings(s) },
@@ -82,13 +87,13 @@ export function resolvesToDetector(taxonomy: string): boolean {
 // rule is matched by id (not by the config-path-prefixed check_id), and the location filter is the
 // file, so an instance of the same rule elsewhere in the target does not keep this fix red — the
 // same scoping the AST path uses.
-function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): DetectorRun {
+async function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): Promise<DetectorRun> {
   const notRun = (reason: string): DetectorRun => ({ detectorId: finding.taxonomy, fired: false, output: "", notRun: reason });
   const file = fileOfLocation(finding.location);
   const abs = isAbsolute(file) ? file : join(targetDir, file);
   if (!existsSync(abs)) return notRun(`semgrep rule ${ruleId} could not be re-run: ${file} does not exist under ${targetDir}`);
 
-  const { result, failure } = runSemgrepOnFile(abs, targetDir);
+  const { result, failure } = await runSemgrepOnFile(abs, targetDir);
   if (failure !== undefined) return notRun(`semgrep rule ${ruleId} could not be re-run: ${failure}`);
 
   // #1093: harvey-route-noauth/harvey-authed-no-role-check now match unconditionally in the YAML
@@ -114,13 +119,13 @@ function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): Dete
 // contain it: this run did not identify it as a registry rule at all (renamed upstream, invented, or
 // coincidentally shaped), so the caller falls back to the generic "no resolver" notRun rather than
 // reporting a registry-specific reason for a taxonomy that may not be one.
-function rerunRegistryPack(finding: Finding, targetDir: string): DetectorRun | undefined {
+async function rerunRegistryPack(finding: Finding, targetDir: string): Promise<DetectorRun | undefined> {
   const notRun = (reason: string): DetectorRun => ({ detectorId: finding.taxonomy, fired: false, output: "", notRun: reason });
   const file = fileOfLocation(finding.location);
   const abs = isAbsolute(file) ? file : join(targetDir, file);
   if (!existsSync(abs)) return notRun(`registry-pack rule ${finding.taxonomy} could not be re-run: ${file} does not exist under ${targetDir}`);
 
-  const { result, ruleIds, failure } = runRegistryPacksOnFile(abs, targetDir);
+  const { result, ruleIds, failure } = await runRegistryPacksOnFile(abs, targetDir);
   if (failure !== undefined) {
     return notRun(
       `registry-pack rule ${finding.taxonomy} could not be re-run: ${failure} (a registry-pack replay needs a live semgrep run — the same network fetch every real scan performs)`,
@@ -148,13 +153,13 @@ export function detectorBefore(finding: Finding): DetectorRun {
 // own file. `sources` lets a caller that already walked the tree avoid a second read; absent, the tree
 // is loaded here (product-code detectors, so test/story/fixture files are excluded — matching
 // src/cli/static-detect.ts). A taxonomy with no resolver is reported notRun, not clean.
-export function rerunDetector(finding: Finding, targetDir: string, sources?: SourceInput[]): DetectorRun {
+export async function rerunDetector(finding: Finding, targetDir: string, sources?: SourceInput[]): Promise<DetectorRun> {
   const engine = AST_ENGINES.find((e) => e.matches(finding.taxonomy));
   if (!engine) {
     const ruleId = harveyRuleOf(finding.taxonomy);
     if (ruleId !== undefined) return rerunSemgrep(finding, ruleId, targetDir);
     if (looksLikeRegistryRule(finding.taxonomy)) {
-      const registryRun = rerunRegistryPack(finding, targetDir);
+      const registryRun = await rerunRegistryPack(finding, targetDir);
       if (registryRun !== undefined) return registryRun;
     }
     return {

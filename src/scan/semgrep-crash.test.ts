@@ -16,6 +16,17 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
+    execFile: vi.fn((bin: string, args: string[], opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+      if (bin !== "semgrep") return actual.execFile(bin as never, args as never, opts as never, callback as never);
+      try {
+        const stdout = semgrepBehavior();
+        queueMicrotask(() => callback(null, stdout, ""));
+      } catch (err) {
+        const failed = err as Error & { stdout?: string };
+        queueMicrotask(() => callback(failed, failed.stdout ?? "", ""));
+      }
+      return {} as never;
+    }),
     execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
       if (bin === "semgrep") return semgrepBehavior();
       return actual.execFileSync(bin as never, args as never, opts as never) as never;
@@ -82,11 +93,11 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
     expect(result.paths?.scanned).toEqual(["/some/target/a.ts"]);
   });
 
-  it("the single-file re-run refuses an incomplete run the same way — its partial output must not feed the paths.scanned check", () => {
+  it("the single-file re-run refuses an incomplete run the same way — its partial output must not feed the paths.scanned check", async () => {
     semgrepBehavior = () => {
       throw execError({ status: 2, stdout: EXIT7_ENVELOPE });
     };
-    const { failure } = runSemgrepOnFile("/some/target/a.ts", "/some/target");
+    const { failure } = await runSemgrepOnFile("/some/target/a.ts", "/some/target");
     expect(failure).toBeDefined();
     expect(failure).toContain("exited with code 2");
   });

@@ -29,6 +29,7 @@ import { fileOfLocation } from "../fix/produce-plan.js";
 import { DEFAULT_CAPS, detectLateConflict, runScheduled, scheduleFixes, type ScheduleNode } from "../fix/schedule.js";
 import { observedClientCommandConcurrency } from "../fix/verify.js";
 import type { BaselineCache } from "../fix/verify-harness.js";
+import { observedSemgrepCommandConcurrency } from "../scan/semgrep.js";
 
 const args = process.argv.slice(2);
 const VALUE_FLAGS = new Set(["--target", "--out"]);
@@ -241,12 +242,8 @@ const handoff = assembleHandoff({ client: manifest.client, baselineCommit: manif
 // spawn boundary in src/fix/verify.ts, so it is the one that answers "did two of the client's own
 // suites genuinely run at the same time".
 //
-// The one step on this path that still occupies the event loop while it runs is the detector re-run
-// (src/fix/detector-rerun.ts): in-process AST engines, plus an execFileSync semgrep replay in
-// src/scan/semgrep.ts. `executeFixDiff` awaits that hook, so an async resolver plugs in without an
-// API change — but nothing is claimed about overlap there today.
 const CONCURRENCY_NOTE =
-  "caps enforced by the runScheduled semaphores; peakSlots is slot occupancy, peakClientChecks is client-check-gate occupancy, and peakClientCommands is how many of the client's own commands were spawned at once — the ingest chain is async end to end (#1464), so the last number is real wall-clock overlap, not gate occupancy";
+  "caps enforced by the runScheduled semaphores; peakSlots is slot occupancy, peakClientChecks is client-check-gate occupancy, peakClientCommands is how many of the client's own commands were spawned at once, and peakSemgrepCommands is external detector replays genuinely running together — the external ingest chain is async end to end; the in-process AST engines remain single-threaded CPU work under the recorded reason in detector-rerun.ts";
 
 writeFileSync(
   join(outDir, "fix-execution.json"),
@@ -261,6 +258,7 @@ writeFileSync(
         peakSlots,
         peakClientChecks,
         peakClientCommands: observedClientCommandConcurrency(),
+        peakSemgrepCommands: observedSemgrepCommandConcurrency(),
         clientCheckMs,
         note: CONCURRENCY_NOTE,
       },

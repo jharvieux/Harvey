@@ -18,7 +18,7 @@
 // Missing CSP is checked separately below (checkMissingCsp) — it's a config-presence check
 // across next.config/middleware/vercel.json, not something a Semgrep AST pattern expresses.
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
@@ -318,15 +318,47 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
 // swallow — copy-pasting the classifier is how the two drift apart. `maxBufferMb` is a parameter for
 // the same reason: that gate scans ~600 SecBench entries in one pass and had already raised its own
 // cap to 256 MB, and silently halving it here would turn a working run into a disclosed failure.
-export function execSemgrep(argv: string[], maxBufferMb = 128): { out: string } | { failure: string; enoent: boolean } {
+type SemgrepExec = { out: string } | { failure: string; enoent: boolean };
+
+interface SemgrepExecError {
+  stdout?: string;
+  code?: string | number;
+  status?: number | null;
+  signal?: string | null;
+}
+
+function semgrepFailure(err: SemgrepExecError): SemgrepExec {
+  if (err.code === "ENOENT") return { failure: "semgrep not found on PATH", enoent: true };
+  const status = err.status ?? (typeof err.code === "number" ? err.code : undefined);
+  const how = err.signal ? `killed by signal ${err.signal}` : `exited with code ${status ?? "unknown"}`;
+  return { failure: `semgrep run did not complete (${how})${envelopeErrorSummary(err.stdout)}`, enoent: false };
+}
+
+let liveAsyncSemgrepCommands = 0;
+let peakAsyncSemgrepCommands = 0;
+export const observedSemgrepCommandConcurrency = (): number => peakAsyncSemgrepCommands;
+
+export function execSemgrep(argv: string[], maxBufferMb = 128): SemgrepExec {
   try {
     return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * maxBufferMb }) };
   } catch (err) {
-    const e = err as { stdout?: string; code?: string; status?: number | null; signal?: string | null };
-    if (e.code === "ENOENT") return { failure: "semgrep not found on PATH", enoent: true };
-    const how = e.signal ? `killed by signal ${e.signal}` : `exited with code ${e.status ?? "unknown"}`;
-    return { failure: `semgrep run did not complete (${how})${envelopeErrorSummary(e.stdout)}`, enoent: false };
+    return semgrepFailure(err as SemgrepExecError);
   }
+}
+
+function execSemgrepAsync(argv: string[], maxBufferMb = 128): Promise<SemgrepExec> {
+  liveAsyncSemgrepCommands++;
+  peakAsyncSemgrepCommands = Math.max(peakAsyncSemgrepCommands, liveAsyncSemgrepCommands);
+  return new Promise((resolve) => {
+    execFile("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * maxBufferMb }, (err, stdout) => {
+      liveAsyncSemgrepCommands--;
+      if (err) {
+        resolve(semgrepFailure({ ...(err as SemgrepExecError), stdout }));
+        return;
+      }
+      resolve({ out: stdout });
+    });
+  });
 }
 
 // The crash's own explanation, when the wrapper still emitted its JSON envelope on the way down
@@ -731,12 +763,12 @@ export function harveyRuleIds(): Set<string> {
 // harvey-void-async) silently matched nothing — a false clean, which computeGreen would have read as
 // a fixed bug. `paths.scanned` is then checked so the narrowing itself can't reintroduce the same
 // silence: a file the run never reached is a failure, not a clean detector.
-export function runSemgrepOnFile(absFile: string, root: string): { result: SemgrepOutput; failure?: string } {
+export async function runSemgrepOnFile(absFile: string, root: string): Promise<{ result: SemgrepOutput; failure?: string }> {
   const rel = relative(root, absFile);
   // #1664: same completeness classification as runSemgrep — a non-zero exit or a signal means the
   // run did not complete (see execSemgrep's measurement), and its partial output must not feed the
   // pathError/paths.scanned checks below as if it were a finished scan.
-  const run = execSemgrep(["--config", CUSTOM_RULES, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", root]);
+  const run = await execSemgrepAsync(["--config", CUSTOM_RULES, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", root]);
   if ("failure" in run) return { result: {}, failure: run.failure };
   const { result, failure } = parseEnvelope(run.out);
   if (failure) return { result: {}, failure };
@@ -758,11 +790,11 @@ export function runSemgrepOnFile(absFile: string, root: string): { result: Semgr
 // registry rule that ran and found nothing" from "this taxonomy is not a registry rule the packs
 // carry at all" (renamed upstream, or not a semgrep taxonomy in the first place) — harvey-* rules
 // have a local file `harveyRuleIds` can read for the same distinction; a registry pack has none.
-export function runRegistryPacksOnFile(absFile: string, root: string): { result: SemgrepOutput; ruleIds: Set<string>; failure?: string } {
+export async function runRegistryPacksOnFile(absFile: string, root: string): Promise<{ result: SemgrepOutput; ruleIds: Set<string>; failure?: string }> {
   const rel = relative(root, absFile);
   const configArgs = REGISTRY_PACKS.flatMap((p) => ["--config", p]);
   // #1664: same completeness classification as runSemgrep — see execSemgrep's measurement.
-  const run = execSemgrep([...configArgs, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", "--time", root]);
+  const run = await execSemgrepAsync([...configArgs, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", "--time", root]);
   if ("failure" in run) return { result: {}, ruleIds: new Set(), failure: run.failure };
   const { result, failure } = parseEnvelope(run.out);
   if (failure) return { result: {}, ruleIds: new Set(), failure };

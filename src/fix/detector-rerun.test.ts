@@ -64,40 +64,40 @@ function finding(o: Partial<Finding> = {}): Finding {
   };
 }
 
-describe("rerunDetector — §2.3 against targets/calibration", () => {
+describe("rerunDetector — §2.3 against targets/calibration", async () => {
   const planted = readFileSync(join(REPO_ROOT, "targets/calibration", PLANTED), "utf8");
 
-  it("fires on the real planted class before the fix", () => {
+  it("fires on the real planted class before the fix", async () => {
     const dir = scratch(PLANTED, planted);
-    const run = rerunDetector(finding(), dir);
+    const run = await rerunDetector(finding(), dir);
     expect(run.fired).toBe(true);
     expect(run.notRun).toBeUndefined();
   });
 
-  it("is clean after the mechanical fix (drop the unused param)", () => {
+  it("is clean after the mechanical fix (drop the unused param)", async () => {
     const fixed = planted.replace("export async function GET(request: Request) {", "export async function GET() {");
     expect(fixed).not.toEqual(planted); // the planted signature was actually present
     const dir = scratch(PLANTED, fixed);
-    const after = rerunDetector(finding(), dir);
+    const after = await rerunDetector(finding(), dir);
     expect(after.fired).toBe(false);
     expect(after.notRun).toBeUndefined();
     expect(detectorHalfClean(after)).toBe(true);
   });
 
-  it("scopes to the fixed file — an instance of the same class elsewhere does not keep it red", () => {
+  it("scopes to the fixed file — an instance of the same class elsewhere does not keep it red", async () => {
     // Same unused-param class planted in a SECOND file; the fix targets only PLANTED, which is clean.
     const fixed = planted.replace("export async function GET(request: Request) {", "export async function GET() {");
     const dir = scratch(PLANTED, fixed);
     mkdirSync(join(dir, "app/api/other"), { recursive: true });
     writeFileSync(join(dir, "app/api/other/route.ts"), "export async function GET(request: Request) {\n  return new Response('x');\n}\n");
-    expect(rerunDetector(finding(), dir).fired).toBe(false); // the other file's instance is out of scope
+    expect((await rerunDetector(finding(), dir)).fired).toBe(false); // the other file's instance is out of scope
   });
 
-  it("reports notRun for a taxonomy with no resolver of any kind — never a false clean", () => {
+  it("reports notRun for a taxonomy with no resolver of any kind — never a false clean", async () => {
     // Not an AST-engine prefix, not a harvey-* rule id, not shaped like a registry-pack check_id
     // (#1368 gave registry rules a real, if online-only, resolver — see the block below).
     const dir = scratch(PLANTED, planted);
-    const run = rerunDetector(finding({ taxonomy: "Coverage — some external tool finding", location: "pages/api/redirect.js:9" }), dir);
+    const run = await rerunDetector(finding({ taxonomy: "Coverage — some external tool finding", location: "pages/api/redirect.js:9" }), dir);
     expect(run.notRun).toContain("no detector re-run resolver");
     expect(run.fired).toBe(false);
     // fail loud: an unrun detector is not clean, so a fix over it can never be green
@@ -105,13 +105,13 @@ describe("rerunDetector — §2.3 against targets/calibration", () => {
     expect(resolvesToDetector("Coverage — some external tool finding")).toBe(false);
   });
 
-  it("a harvey-* rule id that no longer exists in the rule directory does NOT resolve — a deleted rule is not a fixed bug", () => {
+  it("a harvey-* rule id that no longer exists in the rule directory does NOT resolve — a deleted rule is not a fixed bug", async () => {
     expect(resolvesToDetector("harvey-rule-that-was-deleted")).toBe(false);
-    const run = rerunDetector(finding({ taxonomy: "harvey-rule-that-was-deleted" }), scratch(PLANTED, planted));
+    const run = await rerunDetector(finding({ taxonomy: "harvey-rule-that-was-deleted" }), scratch(PLANTED, planted));
     expect(run.notRun).toContain("no detector re-run resolver");
   });
 
-  it("carries detectorBefore verbatim from the scan (§2.4), fired by construction", () => {
+  it("carries detectorBefore verbatim from the scan (§2.4), fired by construction", async () => {
     const before = detectorBefore(finding());
     expect(before).toEqual({ detectorId: "M5 — Unused parameter", fired: true, output: "GET(request: Request) never reads request" });
   });
@@ -144,18 +144,18 @@ const redirectFinding = (o: Partial<Finding> = {}): Finding =>
     category: "Next.js/web footgun", evidence: "z.string().url() validates shape, not host", ...o,
   });
 
-describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012), against targets/calibration", () => {
+describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012), against targets/calibration", async () => {
   const redirectSrc = readFileSync(join(REPO_ROOT, "targets/calibration", REDIRECT), "utf8");
   const verboseSrc = readFileSync(join(REPO_ROOT, "targets/calibration", VERBOSE), "utf8");
 
-  it("fires on the real planted open redirect before the fix", () => {
-    const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
+  it("fires on the real planted open redirect before the fix", async () => {
+    const run = await rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
     expect(run.notRun).toBeUndefined();
     expect(run.fired).toBe(true);
     expect(run.output).toContain("harvey-open-redirect still firing");
   }, SEMGREP_TIMEOUT_MS);
 
-  it("is clean after the mechanical fix (redirect to a literal chosen by an enum key, no URL from the request)", () => {
+  it("is clean after the mechanical fix (redirect to a literal chosen by an enum key, no URL from the request)", async () => {
     const fixed = redirectSrc
       .replace("  url: z.string().url(),", '  dest: z.enum(["home", "settings"]),')
       .replace(
@@ -163,45 +163,45 @@ describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012
         '  if (parsed.data.dest === "settings") {\n    return res.redirect(302, "/settings");\n  }\n  res.redirect(302, "/");',
       );
     expect(fixed).not.toEqual(redirectSrc);
-    const after = rerunDetector(redirectFinding(), scratch(REDIRECT, fixed));
+    const after = await rerunDetector(redirectFinding(), scratch(REDIRECT, fixed));
     expect(after.notRun).toBeUndefined(); // the rule really re-ran
     expect(after.fired).toBe(false);
     expect(detectorHalfClean(after)).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", () => {
+  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", async () => {
     const noop = redirectSrc.replace("export default function handler(req, res) {", "export default function handler(req, res) { // touched");
     expect(noop).not.toEqual(redirectSrc);
-    expect(rerunDetector(redirectFinding(), scratch(REDIRECT, noop)).fired).toBe(true);
+    expect((await rerunDetector(redirectFinding(), scratch(REDIRECT, noop))).fired).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("resolves a second §8 class (verbose error) — fires planted, clean once the stack stops being echoed", () => {
+  it("resolves a second §8 class (verbose error) — fires planted, clean once the stack stops being echoed", async () => {
     const f = (o: Partial<Finding> = {}) =>
       finding({ id: "F-verbose", taxonomy: "harvey-verbose-error", location: `${VERBOSE}:8`, ...o });
-    expect(rerunDetector(f(), scratch(VERBOSE, verboseSrc)).fired).toBe(true);
+    expect((await rerunDetector(f(), scratch(VERBOSE, verboseSrc))).fired).toBe(true);
 
     const fixed = verboseSrc.replace(
       "    res.status(500).json({ ok: false, stack: err.stack });",
       '    console.error(err);\n    res.status(500).json({ ok: false, error: "Server error" });',
     );
     expect(fixed).not.toEqual(verboseSrc);
-    const after = rerunDetector(f(), scratch(VERBOSE, fixed));
+    const after = await rerunDetector(f(), scratch(VERBOSE, fixed));
     expect(after.notRun).toBeUndefined();
     expect(after.fired).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", () => {
+  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", async () => {
     const fixed = redirectSrc.replace("  res.redirect(302, parsed.data.url);", '  res.redirect(302, "/");');
     const dir = scratch(REDIRECT, fixed);
     mkdirSync(join(dir, "pages/api/other"), { recursive: true });
     writeFileSync(join(dir, "pages/api/other/go.js"), "export default function handler(req, res) {\n  res.redirect(302, req.query.next);\n}\n");
-    expect(rerunDetector(redirectFinding(), dir).fired).toBe(false);
+    expect((await rerunDetector(redirectFinding(), dir)).fired).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("carries the config-path-prefixed check_id a --config <dir> scan produces (that IS the finding's taxonomy)", () => {
+  it("carries the config-path-prefixed check_id a --config <dir> scan produces (that IS the finding's taxonomy)", async () => {
     const prefixed = "src.scan.rules.semgrep.harvey-open-redirect";
     expect(resolvesToDetector(prefixed)).toBe(true);
-    expect(rerunDetector(redirectFinding({ taxonomy: prefixed }), scratch(REDIRECT, redirectSrc)).fired).toBe(true);
+    expect((await rerunDetector(redirectFinding({ taxonomy: prefixed }), scratch(REDIRECT, redirectSrc))).fired).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
   // #1021: a rule's own `paths:` filter is matched against the path RELATIVE TO THE SCANNING ROOT.
@@ -210,18 +210,18 @@ describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012
   // was reported CLEAN. A false clean is the worst outcome this gate can produce: it reads as a fixed
   // bug. harvey-void-async (paths: *api*) is the standing case, and this test fails if the re-run
   // ever stops rooting the scan at the target dir.
-  it("re-runs a rule that carries a `paths:` filter — a path-scoped rule is not silently clean", () => {
+  it("re-runs a rule that carries a `paths:` filter — a path-scoped rule is not silently clean", async () => {
     const receipt = "pages/api/receipt.js";
     const src = readFileSync(join(REPO_ROOT, "targets/calibration", receipt), "utf8");
     const f = finding({ id: "F-void", taxonomy: "harvey-void-async", location: `${receipt}:12`, category: "Next.js/web footgun" });
 
-    const before = rerunDetector(f, scratch(receipt, src));
+    const before = await rerunDetector(f, scratch(receipt, src));
     expect(before.notRun).toBeUndefined();
     expect(before.fired).toBe(true);
 
     const fixed = src.replace("  void writeReceiptAudit(req.body.orderId);", "  await writeReceiptAudit(req.body.orderId);");
     expect(fixed).not.toEqual(src);
-    const after = rerunDetector(f, scratch(receipt, fixed));
+    const after = await rerunDetector(f, scratch(receipt, fixed));
     expect(after.notRun).toBeUndefined();
     expect(after.fired).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
@@ -242,64 +242,64 @@ const locationNavFinding = (o: Partial<Finding> = {}): Finding =>
     category: "Next.js/web footgun", confidence: "Review", evidence: "window.location = params.get(\"to\") with no host allowlist", ...o,
   });
 
-describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the registry-pack resolver (#1368), against targets/calibration", () => {
+describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the registry-pack resolver (#1368), against targets/calibration", async () => {
   const locationNavSrc = readFileSync(join(REPO_ROOT, "targets/calibration", LOCATION_NAV), "utf8");
 
-  it("the taxonomy now resolves (shape-only — existence is confirmed live, not offline)", () => {
+  it("the taxonomy now resolves (shape-only — existence is confirmed live, not offline)", async () => {
     expect(resolvesToDetector(REGISTRY_RULE)).toBe(true);
   });
 
-  it("fires on the real planted class before the fix", () => {
-    const run = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, locationNavSrc));
+  it("fires on the real planted class before the fix", async () => {
+    const run = await rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, locationNavSrc));
     expect(run.notRun).toBeUndefined();
     expect(run.fired).toBe(true);
     expect(run.output).toContain(`${REGISTRY_RULE} still firing`);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("is clean after the mechanical fix (no request-controlled value reaches window.location)", () => {
+  it("is clean after the mechanical fix (no request-controlled value reaches window.location)", async () => {
     const fixed = locationNavSrc.replace(
       'window.location = params.get("to");',
       'if (params.get("to") === "settings") window.location = "/settings";',
     );
     expect(fixed).not.toEqual(locationNavSrc);
-    const after = rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, fixed));
+    const after = await rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, fixed));
     expect(after.notRun).toBeUndefined(); // the rule really re-ran
     expect(after.fired).toBe(false);
     expect(detectorHalfClean(after)).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", () => {
+  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", async () => {
     const noop = locationNavSrc.replace("export default function LocationNav() {", "export default function LocationNav() { // touched");
     expect(noop).not.toEqual(locationNavSrc);
-    expect(rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, noop)).fired).toBe(true);
+    expect((await rerunDetector(locationNavFinding(), scratch(LOCATION_NAV, noop))).fired).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
 
-  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", () => {
+  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", async () => {
     const fixed = locationNavSrc.replace('window.location = params.get("to");', 'window.location = "/";');
     const dir = scratch(LOCATION_NAV, fixed);
     mkdirSync(join(dir, "components/other"), { recursive: true });
     writeFileSync(join(dir, "components/other/Nav.jsx"), "export default function Nav() {\n  window.location = new URLSearchParams(window.location.search).get(\"to\");\n}\n");
-    const run = rerunDetector(locationNavFinding(), dir);
+    const run = await rerunDetector(locationNavFinding(), dir);
     expect(run.notRun).toBeUndefined(); // the rule really re-ran, it wasn't skipped
     expect(run.fired).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
 });
 
-describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012/#1368)", () => {
+describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012/#1368)", async () => {
   const redirectSrc = readFileSync(join(REPO_ROOT, "targets/calibration", REDIRECT), "utf8");
 
-  it("a file the fix's location names but that is absent from the worktree is notRun, not clean", () => {
+  it("a file the fix's location names but that is absent from the worktree is notRun, not clean", async () => {
     const dir = scratch("unrelated.js", "export default 1;\n");
-    const run = rerunDetector(redirectFinding(), dir);
+    const run = await rerunDetector(redirectFinding(), dir);
     expect(run.notRun).toContain("does not exist");
     expect(detectorHalfClean(run)).toBe(false);
   });
 
-  it.skipIf(!SEMGREP_PRESENT)("source semgrep cannot parse is notRun — an unevaluated file is not a fixed file", () => {
+  it.skipIf(!SEMGREP_PRESENT)("source semgrep cannot parse is notRun — an unevaluated file is not a fixed file", async () => {
     // Semgrep exits 0 on a syntax error, reporting it in `errors` with zero results. Read naively that
     // is indistinguishable from "the rule matched nothing" — the exact shape of the repo's signature defect.
     const dir = scratch(REDIRECT, `${redirectSrc}\nexport default function handler(req, res) { res.redirect(302, req.query.u\n`);
-    const run = rerunDetector(redirectFinding(), dir);
+    const run = await rerunDetector(redirectFinding(), dir);
     expect(run.notRun).toContain("could not be re-run");
     expect(run.fired).toBe(false);
     expect(detectorHalfClean(run)).toBe(false);

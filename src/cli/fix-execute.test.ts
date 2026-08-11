@@ -173,6 +173,30 @@ describe("fix-execute CLI — the scheduler is the execution driver, and it repo
     }
   }, 120_000);
 
+  it("keeps client commands concurrent while two semgrep detector re-runs yield to the event loop (#1792)", async () => {
+    const names = ["a", "b"];
+    const vulnerable = "export default function handler(req, res) { res.redirect(302, req.query.next); }\n";
+    const fixed = "export default function handler(req, res) { res.redirect(302, '/'); }\n";
+    const slowSuite = "setTimeout(() => console.log('client suite ok'), 600);\n";
+    const c = materialize(clientRepo(Object.fromEntries(names.map((n) => [`app/${n}.js`, vulnerable])), slowSuite));
+    try {
+      const findings = names.map((n) => ({
+        ...finding(`F-${n.toUpperCase()}`, `app/${n}.js`, capturePatch(c, `app/${n}.js`, fixed)),
+        taxonomy: "harvey-open-redirect",
+        location: `app/${n}.js:1`,
+      }));
+      const cfg = engagement(c, findings);
+      const { code, artifact, out } = await run(cfg, c.dir);
+      expect(code).toBe(0);
+      const concurrency = artifact.concurrency as unknown as { peakClientCommands: number; peakSemgrepCommands: number };
+      expect(concurrency.peakSemgrepCommands).toBeGreaterThan(1);
+      expect(concurrency.peakClientCommands).toBeGreaterThan(1);
+      expect(out).toContain("peak client commands actually spawned together 2");
+    } finally {
+      disposeCorpus(c);
+    }
+  }, 120_000);
+
   it("flags the LATE conflict a diff introduced — the overlap batch time could not have seen", async () => {
     const c = materialize(clientRepo({ "app/a.ts": "const a = 0;\n", "app/b.ts": "const b = 0;\n" }));
     try {
