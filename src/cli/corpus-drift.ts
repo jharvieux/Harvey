@@ -58,7 +58,9 @@ import type { Finding } from "../findings.js";
 import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
-import { runMechanicalScan } from "../scan/mechanical.js";
+import { runMechanicalScanDetailed } from "../scan/mechanical.js";
+import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
+import { resolveGitTree } from "../scan/mechanical-phase-cache.js";
 import {
   EXTERNAL_CORPUS,
   driftExplanationLines,
@@ -101,6 +103,12 @@ const baselineFindingsPath = flag("--baseline-findings");
 // scores the source-tier modules exactly as before.
 const install = args.includes("--install");
 const m8 = args.includes("--m8");
+const forceColdCache = args.includes("--force-cold-cache");
+const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
+if (forceColdCache && !phaseCacheDir) {
+  console.error("--force-cold-cache requires HARVEY_CORPUS_PHASE_CACHE_DIR; a cold equivalence run with nowhere to read/write artifacts proves nothing");
+  process.exit(2);
+}
 
 // #1586: `--shard i/n` selects this runner's slice of the corpus so corpus-drift.yml can score the
 // targets in parallel across n machines. Deterministic and coordination-free — every runner computes
@@ -504,10 +512,27 @@ for (const target of targets) {
       // Timed around the SCAN, not just the report build: the scan is the whole cost (proposit's
       // free-tier pass measured 84s of its 96s), and timing the cheap half would have left it in
       // the untimed `other` bucket — a phase table whose largest row is "other" answers nothing.
-      const at = Date.now();
-      const mechanical = await runMechanicalScan({ dir });
+      const mechanicalRun = await runMechanicalScanDetailed({
+        dir,
+        phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
+          repoRoot,
+          cacheDir: phaseCacheDir,
+          mode: forceColdCache ? "verify" : "read-write",
+          targetRevision: target.commit,
+          targetTree: `${resolveGitTree(dir)}:${JSON.stringify(target.vendoredSubtrees ?? [])}`,
+          optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: false, handrolledIndicators: false, authGuards: [] }),
+          onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+        }) : undefined,
+      });
+      const mechanical = mechanicalRun.findings;
+      for (const phase of mechanicalRun.phases) {
+        const name = `mechanical:${phase.phase}`;
+        (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
+        console.error(`  ${target.slug}: PHASE ${phase.phase} ${(phase.durationMs / 1000).toFixed(1)}s — ${phase.cache}; ${phase.scope.unitsExamined} unit(s); ${phase.reason}`);
+      }
+      const reportAt = Date.now();
       const report = buildQuickScanReport(mechanical);
-      (phaseSeconds[phaseTarget] ??= {})["free-tier quick-scan"] = (Date.now() - at) / 1000;
+      (phaseSeconds[phaseTarget] ??= {})["free-tier report"] = (Date.now() - reportAt) / 1000;
       rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
     }
   } finally {

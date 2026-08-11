@@ -34,7 +34,7 @@ vi.mock("./semgrep.js", async (importOriginal) => {
   return { ...actual, runSemgrep };
 });
 
-const { runMechanicalScan } = await import("./mechanical.js");
+const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;
@@ -75,6 +75,38 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect.objectContaining({ candidates: [{ name: "react", version: "18.2.0", direct: true }], completeness: "incomplete" }),
       { skipRegistry: undefined },
     );
+  });
+
+  it("preserves real mechanical findings and examined scopes across a cold then warm faithful large fixture", async () => {
+    const src = join(dir, "src");
+    mkdirSync(src);
+    for (let i = 0; i < 250; i++) writeFileSync(join(src, `route-${i}.ts`), `export function route${i}(tenantId: string) { return { tenantId, row: ${i} }; }\n`);
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-mechanical-cache-"));
+    try {
+      const phases = ["secrets-history", "dependency-advisory", "semgrep", "configuration", "structural-ast", "normalization"] as const;
+      const phaseCache = {
+        dir: cacheDir,
+        mode: "read-write" as const,
+        targetRevision: "large-fixture-revision",
+        targetTree: "large-fixture-tree",
+        implementation: Object.fromEntries(phases.map((phase) => [phase, `implementation:${phase}`])),
+        externalInputs: Object.fromEntries(phases.map((phase) => [phase, { fixture: "v1" }])),
+      };
+      const cold = await runMechanicalScanDetailed({ dir, skipNetworkChecks: true, phaseCache });
+      const warm = await runMechanicalScanDetailed({ dir, skipNetworkChecks: true, phaseCache });
+      expect(warm.findings).toEqual(cold.findings);
+      expect(warm.phases.map((phase) => phase.phase)).toEqual(cold.phases.map((phase) => phase.phase));
+      expect(warm.phases.map((phase) => phase.scope)).toEqual(cold.phases.map((phase) => phase.scope));
+      expect(warm.phases.filter((phase) => phase.cache === "hit").map((phase) => phase.phase).sort()).toEqual([
+        "configuration",
+        "secrets-history",
+        "semgrep",
+        "structural-ast",
+      ]);
+      expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(250);
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true });
+    }
   });
 
   // #1344: a workspace member is resolved from inside the repo, so the registry 404s on its name

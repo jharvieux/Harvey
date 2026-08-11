@@ -200,6 +200,10 @@ jobs:
               # 30584074986) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
               .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
               AGENTS.md|CLAUDE.md|README.md|SESSION.md) ;;
+              # Test modules are never imported by the production scanner graph. Keep unknown
+              # production src/** fail-open below, while a focused test-only edit (PR #1860's
+              # sync-stdio.test.ts case) declares a no-op instead of spending the carbon shard.
+              src/*.test.ts) ;;
               *) relevant=true; manifest_only=false ;;
             esac
           done <<< "$files"
@@ -256,6 +260,22 @@ jobs:
         id: corpus-cache
         if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/corpus-clone-cache
+
+      # #1864: phase artifacts are individually content-addressed inside this directory. The
+      # outer Actions cache is only transport between runs; its per-shard rolling key avoids
+      # concurrent matrix legs overwriting one another, while shard 1 is shared by the scheduled
+      # all-target run and the PR carbon shard. A restored artifact is never trusted by presence:
+      # corpus-drift validates its schema, key, findings, and examined-scope metadata, rejecting
+      # and recomputing corrupt/incomplete entries with a visible CACHE REJECT line.
+      - name: Restore content-addressed corpus phase results
+        id: phase-cache
+        if: steps.filter.outputs.relevant == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache
+          key: corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-
 
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
@@ -351,12 +371,18 @@ jobs:
         if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
+          HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache
           SHARD: ${{ matrix.shard }}
           # Kept in step with the matrix above: 3 on a PR or queue entry, 1 elsewhere so the run
           # holds every clone and the cache-save guard is satisfied.
           SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
         run: |
           set -euo pipefail
+          cold_flag=()
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            cold_flag=(--force-cold-cache)
+            echo "Forced-cold cache equivalence is enabled: every deterministic phase is re-earned and compared with its restored artifact."
+          fi
           # A single-shard run writes the CANONICAL name: it is the one whose artifact #1564's
           # prior-snapshot fetch consumes, and the aggregate job below reassembles the sharded case
           # into that same name so the lineage is unbroken either way.
@@ -370,7 +396,7 @@ jobs:
             # pass a single glued argument and break the flag.
             baseline_flag=()
             [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
-            pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}"
+            pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
           else
             for t in ${{ steps.targets.outputs.slugs }}; do
               echo "::group::$t"
@@ -380,10 +406,17 @@ jobs:
               elif [ -f prior-drift/corpus-drift.json ]; then
                 baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
               fi
-              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" "${baseline_flag[@]}"
+              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" "${baseline_flag[@]}" "${cold_flag[@]}"
               echo "::endgroup::"
             done
           fi
+
+      - name: Save content-addressed corpus phase results
+        if: always() && steps.phase-cache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache
+          key: corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8
