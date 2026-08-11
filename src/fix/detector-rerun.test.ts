@@ -24,17 +24,13 @@ afterEach(() => {
   for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-// #1134: every test in this file is fully synchronous — rerunDetector shells out to semgrep via
-// execFileSync *inside production code* (src/scan/semgrep.ts), not as a CLI child process the test
-// file itself spawns. Converting that call chain to async, unlike the four src/cli/*.test.ts files
-// in the same sweep, would ripple through the scanner core other callers depend on — out of scope
-// for a test-infra change. So this file takes the threshold-check option #1134 offers instead of
-// conversion: each test's own synchronous execution IS the single blocking window (nothing in the
-// body yields to the event loop), so timing beforeEach->afterEach measures exactly that window and
-// fails loud, naming the elapsed time, if it drifts anywhere near vitest's hardcoded 60s worker-RPC
-// ack window (see vitest.config.ts's HEAVY_CLI_TESTS comment). MEASURED 2026-07-26: the slowest test
-// in this file runs in ~2.5s, so 30s leaves ample margin while still catching real drift long before
-// it becomes the #1120/#1133 failure mode (exit 1, zero failing tests, nothing named).
+// #1134/#1792: the in-process AST detector branch remains synchronous, while the Semgrep branches
+// now await src/scan/semgrep.ts's execFile-backed async path and yield to the event loop. This file
+// still belongs in the heavy suite because its repeated real Semgrep rule loads require the external
+// binary and take ~26s for the file (src/heavy-cli-tests.ts), not because each test is one blocking
+// window. The per-test ceiling remains a drift guard: it measures the AST branch's blocking window
+// directly; for Semgrep it measures wall time only, because the async wait does not starve Vitest's
+// worker-RPC channel (see vitest.config.ts's HEAVY_CLI_TESTS comment).
 const BLOCKING_WINDOW_MS = 30_000;
 let __blockingWindowStart = 0;
 beforeEach(() => {
