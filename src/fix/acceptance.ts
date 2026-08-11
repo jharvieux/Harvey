@@ -7,6 +7,17 @@
 // materialization) for the classes whose detector rerunDetector can resolve; the remaining autonomous
 // gap (an LLM implementer generating the diffs, and a semgrep/M1 detector-after resolver) is #957's
 // split remainder, disclosed by the accompanying test — never faked green.
+//
+// `runFixAcceptance` is deliberately a calibration-only answer-key gate: its caller supplies both
+// the planted vulnerable source and the expected fixed source, then this function materializes both
+// into disposable repositories. A production fix run must instead accept a client-authored diff and
+// prove it through `ingestFixDiff`; importing this answer-key path there would fabricate the result.
+//
+// REASON: runFixAcceptance is test-only by design because it evaluates a caller-supplied planted source and expected fixed answer; production fix verification must consume the client's authored diff through ingestFixDiff instead of an answer key.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-11 (#1547) — `pnpm test-only-exports --list` reports the whole src/fix/acceptance.ts file unreachable outside tests, while `git grep -n runFixAcceptance -- src` names only this definition and src/fix/calibration-acceptance.test.ts; the falsifier was exercised as committed (1), with a temporary production import (0), and with this file absent (127).
+// FALSIFIER: test -f src/fix/acceptance.ts || exit 127; o=$(pnpm test-only-exports --list 2>&1); case "$o" in *"test-only-exports gate (#1307)"*) ;; *) exit 127;; esac; case "$o" in *"    file   src/fix/acceptance.ts — every export unreachable"*) exit 1;; *) exit 0;; esac
+// TOUCHES: src/fix/acceptance.ts src/fix/interactive.ts
 
 import type { Finding } from "../findings.js";
 import { detectorBefore, rerunDetector } from "./detector-rerun.js";

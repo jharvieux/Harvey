@@ -154,6 +154,13 @@ export function detectorBefore(finding: Finding): DetectorRun {
 // is loaded here (product-code detectors, so test/story/fixture files are excluded — matching
 // src/cli/static-detect.ts). A taxonomy with no resolver is reported notRun, not clean.
 export async function rerunDetector(finding: Finding, targetDir: string, sources?: SourceInput[]): Promise<DetectorRun> {
+  const noResolver = (): DetectorRun => ({
+    detectorId: finding.taxonomy,
+    fired: false,
+    output: "",
+    notRun: `no detector re-run resolver for taxonomy "${finding.taxonomy}" — fix cannot be scored green`,
+  });
+  if (!resolvesToDetector(finding.taxonomy)) return noResolver();
   const engine = AST_ENGINES.find((e) => e.matches(finding.taxonomy));
   if (!engine) {
     const ruleId = harveyRuleOf(finding.taxonomy);
@@ -162,12 +169,7 @@ export async function rerunDetector(finding: Finding, targetDir: string, sources
       const registryRun = await rerunRegistryPack(finding, targetDir);
       if (registryRun !== undefined) return registryRun;
     }
-    return {
-      detectorId: finding.taxonomy,
-      fired: false,
-      output: "",
-      notRun: `no detector re-run resolver for taxonomy "${finding.taxonomy}" — fix cannot be scored green`,
-    };
+    return noResolver();
   }
   const file = fileOfLocation(finding.location);
   const srcs = (sources ?? loadSources(targetDir)).filter((f) => !NON_PRODUCT.test(f.path));

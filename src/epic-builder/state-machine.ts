@@ -34,9 +34,8 @@ export function canTransition(state: SessionState, event: WorkflowEvent): boolea
 }
 
 export function transition(state: SessionState, event: WorkflowEvent): SessionState {
-  const next = TRANSITIONS[state][event];
-  if (next === undefined) {
+  if (!canTransition(state, event)) {
     throw new Error(`invalid transition: ${event} is not allowed from state "${state}"`);
   }
-  return next;
+  return TRANSITIONS[state][event]!;
 }
