@@ -1,24 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
-import type { FixPlan, ScreenOptions } from "./plan.js";
-import { initialTier, MAX_ATTEMPTS_PER_TIER, planningTriggers, plansDisagree, runEscalation } from "./escalation.js";
-
-function plan(o: Partial<FixPlan> = {}): FixPlan {
-  return {
-    findingId: "F-1",
-    severity: "Medium",
-    category: "Data integrity",
-    mode: "auto",
-    detectorId: "d",
-    approach: "Handle the ignored error.",
-    blastRadius: { files: ["src/a.ts"], createdFiles: [], symbols: [], callers: [], behaviorPreserving: true, estimatedChangedLines: 0 },
-    verifyCommands: [],
-    testPlan: "",
-    tier: "cheap",
-    risks: [],
-    ...o,
-  };
-}
+import type { ScreenOptions } from "./plan.js";
+import { initialTier, MAX_ATTEMPTS_PER_TIER, planningTriggers, runEscalation } from "./escalation.js";
 
 function finding(o: Partial<Finding> = {}): Finding {
   return {
@@ -30,30 +13,12 @@ function finding(o: Partial<Finding> = {}): Finding {
 
 const opts: ScreenOptions = { enabledCategories: ["Data integrity"] };
 
-describe("plansDisagree", () => {
-  it("agrees when file set and approach match", () => {
-    expect(plansDisagree(plan(), plan())).toBe(false);
-  });
-  it("disagrees on a different file set", () => {
-    expect(plansDisagree(plan(), plan({ blastRadius: { ...plan().blastRadius, files: ["src/b.ts"] } }))).toBe(true);
-  });
-  it("disagrees on a materially different approach", () => {
-    expect(plansDisagree(plan(), plan({ approach: "Rewrite the whole handler." }))).toBe(true);
-  });
-  it("ignores whitespace/case noise between the two approaches", () => {
-    expect(plansDisagree(plan(), plan({ approach: "  handle the IGNORED error.  " }))).toBe(false);
-  });
-});
-
 describe("planningTriggers", () => {
   it("fires on Critical/High severity", () => {
     expect(planningTriggers(finding({ severity: "High" }), opts)).toContain("critical-or-high-severity");
   });
   it("fires on a sensitive keyword", () => {
     expect(planningTriggers(finding({ evidence: "stripe webhook replay" }), opts)).toContain("sensitive-path-or-keyword");
-  });
-  it("fires on plan self-disagreement when threaded in", () => {
-    expect(planningTriggers(finding(), opts, true)).toContain("plan-self-disagreement");
   });
   it("is empty for a plain mechanical finding", () => {
     expect(planningTriggers(finding(), opts)).toEqual([]);

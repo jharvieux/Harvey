@@ -51,6 +51,7 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   matchesGlob,
+  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
@@ -349,6 +350,7 @@ function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
         if (!GLOB_TALLY_SKIP_DIRS.has(entry.name)) walk(relPath);
         continue;
       }
+      if (!matchesJscpdIgnoreGlob(relPath)) continue;
       for (const g of JSCPD_DISCLOSED_GLOBS) {
         if (!matchesGlob(g, relPath)) continue;
         const hit = counts.get(g)!;

@@ -52,6 +52,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
+    execFile: vi.fn((bin: string, args: string[], opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+      if (bin === "semgrep") {
+        const err = new Error(`spawn semgrep ${semgrepMock.errCode}`) as NodeJS.ErrnoException;
+        err.code = semgrepMock.errCode;
+        queueMicrotask(() => callback(err, "", ""));
+        return {} as never;
+      }
+      return actual.execFile(bin as never, args as never, opts as never, callback as never);
+    }),
     execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
       if (bin === "semgrep") {
         const err = new Error(`spawnSync semgrep ${semgrepMock.errCode}`) as NodeJS.ErrnoException;
@@ -369,8 +378,8 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
 // unreachable registry — this proves that shared path degrades, not the network specifically (the
 // live success path, which needs a real network fetch, is proven in src/fix/detector-rerun.test.ts).
 describe("runRegistryPacksOnFile degrades on failure, never a false clean (#1368)", () => {
-  it("returns a failure reason and an empty rule-id set instead of throwing when semgrep is unavailable", () => {
-    const { result, ruleIds, failure } = runRegistryPacksOnFile("/some/target/file.js", "/some/target");
+  it("returns a failure reason and an empty rule-id set instead of throwing when semgrep is unavailable", async () => {
+    const { result, ruleIds, failure } = await runRegistryPacksOnFile("/some/target/file.js", "/some/target");
     expect(failure).toBe("semgrep not found on PATH");
     expect(result).toEqual({});
     expect(ruleIds.size).toBe(0);

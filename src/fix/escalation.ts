@@ -1,17 +1,15 @@
 // The model-tier escalation ladder (design §5). Pure functions: they decide which tier a fix STARTS
-// at, whether two independently-drafted plans disagree (a signal the fix isn't mechanical), and how
-// verification failures walk the ladder toward a downgrade. No LLM caller lives here — the router
+// at and how verification failures walk the ladder toward a downgrade. No LLM caller lives here — the router
 // (docs/design/model-routing.md) maps these tiers to bulk/standard/flagship; this module only decides
 // which tier each attempt runs at and records the trail in FixResult.tiersUsed.
 
-import type { EscalationTier, FixPlan, ScreenOptions } from "./plan.js";
+import type { EscalationTier, ScreenOptions } from "./plan.js";
 import { touchesSensitive } from "./plan.js";
 import type { Finding } from "../findings.js";
 
 type EscalationTrigger =
   | "critical-or-high-severity" // §5 trigger 1
-  | "sensitive-path-or-keyword" // §5 trigger 2
-  | "plan-self-disagreement"; // §5 trigger 4 — the two cheap-tier plans disagreed
+  | "sensitive-path-or-keyword"; // §5 trigger 2
 
 // §5 trigger 3: at most two implementation attempts per tier before escalating.
 export const MAX_ATTEMPTS_PER_TIER = 2;
@@ -22,36 +20,11 @@ function higher(a: EscalationTier, b: EscalationTier): EscalationTier {
   return RANK[a] >= RANK[b] ? a : b;
 }
 
-// §5 trigger 4 is a REAL comparison, not an assumption: two plans drafted with independent contexts
-// are compared on their file set and their approach. Agreement is a cheap consistency check;
-// disagreement means the fix isn't mechanical and planning+implementation escalate to standard.
-//
-// It has no production caller, and the reason is recorded HERE, in the file the
-// test-only-exports.baseline.json row names, rather than at the call site that threads the flag —
-// reasonTriaged (src/test-only-exports.ts) binds a row to a reason living in the row's own file, so
-// the same block written next to planningTriggers' caller left this row reading as untriaged (#1547,
-// corrected on #1272 after PR #1662's verifier caught it; the binding predicate itself is #1648).
-//
-// REASON: plansDisagree — §5 trigger 4, plan self-disagreement — is not evaluated on the interactive path, which drafts one plan.
-// KIND: decisional
-// PROVENANCE: TRIED 2026-07-28 — ran producePlan twice on one screened finding against targets/calibration and fed both to plansDisagree: identical plans, disagreement false. Two LOCAL drafts can only ever agree.
-// OWNER: operator
-// DECISION: the 2026-07-26 no-SDK/no-key ruling recorded on issue #1056 removes the second independent draft the trigger compares; a HOLD-or-RETIRE ruling is relayed on #1272 and is the one criterion still open there.
-// TOUCHES: src/fix/escalation.ts, src/fix/produce-plan.ts
-export function plansDisagree(a: FixPlan, b: FixPlan): boolean {
-  const fileSet = (p: FixPlan) => [...p.blastRadius.files, ...p.blastRadius.createdFiles].sort().join("|");
-  if (fileSet(a) !== fileSet(b)) return true;
-  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
-  return norm(a.approach) !== norm(b.approach);
-}
-
-// The planning-time triggers that fired for a finding (§5 triggers 1, 2, 4). `plansDisagreed` is the
-// result of plansDisagree() over the two cheap-tier drafts, threaded in by the caller that drafted them.
-export function planningTriggers(finding: Finding, opts: ScreenOptions, plansDisagreed = false): EscalationTrigger[] {
+// The planning-time triggers that fired for a finding (§5 triggers 1 and 2).
+export function planningTriggers(finding: Finding, opts: ScreenOptions): EscalationTrigger[] {
   const triggers: EscalationTrigger[] = [];
   if (finding.severity === "Critical" || finding.severity === "High") triggers.push("critical-or-high-severity");
   if (touchesSensitive(finding, opts.sensitivePaths ?? [])) triggers.push("sensitive-path-or-keyword");
-  if (plansDisagreed) triggers.push("plan-self-disagreement");
   return triggers;
 }
 
