@@ -21,6 +21,7 @@ import {
   BOUND_TRIAGE,
   RULES_DIR,
   auditDisclosureVenue,
+  boundTriageSourceProblems,
   boundedRatchet,
   commentBounds,
   loadSemgrepRuleFiles,
@@ -120,7 +121,16 @@ function main(): void {
       `\n  bounded on the anchor's wording rather than their own, which is a worse disclosure, not a better one.`,
   );
   console.log(`  rules carrying bound-ish prose outside the marker vocabulary: ${residual.length}, each triaged:`);
-  for (const t of BOUND_TRIAGE) console.log(`    ${t.id}: ${t.disposition}`);
+  console.log(
+    `  BOUND — RESIDUAL VOCABULARY: this count is derived only from the fixed RESIDUAL_MARKERS` +
+      ` vocabulary. It is a lower bound on bound-ish prose, not a census of every residual rule.`,
+  );
+  console.log(
+    `  BOUND — TRIAGE CONTENT: each disposition must quote a verbatim source excerpt, proving the` +
+      ` source was located. The gate cannot prove the interpretation is correct; it proves noticed` +
+      ` and source-linked, not read correctly.`,
+  );
+  for (const t of BOUND_TRIAGE) console.log(`    ${t.id}: source "${t.sourceExcerpt}" — ${t.disposition}`);
 
   if (process.argv.includes("--list")) {
     console.log("\nRules carrying a recorded bound:");
@@ -132,7 +142,8 @@ function main(): void {
 
   const untriaged = residual.filter((id) => !BOUND_TRIAGE.some((t) => t.id === id));
   const stale = BOUND_TRIAGE.filter((t) => !residual.includes(t.id)).map((t) => t.id);
-  if (untriaged.length > 0 || stale.length > 0) {
+  const sourceProblems = boundTriageSourceProblems(rules);
+  if (untriaged.length > 0 || stale.length > 0 || sourceProblems.length > 0) {
     if (untriaged.length > 0) {
       console.error(
         `\n✗ ${untriaged.length} rule(s) carry bound-ish prose this gate's vocabulary cannot see and have no` +
@@ -143,6 +154,10 @@ function main(): void {
     }
     if (stale.length > 0) {
       console.error(`\n✗ ${stale.length} BOUND_TRIAGE entr(ies) no longer match a residual rule: ${stale.join(", ")}`);
+    }
+    if (sourceProblems.length > 0) {
+      console.error(`\n✗ ${sourceProblems.length} BOUND_TRIAGE source citation(s) do not match the rule comments:`);
+      for (const problem of sourceProblems) console.error(`  ${problem}`);
     }
     process.exit(1);
   }

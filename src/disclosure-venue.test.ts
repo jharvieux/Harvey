@@ -9,6 +9,7 @@ import {
   loadSemgrepRules,
   parseSemgrepRules,
   residualBoundish,
+  boundTriageSourceProblems,
   scopeSentence,
   tsDetectorFilesRead,
   unattributedBounds,
@@ -219,7 +220,17 @@ describe("the gate's own residual", () => {
     const residual = residualBoundish(loadSemgrepRules()).map((r) => r.id).sort();
 
     expect(residual).toEqual([...BOUND_TRIAGE.map((t) => t.id)].sort());
-    expect(BOUND_TRIAGE.every((t) => t.disposition.length > 40)).toBe(true);
+    expect(boundTriageSourceProblems(loadSemgrepRules())).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL: rejects the inverted spawn disposition as a source claim the rule never makes", () => {
+    const inverted = BOUND_TRIAGE.map((entry) => entry.id === "harvey-spawn-shell-true"
+      ? { ...entry, sourceExcerpt: "the argv-array rules do cover the excluded spawn/execFile family" }
+      : entry);
+
+    expect(boundTriageSourceProblems(loadSemgrepRules(), inverted)).toEqual([
+      expect.stringContaining("harvey-spawn-shell-true: source excerpt is not present"),
+    ]);
   });
 
   // #1714: the recorded blocker at src/disclosure-venue.ts says a TS/AST detector's bound comments
