@@ -99,11 +99,31 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(warm.phases.map((phase) => phase.scope)).toEqual(cold.phases.map((phase) => phase.scope));
       expect(warm.phases.filter((phase) => phase.cache === "hit").map((phase) => phase.phase).sort()).toEqual([
         "configuration",
-        "secrets-history",
         "semgrep",
         "structural-ast",
       ]);
       expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(250);
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the real forced-cold scanner path when an empty cache provides nothing to compare", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-mechanical-verify-empty-"));
+    const phases = ["secrets-history", "dependency-advisory", "semgrep", "configuration", "structural-ast", "normalization"] as const;
+    try {
+      await expect(runMechanicalScanDetailed({
+        dir,
+        skipNetworkChecks: true,
+        phaseCache: {
+          dir: cacheDir,
+          mode: "verify",
+          targetRevision: "empty-cache-revision",
+          targetTree: "empty-cache-tree",
+          implementation: Object.fromEntries(phases.map((phase) => [phase, `implementation:${phase}`])),
+          externalInputs: Object.fromEntries(phases.map((phase) => [phase, { fixture: "v1" }])),
+        },
+      })).rejects.toThrow("forced-cold cache verification incomplete: semgrep=miss, configuration=miss, structural-ast=miss");
     } finally {
       rmSync(cacheDir, { recursive: true, force: true });
     }

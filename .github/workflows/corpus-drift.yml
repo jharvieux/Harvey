@@ -381,7 +381,7 @@ jobs:
           cold_flag=()
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             cold_flag=(--force-cold-cache)
-            echo "Forced-cold cache equivalence is enabled: every deterministic phase is re-earned and compared with its restored artifact."
+            echo "Forced-cold cache equivalence is enabled: every deterministic phase must compare with a restored artifact; a miss seeds a later run but fails this one."
           fi
           # A single-shard run writes the CANONICAL name: it is the one whose artifact #1564's
           # prior-snapshot fetch consumes, and the aggregate job below reassembles the sharded case

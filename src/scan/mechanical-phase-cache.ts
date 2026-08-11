@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Finding } from "../findings.js";
+import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readRecursiveSafe, statSafe } from "../fs-walk.js";
 
 export const MECHANICAL_PHASES = [
@@ -60,12 +60,32 @@ interface CacheArtifact {
 }
 
 const CACHEABILITY: Record<MechanicalPhase, { cacheable: boolean; reason: string }> = {
-  "secrets-history": { cacheable: true, reason: "target tree/history, implementation/config, and scanner binary versions are reproducibly keyed" },
+  "secrets-history": { cacheable: false, reason: "TruffleHog --only-verified consults live provider state whose result has no reproducible identity" },
   "dependency-advisory": { cacheable: false, reason: "OSV and npm registry/advisory responses have no immutable response identity on this path" },
   semgrep: { cacheable: true, reason: "resolved registry packs, local rules, implementation, target tree, and Semgrep version are keyed" },
   configuration: { cacheable: true, reason: "in-process configuration checks depend only on the keyed target tree and implementation" },
   "structural-ast": { cacheable: true, reason: "in-process structural/AST checks depend only on the keyed target tree, options, runtime, and implementation" },
   normalization: { cacheable: false, reason: "cheap composition step consumes this run's cacheable and live advisory outputs" },
+};
+
+export const CACHEABLE_MECHANICAL_PHASES = MECHANICAL_PHASES.filter(
+  (phase): phase is MechanicalPhase => CACHEABILITY[phase].cacheable,
+);
+
+const CACHE_VALIDATION_META: ReportMeta = {
+  client: "mechanical phase cache artifact",
+  subtitle: "schema validation only",
+  date: "1970-01-01",
+  commit: "cache-artifact",
+  auditor: "Harvey",
+  confidential: true,
+  overallHealth: 0,
+  tenantIsolation: "not applicable",
+  authModel: "not applicable",
+  headline: "cache artifact validation",
+  scope: "one cached mechanical phase",
+  methodology: "canonical Finding schema",
+  outOfScope: "document metadata",
 };
 
 function stable(value: unknown): string {
@@ -128,11 +148,13 @@ export function resolveGitTree(dir: string): string {
   }
 }
 
-function isFinding(value: unknown): value is Finding {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
-  return ["id", "title", "severity", "confidence", "taxonomy", "location", "evidence", "impact", "fix"].every((k) => typeof row[k] === "string")
-    && ["value", "ease", "safety"].every((k) => typeof row[k] === "number");
+function findingSchemaProblems(value: unknown): string[] {
+  const result = validateFindings({ meta: CACHE_VALIDATION_META, findings: [value] });
+  return result.errors.filter((error) => error.startsWith("findings[0]"));
+}
+
+export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): string {
+  return digestParts([stable(value)]);
 }
 
 function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree">): CacheArtifact {
@@ -140,11 +162,13 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
   if (value.schema !== 1 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree) {
     throw new Error("artifact identity/schema mismatch");
   }
-  if (!Array.isArray(value.findings) || !value.findings.every(isFinding)) throw new Error("artifact findings are incomplete or malformed");
+  if (!Array.isArray(value.findings)) throw new Error("artifact findings are incomplete or malformed");
+  const findingProblems = value.findings.flatMap((finding) => findingSchemaProblems(finding));
+  if (findingProblems.length > 0) throw new Error(`artifact findings violate the normalized Finding schema: ${findingProblems.join("; ")}`);
   if (!value.scope || !Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0 || typeof value.scope.description !== "string" || value.scope.description.length === 0) {
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
-  const payloadDigest = digestParts([stable({ findings: value.findings, scope: value.scope })]);
+  const payloadDigest = mechanicalPhasePayloadDigest({ findings: value.findings, scope: value.scope });
   if (value.payloadDigest !== payloadDigest) throw new Error("artifact payload checksum mismatch");
   return value as CacheArtifact;
 }
@@ -192,7 +216,7 @@ export async function executeMechanicalPhase(
   if (hit && !equivalent(value, { findings: hit.findings, scope: hit.scope })) throw new Error(`${phase}: forced-cold result differs from cached findings or examined scope for ${key}`);
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
-  const payloadDigest = digestParts([stable(value)]);
+  const payloadDigest = mechanicalPhasePayloadDigest(value);
   writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...value }, null, 2)}\n`);
   renameSync(temp, path);
   const reread = parseArtifact(readFileSync(path, "utf8"), expected);
@@ -200,4 +224,18 @@ export async function executeMechanicalPhase(
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
   cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact`);
   return { phase, ...value, durationMs: Date.now() - started, cache: status, reason: hit ? "forced-cold result matched cached artifact" : "no complete artifact for this content address; recomputed", key };
+}
+
+export function assertMechanicalCacheVerification(
+  phases: readonly MechanicalPhaseRecord[],
+  mode: MechanicalCacheMode | undefined,
+): void {
+  if (mode !== "verify") return;
+  const unverified = CACHEABLE_MECHANICAL_PHASES.flatMap((phase) => {
+    const record = phases.find((candidate) => candidate.phase === phase);
+    return record?.cache === "recomputed" ? [] : [`${phase}=${record?.cache ?? "missing"}`];
+  });
+  if (unverified.length > 0) {
+    throw new Error(`forced-cold cache verification incomplete: ${unverified.join(", ")}. A miss may seed a later run, but this run compared no restored artifact for every deterministic phase and cannot claim equivalence`);
+  }
 }

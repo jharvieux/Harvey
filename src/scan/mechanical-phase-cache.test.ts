@@ -4,10 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
 import {
+  CACHEABLE_MECHANICAL_PHASES,
+  assertMechanicalCacheVerification,
   executeMechanicalPhase,
   MECHANICAL_PHASES,
+  mechanicalPhasePayloadDigest,
   type MechanicalPhase,
   type MechanicalPhaseCacheOptions,
+  type MechanicalPhaseRecord,
 } from "./mechanical-phase-cache.js";
 
 const finding = (id: string): Finding => ({
@@ -88,6 +92,26 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(events.some((event) => event.includes("payload checksum mismatch"))).toBe(true);
   });
 
+  it("rejects a checksum-valid finding missing required category and status fields", async () => {
+    const events: string[] = [];
+    const cache = options({ onEvent: (message) => events.push(message) });
+    const cold = await run("semgrep", cache);
+    const artifact = join(cache.dir, "semgrep", `${cold.key}.json`);
+    const parsed = JSON.parse(readFileSync(artifact, "utf8")) as {
+      findings: Record<string, unknown>[];
+      scope: { unitsExamined: number; description: string };
+      payloadDigest: string;
+    };
+    delete parsed.findings[0]!.category;
+    delete parsed.findings[0]!.status;
+    parsed.payloadDigest = mechanicalPhasePayloadDigest({ findings: parsed.findings as unknown as Finding[], scope: parsed.scope });
+    writeFileSync(artifact, JSON.stringify(parsed));
+    const recomputed = await run("semgrep", cache, "complete-finding");
+    expect(recomputed.cache).toBe("miss");
+    expect(recomputed.findings[0]?.id).toBe("complete-finding");
+    expect(events.some((event) => event.includes("normalized Finding schema") && event.includes("category") && event.includes("status"))).toBe(true);
+  });
+
   it("invalidates only Semgrep when its rules/implementation move", async () => {
     const cache = options();
     await run("semgrep", cache);
@@ -108,11 +132,23 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
 
   it("invalidates every cacheable artifact when the pinned target tree changes", async () => {
     const cache = options();
-    for (const phase of ["secrets-history", "semgrep", "configuration", "structural-ast"] as const) await run(phase, cache);
+    for (const phase of CACHEABLE_MECHANICAL_PHASES) await run(phase, cache);
     const changed = options({ ...cache, targetRevision: "commit-b", targetTree: "tree-b" });
-    for (const phase of ["secrets-history", "semgrep", "configuration", "structural-ast"] as const) {
+    for (const phase of CACHEABLE_MECHANICAL_PHASES) {
       expect((await run(phase, changed, `${phase}-new-tree`)).cache).toBe("miss");
     }
+  });
+
+  it("never reuses live-provider-backed TruffleHog results", async () => {
+    const cache = options();
+    const execute = vi.fn(() => ({ findings: [finding("verified-secret")], scope: { unitsExamined: 1, description: "one source tree plus provider verification" } }));
+    const first = await executeMechanicalPhase("secrets-history", cache, execute);
+    const second = await executeMechanicalPhase("secrets-history", cache, execute);
+    expect(first.cache).toBe("non-cacheable");
+    expect(second.cache).toBe("non-cacheable");
+    expect(first.reason).toContain("--only-verified");
+    expect(first.reason).toContain("live provider state");
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("always reruns advisory/network work and names why it is non-cacheable", async () => {
@@ -132,6 +168,16 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     const verify = { ...cache, mode: "verify" as const };
     await expect(run("semgrep", verify, "changed-on-cold-run")).rejects.toThrow("forced-cold result differs");
     expect((await run("semgrep", verify)).cache).toBe("recomputed");
+  });
+
+  it("forced-cold verification fails loud when every deterministic phase is a new miss", async () => {
+    const verify = options({ mode: "verify" });
+    const records: MechanicalPhaseRecord[] = [];
+    for (const phase of CACHEABLE_MECHANICAL_PHASES) records.push(await run(phase, verify));
+    expect(records.every((record) => record.cache === "miss")).toBe(true);
+    expect(() => assertMechanicalCacheVerification(records, "verify")).toThrow(
+      "A miss may seed a later run, but this run compared no restored artifact",
+    );
   });
 
   it("a miss executes the phase; it can never be represented as assessed-clean", async () => {

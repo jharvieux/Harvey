@@ -6,6 +6,7 @@ import { readRecursiveSafe, statSafe } from "./fs-walk.js";
 const root = process.cwd();
 const path = join(root, ".github", "workflows", "corpus-drift.yml");
 const workflow = readFileSync(path, "utf8");
+const mechanical = readFileSync(join(root, "src", "scan", "mechanical.ts"), "utf8");
 
 describe("#1864 corpus phase-cache workflow contract", () => {
   it("keeps the required context reporting on every PR and failing on any shard result", () => {
@@ -27,6 +28,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain('if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]');
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
     expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(2);
+    expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache?.mode)");
   });
 
   it("declares test-only source edits unreachable while unknown production source remains fail-open", () => {

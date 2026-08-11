@@ -88,6 +88,7 @@ import { collectWorkspaceManifests } from "../workspaces.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import {
   MECHANICAL_PHASES,
+  assertMechanicalCacheVerification,
   executeMechanicalPhase,
   type MechanicalPhaseCacheOptions,
   type MechanicalPhaseRecord,
@@ -644,6 +645,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     if (missing.length > 0 || duplicates.length > 0) {
       throw new Error(`mechanical phase accounting incomplete: missing [${missing.join(", ")}], duplicated [${duplicates.join(", ")}]`);
     }
+    assertMechanicalCacheVerification(phases, opts.phaseCache?.mode);
     // #975 — declare each AST detector's CWE (semgrep rows already carry theirs from rule metadata).
     return { findings: normalized.findings, phases };
   } finally {
