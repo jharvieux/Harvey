@@ -484,12 +484,22 @@ export function parseBody(prBody: string, repo?: string, venue: string = PR_BODY
   });
 
   for (const d of dispositions.filter((x) => x.disposition === "split")) {
-    const target = /#(\d+)/.exec(d.detail);
-    if (target) remainders.push({ remainder: Number(target[1]), original: d.issue, line: d.line, venue });
+    const target = splitRemainderNumber(d.detail);
+    if (target !== undefined) remainders.push({ remainder: target, original: d.issue, line: d.line, venue });
   }
 
   const byRef = new Map(closes.map((c) => [`${c.repo ?? ""}#${c.number}`, c]));
   return { closes: [...byRef.values()], unresolvedCloses, dispositions, noCriteria, remainders, parseErrors };
+}
+
+function splitRemainderNumber(detail: string): number | undefined {
+  // Inline code is quotation just as a fenced block is. In particular, a quoted gate receipt such
+  // as `RELAY COMPLETED (#1753)` describes an old rule; it does not name the split target. Keep the
+  // first prose reference after removing complete backtick spans. An unmatched backtick removes
+  // nothing rather than hiding the rest of the disposition from the gate.
+  const assertion = detail.replace(/(`+)([\s\S]*?)\1/g, "");
+  const target = /#(\d+)/.exec(assertion);
+  return target ? Number(target[1]) : undefined;
 }
 
 /**
@@ -669,7 +679,14 @@ interface CriterionVerdict {
   disposition?: Disposition;
   detail?: string;
   /** #1753/#1791 — the `relayed` line a terminal disposition retired. Reported, so the retirement is visible rather than silent. */
-  superseded?: { venue: string; line: number; detail: string };
+  superseded?: {
+    /** The retired `relayed` line. Kept at top level for existing report consumers. */
+    venue: string;
+    line: number;
+    detail: string;
+    /** The terminal disposition that retired it. */
+    by: { venue: string; line: number; disposition: Exclude<Disposition, "relayed">; detail: string };
+  };
   problems: string[];
 }
 
@@ -832,7 +849,17 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
     if (superseding !== undefined) {
       const r = relays[0]!;
-      verdict.superseded = { venue: r.venue, line: r.line, detail: r.detail };
+      verdict.superseded = {
+        venue: r.venue,
+        line: r.line,
+        detail: r.detail,
+        by: {
+          venue: superseding.venue,
+          line: superseding.line,
+          disposition: superseding.disposition as Exclude<Disposition, "relayed">,
+          detail: superseding.detail,
+        },
+      };
     }
     if (d.disposition === "met") {
       const evidence = evidenceProblems(d.detail, world);
@@ -845,7 +872,7 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
         verdict.problems.push(`the evidence was TRUNCATED AT A LINE BREAK — ${d.venue}, line ${d.line} is read to its end and line ${d.line + 1} ("${d.wrappedInto.slice(0, 70)}") is NOT joined to it. Put the whole disposition on one line`);
       }
     }
-    if (d.disposition === "split" && !/#\d+/.test(d.detail)) {
+    if (d.disposition === "split" && splitRemainderNumber(d.detail) === undefined) {
       verdict.problems.push("`split` names no remainder issue — a split with no live remainder is a deletion (#1316)");
     }
     if (d.disposition === "relayed") {
