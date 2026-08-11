@@ -76,6 +76,15 @@ const CREATE_TABLE = new RegExp(
   "gi",
 );
 
+// `parseColumns` is the historical union view used to prove the base CREATE TABLE parser. Production
+// seed derivation uses `parseLiveColumns`, because the union includes columns from a table definition
+// that a later DROP + re-CREATE removed (#643) and can therefore generate an invalid INSERT column.
+//
+// REASON: parseColumns is test-only by design as the base CREATE TABLE union view; production two-tenant seeding calls parseLiveColumns so dropped and re-created table definitions cannot contribute stale columns to an INSERT.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-11 (#1547) — `git grep -n parseColumns -- src` names only this definition, parser tests, and explanatory comments, while src/pentest/two-tenant-seed.ts imports parseLiveColumns; the falsifier was exercised as committed (1), with a temporary production import (0), and with this file absent (127).
+// FALSIFIER: test -f src/migration-sql-parse.ts || exit 127; o=$(pnpm test-only-exports --list 2>&1); case "$o" in *"test-only-exports gate (#1307)"*) ;; *) exit 127;; esac; case "$o" in *"    export src/migration-sql-parse.ts:parseColumns"*) exit 1;; *) exit 0;; esac
+// TOUCHES: src/migration-sql-parse.ts src/pentest/two-tenant-seed.ts
 export function parseColumns(sql: string): ParsedColumn[] {
   sql = stripLineComments(sql);
   const out: ParsedColumn[] = [];
@@ -289,7 +298,16 @@ export function parseCheckConstraints(sql: string): CheckConstraint[] {
   return out;
 }
 
-// The derivable subset: enum-like allow-lists the seed can pick a legal value from (#547).
+// The derivable subset: enum-like allow-lists the seed can pick a legal value from (#547). This is
+// a test-facing projection of the full parser. Production uses `parseCheckConstraints`, because its
+// `values: null` rows are the fail-loud signal for a CHECK with no derivable legal value;
+// consuming only this subset would silently omit those constraints.
+//
+// REASON: parseCheckInConstraints is test-only by design as the derivable subset of parseCheckConstraints; production seeding needs the full result including values-null rows so a non-derivable CHECK is disclosed instead of silently omitted.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-08-11 (#1547) — `git grep -n parseCheckInConstraints -- src` names only this definition and migration-sql-parse.test.ts, while src/pentest/two-tenant-seed.ts imports parseCheckConstraints and handles its null rows; the falsifier was exercised as committed (1), with a temporary production import (0), and with this file absent (127).
+// FALSIFIER: test -f src/migration-sql-parse.ts || exit 127; o=$(pnpm test-only-exports --list 2>&1); case "$o" in *"test-only-exports gate (#1307)"*) ;; *) exit 127;; esac; case "$o" in *"    export src/migration-sql-parse.ts:parseCheckInConstraints"*) exit 1;; *) exit 0;; esac
+// TOUCHES: src/migration-sql-parse.ts src/pentest/two-tenant-seed.ts
 export function parseCheckInConstraints(sql: string): { table_name: string; column_name: string; values: string[] }[] {
   return parseCheckConstraints(sql)
     .filter((c): c is { table_name: string; column_name: string; values: string[] } => c.values !== null);

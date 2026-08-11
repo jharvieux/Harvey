@@ -227,7 +227,17 @@ describe("Gate 1 — completing a relay supersedes the `relayed` line (#1753)", 
     const r = checkAcceptance(completed, lookupOf(relayedInComment));
     expect(r.ok).toBe(true);
     expect(r.issues[0]!.criteria[0]!.disposition).toBe("met");
-    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({ venue: "#40 comment 2", line: 1, detail: expect.stringContaining("supervised path") });
+    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({
+      venue: "#40 comment 2",
+      line: 1,
+      detail: expect.stringContaining("supervised path"),
+      by: {
+        venue: "the PR body",
+        line: 3,
+        disposition: "met",
+        detail: expect.stringContaining("src/foo.ts:9"),
+      },
+    });
     const out = formatAcceptance(r);
     expect(out).toContain("RELAY COMPLETED (#1753)");
     expect(out).toContain("#40 comment 2, line 1");
@@ -316,6 +326,12 @@ describe("Gate 1 — an operator can terminally disposition an unmet criterion (
       venue: "#40 comment 2",
       line: 1,
       detail: expect.stringContaining("supervised path"),
+      by: {
+        venue: "the PR body",
+        line: 3,
+        disposition: "ruled-unmet",
+        detail: expect.stringContaining("operator @jharvieux"),
+      },
     });
     const out = formatAcceptance(r);
     expect(out).toContain("RELAY TERMINATED AS RULED-UNMET (#1791)");
@@ -574,6 +590,36 @@ describe("Gate 2 — remainder liveness", () => {
   it("passes a split whose remainder exists, is OPEN and is cross-linked from the original", () => {
     const body = "Closes #40\n\nACCEPTANCE #40.1 split: #41\n";
     expect(checkAcceptance(body, lookupOf(original, issue({ number: 41 }))).ok).toBe(true);
+  });
+
+  it("ignores inline-quoted issue references when harvesting a split remainder (#1788)", () => {
+    const quotedRule = issue({
+      number: 40,
+      body: "## Acceptance\n- one\n",
+      comments: ["Remainder filed as #1900."],
+    });
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted gate output `RELAY COMPLETED (#1753)`; remainder filed as #1900\n";
+    const r = checkAcceptance(body, lookupOf(quotedRule, issue({ number: 1753, state: "CLOSED" }), issue({ number: 1900 })));
+
+    expect(r.ok).toBe(true);
+    expect(r.remainders.map((remainder) => remainder.remainder)).toEqual([1900]);
+  });
+
+  it("treats an inline-quoted #N with no prose target as a numberless split", () => {
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted gate output `RELAY COMPLETED (#1753)` only\n";
+
+    expect(problems(body, lookupOf(original, issue({ number: 1753 })))).toEqual([
+      expect.stringContaining("names no remainder issue"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: still checks a genuinely wrong prose split target", () => {
+    const wrong = issue({ number: 40, body: "## Acceptance\n- one\n", comments: ["Remainder filed as #1900."] });
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted `#1753`; remainder filed as #1900\n";
+
+    expect(problems(body, lookupOf(wrong, issue({ number: 1900, state: "CLOSED" })))).toEqual([
+      expect.stringContaining("#1900 is CLOSED"),
+    ]);
   });
 
   it("NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails — the #715 → #161 shape", () => {

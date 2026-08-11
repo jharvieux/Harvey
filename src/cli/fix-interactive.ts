@@ -143,15 +143,8 @@ if (interactive) {
 
 // ingest — the §5 escalation walk over the operator's ordered attempts (#922/#1272).
 // planningTriggers is fed the SAME ScreenOptions intake screened with, so the tier decision here and
-// the screen agree. plansDisagreed is threaded false with a recorded reason: it compares two
-// INDEPENDENTLY-DRAFTED plans, and this path drafts exactly one (producePlan is deterministic, so
-// drafting it twice compares a plan to itself and can only ever agree).
-//
-// The reason for threading `false` is recorded next to plansDisagree itself in src/fix/escalation.ts
-// — that is the file its test-only-exports row names, and the gate binds a row to a reason in its own
-// file (#1547). plansDisagree stays a PARAMETER of planningTriggers, so an implementer that does draft
-// twice supplies the flag without touching this file.
-const triggers = planningTriggers(finding, { enabledCategories: manifest.enabledCategories, sensitivePaths: manifest.sensitivePaths }, false);
+// the screen agree.
+const triggers = planningTriggers(finding, { enabledCategories: manifest.enabledCategories, sensitivePaths: manifest.sensitivePaths });
 const startTier = initialTier(plan.tier, triggers);
 
 interface Attempt {

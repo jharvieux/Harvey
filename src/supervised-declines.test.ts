@@ -4,7 +4,13 @@
 // 2026-07-31 (`--pr 1481` fires; `--since-days 4` cleared #1456, #1381 and #1327).
 
 import { describe, expect, it } from "vitest";
-import { findSupervisedDeclines, judgeDecline, selftestCases, type IssueLike } from "./supervised-declines.js";
+import {
+  findSupervisedDeclines,
+  judgeDecline,
+  selftestCases,
+  supervisedDeclineTriage,
+  type IssueLike,
+} from "./supervised-declines.js";
 
 const lookupOf = (...issues: IssueLike[]) => (n: number): IssueLike | undefined => issues.find((i) => i.number === n);
 const verdict = (body: string, lookup = lookupOf()): string[] =>
@@ -27,6 +33,20 @@ describe("what counts as a supervised-path decline", () => {
   it("reads the whole PARAGRAPH for the issue it names, not the one line", () => {
     const body = "`.github/workflows/` is supervised, so the wiring is not done in this PR.\nTracked by #1483.";
     expect(findSupervisedDeclines(body)[0]!.issues).toEqual([1483]);
+  });
+});
+
+describe("exact-instance false-positive triage (#1821)", () => {
+  it("records who triaged PR #1683 line 36 and why", () => {
+    expect(supervisedDeclineTriage(1683, 36)).toMatchObject({
+      triagedBy: "@jharvieux in #1821",
+      reason: expect.stringContaining("shared-line decline signal attaches to the wrong file"),
+    });
+  });
+
+  it("NEGATIVE CONTROL: the record does not widen to another line or PR", () => {
+    expect(supervisedDeclineTriage(1683, 35)).toBeUndefined();
+    expect(supervisedDeclineTriage(1684, 36)).toBeUndefined();
   });
 });
 

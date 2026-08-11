@@ -199,13 +199,63 @@ export function residualBoundish(rules: readonly SemgrepRule[]): SemgrepRule[] {
 // every entry here must still be residual — the CLI fails on either mismatch, so a new rule with
 // bound-ish prose cannot join the set unread and a triaged rule cannot quietly stop being triaged.
 // "We looked and it was nothing" and "we never looked" are the same silence otherwise.
-export const BOUND_TRIAGE: readonly { readonly id: string; readonly disposition: string }[] = [
-  { id: "harvey-service-role-in-client", disposition: "pattern mechanics — 'correctly NOT flagged' describes an intended non-firing (a server-only file), which is the rule's edge, not a class it leaves unassessed" },
-  { id: "harvey-prototype-pollution", disposition: "pattern mechanics — 'a source that cannot reach' explains why three candidate source extensions were REJECTED as recall theatre; the rejected shapes are not reachable defects" },
-  { id: "harvey-spawn-shell-true", disposition: "pattern mechanics — 'deliberately excluded' describes the DIVISION OF LABOUR with the argv-array rules, which do cover the excluded family; nothing is unassessed" },
-  { id: "harvey-unsafe-deserialization", disposition: "genuine bound — scope sentence written into the message ('depends on the deserialization library actually in use'); its phrasing is outside the marker vocabulary, so the sentence is voluntary rather than gate-held" },
-  { id: "harvey-template-autoescape-off", disposition: "genuine bound — scope sentence written into the message ('whether user data actually flows through this template is not traced'); same voluntary status as above" },
+interface BoundTriage {
+  readonly id: string;
+  /** A verbatim excerpt from the rule comments. This constrains the disposition to source text. */
+  readonly sourceExcerpt: string;
+  readonly disposition: string;
+}
+
+export const BOUND_TRIAGE: readonly BoundTriage[] = [
+  {
+    id: "harvey-service-role-in-client",
+    sourceExcerpt: 'has no "use client" and is correctly NOT flagged',
+    disposition: "pattern mechanics — the excerpt describes an intended non-firing (a server-only file), which is the rule's edge, not a class it leaves unassessed",
+  },
+  {
+    id: "harvey-prototype-pollution",
+    sourceExcerpt: "Each of these would be recall theatre: a source that cannot reach this weakness",
+    disposition: "pattern mechanics — the candidate source extensions are rejected because their values cannot reach the weakness; the rejected shapes are not reachable defects",
+  },
+  {
+    id: "harvey-spawn-shell-true",
+    sourceExcerpt: "this covers the spawn/execFile family the argv-array rules deliberately excluded",
+    disposition: "pattern mechanics — this rule covers the spawn/execFile family that the argv-array rules deliberately excluded; the family is assessed here, not by those rules",
+  },
+  {
+    id: "harvey-unsafe-deserialization",
+    sourceExcerpt: "depends on the sink library being the exploitable one",
+    disposition: "genuine bound — a scope sentence is written into the message ('depends on the deserialization library actually in use'); its phrasing is outside the marker vocabulary, so the sentence is voluntary rather than gate-held",
+  },
+  {
+    id: "harvey-template-autoescape-off",
+    sourceExcerpt: "depends on whether user data actually flows through the template",
+    disposition: "genuine bound — a scope sentence is written into the message ('whether user data actually flows through this template is not traced'); same voluntary status as above",
+  },
 ];
+
+function normalizedCommentText(rule: SemgrepRule): string {
+  return rule.comments.map((c) => c.text).join(" ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Constrains each residual disposition to a verbatim source excerpt. This proves the source was
+ * located, not that the prose was interpreted correctly: semantic agreement is still a human
+ * judgement, and the CLI prints that bound beside the triage population.
+ */
+export function boundTriageSourceProblems(
+  rules: readonly SemgrepRule[],
+  triage: readonly BoundTriage[] = BOUND_TRIAGE,
+): string[] {
+  const byId = new Map(rules.map((r) => [r.id, r]));
+  return triage.flatMap((entry) => {
+    const rule = byId.get(entry.id);
+    if (!rule) return [`${entry.id}: rule does not exist`];
+    return normalizedCommentText(rule).includes(entry.sourceExcerpt.replace(/\s+/g, " ").trim())
+      ? []
+      : [`${entry.id}: source excerpt is not present in the rule comments: ${entry.sourceExcerpt}`];
+  });
+}
 
 // Terms too generic to prove the message is talking about the same bound the comment declared —
 // they are the vocabulary OF a scope sentence, so matching on them would let any scope sentence
@@ -341,6 +391,41 @@ export function scopeSentence(message: string): string | null {
     if (hit && (at === -1 || hit.index < at)) at = hit.index;
   }
   return at === -1 ? null : message.slice(at);
+}
+
+type CompoundScopeRequirement = {
+  readonly description: string;
+  readonly pattern: RegExp;
+};
+
+// #1411.4: lexical overlap can prove that a scope sentence discusses SOME recorded bound while
+// silently dropping another independent bound from the same rule. Keep the known compound case
+// explicit and client-facing: both precision-motivated false negatives must remain in the scope
+// sentence, not merely in comments or the descriptive half of the finding.
+const COMPOUND_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly CompoundScopeRequirement[]>> = {
+  "harvey-path-traversal": [
+    {
+      description: "states that path.normalize is not recognised as a containment guard",
+      pattern: /path\.normalize\([^)]*\)[^a-z]+is not recognised as a containment guard/i,
+    },
+    {
+      description: "states that bare or named-import open is not examined",
+      pattern: /bare or named-import `open\([^`]*\)` is not examined/i,
+    },
+  ],
+};
+
+export function compoundScopeProblems(rules: readonly SemgrepRule[]): string[] {
+  const byId = new Map(rules.map((rule) => [rule.id, rule]));
+  return Object.entries(COMPOUND_SCOPE_REQUIREMENTS).flatMap(([id, requirements]) => {
+    const rule = byId.get(id);
+    if (!rule) return [`${id}: rule does not exist`];
+    const scope = scopeSentence(rule.message);
+    if (scope === null) return [`${id}: scope sentence does not exist`];
+    return requirements
+      .filter((requirement) => !requirement.pattern.test(scope))
+      .map((requirement) => `${id}: scope sentence ${requirement.description}`);
+  });
 }
 
 export function verdict(rule: SemgrepRule, hits: readonly MarkerHit[]): VenueVerdict {

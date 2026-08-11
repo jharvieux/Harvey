@@ -92,7 +92,7 @@ const CLASS4_FILE = "pages/api/redirect.js"; // class 4: z.string().url() open r
 const CLASS3_FILE = "pages/api/verbose.js"; // class 3: raw error egress (harvey-verbose-error)
 const SQLI_FILE = "pages/api/search.js"; // planted bug #4: SQLi via template literal (harvey-sql-injection-template)
 
-describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (M5)", () => {
+describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (M5)", async () => {
   it("yields GREEN: the mechanical fix applies clean, clears the rails, and the detector-after is clean", async () => {
     const src = readCalibration(M5_FILE);
     const fixed = m5Fixed(src);
@@ -108,7 +108,7 @@ describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (
   it("the detector-after gate genuinely discriminates — it FIRES on the unfixed source", async () => {
     // Proves green isn't an always-clean detector: re-run against the UNFIXED corpus and it must fire.
     const baseline = track(materialize({ [M5_FILE]: readCalibration(M5_FILE) }));
-    const before = rerunDetector(m5Finding(), baseline.dir);
+    const before = await rerunDetector(m5Finding(), baseline.dir);
     expect(before.fired).toBe(true);
     expect(before.notRun).toBeUndefined();
   });
@@ -142,7 +142,7 @@ const SEMGREP_PRESENT = hasBinary("semgrep");
 // comfortably over vitest's 5s default when the full suite runs in parallel.
 const SEMGREP_TIMEOUT_MS = 30_000;
 
-describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the semgrep-detected classes (#1009)", () => {
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the semgrep-detected classes (#1009)", async () => {
   it("class 4 (open redirect) reaches GREEN: the redirect target becomes a literal picked by an enum key", async () => {
     const src = readCalibration(CLASS4_FILE);
     const fixed = src
@@ -219,7 +219,7 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the 
 const REGISTRY_FILE = "components/LocationNav.jsx";
 const REGISTRY_RULE = "javascript.browser.security.open-redirect.js-open-redirect";
 
-describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a semgrep REGISTRY-pack class (#1368)", () => {
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for a semgrep REGISTRY-pack class (#1368)", async () => {
   it("reaches GREEN: the registry pack replays live and the rule stops firing after the fix", async () => {
     const src = readCalibration(REGISTRY_FILE);
     const fixed = src.replace(
@@ -258,7 +258,7 @@ const CLASS1_FILE = "pages/api/payout-claim.js"; // class 1: CAS update with no 
 const CLASS2_FILE = "pages/api/subscribe.js"; // class 2: awaited insert whose { error } is discarded (harvey-unchecked-mutation)
 const CLASS5_FILE = "pages/api/receipt.js"; // class 5: void-prefixed async in a handler (harvey-void-async)
 
-describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 classes 1, 2 and 5 (#1021)", () => {
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 classes 1, 2 and 5 (#1021)", async () => {
   it("class 1 (zero-row update) reaches GREEN: the CAS chains .select() and the handler asserts the row count", async () => {
     const src = readCalibration(CLASS1_FILE);
     const fixed = src
@@ -341,14 +341,14 @@ describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 
     ];
     for (const [file, taxonomy] of negatives) {
       const c = track(materialize({ [file]: readCalibration(file) }));
-      const run = rerunDetector(m5Finding({ id: `CAL-NEG-${file}`, taxonomy, location: `${file}:1` }), c.dir);
+      const run = await rerunDetector(m5Finding({ id: `CAL-NEG-${file}`, taxonomy, location: `${file}:1` }), c.dir);
       expect(run.notRun, file).toBeUndefined();
       expect(run.fired, file).toBe(false);
     }
   }, SEMGREP_TIMEOUT_MS * 4);
 });
 
-describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrades to recommend-only", () => {
+describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrades to recommend-only", async () => {
   const meta = { client: "cal", commit: "cal-base" } as ReportMeta;
   const manifest: EngagementManifest = {
     client: "cal", baselineCommit: "cal-base", approvedFindingIds: ["RLS-USING-TRUE"],
@@ -373,7 +373,7 @@ describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrade
   });
 });
 
-describe("fix §8 acceptance — rails + in-place refusal (unchanged from #885/#930)", () => {
+describe("fix §8 acceptance — rails + in-place refusal (unchanged from #885/#930)", async () => {
   it("the calibration target and its planted class-4 source exist (the recorded #9 blocker is stale)", async () => {
     expect(readFileSync(`${CALIBRATION_ROOT}/${CLASS4_FILE}`, "utf8")).toContain("z.string().url()");
   });
@@ -411,7 +411,7 @@ describe("fix §8 acceptance — rails + in-place refusal (unchanged from #885/#
 // pins BOTH directions, because a gate nobody has watched refuse reads exactly like a gate with no
 // refusal path at all. The corpus carries a real package.json so the §2.1 client half runs too (#1272);
 // npm rather than pnpm because a materialized corpus has no lockfile.
-describe("fix §8 acceptance — a planted class through the full emit → diff → ingest loop (#1277)", () => {
+describe("fix §8 acceptance — a planted class through the full emit → diff → ingest loop (#1277)", async () => {
   const clientRepo = (src: string) => ({
     [M5_FILE]: src,
     "package.json": `${JSON.stringify({ name: "cal-client", private: true, scripts: { test: "node client-test.js" } }, null, 2)}\n`,
