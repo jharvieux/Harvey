@@ -1,4 +1,4 @@
-// pnpm exec tsx src/cli/validate-supervised-declines.ts [--since-days N] [--pr N ...] [--selftest]
+// pnpm exec tsx src/cli/validate-supervised-declines.ts [--since-days N] [--pr N ...] [--all-history] [--selftest]
 //
 // #1545. Reads MERGED PR BODIES for the repo's densest false-decline family — "X is a supervised
 // path", written in the same grammar as "X is impossible" — and reports every instance carrying no
@@ -20,7 +20,14 @@
 import "./sync-stdio.js";
 import { spawnSync } from "node:child_process";
 import { recordDeclaredNoOp, recordMeasured } from "../ci-liveness.js";
-import { findSupervisedDeclines, judgeDecline, ROUTINELY_GRANTED, selftestCases, type IssueLike } from "../supervised-declines.js";
+import {
+  findSupervisedDeclines,
+  judgeDecline,
+  ROUTINELY_GRANTED,
+  selftestCases,
+  supervisedDeclineTriage,
+  type IssueLike,
+} from "../supervised-declines.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -86,8 +93,40 @@ interface Pr {
   mergedAt: string;
 }
 
+const DEFAULT_SINCE_DAYS = 1;
+
+function allMergedPrs(): Pr[] {
+  const repo = gh(["repo", "view", "--json", "nameWithOwner"]);
+  if (repo.status !== 0) die(`\`gh repo view\` failed (exit ${repo.status}): ${repo.stderr.trim()}`);
+  const [owner, name] = (JSON.parse(repo.stdout) as { nameWithOwner: string }).nameWithOwner.split("/");
+  if (!owner || !name) die("could not resolve owner/repo for the historical scan");
+  const query = `query($owner:String!,$name:String!,$after:String){
+    repository(owner:$owner,name:$name){
+      pullRequests(first:50,states:MERGED,after:$after,orderBy:{field:CREATED_AT,direction:ASC}){
+        pageInfo{hasNextPage endCursor}
+        nodes{number title body mergedAt}
+      }
+    }
+  }`;
+  const prs: Pr[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const queryArgs = ["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
+    if (after !== undefined) queryArgs.push("-F", `after=${after}`);
+    const result = gh(queryArgs);
+    if (result.status !== 0) die(`historical GraphQL page failed (exit ${result.status}): ${result.stderr.trim()}`);
+    const page = (JSON.parse(result.stdout) as {
+      data: { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string }; nodes: Pr[] } } };
+    }).data.repository.pullRequests;
+    prs.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage) return prs;
+    after = page.pageInfo.endCursor;
+  }
+}
+
 function prsToScan(): Pr[] {
   const explicit = args.flatMap((a, i) => (a === "--pr" ? [args[i + 1]] : []));
+  if (args.includes("--all-history") && explicit.length > 0) die("--all-history and --pr are mutually exclusive");
   if (explicit.length > 0) {
     return explicit.map((n) => {
       if (!n || !/^\d+$/.test(n)) die("--pr needs a PR number");
@@ -96,7 +135,8 @@ function prsToScan(): Pr[] {
       return JSON.parse(r.stdout) as Pr;
     });
   }
-  const days = Number(flag("--since-days") ?? 1);
+  if (args.includes("--all-history")) return allMergedPrs();
+  const days = Number(flag("--since-days") ?? DEFAULT_SINCE_DAYS);
   if (!Number.isFinite(days) || days <= 0) die("--since-days needs a positive number of days");
   const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const r = gh(["pr", "list", "--state", "merged", "--limit", "200", "--search", `merged:>=${since}`, "--json", "number,title,body,mergedAt"]);
@@ -110,11 +150,21 @@ console.log(`Supervised-path declines (#1545) — ${prs.length} merged PR body(i
 let unrelayed = 0;
 let relayed = 0;
 let notADecline = 0;
+let triagedFalsePositive = 0;
+const agedOutUnrelayed = new Set<number>();
+const defaultCutoff = Date.now() - DEFAULT_SINCE_DAYS * 86_400_000;
 for (const pr of prs) {
   for (const hit of findSupervisedDeclines(pr.body ?? "")) {
     const v = judgeDecline(hit, pr.body ?? "", lookupIssue);
     if (v.relay === "none") {
+      const triage = supervisedDeclineTriage(pr.number, hit.line);
+      if (triage) {
+        triagedFalsePositive++;
+        console.log(`○ PR #${pr.number} line ${hit.line} — TRIAGED FALSE POSITIVE (${triage.triagedBy}: ${triage.reason})`);
+        continue;
+      }
       unrelayed++;
+      if (new Date(pr.mergedAt).getTime() < defaultCutoff) agedOutUnrelayed.add(pr.number);
       console.log(`✗ PR #${pr.number} line ${hit.line} — UNRELAYED DECLINE (${v.detail})`);
       console.log(`    ${hit.text.slice(0, 220)}`);
     } else if (v.relay === "nothing-owed" || v.relay === "met-criterion") {
@@ -152,7 +202,7 @@ console.log(
 // `ACCEPTANCE … met` disposition). Those three causes are fixed; the residual precision bound below
 // is the one that survives, and it is a live instance, not a hypothetical.
 console.log(
-  `\nBOUND — RECALL: ${unrelayed + relayed + notADecline} paragraph(s) matched a supervised-path signal AND a decline verb.` +
+  `\nBOUND — RECALL: ${unrelayed + relayed + notADecline + triagedFalsePositive} paragraph(s) matched a supervised-path signal AND a decline verb.` +
     ` A decline phrased outside that vocabulary is not counted here — this is a floor, not a census.` +
     `\nBOUND — PRECISION: a flag is a paragraph to READ, not a proven defect. The check cannot tell which of several` +
     `\n  files named in one paragraph a decline verb attaches to, so a sentence like "CLAUDE.md is not edited here;` +
@@ -163,9 +213,22 @@ console.log(
     `\n  verdict names which issue cleared it for exactly this reason (live: PR #1481 line 162, cleared via #1319,` +
     `\n  MEASURED 2026-07-31). A "relayed" line is evidence to check, not a verdict to trust.`,
 );
+console.log(
+  `BOUND — DURABILITY: the scheduled/default window is \`--since-days ${DEFAULT_SINCE_DAYS}\`. A flag ages out` +
+    ` unfixed after that window, so a green scheduled run is evidence about one day, NOT evidence that no` +
+    ` supervised-path decline ever went unrelayed. Run \`--all-history\` for the paginated aged-out population.`,
+);
+
+if (args.includes("--all-history")) {
+  console.log(
+    `\nHISTORICAL DURABILITY MEASUREMENT: ${agedOutUnrelayed.size} merged PR(s) older than` +
+      ` \`--since-days ${DEFAULT_SINCE_DAYS}\` still carry an unrelayed decline with no current relay.` +
+      ` Population: ${prs.length} merged PR(s), paginated in full; ${triagedFalsePositive} recorded false positive(s) excluded.`,
+  );
+}
 
 if (unrelayed > 0) {
-  console.error(`\n✗ ${unrelayed} unrelayed supervised-path decline(s) — ${relayed} correctly relayed, ${notADecline} not a decline.`);
+  console.error(`\n✗ ${unrelayed} unrelayed supervised-path decline(s) — ${relayed} correctly relayed, ${notADecline} not a decline, ${triagedFalsePositive} triaged false positive(s).`);
   process.exit(1);
 }
-console.log(`\n✓ no unrelayed supervised-path decline in this window (${relayed} relayed, ${notADecline} not a decline).`);
+console.log(`\n✓ no unrelayed supervised-path decline in this window (${relayed} relayed, ${notADecline} not a decline, ${triagedFalsePositive} triaged false positive(s)).`);

@@ -163,6 +163,31 @@ export interface IssueLike {
   comments: string[];
 }
 
+export interface SupervisedDeclineTriage {
+  pr: number;
+  line: number;
+  triagedBy: string;
+  reason: string;
+}
+
+/**
+ * Exact-instance false-positive records. Detection stays unchanged: a body edit that moves the hit
+ * to another line, or any new PR with the same prose, is unrecorded and fails until read itself.
+ */
+export const SUPERVISED_DECLINE_TRIAGE: readonly SupervisedDeclineTriage[] = [
+  {
+    pr: 1683,
+    line: 36,
+    triagedBy: "@jharvieux in #1821",
+    reason:
+      "CLAUDE.md had no falsified sentence; the sentence says the two falsified claims live in other files and were corrected there, so the shared-line decline signal attaches to the wrong file",
+  },
+];
+
+export function supervisedDeclineTriage(pr: number, line: number): SupervisedDeclineTriage | undefined {
+  return SUPERVISED_DECLINE_TRIAGE.find((record) => record.pr === pr && record.line === line);
+}
+
 interface DeclineVerdict {
   hit: DeclineHit;
   relay: "quoted-grant" | "operator-ask" | "orchestrator-report" | "nothing-owed" | "met-criterion" | "none";
