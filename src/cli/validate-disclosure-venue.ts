@@ -24,6 +24,7 @@ import {
   boundTriageSourceProblems,
   boundedRatchet,
   commentBounds,
+  compoundScopeProblems,
   loadSemgrepRuleFiles,
   loadSemgrepRules,
   residualBoundish,
@@ -83,6 +84,7 @@ function main(): void {
   const rules = [...loadSemgrepRules(), ...(seed ? SEEDED_RULES : [])];
   const bounded = rules.filter((r) => commentBounds(r).length > 0);
   const violations = auditDisclosureVenue(rules);
+  const compoundProblems = compoundScopeProblems(rules);
   const residual = residualBoundish(rules).map((r) => r.id);
 
   // Bare number only, so the recorded reason in src/disclosure-venue.ts has a falsifier that exits
@@ -190,6 +192,14 @@ function main(): void {
         "\n  clean bill of health. Deleting the comment is not a fix; it moves the limitation from an unread" +
         "\n  venue to no venue at all.",
     );
+    process.exit(1);
+  }
+
+  if (compoundProblems.length > 0) {
+    console.error(
+      `\n✗ ${compoundProblems.length} compound bound(s) are incomplete in their client-facing scope sentence:`,
+    );
+    for (const problem of compoundProblems) console.error(`  ${problem}`);
     process.exit(1);
   }
 

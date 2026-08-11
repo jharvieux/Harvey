@@ -5,6 +5,7 @@ import {
   auditDisclosureVenue,
   boundedRatchet,
   commentBounds,
+  compoundScopeProblems,
   loadSemgrepRuleFiles,
   loadSemgrepRules,
   parseSemgrepRules,
@@ -146,6 +147,26 @@ describe("the committed semgrep rules", () => {
   it("states every recorded bound in the finding it bounds", () => {
     const violations = auditDisclosureVenue(rules);
     expect(violations.map((v) => `${v.id} (${v.verdict})`)).toEqual([]);
+    expect(compoundScopeProblems(rules)).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL: rejects either #1411.4 precision false negative missing from the path-traversal scope", () => {
+    const traversal = rules.find((r) => r.id === "harvey-path-traversal");
+    expect(traversal).toBeDefined();
+
+    const withoutNormalize = rules.map((r) => r.id === traversal!.id
+      ? { ...r, message: r.message.replace("`path.normalize(...)` is not recognised as a containment guard", "Normalization is discussed elsewhere") }
+      : r);
+    const withoutBareOpen = rules.map((r) => r.id === traversal!.id
+      ? { ...r, message: r.message.replace("A bare or named-import `open(path)` is not examined", "Some file-open calls are discussed elsewhere") }
+      : r);
+
+    expect(compoundScopeProblems(withoutNormalize)).toEqual([
+      expect.stringContaining("path.normalize is not recognised as a containment guard"),
+    ]);
+    expect(compoundScopeProblems(withoutBareOpen)).toEqual([
+      expect.stringContaining("bare or named-import open is not examined"),
+    ]);
   });
 
   // The population-level negative control, and the one that measured the defect. A fixture proves
@@ -223,7 +244,7 @@ describe("the gate's own residual", () => {
     expect(boundTriageSourceProblems(loadSemgrepRules())).toEqual([]);
   });
 
-  it("NEGATIVE CONTROL: rejects the inverted spawn disposition as a source claim the rule never makes", () => {
+  it("NEGATIVE CONTROL: rejects a mutated sourceExcerpt absent from the spawn rule comments", () => {
     const inverted = BOUND_TRIAGE.map((entry) => entry.id === "harvey-spawn-shell-true"
       ? { ...entry, sourceExcerpt: "the argv-array rules do cover the excluded spawn/execFile family" }
       : entry);

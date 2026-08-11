@@ -1239,7 +1239,7 @@ rules:
     message: >
       Request input is joined into a filesystem path and read/written — path traversal
       (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.
-      SCOPE OF THIS CHECK, two independent bounds, so its silence elsewhere is not read as a
+      SCOPE OF THIS CHECK, four independent bounds, so its silence elsewhere is not read as a
       clean bill of health. (1) The sinks (#1273) are the node `fs` family, Supabase Storage object
       keys, and express `res.sendFile`/`res.download`. A file opened through some other library, or
       a `res.sendFile(p, { root })` whose `root` option confines the read, is judged by neither —
@@ -1247,6 +1247,11 @@ rules:
       (2) A resolve-then-re-verify containment guard that rejects by THROWING is recognised (#1248)
       only when no `try` follows the `path.resolve(...)` in the same scope, so a correct guard
       whose resolve is itself wrapped in try/catch is reported here rather than cleared.
+      (3) `path.normalize(...)` is not recognised as a containment guard: normalization neither
+      makes the path absolute nor proves it remains beneath a base directory. (4) A bare or
+      named-import `open(path)` is not examined because that spelling is commonly a browser/UI call;
+      only receiver-qualified `fs.open(...)` is treated as a file-open sink. Silence on either
+      omitted shape is not an assessment of it.
     # #1708: the Supabase Storage sink is a supabase-js call, callable directly from a client
     # component — the real instance that opened this issue (carbon's JobBillOfProcess.tsx, a
     # `useUrlParams()` read reaching `storage.from(...).upload(...)`). The other two sinks (node

@@ -393,6 +393,41 @@ export function scopeSentence(message: string): string | null {
   return at === -1 ? null : message.slice(at);
 }
 
+type CompoundScopeRequirement = {
+  readonly description: string;
+  readonly pattern: RegExp;
+};
+
+// #1411.4: lexical overlap can prove that a scope sentence discusses SOME recorded bound while
+// silently dropping another independent bound from the same rule. Keep the known compound case
+// explicit and client-facing: both precision-motivated false negatives must remain in the scope
+// sentence, not merely in comments or the descriptive half of the finding.
+const COMPOUND_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly CompoundScopeRequirement[]>> = {
+  "harvey-path-traversal": [
+    {
+      description: "states that path.normalize is not recognised as a containment guard",
+      pattern: /path\.normalize\([^)]*\)[^a-z]+is not recognised as a containment guard/i,
+    },
+    {
+      description: "states that bare or named-import open is not examined",
+      pattern: /bare or named-import `open\([^`]*\)` is not examined/i,
+    },
+  ],
+};
+
+export function compoundScopeProblems(rules: readonly SemgrepRule[]): string[] {
+  const byId = new Map(rules.map((rule) => [rule.id, rule]));
+  return Object.entries(COMPOUND_SCOPE_REQUIREMENTS).flatMap(([id, requirements]) => {
+    const rule = byId.get(id);
+    if (!rule) return [`${id}: rule does not exist`];
+    const scope = scopeSentence(rule.message);
+    if (scope === null) return [`${id}: scope sentence does not exist`];
+    return requirements
+      .filter((requirement) => !requirement.pattern.test(scope))
+      .map((requirement) => `${id}: scope sentence ${requirement.description}`);
+  });
+}
+
 export function verdict(rule: SemgrepRule, hits: readonly MarkerHit[]): VenueVerdict {
   if (hits.length === 0) return "no-bound-recorded";
   const scope = scopeSentence(rule.message);
