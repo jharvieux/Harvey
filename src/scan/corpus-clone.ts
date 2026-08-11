@@ -45,7 +45,7 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     rmSync(cached, { recursive: true, force: true });
     cloneAtPin(repo, commit, cached);
   }
-  cpSync(cached, into, { recursive: true });
+  cpSync(cached, into, { recursive: true, verbatimSymlinks: true });
   if (verifyRemote) {
     // A cache proves only that we fetched this commit once. Corpus drift must also prove the
     // declared origin still serves it, otherwise a deleted/private upstream can look healthy.

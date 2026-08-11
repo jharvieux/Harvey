@@ -3,7 +3,7 @@
 // path is proven to skip the network entirely by pointing its "repo" at one that does not exist —
 // a real fetch attempt would throw, so a clean copy proves the network was never touched.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,25 @@ describe("cloneAtPinCached", () => {
     // instead.
     expect(() => cloneAtPinCached(repo, sha, into, cacheDir)).not.toThrow();
     expect(readFileSync(join(into, "marker.txt"), "utf8")).toBe("pinned content\n");
+  });
+
+  it("preserves relative symlink targets in the copied checkout", () => {
+    const cacheDir = tmp("cache-root-");
+    const repo = "definitely-not-a-real-org/definitely-not-a-real-repo-xyz";
+    const cached = join(cacheDir, repo.replace(/\//g, "__"));
+    mkdirSync(cached, { recursive: true });
+    commitOneFile(cached);
+    symlinkSync("marker.txt", join(cached, "link.txt"));
+    git(cached, "add", "link.txt");
+    git(cached, "commit", "-q", "-m", "add relative link");
+    const linkedSha = execFileSync("git", ["-C", cached, "rev-parse", "HEAD"]).toString().trim();
+    const into = tmp("work-");
+
+    cloneAtPinCached(repo, linkedSha, into, cacheDir);
+
+    expect(readlinkSync(join(into, "link.txt"))).toBe("marker.txt");
+    expect(execFileSync("git", ["-C", into, "status", "--porcelain"]).toString()).toBe("");
+    expect(isFreshClone(into, linkedSha)).toBe(true);
   });
 
   it("fails rather than trusting a cached clone when its declared GitHub origin no longer serves the pin", () => {
