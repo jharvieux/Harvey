@@ -227,7 +227,17 @@ describe("Gate 1 — completing a relay supersedes the `relayed` line (#1753)", 
     const r = checkAcceptance(completed, lookupOf(relayedInComment));
     expect(r.ok).toBe(true);
     expect(r.issues[0]!.criteria[0]!.disposition).toBe("met");
-    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({ venue: "#40 comment 2", line: 1, detail: expect.stringContaining("supervised path") });
+    expect(r.issues[0]!.criteria[0]!.superseded).toEqual({
+      venue: "#40 comment 2",
+      line: 1,
+      detail: expect.stringContaining("supervised path"),
+      by: {
+        venue: "the PR body",
+        line: 3,
+        disposition: "met",
+        detail: expect.stringContaining("src/foo.ts:9"),
+      },
+    });
     const out = formatAcceptance(r);
     expect(out).toContain("RELAY COMPLETED (#1753)");
     expect(out).toContain("#40 comment 2, line 1");
@@ -316,6 +326,12 @@ describe("Gate 1 — an operator can terminally disposition an unmet criterion (
       venue: "#40 comment 2",
       line: 1,
       detail: expect.stringContaining("supervised path"),
+      by: {
+        venue: "the PR body",
+        line: 3,
+        disposition: "ruled-unmet",
+        detail: expect.stringContaining("operator @jharvieux"),
+      },
     });
     const out = formatAcceptance(r);
     expect(out).toContain("RELAY TERMINATED AS RULED-UNMET (#1791)");

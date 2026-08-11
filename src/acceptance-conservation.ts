@@ -679,7 +679,14 @@ interface CriterionVerdict {
   disposition?: Disposition;
   detail?: string;
   /** #1753/#1791 — the `relayed` line a terminal disposition retired. Reported, so the retirement is visible rather than silent. */
-  superseded?: { venue: string; line: number; detail: string };
+  superseded?: {
+    /** The retired `relayed` line. Kept at top level for existing report consumers. */
+    venue: string;
+    line: number;
+    detail: string;
+    /** The terminal disposition that retired it. */
+    by: { venue: string; line: number; disposition: Exclude<Disposition, "relayed">; detail: string };
+  };
   problems: string[];
 }
 
@@ -842,7 +849,17 @@ function checkIssue(target: ClosingRef, parsed: ParsedBody, lookup: IssueLookup,
     const verdict: CriterionVerdict = { ...c, disposition: d.disposition, detail: d.detail, problems: [] };
     if (superseding !== undefined) {
       const r = relays[0]!;
-      verdict.superseded = { venue: r.venue, line: r.line, detail: r.detail };
+      verdict.superseded = {
+        venue: r.venue,
+        line: r.line,
+        detail: r.detail,
+        by: {
+          venue: superseding.venue,
+          line: superseding.line,
+          disposition: superseding.disposition as Exclude<Disposition, "relayed">,
+          detail: superseding.detail,
+        },
+      };
     }
     if (d.disposition === "met") {
       const evidence = evidenceProblems(d.detail, world);
