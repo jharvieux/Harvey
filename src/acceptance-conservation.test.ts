@@ -576,6 +576,36 @@ describe("Gate 2 — remainder liveness", () => {
     expect(checkAcceptance(body, lookupOf(original, issue({ number: 41 }))).ok).toBe(true);
   });
 
+  it("ignores inline-quoted issue references when harvesting a split remainder (#1788)", () => {
+    const quotedRule = issue({
+      number: 40,
+      body: "## Acceptance\n- one\n",
+      comments: ["Remainder filed as #1900."],
+    });
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted gate output `RELAY COMPLETED (#1753)`; remainder filed as #1900\n";
+    const r = checkAcceptance(body, lookupOf(quotedRule, issue({ number: 1753, state: "CLOSED" }), issue({ number: 1900 })));
+
+    expect(r.ok).toBe(true);
+    expect(r.remainders.map((remainder) => remainder.remainder)).toEqual([1900]);
+  });
+
+  it("treats an inline-quoted #N with no prose target as a numberless split", () => {
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted gate output `RELAY COMPLETED (#1753)` only\n";
+
+    expect(problems(body, lookupOf(original, issue({ number: 1753 })))).toEqual([
+      expect.stringContaining("names no remainder issue"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: still checks a genuinely wrong prose split target", () => {
+    const wrong = issue({ number: 40, body: "## Acceptance\n- one\n", comments: ["Remainder filed as #1900."] });
+    const body = "Closes #40\n\nACCEPTANCE #40.1 split: quoted `#1753`; remainder filed as #1900\n";
+
+    expect(problems(body, lookupOf(wrong, issue({ number: 1900, state: "CLOSED" })))).toEqual([
+      expect.stringContaining("#1900 is CLOSED"),
+    ]);
+  });
+
   it("NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails — the #715 → #161 shape", () => {
     const body = seedRemainder("Closes #40\n\nACCEPTANCE #40.1 met: src/foo.ts:1\n", 41);
     const closed = issue({ number: 41, state: "CLOSED" });
