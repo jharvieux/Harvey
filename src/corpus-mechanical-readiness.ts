@@ -28,6 +28,12 @@ export interface SemgrepPackReceipt {
   files: Array<{ ordinal: number; name: string; bytes: number; sha256: string; bodyBase64: string }>;
 }
 
+export interface RestoredSemgrepPackArtifact {
+  identity: string;
+  files: string[];
+  receipt: SemgrepPackReceipt;
+}
+
 export interface CurrentMechanicalTargetReceipt {
   slug: string;
   repo: string;
@@ -122,6 +128,61 @@ export function semgrepPackReceipt(files: readonly string[], aggregateSha256: st
   const actual = registryPackIdentity(rows.map((row, ordinal) => ({ pack: REGISTRY_PACKS[ordinal]!, body: Buffer.from(row.bodyBase64, "base64").toString("utf8") })));
   if (actual !== aggregateSha256) throw new Error(`Semgrep registry bytes hash to ${actual}, not ${aggregateSha256}`);
   return { schema: 1, aggregateSha256, files: rows };
+}
+
+/**
+ * Validate the complete upload-artifact/download-artifact payload, not merely the six files that
+ * Semgrep happens to open. The receipt is an independent, byte-carrying description of the pack;
+ * the manifest selects the canonical identity directory; and the exact inventory rejects nesting,
+ * omitted hidden files, or a mixture left behind by another artifact restoration.
+ */
+export function validateRestoredSemgrepPackArtifact(dir: string): RestoredSemgrepPackArtifact {
+  const currentPath = join(dir, "registry-packs", "current.json");
+  const receiptPath = join(dir, "receipt.json");
+  if (!existsSync(currentPath)) throw new Error(`restored Semgrep artifact is not canonical: registry-packs/current.json is missing under ${dir}`);
+  if (!existsSync(receiptPath)) throw new Error(`restored Semgrep artifact is not canonical: receipt.json is missing under ${dir}`);
+
+  let manifest: { schema?: unknown; identity?: unknown };
+  let receipt: SemgrepPackReceipt;
+  try {
+    manifest = JSON.parse(readFileSync(currentPath, "utf8")) as { schema?: unknown; identity?: unknown };
+  } catch (error) {
+    throw new Error(`restored Semgrep artifact current.json is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (manifest.schema !== 1 || typeof manifest.identity !== "string" || !SHA256.test(manifest.identity)) {
+    throw new Error("restored Semgrep artifact current.json has an invalid schema or identity");
+  }
+  try {
+    receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as SemgrepPackReceipt;
+  } catch (error) {
+    throw new Error(`restored Semgrep artifact receipt.json is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  validatePack(receipt, "restored Semgrep artifact receipt.json");
+
+  const identity = manifest.identity;
+  const files = REGISTRY_PACKS.map((pack, ordinal) => join(dir, "registry-packs", identity, `${ordinal}-${pack.replaceAll("/", "-")}.yml`));
+  for (const file of files) if (!existsSync(file)) {
+    throw new Error(`restored Semgrep artifact is incomplete: ${file.slice(dir.length + 1)} is missing`);
+  }
+  const actualReceipt = semgrepPackReceipt(files, identity);
+  if (stable(actualReceipt) !== stable(receipt)) {
+    throw new Error("restored Semgrep artifact bytes/current.json disagree with receipt.json");
+  }
+
+  const expectedInventory = [
+    "receipt.json",
+    "registry-packs",
+    "registry-packs/current.json",
+    `registry-packs/${identity}`,
+    ...files.map((file) => file.slice(dir.length + 1)),
+  ].sort();
+  const actualInventory = readRecursiveSafe(dir).sort();
+  if (stable(actualInventory) !== stable(expectedInventory)) {
+    const unexpected = actualInventory.filter((path) => !expectedInventory.includes(path));
+    const missing = expectedInventory.filter((path) => !actualInventory.includes(path));
+    throw new Error(`restored Semgrep artifact inventory is mixed or nested; unexpected=[${unexpected.join(", ")}]; missing=[${missing.join(", ")}]`);
+  }
+  return { identity, files, receipt };
 }
 
 export function prepareCurrentMechanicalTarget(options: {

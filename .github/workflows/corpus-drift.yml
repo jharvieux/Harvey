@@ -335,7 +335,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: current-mechanical-semgrep-pack
-          path: .harvey-corpus-phase-cache
+          # Download-by-name writes the artifact's CONTENTS directly here; upload-artifact stripped
+          # the `.harvey-current-semgrep` common root. Keep this immutable input outside the mutable
+          # phase-cache directory, whose rejected transport is recursively cleared below.
+          path: .harvey-current-semgrep
+
+      - name: Validate the exact shared Semgrep artifact layout
+        if: steps.filter.outputs.relevant == 'true'
+        run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --validate-only
 
       # Actions cache visibility is a transport boundary, not an authenticity claim. The inner
       # artifacts validate their content identities, and this manifest independently proves the
@@ -407,6 +414,7 @@ jobs:
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
           HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache
+          HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR: .harvey-current-semgrep
           # `prepare-current-inputs` fetched these exact six YAML files once for the whole run.
           # Producers are reuse-only: no shard may race the live registry independently.
           HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse
@@ -609,12 +617,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: current-mechanical-semgrep-pack
-          path: .harvey-current-replay-cache
+          path: .harvey-current-semgrep
+      - name: Validate the exact shared Semgrep artifact layout
+        run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --validate-only
       - name: Execute the independent exact-head replay
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
           SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
-        run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-replay-cache --out "current-replay-${{ matrix.shard }}.json"
+        run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-semgrep --out "current-replay-${{ matrix.shard }}.json"
       - name: Upload independent raw replay
         uses: actions/upload-artifact@v4
         with:

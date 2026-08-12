@@ -12,6 +12,7 @@ import {
   newExecutionId,
   prepareCurrentMechanicalTarget,
   semgrepPackReceipt,
+  validateRestoredSemgrepPackArtifact,
   type CurrentMechanicalExecutionArtifact,
   type CurrentMechanicalTargetDefinition,
 } from "../corpus-mechanical-readiness.js";
@@ -21,7 +22,6 @@ import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { MechanicalPhaseCacheOptions } from "../scan/mechanical-phase-cache.js";
 import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
 import { shardTargets } from "../scan/corpus-shards.js";
-import { materializeRegistryPacks } from "../scan/semgrep.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -36,8 +36,7 @@ const [rawIndex, rawCount] = shardSpec.split("/");
 const shard = { index: Number(rawIndex), count: Number(rawCount) };
 const allTargets: CurrentMechanicalTargetDefinition[] = EXTERNAL_CORPUS.map(({ slug, repo, commit, vendoredSubtrees }) => ({ slug, repo, commit, vendoredSubtrees }));
 const mine = new Set(shardTargets(allTargets.map((target) => target.slug), shard.index, shard.count));
-const registry = materializeRegistryPacks(registryDir, "reuse");
-if (!registry.identity || !registry.files || registry.failure) throw new Error(registry.failure ?? "shared Semgrep registry snapshot is unavailable");
+const registry = validateRestoredSemgrepPackArtifact(registryDir);
 const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
 const harness = currentHarnessReceipt(repoRoot);
 const artifact: CurrentMechanicalExecutionArtifact = {

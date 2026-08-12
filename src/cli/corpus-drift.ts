@@ -95,11 +95,11 @@ import {
   newExecutionId,
   prepareCurrentMechanicalTarget,
   semgrepPackReceipt,
+  validateRestoredSemgrepPackArtifact,
   type CurrentMechanicalExecutionArtifact,
   type CurrentMechanicalTargetDefinition,
   type PreparedMechanicalTarget,
 } from "../corpus-mechanical-readiness.js";
-import { materializeRegistryPacks } from "../scan/semgrep.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -124,6 +124,7 @@ const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
 const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
+const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
 const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
@@ -131,8 +132,16 @@ if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMod
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
   process.exit(2);
 }
-if (currentReadiness && (externalStateMode !== "snapshot" || !phaseCacheDir || registrySnapshotMode !== "reuse")) {
-  console.error("HARVEY_CURRENT_MECHANICAL_READINESS requires snapshot external state, a phase-cache directory, and the one shared Semgrep pack in reuse mode");
+if (registrySnapshotMode === "reuse" && !registrySnapshotDir) {
+  console.error("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE=reuse requires HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR; immutable registry input must not share the mutable phase-cache directory");
+  process.exit(2);
+}
+if (registrySnapshotDir && phaseCacheDir && resolve(registrySnapshotDir) === resolve(phaseCacheDir)) {
+  console.error("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR must differ from HARVEY_CORPUS_PHASE_CACHE_DIR; rejecting a phase-cache transport recursively clears that directory");
+  process.exit(2);
+}
+if (currentReadiness && (externalStateMode !== "snapshot" || !phaseCacheDir || !registrySnapshotDir || registrySnapshotMode !== "reuse")) {
+  console.error("HARVEY_CURRENT_MECHANICAL_READINESS requires snapshot external state, separate phase-cache and registry-snapshot directories, and the one shared Semgrep pack in reuse mode");
   process.exit(2);
 }
 if (forceColdCache && !phaseCacheDir) {
@@ -160,11 +169,7 @@ const currentShard = (() => {
   return { index: Number(rawIndex), count: Number(rawCount) };
 })();
 const allCurrentTargets: CurrentMechanicalTargetDefinition[] = EXTERNAL_CORPUS.map(({ slug, repo, commit, vendoredSubtrees }) => ({ slug, repo, commit, vendoredSubtrees }));
-const sharedRegistry = currentReadiness ? materializeRegistryPacks(phaseCacheDir!, "reuse") : undefined;
-if (currentReadiness && (!sharedRegistry?.identity || !sharedRegistry.files || sharedRegistry.failure)) {
-  console.error(sharedRegistry?.failure ?? "the per-run Semgrep pack is unavailable");
-  process.exit(2);
-}
+const sharedRegistry = registrySnapshotMode === "reuse" ? validateRestoredSemgrepPackArtifact(registrySnapshotDir!) : undefined;
 const currentExecution: CurrentMechanicalExecutionArtifact | undefined = currentReadiness ? {
   schema: 1,
   kind: "current-mechanical-execution",
