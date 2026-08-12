@@ -26,6 +26,46 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
+  it("caches proven zero-test mutation results for both no-package and package-without-suite targets", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-zero-mutation-"));
+    const cacheDir = join(fixture, "cache");
+    dirs.push(fixture);
+    for (const shape of ["no-package", "package-without-suite"] as const) {
+      const targetDir = join(fixture, shape);
+      mkdirSync(join(targetDir, "src"), { recursive: true });
+      writeFileSync(join(targetDir, "src", "index.ts"), "export const live = true;\n");
+      if (shape === "package-without-suite") {
+        writeFileSync(join(targetDir, "package.json"), '{"name":"subscription-shaped","private":true,"scripts":{"build":"next build"}}\n');
+      }
+      const run = () => runCorpusScanner({
+        repoRoot: process.cwd(),
+        targetDir,
+        targetConfig: shape,
+        script: "mutation-scan",
+        scanner: "mutation-detect-only",
+        scriptArgs: [targetDir, "--detect-only"],
+        cache: { dir: cacheDir, mode: "read-write", targetRevision: `${shape}-pin`, targetTree: `${shape}-tree` },
+      });
+      const cold = await run();
+      const warm = await run();
+      expect([cold.cacheRecord?.cache, warm.cacheRecord?.cache]).toEqual(["miss", "hit"]);
+      expect(cold.findings).toContainEqual(expect.objectContaining({ id: "M8-00" }));
+      expect(warm.findings).toEqual(cold.findings);
+      expect(warm.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
+      expect(warm.cacheRecord?.scope.unitsExamined).toBe(0);
+      expect(warm.cacheRecord?.scope.observation).toMatchObject({
+        scanner: "mutation-detect-only",
+        suiteSignals: { packageManifest: shape === "package-without-suite", strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+        zeroTestDisposition: {
+          status: shape === "no-package" ? "not-applicable" : "no-suite",
+          reason: expect.any(String),
+          provenance: expect.stringContaining("mutation-scan inspected"),
+          falsifier: expect.stringContaining("invalidates"),
+        },
+      });
+    }
+  }, 30_000);
+
   it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);

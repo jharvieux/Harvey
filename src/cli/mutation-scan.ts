@@ -699,7 +699,12 @@ if (!reportPath) {
   const targetPackageManifest = readTargetPackageJson();
   let ancestorWorkspaceSuite: string | null = null;
   let childWorkspaceSuites: string[] = [];
-  const emitDetectOnlyScope = (): void => writeCorpusScannerScope(scopeOutPath, "mutation-detect-only", {
+  const emitDetectOnlyScope = (zeroTestDisposition?: {
+    status: "no-suite" | "not-applicable";
+    reason: string;
+    provenance: string;
+    falsifier: string;
+  }): void => writeCorpusScannerScope(scopeOutPath, "mutation-detect-only", {
     unitsExamined: detectOnlyTestFiles.length,
     description: detectOnlyTestFiles.length > 0
       ? `${detectOnlyTestFiles.length} test source file(s) opened by mutation detect-only suite detection`
@@ -716,6 +721,7 @@ if (!reportPath) {
         ancestorWorkspaceSuite,
         childWorkspaceSuites,
       },
+      ...(detectOnlyTestFiles.length === 0 ? { zeroTestDisposition } : {}),
     },
   });
   const { missing, reason } = detectNoTestSuite(targetPackageManifest, hasStrykerConfig, detectOnlyTestFiles);
@@ -792,7 +798,12 @@ if (!reportPath) {
     } else {
       console.log(json);
     }
-    if (detectOnly) emitDetectOnlyScope();
+    if (detectOnly) emitDetectOnlyScope({
+      status: targetPackageManifest === undefined ? "not-applicable" : "no-suite",
+      reason: why,
+      provenance: "mutation-scan inspected package, Stryker, ancestor-workspace, child-workspace, and test-source suite signals",
+      falsifier: "A discovered test source, Stryker configuration, ancestor suite, or child workspace suite invalidates this zero-unit observation",
+    });
     process.exit(0);
   }
 

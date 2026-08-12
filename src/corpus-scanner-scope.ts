@@ -8,7 +8,7 @@ interface CorpusScannerScopeReceipt extends CorpusScannerScope {
   observation: CorpusScannerObservation;
 }
 
-export type CorpusScannerOwnedScope = CorpusScannerScope & { observation: CorpusScannerObservation };
+type CorpusScannerOwnedScope = CorpusScannerScope & { observation: CorpusScannerObservation };
 
 export function digestObservedPaths(paths: readonly string[]): string {
   return createHash("sha256").update([...paths].sort().join("\0")).digest("hex");
@@ -18,32 +18,82 @@ function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function canonicalStringSet(value: unknown): value is string[] {
+  return stringArray(value)
+    && new Set(value).size === value.length
+    && value.every((item, index) => index === 0 || value[index - 1]! < item);
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function sha256Digest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function completeExplanation(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length >= 20;
+}
+
 export function isCorpusScannerOwnedScope(scope: Partial<CorpusScannerOwnedScope>, scanner: CorpusCacheableScanner): scope is CorpusScannerOwnedScope {
   const units = scope.unitsExamined;
   const observation = scope.observation;
   if (!Number.isInteger(units) || units! < 0 || typeof scope.description !== "string" || scope.description.length === 0 || !observation || observation.scanner !== scanner) return false;
   if (scanner !== "mutation-detect-only" && units === 0) return false;
   if (observation.scanner === "detect-static") {
-    return observation.loadedSources.count === units
-      && observation.loadedSources.pathsDigest.length > 0
+    return nonNegativeInteger(observation.loadedSources?.count)
+      && observation.loadedSources.count === units
+      && sha256Digest(observation.loadedSources.pathsDigest)
+      && nonNegativeInteger(observation.ancillary?.productSources)
+      && nonNegativeInteger(observation.ancillary?.configSources)
+      && nonNegativeInteger(observation.ancillary?.testStorySources)
       && observation.ancillary.productSources + observation.ancillary.configSources + observation.ancillary.testStorySources === units;
   }
   if (observation.scanner === "quality-scan") {
-    return observation.productSources.count === units
-      && observation.productSources.pathsDigest.length > 0
-      && Number.isInteger(observation.jscpd.comparedLines)
-      && observation.jscpd.comparedLines >= 0
-      && stringArray(observation.knip.discovered)
-      && stringArray(observation.knip.completed)
-      && stringArray(observation.knip.reduced)
-      && stringArray(observation.knip.incomplete);
+    if (!nonNegativeInteger(observation.productSources?.count)
+      || observation.productSources.count !== units
+      || !sha256Digest(observation.productSources.pathsDigest)
+      || (observation.jscpd?.status !== "completed" && observation.jscpd?.status !== "incomplete")
+      || !nonNegativeInteger(observation.jscpd.comparedLines)
+      || !canonicalStringSet(observation.knip?.discovered)
+      || !canonicalStringSet(observation.knip.completed)
+      || !canonicalStringSet(observation.knip.reduced)
+      || !canonicalStringSet(observation.knip.incomplete)
+      || !nonNegativeInteger(observation.divergedClones?.securityPathSources)
+      || typeof observation.divergedClones.wholeRepoEnabled !== "boolean"
+      || !nonNegativeInteger(observation.divergedClones.complementSources)
+      || observation.divergedClones.securityPathSources > units!) return false;
+    const discovered = new Set(observation.knip.discovered);
+    const completed = new Set(observation.knip.completed);
+    const incomplete = new Set(observation.knip.incomplete);
+    if (observation.knip.completed.some((scope) => incomplete.has(scope))
+      || observation.knip.reduced.some((scope) => !completed.has(scope))
+      || observation.knip.incomplete.some((scope) => !discovered.has(scope))
+      || observation.knip.completed.some((scope) => !discovered.has(scope))
+      || discovered.size !== completed.size + incomplete.size) return false;
+    return observation.divergedClones.complementSources === (observation.divergedClones.wholeRepoEnabled
+      ? units! - observation.divergedClones.securityPathSources
+      : 0);
   }
-  return observation.testSources.count === units
-    && observation.testSources.pathsDigest.length > 0
-    && typeof observation.suiteSignals.packageManifest === "boolean"
+  const mutationShapeIsComplete = nonNegativeInteger(observation.testSources?.count)
+    && observation.testSources.count === units
+    && sha256Digest(observation.testSources.pathsDigest)
+    && typeof observation.suiteSignals?.packageManifest === "boolean"
     && typeof observation.suiteSignals.strykerConfig === "boolean"
     && (observation.suiteSignals.ancestorWorkspaceSuite === null || typeof observation.suiteSignals.ancestorWorkspaceSuite === "string")
-    && stringArray(observation.suiteSignals.childWorkspaceSuites);
+    && canonicalStringSet(observation.suiteSignals.childWorkspaceSuites);
+  if (!mutationShapeIsComplete) return false;
+  if (units! > 0) return observation.zeroTestDisposition === undefined;
+  const disposition = observation.zeroTestDisposition;
+  return observation.testSources.pathsDigest === digestObservedPaths([])
+    && observation.suiteSignals.strykerConfig === false
+    && observation.suiteSignals.ancestorWorkspaceSuite === null
+    && observation.suiteSignals.childWorkspaceSuites.length === 0
+    && (disposition?.status === "no-suite" || disposition?.status === "not-applicable")
+    && completeExplanation(disposition.reason)
+    && completeExplanation(disposition.provenance)
+    && completeExplanation(disposition.falsifier);
 }
 
 /** Write the examined scope from inside the scanner process that performed the work. */

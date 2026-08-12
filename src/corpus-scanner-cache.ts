@@ -32,6 +32,12 @@ export type CorpusScannerObservation =
         ancestorWorkspaceSuite: string | null;
         childWorkspaceSuites: string[];
       };
+      zeroTestDisposition?: {
+        status: "no-suite" | "not-applicable";
+        reason: string;
+        provenance: string;
+        falsifier: string;
+      };
     };
 
 export interface CorpusScannerScope {
@@ -219,7 +225,9 @@ export async function executeCorpusScanner(
     options.onEvent?.(`CACHE BYPASS ${options.scanner}: ${reason}; incomplete output was not stored`);
     return { scanner: options.scanner, findings: value.findings, scope: value.scope, cache: "non-cacheable", reason, key };
   }
-  if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${options.scanner}: examined scope must be a positive integer`);
+  if (!isCorpusScannerOwnedScope(value.scope, options.scanner)) {
+    throw new Error(`${options.scanner}: examined scope is not a complete scanner-owned observation`);
+  }
   const canonicalFindings = canonicalizeTargetRoot(value.findings, options.pathRoot);
   if (hit && stableCorpusValue({ findings: hit.findings, scope: hit.scope }) !== stableCorpusValue({ findings: canonicalFindings, scope: value.scope })) {
     throw new Error(`${options.scanner}: forced-cold result differs from cached findings or examined scope for ${key}`);

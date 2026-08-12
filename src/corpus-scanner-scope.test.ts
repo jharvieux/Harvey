@@ -2,7 +2,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCorpusScannerScope, writeCorpusScannerScope } from "./corpus-scanner-scope.js";
+import { digestObservedPaths, readCorpusScannerScope, writeCorpusScannerScope } from "./corpus-scanner-scope.js";
+import type { CorpusScannerObservation } from "./corpus-scanner-cache.js";
+
+interface MutableQualityObservation {
+  scanner: "quality-scan";
+  productSources: { count: number; pathsDigest: string };
+  jscpd: { status: string; comparedLines: number };
+  knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[] };
+  divergedClones?: { securityPathSources: number; wholeRepoEnabled: boolean; complementSources: number };
+}
 
 describe("scanner-owned examined-scope receipts", () => {
   const dirs: string[] = [];
@@ -21,7 +30,7 @@ describe("scanner-owned examined-scope receipts", () => {
       description: "sources loaded by detect-static",
       observation: {
         scanner: "detect-static",
-        loadedSources: { count: 6_131, pathsDigest: "static-paths" },
+        loadedSources: { count: 6_131, pathsDigest: "a".repeat(64) },
         ancillary: { productSources: 3_066, configSources: 2, testStorySources: 3_063 },
       },
     });
@@ -30,7 +39,7 @@ describe("scanner-owned examined-scope receipts", () => {
       description: "sources loaded by detect-static",
       observation: {
         scanner: "detect-static",
-        loadedSources: { count: 6_131, pathsDigest: "static-paths" },
+        loadedSources: { count: 6_131, pathsDigest: "a".repeat(64) },
         ancillary: { productSources: 3_066, configSources: 2, testStorySources: 3_063 },
       },
     });
@@ -43,7 +52,7 @@ describe("scanner-owned examined-scope receipts", () => {
       description: "quality source inputs",
       observation: {
         scanner: "quality-scan",
-        productSources: { count: 3_055, pathsDigest: "quality-paths" },
+        productSources: { count: 3_055, pathsDigest: "b".repeat(64) },
         jscpd: { status: "completed", comparedLines: 8_000 },
         knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] },
         divergedClones: { securityPathSources: 1, wholeRepoEnabled: false, complementSources: 0 },
@@ -66,23 +75,112 @@ describe("scanner-owned examined-scope receipts", () => {
     })).toThrow(/incomplete or zero/);
   });
 
-  it("allows mutation to report zero test files while retaining the suite signals it consumed", () => {
+  it("allows mutation to report a proven no-suite zero while retaining its reason, provenance, and falsifier", () => {
     const path = receiptPath();
     writeCorpusScannerScope(path, "mutation-detect-only", {
       unitsExamined: 0,
       description: "zero test files; package/config signals consumed",
       observation: {
         scanner: "mutation-detect-only",
-        testSources: { count: 0, pathsDigest: "empty" },
+        testSources: { count: 0, pathsDigest: digestObservedPaths([]) },
         suiteSignals: { packageManifest: true, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+        zeroTestDisposition: {
+          status: "no-suite",
+          reason: "No runnable automated test suite was detected in this package",
+          provenance: "mutation-scan inspected package, configuration, workspace, and test-source signals",
+          falsifier: "A discovered test source or runnable suite signal invalidates this zero-unit observation",
+        },
       },
     });
-    expect(readCorpusScannerScope(path, "mutation-detect-only").unitsExamined).toBe(0);
+    const scope = readCorpusScannerScope(path, "mutation-detect-only");
+    expect(scope.unitsExamined).toBe(0);
+    if (scope.observation.scanner !== "mutation-detect-only") throw new Error("expected mutation observation");
+    expect(scope.observation.zeroTestDisposition).toMatchObject({ status: "no-suite" });
+  });
+
+  it("rejects mutation zero without a complete disposition or with a signal claiming a suite", () => {
+    const base = {
+      unitsExamined: 0,
+      description: "zero test files; package/config signals consumed",
+      observation: {
+        scanner: "mutation-detect-only" as const,
+        testSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+        suiteSignals: { packageManifest: true, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] as string[] },
+      },
+    };
+    expect(() => writeCorpusScannerScope(receiptPath(), "mutation-detect-only", base)).toThrow(/incomplete or zero/);
+    expect(() => writeCorpusScannerScope(receiptPath(), "mutation-detect-only", {
+      ...base,
+      observation: {
+        ...base.observation,
+        suiteSignals: { ...base.observation.suiteSignals, strykerConfig: true },
+        zeroTestDisposition: {
+          status: "no-suite",
+          reason: "No runnable automated test suite was detected in this package",
+          provenance: "mutation-scan inspected package, configuration, workspace, and test-source signals",
+          falsifier: "A discovered test source or runnable suite signal invalidates this zero-unit observation",
+        },
+      },
+    })).toThrow(/incomplete or zero/);
+  });
+
+  it("rejects generic zero explanations and a zero disposition attached to positive mutation scope", () => {
+    expect(() => writeCorpusScannerScope(receiptPath(), "mutation-detect-only", {
+      unitsExamined: 0,
+      description: "zero test files",
+      observation: {
+        scanner: "mutation-detect-only",
+        testSources: { count: 0, pathsDigest: digestObservedPaths([]) },
+        suiteSignals: { packageManifest: false, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+        zeroTestDisposition: { status: "not-applicable", reason: "none", provenance: "scanner", falsifier: "file" },
+      },
+    })).toThrow(/incomplete or zero/);
+    expect(() => writeCorpusScannerScope(receiptPath(), "mutation-detect-only", {
+      unitsExamined: 1,
+      description: "one test source",
+      observation: {
+        scanner: "mutation-detect-only",
+        testSources: { count: 1, pathsDigest: "c".repeat(64) },
+        suiteSignals: { packageManifest: true, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+        zeroTestDisposition: {
+          status: "no-suite",
+          reason: "No runnable automated test suite was detected in this package",
+          provenance: "mutation-scan inspected package, configuration, workspace, and test-source signals",
+          falsifier: "A discovered test source or runnable suite signal invalidates this zero-unit observation",
+        },
+      },
+    })).toThrow(/incomplete or zero/);
   });
 
   it("rejects malformed and forged generic receipts", () => {
     const path = receiptPath();
     writeFileSync(path, '{"schema":1,"unitsExamined":6133,"description":"generic target census"}\n');
     expect(() => readCorpusScannerScope(path, "detect-static")).toThrow(/mismatched/);
+  });
+
+  it.each([
+    ["unknown jscpd status", (observation: MutableQualityObservation) => { observation.jscpd.status = "forged"; }],
+    ["malformed source-path digest", (observation: MutableQualityObservation) => { observation.productSources.pathsDigest = "not-a-sha256"; }],
+    ["missing divergence scope", (observation: MutableQualityObservation) => { delete observation.divergedClones; }],
+    ["completed scope not discovered", (observation: MutableQualityObservation) => { observation.knip.completed = ["ghost"]; }],
+    ["completed and incomplete overlap", (observation: MutableQualityObservation) => { observation.knip.incomplete = ["(repo root)"]; }],
+    ["reduced scope not completed", (observation: MutableQualityObservation) => { observation.knip.reduced = ["ghost"]; }],
+    ["non-canonical duplicate scope set", (observation: MutableQualityObservation) => { observation.knip.discovered = ["(repo root)", "(repo root)"]; }],
+    ["negative divergence count", (observation: MutableQualityObservation) => { observation.divergedClones!.securityPathSources = -1; }],
+    ["false whole-repo complement", (observation: MutableQualityObservation) => { observation.divergedClones!.complementSources = 1; }],
+  ])("rejects a semantically inconsistent quality receipt: %s", (_name, mutate) => {
+    const observation: MutableQualityObservation = {
+      scanner: "quality-scan" as const,
+      productSources: { count: 5, pathsDigest: "d".repeat(64) },
+      jscpd: { status: "completed" as const, comparedLines: 100 },
+      knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] },
+      divergedClones: { securityPathSources: 2, wholeRepoEnabled: false, complementSources: 0 },
+    };
+    mutate(observation);
+    expect(() => writeCorpusScannerScope(receiptPath(), "quality-scan", {
+      unitsExamined: 5,
+      description: "five quality product sources examined",
+      observation: observation as unknown as CorpusScannerObservation,
+    })).toThrow(/incomplete or zero/);
   });
 });
