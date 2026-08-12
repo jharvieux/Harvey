@@ -421,6 +421,13 @@ const findingsBySlug: Record<string, Finding[]> = {};
 // output merely because many of its rows also carry `mechanical: true`.
 const mechanicalFindingsBySlug: Record<string, Finding[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
+const mechanicalExternalStateBySlug: Record<string, {
+  mode: string;
+  advisoryDigest?: string;
+  advisoryVersion?: string;
+  networkFallbacksDisabled: boolean;
+  secretCandidateIdentity?: string;
+}> = {};
 
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
@@ -562,7 +569,10 @@ for (const target of targets) {
     // #261: the free-tier invariant, scored against a REAL quick-scan of this pinned tree rather
     // than the synthetic findings #244 could only assert over.
     const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
-    const snapshot = expectation && externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+    // The migrated mechanical population covers all pinned targets. Snapshot mode must resolve
+    // deterministic provider input for every one; this unconditional load is the fail-loud gate
+    // against an ungraded target silently falling back to live OSV/provider state.
+    const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
     const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
     const skipNetworkChecks = externalStateMode === "snapshot";
     const secretCandidateIdentity = deterministicSnapshot ? digestParts([
@@ -570,6 +580,13 @@ for (const target of targets) {
       digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
       binaryVersion("gitleaks"),
     ]) : undefined;
+    mechanicalExternalStateBySlug[target.slug] = {
+      mode: externalStateMode,
+      advisoryDigest: deterministicSnapshot?.digest,
+      advisoryVersion: deterministicSnapshot?.osvScannerVersion,
+      networkFallbacksDisabled: skipNetworkChecks,
+      secretCandidateIdentity,
+    };
     // The parity artifact uses this all-target population. Keep it outside the expectation branch:
     // targets without a free-tier grade still own migrated mechanical rows.
     const mechanicalRun = await runMechanicalScanDetailed({
@@ -686,6 +703,7 @@ if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
   mechanicalPopulation: MECHANICAL_CORPUS_POPULATION,
   mechanicalFindings: mechanicalFindingsBySlug,
   detectors: detectorRecordsBySlug,
+  mechanicalExternalState: mechanicalExternalStateBySlug,
 }, null, 2)}\n`);
 
 // #1485 — the manifest's declared false-positive FLOORS, checked here as well as in the unit suite,

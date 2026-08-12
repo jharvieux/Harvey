@@ -63,6 +63,8 @@ const fixtureFor = (file: string): string | undefined => ({
   "src/scan/sfc-coverage.ts": "src/scan/sfc-coverage.test.ts",
   "src/scan/infra-scope.ts": "src/scan/infra-scope.test.ts",
   "src/scan/gha-permissions.ts": "src/scan/gha-permissions.test.ts",
+  "src/scan/mechanical-architecture.ts": "src/scan/mechanical-architecture.test.ts",
+  "src/scan/webext-manifest.ts": "src/scan/webext-manifest.test.ts",
 } as Record<string, string>)[file];
 
 function definition(input: Pick<MechanicalEngineDefinition<ConfigurationInput>, "id" | "order" | "implementation" | "taxonomies" | "applicableFiles" | "invoke"> & Partial<MechanicalEngineDefinition<ConfigurationInput>>): MechanicalEngineDefinition<ConfigurationInput> {

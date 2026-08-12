@@ -95,6 +95,15 @@ describe("#1851 immutable one-scan context", () => {
     const route = context.sourceFiles.find((file) => file.path === "src/route.ts")!;
     const cached = context.withAstCache(() => [parse(route.path, route.text), parse(route.path, route.text)]);
     expect(cached[0]).toBe(cached[1]);
+    const originalStart = cached[0]!.statements[0]!.pos;
+    expect(() => { (cached[0]!.statements[0] as unknown as { pos: number }).pos = 999; })
+      .toThrow("shared TypeScript AST is immutable");
+    expect(() => { (cached[0]!.statements as unknown as { pop(): unknown }).pop(); })
+      .toThrow("shared TypeScript AST is immutable");
+    const laterConsumer = context.withAstCache(() => parse(route.path, route.text));
+    expect(laterConsumer).toBe(cached[0]);
+    expect(laterConsumer.statements[0]!.pos).toBe(originalStart);
+    expect(laterConsumer.statements).toHaveLength(2);
     expect(context.importGraph.get("src/route.ts")).toEqual(["src/repo.ts"]);
 
     const execution = runRegisteredMechanicalDetectors(context);

@@ -197,6 +197,24 @@ describe("#1851 complete mechanical producer ownership", () => {
     }
   });
 
+  it("discovers an inferred-return producer without flagging an ordinary exported helper", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-inferred-producer-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "src", "scan", "inferred.ts"), `import { mechanicalFinding as emit } from "./common.js";
+export const ordinaryHelper = (value: string) => value.trim();
+export function inferredProducer() {
+  return [emit({ id: "X", title: "x", severity: "Low", category: "x", taxonomy: "x", location: "x", evidence: "x", impact: "x", fix: "x" })];
+}
+`);
+      const problems = validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root).join("\n");
+      expect(problems).toContain("src/scan/inferred.ts#inferredProducer: implemented mechanical finding producer is not registered");
+      expect(problems).not.toContain("ordinaryHelper");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a live producer taxonomy outside its declared ownership", () => {
     expect(() => assertProducerTaxonomyOwnership(
       { id: "fixture-producer", phase: "configuration", taxonomies: ["Owned taxonomy"] },

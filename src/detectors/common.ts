@@ -40,6 +40,68 @@ export function parseFresh(path: string, text: string): ts.SourceFile {
   );
 }
 
+/**
+ * TypeScript's AST types are declared readonly but the runtime nodes are mutable.  A shared parse
+ * cache therefore needs a runtime boundary: returning the raw SourceFile lets one detector change
+ * a node and silently change every detector that runs after it.  This membrane keeps one canonical
+ * tree (and stable proxy identity) while rejecting writes at every object reached through it.
+ *
+ * Method calls are applied to the underlying TypeScript object because several SourceFile methods
+ * have internal receiver assumptions.  Arguments are unwrapped and object results are re-wrapped,
+ * so methods such as getChildren()/getSourceFile() cannot be used to escape the membrane.
+ */
+export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
+  // TypeScript memoizes these public queries by writing private cache fields onto nodes. Materialize
+  // them before the membrane is installed so later public API calls remain reads, not hidden writes.
+  const warm = (node: ts.Node): void => {
+    if (ts.canHaveModifiers(node)) void ts.getModifiers(node);
+    if (ts.canHaveDecorators(node)) void ts.getDecorators(node);
+    void ts.getJSDocCommentsAndTags(node);
+    ts.forEachChild(node, warm);
+  };
+  warm(sourceFile);
+  void sourceFile.getLineAndCharacterOfPosition(sourceFile.end);
+  const proxies = new WeakMap<object, object>();
+  const targets = new WeakMap<object, object>();
+  const methods = new WeakMap<object, Map<PropertyKey, (...args: unknown[]) => unknown>>();
+  const reject = (): never => { throw new TypeError("shared TypeScript AST is immutable"); };
+  const unwrap = <T>(value: T): T => (value && typeof value === "object" && targets.has(value as object)
+    ? targets.get(value as object) as T
+    : value);
+  const wrap = <T>(value: T): T => {
+    if ((!value || (typeof value !== "object" && typeof value !== "function"))) return value;
+    const target = value as object;
+    const existing = proxies.get(target);
+    if (existing) return existing as T;
+    const proxy = new Proxy(target, {
+      get(raw, property) {
+        if ((raw instanceof Map || raw instanceof Set)
+          && ["set", "add", "delete", "clear"].includes(String(property))) return reject;
+        if (Array.isArray(raw)
+          && ["copyWithin", "fill", "pop", "push", "reverse", "shift", "sort", "splice", "unshift"].includes(String(property))) return reject;
+        const member = Reflect.get(raw, property, raw) as unknown;
+        if (typeof member !== "function") return wrap(member);
+        const byProperty = methods.get(raw) ?? new Map<PropertyKey, (...args: unknown[]) => unknown>();
+        methods.set(raw, byProperty);
+        const cached = byProperty.get(property);
+        if (cached) return cached;
+        const callable = (...args: unknown[]): unknown => wrap(Reflect.apply(member, raw, args.map(unwrap)));
+        byProperty.set(property, callable);
+        return callable;
+      },
+      set: reject,
+      defineProperty: reject,
+      deleteProperty: reject,
+      preventExtensions: reject,
+      setPrototypeOf: reject,
+    });
+    proxies.set(target, proxy);
+    targets.set(proxy, target);
+    return proxy as T;
+  };
+  return wrap(sourceFile);
+}
+
 export function parse(path: string, text: string): ts.SourceFile {
   const cached = parseCache.getStore()?.get(path);
   if (cached?.text === text) {

@@ -8,6 +8,7 @@ import {
 } from "../detectors/app-router.js";
 import {
   parseFresh,
+  readonlySourceFile,
   withSourceParseCache,
   type CachedSourceFile,
   type SourceInput,
@@ -201,7 +202,7 @@ export class MechanicalScanContext {
       const cache = new Map<string, CachedSourceFile>();
       const snapshots = new Map<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>();
       for (const file of this.envSourceFiles) {
-        const sourceFile = parseFresh(file.path, file.text);
+        const sourceFile = readonlySourceFile(parseFresh(file.path, file.text));
         cache.set(file.path, {
           text: file.text,
           sourceFile,
@@ -210,7 +211,7 @@ export class MechanicalScanContext {
         Object.freeze(cache.get(file.path));
         snapshots.set(file.path, Object.freeze({
           text: file.text,
-          statements: Object.freeze(sourceFile.statements.map((statement) => Object.freeze({ kind: statement.kind, pos: statement.pos, end: statement.end }))),
+          statements: Object.freeze(Array.from(sourceFile.statements, (statement) => Object.freeze({ kind: statement.kind, pos: statement.pos, end: statement.end }))),
         }));
       }
       this.#parseCache = readonlyMap(cache);

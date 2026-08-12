@@ -197,7 +197,6 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): DiscoveredM
     }
     if (!mechanicalFindingLocal) continue;
     for (const candidate of exportedFunctionBodies(parsed)) {
-      if (!candidate.type || !/\bFinding\b/.test(candidate.type.getText(parsed))) continue;
       let emitsMechanicalFinding = false;
       const visit = (node: ts.Node): void => {
         if (node !== candidate.body && ts.isFunctionLike(node)) return;

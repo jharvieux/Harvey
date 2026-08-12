@@ -648,6 +648,7 @@ jobs:
             findings: (map(.findings) | add),
             mechanicalPopulation: (map(.mechanicalPopulation) | unique | if length == 1 then .[0] else error("shards disagree on mechanical population provenance") end),
             mechanicalFindings: (map(.mechanicalFindings // {}) | add),
+            mechanicalExternalState: (map(.mechanicalExternalState // {}) | add),
             detectors: (map(.detectors // {}) | add)
           }' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
