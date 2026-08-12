@@ -174,7 +174,11 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     invoke: (_context, selected) => pathScopeNotAssessedRows(selected),
   }),
   detector({ id: "secret-rotation", order: 290, module: "M1", implementation: { file: "src/scan/secret-rotation.ts", exportName: "detectSecretRotationFindings" }, findingIds: ["SECRET-rotation-pair-*"], taxonomies: ["Static secret verified with no rotation-pair acceptance window"], invoke: (_context, selected) => detectSecretRotationFindings([...selected]) }),
-  detector({ id: "env-schema", order: 300, module: "M1", implementation: { file: "src/scan/env-schema.ts", exportName: "detectEnvSchemaFindings" }, findingIds: ["ENV-*"], taxonomies: ["Env var completeness — framework convention not modelled", "Env var read but not declared in env schema", "Env var declared in env schema but never read"], invoke: (context, selected) => detectEnvSchemaFindings([...selected], context.framework) }),
+  detector({
+    id: "env-schema", order: 300, module: "M1", implementation: { file: "src/scan/env-schema.ts", exportName: "detectEnvSchemaFindings" }, findingIds: ["ENV-*"], taxonomies: ["Env var completeness — framework convention not modelled", "Env var read but not declared in env schema", "Env var declared in env schema but never read"],
+    applicableFiles: { description: "all tracked JavaScript/TypeScript source files, including .mts/.cts used by config and test-runner modules", select: (context) => context.envSourceFiles },
+    invoke: (context, selected) => detectEnvSchemaFindings([...selected], context.framework),
+  }),
   detector({
     id: "handrolled-indicators", order: 310, module: "M6", implementation: { file: "src/detectors/handrolled.ts", exportName: "detectHandrolledFindings" }, findingIds: ["M6IND-*"],
     taxonomies: [

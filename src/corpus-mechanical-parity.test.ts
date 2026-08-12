@@ -6,7 +6,9 @@ import {
   buildCorpusMechanicalParityBaseline,
   compareCorpusMechanicalParity,
   formatCorpusMechanicalParityDifference,
+  MECHANICAL_CORPUS_POPULATION,
   mechanicalFindingRecords,
+  mechanicalFindingsFromCorpusArtifact,
   serializeCorpusMechanicalParityBaseline,
   type CorpusMechanicalParityBaseline,
 } from "./corpus-mechanical-parity.js";
@@ -18,9 +20,25 @@ const baseline = (rows: Finding[]): CorpusMechanicalParityBaseline => buildCorpu
 describe("ordered pinned-corpus mechanical parity", () => {
   it("gates the required aggregate job and retains producer records in its operator artifact", () => {
     const workflow = readFileSync(fileURLToPath(new URL("../.github/workflows/corpus-drift.yml", import.meta.url)), "utf8");
+    const runner = readFileSync(fileURLToPath(new URL("./cli/corpus-drift.ts", import.meta.url)), "utf8");
     expect(workflow).toContain("detectors: (map(.detectors // {}) | add)");
+    expect(workflow).toContain("mechanicalFindings: (map(.mechanicalFindings // {}) | add)");
     expect(workflow).toContain("package_json_file: source/package.json");
     expect(workflow).toContain("pnpm validate:mechanical-corpus-parity --current ../corpus-drift.json");
+    expect(runner).toContain("mechanicalFindingsBySlug[target.slug] = mechanicalRun.findings");
+    expect(runner).toContain("mechanicalPopulation: MECHANICAL_CORPUS_POPULATION");
+  });
+
+  it("refuses the unrelated scorecard population and detects replacement mechanical rows", () => {
+    expect(() => mechanicalFindingsFromCorpusArtifact({
+      mechanicalPopulation: MECHANICAL_CORPUS_POPULATION,
+      mechanicalFindings: undefined,
+    }, "fixture.json")).toThrow("no runMechanicalScanDetailed findings population");
+    const unrelated = mechanicalFindingsFromCorpusArtifact({
+      mechanicalPopulation: MECHANICAL_CORPUS_POPULATION,
+      mechanicalFindings: { target: [{ ...finding("unrelated"), mechanical: false }] },
+    }, "fixture.json");
+    expect(compareCorpusMechanicalParity(baseline([finding("registry-row")]), unrelated).map((difference) => difference.kind)).toEqual(["removed", "added"]);
   });
 
   it("reports every added, removed, moved, and modified row using only client-safe digests", () => {
@@ -54,7 +72,8 @@ describe("ordered pinned-corpus mechanical parity", () => {
   it("stores only digest-shaped row values in the committed fixture", () => {
     const fixtureText = readFileSync(fileURLToPath(new URL("./scan/__fixtures__/mechanical-registry-corpus-parity.json", import.meta.url)), "utf8");
     const fixture = JSON.parse(fixtureText) as CorpusMechanicalParityBaseline;
-    expect(fixture.schema).toBe(2);
+    expect(fixture.schema).toBe(3);
+    expect(fixture.population).toBe(MECHANICAL_CORPUS_POPULATION);
     expect(fixtureText).not.toContain('"identity":');
     for (const target of Object.values(fixture.targets)) for (const row of target.rows) {
       expect(Object.keys(row).sort()).toEqual(["contentDigest", "identityDigest", "orderedDigest", "ordinal"]);

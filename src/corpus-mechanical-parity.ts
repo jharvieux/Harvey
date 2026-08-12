@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Finding } from "./findings.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+export const MECHANICAL_CORPUS_POPULATION = "runMechanicalScanDetailed.findings-v1" as const;
 
 interface OrderedFindingRecord {
   ordinal: number;
@@ -24,9 +25,10 @@ interface CorpusMechanicalParityProvenance {
 }
 
 export interface CorpusMechanicalParityBaseline extends CorpusMechanicalParityProvenance {
-  schema: 2;
+  schema: 3;
   algorithm: "sha256";
-  normalization: "finding-v2";
+  normalization: "finding-v3";
+  population: typeof MECHANICAL_CORPUS_POPULATION;
   targetCount: number;
   mechanicalRowCount: number;
   aggregateDigest: string;
@@ -53,26 +55,26 @@ function stableIdentity(finding: Finding): string {
 }
 
 function orderedRowDigest(target: string, record: Pick<OrderedFindingRecord, "ordinal" | "identityDigest" | "contentDigest">): string {
-  return digest("harvey/corpus-mechanical-parity/ordered-row/v2", target, String(record.ordinal), record.identityDigest, record.contentDigest);
+  return digest("harvey/corpus-mechanical-parity/ordered-row/v3", target, String(record.ordinal), record.identityDigest, record.contentDigest);
 }
 
 function targetDigest(target: string, rows: readonly OrderedFindingRecord[]): string {
-  return digest("harvey/corpus-mechanical-parity/target/v2", target, String(rows.length), ...rows.map((row) => row.orderedDigest));
+  return digest("harvey/corpus-mechanical-parity/target/v3", target, String(rows.length), ...rows.map((row) => row.orderedDigest));
 }
 
 function aggregateDigest(targets: Record<string, TargetParityBaseline>): string {
   const names = Object.keys(targets).sort();
-  return digest("harvey/corpus-mechanical-parity/aggregate/v2", ...names.flatMap((target) => [target, String(targets[target]!.count), targets[target]!.orderedDigest]));
+  return digest("harvey/corpus-mechanical-parity/aggregate/v3", ...names.flatMap((target) => [target, String(targets[target]!.count), targets[target]!.orderedDigest]));
 }
 
 export function mechanicalFindingRecords(target: string, findings: readonly Finding[]): OrderedFindingRecord[] {
   const occurrences = new Map<string, number>();
-  return findings.filter((finding) => finding.mechanical === true).map((finding, ordinal) => {
+  return findings.map((finding, ordinal) => {
     const identity = stableIdentity(finding);
     const occurrence = (occurrences.get(identity) ?? 0) + 1;
     occurrences.set(identity, occurrence);
-    const identityDigest = digest("harvey/corpus-mechanical-parity/identity/v2", target, identity, String(occurrence));
-    const contentDigest = digest("harvey/corpus-mechanical-parity/content/v2", target, canonicalFinding(finding));
+    const identityDigest = digest("harvey/corpus-mechanical-parity/identity/v3", target, identity, String(occurrence));
+    const contentDigest = digest("harvey/corpus-mechanical-parity/content/v3", target, canonicalFinding(finding));
     const record = { ordinal, identityDigest, contentDigest };
     return { ...record, orderedDigest: orderedRowDigest(target, record) };
   });
@@ -88,9 +90,10 @@ export function buildCorpusMechanicalParityBaseline(
     targets[target] = { count: rows.length, orderedDigest: targetDigest(target, rows), rows };
   }
   return {
-    schema: 2,
+    schema: 3,
     algorithm: "sha256",
-    normalization: "finding-v2",
+    normalization: "finding-v3",
+    population: MECHANICAL_CORPUS_POPULATION,
     ...provenance,
     targetCount: Object.keys(targets).length,
     mechanicalRowCount: Object.values(targets).reduce((sum, target) => sum + target.count, 0),
@@ -99,12 +102,32 @@ export function buildCorpusMechanicalParityBaseline(
   };
 }
 
+export function mechanicalFindingsFromCorpusArtifact(
+  artifact: { mechanicalPopulation?: unknown; mechanicalFindings?: unknown },
+  source: string,
+): Record<string, Finding[]> {
+  if (artifact.mechanicalPopulation !== MECHANICAL_CORPUS_POPULATION) {
+    throw new Error(`${source}: corpus scorecard does not identify ${MECHANICAL_CORPUS_POPULATION}`);
+  }
+  if (!artifact.mechanicalFindings || typeof artifact.mechanicalFindings !== "object" || Array.isArray(artifact.mechanicalFindings)) {
+    throw new Error(`${source}: corpus scorecard has no runMechanicalScanDetailed findings population`);
+  }
+  const findings = artifact.mechanicalFindings as Record<string, Finding[]>;
+  if (Object.keys(findings).length === 0) throw new Error(`${source}: runMechanicalScanDetailed findings population is empty`);
+  for (const [target, rows] of Object.entries(findings)) {
+    if (!Array.isArray(rows)) throw new Error(`${source}: ${target} runMechanicalScanDetailed population is not an array`);
+    mechanicalFindingRecords(target, rows);
+  }
+  return findings;
+}
+
 export function serializeCorpusMechanicalParityBaseline(baseline: CorpusMechanicalParityBaseline): string {
   return `${JSON.stringify(baseline, null, 2)}\n`;
 }
 
 function assertBaselineIntegrity(baseline: CorpusMechanicalParityBaseline): void {
-  if (baseline.schema !== 2 || baseline.algorithm !== "sha256" || baseline.normalization !== "finding-v2") {
+  if (baseline.schema !== 3 || baseline.algorithm !== "sha256" || baseline.normalization !== "finding-v3"
+    || baseline.population !== MECHANICAL_CORPUS_POPULATION) {
     throw new Error("corpus mechanical parity baseline uses an unsupported schema or digest contract");
   }
   const targetNames = Object.keys(baseline.targets).sort();

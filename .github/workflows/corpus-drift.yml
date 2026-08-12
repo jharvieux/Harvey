@@ -643,7 +643,13 @@ jobs:
             exit 0
           fi
           echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
-          jq -s '{rows: (map(.rows) | add), findings: (map(.findings) | add), detectors: (map(.detectors // {}) | add)}' "${parts[@]}" > corpus-drift.json
+          jq -s '{
+            rows: (map(.rows) | add),
+            findings: (map(.findings) | add),
+            mechanicalPopulation: (map(.mechanicalPopulation) | unique | if length == 1 then .[0] else error("shards disagree on mechanical population provenance") end),
+            mechanicalFindings: (map(.mechanicalFindings // {}) | add),
+            detectors: (map(.detectors // {}) | add)
+          }' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
 

@@ -179,6 +179,24 @@ describe("#1851 complete mechanical producer ownership", () => {
     }
   });
 
+  it("fails when a non-standard mechanical producer is implemented outside every registry", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-unregistered-producer-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      // Exact adversarial class from criterion 3: a fully implemented producer copied under a new
+      // path, with no detect*Findings naming convention and no call added to a registry file.
+      writeFileSync(
+        join(root, "src", "scan", "adversarial-unregistered.ts"),
+        readFileSync(join(repoRoot, "src", "scan", "gha-permissions.ts"), "utf8"),
+      );
+      expect(validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root)).toContain(
+        "src/scan/adversarial-unregistered.ts#checkWorkflowPermissions: implemented mechanical finding producer is not registered",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a live producer taxonomy outside its declared ownership", () => {
     expect(() => assertProducerTaxonomyOwnership(
       { id: "fixture-producer", phase: "configuration", taxonomies: ["Owned taxonomy"] },

@@ -115,6 +115,8 @@ function migrationOrder(path: string): number {
 export class MechanicalScanContext {
   readonly identity: MechanicalContextIdentity;
   readonly sourceFiles: readonly SourceInput[];
+  /** Full load-sources extension surface for detectors whose legacy walker included .mts/.cts. */
+  readonly envSourceFiles: readonly SourceInput[];
   readonly loadedSources: readonly SourceInput[];
   readonly sourceAndRootManifest: readonly SourceInput[];
   readonly serviceRoleSources: readonly SourceInput[];
@@ -147,6 +149,7 @@ export class MechanicalScanContext {
     }
     Object.freeze(inventory);
     this.sourceFiles = Object.freeze(inventory.filter((file) => WALK_SOURCE.test(basename(file.path)) && !file.path.split("/").some((part) => ["node_modules", ".git", ".next", "dist", "build", "coverage"].includes(part))));
+    this.envSourceFiles = Object.freeze(inventory.filter((file) => SOURCE_FILE.test(basename(file.path)) && !file.path.split("/").some((part) => ["node_modules", ".git", ".next", "dist", "build", "coverage"].includes(part))));
     this.loadedSources = Object.freeze(inventory.filter((file) => {
       const name = basename(file.path);
       if (hasExcludedSegment(file.path) || (!SOURCE_FILE.test(name) && !CONFIG_FILE.test(name))) return false;
@@ -197,7 +200,7 @@ export class MechanicalScanContext {
       const started = performance.now();
       const cache = new Map<string, CachedSourceFile>();
       const snapshots = new Map<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>();
-      for (const file of this.sourceFiles) {
+      for (const file of this.envSourceFiles) {
         const sourceFile = parseFresh(file.path, file.text);
         cache.set(file.path, {
           text: file.text,

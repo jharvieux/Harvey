@@ -85,6 +85,7 @@ import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
+import { MECHANICAL_CORPUS_POPULATION } from "../corpus-mechanical-parity.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -415,6 +416,10 @@ const rows: Row[] = [];
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
 // as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
 const findingsBySlug: Record<string, Finding[]> = {};
+// Criterion 6 parity reads this population exclusively. The general `findingsBySlug` population
+// above feeds M3-M10 score baselines and must never stand in for the registry-owned mechanical
+// output merely because many of its rows also carry `mechanical: true`.
+const mechanicalFindingsBySlug: Record<string, Finding[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 
 for (const target of targets) {
@@ -557,46 +562,47 @@ for (const target of targets) {
     // #261: the free-tier invariant, scored against a REAL quick-scan of this pinned tree rather
     // than the synthetic findings #244 could only assert over.
     const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
+    const snapshot = expectation && externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+    const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
+    const skipNetworkChecks = externalStateMode === "snapshot";
+    const secretCandidateIdentity = deterministicSnapshot ? digestParts([
+      targetTreeIdentity,
+      digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
+      binaryVersion("gitleaks"),
+    ]) : undefined;
+    // The parity artifact uses this all-target population. Keep it outside the expectation branch:
+    // targets without a free-tier grade still own migrated mechanical rows.
+    const mechanicalRun = await runMechanicalScanDetailed({
+      dir,
+      skipNetworkChecks,
+      advisorySnapshot: deterministicSnapshot,
+      advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
+      secretCandidateIdentity,
+      phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
+        repoRoot,
+        cacheDir: phaseCacheDir,
+        mode: forceColdCache ? "verify" : "read-write",
+        targetRevision: target.commit,
+        targetTree: targetTreeIdentity,
+        optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks, handrolledIndicators: false, authGuards: [], externalStateMode }),
+        deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
+          advisoryDigest: deterministicSnapshot.digest,
+          advisoryVersion: deterministicSnapshot.osvScannerVersion,
+          secretCandidateIdentity,
+        } : undefined,
+        registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
+        onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+      }) : undefined,
+    });
+    const mechanical = mechanicalRun.findings;
+    mechanicalFindingsBySlug[target.slug] = mechanicalRun.findings;
+    detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
+    for (const phase of mechanicalRun.phases) {
+      const name = `mechanical:${phase.phase}`;
+      (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
+      console.error(`  ${target.slug}: PHASE ${phase.phase} ${(phase.durationMs / 1000).toFixed(1)}s — ${phase.cache}; ${phase.scope.unitsExamined} unit(s); ${phase.reason}`);
+    }
     if (expectation) {
-      const snapshot = externalStateMode === "live" ? undefined : loadCorpusAdvisorySnapshot(target.slug, target.commit);
-      const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
-      const secretCandidateIdentity = deterministicSnapshot ? digestParts([
-        targetTreeIdentity,
-        digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
-        binaryVersion("gitleaks"),
-      ]) : undefined;
-      // Timed around the SCAN, not just the report build: the scan is the whole cost (proposit's
-      // free-tier pass measured 84s of its 96s), and timing the cheap half would have left it in
-      // the untimed `other` bucket — a phase table whose largest row is "other" answers nothing.
-      const mechanicalRun = await runMechanicalScanDetailed({
-        dir,
-        skipNetworkChecks: deterministicSnapshot !== undefined,
-        advisorySnapshot: deterministicSnapshot,
-        advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
-        secretCandidateIdentity,
-        phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
-          repoRoot,
-          cacheDir: phaseCacheDir,
-          mode: forceColdCache ? "verify" : "read-write",
-          targetRevision: target.commit,
-          targetTree: targetTreeIdentity,
-          optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: deterministicSnapshot !== undefined, handrolledIndicators: false, authGuards: [], externalStateMode }),
-          deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
-            advisoryDigest: deterministicSnapshot.digest,
-            advisoryVersion: deterministicSnapshot.osvScannerVersion,
-            secretCandidateIdentity,
-          } : undefined,
-          registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
-          onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
-        }) : undefined,
-      });
-      const mechanical = mechanicalRun.findings;
-      detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
-      for (const phase of mechanicalRun.phases) {
-        const name = `mechanical:${phase.phase}`;
-        (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
-        console.error(`  ${target.slug}: PHASE ${phase.phase} ${(phase.durationMs / 1000).toFixed(1)}s — ${phase.cache}; ${phase.scope.unitsExamined} unit(s); ${phase.reason}`);
-      }
       const reportAt = Date.now();
       const report = buildQuickScanReport(mechanical);
       (phaseSeconds[phaseTarget] ??= {})["free-tier report"] = (Date.now() - reportAt) / 1000;
@@ -616,6 +622,13 @@ for (const target of targets) {
     console.error(`  ${target.slug}: ${Math.round(total)}s — ${parts.join(", ")}`);
     if (keep) console.error(`  (kept clone: ${dir})`);
     else rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (!m8) {
+  const missingMechanicalTargets = targets.map((target) => target.slug).filter((slug) => !(slug in mechanicalFindingsBySlug));
+  if (missingMechanicalTargets.length > 0) {
+    throw new Error(`runMechanicalScanDetailed population missing for pinned target(s): ${missingMechanicalTargets.join(", ")}`);
   }
 }
 
@@ -667,7 +680,13 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 // #1564: `findings` alongside `rows` so THIS run's own --json output can serve as a
 // FUTURE run's --baseline-findings — no separate artifact, no second scan, just the same data this
 // run already computed, kept instead of discarded.
-if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug, detectors: detectorRecordsBySlug }, null, 2)}\n`);
+if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
+  rows,
+  findings: findingsBySlug,
+  mechanicalPopulation: MECHANICAL_CORPUS_POPULATION,
+  mechanicalFindings: mechanicalFindingsBySlug,
+  detectors: detectorRecordsBySlug,
+}, null, 2)}\n`);
 
 // #1485 — the manifest's declared false-positive FLOORS, checked here as well as in the unit suite,
 // because this is the job that watches the baselines move. A floor that starts producing graded rows

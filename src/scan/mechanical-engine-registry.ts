@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import ts from "typescript";
+import { readRecursiveSafe } from "../fs-walk.js";
 import {
   MECHANICAL_DETECTORS,
   validateMechanicalDetectorRegistry,
@@ -136,6 +137,109 @@ const NON_PRODUCER_REGISTRY_CALLS = new Set([
   "src/sbom.ts#licenseScope",
 ]);
 
+interface DiscoveredMechanicalFindingProducer {
+  file: string;
+  exportName: string;
+}
+
+// These producers intentionally belong to the connected Supabase scanner rather than the free
+// runMechanicalScanDetailed path. Each exception is bound to both the exported bridge and a real
+// CLI caller; it is not a name allowlist that can silently absorb a copied or newly implemented
+// producer elsewhere in src/scan.
+const EXTERNAL_MECHANICAL_PRODUCER_OWNERS: Readonly<Record<string, { bridgeFile: string; bridgeExport: string; runnerFile: string }>> = Object.freeze(Object.fromEntries([
+  "checkAuthConfig",
+  "checkRealtimeAuthorization",
+  "checkGraphqlIntrospection",
+  "checkGotrueVersion",
+].map((exportName) => [`src/scan/supabase-config.ts#${exportName}`, {
+  bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
+}]).concat([["src/scan/supabase-drift.ts#checkMigrationDrift", {
+  bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
+}]])));
+
+function exportedFunctionBodies(parsed: ts.SourceFile): { exportName: string; type: ts.TypeNode | undefined; body: ts.ConciseBody }[] {
+  const functions: { exportName: string; type: ts.TypeNode | undefined; body: ts.ConciseBody }[] = [];
+  for (const statement of parsed.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body
+      && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      functions.push({ exportName: statement.name.text, type: statement.type, body: statement.body });
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)
+      || !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer
+        || (!ts.isArrowFunction(declaration.initializer) && !ts.isFunctionExpression(declaration.initializer))) continue;
+      functions.push({ exportName: declaration.name.text, type: declaration.initializer.type, body: declaration.initializer.body });
+    }
+  }
+  return functions;
+}
+
+function discoverMechanicalFindingProducerExports(repoRoot: string): DiscoveredMechanicalFindingProducer[] {
+  const scanDir = join(repoRoot, "src", "scan");
+  if (!existsSync(scanDir)) return [];
+  const discovered: DiscoveredMechanicalFindingProducer[] = [];
+  for (const relativeFile of readRecursiveSafe(scanDir).filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts")).sort()) {
+    const file = `src/scan/${relativeFile}`;
+    const source = readFileSync(join(scanDir, relativeFile), "utf8");
+    const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let mechanicalFindingLocal: string | undefined;
+    for (const statement of parsed.statements) {
+      if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly || !statement.importClause
+        || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith(".")) continue;
+      const importedFile = normalize(join(dirname(file), statement.moduleSpecifier.text)).replace(/\.js$/, ".ts");
+      if (importedFile !== "src/scan/common.ts") continue;
+      const bindings = statement.importClause.namedBindings;
+      if (!bindings || !ts.isNamedImports(bindings)) continue;
+      const binding = bindings.elements.find((element) => (element.propertyName?.text ?? element.name.text) === "mechanicalFinding");
+      if (binding && !binding.isTypeOnly) mechanicalFindingLocal = binding.name.text;
+    }
+    if (!mechanicalFindingLocal) continue;
+    for (const candidate of exportedFunctionBodies(parsed)) {
+      if (!candidate.type || !/\bFinding\b/.test(candidate.type.getText(parsed))) continue;
+      let emitsMechanicalFinding = false;
+      const visit = (node: ts.Node): void => {
+        if (node !== candidate.body && ts.isFunctionLike(node)) return;
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === mechanicalFindingLocal) {
+          emitsMechanicalFinding = true;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(candidate.body);
+      if (emitsMechanicalFinding) discovered.push({ file, exportName: candidate.exportName });
+    }
+  }
+  return discovered.sort((a, b) => `${a.file}#${a.exportName}`.localeCompare(`${b.file}#${b.exportName}`));
+}
+
+function validateMechanicalFindingProducerDiscovery(
+  producerSurfaceRoot: string,
+  registry: readonly MechanicalRegistryEntry[] = MECHANICAL_REGISTRY,
+): string[] {
+  const problems: string[] = [];
+  const registered = new Set(registry.flatMap((entry) => entry.implementations.map((implementation) => `${implementation.file}#${implementation.exportName}`)));
+  for (const producer of discoverMechanicalFindingProducerExports(producerSurfaceRoot)) {
+    const key = `${producer.file}#${producer.exportName}`;
+    if (registered.has(key)) continue;
+    const external = EXTERNAL_MECHANICAL_PRODUCER_OWNERS[key];
+    if (!external) {
+      problems.push(`${key}: implemented mechanical finding producer is not registered`);
+      continue;
+    }
+    const bridgePath = join(producerSurfaceRoot, external.bridgeFile);
+    const runnerPath = join(producerSurfaceRoot, external.runnerFile);
+    const bridge = existsSync(bridgePath) ? readFileSync(bridgePath, "utf8") : "";
+    const runner = existsSync(runnerPath) ? readFileSync(runnerPath, "utf8") : "";
+    if (!bridge.includes(`${producer.exportName}(`)
+      || !new RegExp(`\\bexport (?:async )?function ${external.bridgeExport}\\b`).test(bridge)
+      || !runner.includes(`${external.bridgeExport}(`)) {
+      problems.push(`${key}: stale external owner ${external.bridgeFile}#${external.bridgeExport} -> ${external.runnerFile}`);
+    }
+  }
+  return problems;
+}
+
 export function discoverMechanicalRegistryImplementations(repoRoot: string): { file: string; exportName: string; registryFile: string }[] {
   const registryFiles = [...new Set(MECHANICAL_REGISTRY.filter((entry) => entry.phase !== "structural-ast").map((entry) => entry.registryFile))];
   const discovered = new Map<string, { file: string; exportName: string; registryFile: string }>();
@@ -214,8 +318,13 @@ function orchestrationProblems(repoRoot: string, registry: readonly MechanicalRe
   return validateMechanicalOrchestrationSource(readFileSync(mechanicalPath, "utf8"), registry);
 }
 
-export function validateMechanicalEngineRegistry(repoRoot: string, registry: readonly MechanicalRegistryEntry[] = MECHANICAL_REGISTRY): string[] {
+export function validateMechanicalEngineRegistry(
+  repoRoot: string,
+  registry: readonly MechanicalRegistryEntry[] = MECHANICAL_REGISTRY,
+  producerSurfaceRoot: string = repoRoot,
+): string[] {
   const problems: string[] = validateMechanicalDetectorRegistry(repoRoot).map((problem) => `structural-ast: ${problem}`);
+  problems.push(...validateMechanicalFindingProducerDiscovery(producerSurfaceRoot, registry));
   const discoveredImplementations = discoverMechanicalRegistryImplementations(repoRoot);
   const registeredNonStructural = new Set(registry.filter((entry) => entry.phase !== "structural-ast").flatMap((entry) => entry.implementations.map((implementation) => `${entry.registryFile}:${implementation.file}#${implementation.exportName}`)));
   const discoveredKeys = new Set(discoveredImplementations.map((implementation) => `${implementation.registryFile}:${implementation.file}#${implementation.exportName}`));

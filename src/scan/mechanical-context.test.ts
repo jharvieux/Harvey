@@ -16,6 +16,7 @@ function fixture(): string {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", dependencies: { express: "4.21.0" } }));
   writeFileSync(join(root, "src", "repo.ts"), "export const findUserById = (id: string) => ({ id });\n");
   writeFileSync(join(root, "src", "route.ts"), "import { findUserById } from './repo';\nexport const route = (id: string) => findUserById(id);\n");
+  writeFileSync(join(root, "src", "runner.mts"), "export const configured = process.env.RUN_CONFIGURED;\n");
   writeFileSync(join(root, "supabase", "migrations", "001.sql"), "create table users (id uuid primary key, tenant_id uuid);\n");
   return root;
 }
@@ -29,6 +30,7 @@ describe("#1851 immutable one-scan context", () => {
     const root = fixture();
     const first = new MechanicalScanContext(root);
     expect(first.sourceFiles.map((file) => file.path)).toEqual(["src/repo.ts", "src/route.ts"]);
+    expect(first.envSourceFiles.map((file) => file.path)).toEqual(["src/repo.ts", "src/route.ts", "src/runner.mts"]);
     expect(first.workspace.manifests.map((manifest) => manifest.label)).toEqual(["package.json"]);
     expect(first.schemas.orderedMigrations.map((migration) => migration.file)).toEqual(["supabase/migrations/001.sql"]);
     expect(first.identity.lifetime).toBe("one-mechanical-scan");
@@ -99,10 +101,10 @@ describe("#1851 immutable one-scan context", () => {
     const metrics = context.metrics();
     expect(execution.records.map((record) => record.detector)).toEqual(MECHANICAL_DETECTORS.map((definition) => definition.id));
     expect(execution.records.every((record) => Number.isInteger(record.unitsExamined) && record.unitsExamined >= 0)).toBe(true);
-    expect(metrics.filesParsed).toBe(2);
-    expect(metrics.astsBuilt).toBe(2);
+    expect(metrics.filesParsed).toBe(3);
+    expect(metrics.astsBuilt).toBe(3);
     expect(metrics.astCacheHits).toBeGreaterThan(2);
-    expect(metrics.importGraphNodes).toBe(2);
+    expect(metrics.importGraphNodes).toBe(3);
     expect(metrics.legacyEquivalentFileReads).toBeGreaterThan(metrics.filesRead);
     expect(metrics.avoidedFileReads).toBeGreaterThan(0);
     expect(metrics.aggregateRunnerMs).toBeGreaterThanOrEqual(metrics.criticalPathMs);
