@@ -28,7 +28,7 @@ export interface SemgrepPackReceipt {
   files: Array<{ ordinal: number; name: string; bytes: number; sha256: string; bodyBase64: string }>;
 }
 
-export interface RestoredSemgrepPackArtifact {
+interface RestoredSemgrepPackArtifact {
   identity: string;
   files: string[];
   receipt: SemgrepPackReceipt;
@@ -237,7 +237,21 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string):
   try {
     mkdirSync(preparedDir);
     for (const entry of entries) {
-      if (entry.mode === "160000") throw new Error(`tracked submodule ${entry.path} is unsupported; pin and materialize its content explicitly`);
+      // A gitlink without an initialized worktree is represented by Git as an empty directory. The
+      // pinned inbox-zero revision carries exactly that shape (and no .gitmodules URL from which its
+      // 160000 object could be fetched). Preserve the pinned checkout's real filesystem surface:
+      // make the empty directory explicit, but never invent or fetch content the parent pin does not
+      // contain. If a caller initializes a gitlink, refuse below rather than silently scanning an
+      // unbound nested checkout whose bytes are outside the parent tree identity.
+      if (entry.mode === "160000") {
+        const source = join(checkoutDir, entry.path);
+        const sourceStat = lstatSync(source, { throwIfNoEntry: false });
+        if (sourceStat && (!sourceStat.isDirectory() || readRecursiveSafe(source).length > 0)) {
+          throw new Error(`tracked gitlink ${entry.path} has materialized content that is not bound by the parent target tree`);
+        }
+        mkdirSync(join(preparedDir, entry.path), { recursive: true });
+        continue;
+      }
       if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") throw new Error(`tracked path ${entry.path} has unsupported Git mode ${entry.mode}`);
       const source = join(checkoutDir, entry.path);
       const destination = join(preparedDir, entry.path);

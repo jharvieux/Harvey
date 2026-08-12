@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readRecursiveSafe } from "./fs-walk.js";
 import type { Finding } from "./findings.js";
 import {
   compareCurrentMechanicalExecutions,
@@ -173,6 +174,10 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
       execFileSync("git", ["init", "-q"], { cwd: source });
       execFileSync("git", ["add", "."], { cwd: source });
       execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], { cwd: source });
+      const gitlink = "8c92f838e2b4c6311c5b970d2b32635d36de9a24";
+      execFileSync("git", ["update-index", "--add", "--cacheinfo", `160000,${gitlink},nested-uninitialized`], { cwd: source });
+      execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "record uninitialized gitlink"], { cwd: source });
+      mkdirSync(join(source, "nested-uninitialized"));
       const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim();
       mkdirSync(join(root, "cache"));
       cpSync(source, join(root, "cache", "fixture__source"), { recursive: true, verbatimSymlinks: true });
@@ -192,6 +197,8 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
       expect(existsSync(join(prepared.preparedDir, "vendor", "reference"))).toBe(false);
       expect(existsSync(join(prepared.preparedDir, ".git"))).toBe(false);
       expect(existsSync(join(prepared.preparedDir, "untracked.txt"))).toBe(false);
+      expect(existsSync(join(prepared.preparedDir, "nested-uninitialized"))).toBe(true);
+      expect(readRecursiveSafe(join(prepared.preparedDir, "nested-uninitialized"))).toEqual([]);
       expect(readFileSync(join(prepared.preparedDir, "tracked.txt"), "utf8")).toBe("pinned tracked content\n");
       expect(readlinkSync(join(prepared.preparedDir, "tracked-link"))).toBe("tracked.txt");
       expect(lstatSync(join(prepared.preparedDir, "run.sh")).mode & 0o111).not.toBe(0);
@@ -205,6 +212,16 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
         verifyRemote: false,
       });
       expect(second.preparedTreeSha256).toBe(prepared.preparedTreeSha256);
+      expect(() => prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit, vendoredSubtrees: ["vendor/reference"] },
+        checkoutDir: join(root, "checkout-materialized-gitlink"),
+        preparedDir: join(root, "prepared-materialized-gitlink"),
+        cloneCacheDir: join(root, "cache"),
+        verifyRemote: false,
+        onPreparationStage: (stage, checkoutDir) => {
+          if (stage === "checkout-validated") writeFileSync(join(checkoutDir, "nested-uninitialized", "outside-parent-pin.ts"), "export {};\n");
+        },
+      })).toThrow(/gitlink nested-uninitialized has materialized content that is not bound/);
       expect(() => assertPreparedTargetUnchanged(prepared)).not.toThrow();
       writeFileSync(join(prepared.preparedDir, "package.json"), "{\"mutated\":true}\n");
       expect(() => assertPreparedTargetUnchanged(prepared)).toThrow(/mutated/);
