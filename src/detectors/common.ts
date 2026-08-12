@@ -22,13 +22,11 @@ function isTsxPath(path: string): boolean {
   return /\.([jt]sx|[cm]?js)$/.test(path);
 }
 
-export interface CachedSourceFile {
-  text: string;
-  sourceFile: ts.SourceFile;
-  onHit?: () => void;
+export interface SourceParseCache {
+  parse(path: string, text: string, create: () => ts.SourceFile): ts.SourceFile;
 }
 
-const parseCache = new AsyncLocalStorage<ReadonlyMap<string, CachedSourceFile>>();
+const parseCache = new AsyncLocalStorage<SourceParseCache>();
 
 export function parseFresh(path: string, text: string): ts.SourceFile {
   return ts.createSourceFile(
@@ -132,6 +130,13 @@ export function readonlySourceFile(sourceFile: ts.SourceFile, metrics?: AstMembr
       apply(raw, thisArgument, args) {
         return wrap(Reflect.apply(raw as (...values: unknown[]) => unknown, unwrap(thisArgument), safeArguments(args)));
       },
+      construct(raw, args, newTarget) {
+        return wrap(Reflect.construct(
+          raw as new (...values: unknown[]) => object,
+          safeArguments(args),
+          unwrap(newTarget) as new (...values: unknown[]) => object,
+        ));
+      },
       set: reject,
       defineProperty: reject,
       deleteProperty: reject,
@@ -146,15 +151,11 @@ export function readonlySourceFile(sourceFile: ts.SourceFile, metrics?: AstMembr
 }
 
 export function parse(path: string, text: string): ts.SourceFile {
-  const cached = parseCache.getStore()?.get(path);
-  if (cached?.text === text) {
-    cached.onHit?.();
-    return cached.sourceFile;
-  }
-  return parseFresh(path, text);
+  const cache = parseCache.getStore();
+  return cache ? cache.parse(path, text, () => parseFresh(path, text)) : parseFresh(path, text);
 }
 
-export function withSourceParseCache<T>(cache: ReadonlyMap<string, CachedSourceFile>, run: () => T): T {
+export function withSourceParseCache<T>(cache: SourceParseCache, run: () => T): T {
   return parseCache.run(cache, run);
 }
 

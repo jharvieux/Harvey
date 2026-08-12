@@ -240,6 +240,39 @@ export const ordinaryHelper = (value: string) => value.trim();
     }
   });
 
+  it("follows preconstructed findings and real higher-order dispatch without tainting ordinary helpers", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-producer-dataflow-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "src", "scan", "dataflow.ts"), `const finding = {
+  id: "X", title: "x", severity: "Low", category: "x", taxonomy: "x",
+  location: "x", evidence: "x", impact: "x", fix: "x",
+};
+export function checkWorkflowPermissions() { return [finding]; }
+export function constantProducer() { return [finding]; }
+export function directWrapper() { return checkWorkflowPermissions(); }
+export function reflectProducer() { return Reflect.apply(checkWorkflowPermissions, undefined, []); }
+export function callbackProducer() { return [1].flatMap(() => checkWorkflowPermissions()); }
+const callbackReference = () => checkWorkflowPermissions();
+export function callbackReferenceProducer() { return [1].flatMap(callbackReference); }
+const ordinary = () => "ordinary";
+export function ordinaryReflectHelper() { return Reflect.apply(ordinary, undefined, []); }
+export function ordinaryInlineCallback() { return [1].map(() => ordinary()); }
+export function ordinaryCallbackReference() { return [1].map(ordinary); }
+`);
+      const problems = validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root).join("\n");
+      for (const name of [
+        "checkWorkflowPermissions", "constantProducer", "directWrapper", "reflectProducer",
+        "callbackProducer", "callbackReferenceProducer",
+      ]) expect(problems).toContain(`src/scan/dataflow.ts#${name}: implemented mechanical finding producer is not registered`);
+      for (const name of ["ordinaryReflectHelper", "ordinaryInlineCallback", "ordinaryCallbackReference"]) {
+        expect(problems).not.toContain(`src/scan/dataflow.ts#${name}: implemented mechanical finding producer is not registered`);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves imported helpers, star/re-export cycles, direct rows, and shadowed seed names", () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-symbol-producer-"));
     try {

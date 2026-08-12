@@ -696,6 +696,12 @@ export function importClosure(roots: Iterable<string>, importGraph: ReadonlyMap<
 export function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
   const graph = new Map<string, string[]>();
   for (const [path, sf] of sources) {
+    graph.set(path, importEdges(path, sf, allPaths, aliases));
+  }
+  return graph;
+}
+
+function importEdges(path: string, sf: ts.SourceFile, allPaths: Set<string>, aliases: PathAlias[]): string[] {
     const edges: string[] = [];
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
@@ -711,7 +717,18 @@ export function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: 
       const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
       if (resolved) edges.push(resolved);
     }
-    graph.set(path, edges);
+    return edges;
+}
+
+// Build the shared mechanical context's compact string graph incrementally through its bounded
+// parse cache: consume each SourceFile immediately and retain only path edges. The Map-based API
+// above remains the boundary detector's in-process path; both use the same edge implementation.
+export function buildImportGraphFromSources(sources: readonly SourceInput[], aliases: PathAlias[]): Map<string, string[]> {
+  const allPaths = new Set(sources.map((source) => source.path));
+  const graph = new Map<string, string[]>();
+  for (const source of sources) {
+    const sf = parse(source.path, source.text);
+    graph.set(source.path, importEdges(source.path, sf, allPaths, aliases));
   }
   return graph;
 }

@@ -181,6 +181,15 @@ const EXTERNAL_MECHANICAL_PRODUCER_OWNERS: Readonly<Record<string, ExternalMecha
   ["src/scan/import-graph-scope.ts#importGraphNotAssessedRows", {
     bridgeFile: "src/scan/import-graph-scope.ts", bridgeExport: "importGraphNotAssessedRows", runnerFile: "src/cli/static-detect.ts", selfBridge: true,
   }],
+  ["src/scan/external-corpus.ts#m10FindingsFromSchema", {
+    bridgeFile: "src/scan/external-corpus.ts", bridgeExport: "m10FindingsFromSchema", runnerFile: "src/cli/corpus-drift.ts", selfBridge: true,
+  }],
+  ["src/scan/external-corpus.ts#m10FindingsFromPrismaSchema", {
+    bridgeFile: "src/scan/external-corpus.ts", bridgeExport: "m10FindingsFromPrismaSchema", runnerFile: "src/cli/corpus-drift.ts", selfBridge: true,
+  }],
+  ["src/scan/prisma-schema-perf.ts#scanPrismaSchemaPerf", {
+    bridgeFile: "src/scan/prisma-schema-perf.ts", bridgeExport: "scanPrismaSchemaPerf", runnerFile: "src/cli/static-detect.ts", selfBridge: true,
+  }],
 ] as [string, ExternalMechanicalProducerOwner][])));
 
 interface MechanicalProducerDiscovery {
@@ -214,6 +223,8 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
   const valueEdges = new Map<ts.Symbol, Set<ts.Symbol>>();
   const callEdges = new Map<ts.Symbol, Set<ts.Symbol>>();
   const direct = new Set<ts.Symbol>();
+  const directFindingValues = new Set<ts.Symbol>();
+  const returnedSymbols = new Map<ts.Symbol, Set<ts.Symbol>>();
   const dynamicCalls: { owner: ts.Symbol; candidates: Set<ts.Symbol>; location: string }[] = [];
   const exported: { file: string; exportName: string; symbol: ts.Symbol }[] = [];
   const starExports = new Map<string, { target: ts.SourceFile; location: string }[]>();
@@ -257,6 +268,19 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
     return ["id", "title", "severity", "category", "taxonomy", "location", "evidence", "impact", "fix"]
       .every((name) => names.has(name));
   };
+  const containsDirectFindingObject = (node: ts.Node): boolean => {
+    let found = false;
+    const visit = (child: ts.Node): void => {
+      if (found) return;
+      if (ts.isObjectLiteralExpression(child) && directFindingObject(child)) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(child, visit);
+    };
+    visit(node);
+    return found;
+  };
   for (const source of program.getSourceFiles().filter((file) => rootNames.includes(file.fileName))) {
     const file = repoRelative(source);
     const moduleSymbol = checker.getSymbolAtLocation(source);
@@ -285,6 +309,12 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
         const owner = unalias(checker.getSymbolAtLocation(node.name));
         if (owner) {
           if (ts.isIdentifier(node.initializer) || ts.isPropertyAccessExpression(node.initializer)) callableSymbols.add(owner);
+          // A Finding assembled before the exported function returns it is still a producer seed.
+          // Bind the actual value symbol, then let return/call dataflow reach its exported owner.
+          if (containsDirectFindingObject(node.initializer)) {
+            direct.add(owner);
+            directFindingValues.add(owner);
+          }
           for (const target of expressionSymbols(node.initializer)) if (target !== owner) addEdge(valueEdges, owner, target);
         }
         const statement = node.parent.parent;
@@ -311,11 +341,29 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
   const seed = unalias(mechanicalFinding);
   for (const [owner, body] of functionBodies) {
     const visit = (node: ts.Node): void => {
-      if (node !== body && ts.isFunctionLike(node)) return;
+      if (node !== body && ts.isFunctionLike(node)) {
+        // An inline callback passed to a live call is executable dataflow owned by the containing
+        // export. A merely-declared nested function is not: it has its own symbol/body analysis.
+        if (node.parent && ts.isCallExpression(node.parent) && node.parent.arguments.includes(node as ts.Expression)
+          && "body" in node && node.body) {
+          visit(node.body as ts.ConciseBody);
+        }
+        return;
+      }
       if (owner !== seed && ts.isObjectLiteralExpression(node) && directFindingObject(node)) direct.add(owner);
+      if (ts.isReturnStatement(node) && node.expression) {
+        const targets = returnedSymbols.get(owner) ?? new Set<ts.Symbol>();
+        for (const target of expressionSymbols(node.expression)) if (target !== owner) targets.add(target);
+        returnedSymbols.set(owner, targets);
+      }
       if (ts.isCallExpression(node)) {
         const called = unalias(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression));
-        if (called) {
+        const reflectApply = ts.isPropertyAccessExpression(node.expression)
+          && called?.getName() === "apply"
+          && called.declarations?.some((declaration) => /lib\.es\d*\.reflect\.d\.ts$/.test(normalize(declaration.getSourceFile().fileName)));
+        if (reflectApply) {
+          for (const target of expressionSymbols(node.arguments[0] ?? node.expression)) if (target !== owner) addEdge(callEdges, owner, target);
+        } else if (called) {
           if (called === seed) direct.add(owner);
           else addEdge(callEdges, owner, called);
         } else if (!ts.isIdentifier(node.expression) && !ts.isPropertyAccessExpression(node.expression)) {
@@ -325,10 +373,30 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
             location: `${repoRelative(node.getSourceFile())}:${node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
           });
         }
+        // A callable value supplied to a higher-order call is a possible dispatch edge. Bind only
+        // symbols proved callable by TypeScript declarations/aliases; ordinary scalar arguments
+        // do not taint their caller as a producer.
+        for (const argument of node.arguments) for (const target of expressionSymbols(argument)) {
+          if (target !== owner && callableSymbols.has(target)) addEdge(callEdges, owner, target);
+        }
       }
       ts.forEachChild(node, visit);
     };
     visit(body);
+  }
+
+  // A return references many implementation symbols (callees, properties, types). Only connect a
+  // returned value when its value-alias chain reaches an object proved to have the Finding shape;
+  // call dispatch remains owned by callEdges. This catches `return [preconstructedFinding]`
+  // without reclassifying every scanner/orchestrator that returns an unrelated `.findings` field.
+  const reachesFindingValue = (symbol: ts.Symbol, seen: Set<ts.Symbol> = new Set()): boolean => {
+    if (directFindingValues.has(symbol)) return true;
+    if (seen.has(symbol)) return false;
+    seen.add(symbol);
+    return [...(valueEdges.get(symbol) ?? [])].some((target) => reachesFindingValue(target, seen));
+  };
+  for (const [owner, targets] of returnedSymbols) for (const target of targets) {
+    if (reachesFindingValue(target)) addEdge(valueEdges, owner, target);
   }
 
   const dependencies = new Map<ts.Symbol, Set<ts.Symbol>>();
@@ -381,8 +449,31 @@ function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalP
     const declaration = symbol.declarations?.[0];
     return declaration ? `${repoRelative(declaration.getSourceFile())}#${symbol.getName()}@${declaration.pos}` : `symbol#${symbol.getName()}`;
   };
+  const findingProperties = ["id", "title", "severity", "category", "taxonomy", "location", "evidence", "impact", "fix"];
+  const containsFindingValue = (type: ts.Type, seen: Set<ts.Type> = new Set()): boolean => {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    if ((type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return true;
+    if (type.isUnionOrIntersection()) return type.types.some((part) => containsFindingValue(part, seen));
+    const element = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
+    if (element) return containsFindingValue(element, seen);
+    if ((type.flags & ts.TypeFlags.Object) !== 0
+      && ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) !== 0
+      && type.getSymbol()?.getName() === "Promise") {
+      const promised = checker.getTypeArguments(type as ts.TypeReference)[0];
+      if (promised) return containsFindingValue(promised, seen);
+    }
+    return findingProperties.every((property) => checker.getPropertyOfType(type, property) !== undefined);
+  };
+  const returnsFindingPopulation = (symbol: ts.Symbol): boolean => {
+    const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+    if (!declaration) return true;
+    const type = checker.getTypeOfSymbolAtLocation(symbol, declaration);
+    const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
+    return signatures.length === 0 || signatures.some((signature) => containsFindingValue(checker.getReturnTypeOfSignature(signature)));
+  };
   const result = exported
-    .filter((entry) => producers.has(entry.symbol) && callableSymbols.has(entry.symbol))
+    .filter((entry) => producers.has(entry.symbol) && callableSymbols.has(entry.symbol) && returnsFindingPopulation(entry.symbol))
     .map(({ file, exportName, symbol }) => {
       const reachable = new Set<ts.Symbol>();
       const pending = [...(dependencies.get(symbol) ?? [])];

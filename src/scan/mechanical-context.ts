@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
-  buildImportGraph,
+  buildImportGraphFromSources,
   collectPathAliases,
 } from "../detectors/app-router.js";
 import {
@@ -11,7 +11,7 @@ import {
   readonlySourceFile,
   withSourceParseCache,
   type AstMembraneMetrics,
-  type CachedSourceFile,
+  type SourceParseCache,
   type SourceInput,
 } from "../detectors/common.js";
 import {
@@ -58,9 +58,24 @@ export interface MechanicalContextMetrics {
   astMembraneCallbacks: number;
   astMembraneIteratorResults: number;
   astMembraneRejectedMutations: number;
+  astCacheMaxEntries: number;
+  astCacheMaxSourceBytes: number;
+  astCachePeakEntries: number;
+  astCachePeakSourceBytes: number;
+  astCacheRejectedEntries: number;
+  astCacheEntriesAtRelease: number;
+  astCacheEntriesAfterRelease: number;
+  astWorkingSetReleased: boolean;
 }
 
 type MutableMetrics = MechanicalContextMetrics;
+
+// A whole-target AST cache exceeded the hosted runner's 4.23 GB heap on Carbon (6,127 source
+// files). Keep a useful, deterministic shared working set without making target size the retention
+// policy. Entries are admitted in stable source-walk order; once the byte or entry budget is full,
+// later parses remain protected by the readonly membrane but are not retained between consumers.
+const AST_CACHE_MAX_ENTRIES = 64;
+const AST_CACHE_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
 interface MechanicalContextIdentity {
   root: string;
@@ -136,10 +151,10 @@ export class MechanicalScanContext {
 
   readonly #metrics: MutableMetrics;
   readonly #toolResults = new Map<string, unknown>();
-  #asts?: ReadonlyMap<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>;
-  #parseCache?: ReadonlyMap<string, CachedSourceFile>;
+  #parseCache?: SourceParseCache & { readonly size: number; readonly sourceBytes: number; clear(): void };
   #importGraph?: ReadonlyMap<string, readonly string[]>;
   #astMembraneMetrics?: AstMembraneMetrics;
+  readonly #parsedPaths = new Set<string>();
   #disposed = false;
 
   constructor(root: string) {
@@ -204,15 +219,20 @@ export class MechanicalScanContext {
       astMembraneCallbacks: 0,
       astMembraneIteratorResults: 0,
       astMembraneRejectedMutations: 0,
+      astCacheMaxEntries: AST_CACHE_MAX_ENTRIES,
+      astCacheMaxSourceBytes: AST_CACHE_MAX_SOURCE_BYTES,
+      astCachePeakEntries: 0,
+      astCachePeakSourceBytes: 0,
+      astCacheRejectedEntries: 0,
+      astCacheEntriesAtRelease: 0,
+      astCacheEntriesAfterRelease: 0,
+      astWorkingSetReleased: false,
     };
   }
 
-  get asts(): ReadonlyMap<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }> {
+  #sourceParseCache(): SourceParseCache & { readonly size: number; readonly sourceBytes: number; clear(): void } {
     this.#assertLive();
-    if (!this.#asts) {
-      const started = performance.now();
-      const cache = new Map<string, CachedSourceFile>();
-      const snapshots = new Map<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>();
+    if (!this.#parseCache) {
       const membraneMetrics: AstMembraneMetrics = {
         objectsWrapped: 0,
         methodWrappersCreated: 0,
@@ -221,40 +241,56 @@ export class MechanicalScanContext {
         rejectedMutations: 0,
       };
       this.#astMembraneMetrics = membraneMetrics;
-      for (const file of this.envSourceFiles) {
-        const sourceFile = readonlySourceFile(parseFresh(file.path, file.text), membraneMetrics);
-        cache.set(file.path, {
-          text: file.text,
-          sourceFile,
-          onHit: () => { this.#metrics.astCacheHits += 1; },
-        });
-        Object.freeze(cache.get(file.path));
-        snapshots.set(file.path, Object.freeze({
-          text: file.text,
-          statements: Object.freeze(Array.from(sourceFile.statements, (statement) => Object.freeze({ kind: statement.kind, pos: statement.pos, end: statement.end }))),
-        }));
-      }
-      this.#parseCache = readonlyMap(cache);
-      this.#asts = readonlyMap(snapshots);
-      this.#metrics.filesParsed = cache.size;
-      this.#metrics.astsBuilt = cache.size;
-      this.#metrics.astBuildMs = performance.now() - started;
-      this.#metrics.astMembraneObjects = membraneMetrics.objectsWrapped;
-      this.#metrics.astMembraneMethodWrappers = membraneMetrics.methodWrappersCreated;
-      this.#metrics.astMembraneCallbacks = membraneMetrics.callbacksWrapped;
-      this.#metrics.astMembraneIteratorResults = membraneMetrics.iteratorResultsWrapped;
-      this.#metrics.astMembraneRejectedMutations = membraneMetrics.rejectedMutations;
+      const entries = new Map<string, { text: string; sourceFile: ReturnType<typeof parseFresh>; sourceBytes: number }>();
+      let sourceBytes = 0;
+      const metrics = this.#metrics;
+      const parsedPaths = this.#parsedPaths;
+      this.#parseCache = {
+        get size() { return entries.size; },
+        get sourceBytes() { return sourceBytes; },
+        parse(path, text, create) {
+          const cached = entries.get(path);
+          if (cached?.text === text) {
+            metrics.astCacheHits += 1;
+            return cached.sourceFile;
+          }
+          const started = performance.now();
+          const bytes = Buffer.byteLength(text, "utf8");
+          const retain = entries.size < AST_CACHE_MAX_ENTRIES && sourceBytes + bytes <= AST_CACHE_MAX_SOURCE_BYTES;
+          // Only retained trees cross a consumer boundary and therefore need the immutable
+          // membrane. A non-retained tree is fresh for this call and becomes unreachable with its
+          // consumer; returning it raw avoids constructing a corpus-sized transient proxy graph
+          // while preserving isolation because the next consumer parses a different tree.
+          const raw = create();
+          const sourceFile = retain ? readonlySourceFile(raw, membraneMetrics) : raw;
+          metrics.astBuildMs += performance.now() - started;
+          metrics.astsBuilt += 1;
+          parsedPaths.add(path);
+          metrics.filesParsed = parsedPaths.size;
+          if (retain) {
+            entries.set(path, { text, sourceFile, sourceBytes: bytes });
+            sourceBytes += bytes;
+            metrics.astCachePeakEntries = Math.max(metrics.astCachePeakEntries, entries.size);
+            metrics.astCachePeakSourceBytes = Math.max(metrics.astCachePeakSourceBytes, sourceBytes);
+          } else {
+            metrics.astCacheRejectedEntries += 1;
+          }
+          return sourceFile;
+        },
+        clear() {
+          entries.clear();
+          sourceBytes = 0;
+        },
+      };
     }
-    return this.#asts;
+    return this.#parseCache;
   }
 
   get importGraph(): ReadonlyMap<string, readonly string[]> {
     this.#assertLive();
     if (!this.#importGraph) {
       const started = performance.now();
-      void this.asts;
-      const sources = new Map([...this.#parseCache!].map(([path, entry]) => [path, entry.sourceFile]));
-      const graph = buildImportGraph(sources, new Set(sources.keys()), [...this.pathAliases]);
+      const graph = this.withAstCache(() => buildImportGraphFromSources(this.envSourceFiles, [...this.pathAliases]));
       this.#importGraph = readonlyMap([...graph].map(([path, edges]) => [path, Object.freeze([...edges])] as const));
       this.#metrics.importGraphNodes = graph.size;
       this.#metrics.importGraphEdges = [...graph.values()].reduce((sum, edges) => sum + edges.length, 0);
@@ -265,8 +301,25 @@ export class MechanicalScanContext {
 
   withAstCache<T>(run: () => T): T {
     this.#assertLive();
-    void this.asts;
-    return withSourceParseCache(this.#parseCache!, run);
+    return withSourceParseCache(this.#sourceParseCache(), run);
+  }
+
+  releaseAstWorkingSet(): void {
+    this.#assertLive();
+    const cache = this.#parseCache;
+    if (this.#astMembraneMetrics) {
+      this.#metrics.astMembraneObjects = this.#astMembraneMetrics.objectsWrapped;
+      this.#metrics.astMembraneMethodWrappers = this.#astMembraneMetrics.methodWrappersCreated;
+      this.#metrics.astMembraneCallbacks = this.#astMembraneMetrics.callbacksWrapped;
+      this.#metrics.astMembraneIteratorResults = this.#astMembraneMetrics.iteratorResultsWrapped;
+      this.#metrics.astMembraneRejectedMutations = this.#astMembraneMetrics.rejectedMutations;
+    }
+    this.#metrics.astCacheEntriesAtRelease = cache?.size ?? 0;
+    cache?.clear();
+    this.#metrics.astCacheEntriesAfterRelease = cache?.size ?? 0;
+    this.#metrics.astWorkingSetReleased = true;
+    this.#parseCache = undefined;
+    this.#astMembraneMetrics = undefined;
   }
 
   recordToolResult(name: string, value: unknown): void {
@@ -304,7 +357,7 @@ export class MechanicalScanContext {
 
   dispose(): void {
     this.#toolResults.clear();
-    this.#asts = undefined;
+    this.#parseCache?.clear();
     this.#parseCache = undefined;
     this.#importGraph = undefined;
     this.#astMembraneMetrics = undefined;

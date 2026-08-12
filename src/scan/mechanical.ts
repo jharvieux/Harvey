@@ -200,6 +200,9 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       return { findings: registered.findings, producers: registered.records, scope: { unitsExamined: sourceUnits, description: "registry-owned source greps, dataflow, and structural/AST detectors over one immutable scan context" } };
     });
     findings.push(...structural.findings);
+    // Normalization consumes findings only. Release the bounded raw-AST working set at the real
+    // consumer boundary rather than retaining it until report assembly and target cleanup.
+    context.releaseAstWorkingSet();
 
     // #874 — rank the Dependency CVE rows by whether the package is actually imported here. Runs
     // LAST so it sees every CVE emitter's output (curated Next.js, curated deps, OSV) in one pass.

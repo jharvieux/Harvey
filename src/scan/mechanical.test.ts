@@ -81,7 +81,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   it("preserves real mechanical findings and examined scopes across a cold then warm faithful large fixture", async () => {
     const src = join(dir, "src");
     mkdirSync(src);
-    for (let i = 0; i < 250; i++) writeFileSync(join(src, `route-${i}.ts`), `export function route${i}(tenantId: string) { return { tenantId, row: ${i} }; }\n`);
+    for (let i = 0; i < 300; i++) writeFileSync(join(src, `route-${i}.ts`), `export function route${i}(tenantId: string) { return { tenantId, row: ${i} }; }\n`);
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-mechanical-cache-"));
     try {
       const phases = ["secrets-history", "dependency-advisory", "semgrep", "configuration", "structural-ast", "normalization"] as const;
@@ -113,15 +113,22 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(new Set(cold.detectors.filter((detector) => detector.phase === "configuration").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
       expect(new Set(cold.detectors.filter((detector) => detector.phase === "dependency-advisory").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
       expect(warm.detectors.filter((detector) => detector.status === "cached").length).toBeGreaterThan(20);
-      expect(cold.context.astsBuilt).toBeGreaterThanOrEqual(250);
-      expect(cold.context.astCacheHits).toBeGreaterThan(cold.context.astsBuilt);
+      expect(cold.context.astsBuilt).toBeGreaterThanOrEqual(300);
+      expect(cold.context.astCacheHits).toBeGreaterThan(0);
       expect(cold.context.avoidedFileReads).toBeGreaterThan(0);
+      expect(cold.context.astCacheRejectedEntries).toBeGreaterThan(0);
+      expect(cold.context.astCachePeakEntries).toBeLessThan(cold.context.filesParsed);
+      expect(cold.context.astCachePeakEntries).toBeLessThanOrEqual(cold.context.astCacheMaxEntries);
+      expect(cold.context.astCachePeakSourceBytes).toBeLessThanOrEqual(cold.context.astCacheMaxSourceBytes);
+      expect(cold.context.astCacheEntriesAtRelease).toBeGreaterThan(0);
+      expect(cold.context.astCacheEntriesAfterRelease).toBe(0);
+      expect(cold.context.astWorkingSetReleased).toBe(true);
       expect(warm.phases.filter((phase) => phase.cache === "hit").map((phase) => phase.phase).sort()).toEqual([
         "configuration",
         "semgrep",
         "structural-ast",
       ]);
-      expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(250);
+      expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(300);
     } finally {
       rmSync(cacheDir, { recursive: true, force: true });
     }

@@ -77,9 +77,8 @@ describe("#1851 immutable one-scan context", () => {
     writeFileSync(workspace, "packages:\n  - packages/*\n");
     const first = new MechanicalScanContext(root);
     const before = first.identity.contentDigest;
-    const ast = first.asts.get("src/route.ts")!;
-    expect(Object.isFrozen(ast)).toBe(true);
-    expect(Object.isFrozen(ast.statements)).toBe(true);
+    const route = first.sourceFiles.find((file) => file.path === "src/route.ts")!;
+    const ast = first.withAstCache(() => parse(route.path, route.text));
     expect(() => { (ast.statements as unknown as { pop(): unknown }).pop(); }).toThrow();
     expect(() => { (ast.statements[0] as unknown as { pos: number }).pos = 99; }).toThrow();
     expect(() => { (first.pathAliases as unknown as { push(value: unknown): void }).push({}); }).toThrow();
@@ -163,6 +162,24 @@ describe("#1851 immutable one-scan context", () => {
     context.dispose();
   });
 
+  it("keeps uncached large-population parses consumer-local while retaining a bounded shared set", () => {
+    const root = fixture();
+    for (let index = 0; index < 300; index++) {
+      writeFileSync(join(root, "src", `overflow-${String(index).padStart(3, "0")}.ts`), `export const value${index} = ${index};\n`);
+    }
+    const context = new MechanicalScanContext(root);
+    void context.importGraph;
+    const overflow = context.sourceFiles.find((file) => file.path === "src/overflow-299.ts")!;
+    const first = context.withAstCache(() => parse(overflow.path, overflow.text));
+    const original = first.statements[0]!.pos;
+    (first.statements[0] as unknown as { pos: number }).pos = 777;
+    const later = context.withAstCache(() => parse(overflow.path, overflow.text));
+    expect(later).not.toBe(first);
+    expect(later.statements[0]!.pos).toBe(original);
+    expect(context.metrics().astCacheRejectedEntries).toBeGreaterThan(0);
+    context.dispose();
+  });
+
   it("wraps Map/Set callbacks, descriptors, callable values, and iterator results with stable identities", () => {
     const raw = parseFresh("fixture.ts", "export const value = 1;\n");
     const firstRaw = raw.statements[0]!;
@@ -170,6 +187,7 @@ describe("#1851 immutable one-scan context", () => {
       detectorMap: { configurable: true, enumerable: true, writable: true, value: new Map([["node", firstRaw]]) },
       detectorSet: { configurable: true, enumerable: true, writable: true, value: new Set([firstRaw]) },
       detectorCallback: { configurable: true, enumerable: true, writable: true, value: () => firstRaw },
+      detectorConstructorFactory: { configurable: true, enumerable: true, writable: true, value: () => function NodeConstructor() { return firstRaw; } },
     });
     const counters: AstMembraneMetrics = {
       objectsWrapped: 0,
@@ -182,6 +200,7 @@ describe("#1851 immutable one-scan context", () => {
       detectorMap: Map<string, ts.Node>;
       detectorSet: Set<ts.Node>;
       detectorCallback: () => ts.Node;
+      detectorConstructorFactory: () => new () => ts.Node;
     };
     const node = source.statements[0]!;
     expect(source.statements[Symbol.iterator]).toBe(source.statements[Symbol.iterator]);
@@ -190,6 +209,9 @@ describe("#1851 immutable one-scan context", () => {
     expect(source.detectorSet.values().next().value).toBe(node);
     expect(source.detectorMap.entries().next().value?.[1]).toBe(node);
     expect(source.detectorCallback()).toBe(node);
+    const constructed = new (source.detectorConstructorFactory())();
+    expect(constructed).toBe(node);
+    expect(() => { (constructed as unknown as { pos: number }).pos = 902; }).toThrow("shared TypeScript AST is immutable");
     expect(source.statements.indexOf(node)).toBe(0);
     expect(node.parent).toBe(source);
     expect(node.getSourceFile()).toBe(source);
@@ -213,7 +235,7 @@ describe("#1851 immutable one-scan context", () => {
     expect(counters.methodWrappersCreated).toBeGreaterThan(5);
     expect(counters.callbacksWrapped).toBe(2);
     expect(counters.iteratorResultsWrapped).toBeGreaterThanOrEqual(2);
-    expect(counters.rejectedMutations).toBe(4);
+    expect(counters.rejectedMutations).toBe(5);
   });
 
   it("owns tool results once and refuses use after explicit disposal", () => {

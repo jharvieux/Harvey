@@ -60,6 +60,7 @@ import { buildQuickScanReport } from "../quick-scan.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
+import type { MechanicalContextMetrics } from "../scan/mechanical-context.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
 import { binaryVersion, digestFiles, digestParts, resolveGitTree } from "../scan/mechanical-phase-cache.js";
 import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
@@ -421,6 +422,7 @@ const findingsBySlug: Record<string, Finding[]> = {};
 // output merely because many of its rows also carry `mechanical: true`.
 const mechanicalFindingsBySlug: Record<string, Finding[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
+const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
 const mechanicalExternalStateBySlug: Record<string, {
   mode: string;
   advisoryDigest?: string;
@@ -614,6 +616,7 @@ for (const target of targets) {
     const mechanical = mechanicalRun.findings;
     mechanicalFindingsBySlug[target.slug] = mechanicalRun.findings;
     detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
+    mechanicalContextBySlug[target.slug] = mechanicalRun.context;
     for (const phase of mechanicalRun.phases) {
       const name = `mechanical:${phase.phase}`;
       (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
@@ -703,6 +706,7 @@ if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
   mechanicalPopulation: MECHANICAL_CORPUS_POPULATION,
   mechanicalFindings: mechanicalFindingsBySlug,
   detectors: detectorRecordsBySlug,
+  mechanicalContexts: mechanicalContextBySlug,
   mechanicalExternalState: mechanicalExternalStateBySlug,
 }, null, 2)}\n`);
 

@@ -58,6 +58,8 @@ describe("ordered pinned-corpus mechanical parity", () => {
     expect(workflow).toContain("package_json_file: source/package.json");
     expect(workflow).toContain("pnpm validate:mechanical-corpus-parity --current ../corpus-drift.json");
     expect(runner).toContain("mechanicalFindingsBySlug[target.slug] = mechanicalRun.findings");
+    expect(runner).toContain("mechanicalContextBySlug[target.slug] = mechanicalRun.context");
+    expect(runner).toContain("mechanicalContexts: mechanicalContextBySlug");
     expect(runner).toContain("mechanicalPopulation: MECHANICAL_CORPUS_POPULATION");
     expect(runner).toContain("const snapshot = externalStateMode !== \"live\" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined");
     expect(runner).toContain("mechanicalExternalState: mechanicalExternalStateBySlug");
