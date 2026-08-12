@@ -1,5 +1,6 @@
 import "./sync-stdio.js";
 import {
+  corpusCacheTransportKey,
   rejectCorpusCacheTransport,
   validateCorpusCacheTransport,
   writeCorpusCacheTransport,
@@ -29,6 +30,9 @@ if (command === "restore") {
     ref: flag("--ref"),
     runId: flag("--run-id"),
     defaultRef: flag("--default-ref"),
+    platform: flag("--platform"),
+    namespace: flag("--namespace"),
+    headSha: flag("--head-sha"),
   });
   const source = decision.source
     ? `; source=${decision.source.event} ${decision.source.ref} run=${decision.source.runId} attempt=${decision.source.runAttempt} sha=${decision.source.headSha}`
@@ -41,8 +45,14 @@ if (command === "restore") {
   }
 } else if (command === "save") {
   const manifest: CorpusCacheTransportManifest = {
-    schema: 1,
-    key: flag("--key"),
+    schema: 2,
+    key: corpusCacheTransportKey({
+      platform: flag("--platform"),
+      namespace: flag("--namespace"),
+      runId: flag("--run-id"),
+      runAttempt: flag("--run-attempt"),
+      headSha: flag("--head-sha"),
+    }),
     event: flag("--event"),
     ref: flag("--ref"),
     runId: flag("--run-id"),

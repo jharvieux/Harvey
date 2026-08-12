@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   assertSemgrepFamilyPlan,
   assertSemgrepFamilyVerification,
+  discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   mergeSemgrepFamilyOutputs,
+  localSemgrepConfigYardstick,
   rejectUnregisteredSemgrepFamilyArtifacts,
   type SemgrepFamily,
   type SemgrepFamilyCacheOptions,
@@ -56,6 +58,20 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     expect(() => assertSemgrepFamilyPlan(families.slice(1), expected)).toThrow("omitted");
     expect(() => assertSemgrepFamilyPlan([...families, families[0]!], expected)).toThrow("duplicate ids");
     expect(() => assertSemgrepFamilyPlan([...families, { id: "unknown", configPath: "/unknown.yml" }], expected)).toThrow("unregistered");
+  });
+
+  it("discovers .yml and .yaml through an execution loader independent of the expected-set yardstick", () => {
+    const { root } = fixture();
+    const rules = join(root, "extension-rules");
+    mkdirSync(join(rules, "nested"), { recursive: true });
+    writeFileSync(join(rules, "legacy.yml"), "rules: []\n");
+    writeFileSync(join(rules, "nested", "new-family.yaml"), "rules: []\n");
+    writeFileSync(join(rules, "not-a-rule.txt"), "rules: []\n");
+    const discovered = discoverLocalSemgrepFamilies(rules);
+    const expected = localSemgrepConfigYardstick(rules);
+    expect(discovered.map((family) => family.configPath)).toEqual(expected);
+    expect(discovered.map((family) => family.configPath)).toContain(join(rules, "nested", "new-family.yaml"));
+    expect(() => assertSemgrepFamilyPlan(discovered.filter((family) => family.configPath.endsWith(".yml")), expected)).toThrow("omitted");
   });
 
   it("changing one local rule invalidates only its family", async () => {

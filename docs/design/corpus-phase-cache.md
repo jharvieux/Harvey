@@ -95,8 +95,7 @@ the cold value with the restored artifact, failing on any findings or scope diff
 seed the next run but fails the current equivalence assertion; normal PR read/write runs are the
 distinct seeding mode.
 
-The Actions cache is transport, not trust. Schema-2 artifacts use the `corpus-phase-v2` transport
-namespace. Per-shard rolling keys avoid matrix legs overwriting
+The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
 the aggregate result of every shard and reports on every pull request, including declared no-op
 changes.
@@ -105,15 +104,22 @@ changes.
 
 ## Cross-run transport, scanner families, and deterministic PR state
 
-The `corpus-phase-v3` transport carries a signed-by-context provenance manifest. A main `push`
-seeds artifacts that PRs may restore; a PR may reuse its own run attempt but never another PR's
-artifact. The validator checks schema, key, source event/ref/SHA and trust relationship before any
-inner artifact is read, and deletes a missing, corrupt, mismatched, or untrusted transport.
+The `corpus-phase-v4` transport carries a context-bound provenance manifest. Scheduled/manual runs
+stay single-shard so they alone hold and save the complete clone tree. A main `push` also runs once
+over every target, then saves that complete content-addressed phase directory under the shard 1, 2,
+and 3 namespaces consumed by PR/merge runs. A PR may reuse its own run attempt but never another
+PR's artifact. The key encodes platform, shard namespace, run, attempt, and head SHA; the validator
+reconstructs that key from the manifest, checks the matched source key and current namespace, then
+checks the source event/ref/SHA trust relationship before any inner artifact is read. Missing,
+corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
 Corpus source scanners now write three independent artifacts: `detect-static`, `quality-scan`, and
 mutation `--detect-only`. Keys cover the pinned target tree, discovered implementation closure,
-Node/tool versions, target configuration, tracked manifest/lock bytes, and workspace install
-presence. Checkout roots are tokenized in stored findings and rehydrated on read. On real Carbon,
+Node/tool versions, target configuration, tracked manifest/lock bytes, and — for quality-scan's
+Knip pass — explicit no-package/not-installed/partial/complete install state plus bounded exact
+bytes for package-manager preparation metadata and installed direct-package entry points. The two
+source-only scanners do not move when an unobserved install changes. Checkout roots are tokenized
+in stored findings and rehydrated on read. On real Carbon,
 the cache reports 6,133 tracked target units rather than walking installed dependencies.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
@@ -148,6 +154,8 @@ They prove cold/warm finding and scope equivalence, full-schema corruption rejec
 recomputation, discovery-backed helper closure, phase-granular invalidation, all-cacheable-phase
 target-pin invalidation, live advisory and live-provider secret non-reuse, forced-cold mismatch and
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
-aggregate, and the scheduled forced-cold path. The cross-process guard uses one persistent target,
-one persistent artifact directory, fixed local Semgrep YAML, and two different checkout paths: the
-first process must miss all three deterministic phases and the second must hit all three.
+aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
+Harvey checkout copies (only the tool installation is shared), runs all three production scanner
+CLIs over the 686-file calibration target through the production identity/cache modules, and reuses
+one artifact directory. Checkout A must miss all three scanners, checkout B must hit all three with
+identical real findings, and a quality-scan implementation edit in B must miss only quality-scan.

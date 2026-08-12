@@ -19,13 +19,16 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
     expect(workflow).toContain("uses: actions/cache/restore@v4");
     expect(workflow).toContain("uses: actions/cache/save@v4");
-    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(2);
+    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(4);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow.match(/corpus-phase-v3-/g)).toHaveLength(4);
+    expect(workflow.match(/corpus-phase-v4-/g)).toHaveLength(5);
     expect(workflow).toContain("Validate corpus phase-cache transport provenance");
     expect(workflow).toContain("Record corpus phase-cache transport provenance");
     expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key }}'");
+    expect(workflow).toContain("--head-sha '${{ github.sha }}'");
+    expect(workflow).toContain("--platform '${{ runner.os }}'");
+    expect(workflow).toContain("--namespace '${{ matrix.shard }}'");
   });
 
   it("seeds the default-branch cache after merge while preserving unconditional PR reporting", () => {
@@ -33,6 +36,11 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--default-ref 'refs/heads/${{ github.event.repository.default_branch }}'");
     expect(workflow).toContain("--event '${{ github.event_name }}'");
     expect(workflow).toContain("--ref '${{ github.ref }}'");
+    expect(workflow).toContain("Save shard2 main-visible corpus phase results");
+    expect(workflow).toContain("Save shard3 main-visible corpus phase results");
+    expect(workflow).toContain("key: corpus-phase-v4-${{ runner.os }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow).toContain("key: corpus-phase-v4-${{ runner.os }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(3);
   });
 
   it("refreshes registry bytes on attempt one and reuses the restored snapshot on retries", () => {

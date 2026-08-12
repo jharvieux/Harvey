@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { readRecursiveSafe } from "../fs-walk.js";
 import type { SemgrepOutput } from "./semgrep.js";
 import type { MechanicalCacheMode } from "./mechanical-phase-cache.js";
@@ -49,6 +49,26 @@ interface FamilyArtifact {
 
 const TARGET_ROOT_TOKEN = "<SEMGREP_TARGET_ROOT>";
 const CACHE_ROOT_TOKEN = "<SEMGREP_CACHE_ROOT>";
+const SEMGREP_YAML_EXTENSIONS = new Set([".yml", ".yaml"]);
+
+/** The execution-side loader: all local YAML configs Semgrep accepts, including nested configs. */
+export function discoverLocalSemgrepFamilies(root: string): SemgrepFamily[] {
+  return readRecursiveSafe(root)
+    .filter((relative) => SEMGREP_YAML_EXTENSIONS.has(extname(relative).toLowerCase()))
+    .sort()
+    .map((relative) => ({
+      id: `local-${relative.replaceAll(/[^a-zA-Z0-9.-]/g, "-").replace(/\.(?:yml|yaml)$/i, "")}`,
+      configPath: join(root, relative),
+    }));
+}
+
+/** Independent source-like yardstick: never derive expected configs from the execution loader. */
+export function localSemgrepConfigYardstick(root: string): string[] {
+  return readRecursiveSafe(root)
+    .filter((relative) => /(?:^|\/)[^/]+\.(?:yml|yaml)$/i.test(relative))
+    .sort()
+    .map((relative) => join(root, relative));
+}
 
 function mapStrings<T>(value: T, map: (text: string) => string): T {
   if (typeof value === "string") return map(value) as T;

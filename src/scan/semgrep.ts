@@ -29,8 +29,10 @@ import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-t
 import {
   assertSemgrepFamilyPlan,
   assertSemgrepFamilyVerification,
+  discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   mergeSemgrepFamilyOutputs,
+  localSemgrepConfigYardstick,
   rejectUnregisteredSemgrepFamilyArtifacts,
   type SemgrepFamily,
   type SemgrepFamilyCacheOptions,
@@ -533,12 +535,9 @@ function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[
     throw new Error(`Semgrep registry family count moved: expected ${REGISTRY_PACKS.length}, received ${registryConfigs.length}; every exact registry pack must be registered once`);
   }
   const registry = registryConfigs.map((configPath, index) => ({ id: `registry-${index}-${REGISTRY_PACKS[index]!.replaceAll("/", "-")}`, configPath }));
-  const local = readNamesSafe(CUSTOM_RULES)
-    .filter((name) => name.endsWith(".yml"))
-    .sort()
-    .map((name) => ({ id: `local-${name.replace(/\.yml$/, "")}`, configPath: join(CUSTOM_RULES, name) }));
+  const local = discoverLocalSemgrepFamilies(CUSTOM_RULES);
   const families = [...registry, ...local];
-  assertSemgrepFamilyPlan(families, [...registryConfigs, ...local.map((family) => family.configPath)]);
+  assertSemgrepFamilyPlan(families, [...registryConfigs, ...localSemgrepConfigYardstick(CUSTOM_RULES)]);
   return families;
 }
 
