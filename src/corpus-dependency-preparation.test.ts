@@ -1,0 +1,181 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
+import { readEntriesLstatSafe, readRecursiveSafe } from "./fs-walk.js";
+
+describe("relocatable corpus dependency preparation (#1872)", () => {
+  const dirs: string[] = [];
+  afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  function fixture(manager: "npm" | "pnpm" | "yarn"): string {
+    const dir = mkdtempSync(join(tmpdir(), `harvey-dependency-${manager}-`));
+    dirs.push(dir);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      name: `${manager}-fixture`,
+      private: true,
+      ...(manager === "pnpm" ? { dependencies: { "is-number": "7.0.0" } } : {}),
+    }));
+    if (manager === "npm") {
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ name: "npm-fixture", lockfileVersion: 3, requires: true, packages: { "": { name: "npm-fixture" } } }));
+    } else if (manager === "pnpm") {
+      writeFileSync(join(dir, "pnpm-lock.yaml"), [
+        "lockfileVersion: '9.0'",
+        "settings:",
+        "  autoInstallPeers: true",
+        "  excludeLinksFromLockfile: false",
+        "importers:",
+        "  .:",
+        "    dependencies:",
+        "      is-number:",
+        "        specifier: 7.0.0",
+        "        version: 7.0.0",
+        "packages:",
+        "  is-number@7.0.0:",
+        "    resolution: {integrity: sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==}",
+        "    engines: {node: '>=0.12.0'}",
+        "snapshots:",
+        "  is-number@7.0.0: {}",
+        "",
+      ].join("\n"));
+    } else {
+      writeFileSync(join(dir, "yarn.lock"), "# yarn lockfile v1\n");
+    }
+    return dir;
+  }
+
+  function symlinksUnder(root: string): string[] {
+    const found: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readEntriesLstatSafe(dir)) {
+        if (entry.isSymbolicLink) found.push(entry.path);
+        else if (entry.isDirectory) walk(entry.path);
+      }
+    };
+    walk(root);
+    return found;
+  }
+
+  it.each(["npm", "pnpm", "yarn"] as const)("materializes %s cold then offline from the same content address", (manager) => {
+    const targetA = fixture(manager);
+    const targetB = fixture(manager);
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-cache-"));
+    dirs.push(cacheDir);
+    const invocations: { bin: string; args: string[]; cwd: string }[] = [];
+    const common = {
+      cacheDir,
+      targetRevision: "same-pin",
+      targetTree: "same-tree",
+      packageManagerVersion: "exact-1.2.3",
+      runInstall: (invocation: { bin: string; args: string[]; cwd: string }) => invocations.push(invocation),
+    };
+    const cold = prepareCorpusDependencies({ ...common, targetDir: targetA });
+    const warm = prepareCorpusDependencies({ ...common, targetDir: targetB });
+
+    expect(cold.status).toBe("miss");
+    expect(warm.status).toBe("hit");
+    expect(warm.key).toBe(cold.key);
+    expect(invocations.map((invocation) => invocation.bin)).toEqual([manager, manager]);
+    expect(invocations[1]!.args).toContain("--offline");
+    expect(invocations.flatMap((invocation) => invocation.args).every((arg) => !arg.includes("node_modules"))).toBe(true);
+    if (manager === "pnpm") expect(invocations[0]!.args).toContain("--config.enableGlobalVirtualStore=false");
+  });
+
+  it.each(["npm", "pnpm", "yarn"] as const)("runs the real %s package manager across different checkout paths", (manager) => {
+    const targetA = fixture(manager);
+    const targetB = fixture(manager);
+    const cacheDir = mkdtempSync(join(tmpdir(), `harvey-real-${manager}-store-`));
+    dirs.push(cacheDir);
+    const events: string[] = [];
+    const common = { cacheDir, targetRevision: "same-pin", targetTree: "same-tree", onEvent: (event: string) => events.push(event) };
+    const cold = prepareCorpusDependencies({ ...common, targetDir: targetA });
+    const warm = prepareCorpusDependencies({ ...common, targetDir: targetB });
+    expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: true, packageManager: manager });
+    expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: true, packageManager: manager, key: cold.key });
+    expect(events).toContainEqual(expect.stringContaining(`DEPENDENCY PREP HIT ${manager}`));
+    if (manager === "pnpm") {
+      expect(symlinksUnder(cacheDir)).toEqual([]);
+      expect(readRecursiveSafe(cacheDir).some((path) => /(^|\/)node_modules(\/|$)/.test(path))).toBe(false);
+    }
+  });
+
+  it("binds lockfile, manager version, runtime/install config, and target identity independently of checkout path", () => {
+    const targetA = fixture("npm");
+    const targetB = fixture("npm");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-identity-"));
+    dirs.push(cacheDir);
+    const runInstall = vi.fn();
+    const build = (targetDir: string, packageManagerVersion = "11.12.1", targetTree = "tree") => prepareCorpusDependencies({
+      targetDir, cacheDir, targetRevision: "pin", targetTree, packageManagerVersion, runInstall,
+    });
+    const first = build(targetA);
+    expect(build(targetB).status).toBe("hit");
+    expect(build(targetB, "11.12.2").key).not.toBe(first.key);
+    expect(build(targetB, "11.12.1", "other-tree").key).not.toBe(first.key);
+    writeFileSync(join(targetB, ".npmrc"), "legacy-peer-deps=true\n");
+    expect(build(targetB).key).not.toBe(first.key);
+    writeFileSync(join(targetB, "package-lock.json"), JSON.stringify({ name: "npm-fixture", lockfileVersion: 3, packages: { "": { name: "changed" } } }));
+    expect(build(targetB).key).not.toBe(first.key);
+  });
+
+  it("rejects a corrupt receipt visibly and performs a clean install", () => {
+    const target = fixture("npm");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-corrupt-"));
+    dirs.push(cacheDir);
+    const events: string[] = [];
+    const runInstall = vi.fn();
+    const options = { targetDir: target, cacheDir, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.12.1", runInstall, onEvent: (event: string) => events.push(event) };
+    const cold = prepareCorpusDependencies(options);
+    const receipt = join(cacheDir, readRecursiveSafe(cacheDir).find((path) => path.startsWith("dependency-preparation/receipts/") && path.endsWith(".json"))!);
+    writeFileSync(receipt, JSON.stringify({ schema: 0, key: cold.key }));
+    expect(prepareCorpusDependencies(options).status).toBe("miss");
+    expect(events).toContainEqual(expect.stringContaining("DEPENDENCY PREP REJECT npm"));
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ schema: 2 });
+    expect(runInstall).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an incomplete restored store, retries clean, and keeps a failed retry fail-loud", () => {
+    const target = fixture("pnpm");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-incomplete-"));
+    dirs.push(cacheDir);
+    const events: string[] = [];
+    const seed = { targetDir: target, cacheDir, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.1.3", onEvent: (event: string) => events.push(event) };
+    prepareCorpusDependencies({ ...seed, runInstall: vi.fn() });
+    let calls = 0;
+    const repaired = prepareCorpusDependencies({ ...seed, runInstall: () => { calls += 1; if (calls === 1) throw new Error("offline store corrupt"); } });
+    expect(repaired.status).toBe("miss");
+    expect(calls).toBe(2);
+    expect(events).toContainEqual(expect.stringContaining("offline materialization failed"));
+
+    const receipt = join(cacheDir, readRecursiveSafe(cacheDir).find((path) => path.startsWith("dependency-preparation/receipts/") && path.endsWith(".json"))!);
+    rmSync(receipt, { force: true });
+    let fallbackCalls = 0;
+    const failed = prepareCorpusDependencies({ ...seed, runInstall: () => {
+      fallbackCalls += 1;
+      mkdirSync(join(target, "node_modules"), { recursive: true });
+      writeFileSync(join(target, "node_modules", "partial.js"), "rejected population\n");
+      throw new Error("clean install unavailable");
+    } });
+    expect(failed).toMatchObject({ status: "incomplete", complete: false, cacheable: false });
+    expect(existsSync(join(target, "node_modules", "partial.js"))).toBe(true);
+    expect(fallbackCalls).toBe(2);
+    expect(events).toContainEqual(expect.stringContaining("M5-knip will preserve its did-not-run/degraded semantics"));
+  });
+
+  it("does not claim a reproducible preparation without an integrity-bearing lockfile", () => {
+    const target = fixture("npm");
+    rmSync(join(target, "package-lock.json"));
+    mkdirSync(join(target, "node_modules"));
+    const result = prepareCorpusDependencies({
+      targetDir: target,
+      cacheDir: mkdtempSync(join(tmpdir(), "harvey-dependency-no-lock-")),
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "non-cacheable", complete: true, cacheable: false });
+    expect(result.reason).toContain("no package-manager lockfile");
+  });
+});

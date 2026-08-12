@@ -44,9 +44,16 @@ if (command === "restore") {
     rejectCorpusCacheTransport(dir);
   }
 } else if (command === "save") {
-  const manifest: CorpusCacheTransportManifest = {
-    schema: 2,
+  const family = flag("--family");
+  if (family !== "run" && family !== "main") {
+    console.error("corpus-cache-transport: --family must be run or main");
+    process.exit(2);
+  }
+  const manifest: Omit<CorpusCacheTransportManifest, "payload"> = {
+    schema: 3,
+    family,
     key: corpusCacheTransportKey({
+      family,
       platform: flag("--platform"),
       namespace: flag("--namespace"),
       runId: flag("--run-id"),
@@ -60,8 +67,8 @@ if (command === "restore") {
     headSha: flag("--head-sha"),
     writtenAt: new Date().toISOString(),
   };
-  writeCorpusCacheTransport(dir, manifest);
-  console.log(`CACHE TRANSPORT SAVE: key=${manifest.key}; source=${manifest.event} ${manifest.ref} run=${manifest.runId} attempt=${manifest.runAttempt} sha=${manifest.headSha}`);
+  const written = writeCorpusCacheTransport(dir, manifest);
+  console.log(`CACHE TRANSPORT SAVE: key=${written.key}; source=${written.event} ${written.ref} run=${written.runId} attempt=${written.runAttempt} sha=${written.headSha}; payload=${written.payload.bytes}/${written.payload.maxBytes} bytes; symlinks=${written.payload.symlinks}`);
 } else {
   console.error("usage: corpus-cache-transport <restore|save> --dir <path> ...");
   process.exit(2);
