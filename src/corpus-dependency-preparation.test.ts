@@ -240,6 +240,47 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(warm.reason).toContain(expected);
   });
 
+  it("resolves package-manager brace workspaces with Knip's own glob semantics", () => {
+    const target = fixture("npm");
+    const pkg = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(target, "package.json"), JSON.stringify({ ...pkg, workspaces: ["packages/{app,lib}"] }));
+    for (const name of ["app", "lib"]) {
+      mkdirSync(join(target, "packages", name), { recursive: true });
+      writeFileSync(join(target, "packages", name, "package.json"), JSON.stringify({ name: `workspace-${name}`, private: true }));
+    }
+    writeFileSync(join(target, "packages", "app", "vite.config.js"), "module.exports = { build: { lib: { entry: process.env.HOME } } };\n");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-brace-workspace-"));
+    dirs.push(cacheDir);
+    const result = prepareCorpusDependencies({
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(result.reason).toContain("packages/app/vite.config.js");
+  });
+
+  it("keeps quality fresh when package-manager workspace declarations are not enumerable", () => {
+    const target = fixture("npm");
+    const pkg = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(target, "package.json"), JSON.stringify({ ...pkg, workspaces: "packages/*" }));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-unknown-workspace-"));
+    dirs.push(cacheDir);
+    const result = prepareCorpusDependencies({
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(result.reason).toContain("package.json#workspaces is not a statically enumerable string array");
+  });
+
   it("fails safe when Knip's executable input set cannot be proven", () => {
     const target = fixture("npm");
     writeFileSync(join(target, "knip.json"), "{ this is not static JSON }\n");

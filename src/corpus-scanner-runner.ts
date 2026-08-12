@@ -54,7 +54,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
         ? [
             join(options.repoRoot, "src", "cli", "quality-scan.ts"),
             ...options.scriptArgs,
-            ...(qualityPreparation?.complete === false ? ["--skip-knip-reason", `dependency preparation incomplete: ${qualityPreparation.reason}`] : []),
+            ...(qualityPreparation?.complete === false ? ["--degraded-knip-reason", `dependency preparation incomplete: ${qualityPreparation.reason}`] : []),
             "--out", out,
           ]
         : [options.script, ...options.scriptArgs, "--out", out];

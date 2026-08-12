@@ -7,7 +7,7 @@
 // the cross-workspace pair. A regression back to per-workspace jscpd fails this test.
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,9 +77,9 @@ function spawnCli(binPath: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
-async function runCli(repo: string): Promise<Finding[]> {
+async function runCli(repo: string, args: string[] = []): Promise<Finding[]> {
   const outPath = join(repo, "quality-out.json");
-  await spawnCli("node_modules/.bin/tsx", [CLI, repo, "--out", outPath], REPO_ROOT);
+  await spawnCli("node_modules/.bin/tsx", [CLI, repo, ...args, "--out", outPath], REPO_ROOT);
   return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
 }
 
@@ -294,7 +294,7 @@ function noNodeModulesViteFixture(): string {
   dirs.push(repo);
   write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
   // Imports an uninstalled plugin → knip can't load this config without the target's node_modules.
-  write(repo, "vite.config.ts", 'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\nexport default defineConfig({ plugins: [react()] });\n');
+  write(repo, "vite.config.cjs", 'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("@vitejs/plugin-react");\nmodule.exports = {};\n');
   write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
   write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
   write(repo, "src/used.ts", 'export const used = "u";\n');
@@ -323,6 +323,15 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(reduced?.taxonomy).toContain("M5");
     expect(reduced?.fix).toContain("dependencies");
     expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
+  it("starts directly in the source-only tier when dependency preparation rejected the installed tree", async () => {
+    const repo = noNodeModulesViteFixture();
+    const findings = await runCli(repo, ["--degraded-knip-reason", "dependency preparation incomplete: clean install failed"]);
+    expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-01", location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
+    expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
   }, 30000);
 });
 

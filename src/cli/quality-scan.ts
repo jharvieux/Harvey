@@ -90,8 +90,8 @@ const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
-const skipKnipIdx = args.indexOf("--skip-knip-reason");
-const skipKnipReason = skipKnipIdx >= 0 ? args[skipKnipIdx + 1] : undefined;
+const degradedKnipIdx = args.indexOf("--degraded-knip-reason");
+const degradedKnipReason = degradedKnipIdx >= 0 ? args[degradedKnipIdx + 1] : undefined;
 // #809: opt-in whole-codebase Type-3 near-miss pass, on top of the always-on security-path pass —
 // see the header comment above securityPathFiles for why this stays opt-in (noisier, no security
 // guarantee, review tier).
@@ -105,8 +105,8 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error("--timeout must be a positive number of seconds");
   process.exit(2);
 }
-if (skipKnipIdx >= 0 && (!skipKnipReason || skipKnipReason.startsWith("--"))) {
-  console.error("--skip-knip-reason requires a non-empty reason");
+if (degradedKnipIdx >= 0 && (!degradedKnipReason || degradedKnipReason.startsWith("--"))) {
+  console.error("--degraded-knip-reason requires a non-empty reason");
   process.exit(2);
 }
 const TIMEOUT_MS = timeoutSeconds * 1000;
@@ -266,6 +266,21 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
   }
 }
 
+// #1871: an incomplete dependency-preparation receipt means any surviving target node_modules is
+// rejected input. Do not make the normal first attempt: it may execute the target's own Knip or
+// framework/provider config against that partial tree. Start directly in the same source-only tier
+// as #810's retry, with every plugin disabled and Harvey-inferred entries. An empty live plugin
+// catalog leaves no complete disable list; abort into M5-00 before starting Knip.
+function runKnipDegraded(dir: string, reason: string): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+  if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
+  return {
+    report: execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)),
+    entriesInferred: true,
+    pluginsDisabled: true,
+    reducedReason: reason,
+  };
+}
+
 function lineCount(dir: string, relPath: string): number | undefined {
   try {
     return readFileSync(join(dir, relPath), "utf8").split("\n").length;
@@ -403,14 +418,6 @@ const inferredEntryFiles = new Set<string>();
 // the same reason (config-only usages are invisible when the config could not be resolved).
 const unresolvedDepScopes = new Set<string>();
 
-if (skipKnipReason) {
-  for (const scope of scopes) {
-    const label = scopeLabel(scope);
-    knipGaps.push({ scope: label, reason: skipKnipReason });
-    console.error(`⚠ knip did not run on ${label} — M5 dead-code coverage skipped: ${skipKnipReason}`);
-  }
-}
-
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
 try {
@@ -423,18 +430,24 @@ try {
 
 // #223/#505: knip has no dependency on M4 and runs per workspace — a knip gap on one workspace
 // must not cost any other workspace's (or jscpd's) findings.
-for (const scope of skipKnipReason ? [] : scopes) {
+for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   try {
-    const { report, entriesInferred, pluginsDisabled, reducedReason } = runKnip(scope);
+    const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
+      ? runKnipDegraded(scope, degradedKnipReason)
+      : runKnip(scope);
     // #810: a scope that only ran after the degraded retry is disclosed as a reduced-mode partial
     // (M5-98). Its file findings are already review-tier via entriesInferred below. The #580
     // entry-uncertain heuristic is skipped for it — its high unused ratio is the EXPECTED cost of a
     // plugins-disabled run, already explained by M5-98, not a separate mis-resolution signal.
     if (pluginsDisabled) {
       knipReducedScopes.push({ scope: label, reason: reducedReason ?? "knip could not load the target's config" });
-      console.error(`⚠ knip could not load ${label}'s config (likely no node_modules) — re-ran with plugins disabled; M5 file findings for it are review-tier (#810, see M5-98)`);
+      console.error(
+        degradedKnipReason
+          ? `⚠ dependency preparation was incomplete for ${label} — ran knip directly with target configs/plugins disabled; M5 file findings for it are source-only review tier (#1871, see M5-98)`
+          : `⚠ knip could not load ${label}'s config (likely no node_modules) — re-ran with plugins disabled; M5 file findings for it are review-tier (#810, see M5-98)`,
+      );
     } else {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
       // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all

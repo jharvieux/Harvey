@@ -7,7 +7,6 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesSafe } from "./fs-walk.js";
 import { detectPackageManager, type PackageManager } from "./package-manager.js";
-import { expandGlob, parseWorkspaceGlobs } from "./workspaces.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 2;
 
@@ -105,7 +104,8 @@ import { pathToFileURL } from "node:url";
 const dist = process.env.HARVEY_KNIP_DIST;
 const requestText = process.env.HARVEY_KNIP_CONFIG_REQUEST;
 if (!dist || !requestText) throw new Error("missing Knip config discovery request");
-const requestedRoots = JSON.parse(requestText);
+const request = JSON.parse(requestText);
+const requestedRoot = resolve(request.root);
 const [{ PluginEntries }, { KNIP_CONFIG_LOCATIONS }, { _dirGlob, _glob }, { parseJSONC }] = await Promise.all([
   import(pathToFileURL(join(dist, "plugins.js")).href),
   import(pathToFileURL(join(dist, "constants.js")).href),
@@ -114,9 +114,22 @@ const [{ PluginEntries }, { KNIP_CONFIG_LOCATIONS }, { _dirGlob, _glob }, { pars
 ]);
 const executableExtension = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
 const resolverPlugins = new Map(PluginEntries.filter(([, plugin]) => typeof plugin.resolveConfig === "function"));
-const roots = new Set(requestedRoots.map((root) => resolve(root)));
-const unknown = [];
+const roots = new Set([requestedRoot]);
+const unknown = [...request.workspaceUnknown];
 const staticConfigs = new Map();
+
+// Package-manager workspaces are part of Knip's config-loading surface. Resolve their complete glob
+// language with Knip's own implementation, rather than Harvey's intentionally small source-loader
+// glob helper; otherwise a valid brace/extglob can hide an executable provider config from the
+// quality cacheability decision while Knip itself still loads it.
+try {
+  for (const workspace of await _dirGlob({ cwd: requestedRoot, patterns: request.workspacePatterns, gitignore: false })) {
+    const absolute = resolve(requestedRoot, workspace);
+    if (existsSync(join(absolute, "package.json"))) roots.add(absolute);
+  }
+} catch (error) {
+  unknown.push("package-manager workspace globs could not be resolved with Knip's glob implementation: " + (error instanceof Error ? error.message : String(error)));
+}
 
 const readStaticConfig = (root) => {
   const configs = [];
@@ -127,7 +140,7 @@ const readStaticConfig = (root) => {
       const text = readFileSync(path, "utf8");
       configs.push(name.endsWith("jsonc") ? parseJSONC(path, text) : JSON.parse(text));
     } catch (error) {
-      unknown.push(relative(requestedRoots[0], path) + " could not be parsed: " + (error instanceof Error ? error.message : String(error)));
+      unknown.push(relative(requestedRoot, path) + " could not be parsed: " + (error instanceof Error ? error.message : String(error)));
     }
   }
   const manifestPath = join(root, "package.json");
@@ -136,7 +149,7 @@ const readStaticConfig = (root) => {
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       if (manifest && typeof manifest === "object" && manifest.knip !== undefined) configs.push(manifest.knip);
     } catch (error) {
-      unknown.push(relative(requestedRoots[0], manifestPath) + " could not be parsed while enumerating Knip inputs: " + (error instanceof Error ? error.message : String(error)));
+      unknown.push(relative(requestedRoot, manifestPath) + " could not be parsed while enumerating Knip inputs: " + (error instanceof Error ? error.message : String(error)));
     }
   }
   return configs;
@@ -163,7 +176,7 @@ for (;;) {
           }
         }
       } catch (error) {
-        unknown.push(relative(requestedRoots[0], root) + " has workspace config globs Knip input discovery could not resolve: " + (error instanceof Error ? error.message : String(error)));
+        unknown.push(relative(requestedRoot, root) + " has workspace config globs Knip input discovery could not resolve: " + (error instanceof Error ? error.message : String(error)));
       }
     }
   }
@@ -211,7 +224,7 @@ for (const root of roots) {
       if (executableExtension.has(extname(path))) executable.add(resolve(path));
     }
   } catch (error) {
-    unknown.push(relative(requestedRoots[0], root) + " provider config globs could not be resolved: " + (error instanceof Error ? error.message : String(error)));
+    unknown.push(relative(requestedRoot, root) + " provider config globs could not be resolved: " + (error instanceof Error ? error.message : String(error)));
   }
   for (const name of KNIP_CONFIG_LOCATIONS) {
     const path = join(root, name);
@@ -259,20 +272,38 @@ function preparationEnvironmentIdentity(environment: NodeJS.ProcessEnv): Record<
   };
 }
 
-function qualityWorkspaceRoots(root: string): string[] {
-  const roots = new Set([resolve(root)]);
-  try {
-    for (const pattern of parseWorkspaceGlobs(root).globs) {
-      if (pattern.startsWith("!")) continue;
-      for (const candidate of expandGlob(root, pattern)) {
-        if (existsSync(join(candidate, "package.json"))) roots.add(resolve(candidate));
+function qualityWorkspaceRequest(root: string): { root: string; workspacePatterns: string[]; workspaceUnknown: string[] } {
+  const pnpmWorkspace = join(root, "pnpm-workspace.yaml");
+  if (existsSync(pnpmWorkspace)) {
+    try {
+      const parsed = parseYaml(readFileSync(pnpmWorkspace, "utf8")) as { packages?: unknown } | null;
+      if (!parsed || !Array.isArray(parsed.packages) || !parsed.packages.every((pattern) => typeof pattern === "string")) {
+        return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: ["pnpm-workspace.yaml does not contain a statically enumerable string packages array"] };
       }
+      return { root: resolve(root), workspacePatterns: parsed.packages, workspaceUnknown: [] };
+    } catch (error) {
+      return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: [`pnpm-workspace.yaml could not be parsed while enumerating package-manager workspaces: ${error instanceof Error ? error.message : String(error)}`] };
     }
-  } catch {
-    // The trusted Knip-catalog child will still inspect the target root. A malformed package
-    // manifest is separately returned as an unknown input-set reason, keeping quality fresh.
   }
-  return [...roots].sort();
+
+  const manifestPath = join(root, "package.json");
+  if (!existsSync(manifestPath)) return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: [] };
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { workspaces?: unknown };
+    const value = manifest.workspaces;
+    if (value === undefined) return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: [] };
+    const patterns = Array.isArray(value)
+      ? value
+      : value && typeof value === "object" && Array.isArray((value as { packages?: unknown }).packages)
+        ? (value as { packages: unknown[] }).packages
+        : undefined;
+    if (!patterns || !patterns.every((pattern) => typeof pattern === "string")) {
+      return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: ["package.json#workspaces is not a statically enumerable string array"] };
+    }
+    return { root: resolve(root), workspacePatterns: patterns as string[], workspaceUnknown: [] };
+  } catch (error) {
+    return { root: resolve(root), workspacePatterns: ["."], workspaceUnknown: [`package.json could not be parsed while enumerating package-manager workspaces: ${error instanceof Error ? error.message : String(error)}`] };
+  }
 }
 
 function knipDiscoveryFailure(error: unknown): string {
@@ -297,7 +328,7 @@ function discoverKnipExecutableConfigs(root: string): KnipExecutableConfigDiscov
       env: {
         ...process.env,
         HARVEY_KNIP_DIST: knipDist,
-        HARVEY_KNIP_CONFIG_REQUEST: JSON.stringify(qualityWorkspaceRoots(root)),
+        HARVEY_KNIP_CONFIG_REQUEST: JSON.stringify(qualityWorkspaceRequest(root)),
       },
     });
     const parsed = JSON.parse(stdout) as Partial<KnipExecutableConfigDiscovery>;

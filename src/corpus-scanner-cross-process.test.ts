@@ -137,22 +137,25 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(homeStable.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
   }, 60_000);
 
-  it("keeps a real npm-installed Vite provider fresh when its config reads unkeyed state", async () => {
+  it("keeps a Vite provider inside a brace-declared npm workspace fresh when its config reads unkeyed state", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-vite-quality-cache-"));
     const targetDir = join(fixture, "target");
     const cacheDir = join(fixture, "cache");
     const stateHome = join(fixture, "home");
     dirs.push(fixture);
-    mkdirSync(join(targetDir, "src"), { recursive: true });
+    const appDir = join(targetDir, "packages", "app");
+    mkdirSync(join(appDir, "src"), { recursive: true });
+    mkdirSync(join(targetDir, "packages", "lib"), { recursive: true });
     mkdirSync(join(targetDir, "provider"), { recursive: true });
     mkdirSync(stateHome);
-    writeFileSync(join(targetDir, "package.json"), '{"name":"vite-cache-falsifier","private":true,"devDependencies":{"vite":"file:provider"}}\n');
+    writeFileSync(join(targetDir, "package.json"), '{"name":"vite-cache-falsifier","private":true,"workspaces":["packages/{app,lib}"],"devDependencies":{"vite":"file:provider"}}\n');
+    writeFileSync(join(appDir, "package.json"), '{"name":"vite-cache-app","private":true}\n');
+    writeFileSync(join(targetDir, "packages", "lib", "package.json"), '{"name":"vite-cache-lib","private":true}\n');
     writeFileSync(join(targetDir, "provider", "package.json"), '{"name":"vite","version":"1.0.0","main":"index.js"}\n');
     writeFileSync(join(targetDir, "provider", "index.js"), "module.exports = {};\n");
-    writeFileSync(join(targetDir, "knip.json"), '{"project":["src/**/*.ts"]}\n');
-    writeFileSync(join(targetDir, "src", "a.ts"), "export const a = true;\n");
-    writeFileSync(join(targetDir, "src", "b.ts"), "export const b = true;\n");
-    writeFileSync(join(targetDir, "vite.config.js"), [
+    writeFileSync(join(appDir, "src", "a.ts"), "export const a = true;\n");
+    writeFileSync(join(appDir, "src", "b.ts"), "export const b = true;\n");
+    writeFileSync(join(appDir, "vite.config.js"), [
       'const { readFileSync } = require("node:fs");',
       'const { join } = require("node:path");',
       'const selected = readFileSync(join(process.env.HOME, "vite-entry.txt"), "utf8").trim();',
@@ -203,12 +206,12 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       writeFileSync(join(stateHome, "vite-entry.txt"), "b\n");
       const changed = await run();
 
-      expect([cold.unused, warm.unused, changed.unused]).toEqual(["src/b.ts", "src/b.ts", "src/a.ts"]);
+      expect([cold.unused, warm.unused, changed.unused]).toEqual(["packages/app/src/b.ts", "packages/app/src/b.ts", "packages/app/src/a.ts"]);
       expect([cold.cache, warm.cache, changed.cache]).toEqual(["fresh", "fresh", "fresh"]);
       expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
       expect(warm.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
       expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
-      expect(changed.events).toContainEqual(expect.stringContaining("vite.config.js"));
+      expect(changed.events).toContainEqual(expect.stringContaining("packages/app/vite.config.js"));
       expect(changed.events).toContainEqual(expect.stringContaining("quality-scan executes fresh because validated receipt and offline materialization; quality-scan remains non-cacheable"));
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
@@ -216,7 +219,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     }
   }, 30_000);
 
-  it("forces an M5 gap without executing a partial installed provider", async () => {
+  it("preserves source-only M5 coverage without executing a rejected provider, and fails loud if that safe tier fails", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-cache-"));
     dirs.push(targetDir, cacheDir);
@@ -224,33 +227,43 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     mkdirSync(join(targetDir, "node_modules", "partial-provider"), { recursive: true });
     writeFileSync(join(targetDir, "package.json"), '{"name":"partial-quality","private":true}\n');
     writeFileSync(join(targetDir, "src", "index.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "src", "dead.ts"), "export const dead = true;\n");
     writeFileSync(join(targetDir, "knip.js"), 'module.exports = require("partial-provider");\n');
     writeFileSync(join(targetDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
     writeFileSync(join(targetDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
-    const result = await runCorpusScanner({
+    const incompletePreparation = {
+      status: "incomplete" as const,
+      complete: false as const,
+      cacheable: false as const,
+      packageManager: "npm" as const,
+      packageManagerVersion: "11.12.1",
+      reason: "clean and fallback installs failed after partial materialization",
+    };
+    const run = (scriptArgs: string[] = [targetDir]) => runCorpusScanner({
       repoRoot: process.cwd(),
       targetDir,
       targetConfig: "incomplete preparation control",
       script: "quality-scan",
       scanner: "quality-scan",
-      scriptArgs: [targetDir],
+      scriptArgs,
       cache: {
         dir: cacheDir,
         mode: "read-write",
         targetRevision: "pin",
         targetTree: "tree",
-        dependencyPreparation: {
-          status: "incomplete",
-          complete: false,
-          cacheable: false,
-          packageManager: "npm",
-          packageManagerVersion: "11.12.1",
-          reason: "clean and fallback installs failed after partial materialization",
-        },
+        dependencyPreparation: incompletePreparation,
       },
     });
+    const result = await run();
     expect(result.cacheRecord).toBeUndefined();
-    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(result.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
+    expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
+
+    const failedDegraded = await run([targetDir, "--timeout", "0.001"]);
+    expect(failedDegraded.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(failedDegraded.findings.some((finding) => finding.id === "M5-98")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
 
     const completeResult = await runCorpusScanner({
@@ -278,5 +291,55 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     });
     expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
-  }, 30_000);
+  }, 60_000);
+
+  it("preserves the nested nextjs M5 scope when a polyglot root has no package manifest", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-polyglot-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-polyglot-cache-"));
+    const nextDir = join(targetDir, "nextjs");
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(nextDir, "src"), { recursive: true });
+    mkdirSync(join(nextDir, "node_modules", "partial-provider"), { recursive: true });
+    writeFileSync(join(nextDir, "package.json"), '{"name":"nested-nextjs","private":true}\n');
+    writeFileSync(join(nextDir, "src", "index.ts"), "export const live = true;\n");
+    writeFileSync(join(nextDir, "src", "dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(nextDir, "knip.js"), 'module.exports = require("partial-provider");\n');
+    writeFileSync(join(nextDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
+    writeFileSync(join(nextDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
+    const dependencyPreparation = {
+      status: "incomplete" as const,
+      complete: false as const,
+      cacheable: false as const,
+      packageManager: "npm" as const,
+      packageManagerVersion: "11.12.1",
+      reason: "root or scoped package installation failed",
+    };
+    const run = (scanDir: string) => runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir: scanDir,
+      targetConfig: scanDir === targetDir ? "polyglot root" : "nextjs M5 scan root",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [scanDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "polyglot-pin",
+        targetTree: "polyglot-tree",
+        dependencyPreparation,
+      },
+    });
+
+    const root = await run(targetDir);
+    const scoped = await run(nextDir);
+    // Knip itself requires a package manifest at its invocation root, so the whole polyglot tree
+    // remains a disclosed M5-00. corpus-drift replaces that root M5 result with the explicit
+    // nextjs/ module scope below; that is the hosted mvp-boilerplate seam this control protects.
+    expect(root.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(root.findings.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(scoped.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(scoped.findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(scoped.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(nextDir, "partial-provider-consumed"))).toBe(false);
+  }, 60_000);
 });

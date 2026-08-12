@@ -137,17 +137,22 @@ version, Node/ABI, platform/architecture, install flags, and every value in the 
 environment (`CI`, `HOME`, `PATH`, and `TMPDIR`). A hit still performs a frozen offline
 materialization into the disposable clone. Corrupt/incomplete receipts or stores reject visibly
 and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
-to emit M5-00 without invoking Knip. The receipt proves dependency materialization; it does not make
-arbitrary target code reproducible. Install lifecycle scripts and executable configuration can read
-time, network, or file contents outside the keyed tree even when every named environment value is
-unchanged.
+to bypass every target Knip/framework/provider config and attempt Knip directly in its all-plugins-
+disabled, Harvey-inferred-entry source tier. Success preserves review-tier M5 findings and emits
+M5-98; failure of that safe tier emits M5-00. A rejected installed tree is never consumed. The
+receipt proves dependency materialization; it does not make arbitrary target code reproducible.
+Install lifecycle scripts and executable configuration can read time, network, or file contents
+outside the keyed tree even when every named environment value is unchanged.
 
 Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
 framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
 every plugin that loads configuration (`resolveConfig`), resolves that catalog's own config globs
 with Knip's glob implementation across the package-manager and static Knip workspace roots, and
 adds executable custom paths declared by `knip.json`, `knip.jsonc`, their dot-prefixed forms, or
-`package.json#knip`. Knip's own executable control configs are included too. A matching
+`package.json#knip`. Package-manager workspace declarations are parsed from JSON/YAML and passed
+unchanged to that same Knip glob implementation, including brace/extglob shapes; an unparseable or
+non-enumerable declaration makes quality fresh. Knip's own executable control configs are included
+too. A matching
 `.js`/`.jsx`/`.mjs`/`.cjs`/`.ts`/`.tsx`/`.mts`/`.cts` input makes quality non-cacheable; so does any
 catalog, workspace, static-config, or glob shape whose enumeration fails. The preparation receipt
 and frozen offline install may still hit, but quality executes fresh and the scanner event records
@@ -215,12 +220,15 @@ preparation and all three scanner families must miss then hit one external artif
 preserving findings and examined scope; cache-only duplicate sources must remain invisible to M4.
 The quality identity is separately falsified by changing its preparation key and each execution
 environment value. A physical copy's real `src/quality-scan.ts` helper is mutated to prove closure
-discovery moves only quality's implementation identity. The incomplete-preparation control proves
-both directions: an incomplete receipt routes around the partial provider and emits M5-00; the
-same provider executes when preparation is complete. The executable-config controls cover the live
+discovery moves only quality's implementation identity. The incomplete-preparation controls prove
+all three directions across both failing corpus shapes: an incomplete receipt routes around the
+partial provider, preserves source-only findings with M5-98 at both a package root and a nested
+`nextjs/` scan root, and emits M5-00 if that safe tier itself fails; the same provider executes when
+preparation is complete. The executable-config controls cover the live
 Knip catalog's Vite default, a non-Vite provider in a declared workspace, a custom executable path
 named only by static Knip configuration, an unenumerable configuration, and a static JSON/JSONC
 direction that remains cacheable. The heavy Vite falsifier installs a local npm package named
-`vite`, keeps a static `knip.json`, and has `vite.config.js` choose its library entry from an
-external file under an unchanged `HOME`: preparation reports miss then hit/hit, all three quality
-runs are fresh, and changing only that external file moves M5-01 from `src/b.ts` to `src/a.ts`.
+`vite` and has `vite.config.js` choose its library entry from an external file under an unchanged
+`HOME`, inside a real npm workspace declared by `packages/{app,lib}`: preparation reports miss then
+hit/hit, all three quality runs are fresh, and changing only that external file moves M5-01 from
+`packages/app/src/b.ts` to `packages/app/src/a.ts`.
