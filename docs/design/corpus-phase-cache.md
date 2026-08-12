@@ -36,6 +36,16 @@ The pre-change CI wall-clock reference is corpus run `31539577747`: its `carbon`
 three-shard `--install` run. Local single-target measurements do not honestly supply either
 number; the PR supervisor records them after update-branch rather than projecting a local ratio.
 
+The first PR retry falsified the original identity contract before it could support that
+performance claim. Run `31545576498` attempt 1 used Node `24.18.0` and wrote Semgrep,
+configuration, and structural/AST keys beginning `182e38546022`, `9474383ad85a`, and
+`d9b9b9b780b5`. Attempt 2 successfully restored that exact Actions cache, but `.nvmrc`'s major-only
+`24` resolved to Node `24.19.0`; configuration and structural/AST moved to `3bb4c982aada` and
+`4974b95b4151`. Semgrep independently re-downloaded live registry packs and moved to
+`c6e8aba4e3f4`. The retry had zero deterministic hits and its 729s carbon shard remained slower
+than the 694s pre-change reference. That is defect evidence, not corrected-head performance
+evidence. `.nvmrc` is now exact, and criterion 6 remains pending a new cold/warm CI pair.
+
 ## Cache contract
 
 `runMechanicalScanDetailed` records exactly six typed phases. The registry is exhaustive at
@@ -52,9 +62,16 @@ compile time and the runner rejects a missing or duplicate phase at runtime.
 
 Semgrep's initial proposed identity (`semgrep show dump-config`) was rejected during the real
 carbon measurement: consecutive resolutions were not byte-stable, and one exceeded the command's
-output buffer. The shipped path downloads the registry YAML, hashes those exact bytes, writes them
-under that content address, and passes those same local files to Semgrep. If registry materialization
-fails, the phase logs `CACHE BYPASS` and runs without reuse.
+output buffer. On workflow attempt 1, the shipped path downloads the registry YAML, hashes those
+exact bytes, writes them under that content address, atomically records a validated `current.json`
+snapshot pointer, and passes those same local files to Semgrep. A GitHub retry restores and
+revalidates that exact pointer and every pack byte instead of consulting the live registry again.
+The retry requests attempt 1's exact Actions-cache key and requires `cache-hit=true`; an older
+rolling-prefix fallback can still contribute independently content-addressed phase artifacts, but
+its registry pointer is marked unavailable because it has no lineage to this run. If a retry's
+exact snapshot is absent, malformed, incomplete, or hashes differently, Semgrep logs the reason
+and becomes explicitly non-cacheable for that run; it never uses newly downloaded bytes under the
+prior attempt's identity.
 
 Implementation identities are dependency closures discovered from the imports actually referenced
 by each cacheable `runPhase` callback, followed transitively across relative imports. A new helper
@@ -63,7 +80,13 @@ auth-guard helper edit on the Semgrep key, a Supabase/config helper on configura
 helper on structural/AST, without falsely moving unrelated keys.
 
 Artifacts are written atomically and contain schema version, phase, full content key, target
-revision/tree, normalized findings, and positive examined-scope metadata. Every cached finding is
+revision/tree, normalized findings, positive examined-scope metadata, and the component digests
+that formed the key: target revision, target tree, implementation closure, and each named external
+input (`node`, `toolchain`, `options`, `registryPacks`, and scanner version). Implementation file
+labels are repository-relative, so identical source in a different checkout path has the same
+identity. A miss searches prior same-phase provenance and names the moving components (for example,
+`identity changed: externalInputs.node`) rather than collapsing every cause to “no artifact.”
+Every cached finding is
 revalidated through the canonical `validateFindings` schema, not a smaller cache-local subset. A
 missing artifact is a miss and executes the phase. A malformed, partial, zero-scope, or
 wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A scheduled or manually
@@ -72,7 +95,8 @@ the cold value with the restored artifact, failing on any findings or scope diff
 seed the next run but fails the current equivalence assertion; normal PR read/write runs are the
 distinct seeding mode.
 
-The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
+The Actions cache is transport, not trust. Schema-2 artifacts use the `corpus-phase-v2` transport
+namespace. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
 the aggregate result of every shard and reports on every pull request, including declared no-op
 changes.
@@ -82,11 +106,13 @@ changes.
 The focused tests exercise both sides of every guard:
 
 ```sh
-pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts
+pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts
 ```
 
 They prove cold/warm finding and scope equivalence, full-schema corruption rejection and
 recomputation, discovery-backed helper closure, phase-granular invalidation, all-cacheable-phase
 target-pin invalidation, live advisory and live-provider secret non-reuse, forced-cold mismatch and
-all-miss failure, cache-miss execution, the required-context aggregate, and the scheduled
-forced-cold path.
+all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
+aggregate, and the scheduled forced-cold path. The cross-process guard uses one persistent target,
+one persistent artifact directory, fixed local Semgrep YAML, and two different checkout paths: the
+first process must miss all three deterministic phases and the second must hit all three.

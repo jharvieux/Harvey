@@ -89,4 +89,21 @@ describe("mechanical phase implementation identities (#1864)", () => {
       expect(after[phase]?.toolchain).not.toBe(before[phase]?.toolchain);
     }
   });
+
+  it("makes Semgrep explicitly non-cacheable when a retry restored no exact attempt-1 snapshot", () => {
+    const root = fixture();
+    const events: string[] = [];
+    const cache = buildMechanicalPhaseCache({
+      repoRoot: root,
+      cacheDir: join(root, "cache"),
+      mode: "read-write",
+      targetRevision: "commit",
+      targetTree: "tree",
+      optionIdentity: "options",
+      registrySnapshotMode: "unavailable",
+      onEvent: (message) => events.push(message),
+    });
+    expect(cache.disabled?.semgrep).toContain("did not restore the exact attempt-1 phase cache");
+    expect(events).toContainEqual(expect.stringContaining("SEMGREP REGISTRY SNAPSHOT UNAVAILABLE"));
+  });
 });

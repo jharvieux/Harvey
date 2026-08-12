@@ -22,6 +22,7 @@ interface PhaseIdentityOptions {
   optionIdentity: string;
   onEvent?: (message: string) => void;
   registryPackIdentity?: { identity?: string; files?: string[]; failure?: string };
+  registrySnapshotMode?: "refresh" | "reuse" | "unavailable";
 }
 
 function resolveRelativeImplementation(from: string, specifier: string): string | undefined {
@@ -128,13 +129,18 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
   const mechanical = join(scanDir, "mechanical.ts");
   const semgrepRules = join(scanDir, "rules", "semgrep");
   const implementationFiles = discoverMechanicalPhaseImplementationFiles(options.repoRoot);
-  const orchestration = digestFiles([mechanical]);
-  const toolchain = digestFiles([join(options.repoRoot, "package.json"), join(options.repoRoot, "pnpm-lock.yaml")]);
-  const registry = options.registryPackIdentity ?? materializeRegistryPacks(options.cacheDir);
+  const orchestration = digestFiles([mechanical], options.repoRoot);
+  const toolchain = digestFiles([join(options.repoRoot, "package.json"), join(options.repoRoot, "pnpm-lock.yaml")], options.repoRoot);
+  const registryMode = options.registrySnapshotMode ?? "refresh";
+  const registry = options.registryPackIdentity ?? (registryMode === "unavailable"
+    ? { failure: "CI retry did not restore the exact attempt-1 phase cache; no registry snapshot has the required provenance" }
+    : materializeRegistryPacks(options.cacheDir, registryMode));
+  if (registry.identity) options.onEvent?.(`SEMGREP REGISTRY SNAPSHOT ${registryMode === "reuse" ? "REUSED" : "REFRESHED"} ${registry.identity.slice(0, 12)}`);
+  if (registry.failure) options.onEvent?.(`SEMGREP REGISTRY SNAPSHOT UNAVAILABLE: ${registry.failure}`);
   const implementation: Partial<Record<MechanicalPhase, string>> = {
-    semgrep: digestParts([orchestration, digestFiles(implementationFiles.semgrep!), digestTree(semgrepRules)]),
-    configuration: digestParts([orchestration, digestFiles(implementationFiles.configuration!)]),
-    "structural-ast": digestParts([orchestration, digestFiles(implementationFiles["structural-ast"]!)]),
+    semgrep: digestParts([orchestration, digestFiles(implementationFiles.semgrep!, options.repoRoot), digestTree(semgrepRules)]),
+    configuration: digestParts([orchestration, digestFiles(implementationFiles.configuration!, options.repoRoot)]),
+    "structural-ast": digestParts([orchestration, digestFiles(implementationFiles["structural-ast"]!, options.repoRoot)]),
   };
   const externalInputs: MechanicalPhaseCacheOptions["externalInputs"] = {
     semgrep: {

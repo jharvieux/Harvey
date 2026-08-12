@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
-import { readRecursiveSafe, statSafe } from "../fs-walk.js";
+import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
 
 export const MECHANICAL_PHASES = [
   "secrets-history",
@@ -48,12 +48,20 @@ export interface MechanicalPhaseCacheOptions {
   onEvent?: (message: string) => void;
 }
 
+interface MechanicalPhaseIdentityComponents {
+  targetRevision: string;
+  targetTree: string;
+  implementation: string;
+  externalInputs: Record<string, string>;
+}
+
 interface CacheArtifact {
-  schema: 1;
+  schema: 2;
   phase: MechanicalPhase;
   key: string;
   targetRevision: string;
   targetTree: string;
+  identity: MechanicalPhaseIdentityComponents;
   payloadDigest: string;
   findings: Finding[];
   scope: MechanicalPhaseScope;
@@ -122,11 +130,15 @@ export function digestTree(dir: string, include: (relativePath: string) => boole
   return digestParts(parts);
 }
 
-export function digestFiles(paths: readonly string[]): string {
+export function digestFiles(paths: readonly string[], repoRoot: string): string {
   const parts: (string | Buffer)[] = [];
   for (const path of [...paths].sort()) {
     if (!existsSync(path)) throw new Error(`mechanical phase implementation input missing: ${path}`);
-    parts.push(path, readFileSync(path));
+    const label = relative(repoRoot, path).replaceAll("\\", "/");
+    if (label === "" || label === ".." || label.startsWith("../")) {
+      throw new Error(`mechanical phase implementation input is outside its repository root: ${path}`);
+    }
+    parts.push(label, readFileSync(path));
   }
   return digestParts(parts);
 }
@@ -143,8 +155,8 @@ export function binaryVersion(binary: string): string {
 export function resolveGitTree(dir: string): string {
   try {
     return execFileSync("git", ["-C", dir, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-  } catch {
-    return digestTree(dir, (path) => !path.split("/").includes("node_modules"));
+  } catch (error) {
+    throw new Error(`pinned corpus target has no resolvable git tree at ${dir}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -157,9 +169,9 @@ export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): strin
   return digestParts([stable(value)]);
 }
 
-function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree">): CacheArtifact {
+function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
   const value = JSON.parse(text) as Partial<CacheArtifact>;
-  if (value.schema !== 1 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree) {
+  if (value.schema !== 2 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
   }
   if (!Array.isArray(value.findings)) throw new Error("artifact findings are incomplete or malformed");
@@ -171,6 +183,36 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
   const payloadDigest = mechanicalPhasePayloadDigest({ findings: value.findings, scope: value.scope });
   if (value.payloadDigest !== payloadDigest) throw new Error("artifact payload checksum mismatch");
   return value as CacheArtifact;
+}
+
+function componentEntries(identity: MechanicalPhaseIdentityComponents): [string, string][] {
+  return [
+    ["targetRevision", identity.targetRevision],
+    ["targetTree", identity.targetTree],
+    ["implementation", identity.implementation],
+    ...Object.entries(identity.externalInputs).sort(([a], [b]) => a.localeCompare(b)).map(([name, value]): [string, string] => [`externalInputs.${name}`, value]),
+  ];
+}
+
+function closestPriorIdentity(dir: string, phase: MechanicalPhase, current: MechanicalPhaseIdentityComponents): string | undefined {
+  const phaseDir = join(dir, phase);
+  if (!existsSync(phaseDir)) return undefined;
+  const currentEntries = new Map(componentEntries(current));
+  let closest: { matches: number; changed: string[] } | undefined;
+  for (const name of readEntriesSafe(phaseDir).entries.filter((candidate) => !candidate.isDirectory && candidate.name.endsWith(".json")).map((candidate) => candidate.name)) {
+    try {
+      const value = JSON.parse(readFileSync(join(phaseDir, name), "utf8")) as Partial<CacheArtifact>;
+      if (value.schema !== 2 || value.phase !== phase || !value.identity) continue;
+      const previous = new Map(componentEntries(value.identity));
+      const names = [...new Set([...currentEntries.keys(), ...previous.keys()])].sort();
+      const changed = names.filter((component) => currentEntries.get(component) !== previous.get(component));
+      const matches = names.length - changed.length;
+      if (changed.length > 0 && (!closest || matches > closest.matches)) closest = { matches, changed };
+    } catch {
+      continue;
+    }
+  }
+  return closest?.changed.join(", ");
 }
 
 function equivalent(a: MechanicalPhaseValue, b: MechanicalPhaseValue): boolean {
@@ -195,9 +237,15 @@ export async function executeMechanicalPhase(
   if (!implementation) throw new Error(`${phase}: cacheable phase has no implementation identity`);
   const externalInputs = cache.externalInputs[phase];
   if (!externalInputs || Object.keys(externalInputs).length === 0) throw new Error(`${phase}: cacheable phase has no declared external-input identity`);
-  const key = digestParts([stable({ phase, implementation, externalInputs, targetRevision: cache.targetRevision, targetTree: cache.targetTree })]);
+  const identity: MechanicalPhaseIdentityComponents = {
+    targetRevision: digestParts([cache.targetRevision]),
+    targetTree: digestParts([cache.targetTree]),
+    implementation: digestParts([implementation]),
+    externalInputs: Object.fromEntries(Object.entries(externalInputs).map(([name, value]) => [name, digestParts([value])])),
+  };
+  const key = digestParts([stable({ phase, identity })]);
   const path = join(cache.dir, phase, `${key}.json`);
-  const expected = { schema: 1 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree };
+  const expected = { schema: 2 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
@@ -207,6 +255,7 @@ export async function executeMechanicalPhase(
       rmSync(path, { force: true });
     }
   }
+  const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
     return { phase, findings: hit.findings, scope: hit.scope, durationMs: Date.now() - started, cache: "hit", reason: policy.reason, key };
@@ -222,8 +271,8 @@ export async function executeMechanicalPhase(
   const reread = parseArtifact(readFileSync(path, "utf8"), expected);
   if (!equivalent(value, { findings: reread.findings, scope: reread.scope })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
-  cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact`);
-  return { phase, ...value, durationMs: Date.now() - started, cache: status, reason: hit ? "forced-cold result matched cached artifact" : "no complete artifact for this content address; recomputed", key };
+  cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`);
+  return { phase, ...value, durationMs: Date.now() - started, cache: status, reason: hit ? "forced-cold result matched cached artifact" : `no complete artifact for this content address; recomputed${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`, key };
 }
 
 export function assertMechanicalCacheVerification(

@@ -9,6 +9,7 @@ import {
   executeMechanicalPhase,
   MECHANICAL_PHASES,
   mechanicalPhasePayloadDigest,
+  resolveGitTree,
   type MechanicalPhase,
   type MechanicalPhaseCacheOptions,
   type MechanicalPhaseRecord,
@@ -130,6 +131,18 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(result.findings[0]?.id).toBe("ast-v2");
   });
 
+  it("names the external identity component that moved instead of reporting an opaque miss", async () => {
+    const events: string[] = [];
+    const cache = options({ onEvent: (message) => events.push(message) });
+    await run("configuration", cache);
+    const changed = options({
+      ...cache,
+      externalInputs: { ...cache.externalInputs, configuration: { ...cache.externalInputs.configuration, node: "v24.19.0" } },
+    });
+    expect((await run("configuration", changed, "new-node")).cache).toBe("miss");
+    expect(events).toContainEqual(expect.stringContaining("identity changed: externalInputs.node"));
+  });
+
   it("invalidates every cacheable artifact when the pinned target tree changes", async () => {
     const cache = options();
     for (const phase of CACHEABLE_MECHANICAL_PHASES) await run(phase, cache);
@@ -188,5 +201,11 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(result.findings.map((row) => row.id)).toEqual(["found-on-miss"]);
     expect(result.scope.unitsExamined).toBe(7);
+  });
+
+  it("fails loud when a pinned corpus target has no git tree instead of hashing a mutable install tree", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-no-git-tree-"));
+    dirs.push(dir);
+    expect(() => resolveGitTree(dir)).toThrow("pinned corpus target has no resolvable git tree");
   });
 });

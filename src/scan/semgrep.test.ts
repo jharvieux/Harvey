@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   checkPublicDirSensitive,
   CI_PIPELINE_CATEGORY,
   CORS_BARE_WILDCARD_TAXONOMY,
+  materializeRegistryPacks,
   parseSemgrepFindings,
   partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
@@ -24,6 +26,50 @@ import {
   type SemgrepOutput,
   type SemgrepResult,
 } from "./semgrep.js";
+
+const CACHE_REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
+
+function seedRegistrySnapshot(cacheDir: string): { identity: string; files: string[] } {
+  const bodies = CACHE_REGISTRY_PACKS.map((pack) => ({ pack, body: `rules: [] # ${pack}\n` }));
+  const hash = createHash("sha256");
+  for (const { pack, body } of bodies) hash.update(pack).update("\0").update(body);
+  const identity = hash.digest("hex");
+  const dir = join(cacheDir, "registry-packs", identity);
+  mkdirSync(dir, { recursive: true });
+  const files = bodies.map(({ pack, body }, index) => {
+    const path = join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`);
+    writeFileSync(path, body);
+    return path;
+  });
+  writeFileSync(join(cacheDir, "registry-packs", "current.json"), `${JSON.stringify({ schema: 1, identity })}\n`);
+  return { identity, files };
+}
+
+describe("Semgrep registry snapshot reuse (#1864)", () => {
+  it("reuses and revalidates the exact restored bytes without contacting the live registry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-reuse-"));
+    try {
+      const seeded = seedRegistrySnapshot(dir);
+      expect(materializeRegistryPacks(dir, "reuse")).toEqual(seeded);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a retry snapshot whose bytes no longer match its manifest identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-registry-corrupt-"));
+    try {
+      const seeded = seedRegistrySnapshot(dir);
+      writeFileSync(seeded.files[0]!, "rules: [changed]\n");
+      const result = materializeRegistryPacks(dir, "reuse");
+      expect(result.identity).toBeUndefined();
+      expect(result.failure).toContain("restored Semgrep registry snapshot required on CI retry but is invalid");
+      expect(result.failure).toContain("snapshot bytes hash to");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 // Real `semgrep 1.164.0` output, captured from a purpose-built corpus — NOT hand-written. See
 // __fixtures__/semgrep/PROVENANCE.md for the exact command, the builder, and the fields dropped.

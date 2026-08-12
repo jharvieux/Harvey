@@ -105,6 +105,11 @@ const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
 const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
+const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
+if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
+  console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
+  process.exit(2);
+}
 if (forceColdCache && !phaseCacheDir) {
   console.error("--force-cold-cache requires HARVEY_CORPUS_PHASE_CACHE_DIR; a cold equivalence run with nowhere to read/write artifacts proves nothing");
   process.exit(2);
@@ -521,6 +526,7 @@ for (const target of targets) {
           targetRevision: target.commit,
           targetTree: `${resolveGitTree(dir)}:${JSON.stringify(target.vendoredSubtrees ?? [])}`,
           optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: false, handrolledIndicators: false, authGuards: [] }),
+          registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
           onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
         }) : undefined,
       });

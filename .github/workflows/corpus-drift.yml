@@ -273,9 +273,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # Retry attempts request attempt 1's exact key. `cache-hit` below distinguishes that
+          # artifact from an older rolling-prefix fallback, whose registry bytes have no lineage
+          # to this run and therefore may not be reused as though they did.
+          key: corpus-phase-v2-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt > 1 && 1 || github.run_attempt }}
           restore-keys: |
-            corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-
+            corpus-phase-v2-${{ runner.os }}-shard${{ matrix.shard }}-
 
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
@@ -372,6 +375,10 @@ jobs:
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
           HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache
+          # Attempt 1 snapshots the exact registry YAML it scans. A retry reuses it only when the
+          # attempt-1 key was an exact hit. A rolling-prefix fallback is usable for phase artifacts,
+          # but its registry snapshot is marked unavailable rather than assigned false provenance.
+          HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: ${{ github.run_attempt == 1 && 'refresh' || (steps.phase-cache.outputs.cache-hit == 'true' && 'reuse' || 'unavailable') }}
           SHARD: ${{ matrix.shard }}
           # Kept in step with the matrix above: 3 on a PR or queue entry, 1 elsewhere so the run
           # holds every clone and the cache-save guard is satisfied.
@@ -416,7 +423,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-v1-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: corpus-phase-v2-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8

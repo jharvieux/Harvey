@@ -36,10 +36,56 @@ const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
 const materializedRegistryMemo = new Map<string, { identity?: string; files?: string[]; failure?: string }>();
 
-export function materializeRegistryPacks(cacheDir: string): { identity?: string; files?: string[]; failure?: string } {
-  const memo = materializedRegistryMemo.get(cacheDir);
-  if (memo) return memo;
+interface RegistryPackSnapshotManifest {
+  schema: 1;
+  identity: string;
+}
+
+function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
   const hash = createHash("sha256");
+  for (const { pack, body } of bodies) {
+    hash.update(pack);
+    hash.update("\0");
+    hash.update(body);
+  }
+  return hash.digest("hex");
+}
+
+function registryPackFiles(cacheDir: string, identity: string): string[] {
+  const dir = join(cacheDir, "registry-packs", identity);
+  return REGISTRY_PACKS.map((pack, index) => join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`));
+}
+
+function readRestoredRegistrySnapshot(cacheDir: string): { identity?: string; files?: string[]; failure?: string } {
+  const manifestPath = join(cacheDir, "registry-packs", "current.json");
+  try {
+    if (!existsSync(manifestPath)) throw new Error("current.json is missing");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Partial<RegistryPackSnapshotManifest>;
+    if (manifest.schema !== 1 || typeof manifest.identity !== "string" || !/^[a-f0-9]{64}$/.test(manifest.identity)) {
+      throw new Error("current.json has an invalid schema or identity");
+    }
+    const files = registryPackFiles(cacheDir, manifest.identity);
+    const bodies = files.map((path, index) => {
+      if (!existsSync(path)) throw new Error(`${relative(cacheDir, path)} is missing`);
+      return { pack: REGISTRY_PACKS[index]!, body: readFileSync(path, "utf8") };
+    });
+    const actual = registryPackIdentity(bodies);
+    if (actual !== manifest.identity) throw new Error(`snapshot bytes hash to ${actual}, not ${manifest.identity}`);
+    return { identity: actual, files };
+  } catch (error) {
+    return { failure: `restored Semgrep registry snapshot required on CI retry but is invalid: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+export function materializeRegistryPacks(cacheDir: string, mode: "refresh" | "reuse" = "refresh"): { identity?: string; files?: string[]; failure?: string } {
+  const memoKey = `${mode}:${cacheDir}`;
+  const memo = materializedRegistryMemo.get(memoKey);
+  if (memo) return memo;
+  if (mode === "reuse") {
+    const result = readRestoredRegistrySnapshot(cacheDir);
+    materializedRegistryMemo.set(memoKey, result);
+    return result;
+  }
   const bodies: { pack: string; body: string }[] = [];
   try {
     for (const pack of REGISTRY_PACKS) {
@@ -48,12 +94,9 @@ export function materializeRegistryPacks(cacheDir: string): { identity?: string;
         maxBuffer: 1024 * 1024 * 32,
         timeout: 60_000,
       });
-      hash.update(pack);
-      hash.update("\0");
-      hash.update(config);
       bodies.push({ pack, body: config });
     }
-    const identity = hash.digest("hex");
+    const identity = registryPackIdentity(bodies);
     const dir = join(cacheDir, "registry-packs", identity);
     mkdirSync(dir, { recursive: true });
     const files = bodies.map(({ pack, body }, index) => {
@@ -65,13 +108,17 @@ export function materializeRegistryPacks(cacheDir: string): { identity?: string;
       }
       return path;
     });
+    const manifestPath = join(cacheDir, "registry-packs", "current.json");
+    const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
+    writeFileSync(manifestTemp, `${JSON.stringify({ schema: 1, identity } satisfies RegistryPackSnapshotManifest, null, 2)}\n`);
+    renameSync(manifestTemp, manifestPath);
     const result = { identity, files };
-    materializedRegistryMemo.set(cacheDir, result);
+    materializedRegistryMemo.set(memoKey, result);
     return result;
   } catch (error) {
     const e = error as { code?: string; message?: string };
     const result = { failure: e.code === "ENOENT" ? "curl not found while materializing Semgrep registry packs" : `Semgrep registry packs could not be reproducibly materialized: ${e.message ?? "registry fetch failed"}` };
-    materializedRegistryMemo.set(cacheDir, result);
+    materializedRegistryMemo.set(memoKey, result);
     return result;
   }
 }

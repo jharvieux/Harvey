@@ -22,6 +22,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(2);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
+    expect(workflow.match(/corpus-phase-v2-/g)).toHaveLength(3);
+  });
+
+  it("refreshes registry bytes on attempt one and reuses the restored snapshot on retries", () => {
+    expect(workflow).toContain("github.run_attempt > 1 && 1 || github.run_attempt");
+    expect(workflow).toContain("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: ${{ github.run_attempt == 1 && 'refresh' || (steps.phase-cache.outputs.cache-hit == 'true' && 'reuse' || 'unavailable') }}");
   });
 
   it("forces scheduled and dispatch runs cold so cache equivalence is re-earned", () => {
