@@ -108,6 +108,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { delete value.targets.target; }, /target population is empty/);
     expectDifference((value) => { value.semgrepRegistry.files[0]!.sha256 = "d".repeat(64); }, /bytes differ|different head/);
     expectDifference((value) => { value.runtime.semgrep = "changed"; }, /different head/);
+    expectDifference((value) => { value.shard = { index: 1, count: 2 }; }, /different head/);
     const producer = artifact("hosted-producer");
     expect(() => compareCurrentMechanicalExecutions(producer, producer)).toThrow(/one real hosted producer/);
   });
@@ -119,18 +120,17 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.skipBundleScan = false as true; }, /bundle input/);
   });
 
-  it("rejects one-side, mixed, duplicate, and incomplete shard populations", () => {
+  it("rejects one-side, mixed, duplicate-index, and incomplete shard populations", () => {
     const left = artifact("hosted-producer");
     const second = structuredClone(left);
-    second.shard = { index: 2, count: 2 };
     left.shard = { index: 1, count: 2 };
-    second.executionId = "hosted-producer:2/2:fixture";
+    second.shard = { index: 1, count: 2 };
+    second.executionId = "hosted-producer:1/2:second-fixture";
     expect(() => mergeCurrentMechanicalShards([left], "producer")).toThrow(/expected 2/);
     second.headCommit = "d".repeat(40);
     expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/mixed/);
     second.headCommit = left.headCommit;
-    expect(() => mergeCurrentMechanicalShards([left, { ...second, shard: { index: 1, count: 2 } }], "producer")).toThrow(/index population/);
-    expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/appears in more than one shard/);
+    expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/index population/);
   });
 
   it("refuses dirty tracked or untracked harness inputs before producing an artifact", () => {

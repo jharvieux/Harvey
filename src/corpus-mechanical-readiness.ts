@@ -8,6 +8,7 @@ import { cloneAtPinCached } from "./scan/corpus-clone.js";
 import type { MechanicalContextMetrics } from "./scan/mechanical-context.js";
 import type { MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
 import { binaryVersion, digestFiles, digestParts, digestTree, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
+import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
@@ -212,6 +213,8 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
   if (new Set(targetNames).size !== targetNames.length || artifact.targetPinsSha256 !== currentTargetPinsSha256(artifact.allTargets)) throw new Error(`${source}: target pin population/identity is invalid`);
   const owned = Object.keys(artifact.targets).sort();
   if (owned.length === 0) throw new Error(`${source}: target population is empty`);
+  const expectedOwned = shardTargets(targetNames, artifact.shard.index, artifact.shard.count).sort();
+  if (stable(owned) !== stable(expectedOwned)) throw new Error(`${source}: target population differs from declared shard ${artifact.shard.index}/${artifact.shard.count}`);
   for (const slug of owned) {
     const target = artifact.targets[slug]!;
     const declared = artifact.allTargets.find((candidate) => candidate.slug === slug);
@@ -288,6 +291,7 @@ export function compareCurrentMechanicalExecutions(producer: CurrentMechanicalEx
     allTargets: artifact.allTargets,
     semgrepRegistry: artifact.semgrepRegistry,
     runtime: artifact.runtime,
+    shard: artifact.shard,
     targetPopulation: Object.keys(artifact.targets).sort(),
   });
   if (stable(common(producer)) !== stable(common(replay))) throw new Error("current producer and replay use different head/harness/pins/runtime/Semgrep bytes or target population");
