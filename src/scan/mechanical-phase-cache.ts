@@ -25,7 +25,6 @@ export interface MechanicalPhaseScope {
 }
 
 export interface MechanicalExaminedUnitIdentity {
-  /** Repeated on every row so a same-shaped population cannot be moved to another producer. */
   producer: string;
   /** Names the selector's semantic namespace; target-path receives additional canonical checks. */
   kind: string;

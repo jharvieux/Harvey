@@ -733,8 +733,10 @@ jobs:
           producer_parts=(../parts/corpus-drift-shard*.json)
           replay_parts=(../replay-parts/current-replay-*.json)
           for part in "${producer_parts[@]}"; do jq -e '.currentMechanicalExecution' "$part" > "$part.current.json"; done
-          producer_csv=$(IFS=,; echo "${producer_parts[*]/%/.current.json}")
-          replay_csv=$(IFS=,; echo "${replay_parts[*]}")
+          printf -v producer_csv '%s,' "${producer_parts[@]/%/.current.json}"
+          producer_csv=${producer_csv%,}
+          printf -v replay_csv '%s,' "${replay_parts[@]}"
+          replay_csv=${replay_csv%,}
           pnpm validate:current-mechanical-readiness --merge "$producer_csv" --out ../current-hosted-producer.json
           pnpm validate:current-mechanical-readiness --merge "$replay_csv" --out ../current-independent-replay.json
           pnpm validate:current-mechanical-readiness --producer ../current-hosted-producer.json --replay ../current-independent-replay.json

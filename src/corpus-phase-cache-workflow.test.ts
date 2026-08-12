@@ -12,14 +12,14 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   it("keeps the required context reporting on every PR and failing on any shard result", () => {
     expect(workflow).toMatch(/^\s{2}pull_request:\s*$/m);
     expect(workflow).toContain("fail-fast: false");
-    expect(workflow).toMatch(/drift:\n\s+name: clone\s+pinned\s+commits\s+\+\s+score\s+baselines\n\s+needs: shard\n\s+if: always\(\)/);
+    expect(workflow).toMatch(/drift:\n\s+name: clone\s+pinned\s+commits\s+\+\s+score\s+baselines\n\s+needs: \[prepare-current-inputs, shard, current-replay\]\n\s+if: always\(\)/);
     expect(workflow).toContain(`if [ "$result" != "success" ]`);
   });
 
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
     expect(workflow).toContain("uses: actions/cache/restore@v4");
     expect(workflow).toContain("uses: actions/cache/save@v4");
-    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(4);
+    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(5);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
     expect(workflow.match(/corpus-phase-v4-/g)).toHaveLength(5);
@@ -43,21 +43,23 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(3);
   });
 
-  it("refreshes registry bytes on attempt one and reuses the restored snapshot on retries", () => {
-    expect(workflow).toContain("github.run_attempt > 1 && 1 || github.run_attempt");
-    expect(workflow).toContain("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: ${{ github.run_attempt == 1 && 'refresh' || (steps.phase-cache.outputs.cache-hit == 'true' && 'reuse' || 'unavailable') }}");
+  it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {
+    expect(workflow).toContain("name: Materialize the one current Semgrep registry input");
+    expect(workflow).toContain("name: current-mechanical-semgrep-pack");
+    expect(workflow.match(/name: Restore the run's exact shared Semgrep bytes/g)).toHaveLength(2);
+    expect(workflow).toContain("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse");
   });
 
   it("forces scheduled and dispatch runs cold so cache equivalence is re-earned", () => {
     expect(workflow).toContain('if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]');
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
-    expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(2);
+    expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(1);
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
   it("declares test-only source edits unreachable while unknown production source remains fail-open", () => {
     const testCase = workflow.indexOf("src/*.test.ts) ;;");
-    const failOpen = workflow.indexOf("*) relevant=true; manifest_only=false ;;", testCase);
+    const failOpen = workflow.indexOf("*) relevant=true ;;", testCase);
     expect(testCase).toBeGreaterThan(0);
     expect(failOpen).toBeGreaterThan(testCase);
     const productionFiles = readRecursiveSafe(join(root, "src"))
