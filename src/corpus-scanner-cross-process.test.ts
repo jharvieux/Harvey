@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
@@ -10,14 +10,15 @@ const execFileAsync = promisify(execFile);
 interface ProcessResult {
   statuses: Record<string, string>;
   findingCounts: Record<string, number>;
-  units: number;
+  qualityLocation: string;
+  events: string[];
 }
 
-describe("corpus scanner cache across processes and checkout paths (#1871)", () => {
+describe("corpus scanner execution across processes and checkout paths (#1871/#1872)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it("runs the production scanners cold, warm, and scanner-specifically invalidated across physical checkouts", async () => {
+  it("caches source-only scanners while consecutive quality runs observe installed Knip config changes", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);
     const checkoutA = join(fixture, "checkout-a");
@@ -30,59 +31,55 @@ describe("corpus scanner cache across processes and checkout paths (#1871)", () 
           return rel === "" || ![".git", "node_modules", ".harvey-corpus-phase-cache"].some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
         },
       });
-      // Only the tool installation is shared. The checkout, production sources, and calibration
-      // target are physical copies; the mutation control writes to checkout B alone.
       symlinkSync(join(process.cwd(), "node_modules"), join(destination, "node_modules"), "dir");
-      execFileSync("git", ["init", "-q", destination]);
-      execFileSync("git", ["-C", destination, "add", "-f", "targets/calibration"]);
     };
     copyCheckout(checkoutA);
     copyCheckout(checkoutB);
     expect(lstatSync(checkoutA).isSymbolicLink()).toBe(false);
-    expect(lstatSync(join(checkoutA, "src", "cli", "static-detect.ts")).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(checkoutA, "src", "corpus-scanner-runner.ts")).isSymbolicLink()).toBe(false);
+
+    const makeTarget = (name: string, entry: "index" | "alternate"): string => {
+      const dir = join(fixture, name);
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"1.0.0"}}\n');
+      writeFileSync(join(dir, "knip.js"), 'module.exports = require("knip-config-provider");\n');
+      writeFileSync(join(dir, "src", "index.ts"), "export const selectedIndex = true;\n");
+      writeFileSync(join(dir, "src", "alternate.ts"), "export const selectedAlternate = true;\n");
+      const provider = join(dir, "node_modules", "knip-config-provider");
+      mkdirSync(provider, { recursive: true });
+      writeFileSync(join(provider, "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
+      writeFileSync(join(provider, "index.js"), 'module.exports = require("./config.js");\n');
+      writeFileSync(join(provider, "config.js"), `module.exports = { entry: ["src/${entry}.ts"] };\n`);
+      execFileSync("git", ["init", "-q", dir]);
+      execFileSync("git", ["-C", dir, "add", "package.json", "knip.js", "src/index.ts", "src/alternate.ts"]);
+      return dir;
+    };
+    const target = makeTarget("target", "index");
+    const installedConfig = join(target, "node_modules", "knip-config-provider", "config.js");
 
     const cacheDir = join(fixture, "cache");
     const runner = join(fixture, "runner.mts");
     writeFileSync(runner, `
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-const [repoRoot, cacheDir] = process.argv.slice(2);
-const targetDir = join(repoRoot, "targets", "calibration");
-const identity = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-identity.ts")).href);
-const cacheModule = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-cache.ts")).href);
-const scopeModule = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-scope.ts")).href);
-const commands = {
-  "detect-static": [join(repoRoot, "src", "cli", "static-detect.ts"), targetDir],
-  "quality-scan": [join(repoRoot, "src", "cli", "quality-scan.ts"), targetDir],
-  "mutation-detect-only": [join(repoRoot, "src", "cli", "mutation-scan.ts"), targetDir, "--detect-only"],
-};
-const statuses = {};
-const findingCounts = {};
-const units = scopeModule.countCorpusScannerUnits(targetDir);
-for (const scanner of cacheModule.CORPUS_SCANNERS) {
-  const out = join(mkdtempSync(join(tmpdir(), "harvey-scanner-output-")), "findings.json");
-  const cache = identity.buildCorpusScannerCache({
-    repoRoot, cacheDir, mode: "read-write", scanner, targetDir,
-    targetRevision: "calibration-pinned-revision",
-    targetTree: execFileSync("git", ["-C", repoRoot, "write-tree"], { encoding: "utf8" }).trim(),
-    targetConfig: JSON.stringify({ root: "targets/calibration", detectOnly: scanner === "mutation-detect-only" }),
-  });
-  const record = await cacheModule.executeCorpusScanner(cache, () => {
-    execFileSync("pnpm", ["exec", "tsx", ...commands[scanner], "--out", out], { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
-    const parsed = JSON.parse(readFileSync(out, "utf8"));
-    const findings = Array.isArray(parsed) ? parsed : [parsed.finding];
-    return { findings, scope: { unitsExamined: units, description: scanner + " over the faithful calibration target" }, completed: true };
-  });
-  statuses[scanner] = record.cache;
-  findingCounts[scanner] = record.findings.length;
-}
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, units }));
+const [repoRoot, targetDir, cacheDir] = process.argv.slice(2);
+const module = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-runner.ts")).href);
+const targetTree = execFileSync("git", ["-C", targetDir, "write-tree"], { encoding: "utf8" }).trim();
+const cache = { dir: cacheDir, mode: "read-write", targetRevision: "fixture-pinned-revision", targetTree };
+const events = [];
+const common = { repoRoot, targetDir, targetConfig: "knip-provider-falsifier", onEvent: (message) => events.push(message) };
+const detected = await module.runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", scriptArgs: [targetDir], cache });
+const quality = await module.runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir] });
+const mutation = await module.runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"], cache });
+const results = { "detect-static": detected, "quality-scan": quality, "mutation-detect-only": mutation };
+const statuses = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.cache ?? "fresh"]));
+const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
+const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, events }));
 `);
-    const run = async (repoRoot: string): Promise<ProcessResult> => {
-      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, cacheDir], {
+    const run = async (repoRoot: string, targetDir: string): Promise<ProcessResult> => {
+      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheDir], {
         cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8,
       });
       const marker = stdout.split("\n").find((line) => line.startsWith("CORPUS_SCANNER_PROCESS="));
@@ -90,17 +87,16 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       return JSON.parse(marker.slice("CORPUS_SCANNER_PROCESS=".length)) as ProcessResult;
     };
 
-    const cold = await run(checkoutA);
-    const warm = await run(checkoutB);
-    expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "miss", "mutation-detect-only": "miss" });
-    expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
+    const cold = await run(checkoutA, target);
+    writeFileSync(installedConfig, 'module.exports = { entry: ["src/alternate.ts"] };\n');
+    const warm = await run(checkoutB, target);
+    expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "fresh", "mutation-detect-only": "miss" });
+    expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "fresh", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
-    expect(cold.units).toBeGreaterThan(600);
-    expect(Object.values(cold.findingCounts).reduce((sum, count) => sum + count, 0)).toBeGreaterThan(100);
-
-    writeFileSync(join(checkoutB, "src", "quality-scan.ts"), `${readFileSync(join(checkoutB, "src", "quality-scan.ts"), "utf8")}\n// scanner-specific identity control\n`);
-    const invalidated = await run(checkoutB);
-    expect(invalidated.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
-    expect(invalidated.findingCounts).toEqual(cold.findingCounts);
+    expect(cold.qualityLocation).toBe("src/alternate.ts");
+    expect(warm.qualityLocation).toBe("src/index.ts");
+    expect(cold.events).toContainEqual(expect.stringContaining("quality-scan executes fresh"));
+    expect(warm.events).toContainEqual(expect.stringContaining("quality-scan executes fresh"));
+    expect(existsSync(join(cacheDir, "corpus-scanners", "quality-scan"))).toBe(false);
   });
 });

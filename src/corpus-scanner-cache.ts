@@ -4,8 +4,8 @@ import { dirname, join } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "./findings.js";
 import { readEntriesSafe } from "./fs-walk.js";
 
-export const CORPUS_SCANNERS = ["detect-static", "quality-scan", "mutation-detect-only"] as const;
-export type CorpusScanner = (typeof CORPUS_SCANNERS)[number];
+export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "mutation-detect-only"] as const;
+export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
 export type CorpusScannerCacheMode = "off" | "read-write" | "verify";
 export type CorpusScannerCacheStatus = "hit" | "miss" | "recomputed" | "non-cacheable";
 
@@ -24,7 +24,7 @@ interface CorpusScannerExecution {
 export interface CorpusScannerCacheOptions {
   dir: string;
   mode: CorpusScannerCacheMode;
-  scanner: CorpusScanner;
+  scanner: CorpusCacheableScanner;
   targetRevision: string;
   targetTree: string;
   implementation: string;
@@ -34,7 +34,7 @@ export interface CorpusScannerCacheOptions {
 }
 
 export interface CorpusScannerRecord {
-  scanner: CorpusScanner;
+  scanner: CorpusCacheableScanner;
   findings: Finding[];
   scope: CorpusScannerScope;
   cache: CorpusScannerCacheStatus;
@@ -51,7 +51,7 @@ interface ScannerIdentity {
 
 interface ScannerArtifact {
   schema: 2;
-  scanner: CorpusScanner;
+  scanner: CorpusCacheableScanner;
   key: string;
   identity: ScannerIdentity;
   payloadDigest: string;
@@ -124,7 +124,7 @@ function validateArtifact(value: unknown, expected: Pick<ScannerArtifact, "scann
   return artifact as ScannerArtifact;
 }
 
-function closestChangedComponents(dir: string, scanner: CorpusScanner, identity: ScannerIdentity): string | undefined {
+function closestChangedComponents(dir: string, scanner: CorpusCacheableScanner, identity: ScannerIdentity): string | undefined {
   const scannerDir = join(dir, "corpus-scanners", scanner);
   if (!existsSync(scannerDir)) return undefined;
   const current = new Map([

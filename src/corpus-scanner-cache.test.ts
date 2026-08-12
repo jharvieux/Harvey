@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "./findings.js";
 import {
-  CORPUS_SCANNERS,
+  CORPUS_CACHEABLE_SCANNERS,
   assertCorpusScannerCacheVerification,
   executeCorpusScanner,
-  type CorpusScanner,
+  type CorpusCacheableScanner,
   type CorpusScannerCacheOptions,
   type CorpusScannerRecord,
 } from "./corpus-scanner-cache.js";
@@ -33,7 +33,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  const options = (scanner: CorpusScanner, overrides: Partial<CorpusScannerCacheOptions> = {}): CorpusScannerCacheOptions => {
+  const options = (scanner: CorpusCacheableScanner, overrides: Partial<CorpusScannerCacheOptions> = {}): CorpusScannerCacheOptions => {
     const dir = overrides.dir ?? mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-cache-"));
     if (!overrides.dir) dirs.push(dir);
     return {
@@ -43,7 +43,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
       targetRevision: "pinned-commit",
       targetTree: "pinned-tree",
       implementation: `implementation:${scanner}:v1`,
-      externalInputs: { node: "v24.18.0", tools: "pinned", targetConfig: "root", dependencyInstall: "lock-v1" },
+      externalInputs: { node: "v24.18.0", toolchain: "pinned", targetConfig: "root" },
       ...overrides,
     };
   };
@@ -54,7 +54,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
   });
 
   it("preserves normalized findings, categories, order, and examined scope on a warm hit", async () => {
-    const cache = options("quality-scan");
+    const cache = options("detect-static");
     const cold = await executeCorpusScanner(cache, () => execute(["b", "a"]));
     const shouldNotRun = vi.fn(() => execute(["wrong"]));
     const warm = await executeCorpusScanner(cache, shouldNotRun);
@@ -95,7 +95,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     const rootA = mkdtempSync(join(tmpdir(), "harvey-corpus-target-a-"));
     const rootB = mkdtempSync(join(tmpdir(), "harvey-corpus-target-b-"));
     dirs.push(dir, rootA, rootB);
-    const cacheA = options("quality-scan", { dir, pathRoot: rootA });
+    const cacheA = options("mutation-detect-only", { dir, pathRoot: rootA });
     const first = execute(["portable"]);
     first.findings[0]!.evidence = `scanner config failed under ${rootA}/packages/app`;
     await executeCorpusScanner(cacheA, () => first);
@@ -111,21 +111,21 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
   it("invalidates only the scanner whose implementation closure changed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-granular-"));
     dirs.push(dir);
-    const seeded = Object.fromEntries(CORPUS_SCANNERS.map((scanner) => [scanner, options(scanner, { dir })])) as Record<CorpusScanner, CorpusScannerCacheOptions>;
-    for (const scanner of CORPUS_SCANNERS) await executeCorpusScanner(seeded[scanner], () => execute([scanner]));
-    for (const scanner of CORPUS_SCANNERS) {
-      const cache = scanner === "quality-scan" ? { ...seeded[scanner], implementation: "quality-v2" } : seeded[scanner];
-      expect((await executeCorpusScanner(cache, () => execute([`${scanner}-fresh`]))).cache).toBe(scanner === "quality-scan" ? "miss" : "hit");
+    const seeded = Object.fromEntries(CORPUS_CACHEABLE_SCANNERS.map((scanner) => [scanner, options(scanner, { dir })])) as Record<CorpusCacheableScanner, CorpusScannerCacheOptions>;
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) await executeCorpusScanner(seeded[scanner], () => execute([scanner]));
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) {
+      const cache = scanner === "detect-static" ? { ...seeded[scanner], implementation: "detect-static-v2" } : seeded[scanner];
+      expect((await executeCorpusScanner(cache, () => execute([`${scanner}-fresh`]))).cache).toBe(scanner === "detect-static" ? "miss" : "hit");
     }
   });
 
-  it("invalidates every affected scanner on target, runtime, or install identity changes", async () => {
+  it("invalidates every affected scanner on target or runtime identity changes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-global-"));
     dirs.push(dir);
-    for (const scanner of CORPUS_SCANNERS) {
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) {
       const before = options(scanner, { dir });
       await executeCorpusScanner(before, () => execute([scanner]));
-      const moved = { ...before, targetTree: "new-tree", externalInputs: { ...before.externalInputs, node: "v-next", dependencyInstall: "lock-v2" } };
+      const moved = { ...before, targetTree: "new-tree", externalInputs: { ...before.externalInputs, node: "v-next" } };
       expect((await executeCorpusScanner(moved, () => execute([`${scanner}-moved`]))).cache).toBe("miss");
     }
   });
@@ -134,7 +134,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-verify-"));
     dirs.push(dir);
     const records: CorpusScannerRecord[] = [];
-    for (const scanner of CORPUS_SCANNERS) {
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) {
       const cache = options(scanner, { dir });
       await executeCorpusScanner(cache, () => execute([scanner]));
       records.push(await executeCorpusScanner({ ...cache, mode: "verify" }, () => execute([scanner])));
@@ -145,7 +145,7 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-empty-"));
     dirs.push(emptyDir);
     const misses: CorpusScannerRecord[] = [];
-    for (const scanner of CORPUS_SCANNERS) misses.push(await executeCorpusScanner(options(scanner, { dir: emptyDir, mode: "verify" }), () => execute([scanner])));
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) misses.push(await executeCorpusScanner(options(scanner, { dir: emptyDir, mode: "verify" }), () => execute([scanner])));
     expect(() => assertCorpusScannerCacheVerification(misses, "verify")).toThrow("A miss may seed a later run but cannot claim equivalence");
   });
 });

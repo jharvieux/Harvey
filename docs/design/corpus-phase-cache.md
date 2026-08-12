@@ -113,31 +113,23 @@ reconstructs that key from the manifest, checks the matched source key and curre
 checks the source event/ref/SHA trust relationship before any inner artifact is read. Missing,
 corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
-Corpus source scanners now write three independent artifacts: `detect-static`, `quality-scan`, and
-mutation `--detect-only`. Keys cover the pinned target tree, discovered implementation closure,
-Node/tool versions, target configuration, tracked manifest/lock bytes, and — for quality-scan's
-Knip pass — explicit no-package/not-installed/partial/complete install state plus bounded exact
-bytes for package-manager preparation metadata and the full installed physical population. This
-includes unexported config/provider descendants and alternate configuration files that Knip can
-load dynamically; an entry-point-only module closure is not the cache boundary. The two
-source-only scanners do not move when an unobserved install changes. Checkout roots are tokenized
-in stored findings and rehydrated on read. On real Carbon,
-the cache reports 6,133 tracked target units rather than walking installed dependencies.
+Corpus source scanners write two independent artifacts: `detect-static` and mutation
+`--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
+Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
+and rehydrated on read. On real Carbon, the cache reports 6,133 tracked target units rather than
+walking installed dependencies.
 
-The install identity's bound follows the installed graph, not workspace alias count. The first
-hosted run exposed the distinction: pinned Carbon presented 9,376 entry-closure logical paths
-because 36 workspace manifests reach the same pnpm packages through different symlinks, but those
-aliases resolved to 3,685 physical entry-closure files / 253,647,541 bytes. That measurement fixed
-the aliasing defect but did not make the entry closure exhaustive: an independently executed Knip
-control changed an installed provider's unexported `config.js`, moved M5-01 from `src/alternate.ts`
-to `src/index.ts`, and left the old identity unchanged. Identity generation now visits each physical
-install directory once, streams every installed regular file, retains hardlink logical aliases,
-and separately hashes symlink routing so rewiring an alias between two already-present packages
-also invalidates it. Harvey's full pnpm install measured 40,743 physical files / 589,858,742 bytes
-on 2026-08-12. The recorded ceilings are 131,072 physical files / 2 GiB, plus 524,288 logical files
-and 262,144 logical directories; every breach throws with the observed and allowed population.
-This keeps the installed population complete without turning `node_modules` traversal into an
-unbounded operation or silently sampling installed bytes.
+`quality-scan` deliberately executes fresh on every corpus run. Its Knip pass can execute target
+configuration and provider descendants from the prepared dependency tree, including files that no
+package export or static entry closure names. A sound content identity therefore requires reading
+the complete installed population. That work defeats this performance cache's purpose: BoxyHQ's
+install measured 106,871 physical files / 1,037,440,676 bytes, and pinned Carbon on Linux arm64
+measured 146,755 physical files / 2,136,592,208 bytes (202,298 logical files, 34,253 logical
+directory visits, and 10,158 links). The hosted Linux x64 Carbon run observed 131,073 physical files
+and failed before scoring. The runner now makes the uncached boundary visible, never creates a
+`quality-scan` artifact family, and keeps forced-cold verification scoped to the two cacheable
+scanners. #1871 remains open; a safe quality-cache design is grouped with #1872's queued dependency
+preparation work.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
@@ -154,8 +146,9 @@ Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are
 and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
 drift. The default client scanner path sets neither mode and remains live.
 
-Real Carbon measurements with `--install` and snapshot state were: legacy monolithic 444.57s wall;
-partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17 artifact files. Every run conserved
+The superseded three-scanner prototype's Carbon measurements with `--install` and snapshot state
+were: legacy monolithic 444.57s wall; partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17
+artifact files. Every run conserved
 all 13 scored baseline/free-tier rows. A temporary edit to one local rule preserved unrelated
 registry-family hits and limited Semgrep recomposition to 1.2s. The final exhaustive family repair
 restored 531 Semgrep-derived rows that an early zero-applicable-pack abort had hidden; the parity
@@ -172,7 +165,8 @@ recomputation, discovery-backed helper closure, phase-granular invalidation, all
 target-pin invalidation, live advisory and live-provider secret non-reuse, forced-cold mismatch and
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
 aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
-Harvey checkout copies (only the tool installation is shared), runs all three production scanner
-CLIs over the 686-file calibration target through the production identity/cache modules, and reuses
-one artifact directory. Checkout A must miss all three scanners, checkout B must hit all three with
-identical real findings, and a quality-scan implementation edit in B must miss only quality-scan.
+Harvey checkout copies (only the tool installation is shared) and invokes the production corpus
+scanner runner twice against matching tracked fixtures. `detect-static` and mutation `--detect-only`
+must miss then hit one artifact directory. `quality-scan` must execute fresh both times; between
+runs only an installed provider's untracked `config.js` changes, and the real M5-01 result must move
+from `src/alternate.ts` to `src/index.ts` without creating a quality cache artifact.

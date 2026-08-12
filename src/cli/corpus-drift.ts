@@ -80,9 +80,8 @@ import {
   scoreMutationBaseline,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
-import { assertCorpusScannerCacheVerification, executeCorpusScanner, type CorpusScanner, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
-import { buildCorpusScannerCache } from "../corpus-scanner-identity.js";
-import { countCorpusScannerUnits } from "../corpus-scanner-scope.js";
+import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
+import { runCorpusScanner } from "../corpus-scanner-runner.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 
@@ -303,9 +302,12 @@ async function timedAsync<T>(phase: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function runScanner(options: {
-  script: "detect-static" | "quality-scan" | "mutation-scan";
-  scanner: CorpusScanner;
+type ScannerInvocation =
+  | { script: "detect-static"; scanner: "detect-static" }
+  | { script: "quality-scan"; scanner: "quality-scan" }
+  | { script: "mutation-scan"; scanner: "mutation-detect-only" };
+
+async function runScanner(options: ScannerInvocation & {
   scriptArgs: string[];
   targetDir: string;
   targetRevision: string;
@@ -313,42 +315,26 @@ async function runScanner(options: {
   targetConfig: string;
   records: CorpusScannerRecord[];
 }): Promise<Finding[]> {
-  const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
-  const unitsExamined = countCorpusScannerUnits(options.targetDir);
-  const cache = phaseCacheDir ? buildCorpusScannerCache({
+  const common = {
     repoRoot,
-    cacheDir: phaseCacheDir,
-    mode: forceColdCache ? "verify" : "read-write",
-    scanner: options.scanner,
+    scriptArgs: options.scriptArgs,
     targetDir: options.targetDir,
+    targetConfig: options.targetConfig,
+    onEvent: (message: string) => console.error(`  ${phaseTarget}: ${message}`),
+  };
+  const cache = phaseCacheDir ? {
+    dir: phaseCacheDir,
+    mode: forceColdCache ? "verify" as const : "read-write" as const,
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
-    targetConfig: options.targetConfig,
-    onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
-  }) : undefined;
-  const record = await executeCorpusScanner(cache, () => {
-    try {
-      execFileSync("pnpm", [options.script, ...options.scriptArgs, "--out", out], { cwd: repoRoot, stdio: ["ignore", "ignore", "inherit"] });
-      const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
-      return {
-        findings: Array.isArray(parsed) ? parsed : [parsed.finding],
-        scope: { unitsExamined, description: `${options.scanner} over ${options.targetConfig}` },
-        completed: true,
-      };
-    } catch (error) {
-      // The scanner CLI already printed its own diagnosis. Preserve the old loud-baseline-drift
-      // behavior, but never persist this empty incomplete result as an assessed-clean cache hit.
-      return {
-        findings: [],
-        scope: { unitsExamined, description: `${options.scanner} incomplete over ${options.targetConfig}` },
-        completed: false,
-        failure: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
-  options.records.push(record);
-  console.error(`  ${phaseTarget}: SCANNER ${options.scanner} — ${record.cache}; ${record.scope.unitsExamined} unit(s); ${record.reason}`);
-  return record.findings;
+  } : undefined;
+  const result = options.scanner === "quality-scan"
+    ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan" })
+    : options.scanner === "detect-static"
+      ? await runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", cache })
+      : await runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", cache });
+  if (result.cacheRecord) options.records.push(result.cacheRecord);
+  return result.findings;
 }
 
 // #300: installs Stryker + the target's runner plugin, writes the vendored config, and runs the M8
