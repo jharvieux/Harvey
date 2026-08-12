@@ -137,8 +137,10 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-current-harness-"));
     try {
       mkdirSync(join(root, "src"));
+      mkdirSync(join(root, "src", "nested"));
       mkdirSync(join(root, ".github", "workflows"), { recursive: true });
       writeFileSync(join(root, "src", "engine.ts"), "export const engine = 1;\n");
+      writeFileSync(join(root, "src", "nested", "helper.ts"), "export const helper = 1;\n");
       writeFileSync(join(root, "package.json"), "{}\n");
       writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
       writeFileSync(join(root, ".github", "workflows", "corpus-drift.yml"), "name: fixture\n");

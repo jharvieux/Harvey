@@ -3,7 +3,7 @@ import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
-import { readRecursiveSafe } from "./fs-walk.js";
+import { readRecursiveSafe, statSafe } from "./fs-walk.js";
 import { cloneAtPinCached } from "./scan/corpus-clone.js";
 import type { MechanicalContextMetrics } from "./scan/mechanical-context.js";
 import type { MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
@@ -107,7 +107,7 @@ export function currentHarnessReceipt(repoRoot: string): { headCommit: string; h
     join(repoRoot, "package.json"),
     join(repoRoot, "pnpm-lock.yaml"),
     join(repoRoot, ".github/workflows/corpus-drift.yml"),
-  ].filter(existsSync);
+  ].filter((path) => statSafe(path)?.isFile());
   return { headCommit, harnessSha256: digestFiles(files, repoRoot) };
 }
 
