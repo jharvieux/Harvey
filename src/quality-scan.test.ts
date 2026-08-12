@@ -26,6 +26,7 @@ import {
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  unlistedImportNeedsResolvedConfig,
   type JscpdDuplicate,
   type JscpdGlobMatch,
   type JscpdReport,
@@ -585,13 +586,9 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
   });
 
   it.each([
-    { slug: "subscription-payments", degradedBy: "lockfile-backed install failure", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
-    { slug: "cravab", degradedBy: "automatic committed-config load fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
-    { slug: "mvp-boilerplate", degradedBy: "lockfile-backed install failure", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
-    { slug: "rallly", degradedBy: "automatic workspace-config output fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
-    { slug: "documenso", degradedBy: "automatic workspace-config output fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
-    { slug: "multi-tenant-starter", degradedBy: "no-lockfile install failure", files: 0, unresolvedDependencySurface: true, expectedCounted: 1 },
-  ])("preserves $slug's evidence-specific reduced-tier countability ($degradedBy)", ({ files, unresolvedDependencySurface, expectedCounted }) => {
+    { evidence: "lockfile-backed source graph", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { evidence: "manifest-only graph after no-lock install failure", files: 0, unresolvedDependencySurface: true, expectedCounted: 1 },
+  ])("classifies reduced-tier evidence from the available $evidence, not a target name", ({ files, unresolvedDependencySurface, expectedCounted }) => {
     const packagePath = "package.json";
     const report: KnipReport = {
       files: files ? ["src/dead.ts"] : [],
@@ -615,6 +612,59 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
     const packageRows = findings.filter((finding) => finding.location === packagePath);
     expect(packageRows).toHaveLength(3);
     expect(packageRows.every((finding) => finding.severity === (unresolvedDependencySurface ? "Info" : "Low"))).toBe(true);
+  });
+
+  it("keeps resolver-contingent unlisted imports informational while runtime imports remain counted", () => {
+    const report: KnipReport = {
+      files: [],
+      issues: [
+        { file: "tests/api.spec.ts", exports: [], types: [], unlisted: [{ name: "@workspace/types", line: 1 }] },
+        { file: "src/runtime.ts", exports: [], types: [], unlisted: [{ name: "runtime-package", line: 1 }] },
+      ],
+    };
+    const findings = knipToFindings(report, {}, new Set(), new Set(), new Set(), new Set(["tests/api.spec.ts"]));
+    expect(findings.find((finding) => finding.location === "tests/api.spec.ts")).toMatchObject({
+      severity: "Info",
+      confidence: "Review",
+      precisionTier: "review",
+    });
+    expect(findings.find((finding) => finding.location === "src/runtime.ts")).toMatchObject({
+      severity: "Medium",
+      confidence: "Confirmed",
+      precisionTier: "high",
+    });
+  });
+});
+
+describe("unlistedImportNeedsResolvedConfig — degraded resolver evidence", () => {
+  const issue = (file: string, name: string) => ({ file, exports: [], types: [], unlisted: [{ name, line: 1 }] });
+  const workspaceNames = new Set(["@workspace/ui", "@workspace/types", "@workspace/env"]);
+
+  it("identifies config and type-only references whose package verdict needs disabled resolver context", () => {
+    expect(unlistedImportNeedsResolvedConfig(issue("tailwind.config.ts", "@workspace/ui"), `const ui = require("@workspace/ui");`, workspaceNames)).toBe(true);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        issue("tests/api.spec.ts", "@workspace/types"),
+        `import type { Api } from "@workspace/types/api";\nexport const value: Api | undefined = undefined;\n`, workspaceNames,
+      ),
+    ).toBe(true);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        issue("src/env.ts", "@workspace/env"),
+        `/// <reference types="@workspace/env/process.d.ts" />\nexport const env = process.env;\n`, workspaceNames,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not demote runtime source imports or mixed runtime/type rows", () => {
+    expect(unlistedImportNeedsResolvedConfig(issue("src/runtime.ts", "@workspace/ui"), `import value from "@workspace/ui";`, workspaceNames)).toBe(false);
+    expect(unlistedImportNeedsResolvedConfig(issue("tailwind.config.ts", "external-plugin"), `import plugin from "external-plugin";`, workspaceNames)).toBe(false);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        { file: "src/mixed.ts", exports: [], types: [], unlisted: [{ name: "types-only", line: 1 }, { name: "runtime-package", line: 2 }] },
+        `import type { T } from "types-only";\nimport value from "runtime-package";\n`, workspaceNames,
+      ),
+    ).toBe(false);
   });
 });
 

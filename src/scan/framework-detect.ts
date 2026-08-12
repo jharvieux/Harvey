@@ -239,6 +239,24 @@ function frameworkEntryGlobs(framework: TargetFramework): string[] {
   if (framework === "vite") {
     return ["index.html", "vite.config.{ts,js,mjs,cjs}", "src/main.{ts,tsx,js,jsx}"];
   }
+  if (framework === "remix" || framework === "react-router") {
+    // Remix and React Router framework mode register route modules dynamically; no ordinary
+    // import has to lead from app/root to app/routes/*. A plugins-disabled Knip run therefore
+    // calls virtually the whole application unused unless these framework-contract entries stand
+    // in for the disabled plugin. Keep this list to paths the frameworks themselves reserve — it
+    // does not bless arbitrary app/components as entries, so genuinely unreachable source still
+    // surfaces. React Router 7 supports both the route-config module and filesystem route modules;
+    // Remix uses the same app/root + entry.client/server contract.
+    return [
+      "app/root.{ts,tsx,js,jsx}",
+      "app/entry.client.{ts,tsx,js,jsx}",
+      "app/entry.server.{ts,tsx,js,jsx}",
+      "app/routes.{ts,tsx,js,jsx}",
+      "app/routes/**/*.{ts,tsx,js,jsx}",
+      "react-router.config.{ts,js,mjs,cjs}",
+      "remix.config.{ts,js,mjs,cjs}",
+    ];
+  }
   return [];
 }
 

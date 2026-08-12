@@ -10,7 +10,9 @@ export function countCorpusScannerUnits(targetDir: string): number {
     const tracked = execFileSync("git", ["-C", targetDir, "ls-files", "-z", "--", "."], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).split("\0").filter(Boolean).length;
+    })
+      .split("\0")
+      .filter((path) => path.length > 0 && SOURCE_LIKE.test(path) && !GENERATED_OR_DEPENDENCY.test(path)).length;
     if (tracked > 0) return tracked;
   } catch {
     // Non-git fixtures still get a bounded source-like census below.

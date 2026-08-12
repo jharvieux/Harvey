@@ -56,6 +56,7 @@ import {
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  unlistedImportNeedsResolvedConfig,
   type JscpdGlobMatch,
   type JscpdReport,
   type KnipReport,
@@ -125,6 +126,15 @@ const targetDir = resolve(targetArg);
 // scanned in that case.
 const workspaceDirs = discoverTargets(targetDir).apps.map((a) => a.path);
 const scopes = workspaceDirs.length ? workspaceDirs : [targetDir];
+const workspacePackageNames = new Set<string>();
+for (const scope of scopes) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(scope, "package.json"), "utf8")) as { name?: unknown };
+    if (typeof parsed.name === "string") workspacePackageNames.add(parsed.name);
+  } catch {
+    // A missing/malformed manifest asserts no workspace package identity.
+  }
+}
 
 interface ScanGap {
   scope: string;
@@ -427,6 +437,9 @@ const unresolvedDepScopes = new Set<string>();
 // narrower than `pluginsDisabled`: automatic config-load fallback and lockfile-backed install
 // failure retain the established reduced-tier semantics and corpus conservation.
 const unresolvedDependencySurfacePaths = new Set<string>();
+// Config-file and type-only unlisted-import verdicts need the target's resolver/config context.
+// In the plugins-disabled tier the references remain visible, but these paths are informational.
+const unresolvedUnlistedImportPaths = new Set<string>();
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -447,6 +460,19 @@ for (const scope of scopes) {
     const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
       ? runKnipDegraded(scope, degradedKnipReason)
       : runKnip(scope);
+    if (pluginsDisabled) {
+      for (const issue of report.issues) {
+        let source: string | undefined;
+        try {
+          source = readFileSync(join(scope, issue.file), "utf8");
+        } catch {
+          // A source read failure leaves the narrow boundary unclassified.
+        }
+        if (unlistedImportNeedsResolvedConfig(issue, source, workspacePackageNames)) {
+          unresolvedUnlistedImportPaths.add(prefixed(workspaceRel, issue.file));
+        }
+      }
+    }
     // #810: a scope that only ran after the degraded retry is disclosed as a reduced-mode partial
     // (M5-98). Its file findings are already review-tier via entriesInferred below. The #580
     // entry-uncertain heuristic is skipped for it — its high unused ratio is the EXPECTED cost of a
@@ -528,7 +554,16 @@ const findings: Finding[] = [
   ...wholeRepoDivergedFindings,
   ...(divergedScopeDisclosure ? [divergedScopeDisclosure] : []),
   ...(jscpdScopeDisclosure ? [jscpdScopeDisclosure] : []),
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes, unresolvedDependencySurfacePaths) : []),
+  ...(knipReport
+    ? knipToFindings(
+        knipReport,
+        fileLineCounts,
+        inferredEntryFiles,
+        unresolvedDepScopes,
+        unresolvedDependencySurfacePaths,
+        unresolvedUnlistedImportPaths,
+      )
+    : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces

@@ -16,7 +16,8 @@ describe("corpus scanner examined-unit census", () => {
     writeFileSync(join(dir, "package.json"), "{}\n");
     mkdirSync(join(dir, "src"));
     writeFileSync(join(dir, "src", "app.ts"), "export const app = true;\n");
-    execFileSync("git", ["-C", dir, "add", "package.json", "src/app.ts"]);
+    writeFileSync(join(dir, "ignored.fixture"), "tracked but no scanner reads this extension\n");
+    execFileSync("git", ["-C", dir, "add", "package.json", "src/app.ts", "ignored.fixture"]);
     mkdirSync(join(dir, "node_modules", "dependency"), { recursive: true });
     for (let index = 0; index < 100; index++) writeFileSync(join(dir, "node_modules", "dependency", `file-${index}.js`), "module.exports = true;\n");
 

@@ -302,6 +302,70 @@ function noNodeModulesViteFixture(): string {
   return repo;
 }
 
+function noNodeModulesReactRouterFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-react-router-degraded-cli-"));
+  dirs.push(repo);
+  write(
+    repo,
+    "package.json",
+    JSON.stringify({
+      name: "react-router-degraded",
+      private: true,
+      version: "0.0.0",
+      type: "module",
+      dependencies: { "@react-router/node": "^7.0.0", "react-router": "^7.0.0" },
+      devDependencies: { "@react-router/dev": "^7.0.0", vite: "^6.0.0" },
+    }),
+  );
+  // A rejected partial install must not execute either provider-bearing config. React Router's
+  // route modules are nevertheless source-evidenced entries: the framework contract registers
+  // app/routes/**/* even though ordinary static imports do not reach those files.
+  write(
+    repo,
+    "react-router.config.js",
+    'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("missing-react-router-provider");\nmodule.exports = {};\n',
+  );
+  write(repo, "app/routes/dashboard.tsx", 'import { live } from "../components/live.js";\nexport default function Dashboard() { return live; }\n');
+  write(repo, "app/components/live.ts", 'export const live = "reachable";\nexport const sourceLocalDeadExport = "dead";\n');
+  write(repo, "app/components/dead.ts", 'export const genuinelyDead = "dead";\n');
+  return repo;
+}
+
+function degradedWorkspaceResolverFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-workspace-resolver-cli-"));
+  dirs.push(repo);
+  write(repo, "package.json", JSON.stringify({ name: "resolver-boundary-root", private: true, workspaces: ["apps/*", "packages/*"] }));
+  write(
+    repo,
+    "apps/web/package.json",
+    JSON.stringify({
+      name: "@fixture/web",
+      private: true,
+      type: "module",
+      dependencies: { "@react-router/node": "^7.0.0", "react-router": "^7.0.0" },
+      devDependencies: { "@react-router/dev": "^7.0.0" },
+    }),
+  );
+  write(repo, "packages/contracts/package.json", JSON.stringify({ name: "@fixture/contracts", private: true, main: "index.js", types: "index.d.ts" }));
+  write(repo, "packages/contracts/index.js", 'exports.runtimeValue = "live";\n');
+  write(repo, "packages/contracts/index.d.ts", 'export interface Contract { value: string }\nexport declare const runtimeValue: string;\n');
+  // Model a rejected partial materialization: source imports can resolve, but the scanner must not
+  // execute the target's provider-bearing config. The app intentionally omits @fixture/contracts
+  // from its own manifest to make Knip emit the three unlisted-import shapes below.
+  write(repo, "apps/web/node_modules/@fixture/contracts/package.json", JSON.stringify({ name: "@fixture/contracts", main: "index.js", types: "index.d.ts" }));
+  write(repo, "apps/web/node_modules/@fixture/contracts/index.js", 'exports.runtimeValue = "live";\n');
+  write(repo, "apps/web/node_modules/@fixture/contracts/index.d.ts", 'export interface Contract { value: string }\nexport declare const runtimeValue: string;\n');
+  write(
+    repo,
+    "apps/web/react-router.config.cjs",
+    'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nconst contracts = require("@fixture/contracts");\nmodule.exports = { contracts };\n',
+  );
+  write(repo, "apps/web/app/runtime.ts", 'import { runtimeValue } from "@fixture/contracts";\nexport const live = runtimeValue;\n');
+  write(repo, "apps/web/app/routes/dashboard.ts", 'import { live } from "../runtime.js";\nexport default live;\n');
+  write(repo, "apps/web/app/routes/types.ts", 'import type { Contract } from "@fixture/contracts";\nexport default {} satisfies Contract;\n');
+  return repo;
+}
+
 describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
   it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", async () => {
     const findings = await runCli(noNodeModulesViteFixture());
@@ -332,6 +396,42 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-01", location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
     expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
+  it("reconstructs framework-contract route entries without executing rejected React Router config", async () => {
+    const repo = noNodeModulesReactRouterFixture();
+    const findings = await runCli(repo, ["--degraded-knip-reason", "dependency preparation incomplete: clean install failed"]);
+    const unusedFile = (name: string) => findings.find(
+      (finding) => finding.taxonomy.startsWith("M5 —") && /^Unused (?:security-relevant )?file:/.test(finding.title) && finding.location.endsWith(name),
+    );
+
+    expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
+    expect(unusedFile("app/routes/dashboard.tsx")).toBeUndefined();
+    expect(unusedFile("app/components/live.ts")).toBeUndefined();
+    expect(unusedFile("app/components/dead.ts")).toMatchObject({ severity: "Low", confidence: "Review", precisionTier: "review" });
+    expect(findings).toContainEqual(expect.objectContaining({
+      title: "Unused exports in app/components/live.ts",
+      severity: "Low",
+      confidence: "Confirmed",
+      evidence: expect.stringContaining("sourceLocalDeadExport"),
+    }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(findings.some((finding) => finding.id === "M5-00")).toBe(false);
+  }, 30000);
+
+  it("separates workspace resolver-contingent config/type imports from reliable runtime imports", async () => {
+    const repo = degradedWorkspaceResolverFixture();
+    const findings = await runCli(repo, ["--degraded-knip-reason", "dependency preparation incomplete: clean install failed"]);
+    const unlisted = (location: string) => findings.find(
+      (finding) => finding.title.startsWith("Unlisted import") && finding.location === location,
+    );
+
+    expect(existsSync(join(repo, "apps/web/target-provider-consumed"))).toBe(false);
+    expect(unlisted("apps/web/react-router.config.cjs")).toMatchObject({ severity: "Info", confidence: "Review", precisionTier: "review" });
+    expect(unlisted("apps/web/app/routes/types.ts")).toMatchObject({ severity: "Info", confidence: "Review", precisionTier: "review" });
+    expect(unlisted("apps/web/app/runtime.ts")).toMatchObject({ severity: "Medium", confidence: "Confirmed", precisionTier: "high" });
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(findings.some((finding) => finding.id === "M5-00")).toBe(false);
   }, 30000);
 });
 

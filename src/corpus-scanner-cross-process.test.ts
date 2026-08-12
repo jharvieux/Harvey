@@ -6,12 +6,14 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
+import { countCorpusScannerUnits } from "./corpus-scanner-scope.js";
 
 const execFileAsync = promisify(execFile);
 
 interface ProcessResult {
   statuses: Record<string, string>;
   findingCounts: Record<string, number>;
+  scopeUnits: Record<string, number>;
   qualityLocation: string;
   qualityLocations: string[];
   preparation: string;
@@ -46,28 +48,38 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     const source = join(fixture, "target-source");
     const makeTarget = (): void => {
       const dir = source;
-      mkdirSync(join(dir, "src"), { recursive: true });
+      mkdirSync(join(dir, "src", "workload"), { recursive: true });
       mkdirSync(join(dir, "provider"), { recursive: true });
-      mkdirSync(join(dir, "assets"), { recursive: true });
       writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"file:provider"}}\n');
-      writeFileSync(join(dir, "knip.json"), '{"entry":["src/index.ts"]}\n');
+      writeFileSync(join(dir, "knip.json"), '{"entry":["src/index.ts","src/workload/*.ts"],"project":["src/**/*.ts"]}\n');
       writeFileSync(join(dir, "src", "index.ts"), 'import provider from "knip-config-provider"; export const selectedIndex = provider;\n');
       writeFileSync(join(dir, "src", "alternate.ts"), "export const selectedAlternate = true;\n");
       writeFileSync(join(dir, "provider", "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
       writeFileSync(join(dir, "provider", "index.js"), 'module.exports = require("./config.js");\n');
       writeFileSync(join(dir, "provider", "config.js"), 'module.exports = { selected: true };\n');
-      // Carbon's production scope currently reports 6,133 tracked units. These distinct tracked
-      // fixture units make the checkout/copy/cache path carry that same order of magnitude without
-      // manufacturing thousands of duplicate TypeScript findings.
-      for (let index = 0; index < 6_133; index += 1) writeFileSync(join(dir, "assets", `unit-${index}.fixture`), `${index}\n`);
+      // Carbon's production receipt is 6,133 scanner-eligible units. Exercise that scale with real
+      // TypeScript, not tracked filler: all three scanners must open/parse these target-owned files;
+      // Knip's target-owned entry glob keeps the fixture from manufacturing thousands of dead-file
+      // findings while still making it build a graph over every module.
+      for (let index = 0; index < 6_125; index += 1) {
+        writeFileSync(
+          join(dir, "src", "workload", `unit-${index.toString().padStart(4, "0")}.ts`),
+          `export const workloadUnit${index} = ${index};\n`,
+        );
+      }
+      // The tracked non-source control is excluded from the receipt.
+      writeFileSync(join(dir, "ignored.fixture"), "tracked but scanner-ineligible\n");
       execFileSync("git", ["init", "-q", dir]);
       execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["-C", dir, "add", "."]);
+      expect(countCorpusScannerUnits(dir)).toBe(6_133);
     };
     makeTarget();
-    const targetA = join(fixture, "target-a");
+    // The freshly-created git tree is checkout A; copy it once for the physically-distinct B.
+    // Keeping an otherwise-unused third 6k-file tree bought no coverage and lengthened the same
+    // blocking test window the heavy-suite split exists to control.
+    const targetA = source;
     const targetB = join(fixture, "target-b");
-    cpSync(source, targetA, { recursive: true, verbatimSymlinks: true });
     cpSync(source, targetB, { recursive: true, verbatimSymlinks: true });
 
     const cacheDir = join(process.cwd(), `.harvey-corpus-phase-cache-test-${process.pid}-${Date.now()}`);
@@ -96,12 +108,13 @@ const mutation = await module.runCorpusScanner({ ...common, script: "mutation-sc
 const results = { "detect-static": detected, "quality-scan": quality, "mutation-detect-only": mutation };
 const statuses = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.cache ?? "fresh"]));
 const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
+const scopeUnits = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.unitsExamined ?? -1]));
 const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
 const qualityLocations = quality.findings.map((finding) => finding.location);
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, scopeUnits, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
 `);
     const run = async (repoRoot: string, targetDir: string, environment: NodeJS.ProcessEnv = {}): Promise<ProcessResult> => {
-      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheArgument], {
+      const { stdout } = await execFileAsync(join(process.cwd(), "node_modules", ".bin", "tsx"), [runner, repoRoot, targetDir, cacheArgument], {
         cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8, env: { ...process.env, ...environment },
       });
       const marker = stdout.split("\n").find((line) => line.startsWith("CORPUS_SCANNER_PROCESS="));
@@ -117,6 +130,8 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "miss", "mutation-detect-only": "miss" });
     expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
+    expect(cold.scopeUnits).toEqual({ "detect-static": 6_133, "quality-scan": 6_133, "mutation-detect-only": 6_133 });
+    expect(warm.scopeUnits).toEqual(cold.scopeUnits);
     expect(warm.qualityLocation).toBe(cold.qualityLocation);
     expect(warm.qualityLocations.some((location) => location.includes("m4-cache-marker"))).toBe(false);
     expect(lstatSync(cacheDir).isDirectory()).toBe(true);

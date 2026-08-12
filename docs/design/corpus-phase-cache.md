@@ -129,7 +129,9 @@ required all-shard cache-size measurement. `node_modules` is never transported.
 Corpus scanners write three independent artifacts: `detect-static`, `quality-scan`, and mutation
 `--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
 Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
-and rehydrated on read. On real Carbon, each cache reports 6,133 tracked target units.
+and rehydrated on read. On real Carbon, each cache reports 6,133 scanner-eligible target units;
+the receipt census applies the source/config extension and generated/dependency exclusions on the
+git-tracked path too, applying the same scanner-eligibility filter.
 
 `quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
 keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
@@ -139,7 +141,10 @@ materialization into the disposable clone. Corrupt/incomplete receipts or stores
 and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
 to bypass every target Knip/framework/provider config and attempt Knip directly in its all-plugins-
 disabled, Harvey-inferred-entry source tier. Success preserves review-tier M5 findings and emits
-M5-98; failure of that safe tier emits M5-00. A rejected installed tree is never consumed. The
+M5-98; Remix/React Router route-contract globs replace the disabled framework plugin's dynamic
+entries. Resolver-contingent workspace imports from config/type-only source remain visible but
+informational, while ordinary runtime imports and source-local exports remain actionable. Failure
+of that safe tier emits M5-00. A rejected installed tree is never consumed. The
 receipt proves dependency materialization; it does not make arbitrary target code reproducible.
 Install lifecycle scripts and executable configuration can read time, network, or file contents
 outside the keyed tree even when every named environment value is unchanged. After each clean or
@@ -223,6 +228,9 @@ Harvey checkout copies (only the tool installation is shared) and invokes the pr
 scanner runner twice against matching tracked fixtures and a relative phase-cache root. Dependency
 preparation and all three scanner families must miss then hit one external artifact directory while
 preserving findings and examined scope; cache-only duplicate sources must remain invisible to M4.
+The scale fixture contains 6,125 real TypeScript modules and enough scanner-readable manifests and
+configuration to total exactly 6,133 units. A tracked `.fixture` adversary is excluded from the
+receipt, and every cold/warm scanner artifact must independently report the same 6,133 units.
 The quality identity is separately falsified by changing its preparation key and each execution
 environment value. A physical copy's real `src/quality-scan.ts` helper is mutated to prove closure
 discovery moves only quality's implementation identity. The incomplete-preparation controls prove
@@ -246,6 +254,11 @@ source tier retains its two source-reliable unused-export findings and the `M5-9
 dependency, optional-peer/catalog, and binary candidates remain visible as informational review
 rows because there is no lockfile-backed resolved package surface. Inferred file rows retain the
 established countable review posture: their source graph still exists, and their uncertainty is
-already expressed by `confidence: Review`. Automatic config-load fallback and lockfile-backed
+already expressed by `confidence: Review`. The degraded React Router control proves
+framework-registered route modules and their imports stay reachable without executing rejected
+config, while a genuinely unreachable file still surfaces and a source-local unused export stays
+counted. A workspace resolver control proves the other evidence boundary in both directions:
+workspace-internal config/type-only unlisted imports are informational without resolver context,
+whereas an ordinary runtime import remains a counted, confirmed finding. Automatic config-load fallback and lockfile-backed
 install failure retain that same established reduced-tier posture rather than treating every
 all-plugins-disabled result as equally unreliable.

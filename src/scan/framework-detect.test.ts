@@ -267,6 +267,20 @@ describe("buildDegradedKnipConfig (#810)", () => {
   it("is identical to buildInferredKnipConfig when no plugins are named (empty list is a no-op)", () => {
     expect(buildDegradedKnipConfig("next", [])).toEqual(buildInferredKnipConfig("next"));
   });
+
+  it.each(["remix", "react-router"] as const)(
+    "preserves %s framework-contract routes when plugins/config cannot load",
+    (framework) => {
+      const config = buildDegradedKnipConfig(framework, ["remix", "react-router"]);
+      expect(config.remix).toBe(false);
+      expect(config["react-router"]).toBe(false);
+      expect(config.entry).toEqual(expect.arrayContaining([
+        "app/root.{ts,tsx,js,jsx}",
+        "app/routes.{ts,tsx,js,jsx}",
+        "app/routes/**/*.{ts,tsx,js,jsx}",
+      ]));
+    },
+  );
 });
 
 // #597: a monorepo ROOT has no vite.config/next.config of its own — they live in the workspace app
