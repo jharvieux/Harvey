@@ -117,21 +117,27 @@ Corpus source scanners now write three independent artifacts: `detect-static`, `
 mutation `--detect-only`. Keys cover the pinned target tree, discovered implementation closure,
 Node/tool versions, target configuration, tracked manifest/lock bytes, and — for quality-scan's
 Knip pass — explicit no-package/not-installed/partial/complete install state plus bounded exact
-bytes for package-manager preparation metadata and installed direct-package entry points. The two
+bytes for package-manager preparation metadata and the full installed physical population. This
+includes unexported config/provider descendants and alternate configuration files that Knip can
+load dynamically; an entry-point-only module closure is not the cache boundary. The two
 source-only scanners do not move when an unobserved install changes. Checkout roots are tokenized
 in stored findings and rehydrated on read. On real Carbon,
 the cache reports 6,133 tracked target units rather than walking installed dependencies.
 
 The install identity's bound follows the installed graph, not workspace alias count. The first
-hosted run exposed the distinction: pinned Carbon presented 9,376 logical paths and would have
-reread 1,988,844,028 bytes because 36 workspace manifests reach the same pnpm packages through
-different symlinks, but those aliases resolve to 3,685 physical files / 253,647,541 bytes. Pinned
-BoxyHQ measured 499 physical files / 40,665,455 bytes. Identity generation now canonicalizes by
-physical file, keeps a deterministic target-relative logical label, and streams the exact file
-digest. Its 8,192-file / 512-MiB ceiling is approximately twice the largest measured physical
-population, recorded alongside the identity itself; exceeding it throws with both the observed and
-allowed population. This keeps legitimate supported trees inside the cache contract without
-turning `node_modules` traversal into an unbounded operation or silently sampling installed bytes.
+hosted run exposed the distinction: pinned Carbon presented 9,376 entry-closure logical paths
+because 36 workspace manifests reach the same pnpm packages through different symlinks, but those
+aliases resolved to 3,685 physical entry-closure files / 253,647,541 bytes. That measurement fixed
+the aliasing defect but did not make the entry closure exhaustive: an independently executed Knip
+control changed an installed provider's unexported `config.js`, moved M5-01 from `src/alternate.ts`
+to `src/index.ts`, and left the old identity unchanged. Identity generation now visits each physical
+install directory once, streams every installed regular file, retains hardlink logical aliases,
+and separately hashes symlink routing so rewiring an alias between two already-present packages
+also invalidates it. Harvey's full pnpm install measured 40,743 physical files / 589,858,742 bytes
+on 2026-08-12. The recorded ceilings are 131,072 physical files / 2 GiB, plus 524,288 logical files
+and 262,144 logical directories; every breach throws with the observed and allowed population.
+This keeps the installed population complete without turning `node_modules` traversal into an
+unbounded operation or silently sampling installed bytes.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling

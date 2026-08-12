@@ -1,17 +1,52 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CORPUS_INSTALL_IDENTITY_BOUNDS, buildCorpusScannerCache, dependencyInstallIdentity, observedInstallDigest } from "./corpus-scanner-identity.js";
 
-const decoded = (dir: string): { state: string; observed?: { digest: string } } => JSON.parse(dependencyInstallIdentity(dir)) as { state: string; observed?: { digest: string } };
+interface DecodedInstallIdentity {
+  state: string;
+  observed?: { digest: string; files: number; logicalFiles: number; bytes: number };
+}
+
+const decoded = (dir: string): DecodedInstallIdentity => JSON.parse(dependencyInstallIdentity(dir)) as DecodedInstallIdentity;
+
+function installedConfigProviderFixture(): string {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-knip-provider-"));
+  execFileSync("git", ["init", "-q", dir]);
+  writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"1.0.0"}}\n');
+  writeFileSync(join(dir, "knip.js"), 'module.exports = require("knip-config-provider");\n');
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "index.ts"), "export const selectedIndex = true;\n");
+  writeFileSync(join(dir, "src", "alternate.ts"), "export const selectedAlternate = true;\n");
+  const provider = join(dir, "node_modules", "knip-config-provider");
+  mkdirSync(join(provider, "settings"), { recursive: true });
+  writeFileSync(join(provider, "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
+  writeFileSync(join(provider, "index.js"), 'module.exports = require("./config.js");\n');
+  writeFileSync(join(provider, "config.js"), 'module.exports = { entry: ["src/index.ts"] };\n');
+  writeFileSync(join(provider, "settings", "primary.js"), 'module.exports = { entry: ["src/index.ts"] };\n');
+  writeFileSync(join(provider, "settings", "alternate.js"), 'module.exports = { entry: ["src/alternate.ts"] };\n');
+  execFileSync("git", ["-C", dir, "add", "package.json", "knip.js", "src/index.ts", "src/alternate.ts"]);
+  return dir;
+}
+
+function qualityScan(dir: string, suffix: string): string {
+  const output = join(dir, `findings-${suffix}.json`);
+  execFileSync(join(process.cwd(), "node_modules", ".bin", "tsx"), [join(process.cwd(), "src", "cli", "quality-scan.ts"), dir, "--out", output], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "ignore", "ignore"],
+    timeout: 30_000,
+  });
+  const findings = JSON.parse(readFileSync(output, "utf8")) as { id: string; location: string }[];
+  return findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
+}
 
 describe("corpus scanner dependency/install identity (#1871)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it("keys actual installed package entry bytes as well as manifests and locks", () => {
+  it("keys actual installed package bytes as well as manifests and locks", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-install-identity-"));
     dirs.push(dir);
     execFileSync("git", ["init", "-q", dir]);
@@ -37,6 +72,58 @@ describe("corpus scanner dependency/install identity (#1871)", () => {
 
     writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nchanged: true\n");
     expect(dependencyInstallIdentity(dir)).not.toBe(installed);
+  });
+
+  it("invalidates the installed identity when Knip executes a provider config descendant that changes its M5 result", () => {
+    const dir = installedConfigProviderFixture();
+    dirs.push(dir);
+    const config = join(dir, "node_modules", "knip-config-provider", "config.js");
+    const beforeIdentity = dependencyInstallIdentity(dir);
+    const beforeFinding = qualityScan(dir, "before");
+    expect(dependencyInstallIdentity(dir)).toBe(beforeIdentity);
+
+    writeFileSync(config, 'module.exports = { entry: ["src/alternate.ts"] };\n');
+    const afterIdentity = dependencyInstallIdentity(dir);
+    const afterFinding = qualityScan(dir, "after");
+
+    expect(beforeFinding).toBe("src/alternate.ts");
+    expect(afterFinding).toBe("src/index.ts");
+    expect(afterIdentity).not.toBe(beforeIdentity);
+  });
+
+  it("covers transitive and alternate installed config files even before the provider selects them", () => {
+    const dir = installedConfigProviderFixture();
+    dirs.push(dir);
+    const provider = join(dir, "node_modules", "knip-config-provider");
+    writeFileSync(join(provider, "config.js"), 'module.exports = require("./settings/primary.js");\n');
+    const before = dependencyInstallIdentity(dir);
+    writeFileSync(join(provider, "settings", "primary.js"), 'module.exports = { entry: ["src/alternate.ts"] };\n');
+    const transitiveChanged = dependencyInstallIdentity(dir);
+    expect(transitiveChanged).not.toBe(before);
+    writeFileSync(join(provider, "settings", "alternate.js"), 'module.exports = { entry: ["src/index.ts"] };\n');
+    expect(dependencyInstallIdentity(dir)).not.toBe(transitiveChanged);
+  });
+
+  it("invalidates when an installed directory symlink is rewired between two already-observed populations", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-install-link-layout-"));
+    const external = mkdtempSync(join(tmpdir(), "harvey-corpus-install-link-store-"));
+    dirs.push(dir, external);
+    execFileSync("git", ["init", "-q", dir]);
+    writeFileSync(join(dir, "package.json"), '{"dependencies":{"dependency":"1.0.0"}}\n');
+    execFileSync("git", ["-C", dir, "add", "package.json"]);
+    const modules = join(dir, "node_modules");
+    mkdirSync(modules);
+    for (const store of ["store-a", "store-b"]) {
+      mkdirSync(join(external, store));
+      writeFileSync(join(external, store, "package.json"), JSON.stringify({ name: "dependency", version: store }));
+      writeFileSync(join(external, store, "index.js"), `module.exports = ${JSON.stringify(store)};\n`);
+      symlinkSync(join(external, store), join(modules, store), "dir");
+    }
+    symlinkSync(join(external, "store-a"), join(modules, "dependency"), "dir");
+    const before = dependencyInstallIdentity(dir);
+    rmSync(join(modules, "dependency"));
+    symlinkSync(join(external, "store-b"), join(modules, "dependency"), "dir");
+    expect(dependencyInstallIdentity(dir)).not.toBe(before);
   });
 
   it("distinguishes a partial install from a complete installed graph", () => {
@@ -109,6 +196,20 @@ describe("corpus scanner dependency/install identity (#1871)", () => {
     const reverse = observedInstallDigest(dir, [...aliases].reverse(), { maxFiles: 1, maxBytes: 1_024 });
     expect(forward).toEqual(reverse);
     expect(forward.files).toBe(1);
+    expect(forward.logicalFiles).toBe(2);
+  });
+
+  it("deduplicates hardlinked installed bytes physically while retaining both logical aliases in identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-install-hardlinks-"));
+    dirs.push(dir);
+    const first = join(dir, "first.js");
+    const second = join(dir, "second.js");
+    writeFileSync(first, "export const installed = true;\n");
+    linkSync(first, second);
+    const observations = [first, second].map((logicalPath) => ({ logicalPath, physicalPath: realpathSync(logicalPath) }));
+    const result = observedInstallDigest(dir, observations, { maxFiles: 1, maxBytes: 1_024 });
+    expect(result.files).toBe(1);
+    expect(result.logicalFiles).toBe(2);
   });
 
   it("keeps the installed identity deterministic across different checkout roots", () => {
