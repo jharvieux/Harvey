@@ -87,6 +87,58 @@ permissions:
   contents: read
 
 jobs:
+  # One run, one exact six-file registry input. The bytes are fetched once, checksummed once, and
+  # uploaded; every hosted producer shard and every independent replay consumes this artifact in
+  # reuse-only mode. A registry release between shard starts can therefore never create a mixed run.
+  prepare-current-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Does this change set require a real corpus execution?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
+          if [ -z "$files" ]; then echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          relevant=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/scan/external-corpus.ts|.github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
+              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
+              AGENTS.md|CLAUDE.md|README.md|SESSION.md|src/*.test.ts) ;;
+              *) relevant=true ;;
+            esac
+          done <<< "$files"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.relevant == 'true'
+      - name: Materialize the one current Semgrep registry input
+        if: steps.filter.outputs.relevant == 'true'
+        run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --out .harvey-current-semgrep/receipt.json
+      - name: Retain exact registry bytes and their receipt
+        if: steps.filter.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-mechanical-semgrep-pack
+          path: .harvey-current-semgrep
+          include-hidden-files: true
+          if-no-files-found: error
+
   # #1586: the scoring work, split across runners. This job is NOT the required context — a matrix
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
@@ -96,8 +148,8 @@ jobs:
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
   # poisoned it beyond repair by re-running. No shard holds all 14, so a sharded run can never save.
-  #   * pull_request / merge_group -> 3 shards. Wall clock is what matters here, and this path
-  #     already restores-without-saving today under #1498's narrowing, so nothing is lost.
+  #   * pull_request / merge_group -> 3 shards. Wall clock is what matters here; each shard owns
+  #     an exhaustive slice for the current producer↔replay population comparison.
   #   * schedule / workflow_dispatch -> ONE shard holding all 14, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
@@ -109,6 +161,7 @@ jobs:
   # stop being scored while every shard still exited 0.
   shard:
     name: corpus shard ${{ matrix.shard }}
+    needs: prepare-current-inputs
     runs-on: ubuntu-latest
     strategy:
       # A drifted baseline in one shard must not cancel the others: the scorecard is most useful when
@@ -134,12 +187,8 @@ jobs:
     env:
       HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
-      # fetch-depth: 0 so the two diff-reading steps below can reach the PR base. MEASURED
-      # 2026-07-30 on run 30569519496: at the default depth 1 the #1498 narrowing step printed
-      # `fatal: bad object <base.sha>` and fell open to "Empty diff — scoring every target" on EVERY
-      # pull request, so the per-target narrowing it added has never once applied. The relevance
-      # filter reads the same diff and would have degraded the same way — permanently relevant, the
-      # short-circuit unreachable.
+      # fetch-depth: 0 so the relevance filter can reach the PR base. A shallow checkout previously
+      # made that diff unreadable and forced every prose-only PR through the expensive lane.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -185,20 +234,15 @@ jobs:
           echo "$files"
           if [ -z "$files" ]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "manifest_only=false" >> "$GITHUB_OUTPUT"
             echo "Could not read the diff — scoring everything. A narrowing that cannot see the change set must cost time, never coverage."
             exit 0
           fi
-          # manifest_only feeds the #1498 per-target narrowing below: it may fire ONLY when the
-          # manifest is the sole relevant edit. A PR that touches the manifest AND a detector must
-          # score every target — the detector can move a baseline the changed slugs don't name.
           relevant=false
-          manifest_only=true
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
               src/scan/external-corpus.ts) relevant=true ;;
-              .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true; manifest_only=false ;;
+              .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
               # .agents/* and AGENTS.md are the Codex-side mirrors of .claude/** and CLAUDE.md
               # (tracked by #1578). Read by no part of the clone-and-score pipeline, exactly like the
               # Claude-side originals two entries along. #1584: they were missing from this list, so a
@@ -210,11 +254,10 @@ jobs:
               # production src/** fail-open below, while a focused test-only edit (PR #1860's
               # sync-stdio.test.ts case) declares a no-op instead of spending the carbon shard.
               src/*.test.ts) ;;
-              *) relevant=true; manifest_only=false ;;
+              *) relevant=true ;;
             esac
           done <<< "$files"
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "manifest_only=$manifest_only" >> "$GITHUB_OUTPUT"
           if [ "$relevant" = "false" ]; then
             echo "Every changed path is prose, site or agent-config — none of it is read by the clone-and-score pipeline, so no baseline can have moved from this PR. The daily scheduled run covers the tree regardless."
           fi
@@ -287,6 +330,13 @@ jobs:
           restore-keys: |
             corpus-phase-v4-${{ runner.os }}-shard${{ matrix.shard }}-
 
+      - name: Restore the run's exact shared Semgrep bytes
+        if: steps.filter.outputs.relevant == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: current-mechanical-semgrep-pack
+          path: .harvey-corpus-phase-cache
+
       # Actions cache visibility is a transport boundary, not an authenticity claim. The inner
       # artifacts validate their content identities, and this manifest independently proves the
       # restored directory came from main or this exact run. A cache from another PR ref is
@@ -310,45 +360,16 @@ jobs:
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
       # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
       # targets instead of 4. It is what pushes this job past its old ~2m: six real installs.
-      # #1498: on a PULL REQUEST whose ONLY relevant edit is the manifest, score just the targets
-      # whose baselines the diff actually touches.
-      #
-      # MEASURED 2026-07-28: this job ran 37 times on pull requests that day against ONE scheduled
-      # run, ~23 minutes each — roughly 14 hours of runner time. Six separate batches edited
-      # src/scan/external-corpus.ts, and every one re-cloned and re-installed all 13 pinned repos to
-      # re-score the one or two baselines it had changed.
-      #
-      # The full sweep is NOT weakened: it still runs on the daily schedule, on workflow_dispatch,
-      # on a merge-queue entry and on any PR that touches a scanner. What narrows is only the
-      # manifest-only edit, where the changed slugs ARE the change.
-      #
-      # FAIL-OPEN BY DESIGN, in the safe direction: if anything besides the manifest was touched, if
-      # the diff cannot be read, or if no slug can be attributed, this scores EVERYTHING. A narrowing
-      # that guesses wrong must cost time, never coverage.
-      - name: Which targets does this diff touch?
+      # Current producer↔replay equivalence is a population claim. A manifest-only change therefore
+      # cannot narrow to its edited slug: both fresh sides must own every pinned target or the union
+      # comparison would prove less than the required context says. This deliberately supersedes
+      # #1498's manifest-only narrowing for relevant PRs; prose/test-only changes still short-circuit.
+      - name: Declare the complete target population
         id: targets
         if: steps.filter.outputs.relevant == 'true'
         run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "Not a PR — scoring every target."; exit 0
-          fi
-          if [ "${{ steps.filter.outputs.manifest_only }}" != "true" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "This PR touches more than the manifest — a scanner change can move a baseline the changed slugs don't name, so scoring every target."; exit 0
-          fi
-          # Attribute changed lines to slugs: every target block opens with `slug: "<name>"`, so the
-          # nearest preceding slug above a changed line is that line's target.
-          slugs=$(git diff -U0 '${{ github.event.pull_request.base.sha }}' HEAD -- src/scan/external-corpus.ts \
-            | grep -E '^@@' | sed -E 's/.*\+([0-9]+).*/\1/' \
-            | while read -r ln; do
-                head -n "$ln" src/scan/external-corpus.ts | grep -oE 'slug: "[a-z0-9-]+"' | tail -1 | sed -E 's/slug: "(.*)"/\1/'
-              done | sort -u | grep -v '^$' || true)
-          if [ -z "$slugs" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"; echo "No slug attributable — scoring every target."; exit 0
-          fi
-          echo "scope=some" >> "$GITHUB_OUTPUT"
-          echo "slugs=$(echo "$slugs" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
-          echo "Scoring only: $(echo "$slugs" | tr '\n' ' ')"
+          echo "scope=all" >> "$GITHUB_OUTPUT"
+          echo "Scoring every target: the required current readiness comparator rejects a partial population."
 
       # #1564: a DRIFT line names a count moving; it does not say WHICH findings moved,
       # and both 2026-07-30 incidents this closes (carbon M7 -1, M5-slop -653) were resolved only by
@@ -381,34 +402,19 @@ jobs:
             echo "Run $run_id has no corpus-drift-scorecard artifact (expired, or that run errored before uploading) — proceeding without it."
           fi
 
-      # #1586: under the #1498 narrowing the changed slugs ARE the change, and there are usually one
-      # or two of them — far fewer than the shard count. Sharding those would leave most shards with
-      # nothing, so shard 1 scores them all and the rest declare a no-op. Declaring matters: a shard
-      # that simply exited 0 having scored nothing is indistinguishable from one that ran clean, and
-      # the gate-liveness assert below would fail it — correctly, which is why the no-op is recorded
-      # rather than the assert being weakened.
-      - name: Declare the no-op (narrowed run — shard 1 covers the touched slugs)
-        if: steps.filter.outputs.relevant == 'true' && steps.targets.outputs.scope != 'all' && matrix.shard != 1
-        uses: ./.github/actions/gate-liveness
-        with:
-          mode: record
-          gate: corpus-drift
-          status: declared-no-op
-          scope: "#1498 narrowed this run to the manifest's touched slugs, which shard 1 scores in full. There are fewer touched slugs than shards, so this shard has no targets to score. Nothing was cloned and nothing was scored here; this shard is evidence about nothing, and shard 1 carries the verdict."
-
       - name: Score the corpus against its baselines
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
+        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
           HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache
-          # Attempt 1 snapshots the exact registry YAML it scans. A retry reuses it only when the
-          # attempt-1 key was an exact hit. A rolling-prefix fallback is usable for phase artifacts,
-          # but its registry snapshot is marked unavailable rather than assigned false provenance.
-          HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: ${{ github.run_attempt == 1 && 'refresh' || (steps.phase-cache.outputs.cache-hit == 'true' && 'reuse' || 'unavailable') }}
+          # `prepare-current-inputs` fetched these exact six YAML files once for the whole run.
+          # Producers are reuse-only: no shard may race the live registry independently.
+          HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse
           # PR/queue/push runs measure Harvey against immutable external inputs. The daily/manual
           # lane uses current providers and compares live OSV bytes with the committed snapshot;
           # client audit CLIs do not set this corpus-only variable and keep their live defaults.
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
+          HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
           # Kept in step with the matrix above: 3 on a PR or queue entry, 1 elsewhere so the run
           # holds every clone and the cache-save guard is satisfied.
@@ -425,31 +431,14 @@ jobs:
           # into that same name so the lineage is unbroken either way.
           out="corpus-drift.json"
           [ "$SHARD_COUNT" != "1" ] && out="corpus-drift-shard$SHARD.json"
-          if [ "${{ steps.targets.outputs.scope }}" = "all" ]; then
-            # An array, not a string: an empty baseline_flag expands to zero arguments
-            # (still vanishing when no prior snapshot exists) and a populated one carries
-            # its flag and path as separate words WITHOUT the unquoted-splitting shellcheck
-            # (SC2086) flags on a plain "$baseline_flag" — quoting that string would instead
-            # pass a single glued argument and break the flag.
-            baseline_flag=()
-            [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
-            pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
-          else
-            for t in ${{ steps.targets.outputs.slugs }}; do
-              echo "::group::$t"
-              baseline_flag=()
-              if [ -f "prior-drift/corpus-drift-$t.json" ]; then
-                baseline_flag=(--baseline-findings "prior-drift/corpus-drift-$t.json")
-              elif [ -f prior-drift/corpus-drift.json ]; then
-                baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
-              fi
-              pnpm corpus-drift --target "$t" --install --json "corpus-drift-$t.json" "${baseline_flag[@]}" "${cold_flag[@]}"
-              echo "::endgroup::"
-            done
-          fi
+          # An array, not a string: an empty baseline_flag expands to zero arguments and a populated
+          # one carries its flag and path as separate words without shell splitting.
+          baseline_flag=()
+          [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+          pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
 
       - name: Record corpus phase-cache transport provenance
-        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
+        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           pnpm exec tsx src/cli/corpus-cache-transport.ts save \
             --dir .harvey-corpus-phase-cache \
@@ -462,7 +451,7 @@ jobs:
             --namespace '${{ matrix.shard }}'
 
       - name: Save content-addressed corpus phase results
-        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
+        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
@@ -515,8 +504,8 @@ jobs:
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8
-      # (4 targets) and this job's own #1498 narrowed PR path (only the touched slugs) therefore
-      # restore but never save, which is what stops a 4-of-14 tree from claiming the 14-target key
+      # and each PR shard own only subsets, so they restore but never save; this stops a partial tree
+      # from claiming the whole-population key
       # and locking every later run out of it (a cache key is immutable once written).
       #
       # `always()` is safe HERE precisely because the guard reads the CLONE TREE rather than the job
@@ -584,6 +573,55 @@ jobs:
           repo: ${{ github.repository }}
           body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."
 
+  # A separate process and separate clone/preparation path. It consumes the exact pack artifact but
+  # no hosted phase artifacts, so the final comparison is not the scorecard comparing with itself.
+  # It starts beside the real producer matrix; the stronger evidence costs runner minutes, not an
+  # additional serial critical path.
+  current-replay:
+    needs: prepare-current-inputs
+    if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    name: current independent replay ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3]' || '[1]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install mechanical-tier scanner binaries
+        uses: ./.github/actions/mechanical-binaries
+      - name: Authenticate private corpus mirrors
+        uses: ./.github/actions/corpus-mirror-auth
+        with:
+          private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
+      - name: Corpus clone cache
+        id: corpus-cache
+        uses: ./.github/actions/corpus-clone-cache
+      - name: Restore the run's exact shared Semgrep bytes
+        uses: actions/download-artifact@v4
+        with:
+          name: current-mechanical-semgrep-pack
+          path: .harvey-current-replay-cache
+      - name: Execute the independent exact-head replay
+        env:
+          HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
+        run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-replay-cache --out "current-replay-${{ matrix.shard }}.json"
+      - name: Upload independent raw replay
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-mechanical-replay-part-${{ matrix.shard }}
+          path: current-replay-${{ matrix.shard }}.json
+          if-no-files-found: error
+
   # #1586: THE REQUIRED CONTEXT. Branch protection on `main` names this job, so it must keep this
   # exact name and must report on every PR — a required context that stops reporting deadlocks every
   # pull request (#1107), which is the failure mode this whole shape has to avoid. It carries no
@@ -593,7 +631,7 @@ jobs:
   # on failure is indistinguishable to branch protection from one that never ran.
   drift:
     name: clone pinned commits + score baselines
-    needs: shard
+    needs: [prepare-current-inputs, shard, current-replay]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -611,6 +649,16 @@ jobs:
             echo "::error::corpus-drift: the shard matrix reported '$result'. A baseline drifted, or a shard errored before it could score. Open the individual 'corpus shard N' jobs for the per-module table, and see the corpus-drift-scorecard artifact."
             exit 1
           fi
+          if [ '${{ needs.prepare-current-inputs.result }}' != 'success' ]; then
+            echo "::error::the shared-input preparation job did not succeed"
+            exit 1
+          fi
+          if { [ '${{ github.event_name }}' = 'pull_request' ] || [ '${{ github.event_name }}' = 'merge_group' ]; } \
+            && [ '${{ needs.prepare-current-inputs.outputs.relevant }}' = 'true' ] \
+            && [ '${{ needs.current-replay.result }}' != 'success' ]; then
+            echo "::error::the independent current replay matrix did not succeed"
+            exit 1
+          fi
           echo "Every shard succeeded."
 
       # Reassemble the per-shard parts into the ONE artifact name #1564's prior-snapshot fetch reads,
@@ -625,6 +673,15 @@ jobs:
           pattern: corpus-drift-scorecard-part-*
           merge-multiple: true
           path: parts
+
+      - name: Collect the independent replay parts
+        id: replay-parts
+        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.prepare-current-inputs.outputs.relevant == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: current-mechanical-replay-part-*
+          merge-multiple: true
+          path: replay-parts
 
       # The shards are disjoint by construction (src/scan/corpus-shards.ts asserts the partition is
       # exhaustive and non-overlapping), so `rows` concatenates and the `findings` maps merge with no
@@ -646,10 +703,8 @@ jobs:
           jq -s '{
             rows: (map(.rows) | add),
             findings: (map(.findings) | add),
-            mechanicalPopulation: (map(.mechanicalPopulation) | unique | if length == 1 then .[0] else error("shards disagree on mechanical population provenance") end),
-            mechanicalFindings: (map(.mechanicalFindings // {}) | add),
-            mechanicalExternalState: (map(.mechanicalExternalState // {}) | add),
-            detectors: (map(.detectors // {}) | add)
+            detectors: (map(.detectors // {}) | add),
+            mechanicalContexts: (map(.mechanicalContexts // {}) | add)
           }' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
@@ -671,9 +726,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.merge.outputs.merged == 'true'
         working-directory: source
-      - name: Old orchestrator → registry ordered mechanical parity
-        if: steps.merge.outputs.merged == 'true'
-        run: pnpm validate:mechanical-corpus-parity --current ../corpus-drift.json
+      - name: Current registry producer ↔ independent replay equivalence/readiness
+        if: steps.merge.outputs.merged == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        run: |
+          set -euo pipefail
+          producer_parts=(../parts/corpus-drift-shard*.json)
+          replay_parts=(../replay-parts/current-replay-*.json)
+          for part in "${producer_parts[@]}"; do jq -e '.currentMechanicalExecution' "$part" > "$part.current.json"; done
+          producer_csv=$(IFS=,; echo "${producer_parts[*]/%/.current.json}")
+          replay_csv=$(IFS=,; echo "${replay_parts[*]}")
+          pnpm validate:current-mechanical-readiness --merge "$producer_csv" --out ../current-hosted-producer.json
+          pnpm validate:current-mechanical-readiness --merge "$replay_csv" --out ../current-independent-replay.json
+          pnpm validate:current-mechanical-readiness --producer ../current-hosted-producer.json --replay ../current-independent-replay.json
+          echo "This proves two fresh current registry executions agree. It is NOT #1851.6/.7 historical manual→registry proof; #1886 remains open and exclusive."
         working-directory: source
 
       - name: Upload the merged drift scorecard
@@ -681,5 +746,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: corpus-drift-scorecard
-          path: corpus-drift.json
+          path: |
+            corpus-drift.json
+            current-hosted-producer.json
+            current-independent-replay.json
           if-no-files-found: warn

@@ -46,7 +46,7 @@ const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 
 // The maintained registry packs every real engagement scan fetches (runSemgrep below) — shared with
 // runRegistryPacksOnFile's single-file replay (#1368) so the two can never drift apart.
-const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
+export const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"] as const;
 const materializedRegistryMemo = new Map<string, { identity?: string; files?: string[]; failure?: string }>();
 
 interface RegistryPackSnapshotManifest {
@@ -54,7 +54,7 @@ interface RegistryPackSnapshotManifest {
   identity: string;
 }
 
-function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
+export function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
   const hash = createHash("sha256");
   for (const { pack, body } of bodies) {
     hash.update(pack);
