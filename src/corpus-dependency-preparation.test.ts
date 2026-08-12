@@ -193,6 +193,91 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(warm.reason).toContain("knip.js");
   });
 
+  it("keeps installed transitive lifecycle scripts non-cacheable after clean and offline materialization", () => {
+    const target = fixture("npm");
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({
+      name: "npm-fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "npm-fixture", dependencies: { "stateful-dependency": "1.0.0" } },
+        "node_modules/stateful-dependency": {
+          name: "stateful-dependency",
+          version: "1.0.0",
+          integrity: "sha512-fixture",
+          hasInstallScript: true,
+        },
+      },
+    }));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-transitive-lifecycle-"));
+    dirs.push(cacheDir);
+    const runInstall = () => {
+      const dependency = join(target, "node_modules", "stateful-dependency");
+      mkdirSync(dependency, { recursive: true });
+      writeFileSync(join(dependency, "package.json"), JSON.stringify({
+        name: "stateful-dependency",
+        version: "1.0.0",
+        scripts: { postinstall: "node rewrite-project.js" },
+      }));
+    };
+    const options = { targetDir: target, cacheDir, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.12.1", runInstall };
+    const cold = prepareCorpusDependencies(options);
+    const warm = prepareCorpusDependencies(options);
+    expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.key });
+    expect(warm.reason).toContain("resolved npm packages declare lifecycle execution in the lockfile");
+    expect(warm.reason).toContain("installed dependency lifecycle scripts can observe or mutate project state");
+    expect(warm.reason).toContain("stateful-dependency@1.0.0 (postinstall)");
+  });
+
+  it("keeps an enumerable installed dependency tree with no lifecycle scripts cacheable", () => {
+    const target = fixture("npm");
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({
+      name: "npm-fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "npm-fixture", dependencies: { "plain-dependency": "1.0.0" } },
+        "node_modules/plain-dependency": { name: "plain-dependency", version: "1.0.0", integrity: "sha512-fixture" },
+      },
+    }));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-no-lifecycle-"));
+    dirs.push(cacheDir);
+    const runInstall = () => {
+      const dependency = join(target, "node_modules", "plain-dependency");
+      mkdirSync(dependency, { recursive: true });
+      writeFileSync(join(dependency, "package.json"), JSON.stringify({ name: "plain-dependency", version: "1.0.0" }));
+    };
+    const options = { targetDir: target, cacheDir, targetRevision: "pin", targetTree: "tree", packageManagerVersion: "11.12.1", runInstall };
+    const cold = prepareCorpusDependencies(options);
+    const warm = prepareCorpusDependencies(options);
+    expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: true });
+    expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: true, key: cold.key });
+  });
+
+  it("fails fresh when the lock resolves dependencies but their installed lifecycle surface is absent", () => {
+    const target = fixture("npm");
+    writeFileSync(join(target, "package-lock.json"), JSON.stringify({
+      name: "npm-fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "npm-fixture", dependencies: { opaque: "1.0.0" } },
+        "node_modules/opaque": { name: "opaque", version: "1.0.0", integrity: "sha512-fixture" },
+      },
+    }));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-opaque-lifecycle-"));
+    dirs.push(cacheDir);
+    const result = prepareCorpusDependencies({
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(result.reason).toContain("installed dependency lifecycle reachability could not be proven");
+    expect(result.reason).toContain("no physical installed package manifests were enumerable");
+  });
+
   it.each([
     {
       label: "Vite's default provider config",

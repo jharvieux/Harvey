@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { readEntriesSafe } from "./fs-walk.js";
+import { readEntriesLstatSafe, readEntriesSafe } from "./fs-walk.js";
 import { detectPackageManager, type PackageManager } from "./package-manager.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 2;
@@ -378,6 +378,126 @@ function qualityNonCacheableReason(root: string): string | undefined {
   return reasons.length > 0 ? reasons.join("; ") : undefined;
 }
 
+function lockfileLifecycleReason(manager: PackageManager, text: string): string | undefined {
+  try {
+    if (manager === "npm") {
+      const lock = JSON.parse(text) as { packages?: Record<string, { hasInstallScript?: boolean; name?: string }> };
+      const scripted = Object.entries(lock.packages ?? {})
+        .filter(([, pkg]) => pkg.hasInstallScript === true)
+        .map(([path, pkg]) => pkg.name ?? path)
+        .sort();
+      return scripted.length > 0 ? `resolved npm packages declare lifecycle execution in the lockfile: ${scripted.join(", ")}` : undefined;
+    }
+    if (manager === "pnpm") {
+      const lock = parseYaml(text) as { packages?: Record<string, { requiresBuild?: boolean }>; snapshots?: Record<string, { requiresBuild?: boolean }> };
+      const scripted = [...Object.entries(lock.packages ?? {}), ...Object.entries(lock.snapshots ?? {})]
+        .filter(([, pkg]) => pkg.requiresBuild === true)
+        .map(([name]) => name)
+        .sort();
+      return scripted.length > 0 ? `resolved pnpm packages declare lifecycle execution in the lockfile: ${[...new Set(scripted)].join(", ")}` : undefined;
+    }
+  } catch {
+    return "resolved dependency lifecycle metadata could not be read from the lockfile";
+  }
+  return undefined;
+}
+
+function lockfileHasInstalledPackages(manager: PackageManager, text: string): boolean {
+  try {
+    if (manager === "npm") {
+      const lock = JSON.parse(text) as { packages?: Record<string, { link?: boolean }> };
+      return Object.entries(lock.packages ?? {}).some(([path, pkg]) => path.includes("node_modules/") && pkg.link !== true);
+    }
+    if (manager === "pnpm") {
+      const lock = parseYaml(text) as { packages?: Record<string, unknown> };
+      return Object.keys(lock.packages ?? {}).length > 0;
+    }
+    return (/^[^\s#][^\n]*:\n(?:[ \t].*(?:\n|$))*/gm.exec(text) ?? []).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+// Inspect package metadata only; this never imports installed code or target/provider config.
+// Physical packages are visited through each package manager's node_modules layout. Workspace
+// symlinks are covered by qualityNonCacheableReason's project-tree walk, while pnpm's backing
+// .pnpm packages are inspected here.
+function installedLifecycleReason(root: string, manager: PackageManager, lockText: string): string | undefined {
+  const lifecycle: string[] = [];
+  const unknown: string[] = [];
+  let manifests = 0;
+
+  const inspectPackage = (dir: string): void => {
+    const manifest = join(dir, "package.json");
+    if (!existsSync(manifest)) {
+      unknown.push(`${relative(root, dir).replaceAll("\\", "/")} has no readable package.json`);
+      return;
+    }
+    manifests += 1;
+    try {
+      const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { name?: string; version?: string; scripts?: Record<string, unknown> };
+      const hooks = Object.keys(pkg.scripts ?? {}).filter((name) => INSTALL_LIFECYCLE_HOOKS.has(name));
+      const label = `${pkg.name ?? relative(root, dir).replaceAll("\\", "/")}${pkg.version ? `@${pkg.version}` : ""}`;
+      if (hooks.length > 0) lifecycle.push(`${label} (${hooks.sort().join(", ")})`);
+      if (existsSync(join(dir, "binding.gyp")) && !hooks.includes("install")) lifecycle.push(`${label} (implicit node-gyp install from binding.gyp)`);
+    } catch (error) {
+      unknown.push(`${relative(root, manifest).replaceAll("\\", "/")} could not be parsed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const nested = join(dir, "node_modules");
+    if (existsSync(nested)) scanNodeModules(nested);
+  };
+
+  const scanPnpmStore = (dir: string): void => {
+    for (const slot of readEntriesLstatSafe(dir)) {
+      if (!slot.isDirectory || slot.isSymbolicLink) continue;
+      const nested = join(slot.path, "node_modules");
+      if (existsSync(nested)) scanNodeModules(nested);
+    }
+  };
+
+  const scanNodeModules = (dir: string): void => {
+    for (const entry of readEntriesLstatSafe(dir)) {
+      if (!entry.isDirectory || entry.isSymbolicLink || entry.name === ".bin") continue;
+      if (entry.name === ".pnpm") {
+        scanPnpmStore(entry.path);
+      } else if (entry.name.startsWith("@")) {
+        for (const scoped of readEntriesLstatSafe(entry.path)) {
+          if (scoped.isDirectory && !scoped.isSymbolicLink) inspectPackage(scoped.path);
+        }
+      } else if (!entry.name.startsWith(".")) {
+        inspectPackage(entry.path);
+      }
+    }
+  };
+
+  const findInstallRoots = (dir: string): void => {
+    for (const entry of readEntriesLstatSafe(dir)) {
+      if (!entry.isDirectory || entry.isSymbolicLink) continue;
+      if (entry.name === "node_modules") scanNodeModules(entry.path);
+      else if (!SKIP_DIRS.has(entry.name)) findInstallRoots(entry.path);
+    }
+  };
+
+  try {
+    findInstallRoots(root);
+  } catch (error) {
+    unknown.push(`installed dependency lifecycle surface could not be enumerated: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (manifests === 0 && lockfileHasInstalledPackages(manager, lockText)) {
+    unknown.push("lockfile resolves installed packages but no physical installed package manifests were enumerable");
+  }
+  const reasons = [
+    ...(lifecycle.length > 0 ? [`installed dependency lifecycle scripts can observe or mutate project state: ${[...new Set(lifecycle)].sort().join(", ")}`] : []),
+    ...(unknown.length > 0 ? [`installed dependency lifecycle reachability could not be proven: ${[...new Set(unknown)].sort().join("; ")}`] : []),
+  ];
+  return reasons.length > 0 ? reasons.join("; ") : undefined;
+}
+
+function combineReasons(...reasons: (string | undefined)[]): string | undefined {
+  const present = reasons.filter((reason): reason is string => Boolean(reason));
+  return present.length > 0 ? present.join("; ") : undefined;
+}
+
 function installInputs(root: string): string[] {
   const files: string[] = [];
   const walk = (dir: string): void => {
@@ -585,7 +705,10 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   const key = digestValue({ schema: DEPENDENCY_PREPARATION_SCHEMA, identity });
   const receiptPath = join(cacheDir, "dependency-preparation", "receipts", `${key}.json`);
   const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
-  const nonCacheableQuality = qualityNonCacheableReason(options.targetDir);
+  const preInstallNonCacheableQuality = combineReasons(
+    qualityNonCacheableReason(options.targetDir),
+    lockfileLifecycleReason(manager, lockText),
+  );
   let hit: PreparationReceipt | undefined;
   if (existsSync(receiptPath)) {
     try {
@@ -604,6 +727,10 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
         const removed = sanitizePnpmStore(storeDir);
         if (removed > 0) options.onEvent?.(`DEPENDENCY PREP SANITIZE pnpm ${key.slice(0, 12)}: removed ${removed} path-bound project/global-link tree(s) after offline materialization`);
       }
+      const nonCacheableQuality = combineReasons(
+        preInstallNonCacheableQuality,
+        installedLifecycleReason(options.targetDir, manager, lockText),
+      );
       options.onEvent?.(`DEPENDENCY PREP HIT ${manager} ${key.slice(0, 12)}: receipt, lockfile, manager ${version}, and offline materialization verified`);
       return {
         status: "hit", complete: true, cacheable: !nonCacheableQuality, key, packageManager: manager,
@@ -623,6 +750,10 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
       const removed = sanitizePnpmStore(storeDir);
       if (removed > 0) options.onEvent?.(`DEPENDENCY PREP SANITIZE pnpm ${key.slice(0, 12)}: removed ${removed} path-bound project/global-link tree(s) after clean materialization`);
     }
+    const nonCacheableQuality = combineReasons(
+      preInstallNonCacheableQuality,
+      installedLifecycleReason(options.targetDir, manager, lockText),
+    );
     writeReceipt(receiptPath, key, identity);
     options.onEvent?.(`DEPENDENCY PREP MISS ${manager} ${key.slice(0, 12)}: clean install completed; receipt stored and reread`);
     return {

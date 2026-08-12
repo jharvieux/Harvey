@@ -142,7 +142,12 @@ disabled, Harvey-inferred-entry source tier. Success preserves review-tier M5 fi
 M5-98; failure of that safe tier emits M5-00. A rejected installed tree is never consumed. The
 receipt proves dependency materialization; it does not make arbitrary target code reproducible.
 Install lifecycle scripts and executable configuration can read time, network, or file contents
-outside the keyed tree even when every named environment value is unchanged.
+outside the keyed tree even when every named environment value is unchanged. After each clean or
+offline materialization, preparation reads the physical installed package manifests (including
+pnpm's backing store layout) and the npm/pnpm lockfile lifecycle markers. Any dependency lifecycle
+hook, implicit `binding.gyp` install, unreadable manifest, or mismatch between the resolved and
+enumerable installed package sets returns `cacheable: false`. Package metadata is read; installed
+modules and target providers are not imported for this decision.
 
 Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
 framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
@@ -232,3 +237,7 @@ direction that remains cacheable. The heavy Vite falsifier installs a local npm 
 `HOME`, inside a real npm workspace declared by `packages/{app,lib}`: preparation reports miss then
 hit/hit, all three quality runs are fresh, and changing only that external file moves M5-01 from
 `packages/app/src/b.ts` to `packages/app/src/a.ts`.
+The dependency-lifecycle falsifier packs a local tarball whose postinstall reads an unchanged
+`HOME` path and rewrites the target's `knip.json`: the content store may hit and re-materialize, but
+both preparation results remain non-cacheable, both quality runs are fresh, and the unused-file row
+moves from `src/b.ts` to `src/a.ts`. Its paired no-script installed dependency stays cacheable.

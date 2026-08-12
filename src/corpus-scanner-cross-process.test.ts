@@ -15,6 +15,7 @@ interface ProcessResult {
   qualityLocation: string;
   qualityLocations: string[];
   preparation: string;
+  preparationCacheable: boolean;
   events: string[];
 }
 
@@ -97,7 +98,7 @@ const statuses = Object.fromEntries(Object.entries(results).map(([name, result])
 const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
 const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
 const qualityLocations = quality.findings.map((finding) => finding.location);
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, qualityLocations, preparation: preparation.status, events }));
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
 `);
     const run = async (repoRoot: string, targetDir: string, environment: NodeJS.ProcessEnv = {}): Promise<ProcessResult> => {
       const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheArgument], {
@@ -112,6 +113,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     const warm = await run(checkoutB, targetB);
     expect(cold.preparation).toBe("miss");
     expect(warm.preparation).toBe("hit");
+    expect([cold.preparationCacheable, warm.preparationCacheable]).toEqual([true, true]);
     expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "miss", "mutation-detect-only": "miss" });
     expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
@@ -218,6 +220,97 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       else process.env.HOME = previousHome;
     }
   }, 30_000);
+
+  it("never reuses quality output after a tarball dependency lifecycle rewrites Knip config from unchanged-HOME external state", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-transitive-lifecycle-quality-"));
+    const dependencyDir = join(fixture, "stateful-dependency");
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    const stateHome = join(fixture, "home");
+    dirs.push(fixture);
+    mkdirSync(dependencyDir, { recursive: true });
+    mkdirSync(join(targetDir, "src"), { recursive: true });
+    mkdirSync(stateHome);
+    writeFileSync(join(dependencyDir, "package.json"), JSON.stringify({
+      name: "stateful-knip-config",
+      version: "1.0.0",
+      scripts: { postinstall: "node postinstall.cjs" },
+      files: ["postinstall.cjs"],
+    }));
+    writeFileSync(join(dependencyDir, "postinstall.cjs"), [
+      'const { readFileSync, writeFileSync } = require("node:fs");',
+      'const { join } = require("node:path");',
+      'const selected = readFileSync(join(process.env.HOME, "selected.txt"), "utf8").trim();',
+      'writeFileSync(join(process.env.INIT_CWD, "knip.json"), JSON.stringify({ entry: [`src/${selected}.ts`], project: ["src/**/*.ts"] }));',
+      "",
+    ].join("\n"));
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", targetDir], {
+      cwd: dependencyDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })) as { filename: string }[];
+    const tarball = packed[0]!.filename;
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({
+      name: "transitive-lifecycle-falsifier",
+      private: true,
+      dependencies: { "stateful-knip-config": `file:./${tarball}` },
+    }));
+    writeFileSync(join(targetDir, "src", "a.ts"), "export const a = true;\n");
+    writeFileSync(join(targetDir, "src", "b.ts"), "export const b = true;\n");
+    writeFileSync(join(stateHome, "selected.txt"), "a\n");
+    execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir, stdio: "ignore" });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = stateHome;
+    try {
+      const run = async () => {
+        const events: string[] = [];
+        const preparation = prepareCorpusDependencies({
+          targetDir,
+          cacheDir,
+          targetRevision: "transitive-lifecycle-pin",
+          targetTree: "transitive-lifecycle-tree",
+          onEvent: (message) => events.push(message),
+        });
+        const result = await runCorpusScanner({
+          repoRoot: process.cwd(),
+          targetDir,
+          targetConfig: "local tarball dependency lifecycle",
+          script: "quality-scan",
+          scanner: "quality-scan",
+          scriptArgs: [targetDir],
+          cache: {
+            dir: cacheDir,
+            mode: "read-write",
+            targetRevision: "transitive-lifecycle-pin",
+            targetTree: "transitive-lifecycle-tree",
+            dependencyPreparation: preparation,
+          },
+          onEvent: (message) => events.push(message),
+        });
+        return {
+          preparation,
+          cache: result.cacheRecord?.cache ?? "fresh",
+          unused: result.findings.find((finding) => finding.taxonomy.startsWith("M5 —") && finding.title.startsWith("Unused file:") && finding.location.startsWith("src/"))?.location,
+          events,
+        };
+      };
+
+      const cold = await run();
+      writeFileSync(join(stateHome, "selected.txt"), "b\n");
+      const changed = await run();
+
+      expect([cold.unused, changed.unused]).toEqual(["src/b.ts", "src/a.ts"]);
+      expect([cold.cache, changed.cache]).toEqual(["fresh", "fresh"]);
+      expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
+      expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.preparation.reason).toContain("stateful-knip-config@1.0.0 (postinstall)");
+      expect(changed.events.some((event) => event.includes("CACHE HIT quality-scan"))).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  }, 45_000);
 
   it("preserves source-only M5 coverage without executing a rejected provider, and fails loud if that safe tier fails", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
