@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "capturedAt": "2026-08-12T01:35:00.469Z",
+  "expiresAt": "2026-08-19T01:35:00.469Z",
+  "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a",
+  "targets": {
+    "proposit": {
+      "file": "proposit.osv.json.gz",
+      "sha256": "81f036c7c6b317aef8c5247537d64da7b5c4e754188af5cd222190c1f8f7d072",
+      "targetCommit": "82838cef3606a176c4bca0af0587c5ea6b08d3a0"
+    },
+    "multi-tenant-starter": {
+      "file": "multi-tenant-starter.osv.json.gz",
+      "sha256": "ade9160c02662012bfb70dcfccc8622477a74dcde5f4cfac20e3992eb0ad4119",
+      "targetCommit": "dcc147c0f945737f69df79e8aa544dc09e84ccbb"
+    },
+    "launch-mvp": {
+      "file": "launch-mvp.osv.json.gz",
+      "sha256": "e432509b25645c3be13e0f31ad643b45e59448ed3fdaf8581b79fe4d90777793",
+      "targetCommit": "513a8f0ca6e405725dcf98eab1fc5cd6468b5f10"
+    },
+    "mvp-boilerplate": {
+      "file": "mvp-boilerplate.osv.json.gz",
+      "sha256": "ade9160c02662012bfb70dcfccc8622477a74dcde5f4cfac20e3992eb0ad4119",
+      "targetCommit": "2aac5c2fcb45c35aa4a5f5eb9eb66645f0f84e70"
+    },
+    "saas-lite": {
+      "file": "saas-lite.osv.json.gz",
+      "sha256": "f85441cdc9e43d2e50b3917725482432977648f5c71ed42d8e3fe80c040c9d9a",
+      "targetCommit": "63892cee72ffc9885bd5bf366ed6f4be78aab1ea"
+    },
+    "carbon": {
+      "file": "carbon.osv.json.gz",
+      "sha256": "13831d94eaca1eccab2a55f1f62ea30382f40d103116221956a8ef991810f970",
+      "targetCommit": "92e19c04417e7023a38264315d7846449fd5c4a1"
+    }
+  }
+}

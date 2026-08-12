@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
+import type { SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
 
 export const MECHANICAL_PHASES = [
   "secrets-history",
@@ -45,6 +46,8 @@ export interface MechanicalPhaseCacheOptions {
   externalInputs: Partial<Record<MechanicalPhase, Record<string, string>>>;
   disabled?: Partial<Record<MechanicalPhase, string>>;
   materializedInputs?: Partial<Record<MechanicalPhase, readonly string[]>>;
+  semgrepFamilies?: SemgrepFamilyCacheOptions;
+  reproducible?: Partial<Record<MechanicalPhase, string>>;
   onEvent?: (message: string) => void;
 }
 
@@ -225,9 +228,11 @@ export async function executeMechanicalPhase(
   execute: () => MechanicalPhaseValue | Promise<MechanicalPhaseValue>,
 ): Promise<MechanicalPhaseRecord> {
   const policy = CACHEABILITY[phase];
+  const reproducible = cache?.reproducible?.[phase];
+  const cacheable = policy.cacheable || reproducible !== undefined;
   const started = Date.now();
   const disabled = cache?.disabled?.[phase];
-  if (!cache || cache.mode === "off" || !policy.cacheable || disabled) {
+  if (!cache || cache.mode === "off" || !cacheable || disabled) {
     const value = await execute();
     const reason = disabled ?? (!cache || cache.mode === "off" ? "phase cache disabled" : policy.reason);
     cache?.onEvent?.(`CACHE BYPASS ${phase}: ${reason}`);
@@ -258,7 +263,7 @@ export async function executeMechanicalPhase(
   const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
-    return { phase, findings: hit.findings, scope: hit.scope, durationMs: Date.now() - started, cache: "hit", reason: policy.reason, key };
+    return { phase, findings: hit.findings, scope: hit.scope, durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = await execute();
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
@@ -277,10 +282,11 @@ export async function executeMechanicalPhase(
 
 export function assertMechanicalCacheVerification(
   phases: readonly MechanicalPhaseRecord[],
-  mode: MechanicalCacheMode | undefined,
+  cache: MechanicalPhaseCacheOptions | undefined,
 ): void {
-  if (mode !== "verify") return;
-  const unverified = CACHEABLE_MECHANICAL_PHASES.flatMap((phase) => {
+  if (cache?.mode !== "verify") return;
+  const expected = [...new Set([...CACHEABLE_MECHANICAL_PHASES, ...Object.keys(cache.reproducible ?? {}) as MechanicalPhase[]])];
+  const unverified = expected.flatMap((phase) => {
     const record = phases.find((candidate) => candidate.phase === phase);
     return record?.cache === "recomputed" ? [] : [`${phase}=${record?.cache ?? "missing"}`];
   });

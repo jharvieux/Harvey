@@ -188,7 +188,7 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     const records: MechanicalPhaseRecord[] = [];
     for (const phase of CACHEABLE_MECHANICAL_PHASES) records.push(await run(phase, verify));
     expect(records.every((record) => record.cache === "miss")).toBe(true);
-    expect(() => assertMechanicalCacheVerification(records, "verify")).toThrow(
+    expect(() => assertMechanicalCacheVerification(records, verify)).toThrow(
       "A miss may seed a later run, but this run compared no restored artifact",
     );
   });

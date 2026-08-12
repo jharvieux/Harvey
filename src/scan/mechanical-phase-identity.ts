@@ -23,6 +23,11 @@ interface PhaseIdentityOptions {
   onEvent?: (message: string) => void;
   registryPackIdentity?: { identity?: string; files?: string[]; failure?: string };
   registrySnapshotMode?: "refresh" | "reuse" | "unavailable";
+  deterministicExternalState?: {
+    advisoryDigest: string;
+    advisoryVersion: string;
+    secretCandidateIdentity: string;
+  };
 }
 
 function resolveRelativeImplementation(from: string, specifier: string): string | undefined {
@@ -69,13 +74,20 @@ function transitiveImplementationClosure(roots: readonly string[]): string[] {
   return [...closure].sort();
 }
 
+export function discoverTransitiveImplementationFiles(roots: readonly string[]): string[] {
+  return transitiveImplementationClosure(roots);
+}
+
 /**
  * Discovers the implementation closure from the identifiers each runPhase callback actually
  * references. A new relative helper import used by a cacheable phase joins its key automatically;
  * an unresolved helper fails loud instead of leaving a stale key. Top-level local helper functions
  * are followed too, adding their imported dependencies to the same closure.
  */
-export function discoverMechanicalPhaseImplementationFiles(repoRoot: string): Partial<Record<MechanicalPhase, string[]>> {
+export function discoverMechanicalPhaseImplementationFiles(
+  repoRoot: string,
+  phases: readonly MechanicalPhase[] = CACHEABLE_MECHANICAL_PHASES,
+): Partial<Record<MechanicalPhase, string[]>> {
   const mechanical = join(repoRoot, "src", "scan", "mechanical.ts");
   const parsed = sourceFile(mechanical);
   const imports = importedBindings(mechanical, parsed);
@@ -105,7 +117,7 @@ export function discoverMechanicalPhaseImplementationFiles(repoRoot: string): Pa
       && node.arguments.length >= 2
       && ts.isStringLiteral(node.arguments[0]!)) {
       const phase = node.arguments[0]!.text as MechanicalPhase;
-      if (CACHEABLE_MECHANICAL_PHASES.includes(phase)) {
+      if (phases.includes(phase)) {
         const roots = new Set<string>();
         collect(node.arguments[1]!, roots, new Set<string>());
         rootsByPhase.set(phase, roots);
@@ -116,7 +128,7 @@ export function discoverMechanicalPhaseImplementationFiles(repoRoot: string): Pa
   findPhases(parsed);
 
   const discovered: Partial<Record<MechanicalPhase, string[]>> = {};
-  for (const phase of CACHEABLE_MECHANICAL_PHASES) {
+  for (const phase of phases) {
     const roots = rootsByPhase.get(phase);
     if (!roots || roots.size === 0) throw new Error(`${phase}: no implementation helpers discovered from its runPhase callback`);
     discovered[phase] = transitiveImplementationClosure([...roots]);
@@ -128,7 +140,10 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
   const scanDir = join(options.repoRoot, "src", "scan");
   const mechanical = join(scanDir, "mechanical.ts");
   const semgrepRules = join(scanDir, "rules", "semgrep");
-  const implementationFiles = discoverMechanicalPhaseImplementationFiles(options.repoRoot);
+  const identityPhases: MechanicalPhase[] = options.deterministicExternalState
+    ? ["secrets-history", "dependency-advisory", ...CACHEABLE_MECHANICAL_PHASES]
+    : [...CACHEABLE_MECHANICAL_PHASES];
+  const implementationFiles = discoverMechanicalPhaseImplementationFiles(options.repoRoot, identityPhases);
   const orchestration = digestFiles([mechanical], options.repoRoot);
   const toolchain = digestFiles([join(options.repoRoot, "package.json"), join(options.repoRoot, "pnpm-lock.yaml")], options.repoRoot);
   const registryMode = options.registrySnapshotMode ?? "refresh";
@@ -142,6 +157,14 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
     configuration: digestParts([orchestration, digestFiles(implementationFiles.configuration!, options.repoRoot)]),
     "structural-ast": digestParts([orchestration, digestFiles(implementationFiles["structural-ast"]!, options.repoRoot)]),
   };
+  if (options.deterministicExternalState) {
+    implementation["secrets-history"] = digestParts([
+      orchestration,
+      digestFiles(implementationFiles["secrets-history"]!, options.repoRoot),
+      digestFiles([join(scanDir, "rules", "gitleaks-supabase.toml")], options.repoRoot),
+    ]);
+    implementation["dependency-advisory"] = digestParts([orchestration, digestFiles(implementationFiles["dependency-advisory"]!, options.repoRoot)]);
+  }
   const externalInputs: MechanicalPhaseCacheOptions["externalInputs"] = {
     semgrep: {
       semgrep: binaryVersion("semgrep"),
@@ -153,6 +176,22 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
     configuration: { node: process.version, toolchain, options: options.optionIdentity },
     "structural-ast": { node: process.version, toolchain, options: options.optionIdentity },
   };
+  if (options.deterministicExternalState) {
+    externalInputs["secrets-history"] = {
+      node: process.version,
+      gitleaks: binaryVersion("gitleaks"),
+      toolchain,
+      options: options.optionIdentity,
+      candidateInput: options.deterministicExternalState.secretCandidateIdentity,
+    };
+    externalInputs["dependency-advisory"] = {
+      node: process.version,
+      toolchain,
+      options: options.optionIdentity,
+      advisorySnapshot: options.deterministicExternalState.advisoryDigest,
+      advisoryVersion: options.deterministicExternalState.advisoryVersion,
+    };
+  }
   return {
     dir: options.cacheDir,
     mode: options.mode,
@@ -162,6 +201,24 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
     externalInputs,
     disabled: registry.failure ? { semgrep: `${registry.failure}; phase is explicitly non-cacheable for this run` } : undefined,
     materializedInputs: registry.files ? { semgrep: registry.files } : undefined,
+    semgrepFamilies: registry.files ? {
+      dir: options.cacheDir,
+      mode: options.mode,
+      targetRevision: options.targetRevision,
+      targetTree: options.targetTree,
+      implementation: digestParts([orchestration, digestFiles(implementationFiles.semgrep!, options.repoRoot)]),
+      externalInputs: {
+        semgrep: binaryVersion("semgrep"),
+        node: process.version,
+        toolchain,
+        options: options.optionIdentity,
+      },
+      onEvent: options.onEvent,
+    } : undefined,
+    reproducible: options.deterministicExternalState ? {
+      "secrets-history": "deterministic corpus candidate lane: pinned target tree plus exact gitleaks rules/version; no provider verification",
+      "dependency-advisory": "immutable digested advisory snapshot plus offline lockfile/manifest checks; live registry fallbacks disabled",
+    } : undefined,
     onEvent: options.onEvent,
   };
 }

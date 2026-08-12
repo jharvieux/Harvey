@@ -95,13 +95,64 @@ the cold value with the restored artifact, failing on any findings or scope diff
 seed the next run but fails the current equivalence assertion; normal PR read/write runs are the
 distinct seeding mode.
 
-The Actions cache is transport, not trust. Schema-2 artifacts use the `corpus-phase-v2` transport
-namespace. Per-shard rolling keys avoid matrix legs overwriting
+The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
 the aggregate result of every shard and reports on every pull request, including declared no-op
 changes.
 
 ## Falsifiers
+
+## Cross-run transport, scanner families, and deterministic PR state
+
+The `corpus-phase-v4` transport carries a context-bound provenance manifest. Scheduled/manual runs
+stay single-shard so they alone hold and save the complete clone tree. A main `push` also runs once
+over every target, then saves that complete content-addressed phase directory under the shard 1, 2,
+and 3 namespaces consumed by PR/merge runs. A PR may reuse its own run attempt but never another
+PR's artifact. The key encodes platform, shard namespace, run, attempt, and head SHA; the validator
+reconstructs that key from the manifest, checks the matched source key and current namespace, then
+checks the source event/ref/SHA trust relationship before any inner artifact is read. Missing,
+corrupt, forged, mismatched, or untrusted transport is deleted visibly.
+
+Corpus source scanners write two independent artifacts: `detect-static` and mutation
+`--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
+Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
+and rehydrated on read. On real Carbon, the cache reports 6,133 tracked target units rather than
+walking installed dependencies.
+
+`quality-scan` deliberately executes fresh on every corpus run. Its Knip pass can execute target
+configuration and provider descendants from the prepared dependency tree, including files that no
+package export or static entry closure names. A sound content identity therefore requires reading
+the complete installed population. That work defeats this performance cache's purpose: BoxyHQ's
+install measured 106,871 physical files / 1,037,440,676 bytes, and pinned Carbon on Linux arm64
+measured 146,755 physical files / 2,136,592,208 bytes (202,298 logical files, 34,253 logical
+directory visits, and 10,158 links). The hosted Linux x64 Carbon run observed 131,073 physical files
+and failed before scoring. The runner now makes the uncached boundary visible, never creates a
+`quality-scan` artifact family, and keeps forced-cold verification scoped to the two cacheable
+scanners. #1871 remains open; a safe quality-cache design is grouped with #1872's queued dependency
+preparation work.
+
+Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
+files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
+timings), tokenizes both target and cache roots, and is independently keyed by its exact rule bytes.
+The merge canonicalizes generated registry namespaces, deduplicates overlapping-pack matches, and
+restores deterministic order. The scheduled forced-cold control re-executes every family and the
+legacy monolithic scan; on the real pinned `saas-lite` target all family artifacts verified and the
+normalized partition/monolith parity assertion passed. The command later exited 1 only for the
+independent pre-existing M5 baseline movement (expected 38, measured 39); no baseline was changed.
+
+The PR lane sets `HARVEY_CORPUS_EXTERNAL_STATE_MODE=snapshot`: OSV reads six committed, digested,
+expiry-checked gzip snapshots through the current parser, secret candidates come from the exact
+Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are disabled. Schedule
+and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
+drift. The default client scanner path sets neither mode and remains live.
+
+The superseded three-scanner prototype's Carbon measurements with `--install` and snapshot state
+were: legacy monolithic 444.57s wall; partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17
+artifact files. Every run conserved
+all 13 scored baseline/free-tier rows. A temporary edit to one local rule preserved unrelated
+registry-family hits and limited Semgrep recomposition to 1.2s. The final exhaustive family repair
+restored 531 Semgrep-derived rows that an early zero-applicable-pack abort had hidden; the parity
+control, not the count baseline, caught that defect.
 
 The focused tests exercise both sides of every guard:
 
@@ -113,6 +164,9 @@ They prove cold/warm finding and scope equivalence, full-schema corruption rejec
 recomputation, discovery-backed helper closure, phase-granular invalidation, all-cacheable-phase
 target-pin invalidation, live advisory and live-provider secret non-reuse, forced-cold mismatch and
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
-aggregate, and the scheduled forced-cold path. The cross-process guard uses one persistent target,
-one persistent artifact directory, fixed local Semgrep YAML, and two different checkout paths: the
-first process must miss all three deterministic phases and the second must hit all three.
+aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
+Harvey checkout copies (only the tool installation is shared) and invokes the production corpus
+scanner runner twice against matching tracked fixtures. `detect-static` and mutation `--detect-only`
+must miss then hit one artifact directory. `quality-scan` must execute fresh both times; between
+runs only an installed provider's untracked `config.js` changes, and the real M5-01 result must move
+from `src/alternate.ts` to `src/index.ts` without creating a quality cache artifact.

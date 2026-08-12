@@ -5,7 +5,7 @@
 //
 // CLI: `pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]`
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
@@ -40,7 +40,7 @@ import { scanExpressPoweredBy } from "./express-powered-by.js";
 import { scanExpressSecurityHeaders } from "./express-security-headers.js";
 import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, runOsvScanner } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, resolvedTree, runOsvScanner, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { checkWorkflowPermissions } from "./gha-permissions.js";
@@ -59,7 +59,9 @@ import {
   parseSemgrepFindings,
   partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
+  canonicalizeSemgrepOutput,
   runSemgrep,
+  runSemgrepPartitioned,
   semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
@@ -86,6 +88,7 @@ import { checkWebExtensionManifest } from "./webext-manifest.js";
 import { licenseScope } from "../sbom.js";
 import { collectWorkspaceManifests } from "../workspaces.js";
 import { readRecursiveSafe } from "../fs-walk.js";
+import { canonicalizeCorpusOsvInput } from "../corpus-advisory-snapshot.js";
 import {
   MECHANICAL_PHASES,
   assertMechanicalCacheVerification,
@@ -142,6 +145,9 @@ interface MechanicalScanOptions {
   // in the target's own source (option (1)). #126 recommended both; PR #127 shipped neither.
   authGuards?: string[];
   phaseCache?: MechanicalPhaseCacheOptions;
+  advisorySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string; expiresAt: string; osvScannerVersion: string };
+  advisoryParitySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string };
+  secretCandidateIdentity?: string;
 }
 
 interface MechanicalScanResult {
@@ -241,7 +247,8 @@ function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase"
 }
 
 export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Promise<MechanicalScanResult> {
-  const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks, skipBundleScan } = opts;
+  const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks, skipBundleScan, advisorySnapshot, advisoryParitySnapshot, secretCandidateIdentity } = opts;
+  if (advisorySnapshot && !skipNetworkChecks) throw new Error("an immutable advisory snapshot requires skipNetworkChecks so live registry fallbacks cannot masquerade as deterministic input");
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
   // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
@@ -273,9 +280,13 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     const secrets = await runPhase("secrets-history", () => {
       const phaseFindings: Finding[] = [];
       const bundle = skipBundleScan ? { disclosure: bundleScanSkippedFinding() } : resolveBundleScan(dir, bundleDir);
-      phaseFindings.push(...scanSecrets(scanDir, dir, bundle.bundleDir));
+      phaseFindings.push(...scanSecrets(scanDir, dir, bundle.bundleDir, secretCandidateIdentity
+        ? { providerVerification: "deterministic-candidates", candidateIdentity: secretCandidateIdentity }
+        : undefined));
       if (bundle.disclosure) phaseFindings.push(bundle.disclosure);
-      return { findings: phaseFindings, scope: { unitsExamined: allUnits, description: "tracked source tree, pinned git history, and discovered built bundle" } };
+      return { findings: phaseFindings, scope: { unitsExamined: allUnits, description: secretCandidateIdentity
+        ? `pinned working-tree secret candidates under identity ${secretCandidateIdentity}; provider verification belongs to the live lane`
+        : "tracked source tree, pinned git history, and discovered built bundle" } };
     });
     findings.push(...secrets.findings);
 
@@ -287,7 +298,10 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     const resolved = resolvedTree(scanDir);
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
     const dependencyStart = Date.now();
-    const osv = runOsvScanner(scanDir);
+    const osv = advisorySnapshot ? { result: advisorySnapshot.result } : runOsvScanner(scanDir);
+    if (advisoryParitySnapshot && !osv.failure && JSON.stringify(canonicalizeCorpusOsvInput(osv.result)) !== JSON.stringify(canonicalizeCorpusOsvInput(advisoryParitySnapshot.result))) {
+      throw new Error(`live OSV advisory state differs from committed corpus snapshot ${advisoryParitySnapshot.digest} captured ${advisoryParitySnapshot.capturedAt}; scheduled freshness detected external-state drift`);
+    }
     const dependencyFindings: Finding[] = stablePaths([...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result))]);
     if (nextVersion) dependencyFindings.push(...checkNextVersionCVEs(nextVersion, "package.json", resolved));
     const dependencyEarlyMs = Date.now() - dependencyStart;
@@ -299,9 +313,12 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     // the withheld matches are counted in SEM-SUPPRESS-00, and anything semgrep never analysed is
     // counted in SEM-SCOPE-00. A suppression the deliverable does not mention is one the audited
     // party made on the auditor's behalf.
-    const semgrepPhase = await runPhase("semgrep", () => {
+    const semgrepPhase = await runPhase("semgrep", async () => {
       const phaseFindings: Finding[] = [];
-      const semgrep = runSemgrep(scanDir, opts.phaseCache?.materializedInputs?.semgrep);
+      const registryConfigs = opts.phaseCache?.materializedInputs?.semgrep;
+      const semgrep = opts.phaseCache?.semgrepFamilies && registryConfigs
+        ? await runSemgrepPartitioned(scanDir, registryConfigs, opts.phaseCache.semgrepFamilies)
+        : runSemgrep(scanDir, registryConfigs);
       if (semgrep.failure) {
         phaseFindings.push(semgrepUnavailableFinding(semgrep.failure));
       } else {
@@ -313,19 +330,44 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       // #1300: the name lists in those two regexes are OURS; a project's house style is not.
       // Guard helpers discovered in the target's own source (option (1)) plus any supplied per
       // engagement (option (2)) clear the finding the same way a recognised name does.
-      const projectGuards = [
-        ...discoverAuthGuards(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))),
-        ...(opts.authGuards ?? []),
-      ];
-      const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result, projectGuards);
-      const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
-      phaseFindings.push(...parseSemgrepFindings({ results: reported }));
-      phaseFindings.push(...semgrepSuppressionFinding(suppressed, scanDir));
-      phaseFindings.push(...semgrepScopeFinding(scanDir, semgrep.result));
+        const projectGuards = [
+          ...discoverAuthGuards(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))),
+          ...(opts.authGuards ?? []),
+        ];
+        const findingsFor = (raw: typeof semgrep.result): Finding[] => {
+          const output = canonicalizeSemgrepOutput(raw);
+          const { reported: guardCleared } = partitionGuardTokenSuppressed(output, projectGuards);
+          const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
+          return [
+            ...parseSemgrepFindings({ results: reported }),
+            ...semgrepSuppressionFinding(suppressed, scanDir),
+            ...semgrepScopeFinding(scanDir, output),
+            ...semgrepErrorFinding(scanDir, output),
+          ];
+        };
+        const partitionedFindings = findingsFor(semgrep.result);
+        phaseFindings.push(...partitionedFindings);
       // #1077: a file semgrep errored on (syntax error) still counts as "scanned", so the SCOPE
       // diff above can't catch it — and paths.skipped is a distinct silence again. Named here so
       // neither reads as a clean file.
-        phaseFindings.push(...semgrepErrorFinding(scanDir, semgrep.result));
+        if (opts.phaseCache?.semgrepFamilies?.mode === "verify") {
+          const monolithic = runSemgrep(scanDir, registryConfigs);
+          if (monolithic.failure) throw new Error(`Semgrep monolithic parity control did not complete: ${monolithic.failure}`);
+          const monolithicFindings = findingsFor(monolithic.result);
+          const canonicalRoot = realpathSync(scanDir);
+          const scanRoots = [...new Set([scanDir, canonicalRoot])].sort((a, b) => b.length - a.length);
+          const canonicalRows = (rows: Finding[]): Finding[] => JSON.parse(scanRoots.reduce((text, root) => text.replaceAll(root, "<SEMGREP_SCAN_ROOT>"), JSON.stringify(rows))) as Finding[];
+          const canonicalMonolithic = canonicalRows(monolithicFindings);
+          const canonicalPartitioned = canonicalRows(partitionedFindings);
+          if (JSON.stringify(canonicalMonolithic) !== JSON.stringify(canonicalPartitioned)) {
+            const monolithicRows = new Set(canonicalMonolithic.map((finding) => JSON.stringify(finding)));
+            const partitionedRows = new Set(canonicalPartitioned.map((finding) => JSON.stringify(finding)));
+            const added = canonicalPartitioned.filter((finding) => !monolithicRows.has(JSON.stringify(finding))).map((finding) => `${finding.id}@${finding.location}`).slice(0, 10);
+            const missing = canonicalMonolithic.filter((finding) => !partitionedRows.has(JSON.stringify(finding))).map((finding) => `${finding.id}@${finding.location}`).slice(0, 10);
+            throw new Error(`partitioned Semgrep result differs from the monolithic cold control: partitioned=${partitionedFindings.length}, monolithic=${monolithicFindings.length}; partition-only [${added.join(", ")}]; monolithic-only [${missing.join(", ")}]`);
+          }
+          opts.phaseCache.onEvent?.(`SEMGREP MONOLITHIC PARITY PASS: ${partitionedFindings.length} normalized finding(s) from ${(semgrep as { records?: unknown[] }).records?.length ?? 0} exhaustive family artifact(s)`);
+        }
       }
       phaseFindings.push(...checkMissingCsp(scanDir));
       phaseFindings.push(...checkHostingConfigHeaders(scanDir));
@@ -477,7 +519,9 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     findings.push(...supplyFindings);
     await runPhase("dependency-advisory", () => ({
       findings: dependencyFindings,
-      scope: { unitsExamined: Math.max(1, collectWorkspaceManifests(scanDir).manifests.length), description: "lockfiles, resolved dependency tree, declared manifests, OSV advisories, and live registry-backed checks" },
+      scope: { unitsExamined: Math.max(1, collectWorkspaceManifests(scanDir).manifests.length), description: advisorySnapshot
+        ? `lockfiles/manifests against immutable OSV snapshot ${advisorySnapshot.digest} (${advisorySnapshot.osvScannerVersion}, captured ${advisorySnapshot.capturedAt}, expires ${advisorySnapshot.expiresAt}); live registry fallbacks disabled`
+        : "lockfiles, resolved dependency tree, declared manifests, current OSV advisories, and live registry-backed checks" },
     }));
     phases[phases.length - 1]!.durationMs = dependencyEarlyMs + (Date.now() - supplyStart);
 
@@ -645,7 +689,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     if (missing.length > 0 || duplicates.length > 0) {
       throw new Error(`mechanical phase accounting incomplete: missing [${missing.join(", ")}], duplicated [${duplicates.join(", ")}]`);
     }
-    assertMechanicalCacheVerification(phases, opts.phaseCache?.mode);
+    assertMechanicalCacheVerification(phases, opts.phaseCache);
     // #975 — declare each AST detector's CWE (semgrep rows already carry theirs from rule metadata).
     return { findings: normalized.findings, phases };
   } finally {

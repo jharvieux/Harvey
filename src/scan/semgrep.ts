@@ -26,6 +26,20 @@ import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-trust.js";
+import {
+  assertSemgrepFamilyPlan,
+  assertSemgrepFamilyVerification,
+  discoverLocalSemgrepFamilies,
+  executeSemgrepFamily,
+  mergeSemgrepFamilyOutputs,
+  localSemgrepConfigYardstick,
+  rejectUnregisteredSemgrepFamilyArtifacts,
+  type SemgrepFamily,
+  type SemgrepFamilyCacheOptions,
+  type SemgrepFamilyRecord,
+} from "./semgrep-family-cache.js";
+
+export { canonicalizeSemgrepOutput } from "./semgrep-family-cache.js";
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
 // `<batch>.yml` here (no shared file → conflict-free parallel batches).
@@ -514,6 +528,70 @@ export function runSemgrep(dir: string, registryConfigs: readonly string[] = REG
   if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
   if ("failure" in run) return { result: {}, failure: run.failure };
   return parseEnvelope(run.out);
+}
+
+function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[] {
+  if (registryConfigs.length !== REGISTRY_PACKS.length) {
+    throw new Error(`Semgrep registry family count moved: expected ${REGISTRY_PACKS.length}, received ${registryConfigs.length}; every exact registry pack must be registered once`);
+  }
+  const registry = registryConfigs.map((configPath, index) => ({ id: `registry-${index}-${REGISTRY_PACKS[index]!.replaceAll("/", "-")}`, configPath }));
+  const local = discoverLocalSemgrepFamilies(CUSTOM_RULES);
+  const families = [...registry, ...local];
+  assertSemgrepFamilyPlan(families, [...registryConfigs, ...localSemgrepConfigYardstick(CUSTOM_RULES)]);
+  return families;
+}
+
+function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
+  const args = [
+    "--config", family.configPath,
+    "--exclude", "node_modules",
+    "--disable-nosem",
+    "--timeout", "0",
+    "--json",
+    "--verbose",
+    "--time",
+    dir,
+  ];
+  let run = execSemgrep(["--x-ignore-semgrepignore-files", "--x-parmap", ...args]);
+  if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
+  if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
+  const parsed = parseEnvelope(run.out);
+  if (parsed.failure) return parsed;
+  parsed.result.results ??= [];
+  parsed.result.errors ??= [];
+  parsed.result.paths ??= {};
+  parsed.result.paths.scanned ??= [];
+  parsed.result.paths.skipped ??= [];
+  parsed.result.time ??= {};
+  parsed.result.time.rules ??= [];
+  return parsed;
+}
+
+export async function runSemgrepPartitioned(
+  dir: string,
+  registryConfigs: readonly string[],
+  cache: SemgrepFamilyCacheOptions,
+): Promise<{ result: SemgrepOutput; records: SemgrepFamilyRecord[]; failure?: string }> {
+  const families = semgrepRuleFamilies(registryConfigs);
+  const portableCache = { ...cache, pathRoot: dir };
+  rejectUnregisteredSemgrepFamilyArtifacts(portableCache, new Set(families.map((family) => family.id)));
+  const records: SemgrepFamilyRecord[] = [];
+  for (const family of families) {
+    let failure: string | undefined;
+    const record = await executeSemgrepFamily(family, portableCache, () => {
+      const run = runSemgrepFamily(dir, family);
+      failure = run.failure;
+      return run.result;
+    }).catch((error) => {
+      failure ??= error instanceof Error ? error.message : String(error);
+      cache.onEvent?.(`SEMGREP FAMILY VERIFY FAIL ${family.id}: ${failure}`);
+      return undefined;
+    });
+    if (!record) return { result: {}, records, failure: `partitioned Semgrep did not complete: ${failure}` };
+    records.push(record);
+  }
+  assertSemgrepFamilyVerification(records, families, cache.mode);
+  return { result: mergeSemgrepFamilyOutputs(records), records };
 }
 
 // A bare rule id (e.g. "harvey-route-noauth") matched against a JSON check_id, which carries a
