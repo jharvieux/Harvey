@@ -25,7 +25,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { leadingDirective, loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 // Names that carry a field a UI component should never be handed wholesale. Deliberately narrow —
 // `email`, `phone` and `address` are absent, because a profile component legitimately renders them
@@ -164,8 +164,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectPropOvershareFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanPropOvershare(projectDir: string): Finding[] {
-  return detectPropOvershareFindings(walkSourceFiles(projectDir));
 }

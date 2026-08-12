@@ -50,7 +50,7 @@ import {
   OWNERSHIP_COLUMN,
   rootIdentifier,
 } from "../detectors/owner-id.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 const HANDLER_FILE = /(^|\/)(pages\/api\/.+|app\/.*route)\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -238,8 +238,4 @@ export function detectBolaCrossFileFindings(files: SourceInput[]): Finding[] {
   return [...sources]
     .filter(([path]) => HANDLER_FILE.test(path))
     .flatMap(([path, sf]) => detectFile(path, sf, sources, allPaths, aliases));
-}
-
-export function scanBolaCrossFile(projectDir: string): Finding[] {
-  return detectBolaCrossFileFindings(walkSourceFiles(projectDir));
 }

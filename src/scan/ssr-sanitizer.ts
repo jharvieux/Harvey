@@ -25,7 +25,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { leadingDirective, loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 const BROWSER_ONLY_PACKAGE = "dompurify";
 const SERVER_DOM_PACKAGE = /^(jsdom|happy-dom|linkedom)$/;
@@ -163,8 +163,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectSsrSanitizerFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanSsrSanitizer(projectDir: string): Finding[] {
-  return detectSsrSanitizerFindings(walkSourceFiles(projectDir));
 }

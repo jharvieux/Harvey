@@ -4,7 +4,7 @@
 // why auth is deliberately deferred, or `isAdmin = true` in a test fixture.
 
 import type { Finding } from "../findings.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 interface SourceFile {
   path: string; // relative to the scanned project root
@@ -432,10 +432,4 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
     );
   }
   return findings;
-}
-
-export function scanLeftoverAuth(projectDir: string): Finding[] {
-  return walkSourceFiles(projectDir)
-    .map((f): SourceFile => ({ path: f.path, content: f.text }))
-    .flatMap(classifyLeftoverAuth);
 }

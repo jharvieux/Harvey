@@ -643,9 +643,31 @@ jobs:
             exit 0
           fi
           echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
-          jq -s '{rows: (map(.rows) | add), findings: (map(.findings) | add)}' "${parts[@]}" > corpus-drift.json
+          jq -s '{rows: (map(.rows) | add), findings: (map(.findings) | add), detectors: (map(.detectors // {}) | add)}' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
+
+      - uses: actions/checkout@v4
+        if: steps.merge.outputs.merged == 'true'
+        with:
+          path: source
+      - uses: pnpm/action-setup@v4
+        if: steps.merge.outputs.merged == 'true'
+        with:
+          package_json_file: source/package.json
+      - uses: actions/setup-node@v4
+        if: steps.merge.outputs.merged == 'true'
+        with:
+          node-version-file: source/.nvmrc
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        if: steps.merge.outputs.merged == 'true'
+        working-directory: source
+      - name: Old orchestrator → registry ordered mechanical parity
+        if: steps.merge.outputs.merged == 'true'
+        run: pnpm validate:mechanical-corpus-parity --current ../corpus-drift.json
+        working-directory: source
 
       - name: Upload the merged drift scorecard
         if: steps.merge.outputs.merged == 'true'

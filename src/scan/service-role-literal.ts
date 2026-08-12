@@ -17,17 +17,13 @@
 // safe: most string literals reaching createClient's second argument in practice, e.g. a
 // hardcoded local anon key with unusual formatting, are simply not JWTs).
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import { collectPathAliases, resolveImport, type PathAlias } from "../detectors/app-router.js";
+import { resolveImport, type PathAlias } from "../detectors/app-router.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 const DEMO_ISS = "supabase-demo";
 
 interface DecodedJwtPayload {
@@ -71,13 +67,15 @@ interface NamedImport {
   modulePath: string;
 }
 
-function collectNamedImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): NamedImport[] {
+function collectNamedImports(sf: ts.SourceFile, path: string, importGraph: ReadonlyMap<string, readonly string[]>, aliases: PathAlias[]): NamedImport[] {
   const imports: NamedImport[] = [];
+  const reachable = new Set(importGraph.get(path) ?? []);
+  const allPaths = new Set(importGraph.keys());
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.importClause?.namedBindings) continue;
     if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
     const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
-    if (!resolved) continue;
+    if (!resolved || !reachable.has(resolved)) continue;
     for (const el of stmt.importClause.namedBindings.elements) {
       imports.push({ local: el.name.text, imported: (el.propertyName ?? el.name).text, modulePath: resolved });
     }
@@ -120,11 +118,11 @@ function resolveKeyLiteral(keyArg: ts.Expression, sameFileConsts: Map<string, st
   return remote !== undefined ? { literal: remote, crossFileFrom: imp.modulePath } : undefined;
 }
 
-function detectFile(path: string, sf: ts.SourceFile, allPaths: Set<string>, aliases: PathAlias[], exportsByPath: ReadonlyMap<string, Map<string, string>>): Finding[] {
+function detectFile(path: string, sf: ts.SourceFile, importGraph: ReadonlyMap<string, readonly string[]>, aliases: PathAlias[], exportsByPath: ReadonlyMap<string, Map<string, string>>): Finding[] {
   const sites = findCreateClientSites(sf);
   if (sites.length === 0) return [];
   const sameFileConsts = collectStringConsts(sf);
-  const namedImports = collectNamedImports(sf, path, allPaths, aliases);
+  const namedImports = collectNamedImports(sf, path, importGraph, aliases);
 
   const findings: Finding[] = [];
   for (const site of sites) {
@@ -149,25 +147,9 @@ function detectFile(path: string, sf: ts.SourceFile, allPaths: Set<string>, alia
   return findings;
 }
 
-export function detectServiceRoleLiteralFindings(files: SourceInput[]): Finding[] {
+export function detectServiceRoleLiteralFindings(files: SourceInput[], importGraph: ReadonlyMap<string, readonly string[]>, aliases: PathAlias[]): Finding[] {
   const sourceFiles = files.filter((f) => SOURCE_EXT.test(f.path));
   const parsed = sourceFiles.map((f) => ({ path: f.path, sf: parse(f.path, f.text) }));
-  const allPaths = new Set(parsed.map((p) => p.path));
-  const aliases = collectPathAliases(files);
   const exportsByPath = new Map(parsed.map((p) => [p.path, collectStringConsts(p.sf)]));
-  return parsed.flatMap(({ path, sf }) => detectFile(path, sf, allPaths, aliases, exportsByPath));
-}
-
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    if (isDirectory) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry) || /^(tsconfig|jsconfig)\.json$/.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
-export function scanServiceRoleLiteral(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectServiceRoleLiteralFindings(files);
+  return parsed.flatMap(({ path, sf }) => detectFile(path, sf, importGraph, aliases, exportsByPath));
 }

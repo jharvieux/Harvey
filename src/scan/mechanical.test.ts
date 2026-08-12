@@ -35,6 +35,7 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 });
 
 const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
+const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;
@@ -97,6 +98,24 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(warm.findings).toEqual(cold.findings);
       expect(warm.phases.map((phase) => phase.phase)).toEqual(cold.phases.map((phase) => phase.phase));
       expect(warm.phases.map((phase) => phase.scope)).toEqual(cold.phases.map((phase) => phase.scope));
+      expect(warm.detectors.map((detector) => [detector.detector, detector.unitsExamined])).toEqual(
+        cold.detectors.map((detector) => [detector.detector, detector.unitsExamined]),
+      );
+      expect(cold.detectors.filter((detector) => detector.phase === "structural-ast").reduce((sum, detector) => sum + detector.findings, 0)).toBe(
+        cold.phases.find((phase) => phase.phase === "structural-ast")?.findings.length,
+      );
+      expect(warm.detectors.filter((detector) => detector.phase === "structural-ast").reduce((sum, detector) => sum + detector.findings, 0)).toBe(
+        warm.phases.find((phase) => phase.phase === "structural-ast")?.findings.length,
+      );
+      expect(cold.detectors.map((detector) => `${detector.phase}:${detector.detector}`).sort()).toEqual(
+        MECHANICAL_REGISTRY.map((producer) => `${producer.phase}:${producer.id}`).sort(),
+      );
+      expect(new Set(cold.detectors.filter((detector) => detector.phase === "configuration").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
+      expect(new Set(cold.detectors.filter((detector) => detector.phase === "dependency-advisory").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
+      expect(warm.detectors.filter((detector) => detector.status === "cached").length).toBeGreaterThan(20);
+      expect(cold.context.astsBuilt).toBeGreaterThanOrEqual(250);
+      expect(cold.context.astCacheHits).toBeGreaterThan(cold.context.astsBuilt);
+      expect(cold.context.avoidedFileReads).toBeGreaterThan(0);
       expect(warm.phases.filter((phase) => phase.cache === "hit").map((phase) => phase.phase).sort()).toEqual([
         "configuration",
         "semgrep",

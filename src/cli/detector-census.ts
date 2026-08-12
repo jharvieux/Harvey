@@ -1,15 +1,15 @@
 // Authoritative per-module detector census. "Measure, don't recall": the count of distinct
 // detectors each module ships is DERIVED from source here, never quoted from memory or a doc.
 //
-// Detectors live in two engines, and the repo does NOT tag every detector with its module, so
-// attribution is by OWNING FILE (the map below), with a taxonomy "Mx —" prefix overriding the
-// file-owner for files that emit more than one module's findings (e.g. app-router → M9 + M1):
+// Registry-owned mechanical producers carry their own module/taxonomy metadata. Non-mechanical
+// engines are attributed by OWNING FILE (the map below), with a taxonomy "Mx —" prefix
+// overriding the file-owner for files that emit more than one module's findings:
 //   - Semgrep taint/pattern rules — src/scan/rules/semgrep/*.yml (`id: harvey-*`). All M1.
 //   - TS/AST detectors — distinct `taxonomy:` strings in the owned files.
 //   - M10 classification rows — the [regex, "LABEL", "CATEGORY", …] table in pii-classify.mjs.
 //
-// When a new detector file is added, add it to OWNERS. That is the single maintenance point and
-// the reason this is a census, not a guess. M2 is dynamic/generative (a probe matrix of every
+// A new mechanical scan producer must join the registry; its discovery gate fails otherwise. A
+// detector in another engine still joins OWNERS. M2 is dynamic/generative (a probe matrix of every
 // table × persona × verb) — its taxonomy count is the static finding classes only; M3 wraps the
 // external vitals plugin. Both caveats are printed so the integer is never over-read as recall.
 //
@@ -17,62 +17,28 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
+import {
+  MECHANICAL_REGISTRY,
+  operatorMechanicalScopeRows,
+  validateMechanicalEngineRegistry,
+} from "../scan/mechanical-engine-registry.js";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
+const registryProblems = validateMechanicalEngineRegistry(ROOT);
+if (registryProblems.length > 0) throw new Error(`mechanical engine registry invalid:\n${registryProblems.join("\n")}`);
 
 // file (repo-relative) or directory → the module that owns the detectors it defines.
 const OWNERS: Record<string, string> = {
-  "src/scan/mechanical.ts": "M1",
-  "src/scan/supabase-static.ts": "M1",
   "src/scan/supabase-config.ts": "M1",
   "src/scan/supabase-advisors.ts": "M1",
   "src/scan/supabase-splinter.ts": "M1",
   "src/scan/supabase.ts": "M1",
-  "src/scan/leftover-auth.ts": "M1",
-  "src/scan/hosting-headers.ts": "M1",
-  "src/scan/counter-race.ts": "M1",
-  "src/scan/bola-owner.ts": "M1",
-  "src/scan/pg-idor.ts": "M1",
-  "src/scan/pg-response-exposure.ts": "M1",
-  "src/scan/service-role-literal.ts": "M1",
-  "src/scan/emitter-error.ts": "M1", // #1202 — EventEmitter 'error' emit with no same-file listener
-  "src/scan/express-powered-by.ts": "M1", // #1204 — Express app whose module never disables X-Powered-By
-  "src/scan/express-security-headers.ts": "M1", // #1350 — Express app that sets no security response headers (b5-headers is next.config.js-only)
-  "src/scan/raw-body-limit.ts": "M1", // #1200 — raw req.on("data") accumulator with no byte ceiling
-  "src/scan/job-tenant-scope.ts": "M1",
-  "src/scan/prisma-tenant-scope.ts": "M1",
-  "src/scan/drizzle-tenant-scope.ts": "M1",
-  "src/scan/client-supplied-tenant.ts": "M1",
-  "src/scan/tenant-guc-scope.ts": "M1",
-  "src/scan/cache-tenant-scope.ts": "M1",
-  "src/scan/storage-tenant-scope.ts": "M1",
-  "src/scan/audit-log-tenant.ts": "M1", // #1242 — audit entry with an actor but no tenant discriminator
-  "src/scan/webhook-signature.ts": "M1", // #1230 / D-091 item 12 — signature decoded with the wrong encoding
-  "src/scan/migration-column-drift.ts": "M1", // #1230 / D-091 item 13 — app code reads a dropped column
-  "src/scan/idempotency.ts": "M1", // #1230 / D-091 items 10, 22, 24 — retry-safety orderings
-  "src/scan/stale-quota-read.ts": "M1", // #1230 / D-091 item 6 — quota gate consumed across a loop
-  "src/scan/secret-rotation.ts": "M1",
-  "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
-  "src/scan/prop-overshare.ts": "M1", // #1252 — whole object with a sensitive field handed to a component as one prop
-  "src/scan/dedup-unique.ts": "M1", // #1257 / D-091 item 25 — SELECT-then-INSERT dedup with no UNIQUE constraint behind it
-  "src/scan/bola-cross-file.ts": "M1", // #1267 — route -> imported repository -> ownership-scoped query, across a module boundary
-  "src/scan/env-schema.ts": "M1",
-  "src/scan/webext-manifest.ts": "M1",
-  "src/scan/language-coverage.ts": "M1",
-  "src/scan/sfc-coverage.ts": "M1", // #919 — cross-cutting coverage disclosure (M5/M6/M7/M9 + M1 AST), filed under M1 same as the language-coverage.ts precedent it mirrors
   "src/scan/ext-coverage.ts": "M1", // #1065 — the extension half of the same disclosure family, filed under M1 with its siblings
-  "src/scan/infra-scope.ts": "M1",
-  "src/scan/gha-permissions.ts": "M1", // #1212 — GITHUB_TOKEN scope; GHA is in scope (see infra-scope.ts's sibling decision)
-  "src/scan/secrets.ts": "M1",
-  "src/scan/dependencies.ts": "M1",
-  "src/scan/dep-reachability.ts": "M1", // #874 — CVE reachability ordering + its not-assessed disclosure
-  "src/scan/supply-chain.ts": "M1",
   "src/scan/git-history-secret-gate.ts": "M1",
   "src/pentest": "M2",
   "src/hotspot-scan.ts": "M3",
   "src/quality-scan.ts": "M4", // jscpd duplication + #360 diverged-clone near-miss
   "src/detectors/slop.ts": "M5",
-  "src/detectors/handrolled.ts": "M6",
   "src/detectors/perf-code.ts": "M7",
   "src/detectors/bundle-stats.ts": "M7",
   "src/detectors/asset-weight.ts": "M7",
@@ -98,6 +64,10 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const MODULES = Array.from({ length: 10 }, (_, i) => `M${i + 1}`);
 const detectors = new Map<string, Set<string>>(MODULES.map((m) => [m, new Set<string>()]));
+const registryOwnedFiles = new Set(MECHANICAL_REGISTRY.flatMap((definition) => definition.implementations.map((implementation) => implementation.file)));
+for (const row of operatorMechanicalScopeRows()) {
+  for (const taxonomy of row.taxonomies) detectors.get(row.module)!.add(`tax:${taxonomy}`);
+}
 
 // 1. Semgrep rules — the security dir is the M1 rule set.
 for (const f of walk(join(ROOT, "src/scan/rules/semgrep")).filter((p) => p.endsWith(".yml"))) {
@@ -108,6 +78,7 @@ for (const f of walk(join(ROOT, "src/scan/rules/semgrep")).filter((p) => p.endsW
 
 // 2. TS/AST detectors — distinct taxonomy per owned file; "Mx —" prefix overrides the file-owner.
 for (const [rel, owner] of Object.entries(OWNERS)) {
+  if (registryOwnedFiles.has(rel)) throw new Error(`${rel} is registry-owned and must not be copied into detector-census OWNERS`);
   const abs = join(ROOT, rel);
   const files = isDirectorySafe(abs)
     ? walk(abs).filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts"))

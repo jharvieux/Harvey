@@ -21,14 +21,10 @@
 // is invisible here — this is a backstop for the contract-before-switchover ordering mistake, not a
 // substitute for grepping every reader before shipping the drop.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
-
+import { mechanicalFinding } from "./common.js";
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
 const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
@@ -49,26 +45,6 @@ interface DroppedColumn {
   line: number;
   how: "dropped" | "renamed";
   renamedTo?: string;
-}
-
-// Migration DDL in apply order. Only directories that carry an ORDERED history are read — a bare
-// root schema.sql is a snapshot, and a snapshot cannot state that anything was ever dropped.
-export function readMigrations(dir: string): { file: string; sql: string }[] {
-  const out: { file: string; sql: string }[] = [];
-  for (const rel of [join("supabase", "migrations"), join("prisma", "migrations"), "migrations"]) {
-    const base = join(dir, rel);
-    if (!isDirectorySafe(base)) continue;
-    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(base).entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (isDirectory) {
-        // prisma/migrations/<name>/migration.sql
-        const nested = join(full, "migration.sql");
-        if (existsSync(nested)) out.push({ file: relative(dir, nested), sql: readFileSync(nested, "utf8") });
-      } else if (entry.endsWith(".sql")) {
-        out.push({ file: relative(dir, full), sql: readFileSync(full, "utf8") });
-      }
-    }
-  }
-  return out;
 }
 
 // Blank comments rather than delete them, so a commented-out DROP can't register while line
@@ -198,8 +174,4 @@ export function detectMigrationColumnDriftFindings(files: SourceInput[], dropped
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text), dropped));
-}
-
-export function scanMigrationColumnDrift(projectDir: string): Finding[] {
-  return detectMigrationColumnDriftFindings(walkSourceFiles(projectDir), droppedColumns(readMigrations(projectDir)));
 }

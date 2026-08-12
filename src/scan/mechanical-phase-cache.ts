@@ -24,9 +24,21 @@ export interface MechanicalPhaseScope {
   description: string;
 }
 
+export interface MechanicalProducerRecord {
+  detector: string;
+  phase: MechanicalPhase;
+  order: number;
+  module: "M1" | "M6";
+  unitsExamined: number;
+  findings: number;
+  durationMs: number;
+  status: "ran" | "not-applicable" | "cached";
+}
+
 export interface MechanicalPhaseValue {
   findings: Finding[];
   scope: MechanicalPhaseScope;
+  producers?: MechanicalProducerRecord[];
 }
 
 export interface MechanicalPhaseRecord extends MechanicalPhaseValue {
@@ -68,6 +80,7 @@ interface CacheArtifact {
   payloadDigest: string;
   findings: Finding[];
   scope: MechanicalPhaseScope;
+  producers?: MechanicalProducerRecord[];
 }
 
 const CACHEABILITY: Record<MechanicalPhase, { cacheable: boolean; reason: string }> = {
@@ -168,8 +181,22 @@ function findingSchemaProblems(value: unknown): string[] {
   return result.errors.filter((error) => error.startsWith("findings[0]"));
 }
 
+function persistedPhaseValue(value: MechanicalPhaseValue): MechanicalPhaseValue {
+  return {
+    findings: value.findings,
+    scope: value.scope,
+    ...(value.producers === undefined ? {} : {
+      producers: value.producers.map((producer) => ({
+        ...producer,
+        durationMs: 0,
+        status: producer.status === "cached" ? "ran" : producer.status,
+      })),
+    }),
+  };
+}
+
 export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): string {
-  return digestParts([stable(value)]);
+  return digestParts([stable(persistedPhaseValue(value))]);
 }
 
 function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
@@ -183,7 +210,25 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
   if (!value.scope || !Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0 || typeof value.scope.description !== "string" || value.scope.description.length === 0) {
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
-  const payloadDigest = mechanicalPhasePayloadDigest({ findings: value.findings, scope: value.scope });
+  if (value.producers !== undefined && (
+    !Array.isArray(value.producers)
+    || value.producers.some((producer) => {
+      if (!producer || typeof producer !== "object") return true;
+      const row = producer as Partial<MechanicalProducerRecord>;
+      return typeof row.detector !== "string" || row.detector.length === 0 || row.phase !== expected.phase
+        || !Number.isInteger(row.order) || (row.module !== "M1" && row.module !== "M6")
+        || !Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0
+        || !Number.isInteger(row.findings) || row.findings! < 0
+        || typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0
+        || (row.status !== "ran" && row.status !== "not-applicable" && row.status !== "cached");
+    })
+    || value.producers.reduce((sum, producer) => sum + producer.findings, 0) !== value.findings.length
+  )) throw new Error("artifact producer execution census is malformed");
+  const payloadDigest = mechanicalPhasePayloadDigest({
+    findings: value.findings,
+    scope: value.scope,
+    ...(value.producers === undefined ? {} : { producers: value.producers }),
+  });
   if (value.payloadDigest !== payloadDigest) throw new Error("artifact payload checksum mismatch");
   return value as CacheArtifact;
 }
@@ -219,7 +264,7 @@ function closestPriorIdentity(dir: string, phase: MechanicalPhase, current: Mech
 }
 
 function equivalent(a: MechanicalPhaseValue, b: MechanicalPhaseValue): boolean {
-  return stable(a) === stable(b);
+  return stable(persistedPhaseValue(a)) === stable(persistedPhaseValue(b));
 }
 
 export async function executeMechanicalPhase(
@@ -263,18 +308,20 @@ export async function executeMechanicalPhase(
   const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
-    return { phase, findings: hit.findings, scope: hit.scope, durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
+    return { phase, findings: hit.findings, scope: hit.scope, producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = await execute();
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
-  if (hit && !equivalent(value, { findings: hit.findings, scope: hit.scope })) throw new Error(`${phase}: forced-cold result differs from cached findings or examined scope for ${key}`);
+  const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
+  if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
-  const payloadDigest = mechanicalPhasePayloadDigest(value);
-  writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...value }, null, 2)}\n`);
+  const persisted = persistedPhaseValue(value);
+  const payloadDigest = mechanicalPhasePayloadDigest(persisted);
+  writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...persisted }, null, 2)}\n`);
   renameSync(temp, path);
   const reread = parseArtifact(readFileSync(path, "utf8"), expected);
-  if (!equivalent(value, { findings: reread.findings, scope: reread.scope })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
+  if (!equivalent(value, { findings: reread.findings, scope: reread.scope, ...(reread.producers === undefined ? {} : { producers: reread.producers }) })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
   cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`);
   return { phase, ...value, durationMs: Date.now() - started, cache: status, reason: hit ? "forced-cold result matched cached artifact" : `no complete artifact for this content address; recomputed${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`, key };

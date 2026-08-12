@@ -21,9 +21,6 @@
 // comparison, not that authorization is absent from a wrapper it can't see (same posture as
 // src/scan/bola-owner.ts, the Supabase-scoped sibling of this class).
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
@@ -31,8 +28,6 @@ import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
 import { mechanicalFinding } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
-
 const READ_BY_ID_FN = /^(find|get|fetch|load)[A-Za-z0-9_]*By(Id|Pk)$/i;
 const REQ_IDENTITY_PATTERN = /^(req|request)\.(user|session\.user)\b/;
 const REQ_SOURCE_PROP = new Set(["params", "query"]);
@@ -161,18 +156,4 @@ export function detectPgIdorFindings(files: SourceInput[]): Finding[] {
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    if (isDirectory) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
-export function scanPgIdor(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectPgIdorFindings(files);
 }

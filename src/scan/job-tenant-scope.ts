@@ -18,7 +18,7 @@ import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
 import { collectServiceClientNames, isServiceRooted, OWNERSHIP_COLUMN } from "../detectors/owner-id.js";
 import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 // Background-job paths, by conventional location. `src/inngest`, `src/jobs`, and the bare
 // `inngest`/`jobs`/`queues`/`workers` segments cover the common Inngest/queue/worker layouts;
@@ -229,8 +229,4 @@ export function jobTenantScopeScannedFiles(files: readonly SourceInput[]): Sourc
 
 export function detectJobTenantScopeFindings(files: SourceInput[]): Finding[] {
   return [...jobTenantScopeScannedFiles(files).flatMap((f) => detectFile(f.path, parse(f.path, f.text))), ...jobPathScopeRow(files)];
-}
-
-export function scanJobTenantScope(projectDir: string): Finding[] {
-  return detectJobTenantScopeFindings(walkSourceFiles(projectDir));
 }

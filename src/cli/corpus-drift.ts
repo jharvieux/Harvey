@@ -59,6 +59,7 @@ import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFl
 import { buildQuickScanReport } from "../quick-scan.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
+import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
 import { binaryVersion, digestFiles, digestParts, resolveGitTree } from "../scan/mechanical-phase-cache.js";
 import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
@@ -414,6 +415,7 @@ const rows: Row[] = [];
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
 // as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
 const findingsBySlug: Record<string, Finding[]> = {};
+const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
@@ -589,6 +591,7 @@ for (const target of targets) {
         }) : undefined,
       });
       const mechanical = mechanicalRun.findings;
+      detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
       for (const phase of mechanicalRun.phases) {
         const name = `mechanical:${phase.phase}`;
         (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
@@ -664,7 +667,7 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 // #1564: `findings` alongside `rows` so THIS run's own --json output can serve as a
 // FUTURE run's --baseline-findings — no separate artifact, no second scan, just the same data this
 // run already computed, kept instead of discarded.
-if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug }, null, 2)}\n`);
+if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug, detectors: detectorRecordsBySlug }, null, 2)}\n`);
 
 // #1485 — the manifest's declared false-positive FLOORS, checked here as well as in the unit suite,
 // because this is the job that watches the baselines move. A floor that starts producing graded rows

@@ -39,7 +39,6 @@ import {
   type SemgrepFamilyRecord,
 } from "./semgrep-family-cache.js";
 
-export { canonicalizeSemgrepOutput } from "./semgrep-family-cache.js";
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
 // `<batch>.yml` here (no shared file → conflict-free parallel batches).

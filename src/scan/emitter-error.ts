@@ -13,7 +13,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 function errorArgLiteral(call: ts.CallExpression): boolean {
   const first = call.arguments[0];
@@ -58,8 +58,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectEmitterUnhandledErrorFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanEmitterUnhandledError(projectDir: string): Finding[] {
-  return detectEmitterUnhandledErrorFindings(walkSourceFiles(projectDir));
 }

@@ -2,6 +2,7 @@
 // source parsing, directive/location helpers, and call-chain walking. Extracted from
 // app-router.ts when perf-code.ts (M7 code layer, #170) became a second consumer.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import ts from "typescript";
 
 export interface SourceInput {
@@ -21,7 +22,15 @@ function isTsxPath(path: string): boolean {
   return /\.([jt]sx|[cm]?js)$/.test(path);
 }
 
-export function parse(path: string, text: string): ts.SourceFile {
+export interface CachedSourceFile {
+  text: string;
+  sourceFile: ts.SourceFile;
+  onHit?: () => void;
+}
+
+const parseCache = new AsyncLocalStorage<ReadonlyMap<string, CachedSourceFile>>();
+
+export function parseFresh(path: string, text: string): ts.SourceFile {
   return ts.createSourceFile(
     path,
     text,
@@ -29,6 +38,19 @@ export function parse(path: string, text: string): ts.SourceFile {
     /* setParentNodes */ true,
     isTsxPath(path) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
+}
+
+export function parse(path: string, text: string): ts.SourceFile {
+  const cached = parseCache.getStore()?.get(path);
+  if (cached?.text === text) {
+    cached.onHit?.();
+    return cached.sourceFile;
+  }
+  return parseFresh(path, text);
+}
+
+export function withSourceParseCache<T>(cache: ReadonlyMap<string, CachedSourceFile>, run: () => T): T {
+  return parseCache.run(cache, run);
 }
 
 export function leadingDirective(sf: ts.SourceFile): "use client" | "use server" | undefined {

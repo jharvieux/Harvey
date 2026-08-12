@@ -66,6 +66,27 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect({ findings: warm.findings, scope: warm.scope }).toEqual({ findings: cold.findings, scope: cold.scope });
   });
 
+  it("persists the producer census deterministically and restores cache-hit status", async () => {
+    const cache = options();
+    const value = {
+      findings: [finding("owned-finding")],
+      scope: { unitsExamined: 1_000, description: "faithful large source fixture" },
+      producers: [{ detector: "owned-producer", phase: "structural-ast" as const, order: 10, module: "M1" as const, unitsExamined: 1_000, findings: 1, durationMs: 12.5, status: "ran" as const }],
+    };
+    const cold = await executeMechanicalPhase("structural-ast", cache, () => value);
+    const artifact = join(cache.dir, "structural-ast", `${cold.key}.json`);
+    expect(JSON.parse(readFileSync(artifact, "utf8")).producers).toEqual([
+      expect.objectContaining({ detector: "owned-producer", durationMs: 0, status: "ran" }),
+    ]);
+
+    const execute = vi.fn(() => value);
+    const warm = await executeMechanicalPhase("structural-ast", cache, execute);
+    expect(execute).not.toHaveBeenCalled();
+    expect(warm.producers).toEqual([
+      expect.objectContaining({ detector: "owned-producer", durationMs: 0, status: "cached" }),
+    ]);
+  });
+
   it("rejects a corrupt artifact, recomputes it, and emits a visible reason", async () => {
     const events: string[] = [];
     const cache = options({ onEvent: (message) => events.push(message) });

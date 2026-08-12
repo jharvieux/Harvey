@@ -25,8 +25,9 @@ import type { TargetFramework } from "./framework-detect.js";
 import type { SourceInput } from "../detectors/app-router.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
-import { scanBolaOwner } from "./bola-owner.js";
-import { scanCounterRace } from "./counter-race.js";
+import { detectBolaOwnerFindings } from "./bola-owner.js";
+import { detectCounterRaceFindings } from "./counter-race.js";
+import { walkSourceFiles } from "./common.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
@@ -850,7 +851,8 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
     "pages/api/preview/enable.js",
     "pages/api/preview/enable-safe.js",
   ].map(read);
-  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...scanCounterRace(CAL), ...scanBolaOwner(CAL)];
+  const mechanicalFixtures = walkSourceFiles(CAL);
+  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...detectCounterRaceFindings(mechanicalFixtures), ...detectBolaOwnerFindings(mechanicalFixtures)];
 
   const graduated = [
     ...b17RaceUnscopedEntries,
@@ -877,7 +879,7 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
   });
 
   it("the counter-race AST fires once (the positive) and stays silent on the atomic RPC sibling", () => {
-    const race = scanCounterRace(CAL).filter((f) => f.taxonomy === "Non-atomic read-modify-write race condition");
+    const race = detectCounterRaceFindings(mechanicalFixtures).filter((f) => f.taxonomy === "Non-atomic read-modify-write race condition");
     expect(race).toHaveLength(1);
     expect(race[0]?.location).toContain("counter/increment.js");
   });
@@ -887,7 +889,7 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
     // the no-session handlers (order/get.js P-IDOR-PARAM, admin/dashboard.js P-MW-SOLE-AUTHZ —
     // whose by-design LLM-tier status this pass must not swallow), and the bare-id IDOR shape
     // (order/scoped.js) are all non-hits, measured, not assumed.
-    const bola = scanBolaOwner(CAL);
+    const bola = detectBolaOwnerFindings(mechanicalFixtures);
     expect(bola).toHaveLength(1);
     expect(bola[0]?.location).toContain("pages/api/billing/invoice.js");
     expect(bola[0]?.precisionTier).toBe("review");
