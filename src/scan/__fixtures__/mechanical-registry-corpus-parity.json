@@ -18,28 +18,10 @@
     "engineAmendmentPatchSha256": "3d16a0c4f4a8ce774c9d438e2667fe6ec7376425183114c25e04fda476b8cb02"
   },
   "migration": {
-    "artifactSha256": "527df4018aa0ddf2768c68bd97bbcfbbe18ce12c80cd9ba28cfc43d8092f5464",
-    "engineCommit": "86eaefadbf84de42dddc3618067ded19d96fbb4e",
+    "artifactSha256": "868c8a2ad4baa7a539a21c1deff740aa2afbac47d39dd8ff82f46d48f6012b5a",
+    "engineCommit": "18bbb40e77b235fbea9df980e7d0ce0cc6965fa1",
     "orchestrator": "registry",
-    "engineAmendmentPaths": [
-      "src/cli/corpus-advisory-snapshot.ts",
-      "src/cli/corpus-drift.ts",
-      "src/cli/validate-corpus-mechanical-parity.ts",
-      "src/corpus-advisory-snapshot.test.ts",
-      "src/corpus-mechanical-parity.test.ts",
-      "src/corpus-mechanical-parity.ts",
-      "src/detectors/common.ts",
-      "src/scan/__fixtures__/corpus-advisories/manifest.json",
-      "src/scan/__fixtures__/corpus-advisories/proposit.osv.json.gz",
-      "src/scan/mechanical-configuration-registry.ts",
-      "src/scan/mechanical-context.test.ts",
-      "src/scan/mechanical-context.ts",
-      "src/scan/mechanical-engine-registry.ts",
-      "src/scan/mechanical-wiring.test.ts",
-      "src/scan/supabase-static.test.ts",
-      "src/scan/supply-chain.test.ts"
-    ],
-    "engineAmendmentPatchSha256": "5b1e9e91a68d58e1a3579c9a6c69a9b65f5c9aba42eaa8f9a30ce1110d2bb540"
+    "engineAmendmentPaths": []
   },
   "externalState": {
     "boxyhq": {
