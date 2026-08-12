@@ -61,9 +61,11 @@ on:
   pull_request:
     paths:
       - "src/scan/m8-corpus.ts"
+      - "src/scan/m8-corpus-artifacts.ts"
       - "src/scan/external-corpus.ts"
       - "src/mutation-scan.ts"
       - "src/cli/mutation-scan.ts"
+      - "src/cli/corpus-m8.ts"
       - "src/cli/corpus-drift.ts"
       - "src/cli/corpus-pins.ts"
       - "src/scan/corpus-clone.ts"

@@ -14,6 +14,11 @@ import { buildM8CorpusPlan } from "./m8-corpus-artifacts.js";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "harvey-m8-corpus-test-"));
 
+function pullRequestPaths(workflow: string): string[] {
+  const block = workflow.match(/pull_request:\n\s+paths:\n((?:\s+- [^\n]+\n)+)/)?.[1] ?? "";
+  return [...block.matchAll(/- "([^"]+)"/g)].map((match) => match[1]!);
+}
+
 describe("materializeM8Config (#1496/#1693)", () => {
   it("writes every extraFiles entry into the clone, creating the directories it needs", () => {
     const dir = scratch();
@@ -79,6 +84,17 @@ describe("materializeM8Config (#1496/#1693)", () => {
 // Nothing structural stops that recurring for the next target, so this is the gate that does.
 describe("corpus-m8.yml scores every target that has an M8 config (#1692)", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/corpus-m8.yml", import.meta.url), "utf8");
+
+  it("runs when either production half of the sharded runner changes (#1877 acceptance)", () => {
+    expect(pullRequestPaths(workflow)).toEqual(expect.arrayContaining([
+      "src/cli/corpus-m8.ts",
+      "src/scan/m8-corpus-artifacts.ts",
+    ]));
+
+    // Negative control: a step mentions the CLI outside the extracted pull_request.paths block.
+    const mentionOnly = 'pull_request:\n  paths:\n    - "docs/**"\njobs:\n  run:\n    steps:\n      - run: pnpm exec tsx src/cli/corpus-m8.ts plan\n';
+    expect(pullRequestPaths(mentionOnly)).not.toContain("src/cli/corpus-m8.ts");
+  });
 
   it("derives one target matrix from M8_CORPUS_CONFIGS and consumes each matrix target once", () => {
     expect(workflow.match(/corpus-m8\.ts plan/g)).toHaveLength(1);

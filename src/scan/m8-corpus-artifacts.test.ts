@@ -58,6 +58,29 @@ describe("M8 corpus plan and aggregate (#1874)", () => {
     );
   });
 
+  it("preserves the hosted pre-shard mutation score byte-for-byte through parse and aggregate", () => {
+    // Run 31549148351's accepted artifact is deliberately used verbatim. Inbox Zero's timeout
+    // count can wobble without its killed/valid baseline moving, so 75.2% and 80/125 are distinct
+    // measurements. Recomputing or rounding this row to the manifest's 76% would rewrite history.
+    const hostedDetail = "MEASURED 75.2% (80/125 killed) over utils/similarity-score.ts — a scoped subset, NOT a whole-repo coverage claim — within the baseline's band; RECORDED baseline is 76% (80/125 killed)";
+    const inputs = plan.configured.map((target) => {
+      const entry = result(target);
+      if (target === "inbox-zero") entry.scorecard!.rows[0] = {
+        slug: target,
+        check: "M8 mutation baseline",
+        pass: true,
+        detail: hostedDetail,
+      };
+      return parseM8TargetResult(JSON.stringify(entry), `${target}/result.json`);
+    });
+
+    const report = aggregateM8TargetResults(plan, inputs);
+    const inboxZero = report.targets.find((target) => target.target === "inbox-zero");
+    expect(inboxZero?.scorecard?.rows[0]).toMatchObject({ detail: hostedDetail });
+    expect(JSON.stringify(inboxZero?.scorecard)).toContain("MEASURED 75.2%");
+    expect(JSON.stringify(inboxZero?.scorecard)).not.toContain("matches baseline exactly: 76%");
+  });
+
   it("waits for all results, then makes one failed target fail the aggregate", () => {
     const inputs = plan.configured.map((target) => result(target, target === "proposit" ? "failed" : "passed"));
     const report = aggregateM8TargetResults(plan, inputs);
