@@ -82,7 +82,10 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
   const cacheAllowed = options.scanner !== "quality-scan" || (qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key);
   if (!options.cache || !cacheAllowed) {
     const value = execute();
-    const reason = value.failure ?? (options.scanner === "quality-scan" ? QUALITY_FRESH_REASON : "corpus scanner cache disabled");
+    const qualityFreshReason = qualityPreparation
+      ? `quality-scan executes fresh because ${qualityPreparation.reason}`
+      : QUALITY_FRESH_REASON;
+    const reason = value.failure ?? (options.scanner === "quality-scan" ? qualityFreshReason : "corpus scanner cache disabled");
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
     return { findings: value.findings };
   }

@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesSafe } from "./fs-walk.js";
 import { detectPackageManager, type PackageManager } from "./package-manager.js";
+import { expandGlob, parseWorkspaceGlobs } from "./workspaces.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 2;
 
@@ -83,7 +85,141 @@ const INSTALL_INPUT_NAMES = new Set([
 
 const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "coverage", ".yarn-cache"]);
 const INSTALL_LIFECYCLE_HOOKS = new Set(["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]);
-const EXECUTABLE_KNIP_CONFIGS = new Set(["knip.ts", "knip.js", "knip.config.ts", "knip.config.js"]);
+
+interface KnipExecutableConfigDiscovery {
+  executable: string[];
+  unknown: string[];
+}
+
+// Knip's provider catalog is the authority on which framework/tool configuration files it may
+// load. Keeping another filename list here is unsafe: that is exactly how vite.config.js escaped
+// the first quality-cache guard. The trusted child imports Harvey's installed Knip version, asks
+// every resolver plugin for its real config globs, adds static per-scope Knip overrides, and uses
+// Knip's own glob implementation to resolve them. A future Knip layout or plugin-shape enumeration
+// failure is returned to the caller, which records the uncertainty and keeps quality fresh.
+const KNIP_CONFIG_DISCOVERY_SCRIPT = String.raw`
+import { existsSync, readFileSync } from "node:fs";
+import { extname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const dist = process.env.HARVEY_KNIP_DIST;
+const requestText = process.env.HARVEY_KNIP_CONFIG_REQUEST;
+if (!dist || !requestText) throw new Error("missing Knip config discovery request");
+const requestedRoots = JSON.parse(requestText);
+const [{ PluginEntries }, { KNIP_CONFIG_LOCATIONS }, { _dirGlob, _glob }, { parseJSONC }] = await Promise.all([
+  import(pathToFileURL(join(dist, "plugins.js")).href),
+  import(pathToFileURL(join(dist, "constants.js")).href),
+  import(pathToFileURL(join(dist, "util", "glob.js")).href),
+  import(pathToFileURL(join(dist, "util", "fs.js")).href),
+]);
+const executableExtension = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]);
+const resolverPlugins = new Map(PluginEntries.filter(([, plugin]) => typeof plugin.resolveConfig === "function"));
+const roots = new Set(requestedRoots.map((root) => resolve(root)));
+const unknown = [];
+const staticConfigs = new Map();
+
+const readStaticConfig = (root) => {
+  const configs = [];
+  for (const name of ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc"]) {
+    const path = join(root, name);
+    if (!existsSync(path)) continue;
+    try {
+      const text = readFileSync(path, "utf8");
+      configs.push(name.endsWith("jsonc") ? parseJSONC(path, text) : JSON.parse(text));
+    } catch (error) {
+      unknown.push(relative(requestedRoots[0], path) + " could not be parsed: " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  const manifestPath = join(root, "package.json");
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (manifest && typeof manifest === "object" && manifest.knip !== undefined) configs.push(manifest.knip);
+    } catch (error) {
+      unknown.push(relative(requestedRoots[0], manifestPath) + " could not be parsed while enumerating Knip inputs: " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  return configs;
+};
+
+// Static Knip configuration may declare Knip-only workspaces beyond the package-manager roots.
+// Add those scopes before resolving provider defaults so their local configs remain visible.
+for (;;) {
+  let added = false;
+  for (const root of [...roots]) {
+    const configs = staticConfigs.get(root) ?? readStaticConfig(root);
+    staticConfigs.set(root, configs);
+    for (const config of configs) {
+      const workspacePatterns = config && typeof config === "object" && config.workspaces && typeof config.workspaces === "object"
+        ? Object.keys(config.workspaces)
+        : [];
+      if (workspacePatterns.length === 0) continue;
+      try {
+        for (const workspace of await _dirGlob({ cwd: root, patterns: workspacePatterns, gitignore: false })) {
+          const absolute = resolve(root, workspace);
+          if (!roots.has(absolute)) {
+            roots.add(absolute);
+            added = true;
+          }
+        }
+      } catch (error) {
+        unknown.push(relative(requestedRoots[0], root) + " has workspace config globs Knip input discovery could not resolve: " + (error instanceof Error ? error.message : String(error)));
+      }
+    }
+  }
+  if (!added) break;
+}
+
+const customPatterns = (value, patterns, trail = "knip config") => {
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value)) {
+    if (resolverPlugins.has(key) && item !== true && item !== false && item !== null) {
+      const configured = typeof item === "string" || Array.isArray(item)
+        ? item
+        : typeof item === "object" && "config" in item
+          ? item.config
+          : undefined;
+      if (configured !== undefined && configured !== null) {
+        const values = Array.isArray(configured) ? configured : [configured];
+        if (values.every((entry) => typeof entry === "string")) patterns.push(...values);
+        else unknown.push(trail + " has a non-string " + key + ".config pattern");
+      }
+    }
+    customPatterns(item, patterns, trail + "." + key);
+  }
+};
+
+const executable = new Set();
+for (const root of roots) {
+  const patterns = [];
+  for (const [name, plugin] of resolverPlugins) {
+    try {
+      const configured = typeof plugin.config === "function" ? plugin.config({ cwd: root }) : plugin.config;
+      if (configured === undefined || configured === null) continue;
+      if (!Array.isArray(configured) || !configured.every((entry) => typeof entry === "string")) {
+        unknown.push(name + " exposes an unrecognized Knip config pattern shape");
+        continue;
+      }
+      patterns.push(...configured);
+    } catch (error) {
+      unknown.push(name + " config pattern discovery failed: " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  for (const config of staticConfigs.get(root) ?? []) customPatterns(config, patterns);
+  try {
+    for (const path of await _glob({ cwd: root, dir: root, patterns: [...new Set(patterns)], gitignore: false, label: "Knip executable config discovery" })) {
+      if (executableExtension.has(extname(path))) executable.add(resolve(path));
+    }
+  } catch (error) {
+    unknown.push(relative(requestedRoots[0], root) + " provider config globs could not be resolved: " + (error instanceof Error ? error.message : String(error)));
+  }
+  for (const name of KNIP_CONFIG_LOCATIONS) {
+    const path = join(root, name);
+    if (existsSync(path) && executableExtension.has(extname(path))) executable.add(resolve(path));
+  }
+}
+process.stdout.write(JSON.stringify({ executable: [...executable].sort(), unknown: [...new Set(unknown)].sort() }));
+`;
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -123,9 +259,65 @@ function preparationEnvironmentIdentity(environment: NodeJS.ProcessEnv): Record<
   };
 }
 
+function qualityWorkspaceRoots(root: string): string[] {
+  const roots = new Set([resolve(root)]);
+  try {
+    for (const pattern of parseWorkspaceGlobs(root).globs) {
+      if (pattern.startsWith("!")) continue;
+      for (const candidate of expandGlob(root, pattern)) {
+        if (existsSync(join(candidate, "package.json"))) roots.add(resolve(candidate));
+      }
+    }
+  } catch {
+    // The trusted Knip-catalog child will still inspect the target root. A malformed package
+    // manifest is separately returned as an unknown input-set reason, keeping quality fresh.
+  }
+  return [...roots].sort();
+}
+
+function knipDiscoveryFailure(error: unknown): string {
+  if (!error || typeof error !== "object") return String(error);
+  const failure = error as { code?: string; signal?: string; status?: number; stderr?: Buffer | string };
+  const stderr = failure.stderr?.toString().trim();
+  if (stderr) {
+    const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
+    return lines.slice(-3).join(" ").slice(0, 600);
+  }
+  return `discovery process failed (status ${failure.status ?? "unknown"}, signal ${failure.signal ?? "none"}, code ${failure.code ?? "none"})`;
+}
+
+function discoverKnipExecutableConfigs(root: string): KnipExecutableConfigDiscovery {
+  try {
+    const require = createRequire(import.meta.url);
+    const knipDist = dirname(require.resolve("knip"));
+    const stdout = execFileSync(process.execPath, ["--input-type=module", "--eval", KNIP_CONFIG_DISCOVERY_SCRIPT], {
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024 * 8,
+      env: {
+        ...process.env,
+        HARVEY_KNIP_DIST: knipDist,
+        HARVEY_KNIP_CONFIG_REQUEST: JSON.stringify(qualityWorkspaceRoots(root)),
+      },
+    });
+    const parsed = JSON.parse(stdout) as Partial<KnipExecutableConfigDiscovery>;
+    if (!Array.isArray(parsed.executable) || !parsed.executable.every((path) => typeof path === "string")) {
+      throw new Error("discovery returned no executable-input list");
+    }
+    if (!Array.isArray(parsed.unknown) || !parsed.unknown.every((reason) => typeof reason === "string")) {
+      throw new Error("discovery returned no unknown-input list");
+    }
+    return { executable: parsed.executable, unknown: parsed.unknown };
+  } catch (error) {
+    return {
+      executable: [],
+      unknown: [`Knip's installed provider/config catalog could not be enumerated (${knipDiscoveryFailure(error)})`],
+    };
+  }
+}
+
 function qualityNonCacheableReason(root: string): string | undefined {
   const lifecycle: string[] = [];
-  const executableConfigs: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of readEntriesSafe(dir).entries) {
       if (entry.isDirectory) {
@@ -133,7 +325,6 @@ function qualityNonCacheableReason(root: string): string | undefined {
         continue;
       }
       const rel = relative(root, entry.path).replaceAll("\\", "/");
-      if (EXECUTABLE_KNIP_CONFIGS.has(entry.name)) executableConfigs.push(rel);
       if (entry.name !== "package.json") continue;
       try {
         const pkg = JSON.parse(readFileSync(entry.path, "utf8")) as { scripts?: Record<string, unknown> };
@@ -146,9 +337,12 @@ function qualityNonCacheableReason(root: string): string | undefined {
     }
   };
   walk(root);
+  const knipInputs = discoverKnipExecutableConfigs(root);
+  const executableConfigs = knipInputs.executable.map((path) => relative(root, path).replaceAll("\\", "/"));
   const reasons = [
     ...(lifecycle.length > 0 ? [`install lifecycle scripts can observe time/network state: ${lifecycle.sort().join(", ")}`] : []),
-    ...(executableConfigs.length > 0 ? [`executable Knip config can observe time/network state: ${executableConfigs.sort().join(", ")}`] : []),
+    ...(executableConfigs.length > 0 ? [`executable framework/plugin configuration Knip may load can observe time/network/unkeyed state: ${executableConfigs.sort().join(", ")}`] : []),
+    ...(knipInputs.unknown.length > 0 ? [`Knip's complete executable configuration input set could not be proven: ${knipInputs.unknown.join("; ")}`] : []),
   ];
   return reasons.length > 0 ? reasons.join("; ") : undefined;
 }

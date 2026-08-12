@@ -137,10 +137,25 @@ version, Node/ABI, platform/architecture, install flags, and every value in the 
 environment (`CI`, `HOME`, `PATH`, and `TMPDIR`). A hit still performs a frozen offline
 materialization into the disposable clone. Corrupt/incomplete receipts or stores reject visibly
 and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
-to emit M5-00 without invoking Knip. A target lifecycle script or executable Knip configuration can
-observe time or network state that the receipt does not reproduce, so the dependency store may
-still hit but the quality result runs fresh with the reason recorded. npm, pnpm, and Yarn are all
-exercised through their real clients from two checkout paths.
+to emit M5-00 without invoking Knip. The receipt proves dependency materialization; it does not make
+arbitrary target code reproducible. Install lifecycle scripts and executable configuration can read
+time, network, or file contents outside the keyed tree even when every named environment value is
+unchanged.
+
+Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
+framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
+every plugin that loads configuration (`resolveConfig`), resolves that catalog's own config globs
+with Knip's glob implementation across the package-manager and static Knip workspace roots, and
+adds executable custom paths declared by `knip.json`, `knip.jsonc`, their dot-prefixed forms, or
+`package.json#knip`. Knip's own executable control configs are included too. A matching
+`.js`/`.jsx`/`.mjs`/`.cjs`/`.ts`/`.tsx`/`.mts`/`.cts` input makes quality non-cacheable; so does any
+catalog, workspace, static-config, or glob shape whose enumeration fails. The preparation receipt
+and frozen offline install may still hit, but quality executes fresh and the scanner event records
+the concrete paths or uncertainty. Static JSON/JSONC/YAML/TOML configuration remains cacheable
+when it names no executable input: its tracked bytes are already bound by the pinned target tree.
+This is intentionally fail-safe for new Knip plugins while retaining caching for targets proven
+free of executable/dynamic configuration. npm, pnpm, and Yarn are all exercised through their real
+clients from two checkout paths.
 
 pnpm is forced to `enableGlobalVirtualStore=false`. pnpm 10/11 still writes a versioned `projects`
 symlink to the current checkout, and a target can otherwise produce a versioned `links` installed
@@ -202,4 +217,10 @@ The quality identity is separately falsified by changing its preparation key and
 environment value. A physical copy's real `src/quality-scan.ts` helper is mutated to prove closure
 discovery moves only quality's implementation identity. The incomplete-preparation control proves
 both directions: an incomplete receipt routes around the partial provider and emits M5-00; the
-same provider executes when preparation is complete.
+same provider executes when preparation is complete. The executable-config controls cover the live
+Knip catalog's Vite default, a non-Vite provider in a declared workspace, a custom executable path
+named only by static Knip configuration, an unenumerable configuration, and a static JSON/JSONC
+direction that remains cacheable. The heavy Vite falsifier installs a local npm package named
+`vite`, keeps a static `knip.json`, and has `vite.config.js` choose its library entry from an
+external file under an unchanged `HOME`: preparation reports miss then hit/hit, all three quality
+runs are fresh, and changing only that external file moves M5-01 from `src/b.ts` to `src/a.ts`.

@@ -169,7 +169,7 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     }
   });
 
-  it("keeps quality results fresh when target code can observe unkeyed external state", () => {
+  it("keeps quality results fresh for executable Knip control config and install hooks", () => {
     const target = fixture("npm");
     writeFileSync(join(target, "knip.js"), "module.exports = { entry: [process.env.DYNAMIC_ENTRY] };\n");
     const pkg = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as Record<string, unknown>;
@@ -189,7 +189,94 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: false });
     expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.key });
     expect(warm.reason).toContain("install lifecycle scripts can observe time/network state");
-    expect(warm.reason).toContain("executable Knip config can observe time/network state");
+    expect(warm.reason).toContain("executable framework/plugin configuration Knip may load can observe time/network/unkeyed state");
+    expect(warm.reason).toContain("knip.js");
+  });
+
+  it.each([
+    {
+      label: "Vite's default provider config",
+      configure: (target: string) => writeFileSync(join(target, "vite.config.js"), "module.exports = { build: { lib: { entry: process.env.ENTRY } } };\n"),
+      expected: "vite.config.js",
+    },
+    {
+      label: "a non-Vite provider config in a declared workspace",
+      configure: (target: string) => {
+        const pkg = JSON.parse(readFileSync(join(target, "package.json"), "utf8")) as Record<string, unknown>;
+        writeFileSync(join(target, "package.json"), JSON.stringify({ ...pkg, workspaces: ["packages/*"] }));
+        mkdirSync(join(target, "packages", "app"), { recursive: true });
+        writeFileSync(join(target, "packages", "app", "package.json"), '{"name":"workspace-app","private":true}\n');
+        writeFileSync(join(target, "packages", "app", "jest.config.cjs"), "module.exports = () => ({ roots: [process.env.HOME] });\n");
+      },
+      expected: "packages/app/jest.config.cjs",
+    },
+    {
+      label: "a custom executable provider input named only by static Knip config",
+      configure: (target: string) => {
+        mkdirSync(join(target, "tooling"));
+        writeFileSync(join(target, "tooling", "runtime.ts"), "export default { entry: [process.env.ENTRY] };\n");
+        writeFileSync(join(target, "knip.json"), JSON.stringify({ vite: { config: ["tooling/runtime.ts"] } }));
+      },
+      expected: "tooling/runtime.ts",
+    },
+  ])("marks quality non-cacheable for $label", ({ configure, expected }) => {
+    const target = fixture("npm");
+    configure(target);
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-provider-config-"));
+    dirs.push(cacheDir);
+    const options = {
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    };
+    const cold = prepareCorpusDependencies(options);
+    const warm = prepareCorpusDependencies(options);
+    expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.key });
+    expect(warm.reason).toContain("executable framework/plugin configuration Knip may load can observe time/network/unkeyed state");
+    expect(warm.reason).toContain(expected);
+  });
+
+  it("fails safe when Knip's executable input set cannot be proven", () => {
+    const target = fixture("npm");
+    writeFileSync(join(target, "knip.json"), "{ this is not static JSON }\n");
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-unknown-config-"));
+    dirs.push(cacheDir);
+    const result = prepareCorpusDependencies({
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    });
+    expect(result).toMatchObject({ status: "miss", complete: true, cacheable: false });
+    expect(result.reason).toContain("Knip's complete executable configuration input set could not be proven");
+    expect(result.reason).toContain("knip.json could not be parsed");
+  });
+
+  it("keeps benign static Knip and provider configuration cacheable", () => {
+    const target = fixture("npm");
+    writeFileSync(join(target, "knip.jsonc"), '{\n  // Static paths are content-addressed by the target tree.\n  "entry": ["src/index.ts"]\n}\n');
+    writeFileSync(join(target, ".eslintrc.json"), '{"extends":[]}\n');
+    writeFileSync(join(target, "tsconfig.json"), '{"compilerOptions":{"strict":true}}\n');
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-dependency-static-config-"));
+    dirs.push(cacheDir);
+    const options = {
+      targetDir: target,
+      cacheDir,
+      targetRevision: "pin",
+      targetTree: "tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: vi.fn(),
+    };
+    const cold = prepareCorpusDependencies(options);
+    const warm = prepareCorpusDependencies(options);
+    expect(cold).toMatchObject({ status: "miss", complete: true, cacheable: true });
+    expect(warm).toMatchObject({ status: "hit", complete: true, cacheable: true, key: cold.key });
   });
 
   it("rejects a corrupt receipt visibly and performs a clean install", () => {

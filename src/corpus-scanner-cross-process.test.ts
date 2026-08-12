@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
 
 const execFileAsync = promisify(execFile);
@@ -135,6 +136,85 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(homeStable.preparation).toBe("hit");
     expect(homeStable.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
   }, 60_000);
+
+  it("keeps a real npm-installed Vite provider fresh when its config reads unkeyed state", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-vite-quality-cache-"));
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    const stateHome = join(fixture, "home");
+    dirs.push(fixture);
+    mkdirSync(join(targetDir, "src"), { recursive: true });
+    mkdirSync(join(targetDir, "provider"), { recursive: true });
+    mkdirSync(stateHome);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"vite-cache-falsifier","private":true,"devDependencies":{"vite":"file:provider"}}\n');
+    writeFileSync(join(targetDir, "provider", "package.json"), '{"name":"vite","version":"1.0.0","main":"index.js"}\n');
+    writeFileSync(join(targetDir, "provider", "index.js"), "module.exports = {};\n");
+    writeFileSync(join(targetDir, "knip.json"), '{"project":["src/**/*.ts"]}\n');
+    writeFileSync(join(targetDir, "src", "a.ts"), "export const a = true;\n");
+    writeFileSync(join(targetDir, "src", "b.ts"), "export const b = true;\n");
+    writeFileSync(join(targetDir, "vite.config.js"), [
+      'const { readFileSync } = require("node:fs");',
+      'const { join } = require("node:path");',
+      'const selected = readFileSync(join(process.env.HOME, "vite-entry.txt"), "utf8").trim();',
+      'module.exports = { build: { lib: { entry: `src/${selected}.ts` } } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(stateHome, "vite-entry.txt"), "a\n");
+    execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir, stdio: "ignore" });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = stateHome;
+    try {
+      const run = async () => {
+        const events: string[] = [];
+        const preparation = prepareCorpusDependencies({
+          targetDir,
+          cacheDir,
+          targetRevision: "vite-provider-pin",
+          targetTree: "vite-provider-tree",
+          onEvent: (message) => events.push(message),
+        });
+        const result = await runCorpusScanner({
+          repoRoot: process.cwd(),
+          targetDir,
+          targetConfig: "real local Vite provider",
+          script: "quality-scan",
+          scanner: "quality-scan",
+          scriptArgs: [targetDir],
+          cache: {
+            dir: cacheDir,
+            mode: "read-write",
+            targetRevision: "vite-provider-pin",
+            targetTree: "vite-provider-tree",
+            dependencyPreparation: preparation,
+          },
+          onEvent: (message) => events.push(message),
+        });
+        return {
+          preparation,
+          cache: result.cacheRecord?.cache ?? "fresh",
+          unused: result.findings.find((finding) => finding.id === "M5-01")?.location,
+          events,
+        };
+      };
+
+      const cold = await run();
+      const warm = await run();
+      writeFileSync(join(stateHome, "vite-entry.txt"), "b\n");
+      const changed = await run();
+
+      expect([cold.unused, warm.unused, changed.unused]).toEqual(["src/b.ts", "src/b.ts", "src/a.ts"]);
+      expect([cold.cache, warm.cache, changed.cache]).toEqual(["fresh", "fresh", "fresh"]);
+      expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
+      expect(warm.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.events).toContainEqual(expect.stringContaining("vite.config.js"));
+      expect(changed.events).toContainEqual(expect.stringContaining("quality-scan executes fresh because validated receipt and offline materialization; quality-scan remains non-cacheable"));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  }, 30_000);
 
   it("forces an M5 gap without executing a partial installed provider", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
