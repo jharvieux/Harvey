@@ -55,6 +55,9 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
             join(options.repoRoot, "src", "cli", "quality-scan.ts"),
             ...options.scriptArgs,
             ...(qualityPreparation?.complete === false ? ["--degraded-knip-reason", `dependency preparation incomplete: ${qualityPreparation.reason}`] : []),
+            ...(qualityPreparation?.complete === false && qualityPreparation.lockfileDigest === undefined
+              ? ["--degraded-knip-unresolved-dependency-surface"]
+              : []),
             "--out", out,
           ]
         : [options.script, ...options.scriptArgs, "--out", out];

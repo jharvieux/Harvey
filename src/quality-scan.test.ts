@@ -476,13 +476,12 @@ describe("knipToFindings", () => {
     expect(fileFinding?.impact).toBe("Entire file is unreferenced.");
   });
 
-  it("keeps an inferred unused file visible but informational when only the degraded source tier ran (#1871)", () => {
+  it("keeps an inferred unused file review-tier and countable when the source graph still supports it (#1871)", () => {
     const path = "src/dead.ts";
     const findings = knipToFindings(knipReport, {}, new Set([path]), new Set(), new Set([path]));
     const fileFinding = findings.find((f) => f.location === path);
-    expect(fileFinding).toMatchObject({ severity: "Info", confidence: "Review", precisionTier: "review" });
-    expect(fileFinding?.evidence).toContain("configuration and plugins were disabled");
-    expect(fileFinding?.fix).toContain("full Knip tier");
+    expect(fileFinding).toMatchObject({ severity: "Low", confidence: "Review", precisionTier: "review" });
+    expect(fileFinding?.evidence).toContain("Harvey-inferred entry points");
   });
 
   it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
@@ -573,7 +572,7 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
     expect(findings[0]?.fix).toContain("Install the target's dependencies");
   });
 
-  it("keeps degraded dependency candidates visible but informational until the full tier runs (#1871)", () => {
+  it("keeps manifest-only dependency candidates visible but informational until the full tier runs (#1871)", () => {
     const findings = knipToFindings(
       depReport,
       {},
@@ -582,7 +581,40 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
       new Set(["package.json"]),
     );
     expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review" && f.severity === "Info")).toBe(true);
-    expect(findings.every((f) => f.evidence.includes("reduced source tier"))).toBe(true);
+    expect(findings.every((f) => f.evidence.includes("no lockfile-backed resolved surface"))).toBe(true);
+  });
+
+  it.each([
+    { slug: "subscription-payments", degradedBy: "lockfile-backed install failure", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { slug: "cravab", degradedBy: "automatic committed-config load fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { slug: "mvp-boilerplate", degradedBy: "lockfile-backed install failure", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { slug: "rallly", degradedBy: "automatic workspace-config output fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { slug: "documenso", degradedBy: "automatic workspace-config output fallback", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { slug: "multi-tenant-starter", degradedBy: "no-lockfile install failure", files: 0, unresolvedDependencySurface: true, expectedCounted: 1 },
+  ])("preserves $slug's evidence-specific reduced-tier countability ($degradedBy)", ({ files, unresolvedDependencySurface, expectedCounted }) => {
+    const packagePath = "package.json";
+    const report: KnipReport = {
+      files: files ? ["src/dead.ts"] : [],
+      issues: [
+        { file: "src/live.ts", exports: [{ name: "deadExport", line: 2 }], types: [] },
+        {
+          file: packagePath,
+          exports: [],
+          types: [],
+          dependencies: [{ name: "runtime-package", line: 4 }],
+          devDependencies: [{ name: "build-package", line: 8 }],
+          binaries: [{ name: "build-cli" }],
+        },
+      ],
+    };
+    const inferredFiles = files ? new Set(["src/dead.ts"]) : new Set<string>();
+    const unresolvedDeps = new Set([packagePath]);
+    const manifestOnly = unresolvedDependencySurface ? new Set([packagePath]) : new Set<string>();
+    const findings = knipToFindings(report, {}, inferredFiles, unresolvedDeps, manifestOnly);
+    expect(findings.filter((finding) => finding.severity !== "Info")).toHaveLength(expectedCounted);
+    const packageRows = findings.filter((finding) => finding.location === packagePath);
+    expect(packageRows).toHaveLength(3);
+    expect(packageRows.every((finding) => finding.severity === (unresolvedDependencySurface ? "Info" : "Low"))).toBe(true);
   });
 });
 

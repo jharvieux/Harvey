@@ -656,11 +656,11 @@ export function knipToFindings(
   // #1050: the package.json paths whose scope ran without resolving the target's own config and
   // plugins. Their unused-dependency verdicts are review tier — see the dependency block below.
   unresolvedDepScopes: Set<string> = new Set(),
-  // #1871: paths produced by the explicit all-plugins-disabled source tier. Findings that depend
-  // on entry/config/plugin reachability remain visible, but are informational: this tier omitted
-  // the very inputs needed to support an actionable deletion verdict. Source-local facts such as
-  // unused value exports keep their normal confidence and severity.
-  degradedScopePaths: Set<string> = new Set(),
+  // #1871: package.json paths from a no-lockfile preparation failure. There is no installed or
+  // reproducibly resolved dependency surface, so package/config-dependent claims are visible but
+  // informational. A normal reduced retry or lockfile-backed failed install does not enter this
+  // set and retains the established M5 review-tier semantics.
+  unresolvedDependencySurfacePaths: Set<string> = new Set(),
 ): Finding[] {
   const findings: Finding[] = [];
   let n = 0;
@@ -678,8 +678,6 @@ export function knipToFindings(
     const lines = fileLineCounts[file];
     const securityPath = touchesSecurityPath(file);
     const inferred = inferredEntryFiles.has(file);
-    const degraded = degradedScopePaths.has(file);
-    const uncertain = inferred || degraded;
     const unreferenced = lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`;
     const securityImpact = securityPath
       ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
@@ -687,26 +685,20 @@ export function knipToFindings(
     findings.push({
       id: positionalId("M5", n),
       title: securityPath ? `Unused security-relevant file: ${file}` : `Unused file: ${file}`,
-      severity: degraded ? "Info" : securityPath ? "Medium" : "Low",
-      confidence: uncertain ? "Review" : "Confirmed",
+      severity: securityPath ? "Medium" : "Low",
+      confidence: inferred ? "Review" : "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: file,
       status: "Open",
-      evidence: uncertain
-        ? degraded
-          ? "knip: file is never imported given Harvey-inferred entry points while target configuration and plugins were disabled."
-          : "knip: file is never imported given Harvey-inferred entry points (target ships no knip config)."
+      evidence: inferred
+        ? "knip: file is never imported given Harvey-inferred entry points (target ships no knip config)."
         : "knip: file is never imported from any entry point.",
-      impact: uncertain
-        ? degraded
-          ? `${securityImpact} Unreachable only in the reduced source tier; target configuration and plugins were unavailable, so this is an informational review candidate, not confirmed dead code.`
-          : `${securityImpact} Unreachable given Harvey-inferred entry points — the target ships no knip config, so this is a review candidate, not confirmed dead code.`
+      impact: inferred
+        ? `${securityImpact} Unreachable given Harvey-inferred entry points — the target ships no knip config, so this is a review candidate, not confirmed dead code.`
         : securityImpact,
-      fix: uncertain
-        ? degraded
-          ? "Restore dependency preparation and re-run the full Knip tier before deciding whether this file is genuinely unreferenced."
-          : "Confirm the file isn't a dynamically-registered entry (route handler, plugin, config-referenced module) Harvey's inferred entry graph missed; if it's genuinely unreferenced, delete it."
+      fix: inferred
+        ? "Confirm the file isn't a dynamically-registered entry (route handler, plugin, config-referenced module) Harvey's inferred entry graph missed; if it's genuinely unreferenced, delete it."
         : "Delete the file (confirm it isn't a planned/unwired entry point first).",
       value: securityPath ? 4 : 2,
       ease: 5,
@@ -714,7 +706,7 @@ export function knipToFindings(
       // knip's dead-file detection is deterministic given its entry config — ~100% precise once the
       // framework/dynamic-ref FP class is configured (issue #72). With Harvey-inferred entries the
       // graph itself is uncertain, so those file findings are review tier, not high (#696).
-      precisionTier: uncertain ? "review" : "high",
+      precisionTier: inferred ? "review" : "high",
     });
   }
 
@@ -798,19 +790,19 @@ export function knipToFindings(
       // config files that reference build-time deps, so those rows are review candidates, not
       // confirmed — the same honesty the file findings already apply.
       const unresolved = unresolvedDepScopes.has(issue.file);
-      const degraded = degradedScopePaths.has(issue.file);
-      const uncertain = unresolved || degraded;
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
+      const uncertain = unresolved || unresolvedDependencySurface;
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused ${label} declared in ${issue.file}`,
-        severity: degraded ? "Info" : "Low",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
         confidence: uncertain ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}${degraded ? " This reduced source tier disabled target configuration and plugins, so the row is informational until the full tier runs." : ""}`,
+        evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so the row is informational until the full tier runs." : ""}`,
         impact:
           (dev
             ? `${names.length} declared devDependenc${names.length === 1 ? "y" : "ies"} nothing imports — install time, lockfile churn and CI minutes spent on packages the build doesn't use.`
@@ -932,46 +924,46 @@ export function knipToFindings(
     for (const { entries, kind, plural, where } of namedDepClasses) {
       if (!entries?.length) continue;
       const names = entries.map((d) => d.name);
-      const degraded = degradedScopePaths.has(issue.file);
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused ${names.length === 1 ? kind : plural} declared in ${issue.file}`,
-        severity: degraded ? "Info" : "Low",
-        confidence: degraded ? "Review" : "Confirmed",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
+        confidence: unresolvedDependencySurface ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: ${names.length === 1 ? kind : plural} declared but never imported: ${names.join(", ")}.${degraded ? " Target configuration and plugins were disabled in the reduced source tier, so consumer/config-only usages may be invisible." : ""}`,
+        evidence: `knip: ${names.length === 1 ? kind : plural} declared but never imported: ${names.join(", ")}.${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so consumer/config-only usages may be invisible." : ""}`,
         impact: `${names.length} declared ${names.length === 1 ? kind : plural} nothing in this scope imports — a stale declaration, or a consumer-facing surface no longer used.${ownerNote}`,
-        fix: degraded
+        fix: unresolvedDependencySurface
           ? `Restore dependency preparation and re-run the full Knip tier before removing ${names.join(", ")} from ${where}.`
           : `Remove ${names.join(", ")} from ${where} if genuinely unused, or confirm it's kept for a downstream consumer.`,
         value: 1,
         ease: 5,
         safety: 4,
-        precisionTier: degraded ? "review" : "high",
+        precisionTier: unresolvedDependencySurface ? "review" : "high",
       });
     }
 
     // #1080: binaries — a CLI binary nothing in the scripts/config knip scanned invokes.
     if (issue.binaries?.length) {
       const names = issue.binaries.map((b) => b.name);
-      const degraded = degradedScopePaths.has(issue.file);
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused binary/binaries declared in ${issue.file}`,
-        severity: degraded ? "Info" : "Low",
-        confidence: degraded ? "Review" : "Confirmed",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
+        confidence: unresolvedDependencySurface ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: binary/binaries never invoked from any script/config knip scanned: ${names.join(", ")}.${degraded ? " Target configuration and plugins were disabled in the reduced source tier, so this is not a complete invocation surface." : ""}`,
+        evidence: `knip: binary/binaries never invoked from any script/config knip scanned: ${names.join(", ")}.${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so this is not a complete invocation surface." : ""}`,
         impact: `${names.length} CLI binar${names.length === 1 ? "y" : "ies"} nothing in this scope's scripts/config invokes — its backing package may itself be unused (cross-check against the unused-dependency rows above).${ownerNote}`,
-        fix: degraded
+        fix: unresolvedDependencySurface
           ? `Restore dependency preparation and re-run the full Knip tier before removing the packages behind ${names.join(", ")}.`
           : `Confirm ${names.join(", ")} isn't invoked from a shell script, CI workflow, or Makefile knip doesn't parse; if genuinely unused, remove the backing package.`,
         value: 1,

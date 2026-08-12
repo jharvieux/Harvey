@@ -243,6 +243,9 @@ both preparation results remain non-cacheable, both quality runs are fresh, and 
 moves from `src/b.ts` to `src/a.ts`. Its paired no-script installed dependency stays cacheable.
 The install-failure control also reproduces multi-tenant-starter's no-lockfile shape. The reduced
 source tier retains its two source-reliable unused-export findings and the `M5-98` limitation. Its
-entry/config-dependent file, dependency, optional-peer/catalog, and binary candidates remain
-visible as informational review rows until the full Knip tier succeeds, so they are not promoted
-into the corpus's countable/actionable baseline by a deliberately incomplete resolution surface.
+dependency, optional-peer/catalog, and binary candidates remain visible as informational review
+rows because there is no lockfile-backed resolved package surface. Inferred file rows retain the
+established countable review posture: their source graph still exists, and their uncertainty is
+already expressed by `confidence: Review`. Automatic config-load fallback and lockfile-backed
+install failure retain that same established reduced-tier posture rather than treating every
+all-plugins-disabled result as equally unreliable.
