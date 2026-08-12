@@ -89,11 +89,11 @@ identity. A miss searches prior same-phase provenance and names the moving compo
 Every cached finding is
 revalidated through the canonical `validateFindings` schema, not a smaller cache-local subset. A
 missing artifact is a miss and executes the phase. A malformed, partial, zero-scope, or
-wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A scheduled or manually
-dispatched workflow uses `--force-cold-cache`: it executes every deterministic phase and compares
-the cold value with the restored artifact, failing on any findings or scope difference. A miss can
-seed the next run but fails the current equivalence assertion; normal PR read/write runs are the
-distinct seeding mode.
+wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A manual dispatch with
+the explicit `force_cold_cache` input executes every deterministic phase and compares the cold
+value with the restored artifact, failing on any findings or scope difference. A miss can seed the
+next run but fails the current equivalence assertion; normal PR, scheduled, and main-push
+read/write runs are the distinct seeding mode.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
@@ -104,32 +104,46 @@ changes.
 
 ## Cross-run transport, scanner families, and deterministic PR state
 
-The `corpus-phase-v4` transport carries a context-bound provenance manifest. Scheduled/manual runs
-stay single-shard so they alone hold and save the complete clone tree. A main `push` also runs once
-over every target, then saves that complete content-addressed phase directory under the shard 1, 2,
-and 3 namespaces consumed by PR/merge runs. A PR may reuse its own run attempt but never another
-PR's artifact. The key encodes platform, shard namespace, run, attempt, and head SHA; the validator
-reconstructs that key from the manifest, checks the matched source key and current namespace, then
-checks the source event/ref/SHA trust relationship before any inner artifact is read. Missing,
-corrupt, forged, mismatched, or untrusted transport is deleted visibly.
+The `corpus-phase-run-v5` and `corpus-phase-main-v5` transports carry a context-bound provenance
+manifest. Pull-request retries use their exact run family; a rolling-prefix lookup is restricted to
+the trusted default-branch family, keeping a newer artifact from another PR separate from the main
+seed. The key encodes family, platform, shard namespace, run,
+attempt, and head SHA. The validator reconstructs that key, checks the matched source key/current
+namespace, then checks the source event/ref/SHA trust relationship before any inner artifact is
+read. Missing, corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
-Corpus source scanners write two independent artifacts: `detect-static` and mutation
+PRs, merge groups, and default-branch pushes all use three shards. Each successful main leg saves
+only its corresponding trusted namespace, after successful scoring. This replaces the one-shard
+main seeding shape. Scheduled/manual validation remains single-shard for canonical
+scorecard and clone-cache lineage, but is warm by default; an explicit `force_cold_cache` dispatch
+input exercises cold-versus-restored equivalence without making daily provider validation pay that
+cost.
+
+Every saved transport now carries a measured payload receipt. Authoring or restoring fails if the
+tree contains any symlink, if the remeasured byte count differs, or if the payload exceeds 6 GiB.
+That ceiling prevents the rejected 8.66 GiB combined prototype shape from recurring silently; the
+authoritative measured rejected value was 9,082,124 KiB (`du -sk`), while the final Carbon shard's
+content receipt measured 2,149,804,255 bytes and zero links. `node_modules` is never transported.
+
+Corpus scanners write three independent artifacts: `detect-static`, `quality-scan`, and mutation
 `--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
 Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
-and rehydrated on read. On real Carbon, the cache reports 6,133 tracked target units rather than
-walking installed dependencies.
+and rehydrated on read. On real Carbon, each cache reports 6,133 tracked target units.
 
-`quality-scan` deliberately executes fresh on every corpus run. Its Knip pass can execute target
-configuration and provider descendants from the prepared dependency tree, including files that no
-package export or static entry closure names. A sound content identity therefore requires reading
-the complete installed population. That work defeats this performance cache's purpose: BoxyHQ's
-install measured 106,871 physical files / 1,037,440,676 bytes, and pinned Carbon on Linux arm64
-measured 146,755 physical files / 2,136,592,208 bytes (202,298 logical files, 34,253 logical
-directory visits, and 10,158 links). The hosted Linux x64 Carbon run observed 131,073 physical files
-and failed before scoring. The runner now makes the uncached boundary visible, never creates a
-`quality-scan` artifact family, and keeps forced-cold verification scoped to the two cacheable
-scanners. #1871 remains open; a safe quality-cache design is grouped with #1872's queued dependency
-preparation work.
+`quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
+keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
+version, Node/ABI, platform/architecture, install flags, and bounded semantic environment. A hit
+still performs a frozen offline materialization into the disposable clone; corrupt/incomplete
+receipts or stores reject visibly and retry clean, while an unreproducible or failed install keeps
+the prior M5 degraded/did-not-run semantics and makes quality non-cacheable. npm, pnpm, and Yarn are
+all exercised through their real clients from two checkout paths.
+
+pnpm is forced to `enableGlobalVirtualStore=false`. pnpm 10/11 still writes a versioned `projects`
+symlink to the current checkout, and a target can otherwise produce a versioned `links` installed
+graph. Both trees are removed after every install; only content/index bytes remain. A real pnpm
+cold-to-offline test with an actual package verifies the second checkout succeeds after that
+sanitization, then asserts the store has no symlink and no `node_modules` path. This preserves the
+content-addressed store/offline-materialization design rather than archiving an installed tree.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
@@ -146,18 +160,25 @@ Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are
 and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
 drift. The default client scanner path sets neither mode and remains live.
 
-The superseded three-scanner prototype's Carbon measurements with `--install` and snapshot state
-were: legacy monolithic 444.57s wall; partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17
-artifact files. Every run conserved
-all 13 scored baseline/free-tier rows. A temporary edit to one local rule preserved unrelated
-registry-family hits and limited Semgrep recomposition to 1.2s. The final exhaustive family repair
-restored 531 Semgrep-derived rows that an early zero-applicable-pack abort had hidden; the parity
-control, not the count baseline, caught that defect.
+The final Carbon run on 2026-08-12 used `--install`, snapshot external state, a fresh shard cache,
+and the pinned 6,133-unit target. Cold was 417.75s wall / 397s phase-timed (install 43.5s,
+quality 51.4s, detect-static 21.7s); restored was 49.21s wall / 32s phase-timed (offline install
+25.6s, quality 0.7s, detect-static 0.1s). Dependency preparation and all three scanner families
+reported hits, and all 13 Carbon rows passed on both runs.
+
+The completed three-shard warm measurements were 32s phase-timed for Carbon, 84s for shard 2, and
+111s for shard 3: a 111s critical path and 227s aggregate runner time. Shard 2 passed 89/89 rows.
+Across all 17 targets, 190/192 rows passed; the only two exceptions were Rallly M5 +8 (147 expected,
+155 measured) and Documenso M5 -1 (1801 expected, 1800 measured). The exact base commit `a157ff9`
+independently reproduced both movements byte-for-byte, so no corpus baseline was changed and these
+are recorded pre-existing measurement exclusions rather than branch regressions. Suppressing
+lifecycle scripts was also rejected as a performance shortcut: real Carbon exited 1 and moved M5
+by +2, while the normal-script run exited 0 and restored every Carbon row.
 
 The focused tests exercise both sides of every guard:
 
 ```sh
-pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts
+pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts src/corpus-cache-transport.test.ts src/corpus-dependency-preparation.test.ts src/corpus-scanner-cache.test.ts src/corpus-scanner-identity.test.ts src/corpus-scanner-cross-process.test.ts
 ```
 
 They prove cold/warm finding and scope equivalence, full-schema corruption rejection and
@@ -166,7 +187,7 @@ target-pin invalidation, live advisory and live-provider secret non-reuse, force
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
 aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
 Harvey checkout copies (only the tool installation is shared) and invokes the production corpus
-scanner runner twice against matching tracked fixtures. `detect-static` and mutation `--detect-only`
-must miss then hit one artifact directory. `quality-scan` must execute fresh both times; between
-runs only an installed provider's untracked `config.js` changes, and the real M5-01 result must move
-from `src/alternate.ts` to `src/index.ts` without creating a quality cache artifact.
+scanner runner twice against matching tracked fixtures. Dependency preparation and all three
+scanner families must miss then hit one artifact directory while preserving findings and examined
+scope. The quality identity is separately falsified by changing its preparation key: only quality
+must miss, while detect-static and mutation remain hits.
