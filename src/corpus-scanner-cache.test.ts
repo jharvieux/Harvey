@@ -119,6 +119,27 @@ describe("content-addressed corpus scanner artifacts (#1871)", () => {
     }
   });
 
+  it("invalidates only quality-scan when the dependency-preparation receipt changes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-preparation-"));
+    dirs.push(dir);
+    const seeded = Object.fromEntries(CORPUS_CACHEABLE_SCANNERS.map((scanner) => [scanner, options(scanner, {
+      dir,
+      externalInputs: {
+        node: "v24.18.0",
+        toolchain: "pinned",
+        targetConfig: "root",
+        ...(scanner === "quality-scan" ? { dependencyPreparation: "receipt-a" } : {}),
+      },
+    })])) as Record<CorpusCacheableScanner, CorpusScannerCacheOptions>;
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) await executeCorpusScanner(seeded[scanner], () => execute([scanner]));
+    for (const scanner of CORPUS_CACHEABLE_SCANNERS) {
+      const cache = scanner === "quality-scan"
+        ? { ...seeded[scanner], externalInputs: { ...seeded[scanner].externalInputs, dependencyPreparation: "receipt-b" } }
+        : seeded[scanner];
+      expect((await executeCorpusScanner(cache, () => execute([`${scanner}-fresh`]))).cache).toBe(scanner === "quality-scan" ? "miss" : "hit");
+    }
+  });
+
   it("invalidates every affected scanner on target or runtime identity changes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-global-"));
     dirs.push(dir);

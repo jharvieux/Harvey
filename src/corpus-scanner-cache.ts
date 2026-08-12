@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "./findings.js";
 import { readEntriesSafe } from "./fs-walk.js";
 
-export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "mutation-detect-only"] as const;
+export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "quality-scan", "mutation-detect-only"] as const;
 export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
 export type CorpusScannerCacheMode = "off" | "read-write" | "verify";
 export type CorpusScannerCacheStatus = "hit" | "miss" | "recomputed" | "non-cacheable";

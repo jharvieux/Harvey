@@ -2,17 +2,17 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DependencyPreparationResult } from "./corpus-dependency-preparation.js";
 import {
   executeCorpusScanner,
   type CorpusScannerCacheMode,
   type CorpusScannerRecord,
 } from "./corpus-scanner-cache.js";
-import { buildCorpusScannerCache } from "./corpus-scanner-identity.js";
+import { buildCorpusScannerCache, corpusQualityEnvironment } from "./corpus-scanner-identity.js";
 import { countCorpusScannerUnits } from "./corpus-scanner-scope.js";
 import type { Finding } from "./findings.js";
 
-const QUALITY_FRESH_REASON =
-  "quality-scan executes fresh because installed dependency/preparation state has no bounded cheap reproducible identity (#1871/#1872)";
+const QUALITY_FRESH_REASON = "quality-scan executes fresh because no complete reproducible dependency-preparation receipt is available";
 
 interface CommonScannerRunOptions {
   repoRoot: string;
@@ -27,12 +27,13 @@ interface ScannerCacheIdentity {
   mode: CorpusScannerCacheMode;
   targetRevision: string;
   targetTree: string;
+  dependencyPreparation?: DependencyPreparationResult;
 }
 
 type CorpusScannerRunOptions = CommonScannerRunOptions & (
   | { script: "detect-static"; scanner: "detect-static"; cache?: ScannerCacheIdentity }
   | { script: "mutation-scan"; scanner: "mutation-detect-only"; cache?: ScannerCacheIdentity }
-  | { script: "quality-scan"; scanner: "quality-scan"; cache?: never }
+  | { script: "quality-scan"; scanner: "quality-scan"; cache?: ScannerCacheIdentity }
 );
 
 interface CorpusScannerRunResult {
@@ -45,9 +46,15 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
   const unitsExamined = countCorpusScannerUnits(options.targetDir);
   const execute = (): { findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string } => {
     try {
-      execFileSync("pnpm", [options.script, ...options.scriptArgs, "--out", out], {
+      const quality = options.scanner === "quality-scan";
+      const bin = quality ? join(options.repoRoot, "node_modules", ".bin", "tsx") : "pnpm";
+      const args = quality
+        ? [join(options.repoRoot, "src", "cli", "quality-scan.ts"), ...options.scriptArgs, "--out", out]
+        : [options.script, ...options.scriptArgs, "--out", out];
+      execFileSync(bin, args, {
         cwd: options.repoRoot,
         stdio: ["ignore", "ignore", "inherit"],
+        ...(quality ? { env: corpusQualityEnvironment() } : {}),
       });
       const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
       return {
@@ -65,7 +72,9 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     }
   };
 
-  if (options.scanner === "quality-scan" || !options.cache) {
+  const qualityPreparation = options.cache?.dependencyPreparation;
+  const cacheAllowed = options.scanner !== "quality-scan" || (qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key);
+  if (!options.cache || !cacheAllowed) {
     const value = execute();
     const reason = value.failure ?? (options.scanner === "quality-scan" ? QUALITY_FRESH_REASON : "corpus scanner cache disabled");
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
@@ -81,6 +90,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     targetRevision: options.cache.targetRevision,
     targetTree: options.cache.targetTree,
     targetConfig: options.targetConfig,
+    dependencyPreparationKey: options.scanner === "quality-scan" ? qualityPreparation!.key : undefined,
     onEvent: options.onEvent,
   });
   const record = await executeCorpusScanner(cache, execute);

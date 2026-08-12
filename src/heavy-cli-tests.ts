@@ -22,6 +22,7 @@ export const HEAVY_CLI_TESTS = [
   "src/cli/lighthouse-scan.test.ts",
   "src/cli/validate-calibration.test.ts",
   "src/cli/fix-execute.test.ts",
+  "src/corpus-scanner-cross-process.test.ts",
 ];
 
 // Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
@@ -47,12 +48,13 @@ const WEIGHT_HINT_SECONDS: Record<string, number> = {
   "src/cli/lighthouse-scan.test.ts": 15.0,
   "src/cli/validate-calibration.test.ts": 40.0,
   "src/cli/fix-execute.test.ts": 23.3,
+  "src/corpus-scanner-cross-process.test.ts": 17.0,
 };
 
 /**
- * Longest-processing-time bin packing: every file lands in exactly one shard, heaviest first onto
- * whichever shard is currently lightest. Deterministic — ties break on path — so shard N holds the
- * same files on every run and a failure is reproducible from the shard index alone.
+ * Reserve run-audit by itself when at least three shards are available, then use
+ * longest-processing-time bin packing for every other file. Deterministic — ties break on path —
+ * so shard N holds the same files on every run and a failure is reproducible from the shard index.
  */
 export function shardHeavyTests(shardCount: number): string[][] {
   if (!Number.isInteger(shardCount) || shardCount < 1) {
@@ -61,11 +63,16 @@ export function shardHeavyTests(shardCount: number): string[][] {
   const heaviestKnown = Math.max(...Object.values(WEIGHT_HINT_SECONDS));
   const weightOf = (f: string) => WEIGHT_HINT_SECONDS[f] ?? heaviestKnown;
 
-  const ordered = [...HEAVY_CLI_TESTS].sort(
+  const reserved = shardCount >= 3 ? "src/cli/run-audit.test.ts" : undefined;
+  const ordered = HEAVY_CLI_TESTS.filter((file) => file !== reserved).sort(
     (a, b) => weightOf(b) - weightOf(a) || a.localeCompare(b),
   );
   const shards: string[][] = Array.from({ length: shardCount }, () => []);
   const load: number[] = new Array<number>(shardCount).fill(0);
+  if (reserved) {
+    shards[0]?.push(reserved);
+    load[0] = Number.POSITIVE_INFINITY;
+  }
   for (const file of ordered) {
     let lightest = 0;
     for (let i = 1; i < shardCount; i++) if ((load[i] ?? 0) < (load[lightest] ?? 0)) lightest = i;
