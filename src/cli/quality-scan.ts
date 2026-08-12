@@ -417,6 +417,10 @@ const inferredEntryFiles = new Set<string>();
 // #1050: the same scopes' package.json paths — their unused-DEPENDENCY findings are review tier for
 // the same reason (config-only usages are invisible when the config could not be resolved).
 const unresolvedDepScopes = new Set<string>();
+// #1871: every path whose result came from the explicit all-plugins-disabled source tier. The
+// converter keeps source-local facts actionable while making entry/config-dependent rows
+// informational until dependency preparation and the full Knip tier succeed.
+const degradedScopePaths = new Set<string>();
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -457,6 +461,10 @@ for (const scope of scopes) {
     }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
+    if (pluginsDisabled) {
+      for (const f of report.files) degradedScopePaths.add(f);
+      for (const issue of report.issues) degradedScopePaths.add(issue.file);
+    }
     // #696: record the (now target-relative) files whose entries Harvey inferred, so their file
     // findings are review-tier after mergeKnipReports flattens per-scope reports into one.
     if (entriesInferred) {
@@ -515,7 +523,7 @@ const findings: Finding[] = [
   ...wholeRepoDivergedFindings,
   ...(divergedScopeDisclosure ? [divergedScopeDisclosure] : []),
   ...(jscpdScopeDisclosure ? [jscpdScopeDisclosure] : []),
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes) : []),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes, degradedScopePaths) : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces

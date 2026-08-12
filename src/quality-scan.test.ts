@@ -476,6 +476,15 @@ describe("knipToFindings", () => {
     expect(fileFinding?.impact).toBe("Entire file is unreferenced.");
   });
 
+  it("keeps an inferred unused file visible but informational when only the degraded source tier ran (#1871)", () => {
+    const path = "src/dead.ts";
+    const findings = knipToFindings(knipReport, {}, new Set([path]), new Set(), new Set([path]));
+    const fileFinding = findings.find((f) => f.location === path);
+    expect(fileFinding).toMatchObject({ severity: "Info", confidence: "Review", precisionTier: "review" });
+    expect(fileFinding?.evidence).toContain("configuration and plugins were disabled");
+    expect(fileFinding?.fix).toContain("full Knip tier");
+  });
+
   it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
     // A fully-used file never appears in knip's own report, so add an all-empty issue record for one
     // (the shape a merged/legacy report can still carry) to prove the transform emits no finding for it.
@@ -560,7 +569,20 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
   it("drops to review tier for a scope whose config/plugins could not be resolved", () => {
     const findings = knipToFindings(depReport, {}, new Set(), new Set(["package.json"]));
     expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
+    expect(findings.every((f) => f.severity === "Low")).toBe(true);
     expect(findings[0]?.fix).toContain("Install the target's dependencies");
+  });
+
+  it("keeps degraded dependency candidates visible but informational until the full tier runs (#1871)", () => {
+    const findings = knipToFindings(
+      depReport,
+      {},
+      new Set(),
+      new Set(),
+      new Set(["package.json"]),
+    );
+    expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review" && f.severity === "Info")).toBe(true);
+    expect(findings.every((f) => f.evidence.includes("reduced source tier"))).toBe(true);
   });
 });
 
@@ -626,6 +648,18 @@ describe("knipToFindings — #1080 (unlisted/unresolved/duplicates/enumMembers/o
     const f = findings.find((r) => r.title.includes("binary"));
     expect(f?.evidence).toContain("some-cli");
     expect(f?.precisionTier).toBe("review");
+  });
+
+  it("does not present config-dependent package metadata as actionable in the degraded source tier (#1871)", () => {
+    const findings = knipToFindings(report, {}, new Set(), new Set(), new Set(["src/lib/report.ts"]));
+    const configDependent = findings.filter((f) =>
+      f.title.includes("optional peer") || f.title.includes("catalog") || f.title.includes("binary"),
+    );
+    expect(configDependent).toHaveLength(3);
+    expect(configDependent.every((f) => f.severity === "Info" && f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
+    expect(configDependent.every((f) => f.fix.includes("full Knip tier"))).toBe(true);
+    expect(findings.find((f) => f.title.includes("Unlisted import"))).toMatchObject({ severity: "Medium", confidence: "Confirmed" });
+    expect(findings.find((f) => f.title.includes("Duplicate export"))).toMatchObject({ severity: "Low", confidence: "Confirmed" });
   });
 
   it("emits nothing for any of the six categories when absent (back-compat with a merged/legacy report)", () => {

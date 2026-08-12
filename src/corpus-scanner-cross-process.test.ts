@@ -312,6 +312,80 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     }
   }, 45_000);
 
+  it("keeps multi-tenant-starter-shaped no-lock install failure output useful without counting degraded package guesses", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-multi-tenant-no-lock-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-multi-tenant-no-lock-cache-"));
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(targetDir, "app"), { recursive: true });
+    mkdirSync(join(targetDir, "lib", "security"), { recursive: true });
+    mkdirSync(join(targetDir, "lib", "supabase"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({
+      name: "multi-tenant-no-lock-falsifier",
+      private: true,
+      scripts: { dev: "next dev", build: "next build", typecheck: "tsc --noEmit", "db:start": "supabase start" },
+      dependencies: { next: "14.2.0", react: "18.3.0", "react-dom": "18.3.0" },
+      devDependencies: { postcss: "8.4.0", supabase: "1.200.0", typescript: "5.6.0" },
+    }));
+    writeFileSync(join(targetDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "esnext", moduleResolution: "bundler" }, include: ["**/*.ts"] }));
+    writeFileSync(join(targetDir, "lib", "security", "guards.ts"), [
+      "export const liveGuard = () => true;",
+      "export const requireTenantAccess = () => true;",
+      "export const requireTenantAdmin = () => true;",
+      "",
+    ].join("\n"));
+    writeFileSync(join(targetDir, "lib", "supabase", "server.ts"), [
+      "export const liveClient = () => ({ kind: 'request' });",
+      "export const createServiceRoleClient = () => ({ kind: 'service-role' });",
+      "",
+    ].join("\n"));
+    writeFileSync(join(targetDir, "app", "page.ts"), [
+      'import { liveGuard } from "../lib/security/guards";',
+      'import { liveClient } from "../lib/supabase/server";',
+      "export const page = () => [liveGuard(), liveClient()];",
+      "",
+    ].join("\n"));
+
+    const dependencyPreparation = prepareCorpusDependencies({
+      targetDir,
+      cacheDir,
+      targetRevision: "multi-tenant-pin",
+      targetTree: "multi-tenant-tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: () => { throw new Error("planted install failure"); },
+    });
+    expect(dependencyPreparation).toMatchObject({ status: "incomplete", complete: false, cacheable: false });
+    expect(dependencyPreparation.reason).toContain("target has no package-manager lockfile; npm install failed");
+
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "multi-tenant no-lock install-failure falsifier",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "multi-tenant-pin",
+        targetTree: "multi-tenant-tree",
+        dependencyPreparation,
+      },
+    });
+    const m5 = result.findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code");
+    const counted = m5.filter((finding) => finding.severity !== "Info");
+    expect(counted).toHaveLength(2);
+    expect(counted.map((finding) => finding.location).sort()).toEqual(["lib/security/guards.ts", "lib/supabase/server.ts"]);
+    expect(counted.every((finding) => finding.confidence === "Confirmed" && finding.precisionTier === "high")).toBe(true);
+
+    const degradedPackageRows = m5.filter((finding) =>
+      finding.title.includes("dependencies declared") || finding.title.includes("binary/binaries"),
+    );
+    expect(degradedPackageRows.length).toBeGreaterThan(0);
+    expect(degradedPackageRows.every((finding) => finding.severity === "Info" && finding.confidence === "Review" && finding.precisionTier === "review")).toBe(true);
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", severity: "Info", confidence: "N/A" }));
+    expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+  }, 45_000);
+
   it("preserves source-only M5 coverage without executing a rejected provider, and fails loud if that safe tier fails", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-cache-"));

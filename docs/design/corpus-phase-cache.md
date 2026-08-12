@@ -241,3 +241,8 @@ The dependency-lifecycle falsifier packs a local tarball whose postinstall reads
 `HOME` path and rewrites the target's `knip.json`: the content store may hit and re-materialize, but
 both preparation results remain non-cacheable, both quality runs are fresh, and the unused-file row
 moves from `src/b.ts` to `src/a.ts`. Its paired no-script installed dependency stays cacheable.
+The install-failure control also reproduces multi-tenant-starter's no-lockfile shape. The reduced
+source tier retains its two source-reliable unused-export findings and the `M5-98` limitation. Its
+entry/config-dependent file, dependency, optional-peer/catalog, and binary candidates remain
+visible as informational review rows until the full Knip tier succeeds, so they are not promoted
+into the corpus's countable/actionable baseline by a deliberately incomplete resolution surface.
