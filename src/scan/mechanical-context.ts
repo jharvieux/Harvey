@@ -10,6 +10,7 @@ import {
   parseFresh,
   readonlySourceFile,
   withSourceParseCache,
+  type AstMembraneMetrics,
   type CachedSourceFile,
   type SourceInput,
 } from "../detectors/common.js";
@@ -52,6 +53,11 @@ export interface MechanicalContextMetrics {
   criticalPathMs: number;
   legacyEquivalentFileReads: number;
   avoidedFileReads: number;
+  astMembraneObjects: number;
+  astMembraneMethodWrappers: number;
+  astMembraneCallbacks: number;
+  astMembraneIteratorResults: number;
+  astMembraneRejectedMutations: number;
 }
 
 type MutableMetrics = MechanicalContextMetrics;
@@ -133,6 +139,7 @@ export class MechanicalScanContext {
   #asts?: ReadonlyMap<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>;
   #parseCache?: ReadonlyMap<string, CachedSourceFile>;
   #importGraph?: ReadonlyMap<string, readonly string[]>;
+  #astMembraneMetrics?: AstMembraneMetrics;
   #disposed = false;
 
   constructor(root: string) {
@@ -192,6 +199,11 @@ export class MechanicalScanContext {
       criticalPathMs: 0,
       legacyEquivalentFileReads: 0,
       avoidedFileReads: 0,
+      astMembraneObjects: 0,
+      astMembraneMethodWrappers: 0,
+      astMembraneCallbacks: 0,
+      astMembraneIteratorResults: 0,
+      astMembraneRejectedMutations: 0,
     };
   }
 
@@ -201,8 +213,16 @@ export class MechanicalScanContext {
       const started = performance.now();
       const cache = new Map<string, CachedSourceFile>();
       const snapshots = new Map<string, { text: string; statements: readonly { kind: number; pos: number; end: number }[] }>();
+      const membraneMetrics: AstMembraneMetrics = {
+        objectsWrapped: 0,
+        methodWrappersCreated: 0,
+        callbacksWrapped: 0,
+        iteratorResultsWrapped: 0,
+        rejectedMutations: 0,
+      };
+      this.#astMembraneMetrics = membraneMetrics;
       for (const file of this.envSourceFiles) {
-        const sourceFile = readonlySourceFile(parseFresh(file.path, file.text));
+        const sourceFile = readonlySourceFile(parseFresh(file.path, file.text), membraneMetrics);
         cache.set(file.path, {
           text: file.text,
           sourceFile,
@@ -219,6 +239,11 @@ export class MechanicalScanContext {
       this.#metrics.filesParsed = cache.size;
       this.#metrics.astsBuilt = cache.size;
       this.#metrics.astBuildMs = performance.now() - started;
+      this.#metrics.astMembraneObjects = membraneMetrics.objectsWrapped;
+      this.#metrics.astMembraneMethodWrappers = membraneMetrics.methodWrappersCreated;
+      this.#metrics.astMembraneCallbacks = membraneMetrics.callbacksWrapped;
+      this.#metrics.astMembraneIteratorResults = membraneMetrics.iteratorResultsWrapped;
+      this.#metrics.astMembraneRejectedMutations = membraneMetrics.rejectedMutations;
     }
     return this.#asts;
   }
@@ -265,7 +290,16 @@ export class MechanicalScanContext {
 
   metrics(): MechanicalContextMetrics {
     this.#assertLive();
-    return Object.freeze({ ...this.#metrics });
+    return Object.freeze({
+      ...this.#metrics,
+      ...(this.#astMembraneMetrics ? {
+        astMembraneObjects: this.#astMembraneMetrics.objectsWrapped,
+        astMembraneMethodWrappers: this.#astMembraneMetrics.methodWrappersCreated,
+        astMembraneCallbacks: this.#astMembraneMetrics.callbacksWrapped,
+        astMembraneIteratorResults: this.#astMembraneMetrics.iteratorResultsWrapped,
+        astMembraneRejectedMutations: this.#astMembraneMetrics.rejectedMutations,
+      } : {}),
+    });
   }
 
   dispose(): void {
@@ -273,6 +307,7 @@ export class MechanicalScanContext {
     this.#asts = undefined;
     this.#parseCache = undefined;
     this.#importGraph = undefined;
+    this.#astMembraneMetrics = undefined;
     this.#disposed = true;
   }
 

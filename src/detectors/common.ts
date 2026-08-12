@@ -50,7 +50,15 @@ export function parseFresh(path: string, text: string): ts.SourceFile {
  * have internal receiver assumptions.  Arguments are unwrapped and object results are re-wrapped,
  * preserving recursive mutation protection for values returned by getChildren()/getSourceFile().
  */
-export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
+export interface AstMembraneMetrics {
+  objectsWrapped: number;
+  methodWrappersCreated: number;
+  callbacksWrapped: number;
+  iteratorResultsWrapped: number;
+  rejectedMutations: number;
+}
+
+export function readonlySourceFile(sourceFile: ts.SourceFile, metrics?: AstMembraneMetrics): ts.SourceFile {
   // TypeScript memoizes these public queries by writing private cache fields onto nodes. Materialize
   // them before the membrane is installed so later public API calls remain reads, not hidden writes.
   const warm = (node: ts.Node): void => {
@@ -64,7 +72,10 @@ export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
   const proxies = new WeakMap<object, object>();
   const targets = new WeakMap<object, object>();
   const methods = new WeakMap<object, Map<PropertyKey, (...args: unknown[]) => unknown>>();
-  const reject = (): never => { throw new TypeError("shared TypeScript AST is immutable"); };
+  const reject = (): never => {
+    if (metrics) metrics.rejectedMutations += 1;
+    throw new TypeError("shared TypeScript AST is immutable");
+  };
   const unwrap = <T>(value: T): T => (value && typeof value === "object" && targets.has(value as object)
     ? targets.get(value as object) as T
     : value);
@@ -73,9 +84,17 @@ export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
     const target = value as object;
     const existing = proxies.get(target);
     if (existing) return existing as T;
+    if (metrics) metrics.objectsWrapped += 1;
+    const safeArguments = (args: readonly unknown[]): unknown[] => args.map((argument) => {
+      if (typeof argument !== "function") return unwrap(argument);
+      if (metrics) metrics.callbacksWrapped += 1;
+      return function callbackMembrane(this: unknown, ...callbackArguments: unknown[]): unknown {
+        return unwrap(Reflect.apply(argument, wrap(this), callbackArguments.map(wrap)));
+      };
+    });
     const proxy = new Proxy(target, {
       get(raw, property) {
-        if ((raw instanceof Map || raw instanceof Set)
+        if ((raw instanceof Map || raw instanceof Set || raw instanceof WeakMap || raw instanceof WeakSet)
           && ["set", "add", "delete", "clear"].includes(String(property))) return reject;
         if (Array.isArray(raw)
           && ["copyWithin", "fill", "pop", "push", "reverse", "shift", "sort", "splice", "unshift"].includes(String(property))) return reject;
@@ -85,9 +104,33 @@ export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
         methods.set(raw, byProperty);
         const cached = byProperty.get(property);
         if (cached) return cached;
-        const callable = (...args: unknown[]): unknown => wrap(Reflect.apply(member, raw, args.map(unwrap)));
+        const callable = (...args: unknown[]): unknown => {
+          const result = Reflect.apply(member, raw, safeArguments(args));
+          if (property === "next" && metrics) metrics.iteratorResultsWrapped += 1;
+          return wrap(result);
+        };
+        if (metrics) metrics.methodWrappersCreated += 1;
         byProperty.set(property, callable);
         return callable;
+      },
+      getOwnPropertyDescriptor(raw, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(raw, property);
+        if (!descriptor) return descriptor;
+        if ("value" in descriptor) {
+          if (descriptor.configurable === false && descriptor.writable === false
+            && descriptor.value && (typeof descriptor.value === "object" || typeof descriptor.value === "function")) reject();
+          return { ...descriptor, value: wrap(descriptor.value) };
+        }
+        return {
+          ...descriptor,
+          get: descriptor.get ? function readonlyDescriptorGet(this: unknown): unknown {
+            return wrap(Reflect.apply(descriptor.get!, unwrap(this), []));
+          } : undefined,
+          set: descriptor.set ? reject : undefined,
+        };
+      },
+      apply(raw, thisArgument, args) {
+        return wrap(Reflect.apply(raw as (...values: unknown[]) => unknown, unwrap(thisArgument), safeArguments(args)));
       },
       set: reject,
       defineProperty: reject,

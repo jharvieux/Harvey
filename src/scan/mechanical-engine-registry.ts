@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { dirname, join, normalize, relative as relativePath } from "node:path";
 import ts from "typescript";
 import { readRecursiveSafe } from "../fs-walk.js";
 import {
@@ -140,76 +140,272 @@ const NON_PRODUCER_REGISTRY_CALLS = new Set([
 interface DiscoveredMechanicalFindingProducer {
   file: string;
   exportName: string;
+  canonicalId: string;
+  supportCanonicalIds: readonly string[];
 }
 
-// These producers intentionally belong to the connected Supabase scanner rather than the free
-// runMechanicalScanDetailed path. Each exception is bound to both the exported bridge and a real
-// CLI caller; it is not a name allowlist that can silently absorb a copied or newly implemented
-// producer elsewhere in src/scan.
-const EXTERNAL_MECHANICAL_PRODUCER_OWNERS: Readonly<Record<string, { bridgeFile: string; bridgeExport: string; runnerFile: string }>> = Object.freeze(Object.fromEntries([
+// These producers intentionally belong to a scanner outside the free runMechanicalScanDetailed
+// path. Each exception is bound to both the exported bridge and a real CLI caller; it is not a
+// name allowlist that can silently absorb a copied or newly implemented producer elsewhere in
+// src/scan. A self-bridge is itself the exported boundary consumed by the CLI.
+interface ExternalMechanicalProducerOwner {
+  bridgeFile: string;
+  bridgeExport: string;
+  runnerFile: string;
+  selfBridge?: true;
+}
+
+const EXTERNAL_MECHANICAL_PRODUCER_OWNERS: Readonly<Record<string, ExternalMechanicalProducerOwner>> = Object.freeze(Object.fromEntries([
   "checkAuthConfig",
   "checkRealtimeAuthorization",
   "checkGraphqlIntrospection",
   "checkGotrueVersion",
 ].map((exportName) => [`src/scan/supabase-config.ts#${exportName}`, {
   bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
-}]).concat([["src/scan/supabase-drift.ts#checkMigrationDrift", {
+}]).concat([
+  ["src/scan/supabase-drift.ts#checkMigrationDrift", {
   bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts",
-}]])));
+  }],
+  ["src/scan/prisma-app-perf.ts#detectPrismaAppPerfFindings", {
+    bridgeFile: "src/scan/prisma-app-perf.ts", bridgeExport: "scanPrismaAppPerf", runnerFile: "src/cli/static-detect.ts",
+  }],
+  ["src/scan/prisma-app-perf.ts#scanPrismaAppPerf", {
+    bridgeFile: "src/scan/prisma-app-perf.ts", bridgeExport: "scanPrismaAppPerf", runnerFile: "src/cli/static-detect.ts", selfBridge: true,
+  }],
+  ["src/scan/supabase.ts#runSupabaseScan", {
+    bridgeFile: "src/scan/supabase.ts", bridgeExport: "runSupabaseScan", runnerFile: "src/cli/scan.ts", selfBridge: true,
+  }],
+  ["src/scan/ext-coverage.ts#checkUnreadSourceExtensions", {
+    bridgeFile: "src/scan/ext-coverage.ts", bridgeExport: "checkUnreadSourceExtensions", runnerFile: "src/cli/static-detect.ts", selfBridge: true,
+  }],
+  ["src/scan/import-graph-scope.ts#importGraphNotAssessedRows", {
+    bridgeFile: "src/scan/import-graph-scope.ts", bridgeExport: "importGraphNotAssessedRows", runnerFile: "src/cli/static-detect.ts", selfBridge: true,
+  }],
+] as [string, ExternalMechanicalProducerOwner][])));
 
-function exportedFunctionBodies(parsed: ts.SourceFile): { exportName: string; type: ts.TypeNode | undefined; body: ts.ConciseBody }[] {
-  const functions: { exportName: string; type: ts.TypeNode | undefined; body: ts.ConciseBody }[] = [];
-  for (const statement of parsed.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body
-      && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
-      functions.push({ exportName: statement.name.text, type: statement.type, body: statement.body });
-      continue;
-    }
-    if (!ts.isVariableStatement(statement)
-      || !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer
-        || (!ts.isArrowFunction(declaration.initializer) && !ts.isFunctionExpression(declaration.initializer))) continue;
-      functions.push({ exportName: declaration.name.text, type: declaration.initializer.type, body: declaration.initializer.body });
-    }
-  }
-  return functions;
+interface MechanicalProducerDiscovery {
+  producers: DiscoveredMechanicalFindingProducer[];
+  problems: string[];
 }
 
-function discoverMechanicalFindingProducerExports(repoRoot: string): DiscoveredMechanicalFindingProducer[] {
+const mechanicalProducerDiscoveryCache = new Map<string, MechanicalProducerDiscovery>();
+
+function discoverMechanicalFindingProducerExports(repoRoot: string): MechanicalProducerDiscovery {
+  const cached = mechanicalProducerDiscoveryCache.get(repoRoot);
+  if (cached) return cached;
   const scanDir = join(repoRoot, "src", "scan");
-  if (!existsSync(scanDir)) return [];
-  const discovered: DiscoveredMechanicalFindingProducer[] = [];
-  for (const relativeFile of readRecursiveSafe(scanDir).filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts")).sort()) {
-    const file = `src/scan/${relativeFile}`;
-    const source = readFileSync(join(scanDir, relativeFile), "utf8");
-    const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    let mechanicalFindingLocal: string | undefined;
-    for (const statement of parsed.statements) {
-      if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly || !statement.importClause
-        || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith(".")) continue;
-      const importedFile = normalize(join(dirname(file), statement.moduleSpecifier.text)).replace(/\.js$/, ".ts");
-      if (importedFile !== "src/scan/common.ts") continue;
-      const bindings = statement.importClause.namedBindings;
-      if (!bindings || !ts.isNamedImports(bindings)) continue;
-      const binding = bindings.elements.find((element) => (element.propertyName?.text ?? element.name.text) === "mechanicalFinding");
-      if (binding && !binding.isTypeOnly) mechanicalFindingLocal = binding.name.text;
+  if (!existsSync(scanDir)) return { producers: [], problems: [] };
+  const rootNames = readRecursiveSafe(scanDir)
+    .filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"))
+    .map((path) => join(scanDir, path))
+    .sort();
+  const program = ts.createProgram(rootNames, {
+    allowJs: false,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    noEmit: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.Latest,
+  });
+  const checker = program.getTypeChecker();
+  const problems: string[] = [];
+  const functionBodies = new Map<ts.Symbol, ts.ConciseBody>();
+  const callableSymbols = new Set<ts.Symbol>();
+  const valueEdges = new Map<ts.Symbol, Set<ts.Symbol>>();
+  const callEdges = new Map<ts.Symbol, Set<ts.Symbol>>();
+  const direct = new Set<ts.Symbol>();
+  const dynamicCalls: { owner: ts.Symbol; candidates: Set<ts.Symbol>; location: string }[] = [];
+  const exported: { file: string; exportName: string; symbol: ts.Symbol }[] = [];
+  const starExports = new Map<string, { target: ts.SourceFile; location: string }[]>();
+  const repoRelative = (source: ts.SourceFile): string => normalize(relativePath(repoRoot, source.fileName));
+  const unalias = (symbol: ts.Symbol | undefined): ts.Symbol | undefined => {
+    const seen = new Set<ts.Symbol>();
+    let current = symbol;
+    while (current && (current.flags & ts.SymbolFlags.Alias) !== 0 && !seen.has(current)) {
+      seen.add(current);
+      const next = checker.getAliasedSymbol(current);
+      if (!next || next === current) break;
+      current = next;
     }
-    if (!mechanicalFindingLocal) continue;
-    for (const candidate of exportedFunctionBodies(parsed)) {
-      let emitsMechanicalFinding = false;
-      const visit = (node: ts.Node): void => {
-        if (node !== candidate.body && ts.isFunctionLike(node)) return;
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === mechanicalFindingLocal) {
-          emitsMechanicalFinding = true;
+    return current;
+  };
+  const addEdge = (map: Map<ts.Symbol, Set<ts.Symbol>>, from: ts.Symbol, to: ts.Symbol | undefined): void => {
+    const target = unalias(to);
+    if (!target) return;
+    const edges = map.get(from) ?? new Set<ts.Symbol>();
+    edges.add(target);
+    map.set(from, edges);
+  };
+  const expressionSymbols = (node: ts.Node): Set<ts.Symbol> => {
+    const out = new Set<ts.Symbol>();
+    const visit = (child: ts.Node): void => {
+      if (ts.isIdentifier(child) || ts.isPropertyAccessExpression(child)) {
+        const symbol = unalias(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(child) ? child.name : child));
+        if (symbol) out.add(symbol);
+      }
+      ts.forEachChild(child, visit);
+    };
+    visit(node);
+    return out;
+  };
+  const directFindingObject = (node: ts.ObjectLiteralExpression): boolean => {
+    const names = new Set(node.properties.flatMap((property) => {
+      if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return [];
+      const name = property.name;
+      return ts.isIdentifier(name) || ts.isStringLiteral(name) ? [name.text] : [];
+    }));
+    return ["id", "title", "severity", "category", "taxonomy", "location", "evidence", "impact", "fix"]
+      .every((name) => names.has(name));
+  };
+  for (const source of program.getSourceFiles().filter((file) => rootNames.includes(file.fileName))) {
+    const file = repoRelative(source);
+    const moduleSymbol = checker.getSymbolAtLocation(source);
+    if (moduleSymbol) for (const exportSymbol of checker.getExportsOfModule(moduleSymbol)) {
+      const target = unalias(exportSymbol);
+      if (target) exported.push({ file, exportName: exportSymbol.getName(), symbol: target });
+    }
+    const stars: { target: ts.SourceFile; location: string }[] = [];
+    for (const statement of source.statements) {
+      if (!ts.isExportDeclaration(statement) || statement.exportClause || !statement.moduleSpecifier
+        || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith(".")) continue;
+      const target = checker.getSymbolAtLocation(statement.moduleSpecifier)?.declarations?.[0]?.getSourceFile();
+      if (target) stars.push({ target, location: `${file}:${source.getLineAndCharacterOfPosition(statement.getStart()).line + 1}` });
+    }
+    if (stars.length > 0) starExports.set(file, stars);
+    const collect = (node: ts.Node): void => {
+      if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) && node.body) {
+        const nameNode = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ? node.name : node.parent && ts.isVariableDeclaration(node.parent) ? node.parent.name : undefined;
+        const owner = nameNode ? unalias(checker.getSymbolAtLocation(nameNode)) : undefined;
+        if (owner) {
+          functionBodies.set(owner, node.body);
+          callableSymbols.add(owner);
         }
-        ts.forEachChild(node, visit);
-      };
-      visit(candidate.body);
-      if (emitsMechanicalFinding) discovered.push({ file, exportName: candidate.exportName });
+      }
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        const owner = unalias(checker.getSymbolAtLocation(node.name));
+        if (owner) {
+          if (ts.isIdentifier(node.initializer) || ts.isPropertyAccessExpression(node.initializer)) callableSymbols.add(owner);
+          for (const target of expressionSymbols(node.initializer)) if (target !== owner) addEdge(valueEdges, owner, target);
+        }
+        const statement = node.parent.parent;
+        if ((ts.isIdentifier(node.initializer) || ts.isPropertyAccessExpression(node.initializer))
+          && ts.isVariableStatement(statement)
+          && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+          && !checker.getSymbolAtLocation(ts.isPropertyAccessExpression(node.initializer) ? node.initializer.name : node.initializer)) {
+          problems.push(`${file}#${node.name.text}: stale exported helper alias cannot be resolved`);
+        }
+      }
+      if (ts.isExportSpecifier(node)) {
+        const target = unalias(checker.getSymbolAtLocation(node.propertyName ?? node.name));
+        if (!target) problems.push(`${file}#${node.name.text}: stale exported helper alias cannot be resolved`);
+      }
+      ts.forEachChild(node, collect);
+    };
+    collect(source);
+  }
+  const commonSource = program.getSourceFiles().find((source) => repoRelative(source) === "src/scan/common.ts");
+  const commonModule = commonSource ? checker.getSymbolAtLocation(commonSource) : undefined;
+  const mechanicalFinding = commonModule
+    ? checker.getExportsOfModule(commonModule).find((candidate) => candidate.getName() === "mechanicalFinding")
+    : undefined;
+  const seed = unalias(mechanicalFinding);
+  for (const [owner, body] of functionBodies) {
+    const visit = (node: ts.Node): void => {
+      if (node !== body && ts.isFunctionLike(node)) return;
+      if (owner !== seed && ts.isObjectLiteralExpression(node) && directFindingObject(node)) direct.add(owner);
+      if (ts.isCallExpression(node)) {
+        const called = unalias(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression));
+        if (called) {
+          if (called === seed) direct.add(owner);
+          else addEdge(callEdges, owner, called);
+        } else if (!ts.isIdentifier(node.expression) && !ts.isPropertyAccessExpression(node.expression)) {
+          dynamicCalls.push({
+            owner,
+            candidates: expressionSymbols(node.expression),
+            location: `${repoRelative(node.getSourceFile())}:${node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
+          });
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(body);
+  }
+
+  const dependencies = new Map<ts.Symbol, Set<ts.Symbol>>();
+  for (const [owner, targets] of [...valueEdges, ...callEdges]) {
+    const combined = dependencies.get(owner) ?? new Set<ts.Symbol>();
+    for (const target of targets) combined.add(target);
+    dependencies.set(owner, combined);
+  }
+  const producers = new Set(direct);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [key, called] of dependencies) if (!producers.has(key) && [...called].some((target) => producers.has(target))) {
+      producers.add(key);
+      changed = true;
     }
   }
-  return discovered.sort((a, b) => `${a.file}#${a.exportName}`.localeCompare(`${b.file}#${b.exportName}`));
+  for (const dynamic of dynamicCalls) {
+    const reachable = new Set(dynamic.candidates);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const candidate of [...reachable]) for (const target of dependencies.get(candidate) ?? []) if (!reachable.has(target)) {
+        reachable.add(target);
+        grew = true;
+      }
+    }
+    if ([...reachable].some((candidate) => producers.has(candidate))) {
+      problems.push(`${dynamic.location}: ambiguous dynamic mechanical producer dispatch is not registry-auditable`);
+      producers.add(dynamic.owner);
+    }
+  }
+  for (const [file, stars] of starExports) {
+    if (stars.length < 2) continue;
+    const owners = new Map<string, Set<ts.Symbol>>();
+    for (const star of stars) {
+      const moduleSymbol = checker.getSymbolAtLocation(star.target);
+      if (!moduleSymbol) continue;
+      for (const candidate of checker.getExportsOfModule(moduleSymbol)) {
+        const target = unalias(candidate);
+        if (!target || !producers.has(target)) continue;
+        const symbols = owners.get(candidate.getName()) ?? new Set<ts.Symbol>();
+        symbols.add(target);
+        owners.set(candidate.getName(), symbols);
+      }
+    }
+    for (const [name, symbols] of owners) if (symbols.size > 1) problems.push(`${file}#${name}: ambiguous export-star mechanical producer ownership`);
+  }
+  const canonicalId = (symbol: ts.Symbol): string => {
+    const declaration = symbol.declarations?.[0];
+    return declaration ? `${repoRelative(declaration.getSourceFile())}#${symbol.getName()}@${declaration.pos}` : `symbol#${symbol.getName()}`;
+  };
+  const result = exported
+    .filter((entry) => producers.has(entry.symbol) && callableSymbols.has(entry.symbol))
+    .map(({ file, exportName, symbol }) => {
+      const reachable = new Set<ts.Symbol>();
+      const pending = [...(dependencies.get(symbol) ?? [])];
+      while (pending.length > 0) {
+        const candidate = pending.pop()!;
+        if (reachable.has(candidate)) continue;
+        reachable.add(candidate);
+        pending.push(...(dependencies.get(candidate) ?? []));
+      }
+      return {
+        file: normalize(file),
+        exportName,
+        canonicalId: canonicalId(symbol),
+        supportCanonicalIds: [...reachable].filter((candidate) => producers.has(candidate)).map(canonicalId).sort(),
+      };
+    });
+  const discovery = {
+    producers: [...new Map(result.map((entry) => [`${entry.file}#${entry.exportName}`, entry])).values()]
+      .sort((a, b) => `${a.file}#${a.exportName}`.localeCompare(`${b.file}#${b.exportName}`)),
+    problems: [...new Set(problems)].sort(),
+  };
+  mechanicalProducerDiscoveryCache.set(repoRoot, discovery);
+  return discovery;
 }
 
 function validateMechanicalFindingProducerDiscovery(
@@ -218,10 +414,22 @@ function validateMechanicalFindingProducerDiscovery(
 ): string[] {
   const problems: string[] = [];
   const registered = new Set(registry.flatMap((entry) => entry.implementations.map((implementation) => `${implementation.file}#${implementation.exportName}`)));
-  for (const producer of discoverMechanicalFindingProducerExports(producerSurfaceRoot)) {
+  const discovery = discoverMechanicalFindingProducerExports(producerSurfaceRoot);
+  problems.push(...discovery.problems);
+  const byKey = new Map(discovery.producers.map((producer) => [`${producer.file}#${producer.exportName}`, producer]));
+  const ownerCanonicalIds = new Set<string>();
+  for (const key of [...registered, ...Object.keys(EXTERNAL_MECHANICAL_PRODUCER_OWNERS)]) {
+    const owner = byKey.get(key);
+    if (owner) ownerCanonicalIds.add(owner.canonicalId);
+  }
+  const supportCanonicalIds = new Set(discovery.producers
+    .filter((producer) => ownerCanonicalIds.has(producer.canonicalId))
+    .flatMap((producer) => [...producer.supportCanonicalIds]));
+  for (const producer of discovery.producers) {
     const key = `${producer.file}#${producer.exportName}`;
     if (registered.has(key)) continue;
     const external = EXTERNAL_MECHANICAL_PRODUCER_OWNERS[key];
+    if (!external && (ownerCanonicalIds.has(producer.canonicalId) || supportCanonicalIds.has(producer.canonicalId))) continue;
     if (!external) {
       problems.push(`${key}: implemented mechanical finding producer is not registered`);
       continue;
@@ -230,7 +438,7 @@ function validateMechanicalFindingProducerDiscovery(
     const runnerPath = join(producerSurfaceRoot, external.runnerFile);
     const bridge = existsSync(bridgePath) ? readFileSync(bridgePath, "utf8") : "";
     const runner = existsSync(runnerPath) ? readFileSync(runnerPath, "utf8") : "";
-    if (!bridge.includes(`${producer.exportName}(`)
+    if ((!external.selfBridge && !bridge.includes(`${producer.exportName}(`))
       || !new RegExp(`\\bexport (?:async )?function ${external.bridgeExport}\\b`).test(bridge)
       || !runner.includes(`${external.bridgeExport}(`)) {
       problems.push(`${key}: stale external owner ${external.bridgeFile}#${external.bridgeExport} -> ${external.runnerFile}`);

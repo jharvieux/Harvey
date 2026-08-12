@@ -215,6 +215,85 @@ export function inferredProducer() {
     }
   });
 
+  it("follows wrapper, exported-alias, and re-export chains to an implemented producer", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-transitive-producer-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "src", "scan", "producer.ts"), `import { mechanicalFinding as emit } from "./common.js";
+function localProducer() {
+  return [emit({ id: "X", title: "x", severity: "Low", category: "x", taxonomy: "x", location: "x", evidence: "x", impact: "x", fix: "x" })];
+}
+export function wrappedProducer() { return localProducer(); }
+export const aliasedProducer = localProducer;
+export const ordinaryHelper = (value: string) => value.trim();
+`);
+      writeFileSync(join(root, "src", "scan", "forwarded.ts"), `export { wrappedProducer as reexportedProducer } from "./producer.js";\n`);
+      const problems = validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root).join("\n");
+      for (const name of ["wrappedProducer", "aliasedProducer"]) {
+        expect(problems).toContain(`src/scan/producer.ts#${name}: implemented mechanical finding producer is not registered`);
+      }
+      expect(problems).toContain("src/scan/forwarded.ts#reexportedProducer: implemented mechanical finding producer is not registered");
+      expect(problems).not.toContain("ordinaryHelper");
+      expect(problems).not.toContain("localProducer: implemented mechanical finding producer is not registered");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves imported helpers, star/re-export cycles, direct rows, and shadowed seed names", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-symbol-producer-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "src", "scan", "common.ts"), `export const mechanicalFinding = <T>(value: T): T => value;\n`);
+      writeFileSync(join(root, "src", "scan", "helper.ts"), `import { mechanicalFinding } from "./common.js";
+export function helperProducer() { return [mechanicalFinding({ id: "X", title: "x", severity: "Low", category: "x", taxonomy: "x", location: "x", evidence: "x", impact: "x", fix: "x" })]; }
+`);
+      writeFileSync(join(root, "src", "scan", "entry.ts"), `import { helperProducer } from "./helper.js";
+export function importedWrapper() { return helperProducer(); }
+export function directFinding() { return [{ id: "Y", title: "y", severity: "Low", category: "y", taxonomy: "y", location: "y", evidence: "y", impact: "y", fix: "y" }]; }
+export function shadowedSeed(mechanicalFinding: (value: string) => string) { return mechanicalFinding("ordinary"); }
+`);
+      writeFileSync(join(root, "src", "scan", "forwarded.ts"), `export * from "./entry.js";\n`);
+      writeFileSync(join(root, "src", "scan", "cycle-a.ts"), `export * from "./forwarded.js"; export * from "./cycle-b.js";\n`);
+      writeFileSync(join(root, "src", "scan", "cycle-b.ts"), `export * from "./cycle-a.js";\n`);
+      const problems = validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root).join("\n");
+      for (const key of [
+        "src/scan/helper.ts#helperProducer",
+        "src/scan/entry.ts#importedWrapper",
+        "src/scan/entry.ts#directFinding",
+        "src/scan/forwarded.ts#importedWrapper",
+        "src/scan/cycle-a.ts#importedWrapper",
+        "src/scan/cycle-b.ts#importedWrapper",
+      ]) expect(problems).toContain(`${key}: implemented mechanical finding producer is not registered`);
+      expect(problems).not.toContain("shadowedSeed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on ambiguous star exports, dynamic dispatch, and stale helper aliases", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-ambiguous-producer-"));
+    try {
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "src", "scan", "common.ts"), `export const mechanicalFinding = <T>(value: T): T => value;\n`);
+      for (const name of ["one", "two"]) writeFileSync(join(root, "src", "scan", `${name}.ts`), `import { mechanicalFinding } from "./common.js";
+export function sameName() { return [mechanicalFinding({ id: "${name}", title: "x", severity: "Low", category: "x", taxonomy: "x", location: "x", evidence: "x", impact: "x", fix: "x" })]; }
+`);
+      writeFileSync(join(root, "src", "scan", "barrel.ts"), `export * from "./one.js"; export * from "./two.js";\n`);
+      writeFileSync(join(root, "src", "scan", "dynamic.ts"), `import { sameName } from "./one.js";
+const producers = [sameName];
+export function dynamicProducer(index: number) { return producers[index]!(); }
+`);
+      writeFileSync(join(root, "src", "scan", "stale.ts"), `export const staleProducer = missingHelper;\n`);
+      const problems = validateMechanicalEngineRegistry(repoRoot, MECHANICAL_REGISTRY, root).join("\n");
+      expect(problems).toContain("src/scan/barrel.ts#sameName: ambiguous export-star mechanical producer ownership");
+      expect(problems).toContain("ambiguous dynamic mechanical producer dispatch is not registry-auditable");
+      expect(problems).toContain("src/scan/stale.ts#staleProducer: stale exported helper alias cannot be resolved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a live producer taxonomy outside its declared ownership", () => {
     expect(() => assertProducerTaxonomyOwnership(
       { id: "fixture-producer", phase: "configuration", taxonomies: ["Owned taxonomy"] },

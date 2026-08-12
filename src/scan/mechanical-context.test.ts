@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "../detectors/common.js";
+import ts from "typescript";
+import { parse, parseFresh, readonlySourceFile, type AstMembraneMetrics } from "../detectors/common.js";
 import { MechanicalScanContext } from "./mechanical-context.js";
 import { MECHANICAL_DETECTORS, runRegisteredMechanicalDetectors } from "./mechanical-detector-registry.js";
 
@@ -117,7 +118,102 @@ describe("#1851 immutable one-scan context", () => {
     expect(metrics.legacyEquivalentFileReads).toBeGreaterThan(metrics.filesRead);
     expect(metrics.avoidedFileReads).toBeGreaterThan(0);
     expect(metrics.aggregateRunnerMs).toBeGreaterThanOrEqual(metrics.criticalPathMs);
+    expect(metrics.astMembraneObjects).toBeGreaterThan(metrics.astsBuilt);
+    expect(metrics.astMembraneMethodWrappers).toBeGreaterThan(0);
+    expect(metrics.astMembraneCallbacks).toBeGreaterThan(0);
+    expect(metrics.astMembraneIteratorResults).toBeGreaterThanOrEqual(0);
     context.dispose();
+  });
+
+  it("never exposes mutable AST nodes through callbacks, iterators, methods, or nested arrays", () => {
+    const context = new MechanicalScanContext(fixture());
+    const route = context.sourceFiles.find((file) => file.path === "src/route.ts")!;
+    const sourceFile = context.withAstCache(() => parse(route.path, route.text));
+    const original = sourceFile.statements.map((statement) => statement.pos);
+    const mutate = (node: { pos: number }): boolean => { node.pos = 777; return true; };
+    for (const run of [
+      () => sourceFile.statements.forEach(mutate),
+      () => sourceFile.statements.map(mutate),
+      () => sourceFile.statements.find(mutate),
+      () => sourceFile.statements.filter(mutate),
+      () => sourceFile.statements.reduce((_prior, node) => mutate(node), false),
+      () => sourceFile.statements.some(mutate),
+      () => sourceFile.statements.every(mutate),
+    ]) expect(run).toThrow("shared TypeScript AST is immutable");
+
+    const iterated = sourceFile.statements.values().next().value!;
+    expect(() => { (iterated as unknown as { pos: number }).pos = 777; }).toThrow("shared TypeScript AST is immutable");
+    const entry = sourceFile.statements.entries().next().value!;
+    expect(() => { (entry[1] as unknown as { pos: number }).pos = 777; }).toThrow("shared TypeScript AST is immutable");
+    const spread = [...sourceFile.statements];
+    expect(() => { (spread[0] as unknown as { pos: number }).pos = 777; }).toThrow("shared TypeScript AST is immutable");
+
+    const children = sourceFile.getChildren();
+    expect(children[0]!.getSourceFile()).toBe(sourceFile);
+    expect(() => { (children[0] as unknown as { pos: number }).pos = 777; }).toThrow("shared TypeScript AST is immutable");
+    const variable = sourceFile.statements.find((statement) => "declarationList" in statement) as unknown as { declarationList?: { declarations: readonly { pos: number }[] } };
+    const nested = variable.declarationList?.declarations[0];
+    expect(nested).toBeDefined();
+    expect(() => { nested!.pos = 777; }).toThrow("shared TypeScript AST is immutable");
+
+    const later = context.withAstCache(() => parse(route.path, route.text));
+    expect(later).toBe(sourceFile);
+    expect(later.statements.map((statement) => statement.pos)).toEqual(original);
+    expect(later.statements).toHaveLength(2);
+    context.dispose();
+  });
+
+  it("wraps Map/Set callbacks, descriptors, callable values, and iterator results with stable identities", () => {
+    const raw = parseFresh("fixture.ts", "export const value = 1;\n");
+    const firstRaw = raw.statements[0]!;
+    Object.defineProperties(raw, {
+      detectorMap: { configurable: true, enumerable: true, writable: true, value: new Map([["node", firstRaw]]) },
+      detectorSet: { configurable: true, enumerable: true, writable: true, value: new Set([firstRaw]) },
+      detectorCallback: { configurable: true, enumerable: true, writable: true, value: () => firstRaw },
+    });
+    const counters: AstMembraneMetrics = {
+      objectsWrapped: 0,
+      methodWrappersCreated: 0,
+      callbacksWrapped: 0,
+      iteratorResultsWrapped: 0,
+      rejectedMutations: 0,
+    };
+    const source = readonlySourceFile(raw, counters) as ts.SourceFile & {
+      detectorMap: Map<string, ts.Node>;
+      detectorSet: Set<ts.Node>;
+      detectorCallback: () => ts.Node;
+    };
+    const node = source.statements[0]!;
+    expect(source.statements[Symbol.iterator]).toBe(source.statements[Symbol.iterator]);
+    expect(source.getChildren).toBe(source.getChildren);
+    expect(source.detectorMap.get("node")).toBe(node);
+    expect(source.detectorSet.values().next().value).toBe(node);
+    expect(source.detectorMap.entries().next().value?.[1]).toBe(node);
+    expect(source.detectorCallback()).toBe(node);
+    expect(source.statements.indexOf(node)).toBe(0);
+    expect(node.parent).toBe(source);
+    expect(node.getSourceFile()).toBe(source);
+    expect(Object.getOwnPropertyDescriptor(source, "statements")?.value).toBe(source.statements);
+
+    let callbackOwner: unknown;
+    expect(() => source.detectorMap.forEach((value, _key, owner) => {
+      callbackOwner = owner;
+      (value as unknown as { pos: number }).pos = 900;
+    })).toThrow("shared TypeScript AST is immutable");
+    expect(callbackOwner).toBe(source.detectorMap);
+    expect(() => source.detectorSet.forEach((value, duplicate, owner) => {
+      expect(duplicate).toBe(value);
+      callbackOwner = owner;
+      (value as unknown as { pos: number }).pos = 901;
+    })).toThrow("shared TypeScript AST is immutable");
+    expect(callbackOwner).toBe(source.detectorSet);
+    expect(() => source.detectorMap.set("other", node)).toThrow("shared TypeScript AST is immutable");
+    expect(() => source.detectorSet.add(node)).toThrow("shared TypeScript AST is immutable");
+    expect(counters.objectsWrapped).toBeGreaterThan(5);
+    expect(counters.methodWrappersCreated).toBeGreaterThan(5);
+    expect(counters.callbacksWrapped).toBe(2);
+    expect(counters.iteratorResultsWrapped).toBeGreaterThanOrEqual(2);
+    expect(counters.rejectedMutations).toBe(4);
   });
 
   it("owns tool results once and refuses use after explicit disposal", () => {
