@@ -95,5 +95,5 @@ void main();
     expect(cold.phases).toMatchObject({ semgrep: "miss", configuration: "miss", "structural-ast": "miss" });
     expect(warm.phases).toMatchObject({ semgrep: "hit", configuration: "hit", "structural-ast": "hit" });
     expect(warm.events.filter((event) => event.startsWith("CACHE HIT"))).toHaveLength(3);
-  }, 180_000);
+  });
 });

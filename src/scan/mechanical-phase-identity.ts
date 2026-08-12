@@ -145,6 +145,7 @@ export function buildMechanicalPhaseCache(options: PhaseIdentityOptions): Mechan
   const externalInputs: MechanicalPhaseCacheOptions["externalInputs"] = {
     semgrep: {
       semgrep: binaryVersion("semgrep"),
+      node: process.version,
       registryPacks: registry.identity ? digestParts([registry.identity]) : "unresolved",
       toolchain,
       options: options.optionIdentity,

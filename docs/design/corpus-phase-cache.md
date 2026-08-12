@@ -55,7 +55,7 @@ compile time and the runner rejects a missing or duplicate phase at runtime.
 |---|---:|---|
 | secrets/history | no | TruffleHog `--only-verified` consults live provider state with no reproducible response identity |
 | dependency/advisory | no | OSV and npm registry responses have no immutable response identity on this path |
-| Semgrep | yes | pinned commit/tree, exact downloaded registry YAML bytes, local rules, phase implementation closure, Semgrep version, dependency lock, scan options |
+| Semgrep | yes | pinned commit/tree, exact downloaded registry YAML bytes, local rules, phase implementation closure, Semgrep and Node versions, dependency lock, scan options |
 | configuration | yes | pinned commit/tree, implementation closure, Node version, dependency lock, scan options |
 | structural/AST | yes | pinned commit/tree, detector implementation closure, Node version, dependency lock, scan options |
 | normalization | no | cheap composition of this run's deterministic and live advisory outputs |

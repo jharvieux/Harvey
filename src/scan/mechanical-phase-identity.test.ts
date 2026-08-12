@@ -90,6 +90,23 @@ describe("mechanical phase implementation identities (#1864)", () => {
     }
   });
 
+  it("a Node runtime change invalidates exactly every phase that executes Node-driven logic", () => {
+    const root = fixture();
+    const before = buildCache(root).externalInputs;
+    const nodeDependent = (["semgrep", "configuration", "structural-ast"] as const).filter((phase) => before[phase]?.node === process.version);
+    expect(nodeDependent).toEqual(["semgrep", "configuration", "structural-ast"]);
+    const after = Object.fromEntries(Object.entries(before).map(([phase, inputs]) => [phase, inputs?.node
+      ? { ...inputs, node: "v-next-runtime" }
+      : inputs])) as typeof before;
+    const movedPhases = (["semgrep", "configuration", "structural-ast"] as const).filter((phase) =>
+      JSON.stringify(before[phase]) !== JSON.stringify(after[phase]));
+    expect(movedPhases).toEqual(["semgrep", "configuration", "structural-ast"]);
+    for (const phase of movedPhases) {
+      const movedInputs = Object.keys(after[phase]!).filter((name) => before[phase]?.[name] !== after[phase]?.[name]);
+      expect(movedInputs).toEqual(["node"]);
+    }
+  });
+
   it("makes Semgrep explicitly non-cacheable when a retry restored no exact attempt-1 snapshot", () => {
     const root = fixture();
     const events: string[] = [];
