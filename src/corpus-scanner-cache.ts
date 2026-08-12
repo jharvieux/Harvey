@@ -3,15 +3,41 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { dirname, join } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "./findings.js";
 import { readEntriesSafe } from "./fs-walk.js";
+import { isCorpusScannerOwnedScope } from "./corpus-scanner-scope.js";
 
 export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "quality-scan", "mutation-detect-only"] as const;
 export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
 export type CorpusScannerCacheMode = "off" | "read-write" | "verify";
 export type CorpusScannerCacheStatus = "hit" | "miss" | "recomputed" | "non-cacheable";
 
+export type CorpusScannerObservation =
+  | {
+      scanner: "detect-static";
+      loadedSources: { count: number; pathsDigest: string };
+      ancillary: { productSources: number; configSources: number; testStorySources: number };
+    }
+  | {
+      scanner: "quality-scan";
+      productSources: { count: number; pathsDigest: string };
+      jscpd: { status: "completed" | "incomplete"; comparedLines: number };
+      knip: { discovered: string[]; completed: string[]; reduced: string[]; incomplete: string[] };
+      divergedClones: { securityPathSources: number; wholeRepoEnabled: boolean; complementSources: number };
+    }
+  | {
+      scanner: "mutation-detect-only";
+      testSources: { count: number; pathsDigest: string };
+      suiteSignals: {
+        packageManifest: boolean;
+        strykerConfig: boolean;
+        ancestorWorkspaceSuite: string | null;
+        childWorkspaceSuites: string[];
+      };
+    };
+
 export interface CorpusScannerScope {
   unitsExamined: number;
   description: string;
+  observation?: CorpusScannerObservation;
 }
 
 interface CorpusScannerExecution {
@@ -117,7 +143,7 @@ function validateArtifact(value: unknown, expected: Pick<ScannerArtifact, "scann
   if (!Array.isArray(artifact.findings)) throw new Error("artifact findings are incomplete or malformed");
   const problems = artifact.findings.flatMap((finding) => validateFindings({ meta: VALIDATION_META, findings: [finding] }).errors.filter((error) => error.startsWith("findings[0]")));
   if (problems.length > 0) throw new Error(`artifact findings violate the normalized Finding schema: ${problems.join("; ")}`);
-  if (!artifact.scope || !Number.isInteger(artifact.scope.unitsExamined) || artifact.scope.unitsExamined <= 0 || typeof artifact.scope.description !== "string" || artifact.scope.description.length === 0) {
+  if (!artifact.scope || !isCorpusScannerOwnedScope(artifact.scope, expected.scanner)) {
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
   if (artifact.payloadDigest !== digest({ findings: artifact.findings, scope: artifact.scope })) throw new Error("artifact payload checksum mismatch");

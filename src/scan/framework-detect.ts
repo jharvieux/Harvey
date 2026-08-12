@@ -243,16 +243,17 @@ function frameworkEntryGlobs(framework: TargetFramework): string[] {
     // Remix and React Router framework mode register route modules dynamically; no ordinary
     // import has to lead from app/root to app/routes/*. A plugins-disabled Knip run therefore
     // calls virtually the whole application unused unless these framework-contract entries stand
-    // in for the disabled plugin. Keep this list to paths the frameworks themselves reserve — it
-    // does not bless arbitrary app/components as entries, so genuinely unreachable source still
-    // surfaces. React Router 7 supports both the route-config module and filesystem route modules;
-    // Remix uses the same app/root + entry.client/server contract.
+    // in for the disabled plugin. Keep this list to paths the frameworks themselves reserve.
+    // `app/routes/**/*` is NOT such a contract: Remix route folders may contain ordinary lib/helper
+    // files, and treating every descendant as an entry erased real Carbon dead-code findings.
+    // Flat route modules live directly below routes; route folders admit only their `route.*`.
+    // React Router's explicit app/routes.* config then pulls declared modules through imports.
     return [
       "app/root.{ts,tsx,js,jsx}",
       "app/entry.client.{ts,tsx,js,jsx}",
       "app/entry.server.{ts,tsx,js,jsx}",
       "app/routes.{ts,tsx,js,jsx}",
-      "app/routes/**/*.{ts,tsx,js,jsx}",
+      "app/routes/*/route.{ts,tsx,js,jsx}",
       "react-router.config.{ts,js,mjs,cjs}",
       "remix.config.{ts,js,mjs,cjs}",
     ];
@@ -286,9 +287,12 @@ const UNIVERSAL_ENTRY_GLOBS = [
 // universal set, plus the same ignoreExportsUsedInFile default the merge path uses (#695). Pure so
 // it's unit-testable directly. Because these entries are INFERRED (not the target's own), the CLI
 // marks the resulting unused-FILE findings as review-tier rather than confirmed dead code.
-export function buildInferredKnipConfig(framework: TargetFramework): Record<string, unknown> {
+export function buildInferredKnipConfig(framework?: TargetFramework): Record<string, unknown> {
+  void framework;
   return {
-    entry: [...KNIP_DEFAULT_ENTRY_GLOBS, ...frameworkEntryGlobs(framework), ...UNIVERSAL_ENTRY_GLOBS],
+    // Installed/plugin-backed runs let Knip's live framework plugin own framework routes. Harvey
+    // supplies only universal non-app entries outside that framework routing contract.
+    entry: [...KNIP_DEFAULT_ENTRY_GLOBS, ...UNIVERSAL_ENTRY_GLOBS],
     ignoreExportsUsedInFile: { interface: true, type: true },
   };
 }
@@ -304,7 +308,8 @@ export function buildInferredKnipConfig(framework: TargetFramework): Record<stri
 // caller-supplied list of knip's own installed plugin ids (knip validates config keys strictly, so
 // it must be knip's real plugin set, not a guess) — see quality-scan.ts's knipPluginNames.
 export function buildDegradedKnipConfig(framework: TargetFramework, pluginNames: string[]): Record<string, unknown> {
-  const config = buildInferredKnipConfig(framework);
+  const config = buildInferredKnipConfig();
+  config.entry = [...(config.entry as string[]), ...frameworkEntryGlobs(framework)];
   for (const name of pluginNames) config[name] = false;
   return config;
 }

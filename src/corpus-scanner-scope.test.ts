@@ -1,39 +1,88 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { countCorpusScannerUnits } from "./corpus-scanner-scope.js";
+import { readCorpusScannerScope, writeCorpusScannerScope } from "./corpus-scanner-scope.js";
 
-describe("corpus scanner examined-unit census", () => {
+describe("scanner-owned examined-scope receipts", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it("counts tracked target files without traversing an installed dependency tree", () => {
+  const receiptPath = (): string => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-scope-"));
     dirs.push(dir);
-    execFileSync("git", ["init", "-q", dir]);
-    writeFileSync(join(dir, "package.json"), "{}\n");
-    mkdirSync(join(dir, "src"));
-    writeFileSync(join(dir, "src", "app.ts"), "export const app = true;\n");
-    writeFileSync(join(dir, "ignored.fixture"), "tracked but no scanner reads this extension\n");
-    execFileSync("git", ["-C", dir, "add", "package.json", "src/app.ts", "ignored.fixture"]);
-    mkdirSync(join(dir, "node_modules", "dependency"), { recursive: true });
-    for (let index = 0; index < 100; index++) writeFileSync(join(dir, "node_modules", "dependency", `file-${index}.js`), "module.exports = true;\n");
+    return join(dir, "scope.json");
+  };
 
-    expect(countCorpusScannerUnits(dir)).toBe(2);
+  it("round-trips the scanner identity and its own examined units", () => {
+    const path = receiptPath();
+    writeCorpusScannerScope(path, "detect-static", {
+      unitsExamined: 6_131,
+      description: "sources loaded by detect-static",
+      observation: {
+        scanner: "detect-static",
+        loadedSources: { count: 6_131, pathsDigest: "static-paths" },
+        ancillary: { productSources: 3_066, configSources: 2, testStorySources: 3_063 },
+      },
+    });
+    expect(readCorpusScannerScope(path, "detect-static")).toEqual({
+      unitsExamined: 6_131,
+      description: "sources loaded by detect-static",
+      observation: {
+        scanner: "detect-static",
+        loadedSources: { count: 6_131, pathsDigest: "static-paths" },
+        ancillary: { productSources: 3_066, configSources: 2, testStorySources: 3_063 },
+      },
+    });
   });
 
-  it("falls back to source-like files while excluding generated and dependency trees", () => {
-    const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-scope-fallback-"));
-    dirs.push(dir);
-    mkdirSync(join(dir, "src"));
-    writeFileSync(join(dir, "src", "app.ts"), "export const app = true;\n");
-    mkdirSync(join(dir, "node_modules", "dependency"), { recursive: true });
-    writeFileSync(join(dir, "node_modules", "dependency", "ignored.js"), "module.exports = true;\n");
-    mkdirSync(join(dir, "dist"));
-    writeFileSync(join(dir, "dist", "ignored.js"), "module.exports = true;\n");
+  it("rejects a receipt from a different scanner instead of sharing a broad census", () => {
+    const path = receiptPath();
+    writeCorpusScannerScope(path, "quality-scan", {
+      unitsExamined: 3_055,
+      description: "quality source inputs",
+      observation: {
+        scanner: "quality-scan",
+        productSources: { count: 3_055, pathsDigest: "quality-paths" },
+        jscpd: { status: "completed", comparedLines: 8_000 },
+        knip: { discovered: ["(repo root)"], completed: ["(repo root)"], reduced: [], incomplete: [] },
+        divergedClones: { securityPathSources: 1, wholeRepoEnabled: false, complementSources: 0 },
+      },
+    });
+    expect(() => readCorpusScannerScope(path, "mutation-detect-only")).toThrow(/mismatched/);
+  });
 
-    expect(countCorpusScannerUnits(dir)).toBe(1);
+  it.each([0, -1, 1.5])("rejects a non-positive or fractional unit claim (%s)", (unitsExamined) => {
+    expect(() => writeCorpusScannerScope(receiptPath(), "quality-scan", {
+      unitsExamined,
+      description: "invalid",
+      observation: {
+        scanner: "quality-scan",
+        productSources: { count: 0, pathsDigest: "none" },
+        jscpd: { status: "completed", comparedLines: 0 },
+        knip: { discovered: [], completed: [], reduced: [], incomplete: [] },
+        divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
+      },
+    })).toThrow(/incomplete or zero/);
+  });
+
+  it("allows mutation to report zero test files while retaining the suite signals it consumed", () => {
+    const path = receiptPath();
+    writeCorpusScannerScope(path, "mutation-detect-only", {
+      unitsExamined: 0,
+      description: "zero test files; package/config signals consumed",
+      observation: {
+        scanner: "mutation-detect-only",
+        testSources: { count: 0, pathsDigest: "empty" },
+        suiteSignals: { packageManifest: true, strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+      },
+    });
+    expect(readCorpusScannerScope(path, "mutation-detect-only").unitsExamined).toBe(0);
+  });
+
+  it("rejects malformed and forged generic receipts", () => {
+    const path = receiptPath();
+    writeFileSync(path, '{"schema":1,"unitsExamined":6133,"description":"generic target census"}\n');
+    expect(() => readCorpusScannerScope(path, "detect-static")).toThrow(/mismatched/);
   });
 });

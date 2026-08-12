@@ -23,6 +23,9 @@ export interface DependencyPreparationResult {
   packageManagerVersion: string;
   lockfileDigest?: string;
   reason: string;
+  /** False when install lifecycle code could have rewritten target-owned source/configuration. */
+  sourceTreeCacheable?: boolean;
+  sourceTreeReason?: string;
 }
 
 interface PreparationIdentity {
@@ -378,6 +381,28 @@ function qualityNonCacheableReason(root: string): string | undefined {
   return reasons.length > 0 ? reasons.join("; ") : undefined;
 }
 
+function projectLifecycleReason(root: string): string | undefined {
+  const lifecycle: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readEntriesSafe(dir).entries) {
+      if (entry.isDirectory) {
+        if (!SKIP_DIRS.has(entry.name)) walk(entry.path);
+        continue;
+      }
+      if (entry.name !== "package.json") continue;
+      try {
+        const pkg = JSON.parse(readFileSync(entry.path, "utf8")) as { scripts?: Record<string, unknown> };
+        const hooks = Object.keys(pkg.scripts ?? {}).filter((name) => INSTALL_LIFECYCLE_HOOKS.has(name));
+        if (hooks.length > 0) lifecycle.push(`${relative(root, entry.path).replaceAll("\\", "/")} (${hooks.sort().join(", ")})`);
+      } catch {
+        return;
+      }
+    }
+  };
+  walk(root);
+  return lifecycle.length > 0 ? `target install lifecycle scripts may rewrite source/configuration: ${lifecycle.sort().join(", ")}` : undefined;
+}
+
 function lockfileLifecycleReason(manager: PackageManager, text: string): string | undefined {
   try {
     if (manager === "npm") {
@@ -532,6 +557,46 @@ function lockfilePath(dir: string, manager: PackageManager): string | undefined 
   return existsSync(join(dir, "package-lock.json")) ? join(dir, "package-lock.json") : undefined;
 }
 
+function packageManagerEvidenceReason(dir: string, detected: PackageManager, actualVersion: string): string | undefined {
+  const locks = [
+    ...(existsSync(join(dir, "pnpm-lock.yaml")) ? ["pnpm"] : []),
+    ...(existsSync(join(dir, "yarn.lock")) ? ["yarn"] : []),
+    ...(existsSync(join(dir, "package-lock.json")) || existsSync(join(dir, "npm-shrinkwrap.json")) ? ["npm"] : []),
+  ] as PackageManager[];
+  const reasons: string[] = [];
+  if (new Set(locks).size > 1) reasons.push(`multiple package-manager lockfile families are present (${[...new Set(locks)].sort().join(", ")})`);
+  const manifestPath = join(dir, "package.json");
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { packageManager?: unknown };
+      if (manifest.packageManager !== undefined) {
+        if (typeof manifest.packageManager !== "string" || !/^(npm|pnpm|yarn)@[^\s]+$/.test(manifest.packageManager)) {
+          reasons.push("package.json#packageManager is not an exact supported manager declaration");
+        } else {
+          const [declaredManager, declaredRaw] = manifest.packageManager.split("@") as [PackageManager, string];
+          const declaredVersion = declaredRaw.split("+")[0]!;
+          if (declaredManager !== detected) reasons.push(`package.json declares ${declaredManager} but lockfile detection selected ${detected}`);
+          if (actualVersion !== "unavailable" && declaredVersion !== actualVersion) reasons.push(`package.json declares ${declaredManager}@${declaredVersion} but the executable is ${actualVersion}`);
+        }
+      }
+    } catch (error) {
+      reasons.push(`package.json could not be parsed while validating package-manager identity: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return reasons.length > 0 ? reasons.join("; ") : undefined;
+}
+
+export function inspectCorpusDependencyInputs(
+  dir: string,
+  detected: PackageManager,
+  actualVersion: string,
+): { installConfiguration: string; packageManagerReason?: string } {
+  return {
+    installConfiguration: digestInstallInputs(dir),
+    packageManagerReason: packageManagerEvidenceReason(dir, detected, actualVersion),
+  };
+}
+
 function npmLockIsReproducible(text: string): boolean {
   try {
     const lock = JSON.parse(text) as { lockfileVersion?: number; packages?: Record<string, { link?: boolean; integrity?: string; resolved?: string }> };
@@ -664,6 +729,7 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
     : manager === "pnpm"
       ? [...PNPM_PORTABLE_STORE_FLAGS]
       : [];
+  const inputInspection = inspectCorpusDependencyInputs(options.targetDir, manager, version);
 
   const legacyInstall = (reason: string): DependencyPreparationResult => {
     try {
@@ -674,15 +740,17 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
           : ["install", "--no-audit", "--no-fund", ...installFlags];
       runInstall({ bin: manager, args, cwd: options.targetDir, env: { ...process.env, ...options.environment, CI: "true" } });
       options.onEvent?.(`DEPENDENCY PREP BYPASS ${manager}: ${reason}; legacy install completed and quality-scan remains non-cacheable`);
-      return { status: "non-cacheable", complete: true, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason };
+      return { status: "non-cacheable", complete: true, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason, sourceTreeCacheable: false, sourceTreeReason: `unkeyed legacy ${manager} install may execute lifecycle code` };
     } catch {
       removeInstalledTrees(options.targetDir);
       const failure = `${reason}; ${manager} install failed`;
       options.onEvent?.(`DEPENDENCY PREP INCOMPLETE ${manager}: ${failure}; M5-knip will preserve its did-not-run/degraded semantics`);
-      return { status: "incomplete", complete: false, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason: failure };
+      return { status: "incomplete", complete: false, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason: failure, sourceTreeCacheable: false, sourceTreeReason: `failed ${manager} install may have executed lifecycle code before rejection` };
     }
   };
 
+  const managerEvidence = inputInspection.packageManagerReason;
+  if (managerEvidence) return legacyInstall(managerEvidence);
   if (version === "unavailable") return legacyInstall("exact package-manager version is unavailable");
   if (!lockPath || !lockText) return legacyInstall("target has no package-manager lockfile");
   if (!reproducibleLock(manager, lockText)) return legacyInstall(`${basename(lockPath)} has no reproducible integrity identity for every installed package`);
@@ -692,7 +760,7 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
     targetTree: digest(options.targetTree),
     sourceRoot: options.sourceRoot ?? ".",
     lockfile: { path: basename(lockPath), digest: lockDigest! },
-    installConfiguration: digestInstallInputs(options.targetDir),
+    installConfiguration: inputInspection.installConfiguration,
     packageManager: manager,
     packageManagerVersion: version,
     node: process.version,
@@ -707,6 +775,10 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
   const preInstallNonCacheableQuality = combineReasons(
     qualityNonCacheableReason(options.targetDir),
+    lockfileLifecycleReason(manager, lockText),
+  );
+  const preInstallSourceTreeReason = combineReasons(
+    projectLifecycleReason(options.targetDir),
     lockfileLifecycleReason(manager, lockText),
   );
   let hit: PreparationReceipt | undefined;
@@ -731,11 +803,14 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
         preInstallNonCacheableQuality,
         installedLifecycleReason(options.targetDir, manager, lockText),
       );
+      const sourceTreeReason = combineReasons(preInstallSourceTreeReason, installedLifecycleReason(options.targetDir, manager, lockText));
       options.onEvent?.(`DEPENDENCY PREP HIT ${manager} ${key.slice(0, 12)}: receipt, lockfile, manager ${version}, and offline materialization verified`);
       return {
         status: "hit", complete: true, cacheable: !nonCacheableQuality, key, packageManager: manager,
         packageManagerVersion: version, lockfileDigest: lockDigest,
         reason: nonCacheableQuality ? `validated receipt and offline materialization; quality-scan remains non-cacheable because ${nonCacheableQuality}` : "validated receipt and offline materialization",
+        sourceTreeCacheable: !sourceTreeReason,
+        sourceTreeReason,
       };
     } catch {
       options.onEvent?.(`DEPENDENCY PREP REJECT ${manager} ${key.slice(0, 12)}: offline materialization failed from restored store; performing clean install`);
@@ -754,12 +829,15 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
       preInstallNonCacheableQuality,
       installedLifecycleReason(options.targetDir, manager, lockText),
     );
+    const sourceTreeReason = combineReasons(preInstallSourceTreeReason, installedLifecycleReason(options.targetDir, manager, lockText));
     writeReceipt(receiptPath, key, identity);
     options.onEvent?.(`DEPENDENCY PREP MISS ${manager} ${key.slice(0, 12)}: clean install completed; receipt stored and reread`);
     return {
       status: "miss", complete: true, cacheable: !nonCacheableQuality, key, packageManager: manager,
       packageManagerVersion: version, lockfileDigest: lockDigest,
       reason: nonCacheableQuality ? `clean content-addressed preparation; quality-scan remains non-cacheable because ${nonCacheableQuality}` : "clean content-addressed preparation",
+      sourceTreeCacheable: !sourceTreeReason,
+      sourceTreeReason,
     };
   } catch {
     rmSync(receiptPath, { force: true });

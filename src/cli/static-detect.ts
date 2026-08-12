@@ -39,11 +39,14 @@ import { resolveScanScope } from "../scan/scan-scope.js";
 import { checkUnreadSourceExtensions } from "../scan/ext-coverage.js";
 import { importGraphNotAssessedRows } from "../scan/import-graph-scope.js";
 import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
+import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const scopeOutIdx = args.indexOf("--scope-out");
+const scopeOutPath = scopeOutIdx >= 0 ? args[scopeOutIdx + 1] : undefined;
 
 if (!targetArg) {
   console.error("usage: pnpm detect-static <target-dir> [--out findings.static.json]");
@@ -163,6 +166,19 @@ try {
     writeFileSync(outPath, `${JSON.stringify(findings, null, 2)}\n`);
     console.log(`\nwritten to ${outPath} — merge into the engagement findings.json and \`pnpm validate:findings\``);
   }
+  writeCorpusScannerScope(scopeOutPath, "detect-static", {
+    unitsExamined: allSources.length,
+    description: `${allSources.length} source/config file(s) loaded and parsed by detect-static`,
+    observation: {
+      scanner: "detect-static",
+      loadedSources: { count: allSources.length, pathsDigest: digestObservedPaths(allSources.map((source) => source.path)) },
+      ancillary: {
+        productSources: productSources.length,
+        configSources: sources.length - productSources.length,
+        testStorySources: allSources.length - sources.length,
+      },
+    },
+  });
 } finally {
   cleanup();
 }

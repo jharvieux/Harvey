@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
+import { inspectCorpusDependencyInputs, prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { readEntriesLstatSafe, readRecursiveSafe } from "./fs-walk.js";
 
 describe("relocatable corpus dependency preparation (#1872)", () => {
@@ -142,6 +142,36 @@ describe("relocatable corpus dependency preparation (#1872)", () => {
     expect(build(targetB).key).not.toBe(first.key);
     writeFileSync(join(targetB, "package-lock.json"), JSON.stringify({ name: "npm-fixture", lockfileVersion: 3, packages: { "": { name: "changed" } } }));
     expect(build(targetB).key).not.toBe(first.key);
+  });
+
+  it("fails cacheability on conflicting locks, manager declarations, or declared executable versions", () => {
+    const multipleLocks = fixture("pnpm");
+    writeFileSync(join(multipleLocks, "package-lock.json"), '{"lockfileVersion":3,"packages":{"":{}}}\n');
+    expect(inspectCorpusDependencyInputs(multipleLocks, "pnpm", "11.12.1").packageManagerReason).toContain("multiple package-manager lockfile families");
+
+    const declarationMismatch = fixture("npm");
+    const mismatchPackage = JSON.parse(readFileSync(join(declarationMismatch, "package.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(declarationMismatch, "package.json"), JSON.stringify({ ...mismatchPackage, packageManager: "pnpm@11.12.1" }));
+    expect(inspectCorpusDependencyInputs(declarationMismatch, "npm", "11.12.1").packageManagerReason).toContain("declares pnpm but lockfile detection selected npm");
+
+    const versionMismatch = fixture("npm");
+    const versionPackage = JSON.parse(readFileSync(join(versionMismatch, "package.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(versionMismatch, "package.json"), JSON.stringify({ ...versionPackage, packageManager: "npm@11.12.0" }));
+    expect(inspectCorpusDependencyInputs(versionMismatch, "npm", "11.12.1").packageManagerReason).toContain("executable is 11.12.1");
+  });
+
+  it.each([
+    { manager: "npm" as const, file: "package.json", change: (text: string) => JSON.stringify({ ...JSON.parse(text), dependencies: { alias: "npm:is-number@7.0.0" } }) },
+    { manager: "pnpm" as const, file: "pnpm-workspace.yaml", change: () => "packages: ['.']\ncatalog:\n  react: 19.0.0\n" },
+    { manager: "yarn" as const, file: ".yarnrc.yml", change: () => "packageExtensions:\n  example@*:\n    dependencies:\n      react: 19.0.0\n" },
+  ])("binds adversarial $manager alias/catalog/workspace installation shape", ({ manager, file, change }) => {
+    const targetA = fixture(manager);
+    const targetB = fixture(manager);
+    const before = inspectCorpusDependencyInputs(targetA, manager, "exact-1.2.3");
+    const path = join(targetB, file);
+    writeFileSync(path, change(existsSync(path) ? readFileSync(path, "utf8") : "{}"));
+    const changed = inspectCorpusDependencyInputs(targetB, manager, "exact-1.2.3");
+    expect(changed.installConfiguration).not.toBe(before.installConfiguration);
   });
 
   it("invalidates preparation when any install-visible environment value changes", () => {

@@ -6,7 +6,6 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
-import { countCorpusScannerUnits } from "./corpus-scanner-scope.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +13,8 @@ interface ProcessResult {
   statuses: Record<string, string>;
   findingCounts: Record<string, number>;
   scopeUnits: Record<string, number>;
+  scopeDescriptions: Record<string, string>;
+  scopeObservations: Record<string, { scanner: string }>;
   qualityLocation: string;
   qualityLocations: string[];
   preparation: string;
@@ -57,22 +58,27 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       writeFileSync(join(dir, "provider", "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
       writeFileSync(join(dir, "provider", "index.js"), 'module.exports = require("./config.js");\n');
       writeFileSync(join(dir, "provider", "config.js"), 'module.exports = { selected: true };\n');
-      // Carbon's production receipt is 6,133 scanner-eligible units. Exercise that scale with real
-      // TypeScript, not tracked filler: all three scanners must open/parse these target-owned files;
-      // Knip's target-owned entry glob keeps the fixture from manufacturing thousands of dead-file
-      // findings while still making it build a graph over every module.
-      for (let index = 0; index < 6_125; index += 1) {
+      // Keep one faithful large target but give every scanner a large surface it REALLY consumes.
+      // Static opens both sets; quality's source passes open the product set; mutation detect-only
+      // opens the test set. No shared target census is allowed to stand in for these three facts.
+      for (let index = 0; index < 3_062; index += 1) {
         writeFileSync(
           join(dir, "src", "workload", `unit-${index.toString().padStart(4, "0")}.ts`),
           `export const workloadUnit${index} = ${index};\n`,
         );
       }
-      // The tracked non-source control is excluded from the receipt.
+      for (let index = 0; index < 3_063; index += 1) {
+        writeFileSync(
+          join(dir, "src", "workload", `unit-${index.toString().padStart(4, "0")}.test.ts`),
+          `test("workload ${index}", () => expect(${index}).toBe(${index}));\n`,
+        );
+      }
+      // Tracked filler and broad JSON inputs must not inflate any scanner-owned receipt.
       writeFileSync(join(dir, "ignored.fixture"), "tracked but scanner-ineligible\n");
+      writeFileSync(join(dir, "generic-data.json"), '{"not":"a static loader config or quality source"}\n');
       execFileSync("git", ["init", "-q", dir]);
       execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "ignore" });
       execFileSync("git", ["-C", dir, "add", "."]);
-      expect(countCorpusScannerUnits(dir)).toBe(6_133);
     };
     makeTarget();
     // The freshly-created git tree is checkout A; copy it once for the physically-distinct B.
@@ -109,9 +115,11 @@ const results = { "detect-static": detected, "quality-scan": quality, "mutation-
 const statuses = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.cache ?? "fresh"]));
 const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
 const scopeUnits = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.unitsExamined ?? -1]));
+const scopeDescriptions = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.description ?? "missing"]));
+const scopeObservations = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.observation ?? { scanner: "missing" }]));
 const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
 const qualityLocations = quality.findings.map((finding) => finding.location);
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, scopeUnits, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, scopeUnits, scopeDescriptions, scopeObservations, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
 `);
     const run = async (repoRoot: string, targetDir: string, environment: NodeJS.ProcessEnv = {}): Promise<ProcessResult> => {
       const { stdout } = await execFileAsync(join(process.cwd(), "node_modules", ".bin", "tsx"), [runner, repoRoot, targetDir, cacheArgument], {
@@ -130,8 +138,20 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "miss", "mutation-detect-only": "miss" });
     expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
-    expect(cold.scopeUnits).toEqual({ "detect-static": 6_133, "quality-scan": 6_133, "mutation-detect-only": 6_133 });
+    expect(cold.scopeUnits).toEqual({ "detect-static": 6_131, "quality-scan": 3_066, "mutation-detect-only": 3_063 });
     expect(warm.scopeUnits).toEqual(cold.scopeUnits);
+    expect(cold.scopeDescriptions).toEqual({
+      "detect-static": "6131 source/config file(s) loaded and parsed by detect-static",
+      "quality-scan": "3066 product source file(s) read by quality-scan's in-process source passes",
+      "mutation-detect-only": "3063 test source file(s) opened by mutation detect-only suite detection",
+    });
+    expect(warm.scopeDescriptions).toEqual(cold.scopeDescriptions);
+    expect(Object.fromEntries(Object.entries(cold.scopeObservations).map(([scanner, observation]) => [scanner, observation.scanner]))).toEqual({
+      "detect-static": "detect-static",
+      "quality-scan": "quality-scan",
+      "mutation-detect-only": "mutation-detect-only",
+    });
+    expect(warm.scopeObservations).toEqual(cold.scopeObservations);
     expect(warm.qualityLocation).toBe(cold.qualityLocation);
     expect(warm.qualityLocations.some((location) => location.includes("m4-cache-marker"))).toBe(false);
     expect(lstatSync(cacheDir).isDirectory()).toBe(true);
@@ -144,6 +164,12 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(closureMoved.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
     expect(closureMoved.findingCounts).toEqual(warm.findingCounts);
 
+    writeFileSync(join(checkoutB, "src", "detectors", "app-router.ts"), `${readFileSync(join(checkoutB, "src", "detectors", "app-router.ts"), "utf8")}\n// static-only helper closure mutation control\n`);
+    writeFileSync(join(checkoutB, "src", "mutation-scan.ts"), `${readFileSync(join(checkoutB, "src", "mutation-scan.ts"), "utf8")}\n// mutation helper closure mutation control\n`);
+    const otherClosuresMoved = await run(checkoutB, targetB);
+    expect(otherClosuresMoved.statuses).toEqual({ "detect-static": "miss", "quality-scan": "hit", "mutation-detect-only": "miss" });
+    expect(otherClosuresMoved.findingCounts).toEqual(warm.findingCounts);
+
     const alternateHome = join(fixture, "home-b");
     mkdirSync(alternateHome);
     const homeMoved = await run(checkoutB, targetB, { HOME: alternateHome });
@@ -152,6 +178,11 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     const homeStable = await run(checkoutB, targetB, { HOME: alternateHome });
     expect(homeStable.preparation).toBe("hit");
     expect(homeStable.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
+
+    writeFileSync(join(checkoutB, "src", "mutation-scan.ts"), `${readFileSync(join(checkoutB, "src", "mutation-scan.ts"), "utf8")}\nexport async function dynamicClosureFalsifier(name: string) { return import(name); }\n`);
+    const dynamicClosure = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(dynamicClosure.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "fresh" });
+    expect(dynamicClosure.events).toContainEqual(expect.stringContaining("implementation closure is non-cacheable"));
   }, 60_000);
 
   it("keeps a Vite provider inside a brace-declared npm workspace fresh when its config reads unkeyed state", async () => {
@@ -321,6 +352,22 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
       expect(changed.preparation.reason).toContain("stateful-knip-config@1.0.0 (postinstall)");
       expect(changed.events.some((event) => event.includes("CACHE HIT quality-scan"))).toBe(false);
+      expect(changed.preparation).toMatchObject({ sourceTreeCacheable: false, sourceTreeReason: expect.stringContaining("lifecycle") });
+      const sourceCache = {
+        dir: cacheDir,
+        mode: "read-write" as const,
+        targetRevision: "transitive-lifecycle-pin",
+        targetTree: "transitive-lifecycle-tree",
+        dependencyPreparation: changed.preparation,
+      };
+      const staticResult = await runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: "lifecycle static isolation", script: "detect-static", scanner: "detect-static", scriptArgs: [targetDir], cache: sourceCache,
+      });
+      const mutationResult = await runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: "lifecycle mutation isolation", script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"], cache: sourceCache,
+      });
+      expect(staticResult.cacheRecord).toBeUndefined();
+      expect(mutationResult.cacheRecord).toBeUndefined();
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;

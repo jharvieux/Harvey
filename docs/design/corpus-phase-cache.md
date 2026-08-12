@@ -128,10 +128,15 @@ required all-shard cache-size measurement. `node_modules` is never transported.
 
 Corpus scanners write three independent artifacts: `detect-static`, `quality-scan`, and mutation
 `--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
-Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
-and rehydrated on read. On real Carbon, each cache reports 6,133 scanner-eligible target units;
-the receipt census applies the source/config extension and generated/dependency exclusions on the
-git-tracked path too, applying the same scanner-eligibility filter.
+Node/toolchain versions, normalized effective invocation flags, any named external build/report
+artifact bytes, and target configuration. Checkout roots are tokenized in stored findings and
+rehydrated on read. Scope is not inferred from a shared target census. Each scanner emits a
+structured receipt from inside its own process: detect-static records the exact `loadSources`
+path digest plus product/config/test partitions; quality records compared jscpd lines, Knip's
+discovered/completed/reduced/incomplete workspace identities, and each diverged-clone surface;
+mutation records the exact test-file path digest and the package/config/workspace suite signals it
+consumed. A computed dynamic implementation import without a statically resolvable local path keeps that scanner
+fresh instead of writing an under-keyed artifact.
 
 `quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
 keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
@@ -153,6 +158,12 @@ pnpm's backing store layout) and the npm/pnpm lockfile lifecycle markers. Any de
 hook, implicit `binding.gyp` install, unreadable manifest, or mismatch between the resolved and
 enumerable installed package sets returns `cacheable: false`. Package metadata is read; installed
 modules and target providers are not imported for this decision.
+The same lifecycle evidence separately governs the source-only scanner caches: when an install may
+have rewritten target-owned source/configuration, detect-static and mutation detect-only execute
+fresh. Package-manager selection is also fail-safe: conflicting lockfile families, a declaration
+that disagrees with the selected lockfile, or a declared version that disagrees with the executable
+forces the legacy non-cacheable path. npm aliases, pnpm catalogs/workspaces, and Yarn install
+configuration are part of the recursive preparation identity.
 
 Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
 framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
@@ -195,7 +206,7 @@ and manual dispatch use `live-verify`, rerun OSV and provider verification, and 
 drift. The default client scanner path sets neither mode and remains live.
 
 A pre-correction local Carbon candidate on 2026-08-12 used `--install`, snapshot external state, a
-fresh shard cache, and the pinned 6,133-unit target. Cold was 417.75s wall / 397s phase-timed
+fresh shard cache, and the pinned Carbon target. Cold was 417.75s wall / 397s phase-timed
 (install 43.5s, quality 51.4s, detect-static 21.7s); restored was 49.21s wall / 32s phase-timed
 (offline install 25.6s, quality 0.7s, detect-static 0.1s). Those are traceable local observations,
 not final-design acceptance evidence: hosted run `31614708026` then showed that the relative cache
@@ -228,12 +239,18 @@ Harvey checkout copies (only the tool installation is shared) and invokes the pr
 scanner runner twice against matching tracked fixtures and a relative phase-cache root. Dependency
 preparation and all three scanner families must miss then hit one external artifact directory while
 preserving findings and examined scope; cache-only duplicate sources must remain invisible to M4.
-The scale fixture contains 6,125 real TypeScript modules and enough scanner-readable manifests and
-configuration to total exactly 6,133 units. A tracked `.fixture` adversary is excluded from the
-receipt, and every cold/warm scanner artifact must independently report the same 6,133 units.
+The scale fixture contains 6,125 real TypeScript modules split between product and test source.
+Receipts are emitted inside each scanner process from the input it actually consumed: detect-static
+reports 6,131 loaded source/config files, quality reports 3,066 product sources read by its source
+passes, and mutation detect-only reports the 3,063 test files it opened. A tracked `.fixture` and a
+generic JSON file are adversarial controls: neither may inflate these scanner-specific receipts.
+The three values are deliberately different; a shared source-like census is not the examined scope
+examined scope of all three scanners.
 The quality identity is separately falsified by changing its preparation key and each execution
-environment value. A physical copy's real `src/quality-scan.ts` helper is mutated to prove closure
-discovery moves only quality's implementation identity. The incomplete-preparation controls prove
+environment value. Physical copies of real helpers in all three scanner families are mutated to
+prove only the dependent implementation identity moves; a computed dynamic import proves the
+unprovable-closure path stays fresh. A flag-only change and a byte change in an external artifact
+each move the invocation identity. The incomplete-preparation controls prove
 all three directions across both failing corpus shapes: an incomplete receipt routes around the
 partial provider, preserves source-only findings with M5-98 at both a package root and a nested
 `nextjs/` scan root, and emits M5-00 if that safe tier itself fails; the same provider executes when

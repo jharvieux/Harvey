@@ -39,6 +39,7 @@ import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { runJscpd as runJscpdLive } from "../scan/duplication.js";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
+import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 import {
   duplicationSummary,
   JSCPD_DISCLOSED_GLOBS,
@@ -89,6 +90,8 @@ const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const scopeOutIdx = args.indexOf("--scope-out");
+const scopeOutPath = scopeOutIdx >= 0 ? args[scopeOutIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
 const degradedKnipIdx = args.indexOf("--degraded-knip-reason");
@@ -318,13 +321,14 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "ge
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
 
-function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
+function securityPathFiles(dir: string, rel = "", observed?: Set<string>): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath));
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath, observed));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      observed?.add(relPath);
       if (touchesSecurityPath(relPath)) {
         files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
       } else {
@@ -515,7 +519,8 @@ const jscpdReport = mergeJscpdReports(jscpdReports);
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
 // touchesTenantSupabasePath).
-const narrowFiles = securityPathFiles(targetDir);
+const observedProductSources = new Set<string>();
+const narrowFiles = securityPathFiles(targetDir, "", observedProductSources);
 const divergedFindings = divergedCloneFindings(narrowFiles);
 
 // #809: opt-in whole-codebase extension. Runs over the COMPLEMENT of narrowFiles — every other
@@ -530,7 +535,7 @@ if (wholeRepoDiverged) {
 
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
-const eligibleFileCount = countSourceFiles(targetDir);
+const eligibleFileCount = observedProductSources.size;
 const divergedScopeDisclosure = wholeRepoDiverged ? undefined : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
 
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
@@ -609,3 +614,23 @@ if (outPath) {
 } else {
   console.log(json);
 }
+writeCorpusScannerScope(scopeOutPath, "quality-scan", {
+  unitsExamined: eligibleFileCount,
+  description: `${eligibleFileCount} product source file(s) read by quality-scan's in-process source passes`,
+  observation: {
+    scanner: "quality-scan",
+    productSources: { count: eligibleFileCount, pathsDigest: digestObservedPaths([...observedProductSources]) },
+    jscpd: { status: jscpdGaps.length > 0 ? "incomplete" : "completed", comparedLines: dup.totalLines },
+    knip: {
+      discovered: scopes.map(scopeLabel).sort(),
+      completed: scopes.map(scopeLabel).filter((scope) => !knipGaps.some((gap) => gap.scope === scope)).sort(),
+      reduced: knipReducedScopes.map((scope) => scope.scope).sort(),
+      incomplete: knipGaps.map((scope) => scope.scope).sort(),
+    },
+    divergedClones: {
+      securityPathSources: narrowFiles.length,
+      wholeRepoEnabled: wholeRepoDiverged,
+      complementSources: wholeRepoDiverged ? Math.max(0, eligibleFileCount - narrowFiles.length) : 0,
+    },
+  },
+});

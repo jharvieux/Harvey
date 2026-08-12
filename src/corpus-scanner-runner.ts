@@ -9,7 +9,7 @@ import {
   type CorpusScannerRecord,
 } from "./corpus-scanner-cache.js";
 import { buildCorpusScannerCache, corpusQualityEnvironment } from "./corpus-scanner-identity.js";
-import { countCorpusScannerUnits } from "./corpus-scanner-scope.js";
+import { readCorpusScannerScope } from "./corpus-scanner-scope.js";
 import type { Finding } from "./findings.js";
 
 const QUALITY_FRESH_REASON = "quality-scan executes fresh because no complete reproducible dependency-preparation receipt is available";
@@ -42,8 +42,9 @@ interface CorpusScannerRunResult {
 }
 
 export async function runCorpusScanner(options: CorpusScannerRunOptions): Promise<CorpusScannerRunResult> {
-  const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
-  const unitsExamined = countCorpusScannerUnits(options.targetDir);
+  const outputDir = mkdtempSync(join(tmpdir(), "harvey-corpus-"));
+  const out = join(outputDir, "findings.json");
+  const scopeOut = join(outputDir, "scope.json");
   const qualityPreparation = options.cache?.dependencyPreparation;
   const qualityEnvironment = corpusQualityEnvironment();
   const execute = (): { findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string } => {
@@ -58,9 +59,9 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
             ...(qualityPreparation?.complete === false && qualityPreparation.lockfileDigest === undefined
               ? ["--degraded-knip-unresolved-dependency-surface"]
               : []),
-            "--out", out,
+            "--out", out, "--scope-out", scopeOut,
           ]
-        : [options.script, ...options.scriptArgs, "--out", out];
+        : [options.script, ...options.scriptArgs, "--out", out, "--scope-out", scopeOut];
       execFileSync(bin, args, {
         cwd: options.repoRoot,
         stdio: ["ignore", "ignore", "inherit"],
@@ -69,43 +70,56 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
       const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
       return {
         findings: Array.isArray(parsed) ? parsed : [parsed.finding],
-        scope: { unitsExamined, description: `${options.scanner} over ${options.targetConfig}` },
+        scope: readCorpusScannerScope(scopeOut, options.scanner),
         completed: true,
       };
     } catch (error) {
       return {
         findings: [],
-        scope: { unitsExamined, description: `${options.scanner} incomplete over ${options.targetConfig}` },
+        scope: { unitsExamined: 0, description: `${options.scanner} emitted no valid scanner-owned scope receipt over ${options.targetConfig}` },
         completed: false,
         failure: error instanceof Error ? error.message : String(error),
       };
     }
   };
 
-  const cacheAllowed = options.scanner !== "quality-scan" || (qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key);
+  const cacheAllowed = options.scanner === "quality-scan"
+    ? Boolean(qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key)
+    : qualityPreparation?.sourceTreeCacheable !== false;
   if (!options.cache || !cacheAllowed) {
     const value = execute();
     const qualityFreshReason = qualityPreparation
       ? `quality-scan executes fresh because ${qualityPreparation.reason}`
       : QUALITY_FRESH_REASON;
-    const reason = value.failure ?? (options.scanner === "quality-scan" ? qualityFreshReason : "corpus scanner cache disabled");
+    const reason = value.failure ?? (options.scanner === "quality-scan"
+      ? qualityFreshReason
+      : qualityPreparation?.sourceTreeReason ?? "corpus scanner cache disabled");
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
     return { findings: value.findings };
   }
 
-  const cache = buildCorpusScannerCache({
-    repoRoot: options.repoRoot,
-    cacheDir: options.cache.dir,
-    mode: options.cache.mode,
-    scanner: options.scanner,
-    targetDir: options.targetDir,
-    targetRevision: options.cache.targetRevision,
-    targetTree: options.cache.targetTree,
-    targetConfig: options.targetConfig,
-    dependencyPreparationKey: options.scanner === "quality-scan" ? qualityPreparation!.key : undefined,
-    environment: options.scanner === "quality-scan" ? qualityEnvironment : undefined,
-    onEvent: options.onEvent,
-  });
+  let cache;
+  try {
+    cache = buildCorpusScannerCache({
+      repoRoot: options.repoRoot,
+      cacheDir: options.cache.dir,
+      mode: options.cache.mode,
+      scanner: options.scanner,
+      targetDir: options.targetDir,
+      targetRevision: options.cache.targetRevision,
+      targetTree: options.cache.targetTree,
+      targetConfig: options.targetConfig,
+      invocationArgs: options.scriptArgs,
+      dependencyPreparationKey: options.scanner === "quality-scan" ? qualityPreparation!.key : undefined,
+      environment: options.scanner === "quality-scan" ? qualityEnvironment : undefined,
+      onEvent: options.onEvent,
+    });
+  } catch (error) {
+    const value = execute();
+    const reason = `scanner implementation closure is non-cacheable: ${error instanceof Error ? error.message : String(error)}`;
+    options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
+    return { findings: value.findings };
+  }
   const record = await executeCorpusScanner(cache, execute);
   options.onEvent?.(`SCANNER ${options.scanner} — ${record.cache}; ${record.scope.unitsExamined} unit(s); ${record.reason}`);
   return { findings: record.findings, cacheRecord: record };

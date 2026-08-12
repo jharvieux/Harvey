@@ -317,15 +317,17 @@ function noNodeModulesReactRouterFixture(): string {
       devDependencies: { "@react-router/dev": "^7.0.0", vite: "^6.0.0" },
     }),
   );
-  // A rejected partial install must not execute either provider-bearing config. React Router's
-  // route modules are nevertheless source-evidenced entries: the framework contract registers
-  // app/routes/**/* even though ordinary static imports do not reach those files.
+  // A rejected partial install must not execute either provider-bearing config. The static
+  // app/routes.ts contract entry imports the actual route module, preserving source-evidenced
+  // reachability without blessing every helper nested anywhere below app/routes/ as an entry.
   write(
     repo,
     "react-router.config.js",
     'require("node:fs").writeFileSync("target-provider-consumed", "yes");\nrequire("missing-react-router-provider");\nmodule.exports = {};\n',
   );
+  write(repo, "app/routes.ts", 'import Dashboard from "./routes/dashboard.js";\nexport default [Dashboard];\n');
   write(repo, "app/routes/dashboard.tsx", 'import { live } from "../components/live.js";\nexport default function Dashboard() { return live; }\n');
+  write(repo, "app/routes/api/lib/dead-helper.ts", 'export const deadNestedRouteHelper = "dead";\n');
   write(repo, "app/components/live.ts", 'export const live = "reachable";\nexport const sourceLocalDeadExport = "dead";\n');
   write(repo, "app/components/dead.ts", 'export const genuinelyDead = "dead";\n');
   return repo;
@@ -363,6 +365,7 @@ function degradedWorkspaceResolverFixture(): string {
   write(repo, "apps/web/app/runtime.ts", 'import { runtimeValue } from "@fixture/contracts";\nexport const live = runtimeValue;\n');
   write(repo, "apps/web/app/routes/dashboard.ts", 'import { live } from "../runtime.js";\nexport default live;\n');
   write(repo, "apps/web/app/routes/types.ts", 'import type { Contract } from "@fixture/contracts";\nexport default {} satisfies Contract;\n');
+  write(repo, "apps/web/app/routes.ts", 'import Dashboard from "./routes/dashboard.js";\nimport Types from "./routes/types.js";\nexport default [Dashboard, Types];\n');
   return repo;
 }
 
@@ -407,6 +410,7 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
 
     expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
     expect(unusedFile("app/routes/dashboard.tsx")).toBeUndefined();
+    expect(unusedFile("app/routes/api/lib/dead-helper.ts")).toMatchObject({ severity: "Low", confidence: "Review", precisionTier: "review" });
     expect(unusedFile("app/components/live.ts")).toBeUndefined();
     expect(unusedFile("app/components/dead.ts")).toMatchObject({ severity: "Low", confidence: "Review", precisionTier: "review" });
     expect(findings).toContainEqual(expect.objectContaining({
