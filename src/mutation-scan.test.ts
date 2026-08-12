@@ -30,6 +30,7 @@ import {
   scopedRunModuleRecord,
   summarizeLineCoverage,
   summarizeMutationReport,
+  strykerPhaseDurations,
   survivingMutantFindings,
   testQualityFromArtifact,
   mutationRunFromArtifact,
@@ -48,6 +49,30 @@ import {
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
+
+describe("strykerPhaseDurations (#1874)", () => {
+  it("separates the unmutated baseline from real mutation time using Stryker's own markers", () => {
+    const output = [
+      "\u001b[32m00:13:14 INFO DryRunExecutor\u001b[39m Starting initial test run (vitest).",
+      "\u001b[32m00:13:41 INFO DryRunExecutor\u001b[39m Initial test run succeeded.",
+      "\u001b[32m00:17:01 INFO MutationTestExecutor\u001b[39m Done in 3 minutes and 51 seconds.",
+    ].join("\n");
+    expect(strykerPhaseDurations(output)).toEqual({ testBaselineMs: 27_000, mutationMs: 200_000 });
+  });
+
+  it("returns undefined rather than inventing a zero when a required marker disappears", () => {
+    expect(strykerPhaseDurations("00:13:14 INFO DryRunExecutor Starting initial test run")).toBeUndefined();
+  });
+
+  it("uses Stryker's measured net + overhead when a sub-second baseline shares one wall-clock second", () => {
+    const output = [
+      "20:26:46 INFO DryRunExecutor Starting initial test run",
+      "20:26:46 INFO DryRunExecutor Initial test run succeeded. Ran 11 tests in 0 seconds (net 2.77 ms, overhead 124.23 ms).",
+      "20:26:47 INFO MutationTestExecutor Done in 2 seconds.",
+    ].join("\n");
+    expect(strykerPhaseDurations(output)).toEqual({ testBaselineMs: 127, mutationMs: 1_000 });
+  });
+});
 
 // Shaped from the documented mutation-testing-elements JSON schema Stryker's json reporter
 // emits (schemaVersion "1") — not captured from a live Stryker run (deferred, see

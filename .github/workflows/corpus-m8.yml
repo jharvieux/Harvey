@@ -61,9 +61,11 @@ on:
   pull_request:
     paths:
       - "src/scan/m8-corpus.ts"
+      - "src/scan/m8-corpus-artifacts.ts"
       - "src/scan/external-corpus.ts"
       - "src/mutation-scan.ts"
       - "src/cli/mutation-scan.ts"
+      - "src/cli/corpus-m8.ts"
       - "src/cli/corpus-drift.ts"
       - "src/cli/corpus-pins.ts"
       - "src/scan/corpus-clone.ts"
@@ -79,84 +81,113 @@ permissions:
   issues: write # #1333: the alert path below find-or-updates ONE tracking issue on a scheduled failure.
 
 jobs:
-  mutation:
-    name: install target deps + score M8 mutation baselines
+  plan:
+    name: derive exact M8 target set
     runs-on: ubuntu-latest
-    # proposit/boxyhq: ~1s of Stryker each (21/35 mutants) on top of two non-workspace installs of
-    # ~1000-1700 packages — each with its own lockfile-implied package manager since #1268, which
-    # for proposit is pnpm, not npm. inbox-zero/rallly (#1268): pnpm workspace installs (~35-70s each,
-    # MEASURED) plus a real Stryker run each (~100s for inbox-zero's 125 mutants, ~10s for rallly's
-    # 30) — still low single-digit minutes total. The headroom is for the installs and for suites
-    # that grow, not for the current mutant counts — a Stryker run that somehow hangs should die
-    # here rather than burn an hour.
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      # Checkout first — the alert step at the end is a LOCAL composite action, so a drill that
-      # fails before the checkout leaves `./.github/actions/alert-issue` unresolvable and proves
-      # nothing. Everything expensive still comes after the drill.
       - uses: actions/checkout@v4
-
-      # Before the six target installs and the Stryker runs on purpose: the drill proves the ALERT
-      # path, not the mutation baselines, so it must not pay ~20 minutes to reach it.
-      - name: Alert-path liveness drill — fail deliberately (#1287)
-        if: inputs.alert_drill
-        run: |
-          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an M8 baseline drift."
-          exit 1
-
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The matrix is derived from M8_CORPUS_CONFIGS, while the same command accounts for every
+      # remaining external-corpus target with its recorded non-mutation reason. A hand-maintained
+      # target list cannot silently diverge from the manifest again.
+      - name: Derive configured targets and counted non-mutation reasons
+        id: plan
+        run: pnpm exec tsx src/cli/corpus-m8.ts plan --github-output "$GITHUB_OUTPUT"
 
+  mutation:
+    name: M8 target (${{ matrix.target }})
+    needs: plan
+    if: ${{ !inputs.alert_drill }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    # The pre-change single job allowed 45 minutes. Each isolated target now gets 20: more than 2x
+    # the measured 9m58s inbox-zero critical target, while a hung suite no longer holds five
+    # already-finished targets hostage. The wrapper itself has no test-worker blocking window.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Authenticate private corpus mirrors
         uses: ./.github/actions/corpus-mirror-auth
         with:
           private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
-
-      # #1571: same pin-keyed clone cache corpus-drift.yml uses — this job scores a SUBSET of the
-      # same pinned targets (the SCOPE block above), so it rides corpus-drift's daily-warmed cache
-      # entry rather than re-cloning cold every month.
-      #
-      # READ-ONLY on purpose: there is no `mode: save` step in this job, because the key hashes the
-      # WHOLE pin set and this job only ever clones part of it — a property that holds however many
-      # targets the step below grows to. It did save, once, and that is what poisoned the cache on
-      # 2026-07-30: a 4-target tree (this job's scope at the time) took the 14-target key,
-      # corpus-drift's complete tree was then refused as a duplicate, and every later run restored
-      # the partial one. Warming this entry is corpus-drift.yml's job; this one consumes it.
+      # Content-addressed clone reuse remains read-only and pin-keyed. Preparation/baseline output
+      # is deliberately not reused: dependency installs execute target lifecycle scripts and the
+      # unmutated baseline is part of Stryker's real mutation execution. Caching either result would
+      # make a green score possible without exercising the current wrapper, defeating this gate.
       - name: Corpus clone cache
         id: corpus-cache
         uses: ./.github/actions/corpus-clone-cache
-
-      # Only the targets with a scoreable suite. --install is redundant with --m8's own install for
-      # these, but passing it keeps this job's M5-knip reading consistent with corpus-drift.yml's
-      # rather than silently scoring knip against an uninstalled tree.
-      - name: Score M8 mutation baselines
+      - name: Prepare, baseline-test, mutate and score target
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
-        run: |
-          set -euo pipefail
-          pnpm corpus-drift --target saas-lite --install --m8 --json corpus-m8-saas-lite.json
-          pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json
-          pnpm corpus-drift --target boxyhq --install --m8 --json corpus-m8-boxyhq.json
-          pnpm corpus-drift --target inbox-zero --install --m8 --json corpus-m8-inbox-zero.json
-          pnpm corpus-drift --target rallly --install --m8 --json corpus-m8-rallly.json
-          pnpm corpus-drift --target multi-tenant-starter --install --m8 --json corpus-m8-multi-tenant-starter.json
-
-      - name: Upload M8 scorecards
+        run: pnpm exec tsx src/cli/corpus-m8.ts target --target "${{ matrix.target }}" --out "corpus-m8-${{ matrix.target }}/result.json"
+      # A failed target still writes and uploads its status: aggregation, not matrix fail-fast,
+      # owns the final verdict after every shard has had a chance to report.
+      - name: Upload target result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: corpus-m8-scorecard
-          path: corpus-m8-*.json
-          if-no-files-found: warn
+          name: corpus-m8-${{ matrix.target }}
+          path: corpus-m8-${{ matrix.target }}/
+          if-no-files-found: error
 
+  aggregate:
+    name: M8 aggregate (all targets)
+    needs: [plan, mutation]
+    if: ${{ always() && (inputs.alert_drill || needs.plan.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Checkout first because the final alert is a local composite action.
+      - uses: actions/checkout@v4
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287/#1333): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an M8 baseline drift."
+          exit 1
+      - uses: pnpm/action-setup@v4
+        if: ${{ !inputs.alert_drill }}
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.alert_drill }}
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: ${{ !inputs.alert_drill }}
+        run: pnpm install --frozen-lockfile
+      - name: Download every target result
+        if: ${{ !inputs.alert_drill }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: corpus-m8-*
+          path: corpus-m8-artifacts
+      - name: Validate, reconcile and aggregate
+        if: ${{ !inputs.alert_drill }}
+        run: pnpm exec tsx src/cli/corpus-m8.ts aggregate --artifacts corpus-m8-artifacts --out corpus-m8-aggregate.json
+      - name: Upload reconciled M8 report
+        if: ${{ !inputs.alert_drill && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-m8-aggregate
+          path: corpus-m8-aggregate.json
+          if-no-files-found: error
       # #1333: this job runs MONTHLY, so before this step a failure could sit unseen for up to 31
-      # days on a branch nobody watches — the longest blind window of any gate in the repo. Never
-      # fires on PR/push; workflow_dispatch is permanently in the condition (#1287) because a
-      # cron-only alert path cannot be proven to work.
+      # days. It never fires on PR/push; workflow_dispatch remains to prove the real alert path.
       - name: Open or update the corpus-m8 tracking issue
         if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
@@ -167,4 +198,4 @@ jobs:
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The monthly `corpus-m8` mutation run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A target's mutation score moved off its baseline, or a target install/Stryker run errored — see the corpus-m8-scorecard artifact for the per-target table. That is EITHER the target's suite changing under its pin (rebaseline in src/scan/external-corpus.ts with the measured note) OR our wrapper mis-reading Stryker's report (a scanner bug). Never something to silence. Close this issue once green."
+          body: "The monthly `corpus-m8` mutation aggregate failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A target's mutation score moved, a shard failed, or a target artifact was missing/duplicate/corrupt — see the per-target artifacts and corpus-m8-aggregate report. Close this issue once green."
