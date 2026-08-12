@@ -22,7 +22,17 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(2);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow.match(/corpus-phase-v2-/g)).toHaveLength(3);
+    expect(workflow.match(/corpus-phase-v3-/g)).toHaveLength(4);
+    expect(workflow).toContain("Validate corpus phase-cache transport provenance");
+    expect(workflow).toContain("Record corpus phase-cache transport provenance");
+    expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key }}'");
+  });
+
+  it("seeds the default-branch cache after merge while preserving unconditional PR reporting", () => {
+    expect(workflow).toMatch(/push:\n\s+branches: \[main\]/);
+    expect(workflow).toContain("--default-ref 'refs/heads/${{ github.event.repository.default_branch }}'");
+    expect(workflow).toContain("--event '${{ github.event_name }}'");
+    expect(workflow).toContain("--ref '${{ github.ref }}'");
   });
 
   it("refreshes registry bytes on attempt one and reuses the restored snapshot on retries", () => {
@@ -34,7 +44,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain('if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]');
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
     expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(2);
-    expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache?.mode)");
+    expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
   it("declares test-only source edits unreachable while unknown production source remains fail-open", () => {

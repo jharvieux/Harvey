@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +26,11 @@ describe("mechanical phase cache across real process and checkout boundaries (#1
     symlinkSync(process.cwd(), repoB, "dir");
     const target = join(fixture, "target");
     const cacheDir = join(fixture, "cache");
+    const binDir = join(fixture, "bin");
+    mkdirSync(binDir);
+    const semgrep = join(binDir, "semgrep");
+    writeFileSync(semgrep, '#!/bin/sh\nprintf \'%s\\n\' \'{"version":"fixture","results":[],"errors":[],"paths":{"scanned":[],"skipped":[]}}\'\n');
+    chmodSync(semgrep, 0o755);
     mkdirSync(join(target, "src"), { recursive: true });
     writeFileSync(join(target, "package.json"), `${JSON.stringify({ name: "phase-process-fixture", private: true })}\n`);
     writeFileSync(join(target, "src", "route.ts"), "export function route(tenantId: string) { console.log(tenantId); return { tenantId }; }\n");
@@ -35,16 +40,19 @@ describe("mechanical phase cache across real process and checkout boundaries (#1
     execFileSync("git", ["-C", target, "add", "."]);
     execFileSync("git", ["-C", target, "commit", "-qm", "fixture"]);
 
-    const registry = join(fixture, "fixed-registry.yml");
-    writeFileSync(registry, [
-      "rules:",
-      "  - id: phase-cache-cross-process",
-      "    languages: [typescript]",
-      "    message: fixed local registry control",
-      "    severity: WARNING",
-      "    pattern: console.log(...)",
-      "",
-    ].join("\n"));
+    const registries = Array.from({ length: 6 }, (_, index) => {
+      const registry = join(fixture, `fixed-registry-${index + 1}.yml`);
+      writeFileSync(registry, [
+        "rules:",
+        `  - id: phase-cache-cross-process-${index + 1}`,
+        "    languages: [typescript]",
+        "    message: fixed local registry control",
+        "    severity: WARNING",
+        "    pattern: console.log(...)",
+        "",
+      ].join("\n"));
+      return registry;
+    });
 
     const runner = join(fixture, "run-phase-cache.mts");
     const identityModule = pathToFileURL(join(process.cwd(), "src", "scan", "mechanical-phase-identity.ts")).href;
@@ -54,23 +62,27 @@ describe("mechanical phase cache across real process and checkout boundaries (#1
 import { buildMechanicalPhaseCache } from ${JSON.stringify(identityModule)};
 import { resolveGitTree } from ${JSON.stringify(cacheModule)};
 import { runMechanicalScanDetailed } from ${JSON.stringify(mechanicalModule)};
-const [repoRoot, cacheDir, target, registry] = process.argv.slice(2);
+const [repoRoot, cacheDir, target, ...registries] = process.argv.slice(2);
 async function main(): Promise<void> {
   const events: string[] = [];
+  const phaseCache = buildMechanicalPhaseCache({
+    repoRoot,
+    cacheDir,
+    mode: "read-write",
+    targetRevision: "fixed-target-revision",
+    targetTree: resolveGitTree(target),
+    optionIdentity: JSON.stringify({ skipNetworkChecks: true, skipBundleScan: true }),
+    registryPackIdentity: { identity: "fixed-local-registry-v1", files: registries },
+    onEvent: (message) => events.push(message),
+  });
+  // This test isolates whole-phase transport across processes. Family partitioning has its own
+  // cross-checks; keeping it enabled here would launch twelve redundant Semgrep child processes.
+  delete phaseCache.semgrepFamilies;
   const result = await runMechanicalScanDetailed({
     dir: target,
     skipNetworkChecks: true,
     skipBundleScan: true,
-    phaseCache: buildMechanicalPhaseCache({
-      repoRoot,
-      cacheDir,
-      mode: "read-write",
-      targetRevision: "fixed-target-revision",
-      targetTree: resolveGitTree(target),
-      optionIdentity: JSON.stringify({ skipNetworkChecks: true, skipBundleScan: true }),
-      registryPackIdentity: { identity: "fixed-local-registry-v1", files: [registry] },
-      onEvent: (message) => events.push(message),
-    }),
+    phaseCache,
   });
   console.log("PHASE_PROCESS_RESULT=" + JSON.stringify({ phases: Object.fromEntries(result.phases.map((phase) => [phase.phase, phase.cache])), events }));
 }
@@ -78,10 +90,10 @@ void main();
 `);
 
     const run = async (repoRoot: string): Promise<ProcessResult> => {
-      const { stdout: output } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, cacheDir, target, registry], {
+      const { stdout: output } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, cacheDir, target, ...registries], {
         cwd: process.cwd(),
         encoding: "utf8",
-        env: { ...process.env, NO_COLOR: "1" },
+        env: { ...process.env, NO_COLOR: "1", PATH: `${binDir}:${process.env.PATH ?? ""}` },
         maxBuffer: 1024 * 1024 * 8,
         timeout: 120_000,
       });

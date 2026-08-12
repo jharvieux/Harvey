@@ -468,6 +468,25 @@ export function secretScanScopeFinding(): Finding {
   };
 }
 
+export function deterministicSecretCandidateScopeFinding(identity: string): Finding {
+  return {
+    id: "SEC-CI-CANDIDATE-00",
+    title: "Corpus regression secret lane uses deterministic candidates, not live provider verification",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Corpus CI — deterministic secret-candidate provenance",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `This corpus-regression run pattern-scanned the pinned working tree with gitleaks under candidate identity ${identity}. It deliberately did not call TruffleHog's live providers; the daily corpus lane performs that current-state verification separately.`,
+    impact: "This row describes corpus-CI architecture, not a client audit limitation. It must never be presented as current provider verification or reused by an engagement scan.",
+    fix: "No client action. Consult the daily live corpus run for provider-state drift; client audits continue to run live verification.",
+    value: 1,
+    ease: 5,
+    safety: 5,
+  };
+}
+
 // Same contract, for gitleaks (source + bundle passes).
 export function gitleaksUnavailableFinding(reason: string): Finding {
   return {
@@ -613,8 +632,15 @@ function runGitleaks(dir: string): { results: GitleaksResult[]; failure?: string
 // sourceDir and historyDir are usually the same directory, but mechanical.ts passes a scoped,
 // tracked-files-only copy as sourceDir (issue #101) — that copy has no `.git`, so the
 // git-history pass needs the real, clonable original directory instead (historyDir).
-export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: string): Finding[] {
+export function scanSecrets(
+  sourceDir: string,
+  historyDir: string,
+  bundleDir?: string,
+  options: { providerVerification?: "live" | "deterministic-candidates"; candidateIdentity?: string } = {},
+): Finding[] {
   const findings: Finding[] = [];
+  const liveProviderVerification = (options.providerVerification ?? "live") === "live";
+  if (!liveProviderVerification && !options.candidateIdentity) throw new Error("deterministic secret-candidate mode requires an exact candidate identity");
   // #950: once a pass reports the binary itself is unavailable, every later pass with the same
   // tool would fail identically — skip the redundant invocation and emit ONE disclosure for the
   // tool below, instead of one near-duplicate row per pass.
@@ -630,17 +656,19 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
     }
   };
 
-  const fsScan = runTruffleHogFilesystem(sourceDir);
-  if (fsScan.failure) truffleHogFailure = fsScan.failure;
-  else findings.push(...parseTruffleHogFindings(fsScan.results, "source"));
+  if (liveProviderVerification) {
+    const fsScan = runTruffleHogFilesystem(sourceDir);
+    if (fsScan.failure) truffleHogFailure = fsScan.failure;
+    else findings.push(...parseTruffleHogFindings(fsScan.results, "source"));
+  }
 
   // Reason deliberately omits historyDir itself: on a real engagement the path is just the
   // target root (no signal beyond what location "(repo-wide)" already says), and on the
   // deterministic dry-run harness (src/cli/dry-run.ts) historyDir is a freshly minted scratch
   // path — embedding it would make the committed findings.json non-reproducible across runs.
-  if (!isGitRepoRoot(historyDir)) {
+  if (liveProviderVerification && !isGitRepoRoot(historyDir)) {
     findings.push(gitHistorySecretsUnavailableFinding("target directory is not a git repository root (an archive export or a subdirectory of a repo, not a full checkout)"));
-  } else if (!truffleHogFailure) {
+  } else if (liveProviderVerification && !truffleHogFailure) {
     const ghScan = runTruffleHogGitHistory(historyDir);
     if (ghScan.failure) truffleHogFailure = ghScan.failure;
     else findings.push(...parseTruffleHogFindings(ghScan.results, "git-history"));
@@ -654,7 +682,7 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
   }
 
   if (bundleDir) {
-    if (!truffleHogFailure) {
+    if (liveProviderVerification && !truffleHogFailure) {
       const bundleTh = runTruffleHogFilesystem(bundleDir);
       if (bundleTh.failure) truffleHogFailure = bundleTh.failure;
       else findings.push(...parseTruffleHogFindings(bundleTh.results, "bundle"));
@@ -671,7 +699,9 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
 
   const allowlistRow = gitleaksAllowlistDisclosure(suppressed);
   if (allowlistRow) findings.push(allowlistRow);
-  findings.push(secretScanScopeFinding());
+  findings.push(liveProviderVerification
+    ? secretScanScopeFinding()
+    : deterministicSecretCandidateScopeFinding(options.candidateIdentity!));
 
   if (truffleHogFailure) findings.push(truffleHogUnavailableFinding(truffleHogFailure));
   if (gitleaksFailure) findings.push(gitleaksUnavailableFinding(gitleaksFailure));

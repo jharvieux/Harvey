@@ -74,8 +74,8 @@ describe("mechanical phase implementation identities (#1864)", () => {
     const mechanical = join(root, "src", "scan", "mechanical.ts");
     writeFileSync(helper, "export function phaseCacheAddedHelper(): void {}\n");
     const source = readFileSync(mechanical, "utf8")
-      .replace('import { existsSync, readFileSync } from "node:fs";', 'import { existsSync, readFileSync } from "node:fs";\nimport { phaseCacheAddedHelper } from "./phase-cache-added-helper.js";')
-      .replace('const semgrepPhase = await runPhase("semgrep", () => {', 'const semgrepPhase = await runPhase("semgrep", () => {\n      phaseCacheAddedHelper();');
+      .replace('import { existsSync, readFileSync, realpathSync } from "node:fs";', 'import { existsSync, readFileSync, realpathSync } from "node:fs";\nimport { phaseCacheAddedHelper } from "./phase-cache-added-helper.js";')
+      .replace('const semgrepPhase = await runPhase("semgrep", async () => {', 'const semgrepPhase = await runPhase("semgrep", async () => {\n      phaseCacheAddedHelper();');
     writeFileSync(mechanical, source);
     expect(discoverMechanicalPhaseImplementationFiles(root).semgrep).toContain(helper);
   });

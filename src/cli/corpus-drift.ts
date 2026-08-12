@@ -60,7 +60,8 @@ import { buildQuickScanReport } from "../quick-scan.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
-import { resolveGitTree } from "../scan/mechanical-phase-cache.js";
+import { binaryVersion, digestFiles, digestParts, resolveGitTree } from "../scan/mechanical-phase-cache.js";
+import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
 import {
   EXTERNAL_CORPUS,
   driftExplanationLines,
@@ -79,6 +80,9 @@ import {
   scoreMutationBaseline,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
+import { assertCorpusScannerCacheVerification, executeCorpusScanner, type CorpusScanner, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
+import { buildCorpusScannerCache } from "../corpus-scanner-identity.js";
+import { countCorpusScannerUnits } from "../corpus-scanner-scope.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 
@@ -106,12 +110,17 @@ const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
 const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
+const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
   process.exit(2);
 }
 if (forceColdCache && !phaseCacheDir) {
   console.error("--force-cold-cache requires HARVEY_CORPUS_PHASE_CACHE_DIR; a cold equivalence run with nowhere to read/write artifacts proves nothing");
+  process.exit(2);
+}
+if (!["live", "snapshot", "live-verify"].includes(externalStateMode)) {
+  console.error(`HARVEY_CORPUS_EXTERNAL_STATE_MODE must be live, snapshot, or live-verify; got ${externalStateMode}`);
   process.exit(2);
 }
 
@@ -284,18 +293,62 @@ function timed<T>(phase: string, fn: () => T): T {
   }
 }
 
-function runScanner(script: string, scriptArgs: string[]): Finding[] {
-  const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
+async function timedAsync<T>(phase: string, fn: () => Promise<T>): Promise<T> {
+  const at = Date.now();
   try {
-    execFileSync("pnpm", [script, ...scriptArgs, "--out", out], { cwd: repoRoot, stdio: ["ignore", "ignore", "inherit"] });
-  } catch {
-    // The scanner CLIs already print their own diagnosis to stderr. A module that could not run
-    // contributes no findings, which the scorer then reports as drift against its baseline —
-    // the loud failure this job exists for, not something to swallow into a pass.
-    return [];
+    return await fn();
+  } finally {
+    const bucket = (phaseSeconds[phaseTarget] ??= {});
+    bucket[phase] = (bucket[phase] ?? 0) + (Date.now() - at) / 1000;
   }
-  const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
-  return Array.isArray(parsed) ? parsed : [parsed.finding];
+}
+
+async function runScanner(options: {
+  script: "detect-static" | "quality-scan" | "mutation-scan";
+  scanner: CorpusScanner;
+  scriptArgs: string[];
+  targetDir: string;
+  targetRevision: string;
+  targetTree: string;
+  targetConfig: string;
+  records: CorpusScannerRecord[];
+}): Promise<Finding[]> {
+  const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
+  const unitsExamined = countCorpusScannerUnits(options.targetDir);
+  const cache = phaseCacheDir ? buildCorpusScannerCache({
+    repoRoot,
+    cacheDir: phaseCacheDir,
+    mode: forceColdCache ? "verify" : "read-write",
+    scanner: options.scanner,
+    targetDir: options.targetDir,
+    targetRevision: options.targetRevision,
+    targetTree: options.targetTree,
+    targetConfig: options.targetConfig,
+    onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
+  }) : undefined;
+  const record = await executeCorpusScanner(cache, () => {
+    try {
+      execFileSync("pnpm", [options.script, ...options.scriptArgs, "--out", out], { cwd: repoRoot, stdio: ["ignore", "ignore", "inherit"] });
+      const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
+      return {
+        findings: Array.isArray(parsed) ? parsed : [parsed.finding],
+        scope: { unitsExamined, description: `${options.scanner} over ${options.targetConfig}` },
+        completed: true,
+      };
+    } catch (error) {
+      // The scanner CLI already printed its own diagnosis. Preserve the old loud-baseline-drift
+      // behavior, but never persist this empty incomplete result as an assessed-clean cache hit.
+      return {
+        findings: [],
+        scope: { unitsExamined, description: `${options.scanner} incomplete over ${options.targetConfig}` },
+        completed: false,
+        failure: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+  options.records.push(record);
+  console.error(`  ${phaseTarget}: SCANNER ${options.scanner} — ${record.cache}; ${record.scope.unitsExamined} unit(s); ${record.reason}`);
+  return record.findings;
 }
 
 // #300: installs Stryker + the target's runner plugin, writes the vendored config, and runs the M8
@@ -404,6 +457,8 @@ for (const target of targets) {
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
     if (install) timed("install", () => installTargetDeps(dir, target.m8?.installFlags ?? []));
+    const targetTreeIdentity = `${resolveGitTree(dir)}:${JSON.stringify(target.vendoredSubtrees ?? [])}`;
+    const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
     // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
@@ -444,9 +499,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...timed("detect-static", () => runScanner("detect-static", [dir])),
-      ...timed("quality-scan", () => runScanner("quality-scan", [dir])),
-      ...timed("mutation-scan", () => runScanner("mutation-scan", [dir, "--detect-only"])),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [dir, "--detect-only"], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -461,9 +516,10 @@ for (const target of targets) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
       if (install) timed("install", () => installTargetDeps(rootDir, []));
-      const scoped = timed("quality-scan", () => runScanner("quality-scan", [rootDir])).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
+      const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
+    assertCorpusScannerCacheVerification(scannerRecords, forceColdCache ? "verify" : "read-write");
 
     // #279: M10 over the target's own cloned migrations. A target with no schemaPath (boxyhq —
     // Prisma migrations this parser can't read) is skipped here and stays not-run in the manifest,
@@ -514,18 +570,34 @@ for (const target of targets) {
     // than the synthetic findings #244 could only assert over.
     const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
     if (expectation) {
+      const snapshot = externalStateMode === "live" ? undefined : loadCorpusAdvisorySnapshot(target.slug, target.commit);
+      const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
+      const secretCandidateIdentity = deterministicSnapshot ? digestParts([
+        targetTreeIdentity,
+        digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
+        binaryVersion("gitleaks"),
+      ]) : undefined;
       // Timed around the SCAN, not just the report build: the scan is the whole cost (proposit's
       // free-tier pass measured 84s of its 96s), and timing the cheap half would have left it in
       // the untimed `other` bucket — a phase table whose largest row is "other" answers nothing.
       const mechanicalRun = await runMechanicalScanDetailed({
         dir,
+        skipNetworkChecks: deterministicSnapshot !== undefined,
+        advisorySnapshot: deterministicSnapshot,
+        advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
+        secretCandidateIdentity,
         phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
           repoRoot,
           cacheDir: phaseCacheDir,
           mode: forceColdCache ? "verify" : "read-write",
           targetRevision: target.commit,
-          targetTree: `${resolveGitTree(dir)}:${JSON.stringify(target.vendoredSubtrees ?? [])}`,
-          optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: false, handrolledIndicators: false, authGuards: [] }),
+          targetTree: targetTreeIdentity,
+          optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: deterministicSnapshot !== undefined, handrolledIndicators: false, authGuards: [], externalStateMode }),
+          deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
+            advisoryDigest: deterministicSnapshot.digest,
+            advisoryVersion: deterministicSnapshot.osvScannerVersion,
+            secretCandidateIdentity,
+          } : undefined,
           registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
           onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
         }) : undefined,

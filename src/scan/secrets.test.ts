@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +50,7 @@ import {
   resolveBundleScan,
   scanSecrets,
   secretScanScopeFinding,
+  deterministicSecretCandidateScopeFinding,
   truffleHogUnavailableFinding,
   type GitleaksResult,
   type TruffleHogResult,
@@ -275,6 +276,43 @@ describe("secretScanScopeFinding (#1078)", () => {
     expect(f.evidence).toContain("--no-git");
     expect(f.impact).toContain("only in git history");
     expect(f.fix).toContain("--results=unverified");
+  });
+});
+
+describe("corpus-only deterministic secret candidates (#1876)", () => {
+  it("does not contact TruffleHog providers and names the exact candidate identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secret-candidates-"));
+    try {
+      vi.mocked(spawnSync).mockClear();
+      const findings = scanSecrets(dir, dir, undefined, { providerVerification: "deterministic-candidates", candidateIdentity: "candidate-sha256" });
+      expect(vi.mocked(spawnSync).mock.calls.some(([binary]) => binary === "trufflehog")).toBe(false);
+      expect(findings.find((finding) => finding.id === "SEC-CI-CANDIDATE-00")?.evidence).toContain("candidate-sha256");
+      expect(findings.some((finding) => finding.id === "SEC-TH-00")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the client/default path live and labels it as provider-verified scope", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secret-live-default-"));
+    try {
+      vi.mocked(spawnSync).mockClear();
+      const findings = scanSecrets(dir, dir);
+      expect(vi.mocked(spawnSync).mock.calls.some(([binary]) => binary === "trufflehog")).toBe(true);
+      expect(findings.some((finding) => finding.id === "SEC-CI-CANDIDATE-00")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses candidate mode without reproducible identity", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secret-no-identity-"));
+    try {
+      expect(() => scanSecrets(dir, dir, undefined, { providerVerification: "deterministic-candidates" })).toThrow("requires an exact candidate identity");
+      expect(deterministicSecretCandidateScopeFinding("digest").impact).toContain("not a client audit limitation");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

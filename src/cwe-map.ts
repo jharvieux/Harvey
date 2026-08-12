@@ -268,6 +268,7 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   { match: (t) => t.startsWith("M9 —"), reason: "M9 server/client boundary & rendering-correctness signal — not a security weakness class" },
   { match: (t) => t.startsWith("Architecture —"), reason: "architecture-disclosure row (ORM/RLS posture) — a not-assessed disclosure, not a CWE finding" },
   { match: (t) => t.startsWith("Coverage —"), reason: "coverage disclosure (a scope not assessed) — a not-assessed row, not a finding with a CWE" },
+  { match: (t) => t === "Corpus CI — deterministic secret-candidate provenance", reason: "corpus-CI reproducibility disclosure — records the deterministic provenance lane used by the gate, not a security weakness" },
   { match: (t) => t.startsWith("Env var"), reason: "environment-variable hygiene/completeness signal — configuration correctness, not a security weakness class" },
   // #1230 / D-091 item 13: the reader 500s because the schema moved under it. A deployment-ordering
   // correctness defect (expand-migrate-contract done out of order), not a weakness an attacker

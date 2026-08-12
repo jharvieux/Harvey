@@ -103,6 +103,41 @@ changes.
 
 ## Falsifiers
 
+## Cross-run transport, scanner families, and deterministic PR state
+
+The `corpus-phase-v3` transport carries a signed-by-context provenance manifest. A main `push`
+seeds artifacts that PRs may restore; a PR may reuse its own run attempt but never another PR's
+artifact. The validator checks schema, key, source event/ref/SHA and trust relationship before any
+inner artifact is read, and deletes a missing, corrupt, mismatched, or untrusted transport.
+
+Corpus source scanners now write three independent artifacts: `detect-static`, `quality-scan`, and
+mutation `--detect-only`. Keys cover the pinned target tree, discovered implementation closure,
+Node/tool versions, target configuration, tracked manifest/lock bytes, and workspace install
+presence. Checkout roots are tokenized in stored findings and rehydrated on read. On real Carbon,
+the cache reports 6,133 tracked target units rather than walking installed dependencies.
+
+Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
+files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
+timings), tokenizes both target and cache roots, and is independently keyed by its exact rule bytes.
+The merge canonicalizes generated registry namespaces, deduplicates overlapping-pack matches, and
+restores deterministic order. The scheduled forced-cold control re-executes every family and the
+legacy monolithic scan; on the real pinned `saas-lite` target all family artifacts verified and the
+normalized partition/monolith parity assertion passed. The command later exited 1 only for the
+independent pre-existing M5 baseline movement (expected 38, measured 39); no baseline was changed.
+
+The PR lane sets `HARVEY_CORPUS_EXTERNAL_STATE_MODE=snapshot`: OSV reads six committed, digested,
+expiry-checked gzip snapshots through the current parser, secret candidates come from the exact
+Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are disabled. Schedule
+and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
+drift. The default client scanner path sets neither mode and remains live.
+
+Real Carbon measurements with `--install` and snapshot state were: legacy monolithic 444.57s wall;
+partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17 artifact files. Every run conserved
+all 13 scored baseline/free-tier rows. A temporary edit to one local rule preserved unrelated
+registry-family hits and limited Semgrep recomposition to 1.2s. The final exhaustive family repair
+restored 531 Semgrep-derived rows that an early zero-applicable-pack abort had hidden; the parity
+control, not the count baseline, caught that defect.
+
 The focused tests exercise both sides of every guard:
 
 ```sh
