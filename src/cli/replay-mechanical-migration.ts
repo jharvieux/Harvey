@@ -18,12 +18,9 @@ import { materializeRegistryPacks } from "../scan/semgrep.js";
 const MECHANICAL_CORPUS_POPULATION = "runMechanicalScanDetailed.findings-v1" as const;
 
 interface ReplayArtifact {
-  schema: 2;
+  schema: 1;
   population: typeof MECHANICAL_CORPUS_POPULATION;
   engineCommit: string;
-  engineTree: string;
-  engineBlobSetSha256: string;
-  amendedEngineIdentity: string;
   orchestrator: "manual" | "registry";
   engineAmendmentPaths: string[];
   engineAmendmentPatchSha256?: string;
@@ -31,15 +28,6 @@ interface ReplayArtifact {
   targetPinsSha256: string;
   advisoryManifestSha256: string;
   semgrepRegistrySha256: string;
-  runtime: {
-    node: string;
-    platform: string;
-    arch: string;
-    semgrep: string;
-    gitleaks: string;
-    trufflehog: string;
-    osvScanner: string;
-  };
   targetCount: number;
   targets: string[];
   externalState: Record<string, {
@@ -48,11 +36,8 @@ interface ReplayArtifact {
     semgrepRegistrySha256: string;
     networkFallbacksDisabled: true;
     bundleScanPinnedOff: true;
-    targetCommit: string;
-    targetTreeIdentity: string;
   }>;
   mechanicalFindings: Record<string, Finding[]>;
-  mechanicalExaminedUnits: Record<string, { phase: string; unitsExamined: number; findingCount: number }[]>;
 }
 
 const args = process.argv.slice(2);
@@ -82,25 +67,19 @@ if (merge) {
     targetPinsSha256: artifact.targetPinsSha256,
     advisoryManifestSha256: artifact.advisoryManifestSha256,
     semgrepRegistrySha256: artifact.semgrepRegistrySha256,
-    runtime: artifact.runtime,
-    engineTree: artifact.engineTree,
-    engineBlobSetSha256: artifact.engineBlobSetSha256,
-    amendedEngineIdentity: artifact.amendedEngineIdentity,
   });
   if (artifacts.some((artifact) => invariant(artifact) !== invariant(first))) throw new Error("replay shards do not share one engine/input/harness identity");
   const mechanicalFindings: Record<string, Finding[]> = {};
-  const mechanicalExaminedUnits: ReplayArtifact["mechanicalExaminedUnits"] = {};
   const externalState: ReplayArtifact["externalState"] = {};
   for (const artifact of artifacts) for (const target of artifact.targets) {
     if (target in mechanicalFindings) throw new Error(`replay target ${target} appears in more than one shard`);
     mechanicalFindings[target] = artifact.mechanicalFindings[target]!;
-    mechanicalExaminedUnits[target] = artifact.mechanicalExaminedUnits[target]!;
     externalState[target] = artifact.externalState[target]!;
   }
   const targets = Object.keys(mechanicalFindings).sort();
   const expected = EXTERNAL_CORPUS.map((target) => target.slug).sort();
   if (JSON.stringify(targets) !== JSON.stringify(expected)) throw new Error(`merged replay target population differs: got [${targets.join(", ")}], expected [${expected.join(", ")}]`);
-  writeFileSync(out, `${JSON.stringify({ ...first, targetCount: targets.length, targets, externalState, mechanicalFindings, mechanicalExaminedUnits } satisfies ReplayArtifact, null, 2)}\n`);
+  writeFileSync(out, `${JSON.stringify({ ...first, targetCount: targets.length, targets, externalState, mechanicalFindings } satisfies ReplayArtifact, null, 2)}\n`);
   console.log(`MECHANICAL MIGRATION REPLAY MERGED — ${targets.length} target(s), ${Object.values(mechanicalFindings).reduce((sum, rows) => sum + rows.length, 0)} ordered row(s)`);
   process.exit(0);
 }
@@ -117,8 +96,6 @@ if (args.includes("--materialize-only")) {
 if (!out) throw new Error("usage: replay-mechanical-migration --out <artifact.json> [--shard i/n] [--snapshot-dir dir] [--registry-dir dir] [--registry-mode refresh|reuse]");
 
 const head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-const engineTree = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-const engineBlobSet = execFileSync("git", ["-C", repoRoot, "ls-tree", "-r", "HEAD", "--", "src/scan", "src/detectors", "src/sbom.ts"], { encoding: "utf8", maxBuffer: 1024 * 1024 * 16 });
 const amendmentPaths = execFileSync("git", ["-C", repoRoot, "diff", "--name-only"], { encoding: "utf8" })
   .trim().split("\n").filter(Boolean).sort();
 const allowedAmendments = (flag("--allow-amendment") ?? "").split(",").filter(Boolean).sort();
@@ -145,7 +122,6 @@ if (shard) {
 }
 
 const mechanicalFindings: Record<string, Finding[]> = {};
-const mechanicalExaminedUnits: ReplayArtifact["mechanicalExaminedUnits"] = {};
 const externalState: ReplayArtifact["externalState"] = {};
 for (const target of selected) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-mechanical-replay-${target.slug}-`));
@@ -176,19 +152,12 @@ for (const target of selected) {
       phaseCache,
     });
     mechanicalFindings[target.slug] = result.findings;
-    mechanicalExaminedUnits[target.slug] = result.phases.map((phase) => ({
-      phase: phase.phase,
-      unitsExamined: phase.scope.unitsExamined,
-      findingCount: phase.findings.length,
-    }));
     externalState[target.slug] = {
       advisorySha256: snapshot.digest,
       secretCandidateIdentity,
       semgrepRegistrySha256: registry.identity,
       networkFallbacksDisabled: true,
       bundleScanPinnedOff: true,
-      targetCommit: target.commit,
-      targetTreeIdentity,
     };
     console.error(`${target.slug}: ${result.findings.length} ordered mechanical row(s)`);
   } finally {
@@ -198,12 +167,9 @@ for (const target of selected) {
 
 const targets = Object.keys(mechanicalFindings).sort();
 const artifact: ReplayArtifact = {
-  schema: 2,
+  schema: 1,
   population: MECHANICAL_CORPUS_POPULATION,
   engineCommit: head,
-  engineTree,
-  engineBlobSetSha256: sha256(engineBlobSet),
-  amendedEngineIdentity: sha256(`${engineTree}\0${amendmentPatch ?? ""}`),
   orchestrator,
   engineAmendmentPaths: amendmentPaths,
   ...(amendmentPatch ? { engineAmendmentPatchSha256: sha256(amendmentPatch) } : {}),
@@ -211,20 +177,10 @@ const artifact: ReplayArtifact = {
   targetPinsSha256,
   advisoryManifestSha256,
   semgrepRegistrySha256: registry.identity,
-  runtime: {
-    node: process.version,
-    platform: process.platform,
-    arch: process.arch,
-    semgrep: binaryVersion("semgrep"),
-    gitleaks: binaryVersion("gitleaks"),
-    trufflehog: binaryVersion("trufflehog"),
-    osvScanner: binaryVersion("osv-scanner"),
-  },
   targetCount: targets.length,
   targets,
   externalState,
   mechanicalFindings,
-  mechanicalExaminedUnits,
 };
 writeFileSync(out, `${JSON.stringify(artifact, null, 2)}\n`);
 console.log(`MECHANICAL MIGRATION REPLAY ${orchestrator.toUpperCase()} — ${targets.length} target(s), ${Object.values(mechanicalFindings).reduce((sum, rows) => sum + rows.length, 0)} ordered row(s)`);
