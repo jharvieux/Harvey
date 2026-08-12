@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesSafe } from "./fs-walk.js";
 import { detectPackageManager, type PackageManager } from "./package-manager.js";
@@ -64,6 +64,7 @@ interface DependencyPreparationOptions {
   onEvent?: (message: string) => void;
   runInstall?: (invocation: InstallInvocation) => void;
   packageManagerVersion?: string;
+  environment?: NodeJS.ProcessEnv;
 }
 
 const INSTALL_INPUT_NAMES = new Set([
@@ -81,6 +82,8 @@ const INSTALL_INPUT_NAMES = new Set([
 ]);
 
 const SKIP_DIRS = new Set([".git", "node_modules", ".next", "dist", "build", "coverage", ".yarn-cache"]);
+const INSTALL_LIFECYCLE_HOOKS = new Set(["preinstall", "install", "postinstall", "prepublish", "preprepare", "prepare", "postprepare"]);
+const EXECUTABLE_KNIP_CONFIGS = new Set(["knip.ts", "knip.js", "knip.config.ts", "knip.config.js"]);
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -98,24 +101,56 @@ function digestValue(value: unknown): string {
   return digest(stable(value));
 }
 
-function preparationEnvironment(): NodeJS.ProcessEnv {
+function preparationEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   // The install subprocess receives only this bounded environment. That makes the receipt cover
   // every environment value the package manager can observe without binding it to GitHub run ids,
   // checkout paths, or unrelated secrets. PATH/HOME/TMPDIR are retained because the package-manager
   // shims and native package selection need them; platform/ABI are separate identity components.
   return {
     CI: "true",
-    HOME: process.env.HOME ?? "",
-    PATH: process.env.PATH ?? "",
-    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    HOME: source.HOME ?? "",
+    PATH: source.PATH ?? "",
+    TMPDIR: source.TMPDIR ?? tmpdir(),
   };
 }
 
-function preparationEnvironmentIdentity(): Record<string, string> {
-  // HOME/PATH/TMPDIR are execution transport: their absolute spellings vary with the disposable
-  // checkout and runner. Exact manager/Node versions, platform, lockfile and recursively discovered
-  // install config bind the behaviour; CI is the only environment switch Harvey supplies.
-  return { CI: "true" };
+function preparationEnvironmentIdentity(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return {
+    CI: environment.CI ?? "",
+    HOME: environment.HOME ?? "",
+    PATH: environment.PATH ?? "",
+    TMPDIR: environment.TMPDIR ?? "",
+  };
+}
+
+function qualityNonCacheableReason(root: string): string | undefined {
+  const lifecycle: string[] = [];
+  const executableConfigs: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readEntriesSafe(dir).entries) {
+      if (entry.isDirectory) {
+        if (!SKIP_DIRS.has(entry.name)) walk(entry.path);
+        continue;
+      }
+      const rel = relative(root, entry.path).replaceAll("\\", "/");
+      if (EXECUTABLE_KNIP_CONFIGS.has(entry.name)) executableConfigs.push(rel);
+      if (entry.name !== "package.json") continue;
+      try {
+        const pkg = JSON.parse(readFileSync(entry.path, "utf8")) as { scripts?: Record<string, unknown> };
+        const hooks = Object.keys(pkg.scripts ?? {}).filter((name) => INSTALL_LIFECYCLE_HOOKS.has(name));
+        if (hooks.length > 0) lifecycle.push(`${rel} (${hooks.sort().join(", ")})`);
+      } catch {
+        // The package manager owns malformed-manifest failure. Installation then stays
+        // non-cacheable, so this preflight need not invent a second parse verdict.
+      }
+    }
+  };
+  walk(root);
+  const reasons = [
+    ...(lifecycle.length > 0 ? [`install lifecycle scripts can observe time/network state: ${lifecycle.sort().join(", ")}`] : []),
+    ...(executableConfigs.length > 0 ? [`executable Knip config can observe time/network state: ${executableConfigs.sort().join(", ")}`] : []),
+  ];
+  return reasons.length > 0 ? reasons.join("; ") : undefined;
 }
 
 function installInputs(root: string): string[] {
@@ -195,9 +230,9 @@ function reproducibleLock(manager: PackageManager, text: string): boolean {
   return yarnLockIsReproducible(text);
 }
 
-function managerVersion(manager: PackageManager, cwd: string): string {
+function managerVersion(manager: PackageManager, cwd: string, environment: NodeJS.ProcessEnv): string {
   try {
-    return execFileSync(manager, ["--version"], { cwd, encoding: "utf8", timeout: 10_000, env: { ...preparationEnvironment() } }).trim();
+    return execFileSync(manager, ["--version"], { cwd, encoding: "utf8", timeout: 10_000, env: environment }).trim();
   } catch {
     return "unavailable";
   }
@@ -269,8 +304,10 @@ function writeReceipt(path: string, key: string, identity: PreparationIdentity):
 }
 
 export function prepareCorpusDependencies(options: DependencyPreparationOptions): DependencyPreparationResult {
+  const cacheDir = resolve(options.cacheDir);
+  const environment = preparationEnvironment(options.environment);
   const manager = detectPackageManager(options.targetDir);
-  const version = options.packageManagerVersion ?? managerVersion(manager, options.targetDir);
+  const version = options.packageManagerVersion ?? managerVersion(manager, options.targetDir, environment);
   const lockPath = lockfilePath(options.targetDir, manager);
   const lockText = lockPath ? readFileSync(lockPath, "utf8") : undefined;
   const lockDigest = lockText ? digest(lockText) : undefined;
@@ -290,10 +327,11 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
         : manager === "yarn"
           ? ["install"]
           : ["install", "--no-audit", "--no-fund", ...installFlags];
-      runInstall({ bin: manager, args, cwd: options.targetDir, env: { ...process.env, CI: "true" } });
+      runInstall({ bin: manager, args, cwd: options.targetDir, env: { ...process.env, ...options.environment, CI: "true" } });
       options.onEvent?.(`DEPENDENCY PREP BYPASS ${manager}: ${reason}; legacy install completed and quality-scan remains non-cacheable`);
       return { status: "non-cacheable", complete: true, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason };
     } catch {
+      removeInstalledTrees(options.targetDir);
       const failure = `${reason}; ${manager} install failed`;
       options.onEvent?.(`DEPENDENCY PREP INCOMPLETE ${manager}: ${failure}; M5-knip will preserve its did-not-run/degraded semantics`);
       return { status: "incomplete", complete: false, cacheable: false, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason: failure };
@@ -317,11 +355,12 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
     platform: process.platform,
     architecture: process.arch,
     installFlags,
-    environment: preparationEnvironmentIdentity(),
+    environment: preparationEnvironmentIdentity(environment),
   };
   const key = digestValue({ schema: DEPENDENCY_PREPARATION_SCHEMA, identity });
-  const receiptPath = join(options.cacheDir, "dependency-preparation", "receipts", `${key}.json`);
-  const storeDir = join(options.cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
+  const receiptPath = join(cacheDir, "dependency-preparation", "receipts", `${key}.json`);
+  const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
+  const nonCacheableQuality = qualityNonCacheableReason(options.targetDir);
   let hit: PreparationReceipt | undefined;
   if (existsSync(receiptPath)) {
     try {
@@ -335,13 +374,17 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   mkdirSync(storeDir, { recursive: true });
   if (hit) {
     try {
-      runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, true), cwd: options.targetDir, env: preparationEnvironment() });
+      runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, true), cwd: options.targetDir, env: environment });
       if (manager === "pnpm") {
         const removed = sanitizePnpmStore(storeDir);
         if (removed > 0) options.onEvent?.(`DEPENDENCY PREP SANITIZE pnpm ${key.slice(0, 12)}: removed ${removed} path-bound project/global-link tree(s) after offline materialization`);
       }
       options.onEvent?.(`DEPENDENCY PREP HIT ${manager} ${key.slice(0, 12)}: receipt, lockfile, manager ${version}, and offline materialization verified`);
-      return { status: "hit", complete: true, cacheable: true, key, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason: "validated receipt and offline materialization" };
+      return {
+        status: "hit", complete: true, cacheable: !nonCacheableQuality, key, packageManager: manager,
+        packageManagerVersion: version, lockfileDigest: lockDigest,
+        reason: nonCacheableQuality ? `validated receipt and offline materialization; quality-scan remains non-cacheable because ${nonCacheableQuality}` : "validated receipt and offline materialization",
+      };
     } catch {
       options.onEvent?.(`DEPENDENCY PREP REJECT ${manager} ${key.slice(0, 12)}: offline materialization failed from restored store; performing clean install`);
       rmSync(receiptPath, { force: true });
@@ -350,14 +393,18 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   }
 
   try {
-    runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, false), cwd: options.targetDir, env: preparationEnvironment() });
+    runInstall({ bin: manager, args: managerArgs(manager, storeDir, installFlags, false), cwd: options.targetDir, env: environment });
     if (manager === "pnpm") {
       const removed = sanitizePnpmStore(storeDir);
       if (removed > 0) options.onEvent?.(`DEPENDENCY PREP SANITIZE pnpm ${key.slice(0, 12)}: removed ${removed} path-bound project/global-link tree(s) after clean materialization`);
     }
     writeReceipt(receiptPath, key, identity);
     options.onEvent?.(`DEPENDENCY PREP MISS ${manager} ${key.slice(0, 12)}: clean install completed; receipt stored and reread`);
-    return { status: "miss", complete: true, cacheable: true, key, packageManager: manager, packageManagerVersion: version, lockfileDigest: lockDigest, reason: "clean content-addressed preparation" };
+    return {
+      status: "miss", complete: true, cacheable: !nonCacheableQuality, key, packageManager: manager,
+      packageManagerVersion: version, lockfileDigest: lockDigest,
+      reason: nonCacheableQuality ? `clean content-addressed preparation; quality-scan remains non-cacheable because ${nonCacheableQuality}` : "clean content-addressed preparation",
+    };
   } catch {
     rmSync(receiptPath, { force: true });
     if (manager === "pnpm") sanitizePnpmStore(storeDir);

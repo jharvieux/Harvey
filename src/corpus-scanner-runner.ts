@@ -44,17 +44,24 @@ interface CorpusScannerRunResult {
 export async function runCorpusScanner(options: CorpusScannerRunOptions): Promise<CorpusScannerRunResult> {
   const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
   const unitsExamined = countCorpusScannerUnits(options.targetDir);
+  const qualityPreparation = options.cache?.dependencyPreparation;
+  const qualityEnvironment = corpusQualityEnvironment();
   const execute = (): { findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string } => {
     try {
       const quality = options.scanner === "quality-scan";
       const bin = quality ? join(options.repoRoot, "node_modules", ".bin", "tsx") : "pnpm";
       const args = quality
-        ? [join(options.repoRoot, "src", "cli", "quality-scan.ts"), ...options.scriptArgs, "--out", out]
+        ? [
+            join(options.repoRoot, "src", "cli", "quality-scan.ts"),
+            ...options.scriptArgs,
+            ...(qualityPreparation?.complete === false ? ["--skip-knip-reason", `dependency preparation incomplete: ${qualityPreparation.reason}`] : []),
+            "--out", out,
+          ]
         : [options.script, ...options.scriptArgs, "--out", out];
       execFileSync(bin, args, {
         cwd: options.repoRoot,
         stdio: ["ignore", "ignore", "inherit"],
-        ...(quality ? { env: corpusQualityEnvironment() } : {}),
+        ...(quality ? { env: qualityEnvironment } : {}),
       });
       const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
       return {
@@ -72,7 +79,6 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     }
   };
 
-  const qualityPreparation = options.cache?.dependencyPreparation;
   const cacheAllowed = options.scanner !== "quality-scan" || (qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key);
   if (!options.cache || !cacheAllowed) {
     const value = execute();
@@ -91,6 +97,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     targetTree: options.cache.targetTree,
     targetConfig: options.targetConfig,
     dependencyPreparationKey: options.scanner === "quality-scan" ? qualityPreparation!.key : undefined,
+    environment: options.scanner === "quality-scan" ? qualityEnvironment : undefined,
     onEvent: options.onEvent,
   });
   const record = await executeCorpusScanner(cache, execute);

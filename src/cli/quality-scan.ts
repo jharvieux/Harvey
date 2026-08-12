@@ -90,6 +90,8 @@ const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
+const skipKnipIdx = args.indexOf("--skip-knip-reason");
+const skipKnipReason = skipKnipIdx >= 0 ? args[skipKnipIdx + 1] : undefined;
 // #809: opt-in whole-codebase Type-3 near-miss pass, on top of the always-on security-path pass —
 // see the header comment above securityPathFiles for why this stays opt-in (noisier, no security
 // guarantee, review tier).
@@ -101,6 +103,10 @@ if (!targetArg) {
 }
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error("--timeout must be a positive number of seconds");
+  process.exit(2);
+}
+if (skipKnipIdx >= 0 && (!skipKnipReason || skipKnipReason.startsWith("--"))) {
+  console.error("--skip-knip-reason requires a non-empty reason");
   process.exit(2);
 }
 const TIMEOUT_MS = timeoutSeconds * 1000;
@@ -397,6 +403,14 @@ const inferredEntryFiles = new Set<string>();
 // the same reason (config-only usages are invisible when the config could not be resolved).
 const unresolvedDepScopes = new Set<string>();
 
+if (skipKnipReason) {
+  for (const scope of scopes) {
+    const label = scopeLabel(scope);
+    knipGaps.push({ scope: label, reason: skipKnipReason });
+    console.error(`⚠ knip did not run on ${label} — M5 dead-code coverage skipped: ${skipKnipReason}`);
+  }
+}
+
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
 try {
@@ -409,7 +423,7 @@ try {
 
 // #223/#505: knip has no dependency on M4 and runs per workspace — a knip gap on one workspace
 // must not cost any other workspace's (or jscpd's) findings.
-for (const scope of scopes) {
+for (const scope of skipKnipReason ? [] : scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   try {

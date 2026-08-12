@@ -49,4 +49,19 @@ describe("cacheable corpus scanner identity (#1871)", () => {
     expect(() => build()).toThrow("complete reproducible dependency-preparation receipt");
     expect(build("receipt-a").externalInputs.dependencyPreparation).not.toBe(build("receipt-b").externalInputs.dependencyPreparation);
   });
+
+  it("binds every environment value passed to quality execution", () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-quality-environment-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-quality-environment-cache-"));
+    dirs.push(targetDir, cacheDir);
+    writeFileSync(join(targetDir, "source.ts"), "export const source = true;\n");
+    const baseEnvironment = { HOME: "/quality/home-a", PATH: "/quality/bin-a", TMPDIR: "/quality/tmp-a" };
+    const first = buildCorpusScannerCache({
+      repoRoot: process.cwd(), cacheDir, mode: "read-write", scanner: "quality-scan", targetDir,
+      targetRevision: "pin", targetTree: "tree", targetConfig: "root", dependencyPreparationKey: "preparation-key", environment: baseEnvironment,
+    });
+    expect(JSON.parse(first.externalInputs.environment!)).toEqual({
+      CI: "true", HOME: "/quality/home-a", NO_COLOR: "1", PATH: "/quality/bin-a", TMPDIR: "/quality/tmp-a",
+    });
+  });
 });

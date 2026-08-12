@@ -122,8 +122,9 @@ cost.
 Every saved transport now carries a measured payload receipt. Authoring or restoring fails if the
 tree contains any symlink, if the remeasured byte count differs, or if the payload exceeds 6 GiB.
 That ceiling prevents the rejected 8.66 GiB combined prototype shape from recurring silently; the
-authoritative measured rejected value was 9,082,124 KiB (`du -sk`), while the final Carbon shard's
-content receipt measured 2,149,804,255 bytes and zero links. `node_modules` is never transported.
+authoritative measured rejected value was 9,082,124 KiB (`du -sk`). A pre-correction local Carbon
+transport measured 2,149,804,255 bytes and zero links, but that is one shard rather than the
+required all-shard cache-size measurement. `node_modules` is never transported.
 
 Corpus scanners write three independent artifacts: `detect-static`, `quality-scan`, and mutation
 `--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
@@ -132,11 +133,14 @@ and rehydrated on read. On real Carbon, each cache reports 6,133 tracked target 
 
 `quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
 keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
-version, Node/ABI, platform/architecture, install flags, and bounded semantic environment. A hit
-still performs a frozen offline materialization into the disposable clone; corrupt/incomplete
-receipts or stores reject visibly and retry clean, while an unreproducible or failed install keeps
-the prior M5 degraded/did-not-run semantics and makes quality non-cacheable. npm, pnpm, and Yarn are
-all exercised through their real clients from two checkout paths.
+version, Node/ABI, platform/architecture, install flags, and every value in the bounded execution
+environment (`CI`, `HOME`, `PATH`, and `TMPDIR`). A hit still performs a frozen offline
+materialization into the disposable clone. Corrupt/incomplete receipts or stores reject visibly
+and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
+to emit M5-00 without invoking Knip. A target lifecycle script or executable Knip configuration can
+observe time or network state that the receipt does not reproduce, so the dependency store may
+still hit but the quality result runs fresh with the reason recorded. npm, pnpm, and Yarn are all
+exercised through their real clients from two checkout paths.
 
 pnpm is forced to `enableGlobalVirtualStore=false`. pnpm 10/11 still writes a versioned `projects`
 symlink to the current checkout, and a target can otherwise produce a versioned `links` installed
@@ -160,25 +164,29 @@ Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are
 and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
 drift. The default client scanner path sets neither mode and remains live.
 
-The final Carbon run on 2026-08-12 used `--install`, snapshot external state, a fresh shard cache,
-and the pinned 6,133-unit target. Cold was 417.75s wall / 397s phase-timed (install 43.5s,
-quality 51.4s, detect-static 21.7s); restored was 49.21s wall / 32s phase-timed (offline install
-25.6s, quality 0.7s, detect-static 0.1s). Dependency preparation and all three scanner families
-reported hits, and all 13 Carbon rows passed on both runs.
+A pre-correction local Carbon candidate on 2026-08-12 used `--install`, snapshot external state, a
+fresh shard cache, and the pinned 6,133-unit target. Cold was 417.75s wall / 397s phase-timed
+(install 43.5s, quality 51.4s, detect-static 21.7s); restored was 49.21s wall / 32s phase-timed
+(offline install 25.6s, quality 0.7s, detect-static 0.1s). Those are traceable local observations,
+not final-design acceptance evidence: hosted run `31614708026` then showed that the relative cache
+root was interpreted under each target cwd and M4 scanned cached package sources. The corrected
+design canonicalizes that root before any child cwd change and has not yet produced a hosted
+cold/warm pair.
 
-The completed three-shard warm measurements were 32s phase-timed for Carbon, 84s for shard 2, and
-111s for shard 3: a 111s critical path and 227s aggregate runner time. Shard 2 passed 89/89 rows.
-Across all 17 targets, 190/192 rows passed; the only two exceptions were Rallly M5 +8 (147 expected,
-155 measured) and Documenso M5 -1 (1801 expected, 1800 measured). The exact base commit `a157ff9`
-independently reproduced both movements byte-for-byte, so no corpus baseline was changed and these
-are recorded pre-existing measurement exclusions rather than branch regressions. Suppressing
-lifecycle scripts was also rejected as a performance shortcut: real Carbon exited 1 and moved M5
-by +2, while the normal-script run exited 0 and restored every Carbon row.
+The same pre-correction exercise recorded per-shard phase-timed sums of 32s, 84s, and 111s. Their
+sum (227s) is not aggregate runner wall time, and their maximum (111s) is not the workflow critical
+path; neither is claimed as such. Baseline conservation is outstanding because the cache-root
+defect caused unrelated M4 drift. Two exact-base comparisons remain useful diagnostic
+facts, not a conservation verdict: Rallly M5 expected 147 and measured 155 (+8), while Documenso M5
+expected 1801 and measured 1800 (-1), identically at base `a157ff9`. Final cold/warm install totals,
+runner critical path, aggregate runner wall time, all-shard cache size, and full baseline
+conservation remain outstanding until the corrected hosted design runs.
 
 The focused tests exercise both sides of every guard:
 
 ```sh
-pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts src/corpus-cache-transport.test.ts src/corpus-dependency-preparation.test.ts src/corpus-scanner-cache.test.ts src/corpus-scanner-identity.test.ts src/corpus-scanner-cross-process.test.ts
+pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts src/corpus-cache-transport.test.ts src/corpus-dependency-preparation.test.ts src/corpus-scanner-cache.test.ts src/corpus-scanner-identity.test.ts
+HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run src/corpus-scanner-cross-process.test.ts
 ```
 
 They prove cold/warm finding and scope equivalence, full-schema corruption rejection and
@@ -187,7 +195,11 @@ target-pin invalidation, live advisory and live-provider secret non-reuse, force
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
 aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
 Harvey checkout copies (only the tool installation is shared) and invokes the production corpus
-scanner runner twice against matching tracked fixtures. Dependency preparation and all three
-scanner families must miss then hit one artifact directory while preserving findings and examined
-scope. The quality identity is separately falsified by changing its preparation key: only quality
-must miss, while detect-static and mutation remain hits.
+scanner runner twice against matching tracked fixtures and a relative phase-cache root. Dependency
+preparation and all three scanner families must miss then hit one external artifact directory while
+preserving findings and examined scope; cache-only duplicate sources must remain invisible to M4.
+The quality identity is separately falsified by changing its preparation key and each execution
+environment value. A physical copy's real `src/quality-scan.ts` helper is mutated to prove closure
+discovery moves only quality's implementation identity. The incomplete-preparation control proves
+both directions: an incomplete receipt routes around the partial provider and emits M5-00; the
+same provider executes when preparation is complete.

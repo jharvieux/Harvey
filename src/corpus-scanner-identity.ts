@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { CorpusCacheableScanner, CorpusScannerCacheMode, CorpusScannerCacheOptions } from "./corpus-scanner-cache.js";
 import { binaryVersion, digestFiles, digestParts } from "./scan/mechanical-phase-cache.js";
 import { discoverTransitiveImplementationFiles } from "./scan/mechanical-phase-identity.js";
@@ -11,18 +11,24 @@ const ENTRY: Record<CorpusCacheableScanner, string> = {
   "mutation-detect-only": "src/cli/mutation-scan.ts",
 };
 
-export function corpusQualityEnvironment(): NodeJS.ProcessEnv {
+export function corpusQualityEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     CI: "true",
-    HOME: process.env.HOME ?? "",
+    HOME: source.HOME ?? "",
     NO_COLOR: "1",
-    PATH: process.env.PATH ?? "",
-    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    PATH: source.PATH ?? "",
+    TMPDIR: source.TMPDIR ?? tmpdir(),
   };
 }
 
-function corpusQualityEnvironmentIdentity(): Record<string, string> {
-  return { CI: "true", NO_COLOR: "1" };
+function corpusQualityEnvironmentIdentity(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return {
+    CI: environment.CI ?? "",
+    HOME: environment.HOME ?? "",
+    NO_COLOR: environment.NO_COLOR ?? "",
+    PATH: environment.PATH ?? "",
+    TMPDIR: environment.TMPDIR ?? "",
+  };
 }
 
 export function buildCorpusScannerCache(options: {
@@ -35,8 +41,10 @@ export function buildCorpusScannerCache(options: {
   targetTree: string;
   targetConfig: string;
   dependencyPreparationKey?: string;
+  environment?: NodeJS.ProcessEnv;
   onEvent?: (message: string) => void;
 }): CorpusScannerCacheOptions {
+  const environment = corpusQualityEnvironment(options.environment);
   const entry = join(options.repoRoot, ENTRY[options.scanner]);
   const closure = discoverTransitiveImplementationFiles([entry]);
   const toolchain = digestFiles(
@@ -47,7 +55,7 @@ export function buildCorpusScannerCache(options: {
     throw new Error("quality-scan: a complete reproducible dependency-preparation receipt is required for caching");
   }
   return {
-    dir: options.cacheDir,
+    dir: resolve(options.cacheDir),
     mode: options.mode,
     scanner: options.scanner,
     targetRevision: options.targetRevision,
@@ -61,7 +69,7 @@ export function buildCorpusScannerCache(options: {
       targetConfig: options.targetConfig,
       ...(options.scanner === "quality-scan" ? {
         dependencyPreparation: options.dependencyPreparationKey!,
-        environment: JSON.stringify(corpusQualityEnvironmentIdentity()),
+        environment: JSON.stringify(corpusQualityEnvironmentIdentity(environment)),
         jscpd: binaryVersion(join(options.repoRoot, "node_modules", ".bin", "jscpd")),
         knip: binaryVersion(join(options.repoRoot, "node_modules", ".bin", "knip")),
       } : {}),

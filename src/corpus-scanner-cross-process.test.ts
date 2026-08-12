@@ -1,9 +1,10 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { runCorpusScanner } from "./corpus-scanner-runner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +12,7 @@ interface ProcessResult {
   statuses: Record<string, string>;
   findingCounts: Record<string, number>;
   qualityLocation: string;
+  qualityLocations: string[];
   preparation: string;
   events: string[];
 }
@@ -46,12 +48,12 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       mkdirSync(join(dir, "provider"), { recursive: true });
       mkdirSync(join(dir, "assets"), { recursive: true });
       writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"file:provider"}}\n');
-      writeFileSync(join(dir, "knip.js"), 'module.exports = require("knip-config-provider");\n');
-      writeFileSync(join(dir, "src", "index.ts"), "export const selectedIndex = true;\n");
+      writeFileSync(join(dir, "knip.json"), '{"entry":["src/index.ts"]}\n');
+      writeFileSync(join(dir, "src", "index.ts"), 'import provider from "knip-config-provider"; export const selectedIndex = provider;\n');
       writeFileSync(join(dir, "src", "alternate.ts"), "export const selectedAlternate = true;\n");
       writeFileSync(join(dir, "provider", "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
       writeFileSync(join(dir, "provider", "index.js"), 'module.exports = require("./config.js");\n');
-      writeFileSync(join(dir, "provider", "config.js"), 'module.exports = { entry: ["src/index.ts"] };\n');
+      writeFileSync(join(dir, "provider", "config.js"), 'module.exports = { selected: true };\n');
       // Carbon's production scope currently reports 6,133 tracked units. These distinct tracked
       // fixture units make the checkout/copy/cache path carry that same order of magnitude without
       // manufacturing thousands of duplicate TypeScript findings.
@@ -66,7 +68,13 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     cpSync(source, targetA, { recursive: true, verbatimSymlinks: true });
     cpSync(source, targetB, { recursive: true, verbatimSymlinks: true });
 
-    const cacheDir = join(fixture, "cache");
+    const cacheDir = join(process.cwd(), `.harvey-corpus-phase-cache-test-${process.pid}-${Date.now()}`);
+    dirs.push(cacheDir);
+    const cacheArgument = relative(process.cwd(), cacheDir);
+    mkdirSync(join(cacheDir, "m4-cache-marker"), { recursive: true });
+    const duplicatedCacheSource = "export function cacheOnlyDuplicate(value) {\n  const normalized = String(value).trim();\n  const lowered = normalized.toLowerCase();\n  return lowered.split(' ').filter(Boolean).join('-');\n}\n";
+    writeFileSync(join(cacheDir, "m4-cache-marker", "cached-a.ts"), duplicatedCacheSource);
+    writeFileSync(join(cacheDir, "m4-cache-marker", "cached-b.ts"), duplicatedCacheSource);
     const runner = join(fixture, "runner.mts");
     writeFileSync(runner, `
 import { execFileSync } from "node:child_process";
@@ -87,11 +95,12 @@ const results = { "detect-static": detected, "quality-scan": quality, "mutation-
 const statuses = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.cache ?? "fresh"]));
 const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
 const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, preparation: preparation.status, events }));
+const qualityLocations = quality.findings.map((finding) => finding.location);
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, qualityLocations, preparation: preparation.status, events }));
 `);
-    const run = async (repoRoot: string, targetDir: string): Promise<ProcessResult> => {
-      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheDir], {
-        cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8,
+    const run = async (repoRoot: string, targetDir: string, environment: NodeJS.ProcessEnv = {}): Promise<ProcessResult> => {
+      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheArgument], {
+        cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8, env: { ...process.env, ...environment },
       });
       const marker = stdout.split("\n").find((line) => line.startsWith("CORPUS_SCANNER_PROCESS="));
       if (!marker) throw new Error(`child emitted no result: ${stdout}`);
@@ -106,7 +115,88 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
     expect(warm.qualityLocation).toBe(cold.qualityLocation);
+    expect(warm.qualityLocations.some((location) => location.includes("m4-cache-marker"))).toBe(false);
+    expect(lstatSync(cacheDir).isDirectory()).toBe(true);
+    expect(() => lstatSync(join(targetA, cacheArgument))).toThrow();
     expect(warm.events).toContainEqual(expect.stringContaining("DEPENDENCY PREP HIT npm"));
     expect(warm.events).toContainEqual(expect.stringContaining("CACHE HIT quality-scan"));
+
+    writeFileSync(join(checkoutB, "src", "quality-scan.ts"), `${readFileSync(join(checkoutB, "src", "quality-scan.ts"), "utf8")}\n// production closure mutation control\n`);
+    const closureMoved = await run(checkoutB, targetB);
+    expect(closureMoved.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
+    expect(closureMoved.findingCounts).toEqual(warm.findingCounts);
+
+    const alternateHome = join(fixture, "home-b");
+    mkdirSync(alternateHome);
+    const homeMoved = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(homeMoved.preparation).toBe("miss");
+    expect(homeMoved.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
+    const homeStable = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(homeStable.preparation).toBe("hit");
+    expect(homeStable.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
   }, 60_000);
+
+  it("forces an M5 gap without executing a partial installed provider", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-cache-"));
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(targetDir, "src"), { recursive: true });
+    mkdirSync(join(targetDir, "node_modules", "partial-provider"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), '{"name":"partial-quality","private":true}\n');
+    writeFileSync(join(targetDir, "src", "index.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "knip.js"), 'module.exports = require("partial-provider");\n');
+    writeFileSync(join(targetDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
+    writeFileSync(join(targetDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "incomplete preparation control",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "pin",
+        targetTree: "tree",
+        dependencyPreparation: {
+          status: "incomplete",
+          complete: false,
+          cacheable: false,
+          packageManager: "npm",
+          packageManagerVersion: "11.12.1",
+          reason: "clean and fallback installs failed after partial materialization",
+        },
+      },
+    });
+    expect(result.cacheRecord).toBeUndefined();
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
+
+    const completeResult = await runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "complete preparation control",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "pin",
+        targetTree: "tree",
+        dependencyPreparation: {
+          status: "hit",
+          complete: true,
+          cacheable: false,
+          key: "complete-but-dynamic",
+          packageManager: "npm",
+          packageManagerVersion: "11.12.1",
+          reason: "quality stays fresh for executable Knip configuration",
+        },
+      },
+    });
+    expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
+  }, 30_000);
 });

@@ -108,7 +108,12 @@ const baselineFindingsPath = flag("--baseline-findings");
 const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
-const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
+// Resolve once while cwd is Harvey. Package managers later run with cwd set to each disposable
+// target checkout; passing their --store-dir a relative path would otherwise put the cache inside
+// the target, where M4/quality-scan can mistake cached package sources for client code.
+const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR
+  ? resolve(process.env.HARVEY_CORPUS_PHASE_CACHE_DIR)
+  : undefined;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
