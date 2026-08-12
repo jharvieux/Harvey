@@ -48,7 +48,7 @@ export function parseFresh(path: string, text: string): ts.SourceFile {
  *
  * Method calls are applied to the underlying TypeScript object because several SourceFile methods
  * have internal receiver assumptions.  Arguments are unwrapped and object results are re-wrapped,
- * so methods such as getChildren()/getSourceFile() cannot be used to escape the membrane.
+ * preserving recursive mutation protection for values returned by getChildren()/getSourceFile().
  */
 export function readonlySourceFile(sourceFile: ts.SourceFile): ts.SourceFile {
   // TypeScript memoizes these public queries by writing private cache fields onto nodes. Materialize
