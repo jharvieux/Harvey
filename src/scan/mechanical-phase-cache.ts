@@ -167,10 +167,6 @@ export function targetPathExaminedUnits(producer: string, paths: readonly string
   return paths.map((identity) => ({ producer, kind: "target-path", identity }));
 }
 
-export function semanticExaminedUnits(producer: string, kind: string, identities: readonly string[]): MechanicalExaminedUnitIdentity[] {
-  return identities.map((identity) => ({ producer, kind, identity }));
-}
-
 export function mechanicalExaminedUnitDigest(units: readonly MechanicalExaminedUnitIdentity[]): string {
   return digestParts([stable(units)]);
 }
