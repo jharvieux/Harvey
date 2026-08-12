@@ -122,6 +122,17 @@ source-only scanners do not move when an unobserved install changes. Checkout ro
 in stored findings and rehydrated on read. On real Carbon,
 the cache reports 6,133 tracked target units rather than walking installed dependencies.
 
+The install identity's bound follows the installed graph, not workspace alias count. The first
+hosted run exposed the distinction: pinned Carbon presented 9,376 logical paths and would have
+reread 1,988,844,028 bytes because 36 workspace manifests reach the same pnpm packages through
+different symlinks, but those aliases resolve to 3,685 physical files / 253,647,541 bytes. Pinned
+BoxyHQ measured 499 physical files / 40,665,455 bytes. Identity generation now canonicalizes by
+physical file, keeps a deterministic target-relative logical label, and streams the exact file
+digest. Its 8,192-file / 512-MiB ceiling is approximately twice the largest measured physical
+population, recorded alongside the identity itself; exceeding it throws with both the observed and
+allowed population. This keeps legitimate supported trees inside the cache contract without
+turning `node_modules` traversal into an unbounded operation or silently sampling installed bytes.
+
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
 timings), tokenizes both target and cache roots, and is independently keyed by its exact rule bytes.

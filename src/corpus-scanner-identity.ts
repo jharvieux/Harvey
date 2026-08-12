@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { statSafe } from "./fs-walk.js";
 import { binaryVersion, digestFiles, digestParts } from "./scan/mechanical-phase-cache.js";
@@ -20,8 +21,31 @@ const TOOL: Record<CorpusScanner, readonly string[]> = {
 
 const INSTALL_INPUT = /(^|\/)package\.json$|(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pnpm-workspace\.yaml|\.npmrc)$/;
 const PREPARATION_FILES = ["node_modules/.modules.yaml", "node_modules/.package-lock.json", "node_modules/.yarn-integrity", ".pnp.cjs", ".pnp.data.json"];
-const MAX_OBSERVED_FILES = 8_192;
-const MAX_OBSERVED_BYTES = 32 * 1024 * 1024;
+
+// MEASURED 2026-08-12 against the installed pinned corpus trees that broke the first hosted run:
+// Carbon exposed 9,376 logical paths but only 3,685 physical files (253,647,541 bytes) because 36
+// workspace manifests reach the same pnpm packages through different symlinks. BoxyHQ exposed 499
+// physical files (40,665,455 bytes). The old logical-path union reread Carbon's installed bytes as
+// 1,988,844,028 bytes and breached both arbitrary 8,192-file / 32-MiB caps. Canonicalizing physical
+// files makes the bound describe installed state instead of workspace alias count. The production
+// ceiling is deliberately about 2x the largest measured physical population: enough for a pinned
+// corpus target to grow materially, still finite and fail-loud rather than an unbounded node_modules
+// walk. The thrown diagnostic prints the observed population so the next adjustment is evidence-led.
+export const CORPUS_INSTALL_IDENTITY_BOUNDS = {
+  maxFiles: 8_192,
+  maxBytes: 512 * 1024 * 1024,
+  basis: "2x headroom over pinned Carbon's 3,685 physical files / 253,647,541 bytes, measured 2026-08-12",
+} as const;
+
+interface ObservedInstallFile {
+  logicalPath: string;
+  physicalPath: string;
+}
+
+interface InstallIdentityBounds {
+  maxFiles: number;
+  maxBytes: number;
+}
 
 function dependencyNames(manifest: Record<string, unknown>): { required: string[]; optional: string[] } {
   const names = (field: string): string[] => {
@@ -46,7 +70,8 @@ function packageEntryCandidates(packageDir: string, manifest: Record<string, unk
   return [...new Set(values)]
     .filter((value) => !value.includes("*") && !value.startsWith("node:"))
     .map((value) => join(packageDir, value.replace(/^\.\//, "")))
-    .filter((path) => statSafe(path)?.isFile());
+    .filter((path) => statSafe(path)?.isFile())
+    .sort();
 }
 
 function findInstalledPackage(targetDir: string, manifestDir: string, name: string): string | undefined {
@@ -61,21 +86,53 @@ function findInstalledPackage(targetDir: string, manifestDir: string, name: stri
   return undefined;
 }
 
-function observedInstallDigest(targetDir: string, files: readonly string[]): { digest: string; files: number; bytes: number } {
-  const parts: (string | Buffer)[] = [];
-  let bytes = 0;
-  const unique = [...new Set(files)].sort();
-  if (unique.length > MAX_OBSERVED_FILES) throw new Error(`corpus scanner install identity exceeds ${MAX_OBSERVED_FILES} observed files`);
-  for (const path of unique) {
-    const stat = statSafe(path);
-    if (!stat?.isFile()) continue;
-    const label = relative(targetDir, path).replaceAll("\\", "/");
-    parts.push(label);
-    if (bytes + stat.size > MAX_OBSERVED_BYTES) throw new Error(`corpus scanner install identity exceeds ${MAX_OBSERVED_BYTES} observed bytes`);
-    const content = readFileSync(path);
-    parts.push(content);
-    bytes += content.length;
+function observeInstallFile(path: string): ObservedInstallFile | undefined {
+  if (!statSafe(path)?.isFile()) return undefined;
+  return { logicalPath: path, physicalPath: realpathSync(path) };
+}
+
+function digestFile(path: string): string {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = openSync(path, "r");
+  try {
+    for (;;) {
+      const bytes = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytes === 0) break;
+      hash.update(buffer.subarray(0, bytes));
+    }
+  } finally {
+    closeSync(fd);
   }
+  return hash.digest("hex");
+}
+
+export function observedInstallDigest(
+  targetDir: string,
+  files: readonly ObservedInstallFile[],
+  bounds: InstallIdentityBounds = CORPUS_INSTALL_IDENTITY_BOUNDS,
+): { digest: string; files: number; bytes: number } {
+  const parts: (string | Buffer)[] = [];
+  const byPhysical = new Map<string, ObservedInstallFile>();
+  for (const file of files) {
+    const prior = byPhysical.get(file.physicalPath);
+    if (!prior || file.logicalPath.localeCompare(prior.logicalPath) < 0) byPhysical.set(file.physicalPath, file);
+  }
+  const unique = [...byPhysical.values()].map((file) => {
+    const label = relative(targetDir, file.logicalPath).replaceAll("\\", "/");
+    if (label === "" || label === ".." || label.startsWith("../")) throw new Error(`corpus scanner install identity logical path is outside target: ${file.logicalPath}`);
+    const stat = statSafe(file.physicalPath);
+    if (!stat?.isFile()) throw new Error(`corpus scanner install identity input disappeared: ${file.logicalPath}`);
+    return { ...file, label, bytes: stat.size };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+  const bytes = unique.reduce((sum, file) => sum + file.bytes, 0);
+  if (unique.length > bounds.maxFiles) {
+    throw new Error(`corpus scanner install identity observed ${unique.length} physical files, exceeding the ${bounds.maxFiles}-file bound`);
+  }
+  if (bytes > bounds.maxBytes) {
+    throw new Error(`corpus scanner install identity observed ${bytes} physical bytes, exceeding the ${bounds.maxBytes}-byte bound`);
+  }
+  for (const file of unique) parts.push(file.label, String(file.bytes), digestFile(file.physicalPath));
   return { digest: digestParts(parts), files: unique.length, bytes };
 }
 
@@ -93,7 +150,7 @@ export function dependencyInstallIdentity(targetDir: string): string {
   const required: string[] = [];
   const optional: string[] = [];
   const installed: string[] = [];
-  const observedFiles = PREPARATION_FILES.map((path) => join(targetDir, path)).filter(existsSync);
+  const observedFiles: ObservedInstallFile[] = PREPARATION_FILES.map((path) => observeInstallFile(join(targetDir, path))).filter((file): file is ObservedInstallFile => file !== undefined);
   let hasInstallRoot = existsSync(join(targetDir, "node_modules")) || existsSync(join(targetDir, ".pnp.cjs"));
   for (const manifestPath of manifests) {
     const absoluteManifest = join(targetDir, manifestPath);
@@ -108,13 +165,15 @@ export function dependencyInstallIdentity(targetDir: string): string {
       if (!packageDir) continue;
       installed.push(`${manifestPath}:${name}`);
       const packageManifestPath = join(packageDir, "package.json");
-      observedFiles.push(packageManifestPath);
+      const observedManifest = observeInstallFile(packageManifestPath);
+      if (observedManifest) observedFiles.push(observedManifest);
       const packageManifest = JSON.parse(readFileSync(packageManifestPath, "utf8")) as Record<string, unknown>;
-      observedFiles.push(...packageEntryCandidates(packageDir, packageManifest));
+      observedFiles.push(...packageEntryCandidates(packageDir, packageManifest).map(observeInstallFile).filter((file): file is ObservedInstallFile => file !== undefined));
     }
     for (const path of PREPARATION_FILES) {
       const candidate = join(manifestDir, path);
-      if (existsSync(candidate)) observedFiles.push(candidate);
+      const observedCandidate = observeInstallFile(candidate);
+      if (observedCandidate) observedFiles.push(observedCandidate);
     }
   }
   const installedSet = new Set(installed);
@@ -130,7 +189,7 @@ export function dependencyInstallIdentity(targetDir: string): string {
     installed: [...installedSet].sort(),
     missingRequired,
     observed,
-    bounds: { maxFiles: MAX_OBSERVED_FILES, maxBytes: MAX_OBSERVED_BYTES },
+    bounds: CORPUS_INSTALL_IDENTITY_BOUNDS,
   });
 }
 
