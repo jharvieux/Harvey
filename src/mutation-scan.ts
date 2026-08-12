@@ -80,6 +80,32 @@ export interface StrykerReport {
   testFiles?: Record<string, StrykerTestFile>;
 }
 
+interface StrykerPhaseDurations {
+  testBaselineMs: number;
+  mutationMs: number;
+}
+
+// Stryker does not expose these two phase clocks in its JSON reporter, but its own INFO lines carry
+// wall-clock timestamps around the initial unmutated suite and the mutation executor. Parse those
+// measured boundaries so corpus-m8 can distinguish an expensive baseline from expensive mutants.
+export function strykerPhaseDurations(output: string): StrykerPhaseDurations | undefined {
+  const stamp = (marker: RegExp): number | undefined => {
+    const match = output.match(new RegExp(`(\\d{2}):(\\d{2}):(\\d{2})(?:\\.\\d+)?[^\\n]*${marker.source}`, marker.flags));
+    if (!match) return undefined;
+    return Number(match[1]) * 3_600_000 + Number(match[2]) * 60_000 + Number(match[3]) * 1000;
+  };
+  const baselineStart = stamp(/Starting initial test run/);
+  const baselineEnd = stamp(/Initial test run succeeded/);
+  const mutationEnd = stamp(/MutationTestExecutor.*Done in/);
+  if (baselineStart === undefined || baselineEnd === undefined || mutationEnd === undefined) return undefined;
+  const elapsed = (start: number, end: number) => end >= start ? end - start : end + 86_400_000 - start;
+  const reportedBaseline = output.match(/Initial test run succeeded\. Ran \d+ tests? in [\d.]+ seconds \(net ([\d.]+) ms, overhead ([\d.]+) ms\)/);
+  const testBaselineMs = reportedBaseline
+    ? Number(reportedBaseline[1]) + Number(reportedBaseline[2])
+    : elapsed(baselineStart, baselineEnd);
+  return { testBaselineMs, mutationMs: elapsed(baselineEnd, mutationEnd) };
+}
+
 // Not exported: nothing outside this file needs to name these shapes — callers get them as
 // the (fully-typed) inferred return of summarizeMutationReport/toReportRows.
 interface ModuleMutationSummary {

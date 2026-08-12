@@ -141,6 +141,7 @@ import {
   stubCheckBaselineModuleRecord,
   summarizeLineCoverage,
   summarizeMutationReport,
+  strykerPhaseDurations,
   survivingMutantFindings,
   toReportRows,
   unverifiableScopeModuleRecord,
@@ -910,7 +911,7 @@ function emitAndExit(output: Record<string, unknown>, stderrNote: string): never
 // #655: `cwd` defaults to the target (the ordinary per-app invocation) but a root-scoped run
 // passes the workspace root instead — Stryker itself, and the local-bin lookup below, both need to
 // execute from wherever the config's `mutate` globs are relative to.
-function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string; ts7Crash?: boolean } {
+function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string; ts7Crash?: boolean; phases?: { testBaselineMs: number; mutationMs: number } } {
   const strykerArgs = ["run"];
   if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
@@ -927,7 +928,8 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dry
     // that's not a wrapper failure, the report is still written; only a missing binary should throw.
     const stdout = execFileSync(strykerBin, strykerArgs, { cwd, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
     process.stderr.write(stdout);
-    return {};
+    const phases = strykerPhaseDurations(stdout);
+    return phases ? { phases } : {};
   } catch (err) {
     const e = err as { code?: string; stdout?: string; stderr?: string };
     if (e.code === "ENOENT") {
@@ -936,14 +938,21 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dry
     const captured = `${e.stdout ?? ""}\n${e.stderr ?? ""}`;
     process.stderr.write(captured);
     const dryRun = detectDryRunFailure(captured);
-    if (dryRun.failed) return { dryRunFailure: dryRun.detail };
+    if (dryRun.failed) {
+      const phases = strykerPhaseDurations(captured);
+      return { dryRunFailure: dryRun.detail, ...(phases ? { phases } : {}) };
+    }
     // #773: the reactive safety net — fires when the proactive TS7 bypass below wasn't applied
     // (non-JSON target config) or missed the incompatibility (TypeScript resolved from outside the
     // dir this tool checked). Caught by exact crash signature so this never falls through to the
     // opaque "mutation report not found" this incompatibility used to produce.
-    if (detectTs7TsconfigCrash(captured)) return { ts7Crash: true };
+    if (detectTs7TsconfigCrash(captured)) {
+      const phases = strykerPhaseDurations(captured);
+      return { ts7Crash: true, ...(phases ? { phases } : {}) };
+    }
     // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
-    return {};
+    const phases = strykerPhaseDurations(captured);
+    return phases ? { phases } : {};
   }
 }
 
@@ -1110,6 +1119,7 @@ let strykerScratchUsed: string | undefined;
 // against the target — Stryker, then #819's line-coverage pass, which invokes the target's own
 // runner in its own tree — has finished.
 let pristine: PristineSnapshot | undefined;
+let strykerPhases: { testBaselineMs: number; mutationMs: number } | undefined;
 
 let resolvedReportPath: string;
 if (reportPath) {
@@ -1132,6 +1142,7 @@ if (reportPath) {
   console.error(`M8: invoking Stryker against ${targetDir} (#1285) — its mutant sandboxes, JSON report and incremental file are redirected to ${redirect.scratchRoot}, outside the target tree; ${targetDir} is not written to at all, and that is asserted after the run.`);
   pristine = snapshotPristine(targetDir, loadSourceFiles(targetDir));
   const run = runStryker(redirect.cfgPath, runCwd);
+  strykerPhases = run.phases;
   // Before the degrade branches, not after: a crashed or dry-run-failed Stryker is exactly when a
   // half-written sandbox would be left behind, so that exit must not skip the check.
   assertTreePristine(pristine, "#1285");
@@ -1225,7 +1236,15 @@ console.error(`M8 mutate scope (#504): ${scope.note}`);
 // "coverage-vs-mutation-score gap" no longer needs a hand-filled column. `coverageCwd`/its
 // package.json follow wherever the runnable suite actually lives — the target for an ordinary
 // run, the workspace root for a successful #655 root-scoped run.
+const lineCoverageStarted = performance.now();
 const lineCoverage = runLineCoverage(readPackageJsonAt(coverageCwd), coverageCwd);
+const lineCoverageMs = performance.now() - lineCoverageStarted;
+if (strykerPhases) {
+  console.error(
+    `M8 PHASES: test baseline ${(strykerPhases.testBaselineMs / 1000).toFixed(1)}s, `
+    + `mutation ${(strykerPhases.mutationMs / 1000).toFixed(1)}s, line coverage ${(lineCoverageMs / 1000).toFixed(1)}s`,
+  );
+}
 if (lineCoverage.status === "partial") {
   console.error(`⚠ M8 line coverage: partial — ${lineCoverage.reason} (#819; the Line-cov column is disclosed as ungenerated, not left blank/omitted)`);
 } else {
@@ -1253,6 +1272,7 @@ const output = {
   // #819: always present (never a silent blank column) — "ran" alongside the module rows above
   // when the coverage pull succeeded, "partial" + reason when it could not.
   lineCoverage: lineCoverage.status === "ran" ? { status: "ran" as const } : { status: "partial" as const, reason: lineCoverage.reason },
+  phaseTimings: strykerPhases ? { ...strykerPhases, lineCoverageMs } : undefined,
   // #504: a scoped run carries the machine-readable partial verdict alongside its summary, so the
   // M8 probe records partial-with-scope instead of banking the subset score as `ran`.
   // #1309: `scope.scoped` is false on BOTH a verified full run (the only real `ran`) AND an

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { EXTERNAL_CORPUS } from "./external-corpus.js";
 import { M8_CORPUS_CONFIGS, materializeM8Config, type M8CorpusConfig } from "./m8-corpus.js";
+import { buildM8CorpusPlan } from "./m8-corpus-artifacts.js";
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), "harvey-m8-corpus-test-"));
 
@@ -78,10 +79,12 @@ describe("materializeM8Config (#1496/#1693)", () => {
 // Nothing structural stops that recurring for the next target, so this is the gate that does.
 describe("corpus-m8.yml scores every target that has an M8 config (#1692)", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/corpus-m8.yml", import.meta.url), "utf8");
-  const scored = [...workflow.matchAll(/pnpm corpus-drift --target (\S+)[^\n]*--m8/g)].map((m) => m[1]).sort();
 
-  it("scores exactly the slugs M8_CORPUS_CONFIGS carries — no more, and crucially no fewer", () => {
-    expect(scored).toEqual(Object.keys(M8_CORPUS_CONFIGS).sort());
+  it("derives one target matrix from M8_CORPUS_CONFIGS and consumes each matrix target once", () => {
+    expect(workflow.match(/corpus-m8\.ts plan/g)).toHaveLength(1);
+    expect(workflow.match(/matrix: \$\{\{ fromJSON\(needs\.plan\.outputs\.matrix\) \}\}/g)).toHaveLength(1);
+    expect(workflow.match(/corpus-m8\.ts target --target "\$\{\{ matrix\.target \}\}"/g)).toHaveLength(1);
+    expect(buildM8CorpusPlan(EXTERNAL_CORPUS, M8_CORPUS_CONFIGS).configured).toEqual(Object.keys(M8_CORPUS_CONFIGS).sort());
   });
 
   it("and those configs are exactly the manifest entries corpus-drift will accept for --m8", () => {
@@ -89,5 +92,17 @@ describe("corpus-m8.yml scores every target that has an M8 config (#1692)", () =
     // config nobody attached (or an attachment with no config) would make the job fail rather than
     // silently under-score — but it would fail on the FIRST of the month, in a job nobody watches.
     expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(Object.keys(M8_CORPUS_CONFIGS).sort());
+  });
+
+  it("keeps mutation real, aggregates every shard, and bounds each target below the old 45-minute timeout", () => {
+    const targetRunner = readFileSync(new URL("../cli/corpus-m8.ts", import.meta.url), "utf8");
+    expect(workflow).toContain("fail-fast: false");
+    expect(workflow).toContain("needs: [plan, mutation]");
+    expect(workflow).toContain("aggregate --artifacts corpus-m8-artifacts");
+    expect(workflow).not.toContain("mode: save");
+    const targetJob = workflow.slice(workflow.indexOf("  mutation:"), workflow.indexOf("  aggregate:"));
+    expect(targetJob).toContain("timeout-minutes: 20");
+    expect(targetRunner).toContain('"--install", "--m8"');
+    expect(targetRunner).not.toContain('"--report"');
   });
 });
