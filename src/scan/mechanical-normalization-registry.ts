@@ -2,7 +2,10 @@ import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { producerAssurance } from "./mechanical-registry-assurance.js";
-import type { MechanicalProducerRecord } from "./mechanical-phase-cache.js";
+import {
+  type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerRecord,
+} from "./mechanical-phase-cache.js";
 import { assertProducerTaxonomyOwnership } from "./mechanical-registry-contract.js";
 
 interface NormalizationInput {
@@ -35,16 +38,34 @@ function runNormalizationEngine({ findings, scanDir, directDeps }: Normalization
   return enrichFindingsCwe(ranked.findings);
 }
 
+function semanticExaminedUnits(producer: string, kind: string, identities: readonly string[]): MechanicalExaminedUnitIdentity[] {
+  return identities.map((identity) => ({ producer, kind, identity }));
+}
+
+function receiptRecord(input: Omit<MechanicalProducerRecord, "unitsExamined">): MechanicalProducerRecord {
+  return { ...input, unitsExamined: input.examinedUnitIdentities.length };
+}
+
 export function runRegisteredNormalizationEngines(input: NormalizationInput): { findings: Finding[]; records: MechanicalProducerRecord[] } {
   const findings: Finding[] = [];
   const records: MechanicalProducerRecord[] = [];
   for (const engine of NORMALIZATION_ENGINES) {
     const selected = engine.select(input);
+    const occurrences = new Map<string, number>();
+    const identities = selected.map((unit) => {
+      const key = `${unit.id}@${unit.location}`;
+      const occurrence = (occurrences.get(key) ?? 0) + 1;
+      occurrences.set(key, occurrence);
+      return `${key}#${occurrence}`;
+    });
+    const examinedUnitIdentities = semanticExaminedUnits(engine.id, "finding", identities);
+    const unitsExamined = engine.countExaminedUnits(input, selected);
+    if (unitsExamined !== examinedUnitIdentities.length) throw new Error(`${engine.id}: examined-unit count ${unitsExamined} differs from exact selector receipt ${examinedUnitIdentities.length}`);
     const started = performance.now();
     const emitted = engine.invoke(input);
     assertProducerTaxonomyOwnership(engine, emitted);
     findings.push(...emitted);
-    records.push({ detector: engine.id, phase: engine.phase, order: engine.order, module: engine.module, unitsExamined: engine.countExaminedUnits(input, selected), findings: emitted.length, durationMs: performance.now() - started, status: "ran" });
+    records.push(receiptRecord({ detector: engine.id, phase: engine.phase, order: engine.order, module: engine.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
   }
   return { findings, records };
 }

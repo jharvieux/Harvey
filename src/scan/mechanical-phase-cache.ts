@@ -24,12 +24,23 @@ export interface MechanicalPhaseScope {
   description: string;
 }
 
+export interface MechanicalExaminedUnitIdentity {
+  /** Repeated on every row so a same-shaped population cannot be moved to another producer. */
+  producer: string;
+  /** Names the selector's semantic namespace; target-path receives additional canonical checks. */
+  kind: string;
+  /** Raw, checkout-independent identity retained in selector order. */
+  identity: string;
+}
+
 export interface MechanicalProducerRecord {
   detector: string;
   phase: MechanicalPhase;
   order: number;
   module: "M1" | "M6";
   unitsExamined: number;
+  examinedUnitIdentities: MechanicalExaminedUnitIdentity[];
+  examinedUnitDigest?: string;
   findings: number;
   durationMs: number;
   status: "ran" | "not-applicable" | "cached";
@@ -71,7 +82,7 @@ interface MechanicalPhaseIdentityComponents {
 }
 
 interface CacheArtifact {
-  schema: 2;
+  schema: 3;
   phase: MechanicalPhase;
   key: string;
   targetRevision: string;
@@ -120,6 +131,64 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function canonicalTargetRelativePath(path: string): boolean {
+  if (path.length === 0 || path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.includes("\\")) return false;
+  const segments = path.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function examinedUnitProblems(detector: string, units: unknown): string[] {
+  if (!Array.isArray(units)) return ["examined-unit identities are missing or malformed"];
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, unit] of units.entries()) {
+    if (!unit || typeof unit !== "object") {
+      problems.push(`examined-unit identity ${index} is malformed`);
+      continue;
+    }
+    const row = unit as Partial<MechanicalExaminedUnitIdentity>;
+    if (row.producer !== detector) problems.push(`examined-unit identity ${index} belongs to the wrong producer`);
+    if (typeof row.kind !== "string" || !/^[a-z][a-z0-9-]*$/.test(row.kind)) problems.push(`examined-unit identity ${index} has a noncanonical kind`);
+    if (typeof row.identity !== "string" || row.identity.length === 0 || [...row.identity].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+      problems.push(`examined-unit identity ${index} is empty or contains control characters`);
+      continue;
+    }
+    if (row.kind === "target-path" && !canonicalTargetRelativePath(row.identity)) problems.push(`examined-unit identity ${index} is not a canonical target-relative path`);
+    if (row.kind !== "target-path" && (row.identity.includes("\\") || /(?:^|[=:])\/(?:Users|home|private|tmp|var\/folders)\//.test(row.identity))) {
+      problems.push(`examined-unit identity ${index} contains a checkout-local path`);
+    }
+    const key = stable(row);
+    if (seen.has(key)) problems.push(`examined-unit identity ${index} duplicates an earlier unit`);
+    seen.add(key);
+  }
+  return problems;
+}
+
+export function targetPathExaminedUnits(producer: string, paths: readonly string[]): MechanicalExaminedUnitIdentity[] {
+  return paths.map((identity) => ({ producer, kind: "target-path", identity }));
+}
+
+export function semanticExaminedUnits(producer: string, kind: string, identities: readonly string[]): MechanicalExaminedUnitIdentity[] {
+  return identities.map((identity) => ({ producer, kind, identity }));
+}
+
+export function mechanicalExaminedUnitDigest(units: readonly MechanicalExaminedUnitIdentity[]): string {
+  return digestParts([stable(units)]);
+}
+
+export function createMechanicalProducerRecord(
+  input: Omit<MechanicalProducerRecord, "unitsExamined" | "examinedUnitDigest"> & { examinedUnitIdentities: MechanicalExaminedUnitIdentity[] },
+): MechanicalProducerRecord {
+  const record: MechanicalProducerRecord = {
+    ...input,
+    unitsExamined: input.examinedUnitIdentities.length,
+    examinedUnitDigest: mechanicalExaminedUnitDigest(input.examinedUnitIdentities),
+  };
+  const problems = producerRecordProblems(record, record.phase);
+  if (problems.length > 0) throw new Error(`${record.phase}:${record.detector}: ${problems.join("; ")}`);
+  return record;
+}
+
 export function digestParts(parts: readonly (string | Buffer)[]): string {
   const hash = createHash("sha256");
   for (const part of parts) {
@@ -129,6 +198,44 @@ export function digestParts(parts: readonly (string | Buffer)[]): string {
     hash.update(data);
   }
   return hash.digest("hex");
+}
+
+function producerRecordProblems(producer: unknown, expectedPhase: MechanicalPhase, requireDigest: boolean = false): string[] {
+  if (!producer || typeof producer !== "object") return ["producer record is malformed"];
+  const row = producer as Partial<MechanicalProducerRecord>;
+  const problems: string[] = [];
+  if (typeof row.detector !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(row.detector)) problems.push("producer id is missing or noncanonical");
+  if (row.phase !== expectedPhase) problems.push("producer phase does not match its artifact");
+  if (!Number.isInteger(row.order) || row.order! < 0) problems.push("producer order is malformed");
+  if (row.module !== "M1" && row.module !== "M6") problems.push("producer module is malformed");
+  if (!Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0) problems.push("producer examined count is malformed");
+  if (!Number.isInteger(row.findings) || row.findings! < 0) problems.push("producer finding count is malformed");
+  if (typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0) problems.push("producer duration is malformed");
+  if (row.status !== "ran" && row.status !== "not-applicable" && row.status !== "cached") problems.push("producer status is malformed");
+  const unitProblems = examinedUnitProblems(row.detector ?? "", row.examinedUnitIdentities);
+  problems.push(...unitProblems);
+  if (Array.isArray(row.examinedUnitIdentities) && row.unitsExamined !== row.examinedUnitIdentities.length) problems.push("producer examined count differs from its exact identity population");
+  if (requireDigest && typeof row.examinedUnitDigest !== "string") problems.push("producer examined-unit digest is missing");
+  if (Array.isArray(row.examinedUnitIdentities) && row.examinedUnitDigest !== undefined && row.examinedUnitDigest !== mechanicalExaminedUnitDigest(row.examinedUnitIdentities)) problems.push("producer examined-unit digest does not match its raw identity population");
+  return problems;
+}
+
+function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue, requireDigest: boolean = false): string[] {
+  if (value.producers === undefined) return [];
+  const problems = value.producers.flatMap((producer) => producerRecordProblems(producer, phase, requireDigest).map((problem) => `${producer.detector}: ${problem}`));
+  for (let index = 1; index < value.producers.length; index++) {
+    const prior = value.producers[index - 1]!;
+    const current = value.producers[index]!;
+    if (current.order <= prior.order) problems.push(`${current.detector}: producer order is duplicate or out of sequence after ${prior.detector}`);
+  }
+  if (new Set(value.producers.map((producer) => producer.detector)).size !== value.producers.length) problems.push("producer ids are duplicated");
+  if (value.producers.reduce((sum, producer) => sum + producer.findings, 0) !== value.findings.length) problems.push("producer finding census does not equal the phase finding population");
+  return problems;
+}
+
+function assertPhaseValue(phase: MechanicalPhase, value: MechanicalPhaseValue): void {
+  const problems = phaseValueProblems(phase, value);
+  if (problems.length > 0) throw new Error(`${phase}: producer execution receipts are malformed: ${problems.join("; ")}`);
 }
 
 export function digestTree(dir: string, include: (relativePath: string) => boolean = () => true): string {
@@ -188,6 +295,7 @@ function persistedPhaseValue(value: MechanicalPhaseValue): MechanicalPhaseValue 
     ...(value.producers === undefined ? {} : {
       producers: value.producers.map((producer) => ({
         ...producer,
+        examinedUnitDigest: mechanicalExaminedUnitDigest(producer.examinedUnitIdentities),
         durationMs: 0,
         status: producer.status === "cached" ? "ran" : producer.status,
       })),
@@ -201,7 +309,7 @@ export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): strin
 
 function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
   const value = JSON.parse(text) as Partial<CacheArtifact>;
-  if (value.schema !== 2 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
+  if (value.schema !== 3 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
   }
   if (!Array.isArray(value.findings)) throw new Error("artifact findings are incomplete or malformed");
@@ -210,20 +318,13 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
   if (!value.scope || !Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0 || typeof value.scope.description !== "string" || value.scope.description.length === 0) {
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
-  if (value.producers !== undefined && (
-    !Array.isArray(value.producers)
-    || value.producers.some((producer) => {
-      if (!producer || typeof producer !== "object") return true;
-      const row = producer as Partial<MechanicalProducerRecord>;
-      return typeof row.detector !== "string" || row.detector.length === 0 || row.phase !== expected.phase
-        || !Number.isInteger(row.order) || (row.module !== "M1" && row.module !== "M6")
-        || !Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0
-        || !Number.isInteger(row.findings) || row.findings! < 0
-        || typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0
-        || (row.status !== "ran" && row.status !== "not-applicable" && row.status !== "cached");
-    })
-    || value.producers.reduce((sum, producer) => sum + producer.findings, 0) !== value.findings.length
-  )) throw new Error("artifact producer execution census is malformed");
+  if (value.producers !== undefined && !Array.isArray(value.producers)) throw new Error("artifact producer execution receipts are malformed");
+  const receiptProblems = phaseValueProblems(expected.phase, {
+    findings: value.findings,
+    scope: value.scope,
+    ...(value.producers === undefined ? {} : { producers: value.producers }),
+  }, true);
+  if (receiptProblems.length > 0) throw new Error(`artifact producer execution receipts are malformed: ${receiptProblems.join("; ")}`);
   const payloadDigest = mechanicalPhasePayloadDigest({
     findings: value.findings,
     scope: value.scope,
@@ -250,7 +351,7 @@ function closestPriorIdentity(dir: string, phase: MechanicalPhase, current: Mech
   for (const name of readEntriesSafe(phaseDir).entries.filter((candidate) => !candidate.isDirectory && candidate.name.endsWith(".json")).map((candidate) => candidate.name)) {
     try {
       const value = JSON.parse(readFileSync(join(phaseDir, name), "utf8")) as Partial<CacheArtifact>;
-      if (value.schema !== 2 || value.phase !== phase || !value.identity) continue;
+      if (value.schema !== 3 || value.phase !== phase || !value.identity) continue;
       const previous = new Map(componentEntries(value.identity));
       const names = [...new Set([...currentEntries.keys(), ...previous.keys()])].sort();
       const changed = names.filter((component) => currentEntries.get(component) !== previous.get(component));
@@ -279,6 +380,7 @@ export async function executeMechanicalPhase(
   const disabled = cache?.disabled?.[phase];
   if (!cache || cache.mode === "off" || !cacheable || disabled) {
     const value = await execute();
+    assertPhaseValue(phase, value);
     const reason = disabled ?? (!cache || cache.mode === "off" ? "phase cache disabled" : policy.reason);
     cache?.onEvent?.(`CACHE BYPASS ${phase}: ${reason}`);
     return { phase, ...value, durationMs: Date.now() - started, cache: "non-cacheable", reason };
@@ -295,7 +397,7 @@ export async function executeMechanicalPhase(
   };
   const key = digestParts([stable({ phase, identity })]);
   const path = join(cache.dir, phase, `${key}.json`);
-  const expected = { schema: 2 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const expected = { schema: 3 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
@@ -311,6 +413,7 @@ export async function executeMechanicalPhase(
     return { phase, findings: hit.findings, scope: hit.scope, producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = await execute();
+  assertPhaseValue(phase, value);
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
   const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
   if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);

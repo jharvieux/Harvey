@@ -4,7 +4,10 @@ import { detectOrm, type TargetOrm } from "./framework-detect.js";
 import { checkInfrastructureScope } from "./infra-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
 import { architectureFindings } from "./mechanical-architecture.js";
-import type { MechanicalProducerRecord } from "./mechanical-phase-cache.js";
+import {
+  type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerRecord,
+} from "./mechanical-phase-cache.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
 import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import {
@@ -37,6 +40,7 @@ interface MechanicalEngineDefinition<Input> {
   taxonomies: readonly string[];
   applicableFiles: { description: string; select: (input: Input) => readonly unknown[] };
   countExaminedUnits: (input: Input, selected: readonly unknown[]) => number;
+  examinedUnitIdentities: (input: Input, selected: readonly unknown[]) => MechanicalExaminedUnitIdentity[];
   prerequisites: readonly string[];
   fallback: string;
   positiveFixture: MechanicalEngineEvidence;
@@ -71,11 +75,29 @@ function definition(input: Pick<MechanicalEngineDefinition<ConfigurationInput>, 
   return Object.freeze({
     module: "M1", phase: "configuration",
     countExaminedUnits: (_full, selected) => selected.length,
+    examinedUnitIdentities: (_full: ConfigurationInput, selected: readonly unknown[]) => targetPathExaminedUnits(input.id, selected.map(configurationUnitPath)),
     prerequisites: Object.freeze([]),
     fallback: "An inapplicable surface emits its architecture/scope disclosure or records zero examined units at the phase level.",
     ...producerAssurance(input.id, input.implementation, fixtureFor(input.implementation.file)),
     ...input,
   } as MechanicalEngineDefinition<ConfigurationInput>);
+}
+
+function configurationUnitPath(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    if ("path" in value && typeof value.path === "string") return value.path;
+    if ("file" in value && typeof value.file === "string") return value.file;
+  }
+  throw new Error("configuration selector returned a unit with no target-relative path identity");
+}
+
+function targetPathExaminedUnits(producer: string, paths: readonly string[]): MechanicalExaminedUnitIdentity[] {
+  return paths.map((identity) => ({ producer, kind: "target-path", identity }));
+}
+
+function receiptRecord(input: Omit<MechanicalProducerRecord, "unitsExamined">): MechanicalProducerRecord {
+  return { ...input, unitsExamined: input.examinedUnitIdentities.length };
 }
 
 const surface = (description: string, select: (input: ConfigurationInput) => readonly unknown[]): MechanicalEngineDefinition<ConfigurationInput>["applicableFiles"] => ({ description, select });
@@ -109,16 +131,18 @@ export function runRegisteredConfigurationDetectors(input: Omit<ConfigurationInp
   const records: MechanicalProducerRecord[] = [];
   for (const detector of CONFIGURATION_DETECTORS) {
     if (!(detector.enabled?.(full) ?? true)) {
-      records.push({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, unitsExamined: 0, findings: 0, durationMs: 0, status: "not-applicable" });
+      records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities: [], findings: 0, durationMs: 0, status: "not-applicable" }));
       continue;
     }
     const selected = detector.applicableFiles.select(full);
     const unitsExamined = detector.countExaminedUnits(full, selected);
+    const examinedUnitIdentities = detector.examinedUnitIdentities(full, selected);
+    if (unitsExamined !== examinedUnitIdentities.length) throw new Error(`${detector.id}: examined-unit count ${unitsExamined} differs from exact selector receipt ${examinedUnitIdentities.length}`);
     const started = performance.now();
     const emitted = detector.invoke(full);
     assertProducerTaxonomyOwnership(detector, emitted);
     findings.push(...emitted);
-    records.push({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, unitsExamined, findings: emitted.length, durationMs: performance.now() - started, status: "ran" });
+    records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
   }
   return { findings, records };
 }

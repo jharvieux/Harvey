@@ -110,6 +110,15 @@ describe("#1851 immutable one-scan context", () => {
     const metrics = context.metrics();
     expect(execution.records.map((record) => record.detector)).toEqual(MECHANICAL_DETECTORS.map((definition) => definition.id));
     expect(execution.records.every((record) => Number.isInteger(record.unitsExamined) && record.unitsExamined >= 0)).toBe(true);
+    expect(execution.records.every((record) => record.examinedUnitIdentities.length === record.unitsExamined)).toBe(true);
+    expect(execution.records.every((record) => record.examinedUnitIdentities.every((unit) => unit.producer === record.detector))).toBe(true);
+    const defaultSurface = execution.records.find((record) => record.detector === "counter-race")!;
+    const pagesRouterSurface = execution.records.find((record) => record.detector === "bola-owner")!;
+    expect(defaultSurface.examinedUnitIdentities).toEqual([
+      { producer: "counter-race", kind: "target-path", identity: "src/repo.ts" },
+      { producer: "counter-race", kind: "target-path", identity: "src/route.ts" },
+    ]);
+    expect(pagesRouterSurface.examinedUnitIdentities).toEqual([]);
     expect(metrics.filesParsed).toBe(3);
     expect(metrics.astsBuilt).toBe(3);
     expect(metrics.astCacheHits).toBeGreaterThan(2);
@@ -122,6 +131,17 @@ describe("#1851 immutable one-scan context", () => {
     expect(metrics.astMembraneCallbacks).toBeGreaterThan(0);
     expect(metrics.astMembraneIteratorResults).toBeGreaterThanOrEqual(0);
     context.dispose();
+  });
+
+  it("keeps producer receipts checkout-independent across two roots containing the same target", () => {
+    const first = new MechanicalScanContext(fixture());
+    const second = new MechanicalScanContext(fixture());
+    const firstReceipts = runRegisteredMechanicalDetectors(first).records.map(({ detector, examinedUnitIdentities }) => ({ detector, examinedUnitIdentities }));
+    const secondReceipts = runRegisteredMechanicalDetectors(second).records.map(({ detector, examinedUnitIdentities }) => ({ detector, examinedUnitIdentities }));
+    expect(secondReceipts).toEqual(firstReceipts);
+    expect(JSON.stringify(firstReceipts)).not.toContain(tmpdir());
+    first.dispose();
+    second.dispose();
   });
 
   it("never exposes mutable AST nodes through callbacks, iterators, methods, or nested arrays", () => {

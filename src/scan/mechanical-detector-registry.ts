@@ -23,7 +23,12 @@ import { detectJobTenantScopeFindings, jobTenantScopeScannedFiles } from "./job-
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { detectMigrationColumnDriftFindings, droppedColumns } from "./migration-column-drift.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
-import type { MechanicalProducerRecord } from "./mechanical-phase-cache.js";
+import {
+  createMechanicalProducerRecord,
+  targetPathExaminedUnits,
+  type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerRecord,
+} from "./mechanical-phase-cache.js";
 import { detectPgIdorFindings } from "./pg-idor.js";
 import { detectPgResponseExposureFindings } from "./pg-response-exposure.js";
 import { pathScopeNotAssessedRows } from "./path-scope.js";
@@ -69,6 +74,7 @@ export interface MechanicalDetectorDefinition {
   cadence: DetectorEvidenceLink;
   enabled?: (options: RegisteredDetectorOptions) => boolean;
   examinedUnits: (context: MechanicalScanContext, selected: readonly SourceInput[]) => number;
+  examinedUnitIdentities: (context: MechanicalScanContext, selected: readonly SourceInput[]) => MechanicalExaminedUnitIdentity[];
   invoke: (context: MechanicalScanContext, selected: readonly SourceInput[]) => Finding[];
 }
 
@@ -97,13 +103,14 @@ function assurance(id: string, file: string, exportName: string): Pick<Mechanica
   };
 }
 
-function detector(input: Omit<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits"> & Partial<Pick<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits">>): MechanicalDetectorDefinition {
+function detector(input: Omit<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities"> & Partial<Pick<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities">>): MechanicalDetectorDefinition {
   const defaults = assurance(input.id, input.implementation.file, input.implementation.exportName);
   return Object.freeze({
     applicableFiles: { description: "all tracked JavaScript/TypeScript source files in the shared inventory", select: sourceFiles },
     prerequisites: Object.freeze([]),
     fallback: "An empty applicable population is recorded in the detector execution census; detector-specific scope disclosures remain findings.",
     examinedUnits: (_context: MechanicalScanContext, selected: readonly SourceInput[]) => selected.length,
+    examinedUnitIdentities: (_context: MechanicalScanContext, selected: readonly SourceInput[]) => targetPathExaminedUnits(input.id, selected.map((file) => file.path)),
     ...defaults,
     ...input,
   });
@@ -121,7 +128,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "bola-owner", order: 30, module: "M1", implementation: { file: "src/scan/bola-owner.ts", exportName: "detectBolaOwnerFindings" }, findingIds: ["AUTH-bola-body-owner-*"], taxonomies: ["Object-level authorization gap: client-supplied owner id scopes the query"],
     applicableFiles: { description: "Pages Router API files admitted by bolaOwnerScannedFiles", select: (context) => bolaOwnerScannedFiles(context.sourceFiles) },
-    invoke: (context) => detectBolaOwnerFindings([...context.sourceFiles]),
+    invoke: (_context, selected) => detectBolaOwnerFindings([...selected]),
   }),
   detector({ id: "ssrf-wrapper", order: 40, module: "M1", implementation: { file: "src/scan/ssrf-wrapper.ts", exportName: "detectSsrfWrapperFindings" }, findingIds: ["SSRF-wrapper-*"], taxonomies: ["M1 — SSRF via an uncurated cross-file fetch wrapper"], prerequisites: ["shared import graph"], invoke: (context, selected) => detectSsrfWrapperFindings([...selected], context.importGraph) }),
   detector({ id: "pg-idor", order: 50, module: "M1", implementation: { file: "src/scan/pg-idor.ts", exportName: "detectPgIdorFindings" }, findingIds: ["SEC-PG-IDOR-*"], taxonomies: ["Object-level authorization gap: client-supplied id reaches a read-by-id repo function (pg-idor-repo-fn)"], invoke: (_context, selected) => detectPgIdorFindings([...selected]) }),
@@ -141,6 +148,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "migration-column-drift", order: 150, module: "M1", implementation: { file: "src/scan/migration-column-drift.ts", exportName: "detectMigrationColumnDriftFindings" }, findingIds: ["SCHEMA-dropped-column-read-*"], taxonomies: ["App code reads a column the migrations dropped"], prerequisites: ["ordered SQL migration inventory"], fallback: "No ordered migration history means there is no historical drop/rename claim to make; the registry records the zero schema population.",
     examinedUnits: (context, selected) => selected.length + context.schemas.orderedMigrations.length,
+    examinedUnitIdentities: (context, selected) => targetPathExaminedUnits("migration-column-drift", [...selected.map((file) => file.path), ...context.schemas.orderedMigrations.map((migration) => migration.file)]),
     invoke: (context, selected) => detectMigrationColumnDriftFindings([...selected], droppedColumns([...context.schemas.orderedMigrations])),
   }),
   detector({ id: "idempotency", order: 160, module: "M1", implementation: { file: "src/scan/idempotency.ts", exportName: "detectIdempotencyFindings" }, findingIds: ["RETRY-*"], taxonomies: ["Batch send stamped after dispatch instead of claimed before", "Idempotency row written before the dispatched handler", "External send without a deterministic idempotency key", "Webhook state applied without an ordering guard"], invoke: (_context, selected) => detectIdempotencyFindings([...selected]) }),
@@ -159,13 +167,14 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "dedup-unique", order: 250, module: "M1", implementation: { file: "src/scan/dedup-unique.ts", exportName: "detectDedupWithoutUniqueFindings" }, findingIds: ["RACE-dedup-no-unique-*"], taxonomies: ["SELECT-then-INSERT dedup with no unique constraint"], prerequisites: ["SQL migration and schema snapshot inventory"], fallback: "No declared schema means the uniqueness premise cannot be evaluated; the registry records the zero schema population.",
     examinedUnits: (context, selected) => selected.length + context.schemas.orderedMigrations.length + context.schemas.snapshots.length,
+    examinedUnitIdentities: (context, selected) => targetPathExaminedUnits("dedup-unique", [...selected.map((file) => file.path), ...context.schemas.orderedMigrations.map((migration) => migration.file), ...context.schemas.snapshots.map((snapshot) => snapshot.file)]),
     invoke: (context, selected) => detectDedupWithoutUniqueFindings([...selected], uniqueConstraints([...context.schemas.orderedMigrations, ...context.schemas.snapshots])),
   }),
   detector({ id: "bola-cross-file", order: 260, module: "M1", implementation: { file: "src/scan/bola-cross-file.ts", exportName: "detectBolaCrossFileFindings" }, findingIds: ["AUTH-bola-cross-file-*"], taxonomies: ["Object-level authorization gap across a module boundary"], prerequisites: ["shared import graph"], invoke: (_context, selected) => detectBolaCrossFileFindings([...selected]) }),
   detector({
     id: "job-tenant-scope", order: 270, module: "M1", implementation: { file: "src/scan/job-tenant-scope.ts", exportName: "detectJobTenantScopeFindings" }, findingIds: ["AUTH-job-tenant-scope-*", "M1-JOBPATH-00"], taxonomies: ["Service-role query in a background-job path with no tenant predicate", "Coverage — background-job directories outside the job-tenant-scope path convention"],
     applicableFiles: { description: "background-job path files admitted by jobTenantScopeScannedFiles", select: (context) => jobTenantScopeScannedFiles(context.sourceFiles) },
-    invoke: (context) => detectJobTenantScopeFindings([...context.sourceFiles]),
+    invoke: (_context, selected) => detectJobTenantScopeFindings([...selected]),
   }),
   detector({
     id: "path-scope-disclosure", order: 280, module: "M1", implementation: { file: "src/scan/path-scope.ts", exportName: "pathScopeNotAssessedRows" }, findingIds: ["M1-PATHSCOPE-*"], taxonomies: ["Coverage — *"],
@@ -255,17 +264,19 @@ export function runRegisteredMechanicalDetectors(context: MechanicalScanContext,
     const records: DetectorExecutionRecord[] = [];
     for (const definition of MECHANICAL_DETECTORS) {
       const selected = definition.applicableFiles.select(context);
-      const unitsExamined = definition.examinedUnits(context, selected);
       if (!(definition.enabled?.(options) ?? true)) {
-        records.push({ detector: definition.id, phase: "structural-ast", order: definition.order, module: definition.module, unitsExamined, findings: 0, durationMs: 0, status: "not-applicable" });
+        records.push(createMechanicalProducerRecord({ detector: definition.id, phase: "structural-ast", order: definition.order, module: definition.module, examinedUnitIdentities: [], findings: 0, durationMs: 0, status: "not-applicable" }));
         continue;
       }
+      const unitsExamined = definition.examinedUnits(context, selected);
+      const examinedUnitIdentities = definition.examinedUnitIdentities(context, selected);
+      if (unitsExamined !== examinedUnitIdentities.length) throw new Error(`${definition.id}: examined-unit count ${unitsExamined} differs from exact selector receipt ${examinedUnitIdentities.length}`);
       const started = performance.now();
       const emitted = definition.invoke(context, selected);
       const durationMs = performance.now() - started;
       validateEmittedOwnership(definition, emitted);
       findings.push(...emitted);
-      records.push({ detector: definition.id, phase: "structural-ast", order: definition.order, module: definition.module, unitsExamined, findings: emitted.length, durationMs, status: unitsExamined === 0 ? "not-applicable" : "ran" });
+      records.push(createMechanicalProducerRecord({ detector: definition.id, phase: "structural-ast", order: definition.order, module: definition.module, examinedUnitIdentities, findings: emitted.length, durationMs, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
       context.recordDetectorRun(durationMs, selected.length);
     }
     for (const finding of findings) uniqueFindingOwner(finding, options);
