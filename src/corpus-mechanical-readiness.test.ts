@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "./findings.js";
@@ -164,25 +164,85 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     try {
       mkdirSync(join(source, "vendor", "reference"), { recursive: true });
       writeFileSync(join(source, "package.json"), "{}\n");
+      writeFileSync(join(source, "tracked.txt"), "pinned tracked content\n");
+      writeFileSync(join(source, "run.sh"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(source, "run.sh"), 0o755);
+      symlinkSync("tracked.txt", join(source, "tracked-link"));
+      writeFileSync(join(source, "malicious;$(touch should-not-exist)"), "safe filename\n");
       writeFileSync(join(source, "vendor", "reference", "not-target.ts"), "export {};\n");
       execFileSync("git", ["init", "-q"], { cwd: source });
       execFileSync("git", ["add", "."], { cwd: source });
       execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], { cwd: source });
       const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim();
       mkdirSync(join(root, "cache"));
-      cpSync(source, join(root, "cache", "fixture__source"), { recursive: true });
+      cpSync(source, join(root, "cache", "fixture__source"), { recursive: true, verbatimSymlinks: true });
       const prepared = prepareCurrentMechanicalTarget({
         target: { slug: "fixture", repo: "fixture/source", commit, vendoredSubtrees: ["vendor/reference"] },
         checkoutDir: join(root, "checkout"),
         preparedDir: join(root, "prepared"),
         cloneCacheDir: join(root, "cache"),
         verifyRemote: false,
+        onPreparationStage: (stage, checkoutDir) => {
+          if (stage !== "checkout-validated") return;
+          writeFileSync(join(checkoutDir, "untracked.txt"), "must not escape checkout\n");
+          rmSync(join(checkoutDir, ".git", "objects", "pack"), { recursive: true, force: true });
+        },
       });
       expect(prepared.checkoutHead).toBe(commit);
       expect(existsSync(join(prepared.preparedDir, "vendor", "reference"))).toBe(false);
+      expect(existsSync(join(prepared.preparedDir, ".git"))).toBe(false);
+      expect(existsSync(join(prepared.preparedDir, "untracked.txt"))).toBe(false);
+      expect(readFileSync(join(prepared.preparedDir, "tracked.txt"), "utf8")).toBe("pinned tracked content\n");
+      expect(readlinkSync(join(prepared.preparedDir, "tracked-link"))).toBe("tracked.txt");
+      expect(lstatSync(join(prepared.preparedDir, "run.sh")).mode & 0o111).not.toBe(0);
+      expect(readFileSync(join(prepared.preparedDir, "malicious;$(touch should-not-exist)"), "utf8")).toBe("safe filename\n");
+      expect(existsSync(join(root, "should-not-exist"))).toBe(false);
+      const second = prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit, vendoredSubtrees: ["vendor/reference"] },
+        checkoutDir: join(root, "checkout-second"),
+        preparedDir: join(root, "prepared-second"),
+        cloneCacheDir: join(root, "cache"),
+        verifyRemote: false,
+      });
+      expect(second.preparedTreeSha256).toBe(prepared.preparedTreeSha256);
       expect(() => assertPreparedTargetUnchanged(prepared)).not.toThrow();
       writeFileSync(join(prepared.preparedDir, "package.json"), "{\"mutated\":true}\n");
       expect(() => assertPreparedTargetUnchanged(prepared)).toThrow(/mutated/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails loud when the validated checkout revision or tracked working tree moves", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-current-prepare-invalid-"));
+    const source = join(root, "source");
+    try {
+      mkdirSync(source);
+      writeFileSync(join(source, "tracked.txt"), "pinned\n");
+      execFileSync("git", ["init", "-q"], { cwd: source });
+      execFileSync("git", ["add", "."], { cwd: source });
+      execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture"], { cwd: source });
+      writeFileSync(join(source, "second.txt"), "second\n");
+      execFileSync("git", ["add", "."], { cwd: source });
+      execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "second"], { cwd: source });
+      const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim();
+      mkdirSync(join(root, "cache"));
+      cpSync(source, join(root, "cache", "fixture__source"), { recursive: true, verbatimSymlinks: true });
+      expect(() => prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit }, checkoutDir: join(root, "wrong-checkout"), preparedDir: join(root, "wrong-prepared"), cloneCacheDir: join(root, "cache"), verifyRemote: false,
+        onPreparationStage: (stage, checkoutDir) => { if (stage === "checkout-cloned") execFileSync("git", ["-C", checkoutDir, "reset", "--hard", "HEAD^"], { stdio: "ignore" }); },
+      })).toThrow(/differs from pin/);
+      expect(() => prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit }, checkoutDir: join(root, "dirty-checkout"), preparedDir: join(root, "dirty-prepared"), cloneCacheDir: join(root, "cache"), verifyRemote: false,
+        onPreparationStage: (stage, checkoutDir) => { if (stage === "checkout-cloned") writeFileSync(join(checkoutDir, "tracked.txt"), "dirty\n"); },
+      })).toThrow(/tracked checkout content differs/);
+      expect(() => prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit }, checkoutDir: join(root, "missing-checkout"), preparedDir: join(root, "missing-prepared"), cloneCacheDir: join(root, "cache"), verifyRemote: false,
+        onPreparationStage: (stage, checkoutDir) => { if (stage === "checkout-validated") rmSync(join(checkoutDir, "tracked.txt")); },
+      })).toThrow(/tracked file tracked.txt is missing/);
+      expect(() => prepareCurrentMechanicalTarget({
+        target: { slug: "fixture", repo: "fixture/source", commit, vendoredSubtrees: ["../outside"] }, checkoutDir: join(root, "unsafe-checkout"), preparedDir: join(root, "unsafe-prepared"), cloneCacheDir: join(root, "cache"), verifyRemote: false,
+      })).toThrow(/not a canonical target-relative path/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

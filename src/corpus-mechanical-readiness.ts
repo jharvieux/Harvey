@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
 import { readRecursiveSafe, statSafe } from "./fs-walk.js";
@@ -12,7 +12,7 @@ import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
-export const CURRENT_MECHANICAL_PREPARATION = "pinned-checkout/remove-vendored/copy-before-install/bundle-off-v1" as const;
+export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/remove-vendored/copy-before-install/bundle-off-v2" as const;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export interface CurrentMechanicalTargetDefinition {
@@ -130,24 +130,72 @@ export function prepareCurrentMechanicalTarget(options: {
   preparedDir: string;
   cloneCacheDir?: string;
   verifyRemote?: boolean;
+  onPreparationStage?: (stage: "checkout-cloned" | "checkout-validated", checkoutDir: string) => void;
 }): PreparedMechanicalTarget {
   const { target, checkoutDir, preparedDir } = options;
   cloneAtPinCached(target.repo, target.commit, checkoutDir, options.cloneCacheDir, options.verifyRemote ?? true);
+  options.onPreparationStage?.("checkout-cloned", checkoutDir);
   const checkoutHead = execFileSync("git", ["-C", checkoutDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   if (checkoutHead !== target.commit) throw new Error(`${target.slug}: checkout head ${checkoutHead} differs from pin ${target.commit}`);
   const checkoutTree = resolveGitTree(checkoutDir);
+  const expectedTree = execFileSync("git", ["-C", checkoutDir, "rev-parse", `${target.commit}^{tree}`], { encoding: "utf8" }).trim();
+  if (checkoutTree !== expectedTree) throw new Error(`${target.slug}: checkout tree ${checkoutTree} differs from pinned tree ${expectedTree}`);
+  const trackedMutation = execFileSync("git", ["-C", checkoutDir, "diff", "--name-only", target.commit, "--"], { encoding: "utf8" }).trim();
+  if (trackedMutation) throw new Error(`${target.slug}: tracked checkout content differs from pin ${target.commit}: ${trackedMutation}`);
   const removedVendoredSubtrees = [...(target.vendoredSubtrees ?? [])];
   for (const subtree of removedVendoredSubtrees) {
+    if (subtree.length === 0 || subtree.startsWith("/") || subtree.includes("\\") || subtree.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+      throw new Error(`${target.slug}: vendored subtree is not a canonical target-relative path: ${JSON.stringify(subtree)}`);
+    }
     const path = join(checkoutDir, subtree);
     if (!existsSync(path)) throw new Error(`${target.slug}: vendored subtree ${subtree} is absent before preparation`);
-    rmSync(path, { recursive: true, force: true });
   }
-  cpSync(checkoutDir, preparedDir, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
+  options.onPreparationStage?.("checkout-validated", checkoutDir);
+  materializePinnedTrackedTree(checkoutDir, preparedDir);
+  for (const subtree of removedVendoredSubtrees) rmSync(join(preparedDir, subtree), { recursive: true, force: true });
   for (const subtree of removedVendoredSubtrees) if (existsSync(join(preparedDir, subtree))) {
     throw new Error(`${target.slug}: vendored subtree ${subtree} survived the prepared copy`);
   }
   const preparedTreeSha256 = digestTree(preparedDir);
   return { checkoutDir, preparedDir, checkoutHead, checkoutTree, preparedTreeSha256, removedVendoredSubtrees };
+}
+
+function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string): void {
+  if (existsSync(preparedDir)) throw new Error(`prepared target destination already exists: ${preparedDir}`);
+  const listed = execFileSync("git", ["-C", checkoutDir, "ls-files", "--stage", "-z"], { encoding: "buffer" });
+  const entries = listed.toString("utf8").split("\0").filter(Boolean).map((row) => {
+    const separator = row.indexOf("\t");
+    if (separator < 0) throw new Error(`malformed tracked-file row: ${JSON.stringify(row)}`);
+    const [mode, object, stage] = row.slice(0, separator).split(" ");
+    const path = row.slice(separator + 1);
+    if (!/^[a-f0-9]{40,64}$/.test(object ?? "") || stage !== "0" || path.length === 0 || path.startsWith("/") || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+      throw new Error(`unsafe or incomplete tracked-file row: ${JSON.stringify(row)}`);
+    }
+    return { mode, path };
+  });
+  try {
+    mkdirSync(preparedDir);
+    for (const entry of entries) {
+      if (entry.mode === "160000") throw new Error(`tracked submodule ${entry.path} is unsupported; pin and materialize its content explicitly`);
+      if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") throw new Error(`tracked path ${entry.path} has unsupported Git mode ${entry.mode}`);
+      const source = join(checkoutDir, entry.path);
+      const destination = join(preparedDir, entry.path);
+      const sourceStat = lstatSync(source, { throwIfNoEntry: false });
+      if (!sourceStat) throw new Error(`tracked file ${entry.path} is missing from the validated checkout`);
+      mkdirSync(dirname(destination), { recursive: true });
+      if (entry.mode === "120000") {
+        if (!sourceStat.isSymbolicLink()) throw new Error(`tracked symlink ${entry.path} is missing or has the wrong filesystem type`);
+        symlinkSync(readlinkSync(source), destination);
+      } else {
+        if (!sourceStat.isFile()) throw new Error(`tracked file ${entry.path} is missing or has the wrong filesystem type`);
+        copyFileSync(source, destination);
+        chmodSync(destination, entry.mode === "100755" ? 0o755 : 0o644);
+      }
+    }
+  } catch (error) {
+    rmSync(preparedDir, { recursive: true, force: true });
+    throw new Error(`pinned tracked-tree materialization failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function assertPreparedTargetUnchanged(prepared: PreparedMechanicalTarget): void {
