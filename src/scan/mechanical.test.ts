@@ -36,6 +36,7 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 
 const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
+const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;
@@ -105,6 +106,8 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(new Set(cold.detectors.map((detector) => detector.phase))).toEqual(new Set(phases));
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.length === detector.unitsExamined)).toBe(true);
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.every((unit) => unit.producer === detector.detector))).toBe(true);
+      expect(cold.detectors.every((detector) => detector.examinedUnitDigest === mechanicalExaminedUnitDigest(detector.examinedUnitIdentities))).toBe(true);
+      expect(cold.detectors.find((detector) => detector.detector === "secrets-history-bundle")?.examinedUnitDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(warm.detectors.map((detector) => detector.examinedUnitIdentities)).toEqual(
         cold.detectors.map((detector) => detector.examinedUnitIdentities),
       );

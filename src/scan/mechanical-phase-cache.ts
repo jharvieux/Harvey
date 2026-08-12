@@ -233,9 +233,20 @@ function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue,
   return problems;
 }
 
-function assertPhaseValue(phase: MechanicalPhase, value: MechanicalPhaseValue): void {
-  const problems = phaseValueProblems(phase, value);
+function assertPhaseValue(phase: MechanicalPhase, value: MechanicalPhaseValue, requireDigest: boolean = false): void {
+  const problems = phaseValueProblems(phase, value, requireDigest);
   if (problems.length > 0) throw new Error(`${phase}: producer execution receipts are malformed: ${problems.join("; ")}`);
+}
+
+function withProducerDigests(value: MechanicalPhaseValue): MechanicalPhaseValue {
+  if (value.producers === undefined) return value;
+  return {
+    ...value,
+    producers: value.producers.map((producer) => ({
+      ...producer,
+      examinedUnitDigest: mechanicalExaminedUnitDigest(producer.examinedUnitIdentities),
+    })),
+  };
 }
 
 export function digestTree(dir: string, include: (relativePath: string) => boolean = () => true): string {
@@ -379,8 +390,8 @@ export async function executeMechanicalPhase(
   const started = Date.now();
   const disabled = cache?.disabled?.[phase];
   if (!cache || cache.mode === "off" || !cacheable || disabled) {
-    const value = await execute();
-    assertPhaseValue(phase, value);
+    const value = withProducerDigests(await execute());
+    assertPhaseValue(phase, value, true);
     const reason = disabled ?? (!cache || cache.mode === "off" ? "phase cache disabled" : policy.reason);
     cache?.onEvent?.(`CACHE BYPASS ${phase}: ${reason}`);
     return { phase, ...value, durationMs: Date.now() - started, cache: "non-cacheable", reason };
@@ -412,8 +423,8 @@ export async function executeMechanicalPhase(
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
     return { phase, findings: hit.findings, scope: hit.scope, producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
-  const value = await execute();
-  assertPhaseValue(phase, value);
+  const value = withProducerDigests(await execute());
+  assertPhaseValue(phase, value, true);
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
   const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
   if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);
