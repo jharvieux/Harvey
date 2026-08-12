@@ -19,7 +19,8 @@
 // across next.config/middleware/vercel.json, not something a Semgrep AST pattern expresses.
 
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
@@ -33,6 +34,94 @@ const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 // The maintained registry packs every real engagement scan fetches (runSemgrep below) — shared with
 // runRegistryPacksOnFile's single-file replay (#1368) so the two can never drift apart.
 const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
+const materializedRegistryMemo = new Map<string, { identity?: string; files?: string[]; failure?: string }>();
+
+interface RegistryPackSnapshotManifest {
+  schema: 1;
+  identity: string;
+}
+
+function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
+  const hash = createHash("sha256");
+  for (const { pack, body } of bodies) {
+    hash.update(pack);
+    hash.update("\0");
+    hash.update(body);
+  }
+  return hash.digest("hex");
+}
+
+function registryPackFiles(cacheDir: string, identity: string): string[] {
+  const dir = join(cacheDir, "registry-packs", identity);
+  return REGISTRY_PACKS.map((pack, index) => join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`));
+}
+
+function readRestoredRegistrySnapshot(cacheDir: string): { identity?: string; files?: string[]; failure?: string } {
+  const manifestPath = join(cacheDir, "registry-packs", "current.json");
+  try {
+    if (!existsSync(manifestPath)) throw new Error("current.json is missing");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Partial<RegistryPackSnapshotManifest>;
+    if (manifest.schema !== 1 || typeof manifest.identity !== "string" || !/^[a-f0-9]{64}$/.test(manifest.identity)) {
+      throw new Error("current.json has an invalid schema or identity");
+    }
+    const files = registryPackFiles(cacheDir, manifest.identity);
+    const bodies = files.map((path, index) => {
+      if (!existsSync(path)) throw new Error(`${relative(cacheDir, path)} is missing`);
+      return { pack: REGISTRY_PACKS[index]!, body: readFileSync(path, "utf8") };
+    });
+    const actual = registryPackIdentity(bodies);
+    if (actual !== manifest.identity) throw new Error(`snapshot bytes hash to ${actual}, not ${manifest.identity}`);
+    return { identity: actual, files };
+  } catch (error) {
+    return { failure: `restored Semgrep registry snapshot required on CI retry but is invalid: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+export function materializeRegistryPacks(cacheDir: string, mode: "refresh" | "reuse" = "refresh"): { identity?: string; files?: string[]; failure?: string } {
+  const memoKey = `${mode}:${cacheDir}`;
+  const memo = materializedRegistryMemo.get(memoKey);
+  if (memo) return memo;
+  if (mode === "reuse") {
+    const result = readRestoredRegistrySnapshot(cacheDir);
+    materializedRegistryMemo.set(memoKey, result);
+    return result;
+  }
+  const bodies: { pack: string; body: string }[] = [];
+  try {
+    for (const pack of REGISTRY_PACKS) {
+      const config = execFileSync("curl", ["-fsSL", `https://semgrep.dev/c/${pack}`], {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 32,
+        timeout: 60_000,
+      });
+      bodies.push({ pack, body: config });
+    }
+    const identity = registryPackIdentity(bodies);
+    const dir = join(cacheDir, "registry-packs", identity);
+    mkdirSync(dir, { recursive: true });
+    const files = bodies.map(({ pack, body }, index) => {
+      const path = join(dir, `${index}-${pack.replaceAll("/", "-")}.yml`);
+      if (!existsSync(path) || readFileSync(path, "utf8") !== body) {
+        const temp = `${path}.${process.pid}.tmp`;
+        writeFileSync(temp, body);
+        renameSync(temp, path);
+      }
+      return path;
+    });
+    const manifestPath = join(cacheDir, "registry-packs", "current.json");
+    const manifestTemp = `${manifestPath}.${process.pid}.tmp`;
+    writeFileSync(manifestTemp, `${JSON.stringify({ schema: 1, identity } satisfies RegistryPackSnapshotManifest, null, 2)}\n`);
+    renameSync(manifestTemp, manifestPath);
+    const result = { identity, files };
+    materializedRegistryMemo.set(memoKey, result);
+    return result;
+  } catch (error) {
+    const e = error as { code?: string; message?: string };
+    const result = { failure: e.code === "ENOENT" ? "curl not found while materializing Semgrep registry packs" : `Semgrep registry packs could not be reproducibly materialized: ${e.message ?? "registry fetch failed"}` };
+    materializedRegistryMemo.set(memoKey, result);
+    return result;
+  }
+}
 
 export interface SemgrepResult {
   check_id: string;
@@ -405,9 +494,9 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     that drops --x-parmap must degrade to "slower and near-deterministic", never to "silently
 //     lossy". The corpus-drift gate scores real quick-scans of six pinned trees, so a determinism
 //     regression in either mode surfaces there as free-tier drift.
-export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
+export function runSemgrep(dir: string, registryConfigs: readonly string[] = REGISTRY_PACKS): { result: SemgrepOutput; failure?: string } {
   const args = [
-    ...REGISTRY_PACKS.flatMap((p) => ["--config", p]),
+    ...registryConfigs.flatMap((p) => ["--config", p]),
     "--config", CUSTOM_RULES,
     "--exclude", "node_modules",
     "--disable-nosem",

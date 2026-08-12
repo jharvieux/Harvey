@@ -85,6 +85,15 @@ import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, chec
 import { checkWebExtensionManifest } from "./webext-manifest.js";
 import { licenseScope } from "../sbom.js";
 import { collectWorkspaceManifests } from "../workspaces.js";
+import { readRecursiveSafe } from "../fs-walk.js";
+import {
+  MECHANICAL_PHASES,
+  assertMechanicalCacheVerification,
+  executeMechanicalPhase,
+  type MechanicalPhaseCacheOptions,
+  type MechanicalPhaseRecord,
+  type MechanicalPhaseValue,
+} from "./mechanical-phase-cache.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -132,6 +141,12 @@ interface MechanicalScanOptions {
   // route-noauth / authed-no-role-check clearance test alongside the ones discoverAuthGuards finds
   // in the target's own source (option (1)). #126 recommended both; PR #127 shipped neither.
   authGuards?: string[];
+  phaseCache?: MechanicalPhaseCacheOptions;
+}
+
+interface MechanicalScanResult {
+  findings: Finding[];
+  phases: MechanicalPhaseRecord[];
 }
 
 // #757 (part of #756): the recognized-architecture record for a Prisma/Postgres target. Same
@@ -225,7 +240,7 @@ function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase"
   };
 }
 
-export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
+export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Promise<MechanicalScanResult> {
   const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks, skipBundleScan } = opts;
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
@@ -237,22 +252,46 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
   const { scanDir, cleanup } = resolveScanScope(dir);
   try {
     const findings: Finding[] = [];
+    const phases: MechanicalPhaseRecord[] = [];
+    const allUnits = Math.max(1, readRecursiveSafe(scanDir).length);
+    const sourceUnits = Math.max(1, walkSourceFiles(scanDir).length);
+    const stablePaths = (rows: Finding[]): Finding[] => rows.map((row) => Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [key, typeof value === "string"
+        ? value.replaceAll(`${scanDir}/`, "").replaceAll(scanDir, "(repo-wide)").replaceAll(`${dir}/`, "").replaceAll(dir, "(repo-wide)")
+        : value]),
+    ) as unknown as Finding);
+    const runPhase = async (phase: Parameters<typeof executeMechanicalPhase>[0], execute: () => MechanicalPhaseValue | Promise<MechanicalPhaseValue>): Promise<MechanicalPhaseValue> => {
+      const record = await executeMechanicalPhase(phase, opts.phaseCache, async () => {
+        const value = await execute();
+        return { ...value, findings: stablePaths(value.findings) };
+      });
+      phases.push(record);
+      return { findings: record.findings, scope: record.scope };
+    };
 
     // Secrets — source, git history, and built bundle (auto-detected .next/static or dist/, #588).
-    const bundle = skipBundleScan ? { disclosure: bundleScanSkippedFinding() } : resolveBundleScan(dir, bundleDir);
-    findings.push(...scanSecrets(scanDir, dir, bundle.bundleDir));
-    if (bundle.disclosure) findings.push(bundle.disclosure);
+    const secrets = await runPhase("secrets-history", () => {
+      const phaseFindings: Finding[] = [];
+      const bundle = skipBundleScan ? { disclosure: bundleScanSkippedFinding() } : resolveBundleScan(dir, bundleDir);
+      phaseFindings.push(...scanSecrets(scanDir, dir, bundle.bundleDir));
+      if (bundle.disclosure) phaseFindings.push(bundle.disclosure);
+      return { findings: phaseFindings, scope: { unitsExamined: allUnits, description: "tracked source tree, pinned git history, and discovered built bundle" } };
+    });
+    findings.push(...secrets.findings);
 
     // Framework/dependency CVEs.
-    const osv = runOsvScanner(scanDir);
-    findings.push(...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result)));
     const pkg = readPackageJson(scanDir);
     // #1471 — the lockfile's RESOLVED version, when there is one. Passing the manifest's range
     // floor as if it were installed made "Installed next@14.2.5" a false claim on this repo's own
     // calibration target, whose lockfile resolves the patched 14.2.35.
     const resolved = resolvedTree(scanDir);
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
-    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion, "package.json", resolved));
+    const dependencyStart = Date.now();
+    const osv = runOsvScanner(scanDir);
+    const dependencyFindings: Finding[] = stablePaths([...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result))]);
+    if (nextVersion) dependencyFindings.push(...checkNextVersionCVEs(nextVersion, "package.json", resolved));
+    const dependencyEarlyMs = Date.now() - dependencyStart;
+    findings.push(...dependencyFindings);
 
     // Semgrep footguns + missing-CSP config check. #950 — a missing/crashing binary degrades to
     // the SEM-00 disclosure instead of an uncaught ENOENT (mirrors osv-scanner, #512).
@@ -260,10 +299,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // the withheld matches are counted in SEM-SUPPRESS-00, and anything semgrep never analysed is
     // counted in SEM-SCOPE-00. A suppression the deliverable does not mention is one the audited
     // party made on the auditor's behalf.
-    const semgrep = runSemgrep(scanDir);
-    if (semgrep.failure) {
-      findings.push(semgrepUnavailableFinding(semgrep.failure));
-    } else {
+    const semgrepPhase = await runPhase("semgrep", () => {
+      const phaseFindings: Finding[] = [];
+      const semgrep = runSemgrep(scanDir, opts.phaseCache?.materializedInputs?.semgrep);
+      if (semgrep.failure) {
+        phaseFindings.push(semgrepUnavailableFinding(semgrep.failure));
+      } else {
       // #1093 — harvey-route-noauth/harvey-authed-no-role-check now match unconditionally in the
       // YAML; this re-derives their guard/role-check clause on the real matched span before
       // nosem re-derivation runs. A function the guard-token check clears was never a finding to
@@ -278,17 +319,20 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       ];
       const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result, projectGuards);
       const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
-      findings.push(...parseSemgrepFindings({ results: reported }));
-      findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
-      findings.push(...semgrepScopeFinding(scanDir, semgrep.result));
+      phaseFindings.push(...parseSemgrepFindings({ results: reported }));
+      phaseFindings.push(...semgrepSuppressionFinding(suppressed, scanDir));
+      phaseFindings.push(...semgrepScopeFinding(scanDir, semgrep.result));
       // #1077: a file semgrep errored on (syntax error) still counts as "scanned", so the SCOPE
       // diff above can't catch it — and paths.skipped is a distinct silence again. Named here so
       // neither reads as a clean file.
-      findings.push(...semgrepErrorFinding(scanDir, semgrep.result));
-    }
-    findings.push(...checkMissingCsp(scanDir));
-    findings.push(...checkHostingConfigHeaders(scanDir));
-    findings.push(...checkPublicDirSensitive(scanDir));
+        phaseFindings.push(...semgrepErrorFinding(scanDir, semgrep.result));
+      }
+      phaseFindings.push(...checkMissingCsp(scanDir));
+      phaseFindings.push(...checkHostingConfigHeaders(scanDir));
+      phaseFindings.push(...checkPublicDirSensitive(scanDir));
+      return { findings: phaseFindings, scope: { unitsExamined: allUnits, description: "Semgrep registry/local rules plus CSP, hosting-header, and public-directory configuration checks" } };
+    });
+    findings.push(...semgrepPhase.findings);
 
     // #757 (part of #756): the Supabase-specific migration/RLS/PostgREST/edge-config detectors read
     // supabase/migrations, supabase/functions, and supabase/config.toml — a Prisma/Postgres app has
@@ -299,8 +343,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #869 extends the same routing to every other recognised non-Supabase layer: it has no
     // supabase/ surface either, and Harvey has no detector for its query shapes, so it gets a
     // named not-assessed row rather than silence.
-    const orm = detectOrm(scanDir);
-    if (orm === "prisma") {
+    const configuration = await runPhase("configuration", () => {
+      const start = findings.length;
+      const orm = detectOrm(scanDir);
+      if (orm === "prisma") {
       findings.push(prismaArchitectureNote());
     } else if (orm === "drizzle") {
       findings.push(drizzleArchitectureNote());
@@ -343,7 +389,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #1212 — GITHUB_TOKEN scope. GHA is NOT covered by the infra-scope decision above: Harvey
     // already ships four registry GHA classes and a non-grading category built for them. The
     // missing-block half is an absence check, which no pattern rule can express.
-    findings.push(...checkWorkflowPermissions(scanDir));
+      findings.push(...checkWorkflowPermissions(scanDir));
+      return { findings: findings.splice(start), scope: { unitsExamined: allUnits, description: "architecture, migration/configuration, unsupported-language, infrastructure, and workflow-permission surfaces" } };
+    });
+    findings.push(...configuration.findings);
 
     // Supply chain. #1231/#1232 — the checks below split by what question each one asks, not by a
     // single scope: a name-match check reads the RESOLVED TREE (where the malicious or typosquatted
@@ -351,6 +400,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // member (a lockfile has no ranges to read). Each split is argued at the check itself and stated
     // in the output by SUP-SCOPE-00 — a scope decision that lives only in a comment is, from the
     // deliverable's side, indistinguishable from an oversight.
+    const supplyStart = Date.now();
+    const supplyIndex = findings.length;
     if (pkg) {
       const workspace = collectWorkspaceManifests(scanDir);
       // prod+dev only: a peer range is deliberately wide and would false-positive SUP-UNPINNED.
@@ -421,9 +472,19 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       );
     }
     findings.push(...checkLockfilePresence(scanDir));
+    const supplyFindings = stablePaths(findings.splice(supplyIndex));
+    dependencyFindings.push(...supplyFindings);
+    findings.push(...supplyFindings);
+    await runPhase("dependency-advisory", () => ({
+      findings: dependencyFindings,
+      scope: { unitsExamined: Math.max(1, collectWorkspaceManifests(scanDir).manifests.length), description: "lockfiles, resolved dependency tree, declared manifests, OSV advisories, and live registry-backed checks" },
+    }));
+    phases[phases.length - 1]!.durationMs = dependencyEarlyMs + (Date.now() - supplyStart);
 
-    // Leftover-auth greps.
-    findings.push(...scanLeftoverAuth(scanDir));
+    const structural = await runPhase("structural-ast", () => {
+      const start = findings.length;
+      // Leftover-auth greps.
+      findings.push(...scanLeftoverAuth(scanDir));
 
     // #353 — non-atomic read-modify-write race (AST dataflow over source files, incl. plain .js).
     findings.push(...scanCounterRace(scanDir));
@@ -561,20 +622,37 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     if (handrolledIndicators) {
       findings.push(...detectHandrolledFindings(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))));
     }
+      return { findings: findings.splice(start), scope: { unitsExamined: sourceUnits, description: "in-process source greps, dataflow, and structural/AST detectors" } };
+    });
+    findings.push(...structural.findings);
 
     // #874 — rank the Dependency CVE rows by whether the package is actually imported here. Runs
     // LAST so it sees every CVE emitter's output (curated Next.js, curated deps, OSV) in one pass.
     // Ordering + a per-row justification only: nothing here grades, and nothing sets
     // exploitabilityVerified (#213/#227 stands).
     const directDeps = new Set(Object.keys({ ...pkg?.dependencies, ...pkg?.devDependencies }));
-    const ranked = annotateCveReachability(findings, scanDir, directDeps);
-    if (ranked.unranked > 0) {
+    const normalized = await runPhase("normalization", () => {
+      const ranked = annotateCveReachability(findings, scanDir, directDeps);
+      if (ranked.unranked > 0) {
       // Fail loud rather than letting unranked rows sink silently to the bottom of a sorted list.
-      ranked.findings.push(unrankedCveDisclosure(ranked.unranked));
+        ranked.findings.push(unrankedCveDisclosure(ranked.unranked));
+      }
+      return { findings: enrichFindingsCwe(ranked.findings), scope: { unitsExamined: Math.max(1, findings.length), description: "all phase findings composed, dependency reachability ranked, and CWE metadata enriched" } };
+    });
+    const recorded = new Set(phases.map((phase) => phase.phase));
+    const missing = MECHANICAL_PHASES.filter((phase) => !recorded.has(phase));
+    const duplicates = phases.map((phase) => phase.phase).filter((phase, index, all) => all.indexOf(phase) !== index);
+    if (missing.length > 0 || duplicates.length > 0) {
+      throw new Error(`mechanical phase accounting incomplete: missing [${missing.join(", ")}], duplicated [${duplicates.join(", ")}]`);
     }
+    assertMechanicalCacheVerification(phases, opts.phaseCache?.mode);
     // #975 — declare each AST detector's CWE (semgrep rows already carry theirs from rule metadata).
-    return enrichFindingsCwe(ranked.findings);
+    return { findings: normalized.findings, phases };
   } finally {
     cleanup();
   }
+}
+
+export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
+  return (await runMechanicalScanDetailed(opts)).findings;
 }
