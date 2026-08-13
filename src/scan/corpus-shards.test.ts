@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertPartitionCoversEveryTarget,
+  COLD_CORPUS_SHARD_PROFILE,
+  corpusShardTargetDigest,
   DEFAULT_SCAN_SECONDS,
   partitionTargets,
+  selectCorpusShardProfile,
   shardTargets,
   TARGET_SCAN_SECONDS,
+  WARM_CORPUS_SHARD_PROFILE,
   weightOf,
 } from "./corpus-shards.js";
 import { EXTERNAL_CORPUS } from "./external-corpus.js";
@@ -40,7 +44,7 @@ describe("corpus shard partition (#1586)", () => {
   // optimal and bounded only by an indivisible target. If a future corpus change makes the split
   // worse than that floor, this fails and the shard count wants revisiting.
   it("at 3 shards the longest shard is bounded by the heaviest single target", () => {
-    const heaviest = Math.max(...SLUGS.map(weightOf));
+    const heaviest = Math.max(...SLUGS.map((slug) => weightOf(slug)));
     const longest = Math.max(...partitionTargets(SLUGS, 3).map(load));
     expect(longest).toBe(heaviest);
   });
@@ -61,6 +65,35 @@ describe("corpus shard partition (#1586)", () => {
   it("rejects a nonsensical shard count instead of silently scoring nothing", () => {
     expect(() => partitionTargets(SLUGS, 0)).toThrow(/positive integer/);
     expect(() => partitionTargets(SLUGS, 1.5)).toThrow(/positive integer/);
+  });
+});
+
+describe("provenance-bound cold/warm shard profiles (#1875)", () => {
+  it("retains both exact-head measured populations and their source digests", () => {
+    expect(COLD_CORPUS_SHARD_PROFILE).toMatchObject({ runId: 31549148174, runAttempt: 1, headSha: "43d819b59aea38bcd777016f167037298c87c550" });
+    expect(WARM_CORPUS_SHARD_PROFILE).toMatchObject({ runId: 31549148174, runAttempt: 2, headSha: "43d819b59aea38bcd777016f167037298c87c550" });
+    expect(Object.keys(COLD_CORPUS_SHARD_PROFILE.seconds).sort()).toEqual([...SLUGS].sort());
+    expect(Object.keys(WARM_CORPUS_SHARD_PROFILE.seconds).sort()).toEqual([...SLUGS].sort());
+    expect(COLD_CORPUS_SHARD_PROFILE.targetDigest).toBe(corpusShardTargetDigest(SLUGS));
+    expect(WARM_CORPUS_SHARD_PROFILE.targetDigest).toBe(corpusShardTargetDigest(SLUGS));
+    expect(COLD_CORPUS_SHARD_PROFILE.sourceDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(WARM_CORPUS_SHARD_PROFILE.sourceDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(COLD_CORPUS_SHARD_PROFILE.sourceDigest).not.toBe(WARM_CORPUS_SHARD_PROFILE.sourceDigest);
+  });
+
+  it("selects warm only for an exact population with verified cache provenance", () => {
+    expect(selectCorpusShardProfile(SLUGS, "warm", "verified-warm").selected).toBe("warm");
+    expect(selectCorpusShardProfile(SLUGS, "auto", "verified-warm").selected).toBe("warm");
+    expect(selectCorpusShardProfile(SLUGS, "warm", "uncertain")).toMatchObject({ selected: "cold", reason: expect.stringMatching(/uncertain/) });
+    expect(selectCorpusShardProfile([...SLUGS, "new-target"], "warm", "verified-warm")).toMatchObject({ selected: "cold", reason: expect.stringMatching(/stale/) });
+    expect(selectCorpusShardProfile(SLUGS, "cold", "verified-warm")).toMatchObject({ selected: "cold", reason: "cold requested explicitly" });
+  });
+
+  it("keeps every target exact under both measured profiles and rejects an unknown warm weight", () => {
+    for (const profile of ["cold", "warm"] as const) {
+      for (const count of [3, 4]) expect([...partitionTargets(SLUGS, count, profile).flat()].sort()).toEqual([...SLUGS].sort());
+    }
+    expect(() => partitionTargets([...SLUGS, "unknown"], 3, "warm")).toThrow(/does not cover target/);
   });
 });
 

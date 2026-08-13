@@ -1,11 +1,13 @@
 import "./sync-stdio.js";
 import {
   corpusCacheTransportKey,
+  mergeCorpusCacheTransports,
   rejectCorpusCacheTransport,
   validateCorpusCacheTransport,
   writeCorpusCacheTransport,
   type CorpusCacheTransportManifest,
 } from "../corpus-cache-transport.js";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -33,6 +35,7 @@ if (command === "restore") {
     platform: flag("--platform"),
     namespace: flag("--namespace"),
     headSha: flag("--head-sha"),
+    ...(optionalFlag("--benchmark-seed") ? { benchmarkSeed: optionalFlag("--benchmark-seed") } : {}),
   });
   const source = decision.source
     ? `; source=${decision.source.event} ${decision.source.ref} run=${decision.source.runId} attempt=${decision.source.runAttempt} sha=${decision.source.headSha}`
@@ -45,12 +48,12 @@ if (command === "restore") {
   }
 } else if (command === "save") {
   const family = flag("--family");
-  if (family !== "run" && family !== "main") {
-    console.error("corpus-cache-transport: --family must be run or main");
+  if (family !== "run" && family !== "main" && family !== "benchmark") {
+    console.error("corpus-cache-transport: --family must be run, main, or benchmark");
     process.exit(2);
   }
   const manifest: Omit<CorpusCacheTransportManifest, "payload"> = {
-    schema: 3,
+    schema: 4,
     family,
     key: corpusCacheTransportKey({
       family,
@@ -59,6 +62,7 @@ if (command === "restore") {
       runId: flag("--run-id"),
       runAttempt: flag("--run-attempt"),
       headSha: flag("--head-sha"),
+      ...(optionalFlag("--benchmark-seed") ? { benchmarkSeed: optionalFlag("--benchmark-seed") } : {}),
     }),
     event: flag("--event"),
     ref: flag("--ref"),
@@ -66,10 +70,29 @@ if (command === "restore") {
     runAttempt: flag("--run-attempt"),
     headSha: flag("--head-sha"),
     writtenAt: new Date().toISOString(),
+    ...(optionalFlag("--benchmark-seed") ? { benchmarkSeed: optionalFlag("--benchmark-seed") } : {}),
   };
   const written = writeCorpusCacheTransport(dir, manifest);
   console.log(`CACHE TRANSPORT SAVE: key=${written.key}; source=${written.event} ${written.ref} run=${written.runId} attempt=${written.runAttempt} sha=${written.headSha}; payload=${written.payload.bytes}/${written.payload.maxBytes} bytes; symlinks=${written.payload.symlinks}`);
+} else if (command === "merge") {
+  const sources = JSON.parse(readFileSync(flag("--sources-json"), "utf8")) as Array<{ dir: string; matchedKey: string; namespace: string }>;
+  const receipt = mergeCorpusCacheTransports({
+    sources,
+    destination: dir,
+    current: {
+      event: flag("--event"),
+      ref: flag("--ref"),
+      runId: flag("--run-id"),
+      defaultRef: flag("--default-ref"),
+      platform: flag("--platform"),
+      headSha: flag("--head-sha"),
+      benchmarkSeed: flag("--benchmark-seed"),
+    },
+    requiredNamespaces: flag("--required-namespaces").split(","),
+  });
+  writeFileSync(flag("--out"), `${JSON.stringify(receipt, null, 2)}\n`);
+  console.log(`CACHE TRANSPORT MERGE: ${receipt.sources.length} source namespace(s), ${receipt.files.length} content-addressed file(s), ${receipt.duplicatePaths} identical duplicate path(s), digest=${receipt.aggregateSha256}`);
 } else {
-  console.error("usage: corpus-cache-transport <restore|save> --dir <path> ...");
+  console.error("usage: corpus-cache-transport <restore|save|merge> --dir <path> ...");
   process.exit(2);
 }

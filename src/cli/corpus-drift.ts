@@ -84,7 +84,13 @@ import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
 import { prepareCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
-import { shardTargets } from "../scan/corpus-shards.js";
+import {
+  selectCorpusShardProfile,
+  shardTargets,
+  type CorpusShardCacheProvenance,
+  type CorpusShardProfileRequest,
+} from "../scan/corpus-shards.js";
+import { corpusTargetConservationVector, executeCorpusTargetWorkers, runBoundedCorpusTasks, type CorpusExecutionDesign } from "../corpus-execution.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
   assertPreparedTargetUnchanged,
@@ -125,6 +131,14 @@ const baselineFindingsPath = flag("--baseline-findings");
 const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
+const targetWorker = args.includes("--target-worker");
+const targetConcurrency = Number(flag("--target-concurrency") ?? "1");
+const executionDesign = (flag("--execution-design") ?? (targetConcurrency > 1 ? "target-workers" : "serial")) as CorpusExecutionDesign;
+const executionProfile = (flag("--cache-profile") ?? (forceColdCache ? "cold" : "warm")) as "cold" | "warm";
+const shardProfileRequest = (flag("--shard-profile") ?? "auto") as CorpusShardProfileRequest;
+const shardCacheProvenance = (flag("--shard-cache-provenance") ?? "uncertain") as CorpusShardCacheProvenance;
+const workerArtifactsDir = flag("--worker-artifacts-dir");
+const failAfterStart = flag("--fail-after-start") ?? process.env.HARVEY_CORPUS_FAIL_AFTER_START;
 // Resolve once while cwd is Harvey. Package managers later run with cwd set to each disposable
 // target checkout; passing their --store-dir a relative path would otherwise put the cache inside
 // the target, where M4/quality-scan can mistake cached package sources for client code.
@@ -159,6 +173,26 @@ if (forceColdCache && !phaseCacheDir) {
 }
 if (!["live", "snapshot", "live-verify"].includes(externalStateMode)) {
   console.error(`HARVEY_CORPUS_EXTERNAL_STATE_MODE must be live, snapshot, or live-verify; got ${externalStateMode}`);
+  process.exit(2);
+}
+if (!Number.isInteger(targetConcurrency) || targetConcurrency < 1 || targetConcurrency > 3) {
+  console.error(`--target-concurrency must be 1, 2, or 3; got ${flag("--target-concurrency") ?? "1"}`);
+  process.exit(2);
+}
+if (!["serial", "target-workers", "intra-target-overlap", "split-carbon"].includes(executionDesign)) {
+  console.error(`--execution-design must be serial, target-workers, intra-target-overlap, or split-carbon; got ${executionDesign}`);
+  process.exit(2);
+}
+if (!["cold", "warm"].includes(executionProfile)) {
+  console.error(`--cache-profile must be cold or warm; got ${executionProfile}`);
+  process.exit(2);
+}
+if (!["auto", "cold", "warm"].includes(shardProfileRequest)) {
+  console.error(`--shard-profile must be auto, cold, or warm; got ${shardProfileRequest}`);
+  process.exit(2);
+}
+if (!["uncertain", "verified-warm"].includes(shardCacheProvenance)) {
+  console.error(`--shard-cache-provenance must be uncertain or verified-warm; got ${shardCacheProvenance}`);
   process.exit(2);
 }
 
@@ -202,6 +236,13 @@ if (targets.length === 0) {
   process.exit(2);
 }
 
+const shardProfile = selectCorpusShardProfile(
+  EXTERNAL_CORPUS.map((target) => target.slug),
+  shardProfileRequest,
+  shardCacheProvenance,
+);
+console.error(`CORPUS SHARD PROFILE: requested=${shardProfile.requested}; selected=${shardProfile.selected}; cache=${shardProfile.cacheProvenance}; run=${shardProfile.runId}/${shardProfile.runAttempt}; source=${shardProfile.sourceDigest}; ${shardProfile.reason}`);
+
 if (shardSpec) {
   const [rawIndex, rawCount] = shardSpec.split("/");
   const shardIndex = Number(rawIndex);
@@ -215,7 +256,7 @@ if (shardSpec) {
   // which is a coverage change wearing a green tick.
   let mine: Set<string>;
   try {
-    mine = new Set(shardTargets(EXTERNAL_CORPUS.map((t) => t.slug), shardIndex, shardCount));
+    mine = new Set(shardTargets(EXTERNAL_CORPUS.map((t) => t.slug), shardIndex, shardCount, shardProfile.selected));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(2);
@@ -230,6 +271,53 @@ if (shardSpec) {
     console.error(`shard ${shardIndex}/${shardCount} drew no targets — the partition or the shard count is wrong`);
     process.exit(2);
   }
+}
+
+if (!targetWorker && !onlySlug && (args.includes("--target-concurrency") || args.includes("--execution-design"))) {
+  const valueFlags = new Set([
+    "--target", "--shard", "--json", "--target-concurrency", "--execution-design",
+    "--cache-profile", "--worker-artifacts-dir", "--fail-after-start", "--baseline-findings",
+  ]);
+  const baseArgs: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--target-worker") continue;
+    if (valueFlags.has(argument)) {
+      if (argument === "--baseline-findings") baseArgs.push(argument, args[index + 1]!);
+      index += 1;
+      continue;
+    }
+    baseArgs.push(argument);
+  }
+  const artifactsDir = resolve(workerArtifactsDir ?? (jsonOut ? `${jsonOut}.workers` : "corpus-worker-artifacts"));
+  const execution = await executeCorpusTargetWorkers({
+    repoRoot,
+    scriptPath: fileURLToPath(import.meta.url),
+    baseArgs,
+    slugs: targets.map((target) => target.slug),
+    requestedConcurrency: targetConcurrency,
+    design: executionDesign,
+    profile: executionProfile,
+    shard: currentShard,
+    artifactsDir,
+    environment: process.env,
+    failAfterStart,
+  });
+  for (const terminal of execution.manifest.terminals) {
+    console.error(`TARGET WORKER ${terminal.ordinal} ${terminal.slug}: ${terminal.state}; exit=${terminal.exitCode}; rss=${terminal.peakRssBytes}; cpu=${terminal.cpuSeconds.toFixed(1)}s`);
+    if (existsSync(terminal.stderrPath)) console.error(readFileSync(terminal.stderrPath, "utf8"));
+    if (existsSync(terminal.stdoutPath)) process.stdout.write(readFileSync(terminal.stdoutPath));
+  }
+  console.error(`CORPUS ADMISSION requested=${execution.manifest.admission.requested} effective=${execution.manifest.admission.effective}; CPU ${execution.manifest.admission.cpuLimit} (${execution.manifest.admission.cpuSource}); memory ${execution.manifest.admission.memoryLimitBytes} (${execution.manifest.admission.memorySource})`);
+  if (!execution.scorecard) {
+    console.error(`CORPUS TARGET AGGREGATION FAILED AFTER ALL ${execution.manifest.terminals.length} TERMINAL TASKS WERE COLLECTED — manifest: ${join(artifactsDir, "execution-manifest.json")}`);
+    process.exit(1);
+  }
+  const scorecard = { ...execution.scorecard, execution: execution.manifest, shardProfile };
+  if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify(scorecard, null, 2)}\n`);
+  recordMeasured("corpus-drift", scorecard.rows.length, `baseline checks over ${targets.length} pinned target(s), process-isolated ${executionDesign} concurrency ${execution.manifest.admission.effective}`);
+  console.error(`CORPUS TARGET AGGREGATION PASS — ${targets.length} target(s), ${scorecard.rows.length} check(s), deterministic ordinal output; worker artifacts: ${artifactsDir}`);
+  process.exit(0);
 }
 
 let priorFindingsBySlug: Record<string, Finding[]> | undefined;
@@ -496,6 +584,9 @@ const rows: Row[] = [];
 const findingsBySlug: Record<string, Finding[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
+const mechanicalRunsBySlug: Record<string, unknown> = {};
+const scannerRecordsBySlug: Record<string, CorpusScannerRecord[]> = {};
+const dependencyPreparationsBySlug: Record<string, DependencyPreparationResult[]> = {};
 
 for (const target of targets) {
   const targetRoot = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
@@ -508,7 +599,12 @@ for (const target of targets) {
   const startedAt = Date.now();
   phaseTarget = target.slug;
   phaseSeconds[target.slug] = {};
+  scannerRecordsBySlug[target.slug] = [];
+  dependencyPreparationsBySlug[target.slug] = [];
   try {
+    if (failAfterStart === target.slug) {
+      throw new Error(`INJECTED POST-START FAILURE ${target.slug}: all-settled target-worker drill`);
+    }
     // One authoritative preparation boundary for hosted scoring and the independent replay: exact
     // pin, remove declared reference subtrees, then capture before dependency installation can
     // mutate manifests or filesystem scope. Mechanical reads the immutable prepared copy; every
@@ -573,6 +669,7 @@ for (const target of targets) {
       assertPreparedTargetUnchanged(prepared!);
       detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
       mechanicalContextBySlug[target.slug] = mechanicalRun.context;
+      mechanicalRunsBySlug[target.slug] = mechanicalRun;
       for (const phase of mechanicalRun.phases) {
         const name = `mechanical:${phase.phase}`;
         (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
@@ -618,7 +715,9 @@ for (const target of targets) {
         sourceRoot: ".",
       }))
       : undefined;
+    if (dependencyPreparation) dependencyPreparationsBySlug[target.slug]!.push(dependencyPreparation);
     const scannerRecords: CorpusScannerRecord[] = [];
+    scannerRecordsBySlug[target.slug] = scannerRecords;
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
     // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
@@ -658,11 +757,14 @@ for (const target of targets) {
     // mutation-scan runs --detect-only (#470): this job provisions no Stryker, so it must only
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
-    let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, dependencyPreparation })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
+    const scannerTasks = [
+      () => timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      () => timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, dependencyPreparation })),
+      () => timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
     ];
+    const scannerLanes = executionDesign === "intra-target-overlap" ? Math.min(2, targetConcurrency) : 1;
+    const scannerFindings = await runBoundedCorpusTasks(scannerTasks, scannerLanes);
+    let findings = scannerFindings.flat();
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
     // tree with the package.json), while every other module keeps the whole repo. The scoped
@@ -682,6 +784,7 @@ for (const target of targets) {
           sourceRoot: m5Root,
         }))
         : undefined;
+      if (scopedDependencyPreparation) dependencyPreparationsBySlug[target.slug]!.push(scopedDependencyPreparation);
       const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
@@ -818,6 +921,24 @@ if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
   findings: findingsBySlug,
   detectors: detectorRecordsBySlug,
   mechanicalContexts: mechanicalContextBySlug,
+  mechanicalRuns: mechanicalRunsBySlug,
+  scannerRecords: scannerRecordsBySlug,
+  dependencyPreparations: dependencyPreparationsBySlug,
+  phaseSeconds,
+  runtimeReceipts: Object.fromEntries(targets.map((target) => [target.slug, { ...currentRuntimeReceipt(), pnpm: binaryVersion("pnpm") }])),
+  conservation: targets.map((target) => corpusTargetConservationVector({
+    rows,
+    findings: findingsBySlug,
+    detectors: detectorRecordsBySlug,
+    mechanicalContexts: mechanicalContextBySlug,
+    mechanicalRuns: mechanicalRunsBySlug,
+    scannerRecords: scannerRecordsBySlug,
+    dependencyPreparations: dependencyPreparationsBySlug,
+    phaseSeconds,
+    runtimeReceipts: Object.fromEntries(targets.map((target) => [target.slug, { ...currentRuntimeReceipt(), pnpm: binaryVersion("pnpm") }])),
+    ...(currentExecution ? { currentMechanicalExecution: currentExecution } : {}),
+  }, target.slug)),
+  shardProfile,
   ...(currentExecution ? { currentMechanicalExecution: currentExecution } : {}),
 }, null, 2)}\n`);
 

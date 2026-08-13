@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CORPUS_CACHE_MAX_PAYLOAD_BYTES,
   corpusCacheTransportKey,
   decideCorpusCacheRestore,
+  mergeCorpusCacheTransports,
   rejectCorpusCacheTransport,
   validateCorpusCacheTransport,
   writeCorpusCacheTransport,
@@ -14,8 +15,8 @@ import {
 
 const source = (overrides: Partial<CorpusCacheTransportManifest> = {}): CorpusCacheTransportManifest => {
   const manifest = {
-    schema: 3 as const,
-    family: (overrides.family ?? "main") as "run" | "main",
+    schema: 4 as const,
+    family: overrides.family ?? "main",
     event: "push",
     ref: "refs/heads/main",
     runId: "100",
@@ -27,7 +28,7 @@ const source = (overrides: Partial<CorpusCacheTransportManifest> = {}): CorpusCa
   };
   return {
     ...manifest,
-    key: overrides.key ?? corpusCacheTransportKey({ family: manifest.family, platform: "Linux", namespace: "1", runId: manifest.runId, runAttempt: manifest.runAttempt, headSha: manifest.headSha }),
+    key: overrides.key ?? corpusCacheTransportKey({ family: manifest.family, platform: "Linux", namespace: "1", runId: manifest.runId, runAttempt: manifest.runAttempt, headSha: manifest.headSha, ...(manifest.benchmarkSeed === undefined ? {} : { benchmarkSeed: manifest.benchmarkSeed }) }),
   };
 };
 
@@ -184,4 +185,114 @@ describe("corpus cache transport scope across refs (#1867)", () => {
       headSha: "c".repeat(40),
     }).accepted).toBe(false);
   });
+
+  it("accepts a cross-run benchmark transport only for the exact seed, ref, and head", () => {
+    const benchmark = source({
+      family: "benchmark",
+      event: "workflow_dispatch",
+      ref: "refs/heads/feature/benchmark",
+      runId: "3000",
+      headSha: "b".repeat(40),
+      benchmarkSeed: "cohort-2026-08-12",
+    });
+    const current = {
+      matchedKey: benchmark.key,
+      event: "workflow_dispatch",
+      ref: benchmark.ref,
+      runId: "3001",
+      defaultRef: "refs/heads/main",
+      platform: "Linux",
+      namespace: "1",
+      headSha: benchmark.headSha,
+      benchmarkSeed: benchmark.benchmarkSeed,
+    };
+    expect(decideCorpusCacheRestore(benchmark, current)).toMatchObject({ accepted: true, reason: expect.stringContaining("exact benchmark seed") });
+    expect(decideCorpusCacheRestore(benchmark, { ...current, benchmarkSeed: "other" }).accepted).toBe(false);
+    expect(decideCorpusCacheRestore(benchmark, { ...current, headSha: "c".repeat(40) }).accepted).toBe(false);
+    expect(decideCorpusCacheRestore(benchmark, { ...current, ref: "refs/heads/other" }).accepted).toBe(false);
+  });
+
+  it("merges all old shard namespaces by content address so a target moving into a fourth shard retains identical evidence", () => {
+    const seed = "three-to-four-seed";
+    const headSha = "d".repeat(40);
+    const artifactPath = `corpus-scanners/detect-static/${"1".repeat(64)}.json`;
+    const artifact = `${JSON.stringify({ findings: [{ id: "moved-target" }], scope: { unitsExamined: 7 } })}\n`;
+    const sources = ["1", "2", "3"].map((namespace) => {
+      const dir = mkdtempSync(join(tmpdir(), `harvey-cache-seed-${namespace}-`));
+      dirs.push(dir);
+      if (namespace === "2") {
+        mkdirSync(join(dir, "corpus-scanners", "detect-static"), { recursive: true });
+        writeFileSync(join(dir, artifactPath), artifact);
+      }
+      const manifest = source({
+        family: "benchmark",
+        event: "workflow_dispatch",
+        ref: "refs/heads/feature/benchmark",
+        runId: `40${namespace}`,
+        headSha,
+        benchmarkSeed: seed,
+        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: `40${namespace}`, runAttempt: "1", headSha, benchmarkSeed: seed }),
+      });
+      const written = writeCorpusCacheTransport(dir, manifest);
+      return { dir, namespace, matchedKey: written.key };
+    });
+    const destination = mkdtempSync(join(tmpdir(), "harvey-cache-merged-"));
+    dirs.push(destination);
+    const receipt = mergeCorpusCacheTransports({
+      sources,
+      destination,
+      current: {
+        event: "workflow_dispatch",
+        ref: "refs/heads/feature/benchmark",
+        runId: "5000",
+        defaultRef: "refs/heads/main",
+        platform: "Linux",
+        headSha,
+        benchmarkSeed: seed,
+      },
+      requiredNamespaces: ["1", "2", "3"],
+    });
+    expect(receipt.sources.map((row) => row.namespace)).toEqual(["1", "2", "3"]);
+    expect(receipt.files.map((row) => row.path)).toContain(artifactPath);
+    expect(readFileSync(join(destination, artifactPath), "utf8")).toBe(artifact);
+    expect(JSON.parse(readFileSync(join(destination, artifactPath), "utf8"))).toEqual({ findings: [{ id: "moved-target" }], scope: { unitsExamined: 7 } });
+    expect(receipt.conflicts).toBe(0);
+  });
+
+  it("fails loud on missing namespaces, conflicting duplicate bytes, and non-content-addressed paths", () => {
+    const seed = "falsifier-seed";
+    const headSha = "e".repeat(40);
+    const artifactPath = `corpus-scanners/detect-static/${"2".repeat(64)}.json`;
+    const make = (namespace: string, body: string, path = artifactPath) => {
+      const dir = mkdtempSync(join(tmpdir(), `harvey-cache-falsifier-${namespace}-`));
+      dirs.push(dir);
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), body);
+      const manifest = source({
+        family: "benchmark",
+        event: "workflow_dispatch",
+        ref: "refs/heads/feature/benchmark",
+        runId: `60${namespace}`,
+        headSha,
+        benchmarkSeed: seed,
+        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: `60${namespace}`, runAttempt: "1", headSha, benchmarkSeed: seed }),
+      });
+      return { dir, namespace, matchedKey: writeCorpusCacheTransport(dir, manifest).key };
+    };
+    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "7000", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed };
+    const one = make("1", "one");
+    expect(() => mergeCorpusCacheTransports({ sources: [one], destination: temporaryDestination(), current, requiredNamespaces: ["1", "2"] })).toThrow(/missing 2/);
+
+    const two = make("2", "two");
+    expect(() => mergeCorpusCacheTransports({ sources: [one, two], destination: temporaryDestination(), current, requiredNamespaces: ["1", "2"] })).toThrow(/conflict/);
+
+    const unknown = make("3", "unknown", "mutable-pointer.json");
+    expect(() => mergeCorpusCacheTransports({ sources: [unknown], destination: temporaryDestination(), current, requiredNamespaces: ["3"] })).toThrow(/non-content-addressed path/);
+  });
+
+  function temporaryDestination(): string {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-cache-merge-destination-"));
+    dirs.push(dir);
+    return dir;
+  }
 });

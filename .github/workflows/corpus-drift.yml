@@ -26,16 +26,11 @@
 # job (the `filter` step below), same shape conservation.yml and dry-run-drift.yml already use: the
 # job always runs and always reports, and only the expensive work is conditional.
 #
-# THE RELEVANCE RULE IS A DENY-LIST, NOT AN ALLOW-LIST — and that polarity is the point. The old
-# three-path `pull_request` filter (src/scan/external-corpus.ts, src/cli/corpus-drift.ts, this file)
-# was scoped for an advisory check and is far too narrow to gate a merge: what a corpus baseline
-# scores is the OUTPUT OF THE SCANNERS, so a change to any detector, rule, taxonomy or scan helper
-# moves a baseline without touching one of those three files. Enumerating the reachable set would be
-# a transitive-import guess that decays silently — exactly the failure this promotion exists to
-# prevent — so the job instead names the directories it can show are UNREACHABLE from clone →
-# detect-static/quality-scan/mutation-scan/quick-scan → score, and treats everything else as
-# relevant. FAIL OPEN: an unknown path scores. A false "relevant" costs ~23 minutes; a false "not
-# relevant" is a silently unscored regression.
+# #1870: one discovered base+head implementation closure decides PR relevance. It starts at the
+# real corpus executables, follows the same graph mechanical phase identities use, and adds one
+# explicit registry for non-import inputs. Relevant deletions stay relevant through the base
+# closure. Unknown paths and any dynamic/unresolved/unreadable discovery edge fail open; a no-op
+# retains the complete category/path/digest/consumer receipt.
 #
 # On failure: the job names the module and target that drifted. A drift is EITHER an intended
 # precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
@@ -65,6 +60,65 @@ on:
         description: "Run the executable cold-vs-restored equivalence control for every deterministic phase. Expensive; daily provider validation stays warm."
         type: boolean
         default: false
+      cache_profile:
+        description: "Benchmark cache profile. cold recomputes every deterministic phase against a restored artifact; warm consumes validated hits."
+        type: choice
+        options: [warm, cold]
+        default: warm
+      target_concurrency:
+        description: "Benchmark task bound; admission may lower it from measured CPU/RSS limits."
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
+      execution_design:
+        description: "Benchmark implementation shape. Production remains serial until the committed evaluator qualifies a candidate."
+        type: choice
+        options: [serial, target-workers, intra-target-overlap, split-carbon]
+        default: serial
+      shard_count:
+        description: "Benchmark PR-shape shard count. Production remains three until the committed evaluator qualifies four."
+        type: choice
+        options: ['3', '4']
+        default: '3'
+      benchmark_seed:
+        description: "Exact cohort seed shared by every matched design/profile/concurrency run."
+        type: string
+        default: ""
+      benchmark_repeat:
+        description: "1-based repeat within the unchanged-head cohort."
+        type: string
+        default: ""
+      benchmark_run_identity:
+        description: "Non-empty only for a benchmark run; makes dispatch concurrency non-colliding and binds the evidence envelope."
+        type: string
+        default: ""
+      benchmark_runner_role:
+        description: "Apply the independently configured PR or schedule runner objective to this benchmark."
+        type: choice
+        options: [pr, schedule]
+        default: pr
+      benchmark_runner_shape:
+        description: "Use the role's current selector or the repository-visible larger-runner label."
+        type: choice
+        options: [current, configured-larger]
+        default: current
+      benchmark_seed_bundle:
+        description: "Author the exact warm transport bundle for this seed; this setup run is not a performance sample."
+        type: boolean
+        default: false
+      cache_seed_shards:
+        description: "Source partition whose trusted content-addressed transports are merged before a benchmark sample."
+        type: choice
+        options: ['3', '4']
+        default: '3'
+      fail_after_start:
+        description: "Named target for the all-settled post-start failure drill; empty on performance samples."
+        type: string
+        default: ""
+      replay_relevance_history:
+        description: "Re-run the latest-50 merged-PR relevance measurement and retain raw revisions/job rows."
+        type: boolean
+        default: false
   pull_request:
   # #1867: the default branch is the only Actions-cache scope every PR can read. A push after
   # merge therefore runs the full corpus once in seeding mode; scheduled/dispatch runs remain the
@@ -84,8 +138,8 @@ on:
 # actually evaluates. A `cancelled` conclusion is therefore never the latest result for the head
 # SHA and cannot strand a merge. (Same posture dry-run-drift.yml and ci.yml already take.)
 concurrency:
-  group: corpus-drift-${{ github.ref }}
-  cancel-in-progress: true
+  group: corpus-drift-${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && format('benchmark-{0}-{1}', github.run_id, inputs.benchmark_run_identity) || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '') }}
 
 permissions:
   contents: read
@@ -98,39 +152,78 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      verdict: ${{ steps.filter.outputs.verdict }}
+      runner: ${{ steps.runner.outputs.runner }}
+      runner-role: ${{ steps.runner.outputs.role }}
+      benchmark-seed-digest: ${{ steps.runner.outputs.seed-digest }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - id: filter
-        name: Does this change set require a real corpus execution?
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
-          if [ -z "$files" ]; then echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          relevant=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              src/scan/external-corpus.ts|.github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
-              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
-              AGENTS.md|CLAUDE.md|README.md|SESSION.md|src/*.test.ts) ;;
-              *) relevant=true ;;
-            esac
-          done <<< "$files"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
       - uses: pnpm/action-setup@v4
-        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
-        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-        if: steps.filter.outputs.relevant == 'true'
+      - id: runner
+        name: Resolve independent PR/schedule runner and exact benchmark seed
+        env:
+          PR_RUNNER: ${{ vars.CORPUS_PR_RUNNER_LABEL }}
+          SCHEDULE_RUNNER: ${{ vars.CORPUS_SCHEDULE_RUNNER_LABEL }}
+          LARGER_RUNNER: ${{ vars.CORPUS_BENCHMARK_RUNNER_LABEL }}
+        run: |
+          set -euo pipefail
+          role=pr
+          [ "${{ github.event_name }}" = "schedule" ] && role=schedule
+          if [ -n "${{ inputs.benchmark_run_identity }}" ]; then
+            role='${{ inputs.benchmark_runner_role }}'
+            if ! [[ '${{ inputs.benchmark_repeat }}' =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::benchmark_repeat must be a positive integer for a benchmark run"
+              exit 2
+            fi
+            if [ -z '${{ inputs.benchmark_seed }}' ]; then
+              echo "::error::benchmark_seed must be non-empty for a benchmark run"
+              exit 2
+            fi
+          fi
+          runner=ubuntu-latest
+          if [ "$role" = schedule ] && [ -n "$SCHEDULE_RUNNER" ]; then runner=$SCHEDULE_RUNNER; fi
+          if [ "$role" = pr ] && [ -n "$PR_RUNNER" ]; then runner=$PR_RUNNER; fi
+          if [ "${{ inputs.benchmark_runner_shape }}" = configured-larger ]; then
+            if [ -z "$LARGER_RUNNER" ]; then
+              echo "::error::configured-larger was requested but repository variable CORPUS_BENCHMARK_RUNNER_LABEL is empty; no runner claim is permitted"
+              exit 2
+            fi
+            runner=$LARGER_RUNNER
+          fi
+          seed_digest=none
+          if [ -n '${{ inputs.benchmark_seed }}' ]; then seed_digest=$(printf '%s' '${{ inputs.benchmark_seed }}' | sha256sum | cut -c1-16); fi
+          echo "runner=$runner" >> "$GITHUB_OUTPUT"
+          echo "role=$role" >> "$GITHUB_OUTPUT"
+          echo "seed-digest=$seed_digest" >> "$GITHUB_OUTPUT"
+          echo "CORPUS RUNNER SELECTOR: role=$role runner=$runner; PR and schedule defaults are independently configurable and fall back to ubuntu-latest."
+      - id: filter
+        name: Discover the base + head corpus implementation closure
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base='${{ github.event.pull_request.base.sha }}'
+          else
+            base='HEAD^'
+          fi
+          pnpm corpus-relevance --base "$base" --head HEAD --out corpus-relevance.json --github-output "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "verdict=full-scan" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain the complete relevance receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-relevance-receipt
+          path: corpus-relevance.json
+          if-no-files-found: error
       - name: Materialize the one current Semgrep registry input
         if: steps.filter.outputs.relevant == 'true'
         run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --out .harvey-current-semgrep/receipt.json
@@ -143,6 +236,34 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  relevance-history:
+    if: github.event_name == 'workflow_dispatch' && inputs.replay_relevance_history
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Replay the latest 50 merged PRs against the discovered closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm corpus-relevance-history --repo "${{ github.repository }}" --out corpus-relevance-history.json --limit 50
+      - name: Retain cutoff, revisions, raw API rows, and separate savings arithmetic
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-relevance-history-${{ github.run_id }}-${{ github.run_attempt }}
+          path: corpus-relevance-history.json
+          if-no-files-found: error
+
   # #1586: the scoring work, split across runners. This job is NOT the required context — a matrix
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
@@ -151,31 +272,34 @@ jobs:
   # namespaces: each successful main leg seeds exactly the transport its corresponding PR leg
   # consumes. This replaced the single 29m30s main seed that timed out before it could publish a
   # complete trusted transport (runs 31601042773/31602706320).
-  # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
+  # .github/actions/corpus-clone-cache keys on the whole resolved pin set, and a cache key is
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
-  # poisoned it beyond repair by re-running. No shard holds all 14, so a sharded run can never save.
+  # poisoned it beyond repair by re-running. No PR shard holds the whole set, so a sharded run can
+  # never save that whole-population key.
   #   * pull_request / merge_group / push -> 3 shards.
   #     Each shard owns an exhaustive slice for the current producer↔replay population comparison.
-  #   * schedule / workflow_dispatch -> ONE shard holding all 14, which still saves the cache and
+  #   * schedule / ordinary workflow_dispatch -> ONE shard holding the whole population, which
+  #     still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
   #
-  # Three, from the per-target cost measured in #1586 (runs 30584074986 and 30588890377, in
-  # agreement): carbon is 564-587s of a ~1290s total and is indivisible, so the longest shard is
-  # carbon's own and a 4th shard buys nothing. The split itself lives in src/scan/corpus-shards.ts,
-  # which asserts it is exhaustive and disjoint — a target silently dropped from the partition would
-  # stop being scored while every shard still exited 0.
+  # Production remains three fail-safe cold-profile shards while the hosted comparison is pending.
+  # The committed cold and warm weights come from the exact-head run 31549148174 attempts 1 and 2;
+  # they are selected only with matching target/cache provenance. Benchmark dispatch may request
+  # four shards, but the evaluator must qualify it before production changes. The split itself lives
+  # in src/scan/corpus-shards.ts, which asserts it is exhaustive and disjoint — a target silently
+  # dropped from the partition would stop being scored while every shard still exited 0.
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.prepare-current-inputs.outputs.runner }}
     strategy:
       # A drifted baseline in one shard must not cancel the others: the scorecard is most useful when
       # it shows everything that moved, not the first thing.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3]' || '[1]') }}
+        shard: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && (inputs.shard_count == '4' && '[1,2,3,4]' || '[1,2,3]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3]' || '[1]')) }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -184,8 +308,8 @@ jobs:
       contents: read
       issues: write
       actions: read
-    # 30m still holds with #251's six per-target installs added: measured locally they total ~1m
-    # (largest: proposit's 1010 packages in 33s), and CI's cold npm cache is the slack this covers.
+    # 30m still covers the per-target installs added by #251; CI's cold package-manager cache is the
+    # slack this bound covers. Do not infer the current target population from this timeout.
     # M8's mutation runs are what genuinely didn't fit here — those are corpus-m8.yml.
     timeout-minutes: 30
     # The receipt both the gate CLI and .github/actions/gate-liveness read. A literal path, not
@@ -200,7 +324,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Before the six clones and installs on purpose: the drill proves the ALERT path, not the
+      - id: filter
+        name: Reuse the one discovered corpus relevance verdict
+        run: |
+          echo "relevant=${{ needs.prepare-current-inputs.outputs.relevant }}" >> "$GITHUB_OUTPUT"
+          echo "verdict=${{ needs.prepare-current-inputs.outputs.verdict }}" >> "$GITHUB_OUTPUT"
+
+      # Before the corpus clones and installs on purpose: the drill proves the ALERT path, not the
       # corpus, so it must not pay 30 minutes to reach it. Everything below is skipped once it fails.
       - name: Alert-path liveness drill — fail deliberately (#1287)
         if: inputs.alert_drill
@@ -208,79 +338,18 @@ jobs:
           echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a corpus-drift failure."
           exit 1
 
-      # The `paths:` filter that used to live on the `pull_request` trigger, moved in-job so this
-      # context reports on EVERY PR (see the header note on the #1107 deadlock).
-      #
-      # A DENY-LIST, deliberately inverted from conservation.yml's allow-list, because the two jobs
-      # have opposite reachability: conservation names a short pipeline it can enumerate, while a
-      # corpus baseline scores the output of the whole scanner tree, which is nearly all of `src/`.
-      # So this lists only what it can show is UNREACHABLE from clone → detect-static / quality-scan
-      # / mutation-scan / quick-scan → scoreExternalBaseline, and everything else — src/**,
-      # targets/**, tools/**, briefs/**, package.json, pnpm-lock.yaml, the root tool configs
-      # (.jscpd.json, knip.json — the scanner CLIs run with cwd=repoRoot, so they are live inputs),
-      # and any path nobody has classified yet — is RELEVANT. `case` patterns, not pathspecs: in
-      # `case` a `*` matches `/` too, so `docs/*` covers the whole subtree.
-      #
-      # The two forced-relevant entries come first because `.github/*` below would otherwise swallow
-      # them: this workflow itself, and `.github/actions/**` (mechanical-binaries provisions the
-      # scanner binaries the free-tier invariant shells out to; gate-liveness is this job's own
-      # receipt machinery).
-      #
-      # Schedule, workflow_dispatch and merge_group always run the full job. A merge-queue entry is
-      # the last gate before `main` and its diff is the whole batch, so it scores rather than
-      # inheriting any PR's verdict.
-      - id: filter
-        name: Does this change set touch anything that can move a corpus baseline?
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
-          echo "Changed files:"
-          echo "$files"
-          if [ -z "$files" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "Could not read the diff — scoring everything. A narrowing that cannot see the change set must cost time, never coverage."
-            exit 0
-          fi
-          relevant=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              src/scan/external-corpus.ts) relevant=true ;;
-              .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
-              # .agents/* and AGENTS.md are the Codex-side mirrors of .claude/** and CLAUDE.md
-              # (tracked by #1578). Read by no part of the clone-and-score pipeline, exactly like the
-              # Claude-side originals two entries along. #1584: they were missing from this list, so a
-              # PR touching only them fell through to *) and paid a full 22m12s score (run
-              # 30584074986) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
-              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
-              AGENTS.md|CLAUDE.md|README.md|SESSION.md) ;;
-              # Test modules are never imported by the production scanner graph. Keep unknown
-              # production src/** fail-open below, while a focused test-only edit (PR #1860's
-              # sync-stdio.test.ts case) declares a no-op instead of spending the carbon shard.
-              src/*.test.ts) ;;
-              *) relevant=true ;;
-            esac
-          done <<< "$files"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          if [ "$relevant" = "false" ]; then
-            echo "Every changed path is prose, site or agent-config — none of it is read by the clone-and-score pipeline, so no baseline can have moved from this PR. The daily scheduled run covers the tree regardless."
-          fi
-
       # #1509: a short-circuited job and a job that died in setup are both "nothing was scored", and
       # from outside they look identical — which is how #1447 merged past a gate that had never run.
       # The no-op is DECLARED, with its reason, so the assert step at the end can pass it while
       # printing something a reader cannot mistake for a scoring run.
       - name: Declare the no-op (a short-circuit must not read like a scoring run)
-        if: steps.filter.outputs.relevant != 'true'
+        if: needs.prepare-current-inputs.outputs.relevant != 'true'
         uses: ./.github/actions/gate-liveness
         with:
           mode: record
           gate: corpus-drift
           status: declared-no-op
-          scope: "in-job filter found no changed path that the clone-and-score pipeline reads — every one is prose, site or agent config, so no corpus baseline can have moved from this PR. Nothing was cloned and nothing was scored; this run is evidence about nothing. The daily scheduled run covers the tree regardless."
+          scope: "the retained base+head implementation-closure receipt declared every changed path disjoint. Nothing was cloned and nothing was scored; this is declared-no-op evidence, not assessed-clean. The daily scheduled run still covers the full corpus."
 
       - uses: pnpm/action-setup@v4
         if: steps.filter.outputs.relevant == 'true'
@@ -330,27 +399,91 @@ jobs:
       # and recomputing corrupt/incomplete entries with a visible CACHE/DEPENDENCY PREP REJECT line.
       - name: Restore content-addressed corpus phase results
         id: phase-cache
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == ''
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache
           # Retry attempts request attempt 1's exact key. `cache-hit` below distinguishes that
           # artifact from an older rolling-prefix fallback, whose registry bytes have no lineage
           # to this run and therefore may not be reused as though they did.
-          key: corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-1-${{ github.sha }}
+          key: corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-1-${{ github.sha }}
 
       # A PR-prefix fallback can be newer than main and shadow the trusted seed, only to be rejected
       # by provenance after restore. Separate key families make that impossible: retries get only
       # their exact current-run artifact above; all other fallback transport comes from main.
       - name: Restore trusted-main corpus phase results
         id: main-phase-cache
-        if: steps.filter.outputs.relevant == 'true' && steps.phase-cache.outputs.cache-hit != 'true'
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == '' && steps.phase-cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.sha }}
+          key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-
+            corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-
+
+      - name: Restore exact benchmark seed shard 1
+        id: benchmark-cache-1
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-benchmark-seed-shard-1
+          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-
+
+      - name: Restore exact benchmark seed shard 2
+        id: benchmark-cache-2
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-benchmark-seed-shard-2
+          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-
+
+      - name: Restore exact benchmark seed shard 3
+        id: benchmark-cache-3
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-benchmark-seed-shard-3
+          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-
+
+      - name: Restore exact benchmark seed shard 4
+        id: benchmark-cache-4
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle && inputs.cache_seed_shards == '4'
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-benchmark-seed-shard-4
+          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-
+
+      - name: Merge every trusted old shard at the content-addressed layer
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg d1 .harvey-benchmark-seed-shard-1 --arg k1 '${{ steps.benchmark-cache-1.outputs.cache-matched-key }}' \
+            --arg d2 .harvey-benchmark-seed-shard-2 --arg k2 '${{ steps.benchmark-cache-2.outputs.cache-matched-key }}' \
+            --arg d3 .harvey-benchmark-seed-shard-3 --arg k3 '${{ steps.benchmark-cache-3.outputs.cache-matched-key }}' \
+            --arg d4 .harvey-benchmark-seed-shard-4 --arg k4 '${{ steps.benchmark-cache-4.outputs.cache-matched-key }}' \
+            '[{dir:$d1,matchedKey:$k1,namespace:"1"},{dir:$d2,matchedKey:$k2,namespace:"2"},{dir:$d3,matchedKey:$k3,namespace:"3"},{dir:$d4,matchedKey:$k4,namespace:"4"}] | map(select(.matchedKey != ""))' \
+            > benchmark-cache-sources.json
+          pnpm exec tsx src/cli/corpus-cache-transport.ts merge \
+            --dir .harvey-corpus-phase-cache \
+            --sources-json benchmark-cache-sources.json \
+            --required-namespaces "$(seq -s, 1 '${{ inputs.cache_seed_shards }}')" \
+            --event '${{ github.event_name }}' \
+            --ref '${{ github.ref }}' \
+            --run-id '${{ github.run_id }}' \
+            --default-ref 'refs/heads/${{ github.event.repository.default_branch }}' \
+            --platform '${{ runner.os }}' \
+            --head-sha '${{ github.sha }}' \
+            --benchmark-seed '${{ inputs.benchmark_seed }}' \
+            --out benchmark-cache-merge-receipt.json
 
       - name: Restore the run's exact shared Semgrep bytes
         if: steps.filter.outputs.relevant == 'true'
@@ -372,7 +505,7 @@ jobs:
       # deleted visibly before any scanner can read it; a miss remains a normal recompute.
       - name: Validate corpus phase-cache transport provenance
         id: phase-cache-transport
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == ''
         run: |
           pnpm exec tsx src/cli/corpus-cache-transport.ts restore \
             --dir .harvey-corpus-phase-cache \
@@ -454,13 +587,30 @@ jobs:
           SHARD: ${{ matrix.shard }}
           # Kept in step with the matrix above: 3 on a PR, queue entry, or main push; 1 on the
           # scheduled/manual canonical-scorecard lane, which still holds every clone.
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 3 || 1 }}
+          SHARD_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && inputs.shard_count || ((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 3 || 1) }}
         run: |
           set -euo pipefail
           cold_flag=()
-          if [ "${{ inputs.force_cold_cache }}" = "true" ]; then
+          if [ "${{ inputs.force_cold_cache }}" = "true" ] || { [ -n "${{ inputs.benchmark_run_identity }}" ] && [ "${{ inputs.cache_profile }}" = "cold" ]; }; then
             cold_flag=(--force-cold-cache)
             echo "Explicit forced-cold cache equivalence is enabled: every deterministic phase must compare with a restored artifact. Daily live-provider validation is warm."
+          fi
+          benchmark_flags=()
+          shard_profile_flags=(--shard-profile auto --shard-cache-provenance uncertain)
+          if [ -n "${{ inputs.benchmark_run_identity }}" ]; then
+            benchmark_flags=(
+              --target-concurrency "${{ inputs.target_concurrency }}"
+              --execution-design "${{ inputs.execution_design }}"
+              --cache-profile "${{ inputs.cache_profile }}"
+            )
+            if [ "${{ inputs.cache_profile }}" = "warm" ]; then
+              shard_profile_flags=(--shard-profile warm --shard-cache-provenance verified-warm)
+            else
+              shard_profile_flags=(--shard-profile cold --shard-cache-provenance uncertain)
+            fi
+            if [ -n "${{ inputs.fail_after_start }}" ]; then
+              benchmark_flags+=(--fail-after-start "${{ inputs.fail_after_start }}")
+            fi
           fi
           # A single-shard run writes the CANONICAL name: it is the one whose artifact #1564's
           # prior-snapshot fetch consumes, and the aggregate job below reassembles the sharded case
@@ -471,10 +621,10 @@ jobs:
           # one carries its flag and path as separate words without shell splitting.
           baseline_flag=()
           [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
-          pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
+          pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}" "${benchmark_flags[@]}" "${shard_profile_flags[@]}"
 
       - name: Measure content-addressed cache size
-        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: always() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           set -euo pipefail
           bytes=$(du -sk .harvey-corpus-phase-cache | awk '{print $1 * 1024}')
@@ -485,8 +635,12 @@ jobs:
           echo "CORPUS CACHE SIZE: ${bytes} bytes; dependency preparation receipts: ${receipts}; node_modules is rematerialized per disposable clone and is not in this transport."
 
       - name: Record corpus phase-cache transport provenance
+        id: write-transport
         if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
         run: |
+          set -euo pipefail
+          transport_seed=()
+          if [ -n '${{ inputs.benchmark_run_identity }}' ]; then transport_seed=(--benchmark-seed '${{ inputs.benchmark_seed }}'); fi
           pnpm exec tsx src/cli/corpus-cache-transport.ts save \
             --dir .harvey-corpus-phase-cache \
             --event '${{ github.event_name }}' \
@@ -495,15 +649,42 @@ jobs:
             --run-attempt '${{ github.run_attempt }}' \
             --head-sha '${{ github.sha }}' \
             --platform '${{ runner.os }}' \
-            --family '${{ github.event_name == 'push' && 'main' || 'run' }}' \
-            --namespace '${{ matrix.shard }}'
+            --family '${{ inputs.benchmark_run_identity != '' && 'benchmark' || (github.event_name == 'push' && 'main' || 'run') }}' \
+            --namespace '${{ matrix.shard }}' \
+            "${transport_seed[@]}"
+          if [ -n '${{ inputs.benchmark_run_identity }}' ]; then
+            cp .harvey-corpus-phase-cache/transport-provenance.json "benchmark-transport-${{ matrix.shard }}.json"
+          fi
+
+      - name: Retain benchmark cache, transport, runner, and resource provenance
+        if: always() && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle && steps.score.outcome == 'success'
+        run: |
+          set -euo pipefail
+          cp benchmark-cache-merge-receipt.json "benchmark-cache-merge-receipt-${{ matrix.shard }}.json"
+          image_os=${ImageOS:?runner image OS receipt is missing}
+          image_version=${ImageVersion:?runner image version receipt is missing}
+          jq -n \
+            --argjson shard '${{ matrix.shard }}' \
+            --arg imageOS "$image_os" \
+            --arg imageVersion "$image_version" \
+            --arg runnerOS '${{ runner.os }}' \
+            --arg runnerArch '${{ runner.arch }}' \
+            '{schema:1,shard:$shard,imageOS:$imageOS,imageVersion:$imageVersion,runnerOS:$runnerOS,runnerArch:$runnerArch}' \
+            > "benchmark-runner-${{ matrix.shard }}.json"
 
       - name: Save current-run corpus phase results for an exact retry
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity == ''
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save exact benchmark-seed corpus phase results
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache
+          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # Only a successful default-branch shard can publish a trusted rolling seed. A cancelled,
       # timed-out, drifted or setup-failed leg never reaches this step and cannot shadow the prior
@@ -513,7 +694,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8
@@ -522,8 +703,8 @@ jobs:
       # and locking every later run out of it (a cache key is immutable once written).
       #
       # `always()` is safe HERE precisely because the guard reads the CLONE TREE rather than the job
-      # status: the common failure of this job is a real baseline drift, on which all fourteen
-      # clones are present and pristine and the cache is worth warming. A failure that left the set
+      # status: the common failure of this job is a real baseline drift, on which the complete pin
+      # set is present and pristine and the cache is worth warming. A failure that left the set
       # incomplete reports complete=false and writes nothing. The `outcome == 'success'` clause only
       # keeps this from adding a second, confusing red step on a job that died before setup
       # finished (no pnpm, so no pin file to check the tree against).
@@ -544,8 +725,13 @@ jobs:
         if: always() && steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
-          path: corpus-drift*.json
+          name: ${{ ((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '')) && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
+          path: |
+            corpus-drift*.json
+            corpus-drift*.json.workers/**
+            benchmark-cache-merge-receipt-*.json
+            benchmark-transport-*.json
+            benchmark-runner-*.json
           if-no-files-found: warn
 
       # #1509: this job failed at SETUP for days (the poisoned pipx cache) and reported nothing a
@@ -594,7 +780,7 @@ jobs:
     needs: prepare-current-inputs
     if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     name: current independent replay ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.prepare-current-inputs.outputs.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -650,6 +836,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     steps:
       # `needs.<matrix-job>.result` is the AGGREGATE over every leg: 'success' only when all of them
@@ -681,7 +868,7 @@ jobs:
       # single-shard run already uploaded that name itself.
       - name: Collect the shard scorecards
         id: parts
-        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != ''))
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
@@ -704,7 +891,7 @@ jobs:
       # is simply nothing to merge, and the declared no-op is the record.
       - name: Merge the shard scorecards into corpus-drift.json
         id: merge
-        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != ''))
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -719,7 +906,15 @@ jobs:
             rows: (map(.rows) | add),
             findings: (map(.findings) | add),
             detectors: (map(.detectors // {}) | add),
-            mechanicalContexts: (map(.mechanicalContexts // {}) | add)
+            mechanicalContexts: (map(.mechanicalContexts // {}) | add),
+            mechanicalRuns: (map(.mechanicalRuns // {}) | add),
+            scannerRecords: (map(.scannerRecords // {}) | add),
+            dependencyPreparations: (map(.dependencyPreparations // {}) | add),
+            phaseSeconds: (map(.phaseSeconds // {}) | add),
+            runtimeReceipts: (map(.runtimeReceipts // {}) | add),
+            conservation: (map(.conservation // []) | add),
+            shardProfiles: map(.shardProfile),
+            executions: map(.execution // null)
           }' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
@@ -758,6 +953,38 @@ jobs:
           echo "This proves two fresh current registry executions agree. It is NOT #1851.6/.7 historical manual→registry proof; #1886 remains open and exclusive."
         working-directory: source
 
+      - name: Read raw Actions jobs for the benchmark timing envelope
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100" \
+            | jq '{jobs: map(.jobs) | add}' > corpus-benchmark-jobs.json
+
+      - name: Build the provenance-bound benchmark sample
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
+        run: |
+          pnpm corpus-benchmark-sample \
+            --scorecard ../corpus-drift.json \
+            --jobs ../corpus-benchmark-jobs.json \
+            --evidence-dir ../parts \
+            --out ../corpus-benchmark-sample.json \
+            --run-id '${{ github.run_id }}' \
+            --run-attempt '${{ github.run_attempt }}' \
+            --head-sha '${{ github.sha }}' \
+            --benchmark-seed '${{ inputs.benchmark_seed }}' \
+            --repeat '${{ inputs.benchmark_repeat }}' \
+            --runner-role '${{ needs.prepare-current-inputs.outputs.runner-role }}' \
+            --requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}' \
+            --profile '${{ inputs.cache_profile }}' \
+            --design '${{ inputs.execution_design }}' \
+            --concurrency '${{ inputs.target_concurrency }}' \
+            --shard-count '${{ inputs.shard_count }}' \
+            --workflow-url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}'
+        working-directory: source
+
       - name: Upload the merged drift scorecard
         if: steps.merge.outputs.merged == 'true'
         uses: actions/upload-artifact@v4
@@ -767,4 +994,6 @@ jobs:
             corpus-drift.json
             current-hosted-producer.json
             current-independent-replay.json
+            corpus-benchmark-jobs.json
+            corpus-benchmark-sample.json
           if-no-files-found: warn

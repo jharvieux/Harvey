@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import ts from "typescript";
 import { statSafe } from "../fs-walk.js";
 import {
@@ -12,6 +12,9 @@ import {
   type MechanicalPhaseCacheOptions,
 } from "./mechanical-phase-cache.js";
 import { materializeRegistryPacks } from "./semgrep.js";
+import { discoverTransitiveImplementationFiles } from "./implementation-closure.js";
+
+export { discoverTransitiveImplementationFiles } from "./implementation-closure.js";
 
 interface PhaseIdentityOptions {
   repoRoot: string;
@@ -28,76 +31,6 @@ interface PhaseIdentityOptions {
     advisoryVersion: string;
     secretCandidateIdentity: string;
   };
-}
-
-function resolveRelativeImplementation(from: string, specifier: string): string | undefined {
-  if (!specifier.startsWith(".")) return undefined;
-  const unresolved = resolve(dirname(from), specifier);
-  const withoutJs = unresolved.replace(/\.js$/, "");
-  const candidates = [unresolved, `${withoutJs}.ts`, `${withoutJs}.tsx`, join(withoutJs, "index.ts")];
-  const found = candidates.find((candidate) => statSafe(candidate)?.isFile());
-  if (!found) throw new Error(`mechanical phase implementation import cannot be resolved: ${from} -> ${specifier}`);
-  return found;
-}
-
-function sourceFile(path: string): ts.SourceFile {
-  return ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-}
-
-function isTypeOnlyDependency(statement: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
-  if (ts.isImportDeclaration(statement)) {
-    const clause = statement.importClause;
-    if (!clause) return false;
-    if (clause.isTypeOnly) return true;
-    return !clause.name
-      && clause.namedBindings !== undefined
-      && ts.isNamedImports(clause.namedBindings)
-      && clause.namedBindings.elements.length > 0
-      && clause.namedBindings.elements.every((element) => element.isTypeOnly);
-  }
-  if (statement.isTypeOnly) return true;
-  return statement.exportClause !== undefined
-    && ts.isNamedExports(statement.exportClause)
-    && statement.exportClause.elements.length > 0
-    && statement.exportClause.elements.every((element) => element.isTypeOnly);
-}
-
-function transitiveImplementationClosure(roots: readonly string[]): string[] {
-  const closure = new Set<string>();
-  const visit = (path: string): void => {
-    if (closure.has(path)) return;
-    closure.add(path);
-    const parsed = sourceFile(path);
-    for (const statement of parsed.statements) {
-      if ((!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      // Type-only edges have no effect on runtime detector output. Following them turns a phase identity into a
-      // declaration graph (for example Semgrep -> MechanicalScanContext -> TenancyOverride ->
-      // supabase-static) and falsely invalidates unrelated phases.
-      if (isTypeOnlyDependency(statement)) continue;
-      const imported = resolveRelativeImplementation(path, statement.moduleSpecifier.text);
-      if (imported) visit(imported);
-    }
-    const inspectDynamic = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)
-        && (node.expression.kind === ts.SyntaxKind.ImportKeyword
-          || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
-        const argument = node.arguments[0];
-        if (!argument || !ts.isStringLiteralLike(argument)) {
-          throw new Error(`implementation closure contains a dynamic import/require whose identity cannot be proven: ${path}`);
-        }
-        const imported = resolveRelativeImplementation(path, argument.text);
-        if (imported) visit(imported);
-      }
-      ts.forEachChild(node, inspectDynamic);
-    };
-    inspectDynamic(parsed);
-  };
-  for (const root of roots) visit(root);
-  return [...closure].sort();
-}
-
-export function discoverTransitiveImplementationFiles(roots: readonly string[]): string[] {
-  return transitiveImplementationClosure(roots);
 }
 
 // The symbol walk is a function of mechanical.ts plus the requested phase set. Cache only its
@@ -126,7 +59,7 @@ export function discoverMechanicalPhaseImplementationFiles(
     return Object.fromEntries(phases.map((phase) => {
       const roots = cachedRoots[phase];
       if (!roots || roots.length === 0) throw new Error(`${phase}: no implementation helpers discovered from its runPhase callback`);
-      return [phase, transitiveImplementationClosure(roots.map((root) => join(repoRoot, root)))];
+      return [phase, discoverTransitiveImplementationFiles(roots.map((root) => join(repoRoot, root)))];
     }));
   }
   const program = ts.createProgram([mechanical], {
@@ -188,7 +121,7 @@ export function discoverMechanicalPhaseImplementationFiles(
   for (const phase of phases) {
     const roots = rootsByPhase.get(phase);
     if (!roots || roots.size === 0) throw new Error(`${phase}: no implementation helpers discovered from its runPhase callback`);
-    discovered[phase] = transitiveImplementationClosure([...roots]);
+    discovered[phase] = discoverTransitiveImplementationFiles([...roots]);
     relativeRoots[phase] = [...roots].map((root) => root.slice(repoRoot.length + 1)).sort();
   }
   PHASE_ROOT_CACHE.set(cacheKey, relativeRoots);

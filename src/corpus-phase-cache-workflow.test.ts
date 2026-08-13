@@ -74,18 +74,18 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
     expect(workflow).toContain("uses: actions/cache/restore@v4");
     expect(workflow).toContain("uses: actions/cache/save@v4");
-    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(4);
+    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(5);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow).toContain("corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
-    expect(workflow).toContain("corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-");
     expect(workflow).toContain("steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key");
     expect(workflow).toContain("Validate corpus phase-cache transport provenance");
     expect(workflow).toContain("Record corpus phase-cache transport provenance");
     expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key }}'");
     expect(workflow).toContain("--head-sha '${{ github.sha }}'");
     expect(workflow).toContain("--platform '${{ runner.os }}'");
-    expect(workflow).toContain("--family '${{ github.event_name == 'push' && 'main' || 'run' }}'");
+    expect(workflow).toContain("--family '${{ inputs.benchmark_run_identity != '' && 'benchmark' || (github.event_name == 'push' && 'main' || 'run') }}'");
     expect(workflow).toContain("--namespace '${{ matrix.shard }}'");
     expect(workflow).toContain("CORPUS CACHE SIZE:");
   });
@@ -98,12 +98,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'");
     expect(workflow.match(/github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group' \|\| github\.event_name == 'push'/g)).toHaveLength(5);
     expect(workflow).toContain("Save successful main-shard corpus phase results");
-    expect(workflow).toContain("key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow).toContain("key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
     expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");
     expect(workflow).not.toContain("Save shard3 main-visible corpus phase results");
     expect(workflow).toContain("success() && steps.score.outcome == 'success'");
     expect(workflow).not.toMatch(/Save successful main-shard corpus phase results[\s\S]{0,250}if: always\(\)/);
-    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(2);
+    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(3);
   });
 
   it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {
@@ -196,14 +196,52 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
-  it("declares test-only source edits unreachable while unknown production source remains fail-open", () => {
-    const testCase = workflow.indexOf("src/*.test.ts) ;;");
-    const failOpen = workflow.indexOf("*) relevant=true ;;", testCase);
-    expect(testCase).toBeGreaterThan(0);
-    expect(failOpen).toBeGreaterThan(testCase);
+  it("uses one discovered fail-open relevance receipt instead of copied workflow filters", () => {
+    expect(workflow).toContain("pnpm corpus-relevance --base \"$base\" --head HEAD --out corpus-relevance.json");
+    expect(workflow).toContain("name: corpus-relevance-receipt");
+    expect(workflow).toContain("Reuse the one discovered corpus relevance verdict");
+    expect(workflow).not.toContain('case "$f" in');
     const productionFiles = readRecursiveSafe(join(root, "src"))
       .filter((rel) => rel.endsWith(".ts") && !rel.endsWith(".test.ts") && statSafe(join(root, "src", rel))?.isFile());
     const importsTest = productionFiles.filter((rel) => /from\s+["'][^"']+\.test(?:\.js)?["']/.test(readFileSync(join(root, "src", rel), "utf8")));
     expect(importsTest, "a production module importing a test invalidates the workflow's test-only exclusion").toEqual([]);
+  });
+
+  it("keeps production selectors conservative and independently configurable", () => {
+    expect(workflow).toContain("PR_RUNNER: ${{ vars.CORPUS_PR_RUNNER_LABEL }}");
+    expect(workflow).toContain("SCHEDULE_RUNNER: ${{ vars.CORPUS_SCHEDULE_RUNNER_LABEL }}");
+    expect(workflow).toContain("LARGER_RUNNER: ${{ vars.CORPUS_BENCHMARK_RUNNER_LABEL }}");
+    expect(workflow).toContain("runner=ubuntu-latest");
+    expect(workflow).toContain("configured-larger was requested but repository variable CORPUS_BENCHMARK_RUNNER_LABEL is empty; no runner claim is permitted");
+    expect(workflow).toContain("default: serial");
+    expect(workflow).toContain("default: '1'");
+    expect(workflow).toContain("default: '3'");
+    expect(workflow).toContain("--shard-profile auto --shard-cache-provenance uncertain");
+    expect(workflow).toContain("--shard-profile warm --shard-cache-provenance verified-warm");
+  });
+
+  it("retains one sample envelope from the merged scorecard and raw Actions jobs", () => {
+    expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("Read raw Actions jobs for the benchmark timing envelope");
+    expect(workflow).toContain("Build the provenance-bound benchmark sample");
+    expect(workflow).toContain("pnpm corpus-benchmark-sample");
+    expect(workflow).toContain("benchmark-cache-merge-receipt-${{ matrix.shard }}.json");
+    expect(workflow).toContain("benchmark-transport-${{ matrix.shard }}.json");
+    expect(workflow).toContain("benchmark-runner-${{ matrix.shard }}.json");
+    expect(workflow).toContain("shardProfiles: map(.shardProfile)");
+    expect(workflow).toContain("corpus-benchmark-sample.json");
+    expect(workflow).toContain("--run-attempt '${{ github.run_attempt }}'");
+    expect(workflow).toContain("--benchmark-seed '${{ inputs.benchmark_seed }}'");
+    expect(workflow).toContain("--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'");
+  });
+
+  it("does not let the selectable split-carbon label masquerade as measured parallel work", () => {
+    expect(corpusCli).toContain("--execution-design must be serial, target-workers, intra-target-overlap, or split-carbon");
+    expect(corpusCli).toContain("process-isolated ${executionDesign}");
+    const execution = readFileSync(join(root, "src", "corpus-execution.ts"), "utf8");
+    expect(execution).toContain("`${options.design} holds this coordinator to one serial target worker`");
+    const benchmark = readFileSync(join(root, "src", "corpus-benchmark.ts"), "utf8");
+    expect(benchmark).toContain('if (sample.design === "serial" && sample.effectiveConcurrency !== 1)');
+    expect(benchmark).toContain('"split-carbon": 3');
   });
 });

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 // #1586: corpus-drift scores its targets serially in one job, and that job is a REQUIRED context
 // since 2026-07-30, so its wall clock sits on the critical path to every merge. This splits the
 // target list across parallel runners.
@@ -10,37 +12,117 @@
 // and semgrep's help warns that raising jobs "induce[s] significant GC latency and slow scan
 // times". The parallelism has to come from more machines.
 
-// Per-target scan cost in SECONDS.
-//
-// PROVENANCE: MEASURED from CI run 30584074986 (job `clone pinned commits + score baselines`,
-// 2026-07-30, a full `--install` scoring pass over every target). Derived from the per-target
-// `=== <slug> (<repo> @ <sha>) ===` banners corpus-drift.ts prints: each target's cost is the
-// interval between its banner and the next one, and the last target's is the interval to the
-// scorecard print. Total 1287s, which reconciles with that step's own 1289s runtime.
-//
-// These are a PARTITIONING HINT, not a claim about any future run — clone times, runner class and
-// upstream tool versions all move them. Nothing is scored against them and no gate reads them; the
-// only consequence of a stale weight is a less even split. `--shard` prints each target's ACTUAL
-// elapsed seconds so a real run always re-measures what this table only estimates.
-//
-// n=1. carbon's dominance is what makes the partition robust to that: at 564s it is 4.7x the next
-// largest target, so it lands alone in a shard under any plausible re-measurement.
-export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
-  carbon: 564,
-  documenso: 119,
-  "inbox-zero": 95,
-  proposit: 86,
-  "saas-lite": 77,
-  ghostfolio: 67,
-  rallly: 56,
-  boxyhq: 54,
-  "tanstack-com": 46,
-  "multi-tenant-starter": 37,
-  "mvp-boilerplate": 35,
-  "launch-mvp": 24,
-  "subscription-payments": 17,
-  "supabase-security-labs": 7,
+export type CorpusShardProfileName = "cold" | "warm";
+export type CorpusShardProfileRequest = "auto" | CorpusShardProfileName;
+export type CorpusShardCacheProvenance = "uncertain" | "verified-warm";
+
+interface CorpusShardProfile {
+  name: CorpusShardProfileName;
+  runId: 31549148174;
+  runAttempt: 1 | 2;
+  headSha: "43d819b59aea38bcd777016f167037298c87c550";
+  measuredAt: string;
+  targetDigest: string;
+  sourceDigest: string;
+  seconds: Readonly<Record<string, number>>;
+}
+
+export interface CorpusShardProfileSelection {
+  requested: CorpusShardProfileRequest;
+  selected: CorpusShardProfileName;
+  cacheProvenance: CorpusShardCacheProvenance;
+  targetDigest: string;
+  sourceDigest: string;
+  runId: number;
+  runAttempt: number;
+  reason: string;
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(stable(value)).digest("hex");
+}
+
+export function corpusShardTargetDigest(slugs: readonly string[]): string {
+  return sha256([...slugs].sort());
+}
+
+function profile(input: Omit<CorpusShardProfile, "targetDigest" | "sourceDigest">): CorpusShardProfile {
+  const targetDigest = corpusShardTargetDigest(Object.keys(input.seconds));
+  const sourceDigest = sha256({ ...input, targetDigest });
+  return { ...input, targetDigest, sourceDigest };
+}
+
+// #1875: both profiles are the same exact-head hosted run. Attempt 1 was the cold/miss path and
+// attempt 2 restored it. The values are the per-target totals printed by corpus-drift itself, not
+// estimates reconstructed from job duration. A warm choice is permitted only when its target
+// digest still matches and cache provenance is verified; all uncertainty falls back to cold.
+export const COLD_CORPUS_SHARD_PROFILE = profile({
+  name: "cold",
+  runId: 31549148174,
+  runAttempt: 1,
+  headSha: "43d819b59aea38bcd777016f167037298c87c550",
+  measuredAt: "2026-08-12T00:21:05Z",
+  seconds: {
+    carbon: 671,
+    proposit: 97,
+    "inbox-zero": 94,
+    "saas-lite": 93,
+    documenso: 114,
+    ghostfolio: 60,
+    "launch-mvp": 56,
+    "multi-tenant-starter": 54,
+    rallly: 54,
+    boxyhq: 51,
+    cravab: 50,
+    "tanstack-com": 48,
+    "mvp-boilerplate": 47,
+    "flori-web": 35,
+    effective: 17,
+    "subscription-payments": 15,
+    "supabase-security-labs": 7,
+  },
+});
+
+export const WARM_CORPUS_SHARD_PROFILE = profile({
+  name: "warm",
+  runId: 31549148174,
+  runAttempt: 2,
+  headSha: "43d819b59aea38bcd777016f167037298c87c550",
+  measuredAt: "2026-08-12T00:29:18Z",
+  seconds: {
+    carbon: 290,
+    documenso: 109,
+    "inbox-zero": 91,
+    proposit: 83,
+    "saas-lite": 80,
+    ghostfolio: 57,
+    rallly: 51,
+    boxyhq: 48,
+    cravab: 46,
+    "tanstack-com": 44,
+    "multi-tenant-starter": 33,
+    "launch-mvp": 32,
+    "flori-web": 32,
+    "mvp-boilerplate": 25,
+    effective: 15,
+    "subscription-payments": 14,
+    "supabase-security-labs": 7,
+  },
+});
+
+const CORPUS_SHARD_PROFILES: Readonly<Record<CorpusShardProfileName, CorpusShardProfile>> = {
+  cold: COLD_CORPUS_SHARD_PROFILE,
+  warm: WARM_CORPUS_SHARD_PROFILE,
 };
+
+// Compatibility export for consumers that intentionally mean the fail-safe profile.
+export const TARGET_SCAN_SECONDS = COLD_CORPUS_SHARD_PROFILE.seconds;
 
 // A target added to EXTERNAL_CORPUS after the table was measured has no entry. It gets a weight at
 // the heavier end of the measured spread deliberately: under-weighting a new target concentrates it
@@ -48,7 +130,38 @@ export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
 // wrong is asymmetric, so the default leans to the safe side rather than to the median.
 export const DEFAULT_SCAN_SECONDS = 120;
 
-export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? DEFAULT_SCAN_SECONDS;
+export const weightOf = (slug: string, profileName: CorpusShardProfileName = "cold"): number => {
+  const measured = profileName === "cold" ? TARGET_SCAN_SECONDS : CORPUS_SHARD_PROFILES.warm.seconds;
+  return measured[slug] ?? DEFAULT_SCAN_SECONDS;
+};
+
+export function selectCorpusShardProfile(
+  slugs: readonly string[],
+  requested: CorpusShardProfileRequest,
+  cacheProvenance: CorpusShardCacheProvenance,
+): CorpusShardProfileSelection {
+  const targetDigest = corpusShardTargetDigest(slugs);
+  const warm = WARM_CORPUS_SHARD_PROFILE;
+  const warmEligible = cacheProvenance === "verified-warm" && targetDigest === warm.targetDigest;
+  const selected = requested === "cold" || !warmEligible ? COLD_CORPUS_SHARD_PROFILE : warm;
+  const reason = requested === "cold"
+    ? "cold requested explicitly"
+    : cacheProvenance !== "verified-warm"
+      ? "cache provenance is uncertain; selected the cold fallback"
+      : targetDigest !== warm.targetDigest
+        ? `warm profile population is stale (${warm.targetDigest} != ${targetDigest}); selected the cold fallback`
+        : `${requested} request has exact verified-warm cache and target provenance`;
+  return {
+    requested,
+    selected: selected.name,
+    cacheProvenance,
+    targetDigest,
+    sourceDigest: selected.sourceDigest,
+    runId: selected.runId,
+    runAttempt: selected.runAttempt,
+    reason,
+  };
+}
 
 /**
  * Longest-processing-time-first partition: sort by descending cost, then repeatedly assign the next
@@ -59,17 +172,21 @@ export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? D
  * LPT rather than round-robin because the corpus is heavily skewed: round-robin over a list whose
  * largest element is 44% of the total pairs that element with others and wastes the parallelism.
  */
-export function partitionTargets(slugs: readonly string[], shardCount: number): string[][] {
+export function partitionTargets(slugs: readonly string[], shardCount: number, profileName: CorpusShardProfileName = "cold"): string[][] {
   if (!Number.isInteger(shardCount) || shardCount < 1) {
     throw new Error(`shard count must be a positive integer, got ${shardCount}`);
   }
   const shards = Array.from({ length: shardCount }, () => ({ slugs: [] as string[], load: 0 }));
 
-  const ordered = [...slugs].sort((a, b) => weightOf(b) - weightOf(a) || a.localeCompare(b));
+  if (profileName === "warm") {
+    const unknown = slugs.filter((slug) => CORPUS_SHARD_PROFILES.warm.seconds[slug] === undefined);
+    if (unknown.length > 0) throw new Error(`warm corpus shard profile does not cover target(s): ${unknown.join(", ")}`);
+  }
+  const ordered = [...slugs].sort((a, b) => weightOf(b, profileName) - weightOf(a, profileName) || a.localeCompare(b));
   for (const slug of ordered) {
     const lightest = shards.reduce((a, b) => (b.load < a.load ? b : a));
     lightest.slugs.push(slug);
-    lightest.load += weightOf(slug);
+    lightest.load += weightOf(slug, profileName);
   }
   return shards.map((s) => s.slugs);
 }
@@ -82,11 +199,11 @@ export function partitionTargets(slugs: readonly string[], shardCount: number): 
  * while coverage silently shrank. So the partition is verified exhaustive and disjoint on every
  * call rather than trusted — it is a few microseconds against a 20-minute job.
  */
-export function shardTargets(slugs: readonly string[], shardIndex: number, shardCount: number): string[] {
+export function shardTargets(slugs: readonly string[], shardIndex: number, shardCount: number, profileName: CorpusShardProfileName = "cold"): string[] {
   if (!Number.isInteger(shardIndex) || shardIndex < 1 || shardIndex > shardCount) {
     throw new Error(`shard index must be within 1..${shardCount}, got ${shardIndex}`);
   }
-  const shards = partitionTargets(slugs, shardCount);
+  const shards = partitionTargets(slugs, shardCount, profileName);
   assertPartitionCoversEveryTarget(slugs, shards);
   const mine = shards[shardIndex - 1];
   if (!mine) throw new Error(`shard ${shardIndex}/${shardCount} does not exist`);
