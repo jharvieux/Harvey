@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { rejectCorpusCacheTransport } from "./corpus-cache-transport.js";
 import { semgrepPackReceipt, validateRestoredSemgrepPackArtifact } from "./corpus-mechanical-readiness.js";
 import { readRecursiveSafe, statSafe } from "./fs-walk.js";
@@ -14,6 +15,14 @@ const workflow = readFileSync(path, "utf8");
 const mechanical = readFileSync(join(root, "src", "scan", "mechanical.ts"), "utf8");
 const corpusCli = readFileSync(join(root, "src", "cli", "corpus-drift.ts"), "utf8");
 const replayCli = readFileSync(join(root, "src", "cli", "replay-current-mechanical.ts"), "utf8");
+interface WorkflowStep { name?: string; if?: string; run?: string }
+const parsedWorkflow = parse(workflow) as { jobs: { shard: { steps: WorkflowStep[] } } };
+const shardSteps = parsedWorkflow.jobs.shard.steps;
+const shardStep = (name: string): WorkflowStep => {
+  const step = shardSteps.find((candidate) => candidate.name === name);
+  if (!step) throw new Error(`workflow shard step is missing: ${name}`);
+  return step;
+};
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -244,7 +253,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("Build the provenance-bound benchmark sample");
     expect(workflow).toContain("pnpm corpus-benchmark-sample");
     expect(workflow).toContain("benchmark-cache-merge-receipt-${{ matrix.shard }}.json");
-    expect(workflow).toContain("benchmark-prior-scorecard-${{ matrix.shard }}.json");
+    expect(workflow).toContain("benchmark-prior-scorecard-policy-${{ matrix.shard }}.json");
     expect(workflow).toContain("benchmark-transport-${{ matrix.shard }}.json");
     expect(workflow).toContain("benchmark-runner-${{ matrix.shard }}.json");
     expect(workflow).toContain("shardProfiles: map(.shardProfile)");
@@ -255,22 +264,36 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'");
   });
 
-  it("binds every timed benchmark sample to the immutable seed scorecard identity and bytes", () => {
-    expect(workflow).toContain("Fetch the exact prior scorecard input (#1564/#1868)");
-    expect(workflow).toContain("run_id='${{ inputs.benchmark_seed_run_id }}'");
-    expect(workflow).toContain("expected_attempt='${{ inputs.benchmark_seed_run_attempt }}'");
-    expect(workflow).toContain('if [ "$actual_attempt" != "$expected_attempt" ]');
-    expect(workflow).toContain("[ \"$source_head\" != '${{ github.sha }}' ]");
-    expect(workflow).toContain("must expose exactly one live corpus-drift-scorecard artifact");
-    expect(workflow).toContain('[[ "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]]');
-    expect(workflow).toContain('post_attempt=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id" --jq .run_attempt)');
-    expect(workflow).toContain("scorecard_sha=$(sha256sum prior-drift/corpus-drift.json");
-    expect(workflow).toContain('artifactName:"corpus-drift-scorecard"');
-    expect(workflow).toContain("benchmark-prior-scorecard-*.json");
-    expect(workflow).toContain("benchmark prior scorecard source $run_id is not the successful immutable seed attempt");
+  it("makes prior-scorecard acquisition and forwarding unreachable for every benchmark identity", () => {
+    const fetch = shardStep("Fetch the latest prior scorecard for ordinary drift attribution (#1564)");
+    const policy = shardStep("Record disabled benchmark prior-scorecard policy");
+    const score = shardStep("Score the corpus against its baselines");
+    expect(fetch.if).toBe("steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == ''");
+    expect(policy.if).toBe("steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != ''");
+    expect(policy.run).toContain('{schema:1,mode:"disabled-for-benchmark",reason:"prior-scorecard-is-diagnostic-only"}');
+    expect(score.run).toContain("if [ -z '${{ inputs.benchmark_run_identity }}' ] && [ -f prior-drift/corpus-drift.json ]; then");
+    expect(score.run).toContain("baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)");
+
+    const ghPriorSteps = shardSteps.filter((step) => /gh run (?:list|download)/.test(step.run ?? ""));
+    expect(ghPriorSteps).toEqual([fetch]);
+    expect(fetch.run).toContain("gh run list");
+    expect(fetch.run).toContain("gh run download");
+    expect(fetch.run).not.toContain("benchmark_seed_run_id");
+
+    const route = (identity: string) => ({ fetch: identity === "", forward: identity === "", recordPolicy: identity !== "" });
+    expect(route("")).toEqual({ fetch: true, forward: true, recordPolicy: false });
+    for (const identity of ["seed-bundle", "sample-repeat-1", "all-settled-drill"]) {
+      expect(route(identity), identity).toEqual({ fetch: false, forward: false, recordPolicy: true });
+    }
+    // Regression fixture: run 31743179519 was a benchmark seed routed through the old source-run
+    // lookup; exercise that exact identity against the policy-only benchmark branch.
+    const failedSeed = { runId: 31_743_179_519, identity: "seed-bundle" };
+    expect({ runId: failedSeed.runId, ...route(failedSeed.identity) }).toEqual({ runId: 31_743_179_519, fetch: false, forward: false, recordPolicy: true });
   });
 
   it("restores only an immutable seed-bundle run and cannot contaminate it with sample outputs", () => {
+    const phaseCache = shardStep("Restore content-addressed corpus phase results");
+    expect(phaseCache.if).toBe("steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == ''");
     expect(workflow).toContain("benchmark_seed_run_id:");
     expect(workflow).toContain("benchmark_seed_run_id must name the immutable seed-bundle workflow run");
     expect(workflow).toContain("key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}");

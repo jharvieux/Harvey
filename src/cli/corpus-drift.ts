@@ -157,6 +157,27 @@ const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
 const benchmarkRunIdentity = process.env.HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY ?? "";
 const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
+const priorInputFlags = new Set([
+  "--baseline-findings",
+  "--baseline-findings-receipt",
+  "--baseline-findings-bundle",
+  "--prior-scorecard",
+  "--prior-scorecard-receipt",
+  "--prior-scorecard-bundle",
+  "--prior-scorecard-authority-dir",
+]);
+const benchmarkPriorInput = args.find((argument) => priorInputFlags.has(argument)
+  || /^--(?:baseline|prior)[a-z0-9-]*(?:receipt|bundle|authority(?:-dir)?)$/.test(argument));
+// A prior scorecard changes only failure explanation attribution, but its mutable artifact lookup
+// was inside the measured benchmark envelope. Benchmark seed, sample, and failure-drill identities
+// therefore disable the optional input completely and retain an explicit policy receipt instead.
+// Reject every known receipt/bundle spelling here, before target-worker orchestration can start.
+if (benchmarkRunIdentity && benchmarkPriorInput) {
+  console.error(
+    `HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY=${benchmarkRunIdentity} cannot be combined with ${benchmarkPriorInput}; prior scorecards are disabled for benchmark execution`,
+  );
+  process.exit(2);
+}
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
   process.exit(2);

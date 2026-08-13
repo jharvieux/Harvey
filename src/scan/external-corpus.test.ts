@@ -38,6 +38,7 @@ import {
 import { buildQuickScanReport } from "../quick-scan.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import type { Finding, Severity } from "../findings.js";
+import { corpusTargetConservationVector, type CorpusScorecard } from "../corpus-execution.js";
 
 function finding(taxonomy: string, severity: Severity = "Perf", location = "app/page.tsx:1"): Finding {
   return {
@@ -453,6 +454,54 @@ describe("driftExplanationLines (#1580) — a consulted snapshot always says so"
     const text = driftExplanationLines("M5-slop", "carbon", [row("a.ts:1")], undefined, undefined).join("\n");
     expect(text).toContain("NO PRIOR SNAPSHOT CONSULTED for carbon");
     expect(text).toContain("CURRENT (1)");
+  });
+
+  it("keeps canonical score, baseline, conservation, assertions, and exit identical with or without a prior snapshot", () => {
+    const slug = "carbon";
+    const current = [row("current.ts:4")];
+    const prior = [row("removed.ts:2")];
+    const run = (priorSnapshot: Finding[] | undefined) => {
+      const rows = scoreExternalBaseline(target(slug), current).map((result) => ({ ...result, check: `${result.module} baseline` }));
+      const scorecard: CorpusScorecard = {
+        rows,
+        findings: { [slug]: current },
+        detectors: { [slug]: [{ detector: "fixture", unitsExamined: 1 }] },
+        mechanicalContexts: { [slug]: { filesExamined: 1 } },
+        mechanicalRuns: { [slug]: { findings: current } },
+        scannerRecords: { [slug]: [{ scanner: "fixture", scope: { unitsExamined: 1 } }] },
+        dependencyPreparations: { [slug]: [] },
+        phaseSeconds: { [slug]: { scan: 1 } },
+        runtimeReceipts: { [slug]: { node: "fixture" } },
+      };
+      const failed = rows.filter((result) => !result.pass);
+      return {
+        canonical: {
+          rows,
+          findings: scorecard.findings,
+          baselines: rows.filter((result) => result.check.includes("baseline")),
+          conservation: [corpusTargetConservationVector(scorecard, slug)],
+          assertions: {
+            baselines: rows.length > 0 && rows.every((result) => result.pass),
+            liveness: rows.length > 0,
+            forcedCold: true,
+            conservation: true,
+          },
+          exit: failed.length === 0 ? 0 : 1,
+        },
+        attribution: failed.flatMap((result) => result.module
+          ? driftExplanationLines(result.module, slug, current, priorSnapshot, priorSnapshot ? "prior.json" : undefined)
+          : []),
+      };
+    };
+
+    const withoutPrior = run(undefined);
+    const withPrior = run(prior);
+    expect(withPrior.canonical).toEqual(withoutPrior.canonical);
+    expect(withPrior.attribution.join("\n")).toContain("ADDED (1)");
+    expect(withPrior.attribution.join("\n")).toContain("REMOVED (1)");
+    expect(withoutPrior.attribution.join("\n")).toContain("NO PRIOR SNAPSHOT CONSULTED");
+    expect(withoutPrior.attribution.join("\n")).toContain("CURRENT (1)");
+    expect(withPrior.attribution).not.toEqual(withoutPrior.attribution);
   });
 });
 

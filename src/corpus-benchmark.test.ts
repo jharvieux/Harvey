@@ -22,6 +22,11 @@ const stable = (value: unknown): string => {
 };
 const hash = (value: unknown): string => createHash("sha256").update(stable(value)).digest("hex");
 const directHash = (value: string): string => createHash("sha256").update(value).digest("hex");
+const DISABLED_PRIOR_SCORECARD_POLICY = {
+  schema: 1,
+  mode: "disabled-for-benchmark",
+  reason: "prior-scorecard-is-diagnostic-only",
+} as const;
 
 function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmarkSample {
   const profile = overrides.profile ?? "warm";
@@ -84,7 +89,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
   const artifacts: CorpusBenchmarkArtifactEvidence[] = [
     { name: "actions/jobs.json", family: "actions/jobs", sha256: hash({ runId, name: "jobs" }) },
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-cache-merge-receipt-${index + 1}.json`, family: "evidence/benchmark-cache-merge-receipt", sha256: hash({ runId, name: "merge", index }) })),
-    ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-prior-scorecard-${index + 1}.json`, family: "evidence/benchmark-prior-scorecard", sha256: hash({ runId, name: "prior", index }) })),
+    ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-prior-scorecard-policy-${index + 1}.json`, family: "evidence/benchmark-prior-scorecard-policy", sha256: hash({ runId, name: "prior-policy" }) })),
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-runner-${index + 1}.json`, family: "evidence/benchmark-runner", sha256: hash({ runId, name: "runner", index }) })),
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-transport-${index + 1}.json`, family: "evidence/benchmark-transport", sha256: hash({ runId, name: "transport", index }) })),
     { name: "scorecard/corpus-drift.json", family: "scorecard/corpus-drift", sha256: hash({ runId, name: "scorecard" }) },
@@ -159,19 +164,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
       artifacts,
       conservationVectors,
       invariantVectors,
-      priorScorecard: {
-        schema: 1,
-        sourceRunId: benchmarkSeedRunId,
-        sourceRunAttempt: 1,
-        sourceHeadSha: headSha,
-        sourceEvent: "workflow_dispatch",
-        sourceWorkflowPath: ".github/workflows/corpus-drift.yml",
-        artifactId: 60_000,
-        artifactName: "corpus-drift-scorecard",
-        artifactDigest: `sha256:${digest("8")}`,
-        scorecardSha256: digest("9"),
-        scorecardBytes: 1_024,
-      },
+      priorScorecardPolicy: structuredClone(DISABLED_PRIOR_SCORECARD_POLICY),
       toolVersions,
       targetCommits,
     },
@@ -496,7 +489,7 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
 
     const mixed = qualifyingMatrix();
     mixed[0]!.headSha = "f".repeat(40);
-    expect(() => evaluateCorpusBenchmark(mixed)).toThrow(/seed\/head|mixes head, seed|prior scorecard identity/);
+    expect(() => evaluateCorpusBenchmark(mixed)).toThrow(/seed\/head|mixes head, seed|prior-scorecard policy/);
     const population = qualifyingMatrix();
     population[0]!.population.findingDigest = digest("9");
     expect(() => evaluateCorpusBenchmark(population)).toThrow(/target\/evidence/);
@@ -528,9 +521,24 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
     mixedTools[0]!.raw.toolVersions.node = "v25";
     expect(() => evaluateCorpusBenchmark(mixedTools)).toThrow(/tool\/runtime|evidenceDigest/);
 
-    const mixedPrior = qualifyingMatrix();
-    mixedPrior[0]!.raw.priorScorecard.scorecardSha256 = digest("f");
-    expect(() => evaluateCorpusBenchmark(mixedPrior)).toThrow(/prior-scorecard/);
+    const mixedPolicy = qualifyingMatrix();
+    (mixedPolicy[0]!.raw.priorScorecardPolicy as unknown as { mode: string }).mode = "bound-live-scorecard";
+    expect(() => evaluateCorpusBenchmark(mixedPolicy)).toThrow(/prior-scorecard policy/);
+
+    for (const invalid of [
+      undefined,
+      { schema: 1, mode: "bound-live-scorecard", reason: "prior-scorecard-is-diagnostic-only" },
+      { ...DISABLED_PRIOR_SCORECARD_POLICY, sourceRunId: 31_743_179_519 },
+    ]) {
+      const matrix = qualifyingMatrix();
+      for (const row of matrix) (row.raw as unknown as { priorScorecardPolicy?: unknown }).priorScorecardPolicy = invalid;
+      expect(() => evaluateCorpusBenchmark(matrix)).toThrow(/prior-scorecard policy/);
+    }
+
+    const mixedPolicyBytes = qualifyingMatrix();
+    mixedPolicyBytes[0]!.raw.artifacts.find((artifact) => artifact.family === "evidence/benchmark-prior-scorecard-policy")!.sha256 = digest("f");
+    reseal(mixedPolicyBytes[0]!);
+    expect(() => evaluateCorpusBenchmark(mixedPolicyBytes)).toThrow(/prior-scorecard policy artifacts do not contain identical bytes/);
   });
 
   it("rejects isolated mutations anywhere in the transport, artifact, conservation, dependency, cache, scanner, Semgrep, phase, or runtime envelope", () => {

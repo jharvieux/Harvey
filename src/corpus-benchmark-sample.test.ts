@@ -1,13 +1,18 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildCorpusBenchmarkSample, type CorpusBenchmarkApiJob, type CorpusBenchmarkScorecard } from "./corpus-benchmark-sample.js";
-import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkPriorScorecardEvidence, CorpusBenchmarkTransportEvidence } from "./corpus-benchmark.js";
+import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkPriorScorecardPolicy, CorpusBenchmarkTransportEvidence } from "./corpus-benchmark.js";
 import { corpusCacheTransportKey } from "./corpus-cache-transport.js";
 import { corpusTargetConservationVector, type CorpusExecutionManifest } from "./corpus-execution.js";
 import { corpusShardTargetDigest, type CorpusShardProfileSelection } from "./scan/corpus-shards.js";
 
 const commits = { alpha: "a".repeat(40), beta: "b".repeat(40) };
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
+const DISABLED_PRIOR_SCORECARD_POLICY = {
+  schema: 1,
+  mode: "disabled-for-benchmark",
+  reason: "prior-scorecard-is-diagnostic-only",
+} as const satisfies CorpusBenchmarkPriorScorecardPolicy;
 
 function execution(index: number): CorpusExecutionManifest {
   return {
@@ -93,23 +98,12 @@ function jobs(): CorpusBenchmarkApiJob[] {
   }));
 }
 
-function priorScorecardEvidence(): CorpusBenchmarkPriorScorecardEvidence {
-  return {
-    schema: 1,
-    sourceRunId: 99,
-    sourceRunAttempt: 1,
-    sourceHeadSha: "c".repeat(40),
-    sourceEvent: "workflow_dispatch",
-    sourceWorkflowPath: ".github/workflows/corpus-drift.yml",
-    artifactId: 456,
-    artifactName: "corpus-drift-scorecard",
-    artifactDigest: `sha256:${hash("seed artifact")}`,
-    scorecardSha256: hash("seed scorecard"),
-    scorecardBytes: 1_024,
-  };
-}
-
-function build(card = scorecard(), apiJobs = jobs(), suppliedPriorScorecards?: CorpusBenchmarkPriorScorecardEvidence[]) {
+function build(
+  card = scorecard(),
+  apiJobs = jobs(),
+  suppliedPolicies?: CorpusBenchmarkPriorScorecardPolicy[],
+  policyArtifactHashes = [hash("prior-policy"), hash("prior-policy"), hash("prior-policy")],
+) {
   const headSha = "c".repeat(40);
   const benchmarkSeed = "seed";
   const seedDigest = hash(benchmarkSeed).slice(0, 16);
@@ -122,10 +116,10 @@ function build(card = scorecard(), apiJobs = jobs(), suppliedPriorScorecards?: C
   const sources = [transport("source", "1", "99")];
   const outputs = ["1", "2", "3"].map((namespace) => transport("output", namespace, "123"));
   const sourceFiles = [{ path: `${hash("cache")}.json`, sha256: hash("cache-body"), bytes: 10, sourceNamespaces: ["1"] }];
-  const priorScorecard = priorScorecardEvidence();
+  const priorScorecardPolicy = structuredClone(DISABLED_PRIOR_SCORECARD_POLICY);
   const artifacts: CorpusBenchmarkArtifactEvidence[] = [
     { name: "actions/jobs.json", family: "actions/jobs", sha256: hash("jobs") },
-    ...[1, 2, 3].map((index) => ({ name: `evidence/benchmark-prior-scorecard-${index}.json`, family: "evidence/benchmark-prior-scorecard", sha256: hash(`prior-${index}`) })),
+    ...[1, 2, 3].map((index) => ({ name: `evidence/benchmark-prior-scorecard-policy-${index}.json`, family: "evidence/benchmark-prior-scorecard-policy", sha256: policyArtifactHashes[index - 1]! })),
     { name: "scorecard/corpus-drift.json", family: "scorecard/corpus-drift", sha256: hash("scorecard") },
   ].sort((left, right) => left.name.localeCompare(right.name));
   return buildCorpusBenchmarkSample({
@@ -151,7 +145,7 @@ function build(card = scorecard(), apiJobs = jobs(), suppliedPriorScorecards?: C
     provenanceDigests: ["d".repeat(64)],
     artifactDigests: artifacts.map((artifact) => artifact.sha256),
     artifacts,
-    priorScorecards: suppliedPriorScorecards ?? [structuredClone(priorScorecard), structuredClone(priorScorecard), structuredClone(priorScorecard)],
+    priorScorecardPolicies: suppliedPolicies ?? [structuredClone(priorScorecardPolicy), structuredClone(priorScorecardPolicy), structuredClone(priorScorecardPolicy)],
     cacheProvenance: {
       schema: 1,
       invariant: {
@@ -163,7 +157,7 @@ function build(card = scorecard(), apiJobs = jobs(), suppliedPriorScorecards?: C
         sourceContentDigest: hash(JSON.stringify(sourceFiles)),
         sourceTransports: sources.map((row) => ({ family: row.family, event: row.event, ref: row.ref, platform: row.platform, namespace: row.namespace, headSha: row.headSha, benchmarkSeed: row.benchmarkSeed, seedDigest: row.seedDigest, payloadBytes: row.payloadBytes })),
       },
-      shape: { outputNamespaces: ["1", "2", "3"], artifactFamilies: [{ family: "actions/jobs", count: 1 }, { family: "evidence/benchmark-prior-scorecard", count: 3 }, { family: "scorecard/corpus-drift", count: 1 }] },
+      shape: { outputNamespaces: ["1", "2", "3"], artifactFamilies: [{ family: "actions/jobs", count: 1 }, { family: "evidence/benchmark-prior-scorecard-policy", count: 3 }, { family: "scorecard/corpus-drift", count: 1 }] },
       transports: { sources, outputs },
       sourceFiles,
       receiptDigests: [],
@@ -182,23 +176,21 @@ describe("corpus benchmark sample evidence envelope", () => {
     ]);
     expect(sample.actualRunner.nameClass).toBe("GitHub Actions <hosted-id>");
     expect(sample.raw).toMatchObject({ jobIds: [1, 2, 3], targetCommits: commits, toolVersions: { node: "v24", pnpm: "10" } });
-    expect(sample.raw.priorScorecard).toMatchObject({ sourceRunId: 99, sourceRunAttempt: 1, artifactId: 456, scorecardBytes: 1_024 });
+    expect(sample.raw.priorScorecardPolicy).toEqual(DISABLED_PRIOR_SCORECARD_POLICY);
     expect(sample.population.rowDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(sample.assertions).toEqual({ baselines: true, liveness: true, forcedCold: true, conservation: true });
   });
 
-  it("accepts only one exact immutable prior-scorecard identity/content receipt across every shard", () => {
+  it("requires the exact disabled prior-scorecard policy across every benchmark shard", () => {
     expect(() => build()).not.toThrow();
-    const sample = build();
-    expect(sample.raw.priorScorecard.scorecardSha256).toBe(hash("seed scorecard"));
-    const base = priorScorecardEvidence();
-    const changed = structuredClone(base);
-    changed.scorecardSha256 = hash("different seed scorecard");
-    expect(() => build(scorecard(), jobs(), [base, structuredClone(base), changed])).toThrow(/mixed prior scorecard identities or content/);
-
-    const wrongAttempt = structuredClone(base);
-    wrongAttempt.sourceRunAttempt = 2;
-    expect(() => build(scorecard(), jobs(), [wrongAttempt, structuredClone(wrongAttempt), structuredClone(wrongAttempt)])).toThrow(/differs from the immutable benchmark seed run/);
+    const base = structuredClone(DISABLED_PRIOR_SCORECARD_POLICY);
+    const live = { ...base, mode: "bound-live-scorecard" } as unknown as CorpusBenchmarkPriorScorecardPolicy;
+    expect(() => build(scorecard(), jobs(), [base, structuredClone(base), live])).toThrow(/mixed prior-scorecard policies/);
+    expect(() => build(scorecard(), jobs(), [live, structuredClone(live), structuredClone(live)])).toThrow(/exact disabled-for-benchmark policy/);
+    expect(() => build(scorecard(), jobs(), [])).toThrow(/population has 0 rows/);
+    const extra = { ...base, sourceRunId: 99 } as CorpusBenchmarkPriorScorecardPolicy;
+    expect(() => build(scorecard(), jobs(), [extra, structuredClone(extra), structuredClone(extra)])).toThrow(/exact disabled-for-benchmark policy/);
+    expect(() => build(scorecard(), jobs(), undefined, [hash("prior-policy"), hash("changed-policy"), hash("prior-policy")])).toThrow(/do not contain identical bytes/);
   });
 
   it("allows distinct machine names but fails loud on mixed runner shapes and stale conservation in both directions", () => {

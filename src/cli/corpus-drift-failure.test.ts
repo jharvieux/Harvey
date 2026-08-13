@@ -71,13 +71,15 @@ function runPiped(failureSlug: string): Promise<{ code: number | null; stdout: s
   });
 }
 
-function runBenchmarkBoundary(mode: "live" | "live-verify" | "snapshot"): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runBenchmarkBoundary(mode: "live" | "live-verify" | "snapshot", extraArgs: string[] = []): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  rmSync(benchmarkArtifacts, { recursive: true, force: true });
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn("node_modules/.bin/tsx", [
       "src/cli/corpus-drift.ts",
       "--target-concurrency", "3",
       "--execution-design", "target-workers",
       "--worker-artifacts-dir", benchmarkArtifacts,
+      ...extraArgs,
     ], {
       cwd: REPO_ROOT,
       env: {
@@ -143,5 +145,23 @@ describe("corpus-drift spawned all-settled failure control", () => {
     const manifest = JSON.parse(readFileSync(join(benchmarkArtifacts, "execution-manifest.json"), "utf8")) as CorpusExecutionManifest;
     expect(manifest.terminals).toHaveLength(EXTERNAL_CORPUS.length);
     expect(manifest.terminals.every((terminal) => terminal.state === "succeeded")).toBe(true);
+  });
+
+  it("rejects every prior-scorecard input spelling before a benchmark worker starts", async () => {
+    for (const flag of [
+      "--baseline-findings",
+      "--baseline-findings-receipt",
+      "--baseline-findings-bundle",
+      "--prior-scorecard",
+      "--prior-scorecard-receipt",
+      "--prior-scorecard-bundle",
+      "--prior-scorecard-authority-dir",
+      "--prior-evidence-bundle",
+    ]) {
+      const rejected = await runBenchmarkBoundary("snapshot", [flag, join(directory, "unused.json")]);
+      expect(rejected.code, flag).toBe(2);
+      expect(rejected.stderr, flag).toContain(`cannot be combined with ${flag}; prior scorecards are disabled for benchmark execution`);
+      expect(existsSync(join(benchmarkArtifacts, "execution-manifest.json")), flag).toBe(false);
+    }
   });
 });

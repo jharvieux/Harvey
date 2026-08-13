@@ -319,9 +319,8 @@ jobs:
       matrix:
         shard: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && (inputs.shard_count == '4' && '[1,2,3,4]' || '[1,2,3]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3]' || '[1]')) }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
-    # actions: read (#1564) so `gh run download` can fetch the prior scorecard. Ordinary lanes use
-    # the latest successful run; benchmark samples use their immutable seed run and retain its
-    # exact run/attempt/artifact/file identity — see "Fetch the exact prior scorecard input" below.
+    # actions: read (#1564) so ordinary lanes can download the latest prior scorecard. Benchmark
+    # identities disable that diagnostic-only input entirely; see the policy receipt below.
     # contents: read is restated because a job-level block replaces (not extends) the top-level one.
     permissions:
       contents: read
@@ -559,65 +558,17 @@ jobs:
       # alongside `rows`, see corpus-drift.ts), so the source is just YESTERDAY's own scorecard
       # artifact, fetched here and never a fresh clone-and-scan.
       #
-      # Ordinary PR/schedule/manual semantics stay fail-open: no prior successful run, an expired
-      # artifact, or a `gh` hiccup yields the existing current-findings fallback. A benchmark sample
-      # is different because this network interval is inside setupNetworkMs: it MUST use the exact
-      # successful seed run/attempt, retain the GitHub artifact identity plus file digest, and fail
-      # before scoring if the seed was rerun or the artifact is absent/ambiguous.
-      - name: Fetch the exact prior scorecard input (#1564/#1868)
-        if: steps.filter.outputs.relevant == 'true'
+      # Ordinary PR/push/schedule/manual semantics stay fail-open: no prior successful run, an
+      # expired artifact, or a `gh` hiccup yields the existing current-findings fallback. Benchmark
+      # seed, sample, and all-settled-drill identities never enter this step: the prior snapshot is
+      # diagnostic attribution only, while its mutable lookup polluted the measured setup envelope.
+      - name: Fetch the latest prior scorecard for ordinary drift attribution (#1564)
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p prior-drift
-          if [ -n '${{ inputs.benchmark_run_identity }}' ] && [ '${{ inputs.benchmark_seed_bundle }}' != 'true' ]; then
-            run_id='${{ inputs.benchmark_seed_run_id }}'
-            expected_attempt='${{ inputs.benchmark_seed_run_attempt }}'
-            read -r actual_attempt source_head source_event source_path conclusion < <(
-              gh api "repos/${{ github.repository }}/actions/runs/$run_id" \
-                --jq '[.run_attempt,.head_sha,.event,.path,.conclusion] | @tsv'
-            )
-            if [ "$actual_attempt" != "$expected_attempt" ] || [ "$source_head" != '${{ github.sha }}' ] \
-              || [ "$source_event" != 'workflow_dispatch' ] || [ "$source_path" != '.github/workflows/corpus-drift.yml' ] \
-              || [ "$conclusion" != 'success' ]; then
-              echo "::error::benchmark prior scorecard source $run_id is not the successful immutable seed attempt $expected_attempt at ${{ github.sha }}"
-              exit 2
-            fi
-            artifact_rows=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id/artifacts?per_page=100" \
-              --jq '[.artifacts[] | select(.name == "corpus-drift-scorecard" and (.expired | not)) | {id,digest}]')
-            if [ "$(jq 'length' <<< "$artifact_rows")" -ne 1 ]; then
-              echo "::error::benchmark seed $run_id/$expected_attempt must expose exactly one live corpus-drift-scorecard artifact"
-              exit 2
-            fi
-            artifact_id=$(jq -r '.[0].id' <<< "$artifact_rows")
-            artifact_digest=$(jq -r '.[0].digest // empty' <<< "$artifact_rows")
-            if ! [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]] || ! [[ "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "::error::benchmark seed scorecard artifact identity/digest is incomplete"
-              exit 2
-            fi
-            gh run download "$run_id" --repo "${{ github.repository }}" -n corpus-drift-scorecard -D prior-drift
-            if [ ! -f prior-drift/corpus-drift.json ]; then
-              echo "::error::benchmark seed scorecard artifact contains no corpus-drift.json"
-              exit 2
-            fi
-            post_attempt=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id" --jq .run_attempt)
-            if [ "$post_attempt" != "$expected_attempt" ]; then
-              echo "::error::benchmark seed run was rerun while its prior scorecard was being acquired"
-              exit 2
-            fi
-            scorecard_sha=$(sha256sum prior-drift/corpus-drift.json | awk '{print $1}')
-            scorecard_bytes=$(wc -c < prior-drift/corpus-drift.json | tr -d ' ')
-            jq -n \
-              --argjson sourceRunId "$run_id" --argjson sourceRunAttempt "$expected_attempt" \
-              --arg sourceHeadSha "$source_head" --arg sourceEvent "$source_event" --arg sourceWorkflowPath "$source_path" \
-              --argjson artifactId "$artifact_id" --arg artifactDigest "$artifact_digest" \
-              --arg scorecardSha256 "$scorecard_sha" --argjson scorecardBytes "$scorecard_bytes" \
-              '{schema:1,sourceRunId:$sourceRunId,sourceRunAttempt:$sourceRunAttempt,sourceHeadSha:$sourceHeadSha,sourceEvent:$sourceEvent,sourceWorkflowPath:$sourceWorkflowPath,artifactId:$artifactId,artifactName:"corpus-drift-scorecard",artifactDigest:$artifactDigest,scorecardSha256:$scorecardSha256,scorecardBytes:$scorecardBytes}' \
-              > 'benchmark-prior-scorecard-${{ matrix.shard }}.json'
-            echo "Benchmark prior scorecard bound to seed $run_id/$expected_attempt artifact $artifact_id file $scorecard_sha."
-            exit 0
-          fi
           run_id=$(gh run list --repo "${{ github.repository }}" --workflow=corpus-drift.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId // empty' || true)
           if [ -z "$run_id" ]; then
             echo "No prior successful corpus-drift run found — proceeding without a baseline snapshot."
@@ -628,6 +579,13 @@ jobs:
           else
             echo "Run $run_id has no corpus-drift-scorecard artifact (expired, or that run errored before uploading) — proceeding without it."
           fi
+
+      - name: Record disabled benchmark prior-scorecard policy
+        if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != ''
+        run: |
+          set -euo pipefail
+          jq -n '{schema:1,mode:"disabled-for-benchmark",reason:"prior-scorecard-is-diagnostic-only"}' \
+            > 'benchmark-prior-scorecard-policy-${{ matrix.shard }}.json'
 
       - name: Score the corpus against its baselines
         id: score
@@ -683,7 +641,9 @@ jobs:
           # An array, not a string: an empty baseline_flag expands to zero arguments and a populated
           # one carries its flag and path as separate words without shell splitting.
           baseline_flag=()
-          [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+          if [ -z '${{ inputs.benchmark_run_identity }}' ] && [ -f prior-drift/corpus-drift.json ]; then
+            baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
+          fi
           pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}" "${benchmark_flags[@]}" "${shard_profile_flags[@]}"
 
       - name: Measure content-addressed cache size
@@ -793,7 +753,7 @@ jobs:
             corpus-drift*.json
             corpus-drift*.json.workers/**
             benchmark-cache-merge-receipt-*.json
-            benchmark-prior-scorecard-*.json
+            benchmark-prior-scorecard-policy-*.json
             benchmark-transport-*.json
             benchmark-runner-*.json
           if-no-files-found: warn

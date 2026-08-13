@@ -11,19 +11,17 @@ export interface CorpusBenchmarkArtifactEvidence {
   sha256: string;
 }
 
-export interface CorpusBenchmarkPriorScorecardEvidence {
+export interface CorpusBenchmarkPriorScorecardPolicy {
   schema: 1;
-  sourceRunId: number;
-  sourceRunAttempt: number;
-  sourceHeadSha: string;
-  sourceEvent: "workflow_dispatch";
-  sourceWorkflowPath: ".github/workflows/corpus-drift.yml";
-  artifactId: number;
-  artifactName: "corpus-drift-scorecard";
-  artifactDigest: string;
-  scorecardSha256: string;
-  scorecardBytes: number;
+  mode: "disabled-for-benchmark";
+  reason: "prior-scorecard-is-diagnostic-only";
 }
+
+export const CORPUS_BENCHMARK_PRIOR_SCORECARD_POLICY: CorpusBenchmarkPriorScorecardPolicy = {
+  schema: 1,
+  mode: "disabled-for-benchmark",
+  reason: "prior-scorecard-is-diagnostic-only",
+};
 
 export interface CorpusBenchmarkTransportEvidence {
   role: "source" | "output";
@@ -150,7 +148,7 @@ export interface CorpusBenchmarkSample {
       cacheInputs: unknown;
       toolInputs: unknown;
     }>;
-    priorScorecard: CorpusBenchmarkPriorScorecardEvidence;
+    priorScorecardPolicy: CorpusBenchmarkPriorScorecardPolicy;
     toolVersions: Record<string, string>;
     targetCommits: Record<string, string>;
   };
@@ -233,7 +231,7 @@ interface CorpusBenchmarkDecision {
   schema: 1;
   thresholdVersion: string;
   thresholdDigest: string;
-  provenance: { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecard: CorpusBenchmarkPriorScorecardEvidence; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
+  provenance: { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecardPolicy: CorpusBenchmarkPriorScorecardPolicy; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
   concurrency: {
     selected: { design: CorpusExecutionDesign; concurrency: number };
     eligible: string[];
@@ -258,7 +256,7 @@ export interface CorpusBenchmarkPilotDecision {
   stage: "pilot";
   thresholdVersion: string;
   thresholdDigest: string;
-  provenance: { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecard: CorpusBenchmarkPriorScorecardEvidence; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
+  provenance: { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecardPolicy: CorpusBenchmarkPriorScorecardPolicy; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
   concurrency: CorpusBenchmarkDecision["concurrency"];
   extendToFive: string[];
   evidence: CorpusBenchmarkDecision["evidence"];
@@ -442,7 +440,7 @@ function cohortIdentity(sample: CorpusBenchmarkSample) {
       shape: sample.cache.provenance.shape,
       outputs: sample.cache.provenance.transports.outputs.map(outputTransportShape).sort((left, right) => stable(left).localeCompare(stable(right))),
     },
-    priorScorecard: sample.raw.priorScorecard,
+    priorScorecardPolicy: sample.raw.priorScorecardPolicy,
     toolVersions: sample.raw.toolVersions,
     targetCommits: sample.raw.targetCommits,
   };
@@ -455,7 +453,7 @@ function assertCohortRows(rows: readonly CorpusBenchmarkSample[], label: string)
   if (rows.length !== repeats.size) throw new Error(`${label}: repeats are duplicated; got ${rows.length} sample(s), ${repeats.size} repeat id(s)`);
   if (rows.length !== runs.size) throw new Error(`${label}: one hosted run was counted more than once`);
   const identities = new Set(rows.map((sample) => stable(cohortIdentity(sample))));
-  if (identities.size !== 1) throw new Error(`${label}: cohort mixes actual runner, prior-scorecard, tool/runtime, target/evidence, role, profile, design, concurrency, shard, or requested-runner identities`);
+  if (identities.size !== 1) throw new Error(`${label}: cohort mixes actual runner, prior-scorecard policy, tool/runtime, target/evidence, role, profile, design, concurrency, shard, or requested-runner identities`);
   return [...rows].sort((left, right) => left.repeat - right.repeat);
 }
 
@@ -538,8 +536,12 @@ function assertSampleEnvelope(sample: CorpusBenchmarkSample): void {
   if (!artifacts.some((artifact) => artifact.name === "scorecard/corpus-drift.json") || !artifacts.some((artifact) => artifact.name === "actions/jobs.json")) {
     throw new Error(`${label}: scorecard or Actions jobs artifact identity is missing`);
   }
-  if (artifacts.filter((artifact) => artifact.family === "evidence/benchmark-prior-scorecard").length !== sample.shardCount) {
-    throw new Error(`${label}: retained prior scorecard receipt artifact population is incomplete`);
+  const priorPolicyArtifacts = artifacts.filter((artifact) => artifact.family === "evidence/benchmark-prior-scorecard-policy");
+  if (priorPolicyArtifacts.length !== sample.shardCount) {
+    throw new Error(`${label}: retained prior-scorecard policy artifact population is incomplete`);
+  }
+  if (new Set(priorPolicyArtifacts.map((artifact) => artifact.sha256)).size !== 1) {
+    throw new Error(`${label}: retained prior-scorecard policy artifacts do not contain identical bytes`);
   }
   const artifactDigests = sortedUnique(artifacts.map((artifact) => artifact.sha256));
   if (stable(sample.raw.artifactDigests) !== stable(artifactDigests)) throw new Error(`${label}: raw artifact digests differ from the named artifact population`);
@@ -671,19 +673,8 @@ function assertSample(sample: CorpusBenchmarkSample): void {
   if (sample.cache.transportKeys.length === 0 || sample.cache.provenanceDigests.length === 0 || sample.raw.artifactDigests.length === 0) throw new Error(`run ${sample.runId}: cache/artifact provenance is incomplete`);
   if (![...sample.cache.provenanceDigests, ...sample.raw.artifactDigests].every((value) => /^[0-9a-f]{64}$/.test(value))) throw new Error(`run ${sample.runId}: cache/artifact digest is invalid`);
   if (!sample.raw.workflowUrl || Object.keys(sample.raw.toolVersions).length === 0 || Object.values(sample.raw.toolVersions).some((value) => !value)) throw new Error(`run ${sample.runId}: raw workflow/tool provenance is incomplete`);
-  const prior = sample.raw.priorScorecard;
-  if (!prior || prior.schema !== 1
-    || prior.sourceRunId !== sample.benchmarkSeedRunId
-    || prior.sourceRunAttempt !== sample.benchmarkSeedRunAttempt
-    || prior.sourceHeadSha !== sample.headSha
-    || prior.sourceEvent !== "workflow_dispatch"
-    || prior.sourceWorkflowPath !== ".github/workflows/corpus-drift.yml"
-    || !Number.isSafeInteger(prior.artifactId) || prior.artifactId < 1
-    || prior.artifactName !== "corpus-drift-scorecard"
-    || !/^sha256:[a-f0-9]{64}$/.test(prior.artifactDigest)
-    || !/^[a-f0-9]{64}$/.test(prior.scorecardSha256)
-    || !Number.isSafeInteger(prior.scorecardBytes) || prior.scorecardBytes < 1) {
-    throw new Error(`run ${sample.runId}: prior scorecard identity/content is missing or differs from the immutable seed run`);
+  if (stable(sample.raw.priorScorecardPolicy) !== stable(CORPUS_BENCHMARK_PRIOR_SCORECARD_POLICY)) {
+    throw new Error(`run ${sample.runId}: prior-scorecard policy is missing, mixed, or not disabled for benchmark execution`);
   }
   assertSampleEnvelope(sample);
   for (const value of [sample.aggregateCpuSeconds, sample.setupNetworkMs, sample.dependencyMs, sample.targetProcessCpuMs, sample.estimatedCostUsd]) {
@@ -704,24 +695,24 @@ function comparableEvidence(sample: CorpusBenchmarkSample): unknown {
     population: invariantPopulation(sample),
     cacheProvenance: sample.cache.provenance.invariant,
     outputTransportScope: outputTransportScope(sample),
-    priorScorecard: sample.raw.priorScorecard,
+    priorScorecardPolicy: sample.raw.priorScorecardPolicy,
     toolVersions: sample.raw.toolVersions,
     targetCommits: sample.raw.targetCommits,
     assertions: sample.assertions,
   };
 }
 
-function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecard: CorpusBenchmarkPriorScorecardEvidence; targetDigest: string; evidenceDigest: string } {
+function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; priorScorecardPolicy: CorpusBenchmarkPriorScorecardPolicy; targetDigest: string; evidenceDigest: string } {
   if (samples.length === 0) throw new Error("benchmark has no raw sample rows");
   const evidence = new Set(samples.map((sample) => stable(comparableEvidence(sample))));
-  if (evidence.size !== 1) throw new Error("benchmark mixes head, seed, prior-scorecard, target/evidence, tool/runtime, target-commit, or assertion identities");
+  if (evidence.size !== 1) throw new Error("benchmark mixes head, seed, prior-scorecard policy, target/evidence, tool/runtime, target-commit, or assertion identities");
   const first = samples[0]!;
   return {
     headSha: first.headSha,
     benchmarkSeed: first.benchmarkSeed,
     benchmarkSeedRunId: first.benchmarkSeedRunId,
     benchmarkSeedRunAttempt: first.benchmarkSeedRunAttempt,
-    priorScorecard: first.raw.priorScorecard,
+    priorScorecardPolicy: first.raw.priorScorecardPolicy,
     targetDigest: first.population.targetDigest,
     evidenceDigest: first.population.evidenceDigest,
   };

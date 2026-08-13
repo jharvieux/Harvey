@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import {
+  CORPUS_BENCHMARK_PRIOR_SCORECARD_POLICY,
   corpusBenchmarkProvenanceIntegrity,
   corpusRunnerNameClass,
   type CorpusBenchmarkArtifactEvidence,
   type CorpusBenchmarkCacheProvenance,
-  type CorpusBenchmarkPriorScorecardEvidence,
+  type CorpusBenchmarkPriorScorecardPolicy,
   type CorpusBenchmarkSample,
   type CorpusCacheProfile,
   type CorpusRunnerRole,
@@ -70,7 +71,7 @@ interface CorpusBenchmarkSampleInput {
   provenanceDigests: string[];
   artifactDigests: string[];
   artifacts: CorpusBenchmarkArtifactEvidence[];
-  priorScorecards: CorpusBenchmarkPriorScorecardEvidence[];
+  priorScorecardPolicies: CorpusBenchmarkPriorScorecardPolicy[];
   cacheProvenance: Omit<CorpusBenchmarkCacheProvenance, "invariant" | "integrityDigest"> & {
     invariant: Omit<CorpusBenchmarkCacheProvenance["invariant"], "targetDigest" | "evidenceDigest" | "dependencyInputDigest" | "cacheInputDigest" | "toolInputDigest">;
   };
@@ -78,28 +79,19 @@ interface CorpusBenchmarkSampleInput {
   estimatedCostUsd?: number;
 }
 
-function assertPriorScorecardEvidence(input: CorpusBenchmarkSampleInput): CorpusBenchmarkPriorScorecardEvidence {
-  if (input.priorScorecards.length !== input.shardCount) {
-    throw new Error(`prior scorecard receipt population has ${input.priorScorecards.length} rows; expected ${input.shardCount}`);
+function assertPriorScorecardPolicy(input: CorpusBenchmarkSampleInput): CorpusBenchmarkPriorScorecardPolicy {
+  if (input.priorScorecardPolicies.length !== input.shardCount) {
+    throw new Error(`prior-scorecard policy population has ${input.priorScorecardPolicies.length} rows; expected ${input.shardCount}`);
   }
-  if (new Set(input.priorScorecards.map(stable)).size !== 1) throw new Error("benchmark shards used mixed prior scorecard identities or content");
-  const receipt = input.priorScorecards[0]!;
-  if (receipt.schema !== 1
-    || receipt.sourceRunId !== input.benchmarkSeedRunId
-    || receipt.sourceRunAttempt !== input.benchmarkSeedRunAttempt
-    || receipt.sourceHeadSha !== input.headSha
-    || receipt.sourceEvent !== "workflow_dispatch"
-    || receipt.sourceWorkflowPath !== ".github/workflows/corpus-drift.yml"
-    || !Number.isSafeInteger(receipt.artifactId) || receipt.artifactId < 1
-    || receipt.artifactName !== "corpus-drift-scorecard"
-    || !/^sha256:[a-f0-9]{64}$/.test(receipt.artifactDigest)
-    || !/^[a-f0-9]{64}$/.test(receipt.scorecardSha256)
-    || !Number.isSafeInteger(receipt.scorecardBytes) || receipt.scorecardBytes < 1) {
-    throw new Error("prior scorecard receipt is malformed or differs from the immutable benchmark seed run/attempt/head");
+  if (new Set(input.priorScorecardPolicies.map(stable)).size !== 1) throw new Error("benchmark shards used mixed prior-scorecard policies");
+  const policy = input.priorScorecardPolicies[0]!;
+  if (stable(policy) !== stable(CORPUS_BENCHMARK_PRIOR_SCORECARD_POLICY)) {
+    throw new Error("prior-scorecard policy must be the exact disabled-for-benchmark policy");
   }
-  const retained = input.artifacts.filter((artifact) => artifact.family === "evidence/benchmark-prior-scorecard");
-  if (retained.length !== input.shardCount) throw new Error(`retained prior scorecard receipt population has ${retained.length} artifacts; expected ${input.shardCount}`);
-  return { ...receipt };
+  const retained = input.artifacts.filter((artifact) => artifact.family === "evidence/benchmark-prior-scorecard-policy");
+  if (retained.length !== input.shardCount) throw new Error(`retained prior-scorecard policy population has ${retained.length} artifacts; expected ${input.shardCount}`);
+  if (new Set(retained.map((artifact) => artifact.sha256)).size !== 1) throw new Error("retained prior-scorecard policy artifacts do not contain identical bytes");
+  return { ...policy };
 }
 
 function stable(value: unknown): string {
@@ -264,7 +256,7 @@ function invariantTargetEvidence(scorecard: CorpusBenchmarkScorecard, slug: stri
 }
 
 export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): CorpusBenchmarkSample {
-  const priorScorecard = assertPriorScorecardEvidence(input);
+  const priorScorecardPolicy = assertPriorScorecardPolicy(input);
   const targets = Object.keys(input.targetCommits).sort();
   if (targets.length === 0 || new Set(targets).size !== targets.length) throw new Error("target commit population is empty or duplicated");
   for (const [slug, commit] of Object.entries(input.targetCommits)) if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`${slug}: target commit is not a 40-character SHA`);
@@ -426,7 +418,7 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
       artifacts,
       conservationVectors,
       invariantVectors,
-      priorScorecard,
+      priorScorecardPolicy,
       toolVersions: runtimeRows[0]!,
       targetCommits: input.targetCommits,
     },
