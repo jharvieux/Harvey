@@ -95,6 +95,35 @@ export interface KnipReport {
   issues: KnipIssue[];
 }
 
+// A plugins-disabled Knip run skips target framework/test/build configuration. Most issue
+// classes remain source-local, but an "unlisted import" emitted from a config file or a type-only
+// import is resolver-contingent: plugins commonly register the config consumer, and TS/framework
+// config controls type-package/workspace resolution. The source alone proves that the reference
+// exists, not that its package declaration is missing. Keep this pure so the CLI can classify the
+// real report using the exact source text and tests can falsify the evidence boundary directly.
+const CONFIG_SOURCE = /(?:^|\/)[^/]*config\.[cm]?[jt]sx?$/i;
+
+export function unlistedImportNeedsResolvedConfig(
+  issue: KnipIssue,
+  source: string | undefined,
+  workspacePackageNames: ReadonlySet<string>,
+): boolean {
+  if (!issue.unlisted?.length || source === undefined) return false;
+  // Missing direct declarations for external packages and runtime imports are source-supported
+  // even in the reduced tier. The unreliable shape is narrower: a workspace-internal package used
+  // only through plugin-owned config or TS type resolution, where disabling the target's resolver
+  // removes the ownership/path context that decides which workspace manifest owns the declaration.
+  if (!issue.unlisted.every(({ name }) => workspacePackageNames.has(name))) return false;
+  if (CONFIG_SOURCE.test(issue.file)) return true;
+  return issue.unlisted.every(({ name }) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(?:\\b(?:import|export)\\s+type\\b[^;]{0,2000}?\\bfrom\\s*["']${escaped}(?:/[^"']*)?["']|<reference\\s+types=["']${escaped}(?:/[^"']*)?["'])`,
+      "m",
+    ).test(source);
+  });
+}
+
 const FRAGMENT_PREVIEW_LEN = 240;
 
 // #232: paths jscpd should never treat as hand-maintained duplication, on top of the standard
@@ -575,7 +604,7 @@ export function knipReducedTierFinding(reason: string): Finding {
     status: "Open",
     evidence: `knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points: ${reason}`,
     impact:
-      "The M5 findings for the affected scope(s) come from a source-only run with no dependency/plugin resolution — the unused-FILE findings above are review-tier (an inferred entry graph, not the target's real one) and may over-report files that are plugin-registered entries. Real dead code is still surfaced; treat file findings as review candidates, not confirmed.",
+      "The M5 findings for the affected scope(s) come from a source-only run with no dependency/plugin resolution. Framework-contract entries preserve known route graphs, inferred unused files stay review-tier, and resolver-contingent workspace imports from config/type-only sources stay informational. Source-local unused exports and ordinary runtime imports remain actionable.",
     fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can load the target's own config and framework plugin configs, then re-run `pnpm quality-scan` for confirmed (non-review) file findings.",
     value: 1,
     ease: 3,
@@ -656,6 +685,15 @@ export function knipToFindings(
   // #1050: the package.json paths whose scope ran without resolving the target's own config and
   // plugins. Their unused-dependency verdicts are review tier — see the dependency block below.
   unresolvedDepScopes: Set<string> = new Set(),
+  // #1871: package.json paths from a no-lockfile preparation failure. There is no installed or
+  // reproducibly resolved dependency surface, so package/config-dependent claims are visible but
+  // informational. A normal reduced retry or lockfile-backed failed install does not enter this
+  // set and retains the established M5 review-tier semantics.
+  unresolvedDependencySurfacePaths: Set<string> = new Set(),
+  // Unlisted-import rows whose originating config/type-only source was examined while target
+  // plugins/config were disabled. The reference is visible, but its resolver/declaration context
+  // is not; keep the row visible and informational until the full tier runs.
+  unresolvedUnlistedImportPaths: Set<string> = new Set(),
 ): Finding[] {
   const findings: Finding[] = [];
   let n = 0;
@@ -785,29 +823,31 @@ export function knipToFindings(
       // config files that reference build-time deps, so those rows are review candidates, not
       // confirmed — the same honesty the file findings already apply.
       const unresolved = unresolvedDepScopes.has(issue.file);
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
+      const uncertain = unresolved || unresolvedDependencySurface;
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused ${label} declared in ${issue.file}`,
-        severity: "Low",
-        confidence: unresolved ? "Review" : "Confirmed",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
+        confidence: uncertain ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}`,
+        evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so the row is informational until the full tier runs." : ""}`,
         impact:
           (dev
             ? `${names.length} declared devDependenc${names.length === 1 ? "y" : "ies"} nothing imports — install time, lockfile churn and CI minutes spent on packages the build doesn't use.`
             : `${names.length} declared runtime dependenc${names.length === 1 ? "y" : "ies"} nothing imports — each ships into the installed tree with its own transitive packages and CVE exposure, for no functionality. Unused runtime deps are supply-chain surface, not just tidiness.`) +
           ownerNote,
-        fix: unresolved
+        fix: uncertain
           ? `Install the target's dependencies so knip can resolve its config and plugins, re-run \`pnpm quality-scan\`, then remove whichever of ${names.join(", ")} is still reported.`
           : `Remove ${names.join(", ")} from ${label} in ${issue.file} (check for config-file-only or CLI-only usage first — knip sees imports, not shell scripts).`,
         value: dev ? 1 : 2,
         ease: 5,
         safety: 4,
-        precisionTier: unresolved ? "review" : "high",
+        precisionTier: uncertain ? "review" : "high",
       });
     }
 
@@ -818,23 +858,26 @@ export function knipToFindings(
     // can break the build with no declared cause.
     if (issue.unlisted?.length) {
       const names = issue.unlisted.map((u) => u.name);
+      const unresolvedConfig = unresolvedUnlistedImportPaths.has(issue.file);
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unlisted import(s) in ${issue.file}`,
-        severity: "Medium",
-        confidence: "Confirmed",
+        severity: unresolvedConfig ? "Info" : "Medium",
+        confidence: unresolvedConfig ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: import(s) resolved with no matching package.json entry: ${names.join(", ")}.`,
+        evidence: `knip: import(s) resolved with no matching package.json entry: ${names.join(", ")}.${unresolvedConfig ? " Target plugins/config were disabled, and this config/type-only reference needs their resolver context, so the declaration verdict is informational." : ""}`,
         impact: `${names.length} import${names.length === 1 ? "" : "s"} resolve today only because another declared dependency happens to provide the same package (a transitive hoist) or a global install — a supply-chain and build-reproducibility gap, not just tidiness.${ownerNote}`,
-        fix: `Add ${names.join(", ")} to package.json directly (dependencies, or devDependencies if it's build/test-only) instead of relying on transitive resolution.`,
+        fix: unresolvedConfig
+          ? `Restore dependency preparation and re-run the full Knip tier before deciding whether ${names.join(", ")} needs a direct package.json declaration.`
+          : `Add ${names.join(", ")} to package.json directly (dependencies, or devDependencies if it's build/test-only) instead of relying on transitive resolution.`,
         value: 3,
         ease: 4,
         safety: 4,
-        precisionTier: "high",
+        precisionTier: unresolvedConfig ? "review" : "high",
       });
     }
 
@@ -917,42 +960,48 @@ export function knipToFindings(
     for (const { entries, kind, plural, where } of namedDepClasses) {
       if (!entries?.length) continue;
       const names = entries.map((d) => d.name);
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused ${names.length === 1 ? kind : plural} declared in ${issue.file}`,
-        severity: "Low",
-        confidence: "Confirmed",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
+        confidence: unresolvedDependencySurface ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: ${names.length === 1 ? kind : plural} declared but never imported: ${names.join(", ")}.`,
+        evidence: `knip: ${names.length === 1 ? kind : plural} declared but never imported: ${names.join(", ")}.${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so consumer/config-only usages may be invisible." : ""}`,
         impact: `${names.length} declared ${names.length === 1 ? kind : plural} nothing in this scope imports — a stale declaration, or a consumer-facing surface no longer used.${ownerNote}`,
-        fix: `Remove ${names.join(", ")} from ${where} if genuinely unused, or confirm it's kept for a downstream consumer.`,
+        fix: unresolvedDependencySurface
+          ? `Restore dependency preparation and re-run the full Knip tier before removing ${names.join(", ")} from ${where}.`
+          : `Remove ${names.join(", ")} from ${where} if genuinely unused, or confirm it's kept for a downstream consumer.`,
         value: 1,
         ease: 5,
         safety: 4,
-        precisionTier: "high",
+        precisionTier: unresolvedDependencySurface ? "review" : "high",
       });
     }
 
     // #1080: binaries — a CLI binary nothing in the scripts/config knip scanned invokes.
     if (issue.binaries?.length) {
       const names = issue.binaries.map((b) => b.name);
+      const unresolvedDependencySurface = unresolvedDependencySurfacePaths.has(issue.file);
       n += 1;
       findings.push({
         id: positionalId("M5", n),
         title: `Unused binary/binaries declared in ${issue.file}`,
-        severity: "Low",
-        confidence: "Confirmed",
+        severity: unresolvedDependencySurface ? "Info" : "Low",
+        confidence: unresolvedDependencySurface ? "Review" : "Confirmed",
         category: "Maintainability",
         taxonomy: "M5 — Slop / dead code",
         location: issue.file,
         status: "Open",
-        evidence: `knip: binary/binaries never invoked from any script/config knip scanned: ${names.join(", ")}.`,
+        evidence: `knip: binary/binaries never invoked from any script/config knip scanned: ${names.join(", ")}.${unresolvedDependencySurface ? " Dependency preparation had no lockfile-backed resolved surface, so this is not a complete invocation surface." : ""}`,
         impact: `${names.length} CLI binar${names.length === 1 ? "y" : "ies"} nothing in this scope's scripts/config invokes — its backing package may itself be unused (cross-check against the unused-dependency rows above).${ownerNote}`,
-        fix: `Confirm ${names.join(", ")} isn't invoked from a shell script, CI workflow, or Makefile knip doesn't parse; if genuinely unused, remove the backing package.`,
+        fix: unresolvedDependencySurface
+          ? `Restore dependency preparation and re-run the full Knip tier before removing the packages behind ${names.join(", ")}.`
+          : `Confirm ${names.join(", ")} isn't invoked from a shell script, CI workflow, or Makefile knip doesn't parse; if genuinely unused, remove the backing package.`,
         value: 1,
         ease: 4,
         safety: 4,

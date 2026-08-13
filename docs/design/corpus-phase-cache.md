@@ -89,11 +89,11 @@ identity. A miss searches prior same-phase provenance and names the moving compo
 Every cached finding is
 revalidated through the canonical `validateFindings` schema, not a smaller cache-local subset. A
 missing artifact is a miss and executes the phase. A malformed, partial, zero-scope, or
-wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A scheduled or manually
-dispatched workflow uses `--force-cold-cache`: it executes every deterministic phase and compares
-the cold value with the restored artifact, failing on any findings or scope difference. A miss can
-seed the next run but fails the current equivalence assertion; normal PR read/write runs are the
-distinct seeding mode.
+wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A manual dispatch with
+the explicit `force_cold_cache` input executes every deterministic phase and compares the cold
+value with the restored artifact, failing on any findings or scope difference. A miss can seed the
+next run but fails the current equivalence assertion; normal PR, scheduled, and main-push
+read/write runs are the distinct seeding mode.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
@@ -104,32 +104,91 @@ changes.
 
 ## Cross-run transport, scanner families, and deterministic PR state
 
-The `corpus-phase-v4` transport carries a context-bound provenance manifest. Scheduled/manual runs
-stay single-shard so they alone hold and save the complete clone tree. A main `push` also runs once
-over every target, then saves that complete content-addressed phase directory under the shard 1, 2,
-and 3 namespaces consumed by PR/merge runs. A PR may reuse its own run attempt but never another
-PR's artifact. The key encodes platform, shard namespace, run, attempt, and head SHA; the validator
-reconstructs that key from the manifest, checks the matched source key and current namespace, then
-checks the source event/ref/SHA trust relationship before any inner artifact is read. Missing,
-corrupt, forged, mismatched, or untrusted transport is deleted visibly.
+The `corpus-phase-run-v5` and `corpus-phase-main-v5` transports carry a context-bound provenance
+manifest. Pull-request retries use their exact run family; a rolling-prefix lookup is restricted to
+the trusted default-branch family, keeping a newer artifact from another PR separate from the main
+seed. The key encodes family, platform, shard namespace, run,
+attempt, and head SHA. The validator reconstructs that key, checks the matched source key/current
+namespace, then checks the source event/ref/SHA trust relationship before any inner artifact is
+read. Missing, corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
-Corpus source scanners write two independent artifacts: `detect-static` and mutation
+PRs, merge groups, and default-branch pushes all use three shards. Each successful main leg saves
+only its corresponding trusted namespace, after successful scoring. This replaces the one-shard
+main seeding shape. Scheduled/manual validation remains single-shard for canonical
+scorecard and clone-cache lineage, but is warm by default; an explicit `force_cold_cache` dispatch
+input exercises cold-versus-restored equivalence without making daily provider validation pay that
+cost.
+
+Every saved transport now carries a measured payload receipt. Authoring or restoring fails if the
+tree contains any symlink, if the remeasured byte count differs, or if the payload exceeds 6 GiB.
+That ceiling prevents the rejected 8.66 GiB combined prototype shape from recurring silently; the
+authoritative measured rejected value was 9,082,124 KiB (`du -sk`). A pre-correction local Carbon
+transport measured 2,149,804,255 bytes and zero links, but that is one shard rather than the
+required all-shard cache-size measurement. `node_modules` is never transported.
+
+Corpus scanners write three independent artifacts: `detect-static`, `quality-scan`, and mutation
 `--detect-only`. Their keys cover the pinned target tree, discovered implementation closure,
-Node/toolchain versions, and target configuration. Checkout roots are tokenized in stored findings
-and rehydrated on read. On real Carbon, the cache reports 6,133 tracked target units rather than
-walking installed dependencies.
+Node/toolchain versions, normalized effective invocation flags, any named external build/report
+artifact bytes, and target configuration. Checkout roots are tokenized in stored findings and
+rehydrated on read. Scope is not inferred from a shared target census. Each scanner emits a
+structured receipt from inside its own process: detect-static records the exact `loadSources`
+path digest plus product/config/test partitions; quality records compared jscpd lines, Knip's
+discovered/completed/reduced/incomplete workspace identities, and each diverged-clone surface;
+mutation records the exact test-file path digest and the package/config/workspace suite signals it
+consumed. A computed dynamic implementation import without a statically resolvable local path keeps that scanner
+fresh instead of writing an under-keyed artifact.
 
-`quality-scan` deliberately executes fresh on every corpus run. Its Knip pass can execute target
-configuration and provider descendants from the prepared dependency tree, including files that no
-package export or static entry closure names. A sound content identity therefore requires reading
-the complete installed population. That work defeats this performance cache's purpose: BoxyHQ's
-install measured 106,871 physical files / 1,037,440,676 bytes, and pinned Carbon on Linux arm64
-measured 146,755 physical files / 2,136,592,208 bytes (202,298 logical files, 34,253 logical
-directory visits, and 10,158 links). The hosted Linux x64 Carbon run observed 131,073 physical files
-and failed before scoring. The runner now makes the uncached boundary visible, never creates a
-`quality-scan` artifact family, and keeps forced-cold verification scoped to the two cacheable
-scanners. #1871 remains open; a safe quality-cache design is grouped with #1872's queued dependency
-preparation work.
+`quality-scan` additionally requires a complete dependency-preparation receipt. Preparation is
+keyed by the target pin/tree, lockfile and recursive install configuration, exact package-manager
+version, Node/ABI, platform/architecture, install flags, and every value in the bounded execution
+environment (`CI`, `HOME`, `PATH`, and `TMPDIR`). A hit still performs a frozen offline
+materialization into the disposable clone. Corrupt/incomplete receipts or stores reject visibly
+and retry clean; a final failure removes every partial `node_modules` tree and forces quality-scan
+to bypass every target Knip/framework/provider config and attempt Knip directly in its all-plugins-
+disabled, Harvey-inferred-entry source tier. Success preserves review-tier M5 findings and emits
+M5-98; Remix/React Router route-contract globs replace the disabled framework plugin's dynamic
+entries. Resolver-contingent workspace imports from config/type-only source remain visible but
+informational, while ordinary runtime imports and source-local exports remain actionable. Failure
+of that safe tier emits M5-00. A rejected installed tree is never consumed. The
+receipt proves dependency materialization; it does not make arbitrary target code reproducible.
+Install lifecycle scripts and executable configuration can read time, network, or file contents
+outside the keyed tree even when every named environment value is unchanged. After each clean or
+offline materialization, preparation reads the physical installed package manifests (including
+pnpm's backing store layout) and the npm/pnpm lockfile lifecycle markers. Any dependency lifecycle
+hook, implicit `binding.gyp` install, unreadable manifest, or mismatch between the resolved and
+enumerable installed package sets returns `cacheable: false`. Package metadata is read; installed
+modules and target providers are not imported for this decision.
+The same lifecycle evidence separately governs the source-only scanner caches: when an install may
+have rewritten target-owned source/configuration, detect-static and mutation detect-only execute
+fresh. Package-manager selection is also fail-safe: conflicting lockfile families, a declaration
+that disagrees with the selected lockfile, or a declared version that disagrees with the executable
+forces the legacy non-cacheable path. npm aliases, pnpm catalogs/workspaces, and Yarn install
+configuration are part of the recursive preparation identity.
+
+Quality cacheability therefore comes from Harvey's installed Knip version, not a Harvey-maintained
+framework filename list. Preparation imports Knip's live plugin catalog in a trusted child, selects
+every plugin that loads configuration (`resolveConfig`), resolves that catalog's own config globs
+with Knip's glob implementation across the package-manager and static Knip workspace roots, and
+adds executable custom paths declared by `knip.json`, `knip.jsonc`, their dot-prefixed forms, or
+`package.json#knip`. Package-manager workspace declarations are parsed from JSON/YAML and passed
+unchanged to that same Knip glob implementation, including brace/extglob shapes; an unparseable or
+non-enumerable declaration makes quality fresh. Knip's own executable control configs are included
+too. A matching
+`.js`/`.jsx`/`.mjs`/`.cjs`/`.ts`/`.tsx`/`.mts`/`.cts` input makes quality non-cacheable; so does any
+catalog, workspace, static-config, or glob shape whose enumeration fails. The preparation receipt
+and frozen offline install may still hit, but quality executes fresh and the scanner event records
+the concrete paths or uncertainty. Static JSON/JSONC/YAML/TOML configuration remains cacheable
+when it names no executable input: its tracked bytes are already bound by the pinned target tree.
+This is intentionally fail-safe for new Knip plugins while retaining caching for targets proven
+free of executable/dynamic configuration. npm, pnpm, and Yarn are all exercised through their real
+clients from two checkout paths.
+
+pnpm is forced to `enableGlobalVirtualStore=false`. pnpm 10/11 still writes a versioned `projects`
+symlink to the current checkout, and a target can otherwise produce a versioned `links` installed
+graph. Both trees are removed after every install; only content/index bytes remain. A real pnpm
+cold-to-offline test with an actual package verifies the second checkout succeeds after that
+sanitization, then asserts the store has no symlink and no `node_modules` path. This preserves the
+content-addressed store/offline-materialization design rather than archiving an installed tree.
 
 Semgrep is partitioned into the six exact materialized registry packs and ten individual local YAML
 files. Each family stores only the deterministic result/error/path/rule envelope (not profiling
@@ -146,18 +205,29 @@ Gitleaks rules/version and pinned tree, and live registry/provider fallbacks are
 and manual dispatch use `live-verify`, rerun OSV and provider verification, and fail on snapshot
 drift. The default client scanner path sets neither mode and remains live.
 
-The superseded three-scanner prototype's Carbon measurements with `--install` and snapshot state
-were: legacy monolithic 444.57s wall; partitioned cold 327.27s; warm 58.68s; 24 MiB cache across 17
-artifact files. Every run conserved
-all 13 scored baseline/free-tier rows. A temporary edit to one local rule preserved unrelated
-registry-family hits and limited Semgrep recomposition to 1.2s. The final exhaustive family repair
-restored 531 Semgrep-derived rows that an early zero-applicable-pack abort had hidden; the parity
-control, not the count baseline, caught that defect.
+A pre-correction local Carbon candidate on 2026-08-12 used `--install`, snapshot external state, a
+fresh shard cache, and the pinned Carbon target. Cold was 417.75s wall / 397s phase-timed
+(install 43.5s, quality 51.4s, detect-static 21.7s); restored was 49.21s wall / 32s phase-timed
+(offline install 25.6s, quality 0.7s, detect-static 0.1s). Those are traceable local observations,
+not final-design acceptance evidence: hosted run `31614708026` then showed that the relative cache
+root was interpreted under each target cwd and M4 scanned cached package sources. The corrected
+design canonicalizes that root before any child cwd change and has not yet produced a hosted
+cold/warm pair.
+
+The same pre-correction exercise recorded per-shard phase-timed sums of 32s, 84s, and 111s. Their
+sum (227s) is not aggregate runner wall time, and their maximum (111s) is not the workflow critical
+path; neither is claimed as such. Baseline conservation is outstanding because the cache-root
+defect caused unrelated M4 drift. Two exact-base comparisons remain useful diagnostic
+facts, not a conservation verdict: Rallly M5 expected 147 and measured 155 (+8), while Documenso M5
+expected 1801 and measured 1800 (-1), identically at base `a157ff9`. Final cold/warm install totals,
+runner critical path, aggregate runner wall time, all-shard cache size, and full baseline
+conservation remain outstanding until the corrected hosted design runs.
 
 The focused tests exercise both sides of every guard:
 
 ```sh
-pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts
+pnpm exec vitest run src/scan/mechanical-phase-cache.test.ts src/scan/mechanical-phase-identity.test.ts src/scan/mechanical-phase-cross-process.test.ts src/scan/semgrep.test.ts src/scan/mechanical.test.ts src/corpus-phase-cache-workflow.test.ts src/corpus-cache-transport.test.ts src/corpus-dependency-preparation.test.ts src/corpus-scanner-cache.test.ts src/corpus-scanner-identity.test.ts
+HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run src/corpus-scanner-cross-process.test.ts
 ```
 
 They prove cold/warm finding and scope equivalence, full-schema corruption rejection and
@@ -166,7 +236,46 @@ target-pin invalidation, live advisory and live-provider secret non-reuse, force
 all-miss failure, cache-miss execution, restored-registry validation/refusal, the required-context
 aggregate, and the scheduled forced-cold path. The scanner cross-process guard creates two physical
 Harvey checkout copies (only the tool installation is shared) and invokes the production corpus
-scanner runner twice against matching tracked fixtures. `detect-static` and mutation `--detect-only`
-must miss then hit one artifact directory. `quality-scan` must execute fresh both times; between
-runs only an installed provider's untracked `config.js` changes, and the real M5-01 result must move
-from `src/alternate.ts` to `src/index.ts` without creating a quality cache artifact.
+scanner runner twice against matching tracked fixtures and a relative phase-cache root. Dependency
+preparation and all three scanner families must miss then hit one external artifact directory while
+preserving findings and examined scope; cache-only duplicate sources must remain invisible to M4.
+The scale fixture contains 6,125 real TypeScript modules split between product and test source.
+Receipts are emitted inside each scanner process from the input it actually consumed: detect-static
+reports 6,131 loaded source/config files, quality reports 3,066 product sources read by its source
+passes, and mutation detect-only reports the 3,063 test files it opened. A tracked `.fixture` and a
+generic JSON file are adversarial controls: neither may inflate these scanner-specific receipts.
+The three values are deliberately different; a shared source-like census is not the examined scope
+examined scope of all three scanners.
+The quality identity is separately falsified by changing its preparation key and each execution
+environment value. Physical copies of real helpers in all three scanner families are mutated to
+prove only the dependent implementation identity moves; a computed dynamic import proves the
+unprovable-closure path stays fresh. A flag-only change and a byte change in an external artifact
+each move the invocation identity. The incomplete-preparation controls prove
+all three directions across both failing corpus shapes: an incomplete receipt routes around the
+partial provider, preserves source-only findings with M5-98 at both a package root and a nested
+`nextjs/` scan root, and emits M5-00 if that safe tier itself fails; the same provider executes when
+preparation is complete. The executable-config controls cover the live
+Knip catalog's Vite default, a non-Vite provider in a declared workspace, a custom executable path
+named only by static Knip configuration, an unenumerable configuration, and a static JSON/JSONC
+direction that remains cacheable. The heavy Vite falsifier installs a local npm package named
+`vite` and has `vite.config.js` choose its library entry from an external file under an unchanged
+`HOME`, inside a real npm workspace declared by `packages/{app,lib}`: preparation reports miss then
+hit/hit, all three quality runs are fresh, and changing only that external file moves M5-01 from
+`packages/app/src/b.ts` to `packages/app/src/a.ts`.
+The dependency-lifecycle falsifier packs a local tarball whose postinstall reads an unchanged
+`HOME` path and rewrites the target's `knip.json`: the content store may hit and re-materialize, but
+both preparation results remain non-cacheable, both quality runs are fresh, and the unused-file row
+moves from `src/b.ts` to `src/a.ts`. Its paired no-script installed dependency stays cacheable.
+The install-failure control also reproduces multi-tenant-starter's no-lockfile shape. The reduced
+source tier retains its two source-reliable unused-export findings and the `M5-98` limitation. Its
+dependency, optional-peer/catalog, and binary candidates remain visible as informational review
+rows because there is no lockfile-backed resolved package surface. Inferred file rows retain the
+established countable review posture: their source graph still exists, and their uncertainty is
+already expressed by `confidence: Review`. The degraded React Router control proves
+framework-registered route modules and their imports stay reachable without executing rejected
+config, while a genuinely unreachable file still surfaces and a source-local unused export stays
+counted. A workspace resolver control proves the other evidence boundary in both directions:
+workspace-internal config/type-only unlisted imports are informational without resolver context,
+whereas an ordinary runtime import remains a counted, confirmed finding. Automatic config-load fallback and lockfile-backed
+install failure retain that same established reduced-tier posture rather than treating every
+all-plugins-disabled result as equally unreliable.

@@ -83,6 +83,7 @@ import {
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
+import { prepareCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
@@ -124,8 +125,15 @@ const baselineFindingsPath = flag("--baseline-findings");
 const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
-const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
-const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR;
+// Resolve once while cwd is Harvey. Package managers later run with cwd set to each disposable
+// target checkout; passing their --store-dir a relative path would otherwise put the cache inside
+// the target, where M4/quality-scan can mistake cached package sources for client code.
+const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR
+  ? resolve(process.env.HARVEY_CORPUS_PHASE_CACHE_DIR)
+  : undefined;
+const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR
+  ? resolve(process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR)
+  : undefined;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
 const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
@@ -273,15 +281,31 @@ function disableGlobalVirtualStoreIfSet(dir: string): void {
   console.error(`  #1268: ${path} opts into enableGlobalVirtualStore — disabled for this clone (Stryker's own plugin/typescript resolution cannot reach a globally-stored package graph)`);
 }
 
-function installTargetDeps(dir: string, flags: readonly string[]): void {
+function installTargetDeps(dir: string, flags: readonly string[], identity?: {
+  targetRevision: string;
+  targetTree: string;
+  sourceRoot: string;
+}): DependencyPreparationResult | undefined {
   const pm = detectPackageManager(dir);
   if (pm === "pnpm") disableGlobalVirtualStoreIfSet(dir);
+  if (phaseCacheDir && identity) {
+    return prepareCorpusDependencies({
+      targetDir: dir,
+      sourceRoot: identity.sourceRoot,
+      cacheDir: phaseCacheDir,
+      targetRevision: identity.targetRevision,
+      targetTree: identity.targetTree,
+      installFlags: npmOnlyFlags(pm, flags),
+      onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
+    });
+  }
   const { bin, args } = installAllCommand(pm, npmOnlyFlags(pm, flags));
   try {
     execFileSync(bin, args, { cwd: dir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, CI: "true" } });
   } catch {
     console.error(`  ⚠ ${bin} install failed — M5-knip will report its #223 did-not-run finding and drift against the baseline`);
   }
+  return undefined;
 }
 
 // #1574: PER-PHASE cost, per target. #1586 measured each target's TOTAL from banner intervals and
@@ -368,6 +392,7 @@ async function runScanner(options: ScannerInvocation & {
   targetTree: string;
   targetConfig: string;
   records: CorpusScannerRecord[];
+  dependencyPreparation?: DependencyPreparationResult;
 }): Promise<Finding[]> {
   const common = {
     repoRoot,
@@ -381,9 +406,10 @@ async function runScanner(options: ScannerInvocation & {
     mode: forceColdCache ? "verify" as const : "read-write" as const,
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
+    dependencyPreparation: options.dependencyPreparation,
   } : undefined;
   const result = options.scanner === "quality-scan"
-    ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan" })
+    ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", cache })
     : options.scanner === "detect-static"
       ? await runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", cache })
       : await runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", cache });
@@ -581,8 +607,17 @@ for (const target of targets) {
       }
     }
 
-    // #251: before any scanner — knip needs these present to resolve the target's config.
-    if (install) timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? []));
+    // #251: before any scanner — knip needs these present to resolve the target's config. When the
+    // content-addressed phase transport is available, this returns the validated preparation key
+    // that is the installed-population identity for quality-scan; a failed/legacy install remains
+    // visible and keeps quality-scan fresh.
+    const dependencyPreparation = install
+      ? timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? [], {
+        targetRevision: target.commit,
+        targetTree: targetTreeIdentity,
+        sourceRoot: ".",
+      }))
+      : undefined;
     const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
@@ -625,7 +660,7 @@ for (const target of targets) {
     // dies on a missing binary mid-corpus.
     let findings = [
       ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, dependencyPreparation })),
       ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
     ];
 
@@ -640,8 +675,14 @@ for (const target of targets) {
       if (!existsSync(rootDir)) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
-      if (install) timed("install", () => installTargetDeps(rootDir, []));
-      const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
+      const scopedDependencyPreparation = install
+        ? timed("install", () => installTargetDeps(rootDir, [], {
+          targetRevision: target.commit,
+          targetTree: targetTreeIdentity,
+          sourceRoot: m5Root,
+        }))
+        : undefined;
+      const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
     assertCorpusScannerCacheVerification(scannerRecords, forceColdCache ? "verify" : "read-write");

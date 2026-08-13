@@ -39,6 +39,7 @@ import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { runJscpd as runJscpdLive } from "../scan/duplication.js";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
+import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 import {
   duplicationSummary,
   JSCPD_DISCLOSED_GLOBS,
@@ -56,6 +57,7 @@ import {
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  unlistedImportNeedsResolvedConfig,
   type JscpdGlobMatch,
   type JscpdReport,
   type KnipReport,
@@ -88,8 +90,13 @@ const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const scopeOutIdx = args.indexOf("--scope-out");
+const scopeOutPath = scopeOutIdx >= 0 ? args[scopeOutIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
+const degradedKnipIdx = args.indexOf("--degraded-knip-reason");
+const degradedKnipReason = degradedKnipIdx >= 0 ? args[degradedKnipIdx + 1] : undefined;
+const degradedKnipUnresolvedDependencySurface = args.includes("--degraded-knip-unresolved-dependency-surface");
 // #809: opt-in whole-codebase Type-3 near-miss pass, on top of the always-on security-path pass —
 // see the header comment above securityPathFiles for why this stays opt-in (noisier, no security
 // guarantee, review tier).
@@ -103,6 +110,14 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error("--timeout must be a positive number of seconds");
   process.exit(2);
 }
+if (degradedKnipIdx >= 0 && (!degradedKnipReason || degradedKnipReason.startsWith("--"))) {
+  console.error("--degraded-knip-reason requires a non-empty reason");
+  process.exit(2);
+}
+if (degradedKnipUnresolvedDependencySurface && degradedKnipIdx < 0) {
+  console.error("--degraded-knip-unresolved-dependency-surface requires --degraded-knip-reason");
+  process.exit(2);
+}
 const TIMEOUT_MS = timeoutSeconds * 1000;
 
 const targetDir = resolve(targetArg);
@@ -114,6 +129,15 @@ const targetDir = resolve(targetArg);
 // scanned in that case.
 const workspaceDirs = discoverTargets(targetDir).apps.map((a) => a.path);
 const scopes = workspaceDirs.length ? workspaceDirs : [targetDir];
+const workspacePackageNames = new Set<string>();
+for (const scope of scopes) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(scope, "package.json"), "utf8")) as { name?: unknown };
+    if (typeof parsed.name === "string") workspacePackageNames.add(parsed.name);
+  } catch {
+    // A missing/malformed manifest asserts no workspace package identity.
+  }
+}
 
 interface ScanGap {
   scope: string;
@@ -260,6 +284,21 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; p
   }
 }
 
+// #1871: an incomplete dependency-preparation receipt means any surviving target node_modules is
+// rejected input. Do not make the normal first attempt: it may execute the target's own Knip or
+// framework/provider config against that partial tree. Start directly in the same source-only tier
+// as #810's retry, with every plugin disabled and Harvey-inferred entries. An empty live plugin
+// catalog leaves no complete disable list; abort into M5-00 before starting Knip.
+function runKnipDegraded(dir: string, reason: string): { report: KnipReport; entriesInferred: true; pluginsDisabled: true; reducedReason: string } {
+  if (KNIP_PLUGIN_NAMES.length === 0) throw new Error("Knip's live plugin catalog is empty; safe source-only execution cannot be proven");
+  return {
+    report: execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES)),
+    entriesInferred: true,
+    pluginsDisabled: true,
+    reducedReason: reason,
+  };
+}
+
 function lineCount(dir: string, relPath: string): number | undefined {
   try {
     return readFileSync(join(dir, relPath), "utf8").split("\n").length;
@@ -282,13 +321,14 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "ge
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
 
-function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
+function securityPathFiles(dir: string, rel = "", observed?: Set<string>): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
   for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory) {
-      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath));
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath, observed));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      observed?.add(relPath);
       if (touchesSecurityPath(relPath)) {
         files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
       } else {
@@ -396,6 +436,14 @@ const inferredEntryFiles = new Set<string>();
 // #1050: the same scopes' package.json paths — their unused-DEPENDENCY findings are review tier for
 // the same reason (config-only usages are invisible when the config could not be resolved).
 const unresolvedDepScopes = new Set<string>();
+// #1871: package metadata from a no-lockfile preparation failure has neither an installed graph
+// nor a reproducible resolved dependency surface. It remains visible but informational. This is
+// narrower than `pluginsDisabled`: automatic config-load fallback and lockfile-backed install
+// failure retain the established reduced-tier semantics and corpus conservation.
+const unresolvedDependencySurfacePaths = new Set<string>();
+// Config-file and type-only unlisted-import verdicts need the target's resolver/config context.
+// In the plugins-disabled tier the references remain visible, but these paths are informational.
+const unresolvedUnlistedImportPaths = new Set<string>();
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -413,14 +461,33 @@ for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   try {
-    const { report, entriesInferred, pluginsDisabled, reducedReason } = runKnip(scope);
+    const { report, entriesInferred, pluginsDisabled, reducedReason } = degradedKnipReason
+      ? runKnipDegraded(scope, degradedKnipReason)
+      : runKnip(scope);
+    if (pluginsDisabled) {
+      for (const issue of report.issues) {
+        let source: string | undefined;
+        try {
+          source = readFileSync(join(scope, issue.file), "utf8");
+        } catch {
+          // A source read failure leaves the narrow boundary unclassified.
+        }
+        if (unlistedImportNeedsResolvedConfig(issue, source, workspacePackageNames)) {
+          unresolvedUnlistedImportPaths.add(prefixed(workspaceRel, issue.file));
+        }
+      }
+    }
     // #810: a scope that only ran after the degraded retry is disclosed as a reduced-mode partial
     // (M5-98). Its file findings are already review-tier via entriesInferred below. The #580
     // entry-uncertain heuristic is skipped for it — its high unused ratio is the EXPECTED cost of a
     // plugins-disabled run, already explained by M5-98, not a separate mis-resolution signal.
     if (pluginsDisabled) {
       knipReducedScopes.push({ scope: label, reason: reducedReason ?? "knip could not load the target's config" });
-      console.error(`⚠ knip could not load ${label}'s config (likely no node_modules) — re-ran with plugins disabled; M5 file findings for it are review-tier (#810, see M5-98)`);
+      console.error(
+        degradedKnipReason
+          ? `⚠ dependency preparation was incomplete for ${label} — ran knip directly with target configs/plugins disabled; M5 file findings for it are source-only review tier (#1871, see M5-98)`
+          : `⚠ knip could not load ${label}'s config (likely no node_modules) — re-ran with plugins disabled; M5 file findings for it are review-tier (#810, see M5-98)`,
+      );
     } else {
       // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
       // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
@@ -430,6 +497,9 @@ for (const scope of scopes) {
     }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
+    if (pluginsDisabled && degradedKnipUnresolvedDependencySurface) {
+      for (const issue of report.issues) unresolvedDependencySurfacePaths.add(issue.file);
+    }
     // #696: record the (now target-relative) files whose entries Harvey inferred, so their file
     // findings are review-tier after mergeKnipReports flattens per-scope reports into one.
     if (entriesInferred) {
@@ -449,7 +519,8 @@ const jscpdReport = mergeJscpdReports(jscpdReports);
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
 // touchesTenantSupabasePath).
-const narrowFiles = securityPathFiles(targetDir);
+const observedProductSources = new Set<string>();
+const narrowFiles = securityPathFiles(targetDir, "", observedProductSources);
 const divergedFindings = divergedCloneFindings(narrowFiles);
 
 // #809: opt-in whole-codebase extension. Runs over the COMPLEMENT of narrowFiles — every other
@@ -464,7 +535,7 @@ if (wholeRepoDiverged) {
 
 // #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
 // once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
-const eligibleFileCount = countSourceFiles(targetDir);
+const eligibleFileCount = observedProductSources.size;
 const divergedScopeDisclosure = wholeRepoDiverged ? undefined : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
 
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
@@ -488,7 +559,16 @@ const findings: Finding[] = [
   ...wholeRepoDivergedFindings,
   ...(divergedScopeDisclosure ? [divergedScopeDisclosure] : []),
   ...(jscpdScopeDisclosure ? [jscpdScopeDisclosure] : []),
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes) : []),
+  ...(knipReport
+    ? knipToFindings(
+        knipReport,
+        fileLineCounts,
+        inferredEntryFiles,
+        unresolvedDepScopes,
+        unresolvedDependencySurfacePaths,
+        unresolvedUnlistedImportPaths,
+      )
+    : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces
@@ -534,3 +614,23 @@ if (outPath) {
 } else {
   console.log(json);
 }
+writeCorpusScannerScope(scopeOutPath, "quality-scan", {
+  unitsExamined: eligibleFileCount,
+  description: `${eligibleFileCount} product source file(s) read by quality-scan's in-process source passes`,
+  observation: {
+    scanner: "quality-scan",
+    productSources: { count: eligibleFileCount, pathsDigest: digestObservedPaths([...observedProductSources]) },
+    jscpd: { status: jscpdGaps.length > 0 ? "incomplete" : "completed", comparedLines: dup.totalLines },
+    knip: {
+      discovered: scopes.map(scopeLabel).sort(),
+      completed: scopes.map(scopeLabel).filter((scope) => !knipGaps.some((gap) => gap.scope === scope)).sort(),
+      reduced: knipReducedScopes.map((scope) => scope.scope).sort(),
+      incomplete: knipGaps.map((scope) => scope.scope).sort(),
+    },
+    divergedClones: {
+      securityPathSources: narrowFiles.length,
+      wholeRepoEnabled: wholeRepoDiverged,
+      complementSources: wholeRepoDiverged ? Math.max(0, eligibleFileCount - narrowFiles.length) : 0,
+    },
+  },
+});

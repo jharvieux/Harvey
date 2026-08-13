@@ -213,7 +213,7 @@ describe("rawSqlDriver (#861)", () => {
 });
 
 // #696: the knip config Harvey generates for a config-less scope. The universal entry set (test
-// files above all) is the measured lever; the framework globs add app/route entries per shape.
+// files above all) is the measured lever; installed framework plugins retain ownership of routes.
 describe("buildInferredKnipConfig (#696)", () => {
   it("always declares the universal test/script/config entry globs (the dominant lever)", () => {
     for (const fw of ["next", "vite", "other"] as const) {
@@ -224,19 +224,16 @@ describe("buildInferredKnipConfig (#696)", () => {
     }
   });
 
-  it("adds Next app-router / pages / middleware entries for a Next scope", () => {
+  it("does not shadow installed Next plugin route discovery with degraded guesses", () => {
     const entry = buildInferredKnipConfig("next").entry as string[];
-    expect(entry.some((g) => g.startsWith("app/**/") && g.includes("page"))).toBe(true);
-    expect(entry.some((g) => g.startsWith("src/app/**/"))).toBe(true);
-    expect(entry).toContain("middleware.{ts,js}");
-    expect(entry).toContain("next.config.{js,mjs,cjs,ts}");
+    expect(entry.some((g) => g.startsWith("app/**/") && g.includes("page"))).toBe(false);
+    expect(entry).not.toContain("next.config.{js,mjs,cjs,ts}");
   });
 
-  it("adds Vite index.html / main entries for a Vite scope", () => {
+  it("does not shadow installed Vite plugin entry discovery with degraded guesses", () => {
     const entry = buildInferredKnipConfig("vite").entry as string[];
-    expect(entry).toContain("index.html");
-    expect(entry).toContain("src/main.{ts,tsx,js,jsx}");
-    expect(entry).toContain("vite.config.{ts,js,mjs,cjs}");
+    expect(entry).not.toContain("index.html");
+    expect(entry).not.toContain("vite.config.{ts,js,mjs,cjs}");
   });
 
   it("adds no framework globs for an `other` scope (universal set only)", () => {
@@ -264,9 +261,25 @@ describe("buildDegradedKnipConfig (#810)", () => {
     expect(config.ignoreExportsUsedInFile).toEqual({ interface: true, type: true });
   });
 
-  it("is identical to buildInferredKnipConfig when no plugins are named (empty list is a no-op)", () => {
-    expect(buildDegradedKnipConfig("next", [])).toEqual(buildInferredKnipConfig("next"));
+  it("adds bounded framework-contract entries only to the degraded shape", () => {
+    expect(buildDegradedKnipConfig("next", []).entry).toContain("next.config.{js,mjs,cjs,ts}");
+    expect(buildInferredKnipConfig("next").entry).not.toContain("next.config.{js,mjs,cjs,ts}");
   });
+
+  it.each(["remix", "react-router"] as const)(
+    "preserves %s framework-contract routes when plugins/config cannot load",
+    (framework) => {
+      const config = buildDegradedKnipConfig(framework, ["remix", "react-router"]);
+      expect(config.remix).toBe(false);
+      expect(config["react-router"]).toBe(false);
+      expect(config.entry).toEqual(expect.arrayContaining([
+        "app/root.{ts,tsx,js,jsx}",
+        "app/routes.{ts,tsx,js,jsx}",
+        "app/routes/*/route.{ts,tsx,js,jsx}",
+      ]));
+      expect(config.entry).not.toContain("app/routes/**/*.{ts,tsx,js,jsx}");
+    },
+  );
 });
 
 // #597: a monorepo ROOT has no vite.config/next.config of its own — they live in the workspace app

@@ -77,6 +77,20 @@ function transitiveImplementationClosure(roots: readonly string[]): string[] {
       const imported = resolveRelativeImplementation(path, statement.moduleSpecifier.text);
       if (imported) visit(imported);
     }
+    const inspectDynamic = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)
+        && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+          || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
+        const argument = node.arguments[0];
+        if (!argument || !ts.isStringLiteralLike(argument)) {
+          throw new Error(`implementation closure contains a dynamic import/require whose identity cannot be proven: ${path}`);
+        }
+        const imported = resolveRelativeImplementation(path, argument.text);
+        if (imported) visit(imported);
+      }
+      ts.forEachChild(node, inspectDynamic);
+    };
+    inspectDynamic(parsed);
   };
   for (const root of roots) visit(root);
   return [...closure].sort();

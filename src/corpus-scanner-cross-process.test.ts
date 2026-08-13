@@ -1,16 +1,24 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
+import { runCorpusScanner } from "./corpus-scanner-runner.js";
 
 const execFileAsync = promisify(execFile);
 
 interface ProcessResult {
   statuses: Record<string, string>;
   findingCounts: Record<string, number>;
+  scopeUnits: Record<string, number>;
+  scopeDescriptions: Record<string, string>;
+  scopeObservations: Record<string, { scanner: string }>;
   qualityLocation: string;
+  qualityLocations: string[];
+  preparation: string;
+  preparationCacheable: boolean;
   events: string[];
 }
 
@@ -18,7 +26,47 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-  it("caches source-only scanners while consecutive quality runs observe installed Knip config changes", async () => {
+  it("caches proven zero-test mutation results for both no-package and package-without-suite targets", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-zero-mutation-"));
+    const cacheDir = join(fixture, "cache");
+    dirs.push(fixture);
+    for (const shape of ["no-package", "package-without-suite"] as const) {
+      const targetDir = join(fixture, shape);
+      mkdirSync(join(targetDir, "src"), { recursive: true });
+      writeFileSync(join(targetDir, "src", "index.ts"), "export const live = true;\n");
+      if (shape === "package-without-suite") {
+        writeFileSync(join(targetDir, "package.json"), '{"name":"subscription-shaped","private":true,"scripts":{"build":"next build"}}\n');
+      }
+      const run = () => runCorpusScanner({
+        repoRoot: process.cwd(),
+        targetDir,
+        targetConfig: shape,
+        script: "mutation-scan",
+        scanner: "mutation-detect-only",
+        scriptArgs: [targetDir, "--detect-only"],
+        cache: { dir: cacheDir, mode: "read-write", targetRevision: `${shape}-pin`, targetTree: `${shape}-tree` },
+      });
+      const cold = await run();
+      const warm = await run();
+      expect([cold.cacheRecord?.cache, warm.cacheRecord?.cache]).toEqual(["miss", "hit"]);
+      expect(cold.findings).toContainEqual(expect.objectContaining({ id: "M8-00" }));
+      expect(warm.findings).toEqual(cold.findings);
+      expect(warm.cacheRecord?.scope).toEqual(cold.cacheRecord?.scope);
+      expect(warm.cacheRecord?.scope.unitsExamined).toBe(0);
+      expect(warm.cacheRecord?.scope.observation).toMatchObject({
+        scanner: "mutation-detect-only",
+        suiteSignals: { packageManifest: shape === "package-without-suite", strykerConfig: false, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+        zeroTestDisposition: {
+          status: shape === "no-package" ? "not-applicable" : "no-suite",
+          reason: expect.any(String),
+          provenance: expect.stringContaining("mutation-scan inspected"),
+          falsifier: expect.stringContaining("invalidates"),
+        },
+      });
+    }
+  }, 30_000);
+
+  it("materializes dependencies and caches all scanners across two physical Harvey/target checkouts", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-process-"));
     dirs.push(fixture);
     const checkoutA = join(fixture, "checkout-a");
@@ -38,26 +86,55 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
     expect(lstatSync(checkoutA).isSymbolicLink()).toBe(false);
     expect(lstatSync(join(checkoutA, "src", "corpus-scanner-runner.ts")).isSymbolicLink()).toBe(false);
 
-    const makeTarget = (name: string, entry: "index" | "alternate"): string => {
-      const dir = join(fixture, name);
-      mkdirSync(join(dir, "src"), { recursive: true });
-      writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"1.0.0"}}\n');
-      writeFileSync(join(dir, "knip.js"), 'module.exports = require("knip-config-provider");\n');
-      writeFileSync(join(dir, "src", "index.ts"), "export const selectedIndex = true;\n");
+    const source = join(fixture, "target-source");
+    const makeTarget = (): void => {
+      const dir = source;
+      mkdirSync(join(dir, "src", "workload"), { recursive: true });
+      mkdirSync(join(dir, "provider"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), '{"name":"knip-provider-falsifier","private":true,"devDependencies":{"knip-config-provider":"file:provider"}}\n');
+      writeFileSync(join(dir, "knip.json"), '{"entry":["src/index.ts","src/workload/*.ts"],"project":["src/**/*.ts"]}\n');
+      writeFileSync(join(dir, "src", "index.ts"), 'import provider from "knip-config-provider"; export const selectedIndex = provider;\n');
       writeFileSync(join(dir, "src", "alternate.ts"), "export const selectedAlternate = true;\n");
-      const provider = join(dir, "node_modules", "knip-config-provider");
-      mkdirSync(provider, { recursive: true });
-      writeFileSync(join(provider, "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
-      writeFileSync(join(provider, "index.js"), 'module.exports = require("./config.js");\n');
-      writeFileSync(join(provider, "config.js"), `module.exports = { entry: ["src/${entry}.ts"] };\n`);
+      writeFileSync(join(dir, "provider", "package.json"), '{"name":"knip-config-provider","version":"1.0.0","main":"index.js"}\n');
+      writeFileSync(join(dir, "provider", "index.js"), 'module.exports = require("./config.js");\n');
+      writeFileSync(join(dir, "provider", "config.js"), 'module.exports = { selected: true };\n');
+      // Keep one faithful large target but give every scanner a large surface it REALLY consumes.
+      // Static opens both sets; quality's source passes open the product set; mutation detect-only
+      // opens the test set. No shared target census is allowed to stand in for these three facts.
+      for (let index = 0; index < 3_062; index += 1) {
+        writeFileSync(
+          join(dir, "src", "workload", `unit-${index.toString().padStart(4, "0")}.ts`),
+          `export const workloadUnit${index} = ${index};\n`,
+        );
+      }
+      for (let index = 0; index < 3_063; index += 1) {
+        writeFileSync(
+          join(dir, "src", "workload", `unit-${index.toString().padStart(4, "0")}.test.ts`),
+          `test("workload ${index}", () => expect(${index}).toBe(${index}));\n`,
+        );
+      }
+      // Tracked filler and broad JSON inputs must not inflate any scanner-owned receipt.
+      writeFileSync(join(dir, "ignored.fixture"), "tracked but scanner-ineligible\n");
+      writeFileSync(join(dir, "generic-data.json"), '{"not":"a static loader config or quality source"}\n');
       execFileSync("git", ["init", "-q", dir]);
-      execFileSync("git", ["-C", dir, "add", "package.json", "knip.js", "src/index.ts", "src/alternate.ts"]);
-      return dir;
+      execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["-C", dir, "add", "."]);
     };
-    const target = makeTarget("target", "index");
-    const installedConfig = join(target, "node_modules", "knip-config-provider", "config.js");
+    makeTarget();
+    // The freshly-created git tree is checkout A; copy it once for the physically-distinct B.
+    // Keeping an otherwise-unused third 6k-file tree bought no coverage and lengthened the same
+    // blocking test window the heavy-suite split exists to control.
+    const targetA = source;
+    const targetB = join(fixture, "target-b");
+    cpSync(source, targetB, { recursive: true, verbatimSymlinks: true });
 
-    const cacheDir = join(fixture, "cache");
+    const cacheDir = join(process.cwd(), `.harvey-corpus-phase-cache-test-${process.pid}-${Date.now()}`);
+    dirs.push(cacheDir);
+    const cacheArgument = relative(process.cwd(), cacheDir);
+    mkdirSync(join(cacheDir, "m4-cache-marker"), { recursive: true });
+    const duplicatedCacheSource = "export function cacheOnlyDuplicate(value) {\n  const normalized = String(value).trim();\n  const lowered = normalized.toLowerCase();\n  return lowered.split(' ').filter(Boolean).join('-');\n}\n";
+    writeFileSync(join(cacheDir, "m4-cache-marker", "cached-a.ts"), duplicatedCacheSource);
+    writeFileSync(join(cacheDir, "m4-cache-marker", "cached-b.ts"), duplicatedCacheSource);
     const runner = join(fixture, "runner.mts");
     writeFileSync(runner, `
 import { execFileSync } from "node:child_process";
@@ -65,38 +142,473 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 const [repoRoot, targetDir, cacheDir] = process.argv.slice(2);
 const module = await import(pathToFileURL(join(repoRoot, "src", "corpus-scanner-runner.ts")).href);
+const preparationModule = await import(pathToFileURL(join(repoRoot, "src", "corpus-dependency-preparation.ts")).href);
 const targetTree = execFileSync("git", ["-C", targetDir, "write-tree"], { encoding: "utf8" }).trim();
-const cache = { dir: cacheDir, mode: "read-write", targetRevision: "fixture-pinned-revision", targetTree };
 const events = [];
+const preparation = preparationModule.prepareCorpusDependencies({ targetDir, cacheDir, targetRevision: "fixture-pinned-revision", targetTree, onEvent: (message) => events.push(message) });
+const cache = { dir: cacheDir, mode: "read-write", targetRevision: "fixture-pinned-revision", targetTree, dependencyPreparation: preparation };
 const common = { repoRoot, targetDir, targetConfig: "knip-provider-falsifier", onEvent: (message) => events.push(message) };
 const detected = await module.runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", scriptArgs: [targetDir], cache });
-const quality = await module.runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir] });
+const quality = await module.runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir], cache });
 const mutation = await module.runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"], cache });
 const results = { "detect-static": detected, "quality-scan": quality, "mutation-detect-only": mutation };
 const statuses = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.cache ?? "fresh"]));
 const findingCounts = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.findings.length]));
+const scopeUnits = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.unitsExamined ?? -1]));
+const scopeDescriptions = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.description ?? "missing"]));
+const scopeObservations = Object.fromEntries(Object.entries(results).map(([name, result]) => [name, result.cacheRecord?.scope.observation ?? { scanner: "missing" }]));
 const qualityLocation = quality.findings.find((finding) => finding.id === "M5-01")?.location ?? "missing M5-01";
-console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, qualityLocation, events }));
+const qualityLocations = quality.findings.map((finding) => finding.location);
+console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts, scopeUnits, scopeDescriptions, scopeObservations, qualityLocation, qualityLocations, preparation: preparation.status, preparationCacheable: preparation.cacheable, events }));
 `);
-    const run = async (repoRoot: string, targetDir: string): Promise<ProcessResult> => {
-      const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", runner, repoRoot, targetDir, cacheDir], {
-        cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8,
+    const run = async (repoRoot: string, targetDir: string, environment: NodeJS.ProcessEnv = {}): Promise<ProcessResult> => {
+      const { stdout } = await execFileAsync(join(process.cwd(), "node_modules", ".bin", "tsx"), [runner, repoRoot, targetDir, cacheArgument], {
+        cwd: process.cwd(), encoding: "utf8", timeout: 55_000, maxBuffer: 1024 * 1024 * 8, env: { ...process.env, ...environment },
       });
       const marker = stdout.split("\n").find((line) => line.startsWith("CORPUS_SCANNER_PROCESS="));
       if (!marker) throw new Error(`child emitted no result: ${stdout}`);
       return JSON.parse(marker.slice("CORPUS_SCANNER_PROCESS=".length)) as ProcessResult;
     };
 
-    const cold = await run(checkoutA, target);
-    writeFileSync(installedConfig, 'module.exports = { entry: ["src/alternate.ts"] };\n');
-    const warm = await run(checkoutB, target);
-    expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "fresh", "mutation-detect-only": "miss" });
-    expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "fresh", "mutation-detect-only": "hit" });
+    const cold = await run(checkoutA, targetA);
+    const warm = await run(checkoutB, targetB);
+    expect(cold.preparation).toBe("miss");
+    expect(warm.preparation).toBe("hit");
+    expect([cold.preparationCacheable, warm.preparationCacheable]).toEqual([true, true]);
+    expect(cold.statuses).toEqual({ "detect-static": "miss", "quality-scan": "miss", "mutation-detect-only": "miss" });
+    expect(warm.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
     expect(warm.findingCounts).toEqual(cold.findingCounts);
-    expect(cold.qualityLocation).toBe("src/alternate.ts");
-    expect(warm.qualityLocation).toBe("src/index.ts");
-    expect(cold.events).toContainEqual(expect.stringContaining("quality-scan executes fresh"));
-    expect(warm.events).toContainEqual(expect.stringContaining("quality-scan executes fresh"));
-    expect(existsSync(join(cacheDir, "corpus-scanners", "quality-scan"))).toBe(false);
-  });
+    expect(cold.scopeUnits).toEqual({ "detect-static": 6_131, "quality-scan": 3_066, "mutation-detect-only": 3_063 });
+    expect(warm.scopeUnits).toEqual(cold.scopeUnits);
+    expect(cold.scopeDescriptions).toEqual({
+      "detect-static": "6131 source/config file(s) loaded and parsed by detect-static",
+      "quality-scan": "3066 product source file(s) read by quality-scan's in-process source passes",
+      "mutation-detect-only": "3063 test source file(s) opened by mutation detect-only suite detection",
+    });
+    expect(warm.scopeDescriptions).toEqual(cold.scopeDescriptions);
+    expect(Object.fromEntries(Object.entries(cold.scopeObservations).map(([scanner, observation]) => [scanner, observation.scanner]))).toEqual({
+      "detect-static": "detect-static",
+      "quality-scan": "quality-scan",
+      "mutation-detect-only": "mutation-detect-only",
+    });
+    expect(warm.scopeObservations).toEqual(cold.scopeObservations);
+    expect(warm.qualityLocation).toBe(cold.qualityLocation);
+    expect(warm.qualityLocations.some((location) => location.includes("m4-cache-marker"))).toBe(false);
+    expect(lstatSync(cacheDir).isDirectory()).toBe(true);
+    expect(() => lstatSync(join(targetA, cacheArgument))).toThrow();
+    expect(warm.events).toContainEqual(expect.stringContaining("DEPENDENCY PREP HIT npm"));
+    expect(warm.events).toContainEqual(expect.stringContaining("CACHE HIT quality-scan"));
+
+    writeFileSync(join(checkoutB, "src", "quality-scan.ts"), `${readFileSync(join(checkoutB, "src", "quality-scan.ts"), "utf8")}\n// production closure mutation control\n`);
+    const closureMoved = await run(checkoutB, targetB);
+    expect(closureMoved.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
+    expect(closureMoved.findingCounts).toEqual(warm.findingCounts);
+
+    writeFileSync(join(checkoutB, "src", "detectors", "app-router.ts"), `${readFileSync(join(checkoutB, "src", "detectors", "app-router.ts"), "utf8")}\n// static-only helper closure mutation control\n`);
+    writeFileSync(join(checkoutB, "src", "mutation-scan.ts"), `${readFileSync(join(checkoutB, "src", "mutation-scan.ts"), "utf8")}\n// mutation helper closure mutation control\n`);
+    const otherClosuresMoved = await run(checkoutB, targetB);
+    expect(otherClosuresMoved.statuses).toEqual({ "detect-static": "miss", "quality-scan": "hit", "mutation-detect-only": "miss" });
+    expect(otherClosuresMoved.findingCounts).toEqual(warm.findingCounts);
+
+    const alternateHome = join(fixture, "home-b");
+    mkdirSync(alternateHome);
+    const homeMoved = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(homeMoved.preparation).toBe("miss");
+    expect(homeMoved.statuses).toEqual({ "detect-static": "hit", "quality-scan": "miss", "mutation-detect-only": "hit" });
+    const homeStable = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(homeStable.preparation).toBe("hit");
+    expect(homeStable.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "hit" });
+
+    writeFileSync(join(checkoutB, "src", "mutation-scan.ts"), `${readFileSync(join(checkoutB, "src", "mutation-scan.ts"), "utf8")}\nexport async function dynamicClosureFalsifier(name: string) { return import(name); }\n`);
+    const dynamicClosure = await run(checkoutB, targetB, { HOME: alternateHome });
+    expect(dynamicClosure.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "fresh" });
+    expect(dynamicClosure.events).toContainEqual(expect.stringContaining("implementation closure is non-cacheable"));
+  }, 60_000);
+
+  it("keeps a Vite provider inside a brace-declared npm workspace fresh when its config reads unkeyed state", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-vite-quality-cache-"));
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    const stateHome = join(fixture, "home");
+    dirs.push(fixture);
+    const appDir = join(targetDir, "packages", "app");
+    mkdirSync(join(appDir, "src"), { recursive: true });
+    mkdirSync(join(targetDir, "packages", "lib"), { recursive: true });
+    mkdirSync(join(targetDir, "provider"), { recursive: true });
+    mkdirSync(stateHome);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"vite-cache-falsifier","private":true,"workspaces":["packages/{app,lib}"],"devDependencies":{"vite":"file:provider"}}\n');
+    writeFileSync(join(appDir, "package.json"), '{"name":"vite-cache-app","private":true}\n');
+    writeFileSync(join(targetDir, "packages", "lib", "package.json"), '{"name":"vite-cache-lib","private":true}\n');
+    writeFileSync(join(targetDir, "provider", "package.json"), '{"name":"vite","version":"1.0.0","main":"index.js"}\n');
+    writeFileSync(join(targetDir, "provider", "index.js"), "module.exports = {};\n");
+    writeFileSync(join(appDir, "src", "a.ts"), "export const a = true;\n");
+    writeFileSync(join(appDir, "src", "b.ts"), "export const b = true;\n");
+    writeFileSync(join(appDir, "vite.config.js"), [
+      'const { readFileSync } = require("node:fs");',
+      'const { join } = require("node:path");',
+      'const selected = readFileSync(join(process.env.HOME, "vite-entry.txt"), "utf8").trim();',
+      'module.exports = { build: { lib: { entry: `src/${selected}.ts` } } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(stateHome, "vite-entry.txt"), "a\n");
+    execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir, stdio: "ignore" });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = stateHome;
+    try {
+      const run = async () => {
+        const events: string[] = [];
+        const preparation = prepareCorpusDependencies({
+          targetDir,
+          cacheDir,
+          targetRevision: "vite-provider-pin",
+          targetTree: "vite-provider-tree",
+          onEvent: (message) => events.push(message),
+        });
+        const result = await runCorpusScanner({
+          repoRoot: process.cwd(),
+          targetDir,
+          targetConfig: "real local Vite provider",
+          script: "quality-scan",
+          scanner: "quality-scan",
+          scriptArgs: [targetDir],
+          cache: {
+            dir: cacheDir,
+            mode: "read-write",
+            targetRevision: "vite-provider-pin",
+            targetTree: "vite-provider-tree",
+            dependencyPreparation: preparation,
+          },
+          onEvent: (message) => events.push(message),
+        });
+        return {
+          preparation,
+          cache: result.cacheRecord?.cache ?? "fresh",
+          unused: result.findings.find((finding) => finding.id === "M5-01")?.location,
+          events,
+        };
+      };
+
+      const cold = await run();
+      const warm = await run();
+      writeFileSync(join(stateHome, "vite-entry.txt"), "b\n");
+      const changed = await run();
+
+      expect([cold.unused, warm.unused, changed.unused]).toEqual(["packages/app/src/b.ts", "packages/app/src/b.ts", "packages/app/src/a.ts"]);
+      expect([cold.cache, warm.cache, changed.cache]).toEqual(["fresh", "fresh", "fresh"]);
+      expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
+      expect(warm.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.events).toContainEqual(expect.stringContaining("packages/app/vite.config.js"));
+      expect(changed.events).toContainEqual(expect.stringContaining("quality-scan executes fresh because validated receipt and offline materialization; quality-scan remains non-cacheable"));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  }, 30_000);
+
+  it("never reuses quality output after a tarball dependency lifecycle rewrites Knip config from unchanged-HOME external state", async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "harvey-transitive-lifecycle-quality-"));
+    const dependencyDir = join(fixture, "stateful-dependency");
+    const targetDir = join(fixture, "target");
+    const cacheDir = join(fixture, "cache");
+    const stateHome = join(fixture, "home");
+    dirs.push(fixture);
+    mkdirSync(dependencyDir, { recursive: true });
+    mkdirSync(join(targetDir, "src"), { recursive: true });
+    mkdirSync(stateHome);
+    writeFileSync(join(dependencyDir, "package.json"), JSON.stringify({
+      name: "stateful-knip-config",
+      version: "1.0.0",
+      scripts: { postinstall: "node postinstall.cjs" },
+      files: ["postinstall.cjs"],
+    }));
+    writeFileSync(join(dependencyDir, "postinstall.cjs"), [
+      'const { readFileSync, writeFileSync } = require("node:fs");',
+      'const { join } = require("node:path");',
+      'const selected = readFileSync(join(process.env.HOME, "selected.txt"), "utf8").trim();',
+      'writeFileSync(join(process.env.INIT_CWD, "knip.json"), JSON.stringify({ entry: [`src/${selected}.ts`], project: ["src/**/*.ts"] }));',
+      "",
+    ].join("\n"));
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", targetDir], {
+      cwd: dependencyDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })) as { filename: string }[];
+    const tarball = packed[0]!.filename;
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({
+      name: "transitive-lifecycle-falsifier",
+      private: true,
+      dependencies: { "stateful-knip-config": `file:./${tarball}` },
+    }));
+    writeFileSync(join(targetDir, "src", "a.ts"), "export const a = true;\n");
+    writeFileSync(join(targetDir, "src", "b.ts"), "export const b = true;\n");
+    writeFileSync(join(stateHome, "selected.txt"), "a\n");
+    execFileSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: targetDir, stdio: "ignore" });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = stateHome;
+    try {
+      const run = async () => {
+        const events: string[] = [];
+        const preparation = prepareCorpusDependencies({
+          targetDir,
+          cacheDir,
+          targetRevision: "transitive-lifecycle-pin",
+          targetTree: "transitive-lifecycle-tree",
+          onEvent: (message) => events.push(message),
+        });
+        const result = await runCorpusScanner({
+          repoRoot: process.cwd(),
+          targetDir,
+          targetConfig: "local tarball dependency lifecycle",
+          script: "quality-scan",
+          scanner: "quality-scan",
+          scriptArgs: [targetDir],
+          cache: {
+            dir: cacheDir,
+            mode: "read-write",
+            targetRevision: "transitive-lifecycle-pin",
+            targetTree: "transitive-lifecycle-tree",
+            dependencyPreparation: preparation,
+          },
+          onEvent: (message) => events.push(message),
+        });
+        return {
+          preparation,
+          cache: result.cacheRecord?.cache ?? "fresh",
+          unused: result.findings.find((finding) => finding.taxonomy.startsWith("M5 —") && finding.title.startsWith("Unused file:") && finding.location.startsWith("src/"))?.location,
+          events,
+        };
+      };
+
+      const cold = await run();
+      writeFileSync(join(stateHome, "selected.txt"), "b\n");
+      const changed = await run();
+
+      expect([cold.unused, changed.unused]).toEqual(["src/b.ts", "src/a.ts"]);
+      expect([cold.cache, changed.cache]).toEqual(["fresh", "fresh"]);
+      expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
+      expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
+      expect(changed.preparation.reason).toContain("stateful-knip-config@1.0.0 (postinstall)");
+      expect(changed.events.some((event) => event.includes("CACHE HIT quality-scan"))).toBe(false);
+      expect(changed.preparation).toMatchObject({ sourceTreeCacheable: false, sourceTreeReason: expect.stringContaining("lifecycle") });
+      const sourceCache = {
+        dir: cacheDir,
+        mode: "read-write" as const,
+        targetRevision: "transitive-lifecycle-pin",
+        targetTree: "transitive-lifecycle-tree",
+        dependencyPreparation: changed.preparation,
+      };
+      const staticResult = await runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: "lifecycle static isolation", script: "detect-static", scanner: "detect-static", scriptArgs: [targetDir], cache: sourceCache,
+      });
+      const mutationResult = await runCorpusScanner({
+        repoRoot: process.cwd(), targetDir, targetConfig: "lifecycle mutation isolation", script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"], cache: sourceCache,
+      });
+      expect(staticResult.cacheRecord).toBeUndefined();
+      expect(mutationResult.cacheRecord).toBeUndefined();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  }, 45_000);
+
+  it("keeps multi-tenant-starter-shaped no-lock install failure output useful without counting degraded package guesses", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-multi-tenant-no-lock-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-multi-tenant-no-lock-cache-"));
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(targetDir, "app"), { recursive: true });
+    mkdirSync(join(targetDir, "lib", "security"), { recursive: true });
+    mkdirSync(join(targetDir, "lib", "supabase"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({
+      name: "multi-tenant-no-lock-falsifier",
+      private: true,
+      scripts: { dev: "next dev", build: "next build", typecheck: "tsc --noEmit", "db:start": "supabase start" },
+      dependencies: { next: "14.2.0", react: "18.3.0", "react-dom": "18.3.0" },
+      devDependencies: { postcss: "8.4.0", supabase: "1.200.0", typescript: "5.6.0" },
+    }));
+    writeFileSync(join(targetDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { module: "esnext", moduleResolution: "bundler" }, include: ["**/*.ts"] }));
+    writeFileSync(join(targetDir, "lib", "security", "guards.ts"), [
+      "export const liveGuard = () => true;",
+      "export const requireTenantAccess = () => true;",
+      "export const requireTenantAdmin = () => true;",
+      "",
+    ].join("\n"));
+    writeFileSync(join(targetDir, "lib", "supabase", "server.ts"), [
+      "export const liveClient = () => ({ kind: 'request' });",
+      "export const createServiceRoleClient = () => ({ kind: 'service-role' });",
+      "",
+    ].join("\n"));
+    writeFileSync(join(targetDir, "app", "page.ts"), [
+      'import { liveGuard } from "../lib/security/guards";',
+      'import { liveClient } from "../lib/supabase/server";',
+      "export const page = () => [liveGuard(), liveClient()];",
+      "",
+    ].join("\n"));
+
+    const dependencyPreparation = prepareCorpusDependencies({
+      targetDir,
+      cacheDir,
+      targetRevision: "multi-tenant-pin",
+      targetTree: "multi-tenant-tree",
+      packageManagerVersion: "11.12.1",
+      runInstall: () => { throw new Error("planted install failure"); },
+    });
+    expect(dependencyPreparation).toMatchObject({ status: "incomplete", complete: false, cacheable: false });
+    expect(dependencyPreparation.reason).toContain("target has no package-manager lockfile; npm install failed");
+
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "multi-tenant no-lock install-failure falsifier",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "multi-tenant-pin",
+        targetTree: "multi-tenant-tree",
+        dependencyPreparation,
+      },
+    });
+    const m5 = result.findings.filter((finding) => finding.taxonomy === "M5 — Slop / dead code");
+    const counted = m5.filter((finding) => finding.severity !== "Info");
+    expect(counted).toHaveLength(2);
+    expect(counted.map((finding) => finding.location).sort()).toEqual(["lib/security/guards.ts", "lib/supabase/server.ts"]);
+    expect(counted.every((finding) => finding.confidence === "Confirmed" && finding.precisionTier === "high")).toBe(true);
+
+    const degradedPackageRows = m5.filter((finding) =>
+      finding.title.includes("dependencies declared") || finding.title.includes("binary/binaries"),
+    );
+    expect(degradedPackageRows.length).toBeGreaterThan(0);
+    expect(degradedPackageRows.every((finding) => finding.severity === "Info" && finding.confidence === "Review" && finding.precisionTier === "review")).toBe(true);
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", severity: "Info", confidence: "N/A" }));
+    expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+  }, 45_000);
+
+  it("preserves source-only M5 coverage without executing a rejected provider, and fails loud if that safe tier fails", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-cache-"));
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(targetDir, "src"), { recursive: true });
+    mkdirSync(join(targetDir, "node_modules", "partial-provider"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), '{"name":"partial-quality","private":true}\n');
+    writeFileSync(join(targetDir, "src", "index.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "src", "dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(targetDir, "knip.js"), 'module.exports = require("partial-provider");\n');
+    writeFileSync(join(targetDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
+    writeFileSync(join(targetDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
+    const incompletePreparation = {
+      status: "incomplete" as const,
+      complete: false as const,
+      cacheable: false as const,
+      packageManager: "npm" as const,
+      packageManagerVersion: "11.12.1",
+      reason: "clean and fallback installs failed after partial materialization",
+    };
+    const run = (scriptArgs: string[] = [targetDir]) => runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "incomplete preparation control",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs,
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "pin",
+        targetTree: "tree",
+        dependencyPreparation: incompletePreparation,
+      },
+    });
+    const result = await run();
+    expect(result.cacheRecord).toBeUndefined();
+    expect(result.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
+    expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
+
+    const failedDegraded = await run([targetDir, "--timeout", "0.001"]);
+    expect(failedDegraded.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(failedDegraded.findings.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
+
+    const completeResult = await runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir,
+      targetConfig: "complete preparation control",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "pin",
+        targetTree: "tree",
+        dependencyPreparation: {
+          status: "hit",
+          complete: true,
+          cacheable: false,
+          key: "complete-but-dynamic",
+          packageManager: "npm",
+          packageManagerVersion: "11.12.1",
+          reason: "quality stays fresh for executable Knip configuration",
+        },
+      },
+    });
+    expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
+  }, 60_000);
+
+  it("preserves the nested nextjs M5 scope when a polyglot root has no package manifest", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-polyglot-quality-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-polyglot-cache-"));
+    const nextDir = join(targetDir, "nextjs");
+    dirs.push(targetDir, cacheDir);
+    mkdirSync(join(nextDir, "src"), { recursive: true });
+    mkdirSync(join(nextDir, "node_modules", "partial-provider"), { recursive: true });
+    writeFileSync(join(nextDir, "package.json"), '{"name":"nested-nextjs","private":true}\n');
+    writeFileSync(join(nextDir, "src", "index.ts"), "export const live = true;\n");
+    writeFileSync(join(nextDir, "src", "dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(nextDir, "knip.js"), 'module.exports = require("partial-provider");\n');
+    writeFileSync(join(nextDir, "node_modules", "partial-provider", "package.json"), '{"name":"partial-provider","main":"index.js"}\n');
+    writeFileSync(join(nextDir, "node_modules", "partial-provider", "index.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "partial-provider-consumed"), "yes"); module.exports = { entry: ["src/index.ts"] };\n');
+    const dependencyPreparation = {
+      status: "incomplete" as const,
+      complete: false as const,
+      cacheable: false as const,
+      packageManager: "npm" as const,
+      packageManagerVersion: "11.12.1",
+      reason: "root or scoped package installation failed",
+    };
+    const run = (scanDir: string) => runCorpusScanner({
+      repoRoot: process.cwd(),
+      targetDir: scanDir,
+      targetConfig: scanDir === targetDir ? "polyglot root" : "nextjs M5 scan root",
+      script: "quality-scan",
+      scanner: "quality-scan",
+      scriptArgs: [scanDir],
+      cache: {
+        dir: cacheDir,
+        mode: "read-write",
+        targetRevision: "polyglot-pin",
+        targetTree: "polyglot-tree",
+        dependencyPreparation,
+      },
+    });
+
+    const root = await run(targetDir);
+    const scoped = await run(nextDir);
+    // Knip itself requires a package manifest at its invocation root, so the whole polyglot tree
+    // remains a disclosed M5-00. corpus-drift replaces that root M5 result with the explicit
+    // nextjs/ module scope below; that is the hosted mvp-boilerplate seam this control protects.
+    expect(root.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(root.findings.some((finding) => finding.id === "M5-98")).toBe(false);
+    expect(scoped.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(scoped.findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
+    expect(scoped.findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(existsSync(join(nextDir, "partial-provider-consumed"))).toBe(false);
+  }, 60_000);
 });

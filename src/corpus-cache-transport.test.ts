@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CORPUS_CACHE_MAX_PAYLOAD_BYTES,
   corpusCacheTransportKey,
   decideCorpusCacheRestore,
   rejectCorpusCacheTransport,
@@ -13,18 +14,20 @@ import {
 
 const source = (overrides: Partial<CorpusCacheTransportManifest> = {}): CorpusCacheTransportManifest => {
   const manifest = {
-    schema: 2 as const,
+    schema: 3 as const,
+    family: (overrides.family ?? "main") as "run" | "main",
     event: "push",
     ref: "refs/heads/main",
     runId: "100",
     runAttempt: "1",
     headSha: "a".repeat(40),
     writtenAt: "2026-08-12T01:00:00.000Z",
+    payload: { bytes: 0, maxBytes: CORPUS_CACHE_MAX_PAYLOAD_BYTES, symlinks: 0 as const },
     ...overrides,
   };
   return {
     ...manifest,
-    key: overrides.key ?? corpusCacheTransportKey({ platform: "Linux", namespace: "1", runId: manifest.runId, runAttempt: manifest.runAttempt, headSha: manifest.headSha }),
+    key: overrides.key ?? corpusCacheTransportKey({ family: manifest.family, platform: "Linux", namespace: "1", runId: manifest.runId, runAttempt: manifest.runAttempt, headSha: manifest.headSha }),
   };
 };
 
@@ -48,7 +51,7 @@ describe("corpus cache transport scope across refs (#1867)", () => {
   });
 
   it("rejects a cache written by a separate PR even when its key prefix and scanner inputs match", () => {
-    const otherPr = source({ event: "pull_request", ref: "refs/pull/199/merge", runId: "1990" });
+    const otherPr = source({ family: "run", event: "pull_request", ref: "refs/pull/199/merge", runId: "1990" });
     const decision = decideCorpusCacheRestore(otherPr, {
       matchedKey: otherPr.key,
       event: "pull_request",
@@ -64,7 +67,7 @@ describe("corpus cache transport scope across refs (#1867)", () => {
   });
 
   it("accepts only the current run's PR cache on a retry and rejects a forged matched key", () => {
-    const retry = source({ event: "pull_request", ref: "refs/pull/200/merge", runId: "2000" });
+    const retry = source({ family: "run", event: "pull_request", ref: "refs/pull/200/merge", runId: "2000" });
     expect(decideCorpusCacheRestore(retry, {
       matchedKey: retry.key,
       event: "pull_request",
@@ -116,6 +119,20 @@ describe("corpus cache transport scope across refs (#1867)", () => {
     })).toMatchObject({ accepted: true, source: source() });
   });
 
+  it("refuses to author a transport containing links or exceeding the payload ceiling", () => {
+    const linked = mkdtempSync(join(tmpdir(), "harvey-cache-transport-linked-"));
+    const oversized = mkdtempSync(join(tmpdir(), "harvey-cache-transport-oversized-"));
+    dirs.push(linked, oversized);
+    writeFileSync(join(linked, "content"), "portable bytes\n");
+    symlinkSync(join(linked, "content"), join(linked, "path-bound-link"));
+    expect(() => writeCorpusCacheTransport(linked, source())).toThrow("path-bound link");
+
+    const sparse = join(oversized, "sparse-payload");
+    writeFileSync(sparse, "");
+    truncateSync(sparse, CORPUS_CACHE_MAX_PAYLOAD_BYTES + 1);
+    expect(() => writeCorpusCacheTransport(oversized, source())).toThrow(`${CORPUS_CACHE_MAX_PAYLOAD_BYTES}-byte ceiling`);
+  });
+
   it("rejects a shard2/3 namespace absence instead of falling back to shard1", () => {
     for (const namespace of ["2", "3"]) {
       const decision = decideCorpusCacheRestore(source(), {
@@ -133,7 +150,7 @@ describe("corpus cache transport scope across refs (#1867)", () => {
   });
 
   it("rejects forged and mismatched head SHA claims", () => {
-    expect(() => corpusCacheTransportKey({ platform: "Linux", namespace: "1", runId: "100", runAttempt: "1", headSha: "forged" })).toThrow("headSha");
+    expect(() => corpusCacheTransportKey({ family: "main", platform: "Linux", namespace: "1", runId: "100", runAttempt: "1", headSha: "forged" })).toThrow("headSha");
     const forged = source({ headSha: "b".repeat(40), key: source().key });
     const dir = mkdtempSync(join(tmpdir(), "harvey-cache-transport-forged-"));
     dirs.push(dir);
@@ -153,7 +170,8 @@ describe("corpus cache transport scope across refs (#1867)", () => {
       event: "pull_request",
       ref: "refs/pull/200/merge",
       runId: "2000",
-      key: corpusCacheTransportKey({ platform: "Linux", namespace: "1", runId: "2000", runAttempt: "1", headSha: "a".repeat(40) }),
+      family: "run",
+      key: corpusCacheTransportKey({ family: "run", platform: "Linux", namespace: "1", runId: "2000", runAttempt: "1", headSha: "a".repeat(40) }),
     });
     expect(decideCorpusCacheRestore(retry, {
       matchedKey: retry.key,

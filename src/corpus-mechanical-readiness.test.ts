@@ -98,7 +98,9 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expect(workflow).not.toContain("validate:mechanical-corpus-parity");
     expect(producer).toContain("const scanDir = prepared!.scanDir");
     expect(producer.match(/scriptArgs: \[scanDir(?:, "--detect-only")?\]/g)).toHaveLength(3);
-    expect(producer).toContain("installTargetDeps(scanDir, target.m8?.installFlags ?? [])");
+    expect(producer).toContain("installTargetDeps(scanDir, target.m8?.installFlags ?? [], {");
+    expect(producer).toContain("targetTree: targetTreeIdentity");
+    expect(producer).toContain("dependencyPreparation }");
     expect(producer).toContain("runMutationScan(target.slug, scanDir, target.m8)");
     expect(producer).toContain("join(scanDir, m5Root)");
     expect(producer).toContain("join(scanDir, target.schemaPath)");

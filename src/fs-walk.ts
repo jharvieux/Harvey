@@ -24,13 +24,35 @@
 // `opendirSync` and an `await readdir()` are outside it — none is in the tree today, so banning
 // them would be a rule with a population of zero (#1345). Add them here the day one lands.
 
-import { readdirSync, statSync, type Stats } from "node:fs";
+import { lstatSync, readdirSync, statSync, type Stats } from "node:fs";
 import { join } from "node:path";
 
 export interface SafeDirEntry {
   name: string;
   path: string;
   isDirectory: boolean;
+}
+
+interface SafeLstatDirEntry extends SafeDirEntry {
+  isFile: boolean;
+  isSymbolicLink: boolean;
+  size: number;
+}
+
+/** Read directory entries without following links, for transport/shape validation. */
+export function readEntriesLstatSafe(dir: string): SafeLstatDirEntry[] {
+  return readdirSync(dir, { withFileTypes: true }).map((entry) => {
+    const path = join(dir, entry.name);
+    const stat = lstatSync(path);
+    return {
+      name: entry.name,
+      path,
+      isDirectory: stat.isDirectory(),
+      isFile: stat.isFile(),
+      isSymbolicLink: stat.isSymbolicLink(),
+      size: stat.size,
+    };
+  });
 }
 
 // MEASURED 2026-07-28 (node 24, darwin) against the three ways a committed link fails to resolve:

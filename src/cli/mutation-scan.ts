@@ -111,6 +111,7 @@ import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from ".
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
 import {
@@ -187,6 +188,7 @@ const incremental = process.argv.includes("--incremental");
 let reportPath = arg("--report");
 const hotspotsPath = arg("--hotspots");
 const outPath = arg("--out");
+const scopeOutPath = arg("--scope-out");
 // #819: where/whose package.json the line-coverage tool run should invoke — the target itself for
 // an ordinary per-app run, redirected to the workspace root by a successful #655 root-scoped run
 // below (the same case where reportPath/configPath are redirected).
@@ -693,13 +695,43 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
 // same finding to a harness with no meaningful suite: zero test files, or one placeholder spec.
 if (!reportPath) {
   const hasStrykerConfig = configPath ? existsSync(resolve(configPath)) : STRYKER_CONFIG_NAMES.some((f) => existsSync(join(targetDir, f)));
-  const { missing, reason } = detectNoTestSuite(readTargetPackageJson(), hasStrykerConfig, collectTestFiles(targetDir));
+  const detectOnlyTestFiles = collectTestFiles(targetDir);
+  const targetPackageManifest = readTargetPackageJson();
+  let ancestorWorkspaceSuite: string | null = null;
+  let childWorkspaceSuites: string[] = [];
+  const emitDetectOnlyScope = (zeroTestDisposition?: {
+    status: "no-suite" | "not-applicable";
+    reason: string;
+    provenance: string;
+    falsifier: string;
+  }): void => writeCorpusScannerScope(scopeOutPath, "mutation-detect-only", {
+    unitsExamined: detectOnlyTestFiles.length,
+    description: detectOnlyTestFiles.length > 0
+      ? `${detectOnlyTestFiles.length} test source file(s) opened by mutation detect-only suite detection`
+      : "package/config suite-presence signals examined by mutation detect-only (zero test source files found)",
+    observation: {
+      scanner: "mutation-detect-only",
+      testSources: {
+        count: detectOnlyTestFiles.length,
+        pathsDigest: digestObservedPaths(detectOnlyTestFiles.map((file) => file.path)),
+      },
+      suiteSignals: {
+        packageManifest: targetPackageManifest !== undefined,
+        strykerConfig: hasStrykerConfig,
+        ancestorWorkspaceSuite,
+        childWorkspaceSuites,
+      },
+      ...(detectOnlyTestFiles.length === 0 ? { zeroTestDisposition } : {}),
+    },
+  });
+  const { missing, reason } = detectNoTestSuite(targetPackageManifest, hasStrykerConfig, detectOnlyTestFiles);
   if (missing) {
     // #623: before declaring suite-absent, check whether the target is an app whose tests live at
     // a monorepo root — a false "no test suite" on a well-tested app reads as zero coverage.
     const ancestors = collectAncestorSignals(targetDir);
     const rootSuite = detectRootWorkspaceTestSuite(ancestors);
     if (rootSuite) {
+      ancestorWorkspaceSuite = rootSuite.reason;
       // #655: attempt a real root-scoped measurement — but never under --detect-only (must never
       // invoke Stryker) or --stub-check (a distinct, non-Stryker measurement tier).
       const attempt = !detectOnly && !stubCheck ? attemptRootScopedRun(rootSuite, ancestors) : undefined;
@@ -727,6 +759,7 @@ if (!reportPath) {
         } else {
           console.log(json);
         }
+        if (detectOnly) emitDetectOnlyScope();
         process.exit(0);
       }
     } else {
@@ -737,6 +770,7 @@ if (!reportPath) {
       // both (unusual, but not impossible) reports the ancestor-root gap first.
       const workspaceSuites = detectWorkspaceTestSuites(collectWorkspaceSignals(targetDir));
       if (workspaceSuites.length) {
+        childWorkspaceSuites = workspaceSuites.map((suite) => suite.path).sort();
         console.error(`✗ ${targetDir}: no root-level test suite, but ${workspaceSuites.length} workspace(s) carry their own (e.g. ${workspaceSuites[0]!.path}) — measurement gap, not 'no test suite' (#932).`);
         console.error(`M8 coverage: partial (workspace test suites not reachable from the root, #932) — emitting the measurement-gap finding instead of M8-00.`);
         const output = { finding: workspaceTestSuiteFinding(workspaceSuites), moduleRecord: workspaceTestSuiteModuleRecord(workspaceSuites) };
@@ -747,6 +781,7 @@ if (!reportPath) {
         } else {
           console.log(json);
         }
+        if (detectOnly) emitDetectOnlyScope();
         process.exit(0);
       }
     }
@@ -763,6 +798,21 @@ if (!reportPath) {
     } else {
       console.log(json);
     }
+    if (detectOnly) emitDetectOnlyScope({
+      status: targetPackageManifest === undefined ? "not-applicable" : "no-suite",
+      reason: why,
+      provenance: "mutation-scan inspected package, Stryker, ancestor-workspace, child-workspace, and test-source suite signals",
+      falsifier: "A discovered test source, Stryker configuration, ancestor suite, or child workspace suite invalidates this zero-unit observation",
+    });
+    process.exit(0);
+  }
+
+  if (detectOnly) {
+    console.error(`✓ ${targetDir}: test suite detected — mutation scoring skipped (--detect-only; a real run needs a provisioned Stryker install)`);
+    const json = "[]";
+    if (outPath) writeFileSync(outPath, json + "\n");
+    else console.log(json);
+    emitDetectOnlyScope();
     process.exit(0);
   }
 }
@@ -770,13 +820,7 @@ if (!reportPath) {
 // #470: detect-only stops here when a suite IS present — the caller (corpus-drift) wants the
 // suite-absent finding when it applies, never a Stryker invocation. An empty findings array,
 // not silence: the caller can tell "suite present, mutation deferred" from a crashed run.
-if (detectOnly) {
-  console.error(`✓ ${targetDir}: test suite detected — mutation scoring skipped (--detect-only; a real run needs a provisioned Stryker install)`);
-  const json = "[]";
-  if (outPath) writeFileSync(outPath, json + "\n");
-  else console.log(json);
-  process.exit(0);
-}
+if (detectOnly) throw new Error("mutation detect-only reached a report-backed path without emitting its scanner-owned scope receipt");
 
 // #373: the fast pre-Stryker deletion-survival pass. Everything below (Stryker invocation,
 // report shaping) is bypassed — this mode's output is stub-check runs + M8-01 findings.

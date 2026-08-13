@@ -77,13 +77,17 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(4);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow.match(/corpus-phase-v4-/g)).toHaveLength(5);
+    expect(workflow).toContain("corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key");
     expect(workflow).toContain("Validate corpus phase-cache transport provenance");
     expect(workflow).toContain("Record corpus phase-cache transport provenance");
-    expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key }}'");
+    expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key }}'");
     expect(workflow).toContain("--head-sha '${{ github.sha }}'");
     expect(workflow).toContain("--platform '${{ runner.os }}'");
+    expect(workflow).toContain("--family '${{ github.event_name == 'push' && 'main' || 'run' }}'");
     expect(workflow).toContain("--namespace '${{ matrix.shard }}'");
+    expect(workflow).toContain("CORPUS CACHE SIZE:");
   });
 
   it("seeds the default-branch cache after merge while preserving unconditional PR reporting", () => {
@@ -91,11 +95,15 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--default-ref 'refs/heads/${{ github.event.repository.default_branch }}'");
     expect(workflow).toContain("--event '${{ github.event_name }}'");
     expect(workflow).toContain("--ref '${{ github.ref }}'");
-    expect(workflow).toContain("Save shard2 main-visible corpus phase results");
-    expect(workflow).toContain("Save shard3 main-visible corpus phase results");
-    expect(workflow).toContain("key: corpus-phase-v4-${{ runner.os }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
-    expect(workflow).toContain("key: corpus-phase-v4-${{ runner.os }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
-    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(3);
+    expect(workflow).toContain("github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'");
+    expect(workflow.match(/github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group' \|\| github\.event_name == 'push'/g)).toHaveLength(5);
+    expect(workflow).toContain("Save successful main-shard corpus phase results");
+    expect(workflow).toContain("key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");
+    expect(workflow).not.toContain("Save shard3 main-visible corpus phase results");
+    expect(workflow).toContain("success() && steps.score.outcome == 'success'");
+    expect(workflow).not.toMatch(/Save successful main-shard corpus phase results[\s\S]{0,250}if: always\(\)/);
+    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(2);
   });
 
   it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {
@@ -179,8 +187,10 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(() => validateRestoredSemgrepPackArtifact(registry)).not.toThrow();
   });
 
-  it("forces scheduled and dispatch runs cold so cache equivalence is re-earned", () => {
-    expect(workflow).toContain('if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]');
+  it("keeps daily provider validation warm and exposes an explicit cold-equivalence drill", () => {
+    expect(workflow).toContain("force_cold_cache:");
+    expect(workflow).toContain('if [ "${{ inputs.force_cold_cache }}" = "true" ]');
+    expect(workflow).not.toContain('if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]');
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
     expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(1);
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");

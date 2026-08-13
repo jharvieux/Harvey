@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 // Not exported: nothing outside this file needs to name this type — callers get it as the inferred
 // return of detectPackageManager, or infer it structurally when passing "npm"/"pnpm"/"yarn" literals.
-type PackageManager = "npm" | "pnpm" | "yarn";
+export type PackageManager = "npm" | "pnpm" | "yarn";
 
 export function detectPackageManager(dir: string): PackageManager {
   if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";

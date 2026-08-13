@@ -26,6 +26,7 @@ import {
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  unlistedImportNeedsResolvedConfig,
   type JscpdDuplicate,
   type JscpdGlobMatch,
   type JscpdReport,
@@ -476,6 +477,14 @@ describe("knipToFindings", () => {
     expect(fileFinding?.impact).toBe("Entire file is unreferenced.");
   });
 
+  it("keeps an inferred unused file review-tier and countable when the source graph still supports it (#1871)", () => {
+    const path = "src/dead.ts";
+    const findings = knipToFindings(knipReport, {}, new Set([path]), new Set(), new Set([path]));
+    const fileFinding = findings.find((f) => f.location === path);
+    expect(fileFinding).toMatchObject({ severity: "Low", confidence: "Review", precisionTier: "review" });
+    expect(fileFinding?.evidence).toContain("Harvey-inferred entry points");
+  });
+
   it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
     // A fully-used file never appears in knip's own report, so add an all-empty issue record for one
     // (the shape a merged/legacy report can still carry) to prove the transform emits no finding for it.
@@ -560,7 +569,102 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
   it("drops to review tier for a scope whose config/plugins could not be resolved", () => {
     const findings = knipToFindings(depReport, {}, new Set(), new Set(["package.json"]));
     expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
+    expect(findings.every((f) => f.severity === "Low")).toBe(true);
     expect(findings[0]?.fix).toContain("Install the target's dependencies");
+  });
+
+  it("keeps manifest-only dependency candidates visible but informational until the full tier runs (#1871)", () => {
+    const findings = knipToFindings(
+      depReport,
+      {},
+      new Set(),
+      new Set(),
+      new Set(["package.json"]),
+    );
+    expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review" && f.severity === "Info")).toBe(true);
+    expect(findings.every((f) => f.evidence.includes("no lockfile-backed resolved surface"))).toBe(true);
+  });
+
+  it.each([
+    { evidence: "lockfile-backed source graph", files: 1, unresolvedDependencySurface: false, expectedCounted: 5 },
+    { evidence: "manifest-only graph after no-lock install failure", files: 0, unresolvedDependencySurface: true, expectedCounted: 1 },
+  ])("classifies reduced-tier evidence from the available $evidence, not a target name", ({ files, unresolvedDependencySurface, expectedCounted }) => {
+    const packagePath = "package.json";
+    const report: KnipReport = {
+      files: files ? ["src/dead.ts"] : [],
+      issues: [
+        { file: "src/live.ts", exports: [{ name: "deadExport", line: 2 }], types: [] },
+        {
+          file: packagePath,
+          exports: [],
+          types: [],
+          dependencies: [{ name: "runtime-package", line: 4 }],
+          devDependencies: [{ name: "build-package", line: 8 }],
+          binaries: [{ name: "build-cli" }],
+        },
+      ],
+    };
+    const inferredFiles = files ? new Set(["src/dead.ts"]) : new Set<string>();
+    const unresolvedDeps = new Set([packagePath]);
+    const manifestOnly = unresolvedDependencySurface ? new Set([packagePath]) : new Set<string>();
+    const findings = knipToFindings(report, {}, inferredFiles, unresolvedDeps, manifestOnly);
+    expect(findings.filter((finding) => finding.severity !== "Info")).toHaveLength(expectedCounted);
+    const packageRows = findings.filter((finding) => finding.location === packagePath);
+    expect(packageRows).toHaveLength(3);
+    expect(packageRows.every((finding) => finding.severity === (unresolvedDependencySurface ? "Info" : "Low"))).toBe(true);
+  });
+
+  it("keeps resolver-contingent unlisted imports informational while runtime imports remain counted", () => {
+    const report: KnipReport = {
+      files: [],
+      issues: [
+        { file: "tests/api.spec.ts", exports: [], types: [], unlisted: [{ name: "@workspace/types", line: 1 }] },
+        { file: "src/runtime.ts", exports: [], types: [], unlisted: [{ name: "runtime-package", line: 1 }] },
+      ],
+    };
+    const findings = knipToFindings(report, {}, new Set(), new Set(), new Set(), new Set(["tests/api.spec.ts"]));
+    expect(findings.find((finding) => finding.location === "tests/api.spec.ts")).toMatchObject({
+      severity: "Info",
+      confidence: "Review",
+      precisionTier: "review",
+    });
+    expect(findings.find((finding) => finding.location === "src/runtime.ts")).toMatchObject({
+      severity: "Medium",
+      confidence: "Confirmed",
+      precisionTier: "high",
+    });
+  });
+});
+
+describe("unlistedImportNeedsResolvedConfig — degraded resolver evidence", () => {
+  const issue = (file: string, name: string) => ({ file, exports: [], types: [], unlisted: [{ name, line: 1 }] });
+  const workspaceNames = new Set(["@workspace/ui", "@workspace/types", "@workspace/env"]);
+
+  it("identifies config and type-only references whose package verdict needs disabled resolver context", () => {
+    expect(unlistedImportNeedsResolvedConfig(issue("tailwind.config.ts", "@workspace/ui"), `const ui = require("@workspace/ui");`, workspaceNames)).toBe(true);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        issue("tests/api.spec.ts", "@workspace/types"),
+        `import type { Api } from "@workspace/types/api";\nexport const value: Api | undefined = undefined;\n`, workspaceNames,
+      ),
+    ).toBe(true);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        issue("src/env.ts", "@workspace/env"),
+        `/// <reference types="@workspace/env/process.d.ts" />\nexport const env = process.env;\n`, workspaceNames,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not demote runtime source imports or mixed runtime/type rows", () => {
+    expect(unlistedImportNeedsResolvedConfig(issue("src/runtime.ts", "@workspace/ui"), `import value from "@workspace/ui";`, workspaceNames)).toBe(false);
+    expect(unlistedImportNeedsResolvedConfig(issue("tailwind.config.ts", "external-plugin"), `import plugin from "external-plugin";`, workspaceNames)).toBe(false);
+    expect(
+      unlistedImportNeedsResolvedConfig(
+        { file: "src/mixed.ts", exports: [], types: [], unlisted: [{ name: "types-only", line: 1 }, { name: "runtime-package", line: 2 }] },
+        `import type { T } from "types-only";\nimport value from "runtime-package";\n`, workspaceNames,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -626,6 +730,18 @@ describe("knipToFindings — #1080 (unlisted/unresolved/duplicates/enumMembers/o
     const f = findings.find((r) => r.title.includes("binary"));
     expect(f?.evidence).toContain("some-cli");
     expect(f?.precisionTier).toBe("review");
+  });
+
+  it("does not present config-dependent package metadata as actionable in the degraded source tier (#1871)", () => {
+    const findings = knipToFindings(report, {}, new Set(), new Set(), new Set(["src/lib/report.ts"]));
+    const configDependent = findings.filter((f) =>
+      f.title.includes("optional peer") || f.title.includes("catalog") || f.title.includes("binary"),
+    );
+    expect(configDependent).toHaveLength(3);
+    expect(configDependent.every((f) => f.severity === "Info" && f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
+    expect(configDependent.every((f) => f.fix.includes("full Knip tier"))).toBe(true);
+    expect(findings.find((f) => f.title.includes("Unlisted import"))).toMatchObject({ severity: "Medium", confidence: "Confirmed" });
+    expect(findings.find((f) => f.title.includes("Duplicate export"))).toMatchObject({ severity: "Low", confidence: "Confirmed" });
   });
 
   it("emits nothing for any of the six categories when absent (back-compat with a merged/legacy report)", () => {
