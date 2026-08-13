@@ -196,6 +196,14 @@ export interface SemgrepOutput {
   time?: { rules?: string[] };
 }
 
+export interface SemgrepExecutionPlanReceipt {
+  schema: 1;
+  strategy: "partitioned-families";
+  families: Array<{ ordinal: number; id: string; configSha256: string }>;
+  primaryArgv: string[];
+  fallbackArgv: string[];
+}
+
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
 // legacy 3-level one (ERROR/WARNING/INFO) — MEASURED 2026-07-26 (semgrep 1.164.0): a live six-pack
 // scan produced MEDIUM as an `extra.severity` string (e.g. npm-missing-minimum-release-age). Mapping
@@ -540,19 +548,41 @@ function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[
   return families;
 }
 
+const SEMGREP_FAMILY_PRIMARY_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap"] as const;
+const SEMGREP_FAMILY_FALLBACK_PREFIX = ["-j", "1"] as const;
+const SEMGREP_FAMILY_TAIL = [
+  "--exclude", "node_modules",
+  "--disable-nosem",
+  "--timeout", "0",
+  "--json",
+  "--verbose",
+  "--time",
+] as const;
+
+/** Semantic plan receipt built from the same constants and family registry execution consumes. */
+export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepExecutionPlanReceipt {
+  const families = semgrepRuleFamilies(registryConfigs);
+  return {
+    schema: 1,
+    strategy: "partitioned-families",
+    families: families.map((family, ordinal) => ({
+      ordinal,
+      id: family.id,
+      configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
+    })),
+    primaryArgv: [...SEMGREP_FAMILY_PRIMARY_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+    fallbackArgv: [...SEMGREP_FAMILY_FALLBACK_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+  };
+}
+
 function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
   const args = [
     "--config", family.configPath,
-    "--exclude", "node_modules",
-    "--disable-nosem",
-    "--timeout", "0",
-    "--json",
-    "--verbose",
-    "--time",
+    ...SEMGREP_FAMILY_TAIL,
     dir,
   ];
-  let run = execSemgrep(["--x-ignore-semgrepignore-files", "--x-parmap", ...args]);
-  if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
+  let run = execSemgrep([...SEMGREP_FAMILY_PRIMARY_PREFIX, ...args]);
+  if ("failure" in run && !run.enoent) run = execSemgrep([...SEMGREP_FAMILY_FALLBACK_PREFIX, ...args]);
   if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
   const parsed = parseEnvelope(run.out);
   if (parsed.failure) return parsed;

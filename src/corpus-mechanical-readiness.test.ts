@@ -9,6 +9,7 @@ import type { Finding } from "./findings.js";
 import {
   compareCurrentMechanicalExecutions,
   assertPreparedTargetUnchanged,
+  buildCurrentMechanicalPhasePlan,
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
   currentTargetPinsSha256,
@@ -17,19 +18,26 @@ import {
   prepareCurrentMechanicalTarget,
   type CurrentMechanicalExecutionArtifact,
 } from "./corpus-mechanical-readiness.js";
-import { digestParts, mechanicalExaminedUnitDigest } from "./scan/mechanical-phase-cache.js";
+import { digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest } from "./scan/mechanical-phase-cache.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 const digest = "a".repeat(64);
 const packBody = Buffer.from("x");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
+const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
 const target = { slug: "target", repo: "https://example.invalid/target.git", commit: "b".repeat(40), vendoredSubtrees: ["vendor/reference"] };
 const finding: Finding = { id: "ROW-1", title: "row", severity: "Low", confidence: "Likely", category: "test", taxonomy: "test", location: "a.ts:1", status: "Open", evidence: "evidence", impact: "impact", fix: "fix", value: 1, ease: 1, safety: 1, mechanical: true };
 
+function stableFixture(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableFixture).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableFixture(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMechanicalExecutionArtifact {
   return {
-    schema: 1,
+    schema: 2,
     kind: "current-mechanical-execution",
     population: CURRENT_MECHANICAL_POPULATION,
     side,
@@ -47,12 +55,22 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
       target: {
         slug: "target", repo: target.repo, pin: target.commit, checkoutHead: target.commit, checkoutTree: digest,
         preparedTreeSha256: digest, preparation: CURRENT_MECHANICAL_PREPARATION, removedVendoredSubtrees: ["vendor/reference"],
+        emptyGitlinks: [{ path: "apps/web/app/(marketing)", object: "f".repeat(40), representation: "empty-directory" }],
         captureBeforeInstall: true, installMutationAtCapture: false, skipBundleScan: true,
         bundleDigest: digestParts(["bundle-pinned-off-v1"]),
         advisorySha256: digest, advisoryVersion: "osv-1", secretCandidateIdentity: digest,
         findings: [finding],
         producers: [{ detector: "producer", phase: "structural-ast", order: 1, module: "M1", unitsExamined: 1, examinedUnitIdentities: [{ producer: "producer", kind: "target-path", identity: "a.ts" }], examinedUnitDigest: mechanicalExaminedUnitDigest([{ producer: "producer", kind: "target-path", identity: "a.ts" }]), findings: 1, durationMs: 1, status: "ran" }],
         context: { filesPresent: 1 } as never,
+        executionPlan: {
+          schema: 1,
+          phases: MECHANICAL_PHASES,
+          implementation: { semgrep: digest },
+          externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
+          semgrep: { schema: 1, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], primaryArgv: ["--x-parmap"], fallbackArgv: ["-j", "1"] },
+        },
+        cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
+        semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
       },
     },
   };
@@ -100,6 +118,53 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.findings.push({ ...finding, id: "ROW-2" }); value.targets.target!.findings.reverse(); }, /ordered raw mechanical finding/);
     expectDifference((value) => { value.targets.target!.findings.length = 0; }, /ordered raw mechanical finding/);
     expectDifference((value) => { value.targets.target!.findings.push(finding); }, /ordered raw mechanical finding/);
+  });
+
+  it("strictly compares the partition strategy, family order/membership, flags, and config bytes", () => {
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "partitioned-families"; }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.reverse().forEach((family, ordinal) => { family.ordinal = ordinal; }); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.primaryArgv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
+  });
+
+  it("strictly compares complete ordered Semgrep errors and skipped paths, not their counts", () => {
+    const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>): void => {
+      const payload = { errors, skipped };
+      value.targets.target!.semgrepDiagnostics = { schema: 1, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
+    };
+    expectDifference((value) => { setDiagnostics(value, [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", message: "substituted" }], []); }, /ordered Semgrep/);
+    expectDifference((value) => { setDiagnostics(value, [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", reason: "too large" }]); }, /ordered Semgrep/);
+    const producer = artifact("hosted-producer");
+    const replay = artifact("independent-replay");
+    setDiagnostics(producer, [{ path: "a", message: "one" }, { path: "b", message: "two" }], []);
+    setDiagnostics(replay, [{ path: "b", message: "two" }, { path: "a", message: "one" }], []);
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).toThrow(/ordered Semgrep/);
+  });
+
+  it("rejects cache namespace cross-use, producer artifact permission, and gitlink receipt drift", () => {
+    expectDifference((value) => { value.targets.target!.cachePolicy.namespaceSha256 = "d".repeat(64); }, /cache namespaces overlap/);
+    expectDifference((value) => { value.targets.target!.cachePolicy.producerArtifactsAllowed = true; }, /cache policy\/namespace/);
+    expectDifference((value) => { value.targets.target!.emptyGitlinks = []; }, /empty-gitlink/);
+    expectDifference((value) => { value.targets.target!.emptyGitlinks[0]!.object = "e".repeat(40); }, /empty-gitlink/);
+    expectDifference((value) => { value.targets.target!.emptyGitlinks[0]!.path = "apps/web/other"; }, /empty-gitlink/);
+    expectDifference((value) => { value.targets.target!.emptyGitlinks[0]!.representation = "missing" as "empty-directory"; }, /empty-gitlink/);
+  });
+
+  it("refuses a replay namespace containing any prior artifact", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-current-replay-namespace-"));
+    try {
+      const cacheDir = join(root, "cache");
+      mkdirSync(cacheDir);
+      writeFileSync(join(cacheDir, "producer-artifact.json"), "{}\n");
+      expect(() => buildCurrentMechanicalPhasePlan({
+        side: "independent-replay", repoRoot: new URL("..", import.meta.url).pathname, cacheDir,
+        targetRevision: target.commit, targetTree: digest, advisoryDigest: digest, advisoryVersion: "osv-1", secretCandidateIdentity: digest,
+        registry: { identity: digest, files: [] },
+      })).toThrow(/namespace is not empty/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects examined-unit substitution/reorder and missing or duplicate producers", () => {

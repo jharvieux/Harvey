@@ -144,6 +144,36 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     expect(merged.time?.rules).toEqual(["a", "b", "same"]);
   });
 
+  it("conserves distinct same-path errors and removes only exact cross-family duplicates", () => {
+    const first = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first partial parse" };
+    const second = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second partial parse" };
+    const merged = mergeSemgrepFamilyOutputs([
+      { family: "a", output: { ...output("a"), errors: [first, second] }, cache: "miss", key: "a", unitsExamined: 1 },
+      { family: "b", output: { ...output("b"), errors: [first] }, cache: "miss", key: "b", unitsExamined: 1 },
+    ]);
+    expect(merged.errors).toEqual([first, second]);
+  });
+
+  it("does not erase an exact duplicate emitted twice by one family", () => {
+    const repeated = { path: "/target/src/broken.ts", type: "ParseError", message: "same engine record twice" };
+    const merged = mergeSemgrepFamilyOutputs([
+      { family: "a", output: { ...output("a"), errors: [repeated, repeated] }, cache: "miss", key: "a", unitsExamined: 1 },
+      { family: "b", output: { ...output("b"), errors: [repeated] }, cache: "miss", key: "b", unitsExamined: 1 },
+    ]);
+    expect(merged.errors).toEqual([repeated, repeated]);
+  });
+
+  it("stores and rereads every same-path diagnostic without collapsing its structure", async () => {
+    const { families, options } = fixture();
+    const first = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first partial parse" };
+    const second = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second partial parse" };
+    const complete: SemgrepOutput = { ...output("auth"), errors: [first, second] };
+    const cold = await executeSemgrepFamily(families[0]!, options, () => complete);
+    const warm = await executeSemgrepFamily(families[0]!, options, () => output("must-not-run"));
+    expect(cold.output.errors).toEqual([first, second]);
+    expect(warm.output.errors).toEqual([first, second]);
+  });
+
   it("preserves the monolithic namespace for a local Harvey rule loaded as one family", () => {
     const merged = mergeSemgrepFamilyOutputs([
       { family: "local", output: output("harvey-route-noauth"), cache: "miss", key: "local", unitsExamined: 1 },

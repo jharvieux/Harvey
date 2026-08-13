@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   assertPreparedTargetUnchanged,
+  buildCurrentMechanicalPhasePlan,
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
   currentHarnessReceipt,
@@ -19,7 +20,6 @@ import {
 import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
-import type { MechanicalPhaseCacheOptions } from "../scan/mechanical-phase-cache.js";
 import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 
@@ -40,7 +40,7 @@ const registry = validateRestoredSemgrepPackArtifact(registryDir);
 const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
 const harness = currentHarnessReceipt(repoRoot);
 const artifact: CurrentMechanicalExecutionArtifact = {
-  schema: 1,
+  schema: 2,
   kind: "current-mechanical-execution",
   population: CURRENT_MECHANICAL_POPULATION,
   side: "independent-replay",
@@ -69,22 +69,24 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
       binaryVersion("gitleaks"),
     ]);
-    const phaseCache: MechanicalPhaseCacheOptions = {
-      dir: registryDir,
-      mode: "off",
+    const plan = buildCurrentMechanicalPhasePlan({
+      side: "independent-replay",
+      repoRoot,
+      cacheDir: join(root, "replay-phase-cache"),
       targetRevision: target.commit,
       targetTree: targetTreeIdentity,
-      implementation: {},
-      externalInputs: {},
-      materializedInputs: { semgrep: registry.files },
-    };
+      advisoryDigest: snapshot.digest,
+      advisoryVersion: snapshot.osvScannerVersion,
+      secretCandidateIdentity,
+      registry,
+    });
     const result = await runMechanicalScanDetailed({
       dir: preparedDir,
       skipNetworkChecks: true,
       skipBundleScan: true,
       advisorySnapshot: snapshot,
       secretCandidateIdentity,
-      phaseCache,
+      phaseCache: plan.phaseCache,
     });
     assertPreparedTargetUnchanged(prepared);
     artifact.targets[target.slug] = {
@@ -94,6 +96,7 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       checkoutHead: prepared.checkoutHead,
       checkoutTree: prepared.checkoutTree,
       preparedTreeSha256: prepared.preparedTreeSha256,
+      emptyGitlinks: prepared.emptyGitlinks,
       preparation: CURRENT_MECHANICAL_PREPARATION,
       removedVendoredSubtrees: prepared.removedVendoredSubtrees,
       captureBeforeInstall: true,
@@ -106,6 +109,9 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       findings: result.findings,
       producers: result.detectors,
       context: result.context,
+      executionPlan: plan.executionPlan,
+      cachePolicy: plan.cachePolicy,
+      semgrepDiagnostics: result.semgrepDiagnostics,
     };
     console.error(`${target.slug}: ${result.findings.length} ordered current-replay row(s), ${result.detectors.length} producer receipt(s)`);
   } finally {

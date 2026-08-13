@@ -87,6 +87,7 @@ import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
   assertPreparedTargetUnchanged,
+  buildCurrentMechanicalPhasePlan,
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
   currentHarnessReceipt,
@@ -171,7 +172,7 @@ const currentShard = (() => {
 const allCurrentTargets: CurrentMechanicalTargetDefinition[] = EXTERNAL_CORPUS.map(({ slug, repo, commit, vendoredSubtrees }) => ({ slug, repo, commit, vendoredSubtrees }));
 const sharedRegistry = registrySnapshotMode === "reuse" ? validateRestoredSemgrepPackArtifact(registrySnapshotDir!) : undefined;
 const currentExecution: CurrentMechanicalExecutionArtifact | undefined = currentReadiness ? {
-  schema: 1,
+  schema: 2,
   kind: "current-mechanical-execution",
   population: CURRENT_MECHANICAL_POPULATION,
   side: "hosted-producer",
@@ -505,6 +506,19 @@ for (const target of targets) {
       digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
       binaryVersion("gitleaks"),
     ]) : undefined;
+    const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
+      side: "hosted-producer",
+      repoRoot,
+      cacheDir: phaseCacheDir!,
+      targetRevision: target.commit,
+      targetTree: targetTreeIdentity,
+      advisoryDigest: deterministicSnapshot.digest,
+      advisoryVersion: deterministicSnapshot.osvScannerVersion,
+      secretCandidateIdentity,
+      registry: { identity: sharedRegistry!.identity!, files: sharedRegistry!.files! },
+      producerMode: forceColdCache ? "verify" : "read-write",
+      onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+    }) : undefined;
     const mechanicalRun = !m8 ? await runMechanicalScanDetailed({
       dir: preparedDir,
       skipNetworkChecks,
@@ -512,7 +526,7 @@ for (const target of targets) {
       advisorySnapshot: deterministicSnapshot,
       advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
       secretCandidateIdentity,
-      phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
+      phaseCache: currentPlan?.phaseCache ?? (phaseCacheDir ? buildMechanicalPhaseCache({
         repoRoot,
         cacheDir: phaseCacheDir,
         mode: forceColdCache ? "verify" : "read-write",
@@ -527,7 +541,7 @@ for (const target of targets) {
         registryPackIdentity: sharedRegistry,
         registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
         onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
-      }) : undefined,
+      }) : undefined),
     }) : undefined;
     if (mechanicalRun) {
       assertPreparedTargetUnchanged(prepared!);
@@ -547,6 +561,7 @@ for (const target of targets) {
           checkoutHead: prepared!.checkoutHead,
           checkoutTree: prepared!.checkoutTree,
           preparedTreeSha256: prepared!.preparedTreeSha256,
+          emptyGitlinks: prepared!.emptyGitlinks,
           preparation: CURRENT_MECHANICAL_PREPARATION,
           removedVendoredSubtrees: prepared!.removedVendoredSubtrees,
           captureBeforeInstall: true,
@@ -559,6 +574,9 @@ for (const target of targets) {
           findings: mechanicalRun.findings,
           producers: mechanicalRun.detectors,
           context: mechanicalRun.context,
+          executionPlan: currentPlan!.executionPlan,
+          cachePolicy: currentPlan!.cachePolicy,
+          semgrepDiagnostics: mechanicalRun.semgrepDiagnostics,
         };
       }
     }

@@ -29,6 +29,13 @@ export interface SemgrepFamilyRecord {
   unitsExamined: number;
 }
 
+export interface SemgrepDiagnosticEvidence {
+  schema: 1;
+  errors: NonNullable<SemgrepOutput["errors"]>;
+  skipped: NonNullable<NonNullable<SemgrepOutput["paths"]>["skipped"]>;
+  sha256: string;
+}
+
 interface FamilyIdentity {
   targetRevision: string;
   targetTree: string;
@@ -218,6 +225,17 @@ function uniqueSorted<T>(items: readonly T[]): T[] {
   return [...new Map(items.map((item) => [stable(item), item])).entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, item]) => item);
 }
 
+function uniqueAcrossFamilies<T>(records: readonly SemgrepFamilyRecord[], select: (record: SemgrepFamilyRecord) => readonly T[]): T[] {
+  const seenInPriorFamilies = new Set<string>();
+  const kept: T[] = [];
+  for (const record of records) {
+    const items = select(record);
+    for (const item of items) if (!seenInPriorFamilies.has(stable(item))) kept.push(item);
+    for (const item of items) seenInPriorFamilies.add(stable(item));
+  }
+  return kept;
+}
+
 function stableRuleId(checkId: string): string {
   const registry = checkId.replace(/^.*?\.registry-packs\.[^.]+\./, "");
   if (registry !== checkId) return registry;
@@ -229,20 +247,32 @@ function stableRuleId(checkId: string): string {
 }
 
 export function mergeSemgrepFamilyOutputs(records: readonly SemgrepFamilyRecord[]): SemgrepOutput {
-  const errors = uniqueSorted(records.flatMap((record) => record.output.errors ?? []));
-  const errorsByPath = [...new Map(errors.map((error) => [error.path ?? stable(error), error])).values()];
-  const skipped = uniqueSorted(records.flatMap((record) => record.output.paths?.skipped ?? []));
+  // A path is not an error identity. Semgrep can emit several structurally distinct diagnostics
+  // for one file (including multiple PartialParsing records). Preserve the deterministic family
+  // traversal order and remove only content-identical cross-family duplicates. The old path-keyed
+  // Map silently discarded inbox-zero's second line-42 diagnostic while keeping the count-bearing
+  // cache artifact internally valid.
+  const errors = uniqueAcrossFamilies(records, (record) => record.output.errors ?? []);
+  const skipped = uniqueAcrossFamilies(records, (record) => record.output.paths?.skipped ?? []);
   const scanned = new Set(records.flatMap((record) => record.output.paths?.scanned ?? []));
-  for (const error of errorsByPath) if (error.path) scanned.add(error.path);
-  return canonicalizeSemgrepOutput({
+  for (const error of errors) if (error.path) scanned.add(error.path);
+  const canonical = canonicalizeSemgrepOutput({
     results: uniqueSorted(records.flatMap((record) => record.output.results ?? [])),
-    errors: errorsByPath,
+    errors: [],
     paths: {
       scanned: [...scanned].sort(),
-      skipped,
+      skipped: [],
     },
     time: { rules: [...new Set(records.flatMap((record) => record.output.time?.rules ?? []))].sort() },
   });
+  return { ...canonical, errors, paths: { ...canonical.paths, skipped } };
+}
+
+/** Checkout-independent, content-bearing diagnostic evidence. Array order remains load-bearing. */
+export function semgrepDiagnosticEvidence(output: SemgrepOutput, pathRoot: string): SemgrepDiagnosticEvidence {
+  const errors = canonicalizeRoot(output.errors ?? [], pathRoot, TARGET_ROOT_TOKEN);
+  const skipped = canonicalizeRoot(output.paths?.skipped ?? [], pathRoot, TARGET_ROOT_TOKEN);
+  return { schema: 1, errors, skipped, sha256: digest({ errors, skipped }) };
 }
 
 export function canonicalizeSemgrepOutput(output: SemgrepOutput): SemgrepOutput {

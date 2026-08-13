@@ -3,7 +3,7 @@ import type { Finding } from "../findings.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
 import { discoverAuthGuards } from "./auth-guard-discovery.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
-import { canonicalizeSemgrepOutput } from "./semgrep-family-cache.js";
+import { canonicalizeSemgrepOutput, semgrepDiagnosticEvidence, type SemgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
 import type { MechanicalPhaseCacheOptions } from "./mechanical-phase-cache.js";
 import {
@@ -50,7 +50,7 @@ interface SemgrepEngineDefinition {
   conservation: MechanicalEngineEvidence;
   corpus: MechanicalEngineEvidence;
   cadence: MechanicalEngineEvidence;
-  invoke: (input: SemgrepInput) => Promise<Finding[]>;
+  invoke: (input: SemgrepInput) => Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence }>;
   select: (input: SemgrepInput) => readonly unknown[];
   countExaminedUnits: (input: SemgrepInput, selected: readonly unknown[]) => number;
 }
@@ -61,6 +61,7 @@ export const SEMGREP_ENGINES: readonly SemgrepEngineDefinition[] = Object.freeze
     { file: "src/scan/semgrep.ts", exportName: "runSemgrep" },
     { file: "src/scan/semgrep.ts", exportName: "runSemgrepPartitioned" },
     { file: "src/scan/semgrep-family-cache.ts", exportName: "canonicalizeSemgrepOutput" },
+    { file: "src/scan/semgrep-family-cache.ts", exportName: "semgrepDiagnosticEvidence" },
     { file: "src/scan/auth-guard-discovery.ts", exportName: "discoverAuthGuards" },
     { file: "src/scan/semgrep.ts", exportName: "parseSemgrepFindings" },
     { file: "src/scan/semgrep.ts", exportName: "partitionGuardTokenSuppressed" },
@@ -84,7 +85,7 @@ export const SEMGREP_ENGINES: readonly SemgrepEngineDefinition[] = Object.freeze
   invoke: runSemgrepEngine,
 })]);
 
-async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: SemgrepInput): Promise<Finding[]> {
+async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: SemgrepInput): Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence }> {
   const findings: Finding[] = [];
   const registryConfigs = phaseCache?.materializedInputs?.semgrep;
   const semgrep = phaseCache?.semgrepFamilies && registryConfigs
@@ -132,8 +133,9 @@ async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: Se
   findings.push(...checkMissingCsp(scanDir));
   findings.push(...checkHostingConfigHeaders(scanDir));
   findings.push(...checkPublicDirSensitive(scanDir));
-  context.recordToolResult("semgrep", { failure: semgrep.failure, findings: findings.length });
-  return findings;
+  const diagnostics = semgrepDiagnosticEvidence(semgrep.result, scanDir);
+  context.recordToolResult("semgrep", { failure: semgrep.failure, findings: findings.length, diagnostics });
+  return { findings, diagnostics };
 }
 
 function targetPathExaminedUnits(producer: string, paths: readonly string[]): MechanicalExaminedUnitIdentity[] {
@@ -144,9 +146,10 @@ function receiptRecord(input: Omit<MechanicalProducerRecord, "unitsExamined">): 
   return { ...input, unitsExamined: input.examinedUnitIdentities.length };
 }
 
-export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<{ findings: Finding[]; records: MechanicalProducerRecord[] }> {
+export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<{ findings: Finding[]; records: MechanicalProducerRecord[]; diagnostics: SemgrepDiagnosticEvidence }> {
   const findings: Finding[] = [];
   const records: MechanicalProducerRecord[] = [];
+  let diagnostics: SemgrepDiagnosticEvidence | undefined;
   for (const engine of SEMGREP_ENGINES) {
     const selected = engine.select(input);
     const examinedUnitIdentities = targetPathExaminedUnits(engine.id, selected.map((unit) => {
@@ -157,9 +160,11 @@ export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<
     if (unitsExamined !== examinedUnitIdentities.length) throw new Error(`${engine.id}: examined-unit count ${unitsExamined} differs from exact selector receipt ${examinedUnitIdentities.length}`);
     const started = performance.now();
     const emitted = await engine.invoke(input);
-    assertProducerTaxonomyOwnership(engine, emitted);
-    findings.push(...emitted);
-    records.push(receiptRecord({ detector: engine.id, phase: engine.phase, order: engine.order, module: engine.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
+    assertProducerTaxonomyOwnership(engine, emitted.findings);
+    findings.push(...emitted.findings);
+    diagnostics = emitted.diagnostics;
+    records.push(receiptRecord({ detector: engine.id, phase: engine.phase, order: engine.order, module: engine.module, examinedUnitIdentities, findings: emitted.findings.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
   }
-  return { findings, records };
+  if (!diagnostics) throw new Error("Semgrep registry produced no diagnostic evidence");
+  return { findings, records, diagnostics };
 }

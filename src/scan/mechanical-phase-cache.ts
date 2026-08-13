@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
-import type { SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
+import type { SemgrepDiagnosticEvidence, SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
 
 export const MECHANICAL_PHASES = [
   "secrets-history",
@@ -49,6 +49,7 @@ export interface MechanicalPhaseValue {
   findings: Finding[];
   scope: MechanicalPhaseScope;
   producers?: MechanicalProducerRecord[];
+  evidence?: { semgrepDiagnostics: SemgrepDiagnosticEvidence };
 }
 
 export interface MechanicalPhaseRecord extends MechanicalPhaseValue {
@@ -91,6 +92,7 @@ interface CacheArtifact {
   findings: Finding[];
   scope: MechanicalPhaseScope;
   producers?: MechanicalProducerRecord[];
+  evidence?: MechanicalPhaseValue["evidence"];
 }
 
 const CACHEABILITY: Record<MechanicalPhase, { cacheable: boolean; reason: string }> = {
@@ -216,8 +218,18 @@ function producerRecordProblems(producer: unknown, expectedPhase: MechanicalPhas
 }
 
 function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue, requireDigest: boolean = false): string[] {
-  if (value.producers === undefined) return [];
-  const problems = value.producers.flatMap((producer) => producerRecordProblems(producer, phase, requireDigest).map((problem) => `${producer.detector}: ${problem}`));
+  const problems: string[] = [];
+  if (value.evidence !== undefined) {
+    const diagnostic = value.evidence.semgrepDiagnostics;
+    if (phase !== "semgrep") problems.push("Semgrep diagnostic evidence is attached to a non-Semgrep phase");
+    if (diagnostic?.schema !== 1 || !Array.isArray(diagnostic.errors) || !Array.isArray(diagnostic.skipped) || !/^[a-f0-9]{64}$/.test(diagnostic.sha256 ?? "")) {
+      problems.push("Semgrep diagnostic evidence is incomplete or malformed");
+    } else if (diagnostic.sha256 !== createHash("sha256").update(stable({ errors: diagnostic.errors, skipped: diagnostic.skipped })).digest("hex")) {
+      problems.push("Semgrep diagnostic evidence digest differs from its complete raw content");
+    }
+  }
+  if (value.producers === undefined) return problems;
+  problems.push(...value.producers.flatMap((producer) => producerRecordProblems(producer, phase, requireDigest).map((problem) => `${producer.detector}: ${problem}`)));
   for (let index = 1; index < value.producers.length; index++) {
     const prior = value.producers[index - 1]!;
     const current = value.producers[index]!;
@@ -298,6 +310,7 @@ function persistedPhaseValue(value: MechanicalPhaseValue): MechanicalPhaseValue 
   return {
     findings: value.findings,
     scope: value.scope,
+    ...(value.evidence === undefined ? {} : { evidence: value.evidence }),
     ...(value.producers === undefined ? {} : {
       producers: value.producers.map((producer) => ({
         ...producer,
@@ -328,12 +341,14 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
   const receiptProblems = phaseValueProblems(expected.phase, {
     findings: value.findings,
     scope: value.scope,
+    ...(value.evidence === undefined ? {} : { evidence: value.evidence }),
     ...(value.producers === undefined ? {} : { producers: value.producers }),
   }, true);
   if (receiptProblems.length > 0) throw new Error(`artifact producer execution receipts are malformed: ${receiptProblems.join("; ")}`);
   const payloadDigest = mechanicalPhasePayloadDigest({
     findings: value.findings,
     scope: value.scope,
+    ...(value.evidence === undefined ? {} : { evidence: value.evidence }),
     ...(value.producers === undefined ? {} : { producers: value.producers }),
   });
   if (value.payloadDigest !== payloadDigest) throw new Error("artifact payload checksum mismatch");
@@ -416,12 +431,12 @@ export async function executeMechanicalPhase(
   const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
-    return { phase, findings: hit.findings, scope: hit.scope, producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
+    return { phase, findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = withProducerDigests(await execute());
   assertPhaseValue(phase, value, true);
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
-  const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
+  const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
   if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
@@ -430,7 +445,7 @@ export async function executeMechanicalPhase(
   writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...persisted }, null, 2)}\n`);
   renameSync(temp, path);
   const reread = parseArtifact(readFileSync(path, "utf8"), expected);
-  if (!equivalent(value, { findings: reread.findings, scope: reread.scope, ...(reread.producers === undefined ? {} : { producers: reread.producers }) })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
+  if (!equivalent(value, { findings: reread.findings, scope: reread.scope, ...(reread.evidence === undefined ? {} : { evidence: reread.evidence }), ...(reread.producers === undefined ? {} : { producers: reread.producers }) })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
   cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`);
   return { phase, ...value, durationMs: Date.now() - started, cache: status, reason: hit ? "forced-cold result matched cached artifact" : `no complete artifact for this content address; recomputed${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`, key };

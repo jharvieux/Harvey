@@ -1,15 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
 import { cloneAtPinCached } from "./scan/corpus-clone.js";
 import type { MechanicalContextMetrics } from "./scan/mechanical-context.js";
-import type { MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
-import { binaryVersion, digestFiles, digestParts, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
+import type { MechanicalPhaseCacheOptions, MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
+import { binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
+import { buildMechanicalPhaseCache } from "./scan/mechanical-phase-identity.js";
 import { shardTargets } from "./scan/corpus-shards.js";
-import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
+import type { SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
+import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
 export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/shared-pruned-scan-root/copy-before-install/bundle-off-v3" as const;
@@ -41,6 +43,7 @@ export interface CurrentMechanicalTargetReceipt {
   checkoutHead: string;
   checkoutTree: string;
   preparedTreeSha256: string;
+  emptyGitlinks: EmptyGitlinkReceipt[];
   preparation: typeof CURRENT_MECHANICAL_PREPARATION;
   removedVendoredSubtrees: string[];
   captureBeforeInstall: true;
@@ -53,10 +56,35 @@ export interface CurrentMechanicalTargetReceipt {
   findings: Finding[];
   producers: MechanicalProducerRecord[];
   context: MechanicalContextMetrics;
+  executionPlan: CurrentMechanicalExecutionPlanReceipt;
+  cachePolicy: CurrentMechanicalCachePolicyReceipt;
+  semgrepDiagnostics: SemgrepDiagnosticEvidence;
+}
+
+export interface EmptyGitlinkReceipt {
+  path: string;
+  object: string;
+  representation: "empty-directory";
+}
+
+interface CurrentMechanicalExecutionPlanReceipt {
+  schema: 1;
+  phases: typeof MECHANICAL_PHASES;
+  implementation: MechanicalPhaseCacheOptions["implementation"];
+  externalInputs: MechanicalPhaseCacheOptions["externalInputs"];
+  semgrep: SemgrepExecutionPlanReceipt;
+}
+
+interface CurrentMechanicalCachePolicyReceipt {
+  schema: 1;
+  mode: "hosted-content-addressed" | "independent-cold-off";
+  namespaceSha256: string;
+  emptyNamespaceVerified: boolean;
+  producerArtifactsAllowed: boolean;
 }
 
 export interface CurrentMechanicalExecutionArtifact {
-  schema: 1;
+  schema: 2;
   kind: "current-mechanical-execution";
   population: typeof CURRENT_MECHANICAL_POPULATION;
   side: "hosted-producer" | "independent-replay";
@@ -88,7 +116,67 @@ export interface PreparedMechanicalTarget {
   checkoutHead: string;
   checkoutTree: string;
   preparedTreeSha256: string;
+  emptyGitlinks: EmptyGitlinkReceipt[];
   removedVendoredSubtrees: string[];
+}
+
+function currentMechanicalOptionIdentity(): string {
+  return JSON.stringify({ bundleDir: null, skipBundleScan: true, skipNetworkChecks: true, handrolledIndicators: false, authGuards: [], externalStateMode: "snapshot" });
+}
+
+export function buildCurrentMechanicalPhasePlan(options: {
+  side: CurrentMechanicalExecutionArtifact["side"];
+  repoRoot: string;
+  cacheDir: string;
+  targetRevision: string;
+  targetTree: string;
+  advisoryDigest: string;
+  advisoryVersion: string;
+  secretCandidateIdentity: string;
+  registry: { identity: string; files: string[] };
+  producerMode?: "read-write" | "verify";
+  onEvent?: (message: string) => void;
+}): { phaseCache: MechanicalPhaseCacheOptions; executionPlan: CurrentMechanicalExecutionPlanReceipt; cachePolicy: CurrentMechanicalCachePolicyReceipt } {
+  const cacheDir = resolve(options.cacheDir);
+  if (options.side === "independent-replay") {
+    if (existsSync(cacheDir) && readRecursiveSafe(cacheDir).length > 0) throw new Error("independent replay cache namespace is not empty; producer artifacts must never enter replay");
+    mkdirSync(cacheDir, { recursive: true });
+  }
+  const mode = options.side === "independent-replay" ? "off" : (options.producerMode ?? "read-write");
+  const phaseCache = buildMechanicalPhaseCache({
+    repoRoot: options.repoRoot,
+    cacheDir,
+    mode,
+    targetRevision: options.targetRevision,
+    targetTree: options.targetTree,
+    optionIdentity: currentMechanicalOptionIdentity(),
+    deterministicExternalState: {
+      advisoryDigest: options.advisoryDigest,
+      advisoryVersion: options.advisoryVersion,
+      secretCandidateIdentity: options.secretCandidateIdentity,
+    },
+    registryPackIdentity: options.registry,
+    registrySnapshotMode: "reuse",
+    onEvent: options.onEvent,
+  });
+  if (!phaseCache.semgrepFamilies || !phaseCache.materializedInputs?.semgrep) throw new Error("current readiness requires the exhaustive partitioned Semgrep plan");
+  return {
+    phaseCache,
+    executionPlan: {
+      schema: 1,
+      phases: MECHANICAL_PHASES,
+      implementation: phaseCache.implementation,
+      externalInputs: phaseCache.externalInputs,
+      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
+    },
+    cachePolicy: {
+      schema: 1,
+      mode: options.side === "independent-replay" ? "independent-cold-off" : "hosted-content-addressed",
+      namespaceSha256: sha256(cacheDir),
+      emptyNamespaceVerified: options.side === "independent-replay",
+      producerArtifactsAllowed: options.side === "hosted-producer",
+    },
+  };
 }
 
 function sha256(value: string | Buffer): string {
@@ -99,6 +187,11 @@ function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${stable(entry)}`).join(",")}}`;
   return JSON.stringify(value);
+}
+
+function canonicalTargetRelativePath(path: string): boolean {
+  return path.length > 0 && !path.startsWith("/") && !path.includes("\\")
+    && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
 export function currentTargetPinsSha256(targets: readonly CurrentMechanicalTargetDefinition[]): string {
@@ -227,8 +320,8 @@ export function prepareCurrentMechanicalTarget(options: {
   // M5-M8 baselines by thousands of rows). Empty gitlinks are filesystem surface, not nested bytes:
   // keep them explicit unless their containing subtree is itself excluded by the target manifest.
   for (const subtree of removedVendoredSubtrees) rmSync(join(checkoutDir, subtree), { recursive: true, force: true });
-  for (const gitlink of trackedGitlinks) if (!removedVendoredSubtrees.some((subtree) => gitlink === subtree || gitlink.startsWith(`${subtree}/`))) {
-    mkdirSync(join(checkoutDir, gitlink), { recursive: true });
+  for (const gitlink of trackedGitlinks) if (!removedVendoredSubtrees.some((subtree) => gitlink.path === subtree || gitlink.path.startsWith(`${subtree}/`))) {
+    mkdirSync(join(checkoutDir, gitlink.path), { recursive: true });
   }
   for (const subtree of removedVendoredSubtrees) if (existsSync(join(checkoutDir, subtree))) {
     throw new Error(`${target.slug}: vendored subtree ${subtree} survived the mutable scan-tree preparation`);
@@ -237,10 +330,10 @@ export function prepareCurrentMechanicalTarget(options: {
   if (scanTreeSha256 !== preparedTreeSha256) {
     throw new Error(`${target.slug}: mutable scan tree differs from the pinned prepared population before install: ${scanTreeSha256} != ${preparedTreeSha256}`);
   }
-  return { checkoutDir, preparedDir, scanDir: checkoutDir, checkoutHead, checkoutTree, preparedTreeSha256, removedVendoredSubtrees };
+  return { checkoutDir, preparedDir, scanDir: checkoutDir, checkoutHead, checkoutTree, preparedTreeSha256, emptyGitlinks: trackedGitlinks, removedVendoredSubtrees };
 }
 
-function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, excludedSubtrees: readonly string[]): string[] {
+function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, excludedSubtrees: readonly string[]): EmptyGitlinkReceipt[] {
   if (existsSync(preparedDir)) throw new Error(`prepared target destination already exists: ${preparedDir}`);
   const listed = execFileSync("git", ["-C", checkoutDir, "ls-files", "--stage", "-z"], { encoding: "buffer" });
   const entries = listed.toString("utf8").split("\0").filter(Boolean).map((row) => {
@@ -251,9 +344,9 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, 
     if (!/^[a-f0-9]{40,64}$/.test(object ?? "") || stage !== "0" || path.length === 0 || path.startsWith("/") || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
       throw new Error(`unsafe or incomplete tracked-file row: ${JSON.stringify(row)}`);
     }
-    return { mode, path };
+    return { mode, object: object!, path };
   });
-  const gitlinks: string[] = [];
+  const gitlinks: EmptyGitlinkReceipt[] = [];
   try {
     mkdirSync(preparedDir);
     for (const entry of entries) {
@@ -271,7 +364,7 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, 
           throw new Error(`tracked gitlink ${entry.path} has materialized content that is not bound by the parent target tree`);
         }
         mkdirSync(join(preparedDir, entry.path), { recursive: true });
-        gitlinks.push(entry.path);
+        gitlinks.push({ path: entry.path, object: entry.object, representation: "empty-directory" });
         continue;
       }
       if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") throw new Error(`tracked path ${entry.path} has unsupported Git mode ${entry.mode}`);
@@ -357,7 +450,7 @@ function normalizedProducer(record: MechanicalProducerRecord): unknown {
 }
 
 function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: string): void {
-  if (artifact.schema !== 1 || artifact.kind !== "current-mechanical-execution" || artifact.population !== CURRENT_MECHANICAL_POPULATION) throw new Error(`${source}: not a current mechanical execution artifact`);
+  if (artifact.schema !== 2 || artifact.kind !== "current-mechanical-execution" || artifact.population !== CURRENT_MECHANICAL_POPULATION) throw new Error(`${source}: not a current mechanical execution artifact`);
   if (artifact.side !== "hosted-producer" && artifact.side !== "independent-replay") throw new Error(`${source}: execution side is invalid`);
   if (!artifact.executionId.startsWith(`${artifact.side}:`)) throw new Error(`${source}: execution id is missing or belongs to another side`);
   if (!Array.isArray(artifact.commands) || artifact.commands.length === 0 || artifact.commands.some((command) => typeof command !== "string" || command.length === 0)) throw new Error(`${source}: execution command receipt is missing`);
@@ -384,6 +477,30 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
     if (target.preparation !== CURRENT_MECHANICAL_PREPARATION || target.captureBeforeInstall !== true || target.installMutationAtCapture !== false) throw new Error(`${source}: ${slug} was not captured before install mutation`);
     if (target.skipBundleScan !== true || target.bundleDigest !== digestParts(["bundle-pinned-off-v1"])) throw new Error(`${source}: ${slug} bundle input was not pinned off`);
     if (stable(target.removedVendoredSubtrees) !== stable([...(declared.vendoredSubtrees ?? [])])) throw new Error(`${source}: ${slug} vendored-subtree preparation differs from the manifest`);
+    if (!Array.isArray(target.emptyGitlinks) || target.emptyGitlinks.some((entry) => !canonicalTargetRelativePath(entry.path) || !/^[a-f0-9]{40,64}$/.test(entry.object) || entry.representation !== "empty-directory")
+      || new Set(target.emptyGitlinks.map((entry) => entry.path)).size !== target.emptyGitlinks.length) {
+      throw new Error(`${source}: ${slug} empty-gitlink receipt is missing or malformed`);
+    }
+    if (target.executionPlan?.schema !== 1 || stable(target.executionPlan.phases) !== stable(MECHANICAL_PHASES)
+      || target.executionPlan.semgrep?.strategy !== "partitioned-families" || target.executionPlan.semgrep.families.length === 0
+      || new Set(target.executionPlan.semgrep.families.map((family) => family.id)).size !== target.executionPlan.semgrep.families.length
+      || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal || !SHA256.test(family.configSha256))
+      || !Array.isArray(target.executionPlan.semgrep.primaryArgv) || target.executionPlan.semgrep.primaryArgv.length === 0
+      || !Array.isArray(target.executionPlan.semgrep.fallbackArgv) || target.executionPlan.semgrep.fallbackArgv.length === 0
+      || Object.keys(target.executionPlan.implementation).length === 0 || Object.keys(target.executionPlan.externalInputs).length === 0) {
+      throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed`);
+    }
+    const policy = target.cachePolicy;
+    if (policy?.schema !== 1 || !SHA256.test(policy.namespaceSha256)
+      || (artifact.side === "hosted-producer" && (policy.mode !== "hosted-content-addressed" || policy.emptyNamespaceVerified || !policy.producerArtifactsAllowed))
+      || (artifact.side === "independent-replay" && (policy.mode !== "independent-cold-off" || !policy.emptyNamespaceVerified || policy.producerArtifactsAllowed))) {
+      throw new Error(`${source}: ${slug} cache policy/namespace does not preserve producer/replay isolation`);
+    }
+    const diagnostics = target.semgrepDiagnostics;
+    if (diagnostics?.schema !== 1 || !Array.isArray(diagnostics.errors) || !Array.isArray(diagnostics.skipped)
+      || diagnostics.sha256 !== sha256(stable({ errors: diagnostics.errors, skipped: diagnostics.skipped }))) {
+      throw new Error(`${source}: ${slug} complete Semgrep diagnostic evidence is missing or corrupt`);
+    }
     for (const [value, label] of [[target.preparedTreeSha256, "prepared tree"], [target.advisorySha256, "advisory"], [target.secretCandidateIdentity, "secret candidates"]] as const) assertSha(value, `${source}: ${slug} ${label}`);
     if (!Array.isArray(target.findings) || !Array.isArray(target.producers) || target.producers.length === 0) throw new Error(`${source}: ${slug} mechanical rows or producer census is missing`);
     const producerIds = target.producers.map((producer) => `${producer.phase}:${producer.order}:${producer.detector}`);
@@ -478,6 +595,10 @@ export function compareCurrentMechanicalExecutions(producer: CurrentMechanicalEx
       secretCandidateIdentity: target.secretCandidateIdentity,
     });
     if (stable(receipt(left)) !== stable(receipt(right))) throw new Error(`${slug}: producer/replay preparation or external-state receipt differs`);
+    if (stable(left.emptyGitlinks) !== stable(right.emptyGitlinks)) throw new Error(`${slug}: explicit empty-gitlink path/object/representation receipt differs`);
+    if (stable(left.executionPlan) !== stable(right.executionPlan)) throw new Error(`${slug}: semantic execution-plan strategy/families/flags/config/identity differs`);
+    if (left.cachePolicy.namespaceSha256 === right.cachePolicy.namespaceSha256) throw new Error(`${slug}: producer/replay cache namespaces overlap`);
+    if (stable(left.semgrepDiagnostics) !== stable(right.semgrepDiagnostics)) throw new Error(`${slug}: complete ordered Semgrep errors/skipped evidence differs`);
     if (stable(left.findings) !== stable(right.findings)) throw new Error(`${slug}: ordered raw mechanical finding fields/order/population differ`);
     if (stable(left.producers.map(normalizedProducer)) !== stable(right.producers.map(normalizedProducer))) throw new Error(`${slug}: producer order, findings, status, or exact examined-unit population differs`);
   }

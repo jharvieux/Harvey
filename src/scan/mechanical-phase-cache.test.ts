@@ -19,6 +19,7 @@ import {
   type MechanicalExaminedUnitIdentity,
   type MechanicalProducerRecord,
 } from "./mechanical-phase-cache.js";
+import { semgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
 
 const finding = (id: string): Finding => ({
   id,
@@ -88,6 +89,24 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(warm.cache).toBe("hit");
     expect(execute).not.toHaveBeenCalled();
     expect({ findings: warm.findings, scope: warm.scope }).toEqual({ findings: cold.findings, scope: cold.scope });
+  });
+
+  it("conserves complete same-path Semgrep diagnostics through phase store and reread", async () => {
+    const cache = options();
+    const errors = [
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first" },
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second" },
+    ];
+    const value = {
+      findings: [finding("SEM-ERR-00")],
+      scope: { unitsExamined: 1, description: "one Semgrep target" },
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] } }, tmpdir()) },
+    };
+    const cold = await executeMechanicalPhase("semgrep", cache, () => value);
+    const warm = await executeMechanicalPhase("semgrep", cache, () => ({ ...value, findings: [finding("must-not-run")] }));
+    expect(cold.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(warm.cache).toBe("hit");
+    expect(warm.evidence?.semgrepDiagnostics.errors).toEqual(errors);
   });
 
   it("persists the producer census deterministically and restores cache-hit status", async () => {
