@@ -58,6 +58,43 @@ describe("mechanical phase implementation identities (#1864)", () => {
     expect(after.semgrep).toBe(before.semgrep);
   });
 
+  it("follows shared-context ownership into deterministic dependency advisory identity", () => {
+    const root = fixture();
+    const files = discoverMechanicalPhaseImplementationFiles(root, ["dependency-advisory"])["dependency-advisory"]!;
+    expect(files).toContain(join(root, "src", "scan", "mechanical-context.ts"));
+    expect(files).toContain(join(root, "src", "workspaces.ts"));
+    expect(buildMechanicalPhaseCache({
+      repoRoot: root,
+      cacheDir: join(root, "cache"),
+      mode: "read-write",
+      targetRevision: "commit",
+      targetTree: "tree",
+      optionIdentity: "options",
+      registryPackIdentity: { identity: "resolved-registry-packs-v1" },
+      deterministicExternalState: {
+        advisoryDigest: "advisory-snapshot",
+        advisoryVersion: "osv-scanner-test",
+        secretCandidateIdentity: "secret-candidates",
+      },
+    }).implementation["dependency-advisory"]).toBeTruthy();
+  });
+
+  it("keeps empty implementation ownership a loud failure", () => {
+    const root = fixture();
+    const mechanical = join(root, "src", "scan", "mechanical.ts");
+    writeFileSync(mechanical, `async function scan(): Promise<void> {
+  const runPhase = async (_phase: string, execute: () => unknown): Promise<unknown> => execute();
+  await runPhase("dependency-advisory", () => ({
+    findings: [],
+    scope: { unitsExamined: 1, description: "no implementation ownership" },
+  }));
+}
+void scan;
+`);
+    expect(() => discoverMechanicalPhaseImplementationFiles(root, ["dependency-advisory"]))
+      .toThrow("dependency-advisory: no implementation helpers discovered from its runPhase callback");
+  });
+
   it("a configuration helper edit invalidates only configuration", () => {
     const root = fixture();
     const before = build(root);
@@ -74,8 +111,13 @@ describe("mechanical phase implementation identities (#1864)", () => {
     const mechanical = join(root, "src", "scan", "mechanical.ts");
     writeFileSync(helper, "export function phaseCacheAddedHelper(): void {}\n");
     const source = readFileSync(mechanical, "utf8")
-      .replace('import { existsSync, readFileSync, realpathSync } from "node:fs";', 'import { existsSync, readFileSync, realpathSync } from "node:fs";\nimport { phaseCacheAddedHelper } from "./phase-cache-added-helper.js";')
-      .replace('const semgrepPhase = await runPhase("semgrep", async () => {', 'const semgrepPhase = await runPhase("semgrep", async () => {\n      phaseCacheAddedHelper();');
+      .replace('import type { Finding } from "../findings.js";', 'import type { Finding } from "../findings.js";\nimport { phaseCacheAddedHelper } from "./phase-cache-added-helper.js";')
+      .replace(
+        'const result = await runRegisteredSemgrepEngines({ scanDir, context, phaseCache: opts.phaseCache, authGuards: opts.authGuards, unitsExamined: allUnits });',
+        'const result = (phaseCacheAddedHelper(), await runRegisteredSemgrepEngines({ scanDir, context, phaseCache: opts.phaseCache, authGuards: opts.authGuards, unitsExamined: allUnits }));',
+      );
+    expect(source).toContain('import { phaseCacheAddedHelper } from "./phase-cache-added-helper.js";');
+    expect(source).toContain("phaseCacheAddedHelper(),");
     writeFileSync(mechanical, source);
     expect(discoverMechanicalPhaseImplementationFiles(root).semgrep).toContain(helper);
   });

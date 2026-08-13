@@ -14,14 +14,8 @@ import { isDirectorySafe, readEntriesSafe, statSafe } from "./fs-walk.js";
 import { BANNED, GUARD_MODULE, discoverSourceFiles, findBannedStatSites, readSourceFiles } from "./fs-walk-guard.js";
 import { walkSourceFiles } from "./scan/common.js";
 import { measureCodebaseSize } from "./scan/codebase-size.js";
-import { scanPgIdor } from "./scan/pg-idor.js";
-import { scanPgResponseExposure } from "./scan/pg-response-exposure.js";
-import { scanServiceRoleLiteral } from "./scan/service-role-literal.js";
-import { scanCounterRace } from "./scan/counter-race.js";
-import { scanEnvSchema } from "./scan/env-schema.js";
-import { scanSecretRotation } from "./scan/secret-rotation.js";
+import { MechanicalScanContext } from "./scan/mechanical-context.js";
 import { checkWebExtensionManifest } from "./scan/webext-manifest.js";
-import { scanMigrationColumnDrift } from "./scan/migration-column-drift.js";
 import { annotateCveReachability } from "./scan/dep-reachability.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { checkInfrastructureScope } from "./scan/infra-scope.js";
@@ -58,9 +52,9 @@ function plantTarget(): string {
   symlinkSync("real.js/child", join(dir, "src", "through-a-file"));
   symlinkSync("cycle-b", join(dir, "src", "cycle-a"));
   symlinkSync("cycle-a", join(dir, "src", "cycle-b"));
-  // scanMigrationColumnDrift only walks a directory that carries an ORDERED migration history, so
-  // without this its row passes on a tree it never read — the zero-findings-because-unscanned shape
-  // #1190 warns about. Same reason the CVE row below hands annotateCveReachability a real finding.
+  // The mechanical context inventories ordered migration history, so include that surface rather
+  // than letting its walker row pass on a tree it never read. Same reason the CVE row below hands
+  // annotateCveReachability a real finding.
   mkdirSync(join(dir, "supabase", "migrations"), { recursive: true });
   writeFileSync(join(dir, "supabase", "migrations", "001_init.sql"), "create table t (id uuid, org_id uuid);\n");
   symlinkSync("../../nowhere.sql", join(dir, "supabase", "migrations", "002_missing.sql"));
@@ -125,18 +119,12 @@ describe("statSafe / readEntriesSafe (#1451)", () => {
 // the planted tree — verified by reverting the source files and watching every row below fail.
 const WALKERS: [name: string, run: (dir: string) => unknown][] = [
   ["scan/common.ts walkSourceFiles — M1 AST tier (21 detectors), M7 prisma-app-perf, migration drift (fixed #1455; standing regression)", (d) => walkSourceFiles(d)],
+  ["scan/mechanical-context.ts MechanicalScanContext — shared M1/M6 detector inventory", (d) => new MechanicalScanContext(d).dispose()],
   ["scan/codebase-size.ts measureCodebaseSize — quick-scan pricing + the run-audit orchestrator (fixed #1455; standing regression)", (d) => measureCodebaseSize(d)],
   ["detectors/load-sources.ts loadSources — the shared loader for M5/M6/M7/M8/M9 and the M1 AST tier", (d) => loadSources(d)],
   ["detectors/asset-weight.ts scanAssetWeight — M7", (d) => scanAssetWeight(d)],
   ["scan/scan-scope.ts resolveScanScope — every module's scratch copy, non-git (zip-export) target", (d) => resolveScanScope(d).cleanup()],
-  ["scan/pg-idor.ts scanPgIdor — M1", (d) => scanPgIdor(d)],
-  ["scan/pg-response-exposure.ts scanPgResponseExposure — M1", (d) => scanPgResponseExposure(d)],
-  ["scan/service-role-literal.ts scanServiceRoleLiteral — M1", (d) => scanServiceRoleLiteral(d)],
-  ["scan/counter-race.ts scanCounterRace — M1", (d) => scanCounterRace(d)],
-  ["scan/env-schema.ts scanEnvSchema — M1", (d) => scanEnvSchema(d)],
-  ["scan/secret-rotation.ts scanSecretRotation — M1", (d) => scanSecretRotation(d)],
   ["scan/webext-manifest.ts checkWebExtensionManifest — M1", (d) => checkWebExtensionManifest(d)],
-  ["scan/migration-column-drift.ts scanMigrationColumnDrift — M1", (d) => scanMigrationColumnDrift(d)],
   ["scan/dep-reachability.ts annotateCveReachability — M1 CVE ranking", (d) => annotateCveReachability([CVE_FINDING], d, new Set(["next"]))],
   ["scan/ext-coverage.ts checkUnreadSourceExtensions — M1-EXT-00", (d) => checkUnreadSourceExtensions(d, [])],
   ["scan/infra-scope.ts checkInfrastructureScope — INFRA-SCOPE-00", (d) => checkInfrastructureScope(d)],

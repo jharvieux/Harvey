@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { binaryVersion } from "../scan/mechanical-phase-cache.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runOsvScanner } from "../scan/dependencies.js";
-import { EXTERNAL_CORPUS, FREE_TIER_EXPECTATIONS } from "../scan/external-corpus.js";
+import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { CORPUS_ADVISORY_SNAPSHOT_DIR, canonicalizeCorpusOsvInput, type CorpusAdvisorySnapshotManifest } from "../corpus-advisory-snapshot.js";
 
 const args = process.argv.slice(2);
@@ -19,8 +19,9 @@ if (!outDir) {
 }
 const targetAt = args.indexOf("--target");
 const onlyTarget = targetAt >= 0 ? args[targetAt + 1] : undefined;
-const expected = new Set(FREE_TIER_EXPECTATIONS.map((row) => row.slug));
-const targets = EXTERNAL_CORPUS.filter((target) => expected.has(target.slug) && (!onlyTarget || target.slug === onlyTarget));
+// Migration parity and the registry corpus lane scan every pinned target, not only the six with a
+// free-tier grade. The snapshot population must therefore be coextensive with EXTERNAL_CORPUS.
+const targets = EXTERNAL_CORPUS.filter((target) => !onlyTarget || target.slug === onlyTarget);
 if (targets.length === 0) {
   console.error(`corpus-advisory-snapshot: no snapshot target ${onlyTarget ?? "(all)"}`);
   process.exit(2);

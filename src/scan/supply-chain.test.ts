@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LicenseCandidate, LicenseScope } from "../sbom.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
+import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -71,6 +71,24 @@ describe("checkInstallScripts", () => {
 
   it("does not flag when no install lifecycle hooks are present", () => {
     expect(checkInstallScripts([{ label: "package.json", scripts: { build: "next build", test: "vitest" } }])).toEqual([]);
+  });
+});
+
+describe("checkDependencyInstallScripts", () => {
+  it("flags a resolved transitive install script with its pinned version", () => {
+    const findings = checkDependencyInstallScripts([
+      { name: "native-helper", version: "2.1.0", license: "MIT", direct: false, hasInstallScript: true },
+      { name: "plain-helper", version: "1.0.0", license: "MIT", direct: false, hasInstallScript: false },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-INSTALL-SCRIPT-DEP");
+    expect(findings[0]?.evidence).toBe("native-helper@2.1.0");
+  });
+
+  it("does not flag a resolved tree with no lifecycle scripts", () => {
+    expect(checkDependencyInstallScripts([
+      { name: "plain-helper", version: "1.0.0", license: "MIT", direct: false, hasInstallScript: false },
+    ])).toEqual([]);
   });
 });
 

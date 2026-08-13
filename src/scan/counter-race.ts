@@ -10,20 +10,12 @@
 // shape this dataflow gate clears. It still can't see a DB-side lock/transaction wrapper, so it
 // stays review, never free-count.
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding } from "./common.js";
 
-// Plain .js is deliberately in scope — the calibration fixtures (and many Next.js pages/api routes)
-// are .js. (The original reason for the separate walk, "loadSources() excludes .js", was true until
-// #1065 widened SOURCE_FILE on 2026-07-25; this pass runs inside runMechanicalScan, which hands it
-// no SourceInput[], so it keeps its own tree walk.)
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 // The string table name in a `.from("<table>")` call anywhere in a call chain, if any.
 function tableOf(node: ts.Node): string | undefined {
@@ -147,18 +139,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectCounterRaceFindings(files: SourceInput[]): Finding[] {
   return files.filter((f) => SOURCE_EXT.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    if (isDirectory) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
-export function scanCounterRace(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectCounterRaceFindings(files);
 }

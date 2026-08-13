@@ -44,18 +44,22 @@ function sourceFile(path: string): ts.SourceFile {
   return ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
-function importedBindings(path: string, parsed: ts.SourceFile): Map<string, string> {
-  const bindings = new Map<string, string>();
-  for (const statement of parsed.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const imported = resolveRelativeImplementation(path, statement.moduleSpecifier.text);
-    if (!imported || !statement.importClause) continue;
-    if (statement.importClause.name) bindings.set(statement.importClause.name.text, imported);
-    const named = statement.importClause.namedBindings;
-    if (named && ts.isNamespaceImport(named)) bindings.set(named.name.text, imported);
-    if (named && ts.isNamedImports(named)) for (const element of named.elements) bindings.set(element.name.text, imported);
+function isTypeOnlyDependency(statement: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
+  if (ts.isImportDeclaration(statement)) {
+    const clause = statement.importClause;
+    if (!clause) return false;
+    if (clause.isTypeOnly) return true;
+    return !clause.name
+      && clause.namedBindings !== undefined
+      && ts.isNamedImports(clause.namedBindings)
+      && clause.namedBindings.elements.length > 0
+      && clause.namedBindings.elements.every((element) => element.isTypeOnly);
   }
-  return bindings;
+  if (statement.isTypeOnly) return true;
+  return statement.exportClause !== undefined
+    && ts.isNamedExports(statement.exportClause)
+    && statement.exportClause.elements.length > 0
+    && statement.exportClause.elements.every((element) => element.isTypeOnly);
 }
 
 function transitiveImplementationClosure(roots: readonly string[]): string[] {
@@ -66,6 +70,10 @@ function transitiveImplementationClosure(roots: readonly string[]): string[] {
     const parsed = sourceFile(path);
     for (const statement of parsed.statements) {
       if ((!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+      // Type-only edges have no effect on runtime detector output. Following them turns a phase identity into a
+      // declaration graph (for example Semgrep -> MechanicalScanContext -> TenancyOverride ->
+      // supabase-static) and falsely invalidates unrelated phases.
+      if (isTypeOnlyDependency(statement)) continue;
       const imported = resolveRelativeImplementation(path, statement.moduleSpecifier.text);
       if (imported) visit(imported);
     }
@@ -92,36 +100,70 @@ export function discoverTransitiveImplementationFiles(roots: readonly string[]):
   return transitiveImplementationClosure(roots);
 }
 
+// The symbol walk is a function of mechanical.ts plus the requested phase set. Cache only its
+// relative ROOTS: every call still re-walks and re-digests the transitive implementation files, so
+// an edited helper or a helper that changes its own imports invalidates immediately. Corpus parity
+// constructs this identity repeatedly across checkout paths; rebuilding the identical TS program
+// for every before/after assertion needlessly blocks Vitest's worker RPC window.
+const PHASE_ROOT_CACHE = new Map<string, Partial<Record<MechanicalPhase, string[]>>>();
+
 /**
  * Discovers the implementation closure from the identifiers each runPhase callback actually
  * references. A new relative helper import used by a cacheable phase joins its key automatically;
- * an unresolved helper fails loud instead of leaving a stale key. Top-level local helper functions
- * are followed too, adding their imported dependencies to the same closure.
+ * an unresolved helper fails loud instead of leaving a stale key. The TypeScript symbol graph
+ * follows aliases and lexically-scoped locals back to their imported implementation, so a common
+ * local names in other phases stay outside this phase's identity.
  */
 export function discoverMechanicalPhaseImplementationFiles(
   repoRoot: string,
   phases: readonly MechanicalPhase[] = CACHEABLE_MECHANICAL_PHASES,
 ): Partial<Record<MechanicalPhase, string[]>> {
   const mechanical = join(repoRoot, "src", "scan", "mechanical.ts");
-  const parsed = sourceFile(mechanical);
-  const imports = importedBindings(mechanical, parsed);
-  const localFunctions = new Map<string, ts.FunctionDeclaration>();
-  for (const statement of parsed.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name) localFunctions.set(statement.name.text, statement);
+  const mechanicalSource = readFileSync(mechanical, "utf8");
+  const cacheKey = digestParts([mechanicalSource, [...phases].sort().join("\0")]);
+  const cachedRoots = PHASE_ROOT_CACHE.get(cacheKey);
+  if (cachedRoots) {
+    return Object.fromEntries(phases.map((phase) => {
+      const roots = cachedRoots[phase];
+      if (!roots || roots.length === 0) throw new Error(`${phase}: no implementation helpers discovered from its runPhase callback`);
+      return [phase, transitiveImplementationClosure(roots.map((root) => join(repoRoot, root)))];
+    }));
   }
+  const program = ts.createProgram([mechanical], {
+    allowJs: false,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    noLib: true,
+    skipLibCheck: true,
+    target: ts.ScriptTarget.Latest,
+    types: [],
+  });
+  const parsed = program.getSourceFile(mechanical);
+  if (!parsed) throw new Error(`mechanical phase orchestrator cannot be parsed: ${mechanical}`);
+  const checker = program.getTypeChecker();
 
   const rootsByPhase = new Map<MechanicalPhase, Set<string>>();
-  const collect = (node: ts.Node, roots: Set<string>, visitedFunctions: Set<string>): void => {
+  const collectLocalImplementation = (declaration: ts.Declaration, roots: Set<string>, visitedSymbols: Set<ts.Symbol>): void => {
+    if (ts.isVariableDeclaration(declaration) && declaration.initializer) collect(declaration.initializer, roots, visitedSymbols);
+    else if (ts.isFunctionDeclaration(declaration) && declaration.body) collect(declaration.body, roots, visitedSymbols);
+    else if (ts.isParameter(declaration) && declaration.initializer) collect(declaration.initializer, roots, visitedSymbols);
+    else if (ts.isClassDeclaration(declaration)) collect(declaration, roots, visitedSymbols);
+  };
+  const collect = (node: ts.Node, roots: Set<string>, visitedSymbols: Set<ts.Symbol>): void => {
     if (ts.isIdentifier(node)) {
-      const imported = imports.get(node.text);
-      if (imported) roots.add(imported);
-      const local = localFunctions.get(node.text);
-      if (local && !visitedFunctions.has(node.text)) {
-        visitedFunctions.add(node.text);
-        collect(local, roots, visitedFunctions);
+      const symbol = checker.getSymbolAtLocation(node);
+      if (symbol && !visitedSymbols.has(symbol)) {
+        visitedSymbols.add(symbol);
+        const resolved = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+        const declarations = resolved.declarations ?? symbol.declarations ?? [];
+        for (const declaration of declarations) {
+          const owner = declaration.getSourceFile().fileName;
+          if (owner === mechanical) collectLocalImplementation(declaration, roots, visitedSymbols);
+          else if (owner.startsWith(`${repoRoot}/`) && statSafe(owner)?.isFile()) roots.add(owner);
+        }
       }
     }
-    ts.forEachChild(node, (child) => collect(child, roots, visitedFunctions));
+    ts.forEachChild(node, (child) => collect(child, roots, visitedSymbols));
   };
 
   const findPhases = (node: ts.Node): void => {
@@ -133,7 +175,7 @@ export function discoverMechanicalPhaseImplementationFiles(
       const phase = node.arguments[0]!.text as MechanicalPhase;
       if (phases.includes(phase)) {
         const roots = new Set<string>();
-        collect(node.arguments[1]!, roots, new Set<string>());
+        collect(node.arguments[1]!, roots, new Set<ts.Symbol>());
         rootsByPhase.set(phase, roots);
       }
     }
@@ -142,11 +184,14 @@ export function discoverMechanicalPhaseImplementationFiles(
   findPhases(parsed);
 
   const discovered: Partial<Record<MechanicalPhase, string[]>> = {};
+  const relativeRoots: Partial<Record<MechanicalPhase, string[]>> = {};
   for (const phase of phases) {
     const roots = rootsByPhase.get(phase);
     if (!roots || roots.size === 0) throw new Error(`${phase}: no implementation helpers discovered from its runPhase callback`);
     discovered[phase] = transitiveImplementationClosure([...roots]);
+    relativeRoots[phase] = [...roots].map((root) => root.slice(repoRoot.length + 1)).sort();
   }
+  PHASE_ROOT_CACHE.set(cacheKey, relativeRoots);
   return discovered;
 }
 

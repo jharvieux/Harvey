@@ -35,6 +35,8 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 });
 
 const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
+const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
+const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;
@@ -80,7 +82,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   it("preserves real mechanical findings and examined scopes across a cold then warm faithful large fixture", async () => {
     const src = join(dir, "src");
     mkdirSync(src);
-    for (let i = 0; i < 250; i++) writeFileSync(join(src, `route-${i}.ts`), `export function route${i}(tenantId: string) { return { tenantId, row: ${i} }; }\n`);
+    for (let i = 0; i < 300; i++) writeFileSync(join(src, `route-${i}.ts`), `export function route${i}(tenantId: string) { return { tenantId, row: ${i} }; }\n`);
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-mechanical-cache-"));
     try {
       const phases = ["secrets-history", "dependency-advisory", "semgrep", "configuration", "structural-ast", "normalization"] as const;
@@ -97,12 +99,46 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(warm.findings).toEqual(cold.findings);
       expect(warm.phases.map((phase) => phase.phase)).toEqual(cold.phases.map((phase) => phase.phase));
       expect(warm.phases.map((phase) => phase.scope)).toEqual(cold.phases.map((phase) => phase.scope));
+      expect(warm.detectors.map((detector) => [detector.detector, detector.unitsExamined])).toEqual(
+        cold.detectors.map((detector) => [detector.detector, detector.unitsExamined]),
+      );
+      expect(cold.detectors).toHaveLength(65);
+      expect(new Set(cold.detectors.map((detector) => detector.phase))).toEqual(new Set(phases));
+      expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.length === detector.unitsExamined)).toBe(true);
+      expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.every((unit) => unit.producer === detector.detector))).toBe(true);
+      expect(cold.detectors.every((detector) => detector.examinedUnitDigest === mechanicalExaminedUnitDigest(detector.examinedUnitIdentities))).toBe(true);
+      expect(cold.detectors.find((detector) => detector.detector === "secrets-history-bundle")?.examinedUnitDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(warm.detectors.map((detector) => detector.examinedUnitIdentities)).toEqual(
+        cold.detectors.map((detector) => detector.examinedUnitIdentities),
+      );
+      expect(cold.detectors.filter((detector) => detector.phase === "structural-ast").reduce((sum, detector) => sum + detector.findings, 0)).toBe(
+        cold.phases.find((phase) => phase.phase === "structural-ast")?.findings.length,
+      );
+      expect(warm.detectors.filter((detector) => detector.phase === "structural-ast").reduce((sum, detector) => sum + detector.findings, 0)).toBe(
+        warm.phases.find((phase) => phase.phase === "structural-ast")?.findings.length,
+      );
+      expect(cold.detectors.map((detector) => `${detector.phase}:${detector.detector}`).sort()).toEqual(
+        MECHANICAL_REGISTRY.map((producer) => `${producer.phase}:${producer.id}`).sort(),
+      );
+      expect(new Set(cold.detectors.filter((detector) => detector.phase === "configuration").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
+      expect(new Set(cold.detectors.filter((detector) => detector.phase === "dependency-advisory").map((detector) => detector.unitsExamined)).size).toBeGreaterThan(1);
+      expect(warm.detectors.filter((detector) => detector.status === "cached").length).toBeGreaterThan(20);
+      expect(cold.context.astsBuilt).toBeGreaterThanOrEqual(300);
+      expect(cold.context.astCacheHits).toBeGreaterThan(0);
+      expect(cold.context.avoidedFileReads).toBeGreaterThan(0);
+      expect(cold.context.astCacheRejectedEntries).toBeGreaterThan(0);
+      expect(cold.context.astCachePeakEntries).toBeLessThan(cold.context.filesParsed);
+      expect(cold.context.astCachePeakEntries).toBeLessThanOrEqual(cold.context.astCacheMaxEntries);
+      expect(cold.context.astCachePeakSourceBytes).toBeLessThanOrEqual(cold.context.astCacheMaxSourceBytes);
+      expect(cold.context.astCacheEntriesAtRelease).toBeGreaterThan(0);
+      expect(cold.context.astCacheEntriesAfterRelease).toBe(0);
+      expect(cold.context.astWorkingSetReleased).toBe(true);
       expect(warm.phases.filter((phase) => phase.cache === "hit").map((phase) => phase.phase).sort()).toEqual([
         "configuration",
         "semgrep",
         "structural-ast",
       ]);
-      expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(250);
+      expect(warm.phases.find((phase) => phase.phase === "structural-ast")?.scope.unitsExamined).toBeGreaterThanOrEqual(300);
     } finally {
       rmSync(cacheDir, { recursive: true, force: true });
     }

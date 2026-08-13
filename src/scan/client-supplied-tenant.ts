@@ -40,7 +40,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 import { COMPARISON_OPS } from "./drizzle-tenant-scope.js";
 import {
   NON_SHIPPING_FILE,
@@ -444,8 +444,4 @@ export function detectClientSuppliedTenantFindings(files: SourceInput[]): Findin
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanClientSuppliedTenant(projectDir: string): Finding[] {
-  return detectClientSuppliedTenantFindings(walkSourceFiles(projectDir));
 }

@@ -36,7 +36,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 const POWERED_BY_HEADER = /^x-powered-by$/i;
 
@@ -122,8 +122,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectExpressPoweredByFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanExpressPoweredBy(projectDir: string): Finding[] {
-  return detectExpressPoweredByFindings(walkSourceFiles(projectDir));
 }

@@ -21,13 +21,11 @@
 // outside the migration history is not seen; and the read and the insert must be in the same
 // function, so a dedup split across a helper is not assessed.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
-import { readMigrations, stripComments } from "./migration-column-drift.js";
+import { mechanicalFinding } from "./common.js";
+import { stripComments } from "./migration-column-drift.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
@@ -83,15 +81,6 @@ export function uniqueConstraints(sources: { file: string; sql: string }[]): Map
 
 // A snapshot does not record that a column was ever dropped, which is why migration-column-drift.ts
 // refuses to read one — but it states the constraints in force perfectly well, so it is read here.
-function readSchemaSnapshots(dir: string): { file: string; sql: string }[] {
-  const out: { file: string; sql: string }[] = [];
-  for (const rel of ["schema.sql", join("supabase", "schema.sql"), join("db", "schema.sql")]) {
-    const full = join(dir, rel);
-    if (existsSync(full)) out.push({ file: relative(dir, full), sql: readFileSync(full, "utf8") });
-  }
-  return out;
-}
-
 interface Chain {
   table: string;
   kind: "read" | "insert";
@@ -207,8 +196,4 @@ export function detectDedupWithoutUniqueFindings(files: SourceInput[], constrain
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text), constraints));
-}
-
-export function scanDedupWithoutUnique(projectDir: string): Finding[] {
-  return detectDedupWithoutUniqueFindings(walkSourceFiles(projectDir), uniqueConstraints([...readMigrations(projectDir), ...readSchemaSnapshots(projectDir)]));
 }

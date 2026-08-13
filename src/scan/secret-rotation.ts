@@ -18,16 +18,12 @@
 // code never names. The `===`/`!==` shape additionally requires a secret-ish env name AND a
 // non-literal other side, so config compares (`process.env.NODE_ENV === "production"`) never fire.
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 // The `===`/`!==` verify shape needs a secret-ish name to distinguish a signature check from a
 // config compare. timingSafeEqual is high-signal on its own and does not require this.
@@ -214,18 +210,4 @@ export function detectSecretRotationFindings(files: SourceInput[]): Finding[] {
     }
   }
   return findings;
-}
-
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    if (isDirectory) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
-export function scanSecretRotation(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectSecretRotationFindings(files);
 }

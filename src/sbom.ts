@@ -79,7 +79,10 @@ export function parsePackageLock(text: string): ParsedLock {
   interface LockEntry {
     version?: string;
     dev?: boolean;
-    license?: string;
+    // npm normally records an SPDX string here, but older/generated package-lock files can
+    // preserve package.json's deprecated `{ type, url }` license object. Keep the parse boundary
+    // honest: JSON is untrusted and must not smuggle an object into LicenseCandidate's string.
+    license?: unknown;
     integrity?: string;
     link?: boolean;
     hasInstallScript?: boolean;
@@ -88,12 +91,19 @@ export function parsePackageLock(text: string): ParsedLock {
   const lock = JSON.parse(text) as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
   const out = new Map<string, SbomComponent>();
   let unmatched = 0;
+  const licenseId = (raw: unknown): string | undefined => {
+    if (typeof raw === "string") return raw.trim() || undefined;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const type = (raw as { type?: unknown }).type;
+    return typeof type === "string" ? type.trim() || undefined : undefined;
+  };
   const add = (name: string, meta: LockEntry): void => {
+    const license = licenseId(meta.license);
     out.set(`${name}@${meta.version ?? ""}`, {
       name,
       version: meta.version ?? "",
       ...(meta.dev ? { dev: true } : {}),
-      ...(meta.license ? { license: meta.license } : {}),
+      ...(license ? { license } : {}),
       ...(meta.integrity ? { integrity: meta.integrity } : {}),
       ...(meta.hasInstallScript ? { hasInstallScript: true } : {}),
     });

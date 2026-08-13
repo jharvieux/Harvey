@@ -6,14 +6,20 @@ import type { Finding } from "../findings.js";
 import {
   CACHEABLE_MECHANICAL_PHASES,
   assertMechanicalCacheVerification,
+  createMechanicalProducerRecord,
   executeMechanicalPhase,
   MECHANICAL_PHASES,
+  mechanicalExaminedUnitDigest,
   mechanicalPhasePayloadDigest,
   resolveGitTree,
+  targetPathExaminedUnits,
   type MechanicalPhase,
   type MechanicalPhaseCacheOptions,
   type MechanicalPhaseRecord,
+  type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerRecord,
 } from "./mechanical-phase-cache.js";
+import { semgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
 
 const finding = (id: string): Finding => ({
   id,
@@ -31,6 +37,16 @@ const finding = (id: string): Finding => ({
   ease: 1,
   safety: 1,
 });
+
+interface MutableReceiptArtifact {
+  findings: Finding[];
+  scope: { unitsExamined: number; description: string };
+  producers: (Partial<MechanicalProducerRecord> & {
+    unitsExamined: number;
+    examinedUnitIdentities?: MechanicalExaminedUnitIdentity[];
+  })[];
+  payloadDigest: string;
+}
 
 describe("content-addressed mechanical phase cache (#1864)", () => {
   const dirs: string[] = [];
@@ -55,6 +71,15 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
   const run = (phase: MechanicalPhase, cache: MechanicalPhaseCacheOptions, id: string = phase) =>
     executeMechanicalPhase(phase, cache, () => ({ findings: [finding(id)], scope: { unitsExamined: 1_000, description: "faithful large source fixture" } }));
 
+  const producerValue = (paths: readonly string[] = ["src/a.ts", "src/b.ts", "src/c.ts"]) => {
+    const examinedUnitIdentities = targetPathExaminedUnits("owned-producer", paths);
+    return {
+      findings: [finding("owned-finding")],
+      scope: { unitsExamined: paths.length, description: "exact producer-selected source population" },
+      producers: [createMechanicalProducerRecord({ detector: "owned-producer", phase: "structural-ast", order: 10, module: "M1", examinedUnitIdentities, findings: 1, durationMs: 12.5, status: "ran" })],
+    };
+  };
+
   it("returns byte-equivalent normalized findings and examined scope on a real cold then warm large-fixture path", async () => {
     const cache = options();
     const cold = await run("structural-ast", cache);
@@ -64,6 +89,98 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(warm.cache).toBe("hit");
     expect(execute).not.toHaveBeenCalled();
     expect({ findings: warm.findings, scope: warm.scope }).toEqual({ findings: cold.findings, scope: cold.scope });
+  });
+
+  it("conserves complete same-path Semgrep diagnostics through phase store and reread", async () => {
+    const cache = options();
+    const errors = [
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first" },
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second" },
+    ];
+    const value = {
+      findings: [finding("SEM-ERR-00")],
+      scope: { unitsExamined: 1, description: "one Semgrep target" },
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] } }, tmpdir()) },
+    };
+    const cold = await executeMechanicalPhase("semgrep", cache, () => value);
+    const warm = await executeMechanicalPhase("semgrep", cache, () => ({ ...value, findings: [finding("must-not-run")] }));
+    expect(cold.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(warm.cache).toBe("hit");
+    expect(warm.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+  });
+
+  it("persists the producer census deterministically and restores cache-hit status", async () => {
+    const cache = options();
+    const examinedUnitIdentities = targetPathExaminedUnits("owned-producer", Array.from({ length: 1_000 }, (_, index) => `src/unit-${index}.ts`));
+    const value = {
+      findings: [finding("owned-finding")],
+      scope: { unitsExamined: 1_000, description: "faithful large source fixture" },
+      producers: [createMechanicalProducerRecord({ detector: "owned-producer", phase: "structural-ast", order: 10, module: "M1", examinedUnitIdentities, findings: 1, durationMs: 12.5, status: "ran" })],
+    };
+    const cold = await executeMechanicalPhase("structural-ast", cache, () => value);
+    const artifact = join(cache.dir, "structural-ast", `${cold.key}.json`);
+    expect(JSON.parse(readFileSync(artifact, "utf8")).producers).toEqual([
+      expect.objectContaining({ detector: "owned-producer", durationMs: 0, status: "ran", examinedUnitIdentities }),
+    ]);
+
+    const execute = vi.fn(() => value);
+    const warm = await executeMechanicalPhase("structural-ast", cache, execute);
+    expect(execute).not.toHaveBeenCalled();
+    expect(warm.producers).toEqual([
+      expect.objectContaining({ detector: "owned-producer", durationMs: 0, status: "cached", examinedUnitIdentities }),
+    ]);
+  });
+
+  it("rejects missing, duplicate, noncanonical, count-inconsistent, wrong-producer, and wrong-order cached receipts", async () => {
+    const corruptions: readonly [string, (artifact: MutableReceiptArtifact) => void, RegExp][] = [
+      ["missing", (artifact) => { delete artifact.producers[0]!.examinedUnitIdentities; }, /identities are missing/],
+      ["duplicate", (artifact) => {
+        artifact.producers[0]!.examinedUnitIdentities![1] = artifact.producers[0]!.examinedUnitIdentities![0]!;
+        artifact.producers[0]!.examinedUnitDigest = mechanicalExaminedUnitDigest(artifact.producers[0]!.examinedUnitIdentities!);
+      }, /duplicates an earlier unit/],
+      ["noncanonical", (artifact) => {
+        artifact.producers[0]!.examinedUnitIdentities![0]!.identity = "/private/tmp/checkout/src/a.ts";
+        artifact.producers[0]!.examinedUnitDigest = mechanicalExaminedUnitDigest(artifact.producers[0]!.examinedUnitIdentities!);
+      }, /not a canonical target-relative path/],
+      ["count", (artifact) => { artifact.producers[0]!.unitsExamined += 1; }, /count differs/],
+      ["producer", (artifact) => {
+        artifact.producers[0]!.examinedUnitIdentities![0]!.producer = "another-producer";
+        artifact.producers[0]!.examinedUnitDigest = mechanicalExaminedUnitDigest(artifact.producers[0]!.examinedUnitIdentities!);
+      }, /wrong producer/],
+      ["order", (artifact) => {
+        const second = createMechanicalProducerRecord({ detector: "second-producer", phase: "structural-ast", order: 5, module: "M1", examinedUnitIdentities: [], findings: 0, durationMs: 0, status: "not-applicable" });
+        artifact.producers.push(second);
+      }, /out of sequence/],
+    ];
+    for (const [name, mutate, reason] of corruptions) {
+      const events: string[] = [];
+      const cache = options({ onEvent: (message) => events.push(message) });
+      const value = producerValue();
+      const cold = await executeMechanicalPhase("structural-ast", cache, () => value);
+      const artifactPath = join(cache.dir, "structural-ast", `${cold.key}.json`);
+      const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as MutableReceiptArtifact;
+      mutate(artifact);
+      if (artifact.producers.every((producer) => Array.isArray(producer.examinedUnitIdentities))) {
+        artifact.payloadDigest = mechanicalPhasePayloadDigest({ findings: artifact.findings, scope: artifact.scope, producers: artifact.producers as MechanicalProducerRecord[] });
+      }
+      writeFileSync(artifactPath, JSON.stringify(artifact));
+      expect((await executeMechanicalPhase("structural-ast", cache, () => value)).cache, name).toBe("miss");
+      expect(events.some((event) => reason.test(event)), name).toBe(true);
+    }
+  });
+
+  it("forced-cold comparison rejects same-count substitution and reordering even with self-consistent digests", async () => {
+    for (const paths of [["src/a.ts", "src/replaced.ts", "src/c.ts"], ["src/b.ts", "src/a.ts", "src/c.ts"]]) {
+      const cache = options();
+      const authentic = producerValue();
+      const cold = await executeMechanicalPhase("structural-ast", cache, () => authentic);
+      const artifactPath = join(cache.dir, "structural-ast", `${cold.key}.json`);
+      const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as MutableReceiptArtifact;
+      artifact.producers = producerValue(paths).producers;
+      artifact.payloadDigest = mechanicalPhasePayloadDigest({ findings: artifact.findings, scope: artifact.scope, producers: artifact.producers as MechanicalProducerRecord[] });
+      writeFileSync(artifactPath, JSON.stringify(artifact));
+      await expect(executeMechanicalPhase("structural-ast", { ...cache, mode: "verify" }, () => authentic)).rejects.toThrow("forced-cold result differs");
+    }
   });
 
   it("rejects a corrupt artifact, recomputes it, and emits a visible reason", async () => {

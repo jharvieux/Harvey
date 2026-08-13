@@ -9,6 +9,7 @@ import {
   checkMigrationDynamicSqlInjection,
   checkMigrationPolicySemantics,
   checkMigrationRlsBypass,
+  checkMigrationRlsCommandCoverage,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   checkMigrationStorageBuckets,
@@ -17,6 +18,37 @@ import {
   inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
+
+describe("checkMigrationRlsCommandCoverage", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigration(sql: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-rls-command-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "001.sql"), sql);
+    return root;
+  }
+
+  it("flags a client write policy whose live policy set has no SELECT policy", () => {
+    const findings = checkMigrationRlsCommandCoverage(writeMigration(`
+create table public.events (id uuid primary key);
+alter table public.events enable row level security;
+create policy "insert events" on public.events for insert to authenticated with check (true);
+`));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SB-RLS-CMDGAP-events");
+  });
+
+  it("does not flag the standard read-only client policy shape", () => {
+    expect(checkMigrationRlsCommandCoverage(writeMigration(`
+create table public.catalog (id uuid primary key);
+alter table public.catalog enable row level security;
+create policy "read catalog" on public.catalog for select to authenticated using (true);
+`))).toEqual([]);
+  });
+});
 
 describe("checkMigrationRlsStatic", () => {
   let root: string;

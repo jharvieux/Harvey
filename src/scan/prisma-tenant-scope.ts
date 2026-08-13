@@ -20,12 +20,10 @@
 // Review tier, never free-count: the AST proves the where clause carries no tenant column, not that
 // an ownership check in a wrapper/middleware it can't see is absent.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 // Shared with the Drizzle idiom of this same cross-tenant BOLA class (#901,
 // src/scan/drizzle-tenant-scope.ts): the source-extension gate, the tenant/owner column vocabulary,
@@ -249,11 +247,4 @@ export function detectPrismaTenantScopeFindings(files: SourceInput[]): Finding[]
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
   const signals = tenantScopingWrapperSignals(files);
   return signals.length > 0 ? [wrapperDisclosure(signals, matches)] : matches;
-}
-
-export function scanPrismaTenantScope(projectDir: string): Finding[] {
-  const files = walkSourceFiles(projectDir);
-  const pkgPath = join(projectDir, "package.json");
-  if (existsSync(pkgPath)) files.push({ path: "package.json", text: readFileSync(pkgPath, "utf8") });
-  return detectPrismaTenantScopeFindings(files);
 }
