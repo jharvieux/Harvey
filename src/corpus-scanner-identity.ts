@@ -1,16 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import type { CorpusCacheableScanner, CorpusScannerCacheMode, CorpusScannerCacheOptions } from "./corpus-scanner-cache.js";
+import {
+  CORPUS_SCANNER_ENTRY_POINTS,
+  type CorpusCacheableScanner,
+  type CorpusScannerCacheMode,
+  type CorpusScannerCacheOptions,
+} from "./corpus-scanner-cache.js";
 import { statSafe } from "./fs-walk.js";
 import { binaryVersion, digestFiles, digestParts, digestTree } from "./scan/mechanical-phase-cache.js";
 import { discoverTransitiveImplementationFiles } from "./scan/mechanical-phase-identity.js";
-
-const ENTRY: Record<CorpusCacheableScanner, string> = {
-  "detect-static": "src/cli/static-detect.ts",
-  "quality-scan": "src/cli/quality-scan.ts",
-  "mutation-detect-only": "src/cli/mutation-scan.ts",
-};
 
 const PATH_ARGUMENTS = new Set(["--build", "--stats", "--config", "--report", "--hotspots"]);
 
@@ -67,7 +66,7 @@ export function buildCorpusScannerCache(options: {
   onEvent?: (message: string) => void;
 }): CorpusScannerCacheOptions {
   const environment = corpusQualityEnvironment(options.environment);
-  const entry = join(options.repoRoot, ENTRY[options.scanner]);
+  const entry = join(options.repoRoot, CORPUS_SCANNER_ENTRY_POINTS[options.scanner]);
   const closure = discoverTransitiveImplementationFiles([entry]);
   const toolchain = digestFiles(
     [join(options.repoRoot, "package.json"), join(options.repoRoot, "pnpm-lock.yaml")],

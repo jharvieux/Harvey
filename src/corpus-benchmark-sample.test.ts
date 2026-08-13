@@ -95,6 +95,7 @@ describe("corpus benchmark sample evidence envelope", () => {
       { id: 2, name: "GitHub Actions 2" },
       { id: 3, name: "GitHub Actions 3" },
     ]);
+    expect(sample.actualRunner.nameClass).toBe("GitHub Actions <hosted-id>");
     expect(sample.raw).toMatchObject({ jobIds: [1, 2, 3], targetCommits: commits, toolVersions: { node: "v24", pnpm: "10" } });
     expect(sample.population.rowDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(sample.assertions).toEqual({ baselines: true, liveness: true, forcedCold: true, conservation: true });

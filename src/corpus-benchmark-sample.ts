@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CorpusBenchmarkSample, CorpusCacheProfile, CorpusRunnerRole } from "./corpus-benchmark.js";
+import { corpusRunnerNameClass, type CorpusBenchmarkSample, type CorpusCacheProfile, type CorpusRunnerRole } from "./corpus-benchmark.js";
 import type { CorpusExecutionDesign, CorpusExecutionManifest } from "./corpus-execution.js";
 import type { CorpusShardProfileSelection } from "./scan/corpus-shards.js";
 
@@ -145,6 +145,8 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
   if (actualRunnerRows.some((runner) => !runner.name || !runner.group || runner.labels.length === 0)) throw new Error("actual runner name/group/labels are incomplete");
   const runnerShapes = new Set(actualRunnerRows.map(({ group, labels }) => stable({ group, labels })));
   if (runnerShapes.size !== 1) throw new Error("benchmark shard jobs ran on mixed runner group/label shapes");
+  const runnerNameClasses = new Set(actualRunnerRows.map((runner) => corpusRunnerNameClass(runner.name!, runner.group!)));
+  if (runnerNameClasses.size !== 1) throw new Error("benchmark shard jobs ran on mixed runner name classes");
   const executions = input.scorecard.executions.filter((manifest): manifest is CorpusExecutionManifest => manifest !== null);
   if (executions.length !== input.shardCount) throw new Error(`scorecard has ${executions.length} execution manifests; expected ${input.shardCount}`);
   if (executions.some((manifest) => manifest.design !== input.design || manifest.profile !== input.profile || manifest.shard.count !== input.shardCount)) throw new Error("execution manifest design/profile/shard provenance differs from requested sample");
@@ -194,6 +196,7 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
     requestedRunner: input.requestedRunner,
     actualRunner: {
       jobs: actualRunnerRows.map((runner, index) => ({ id: jobs[index]!.id, name: runner.name! })),
+      nameClass: [...runnerNameClasses][0]!,
       group: actualRunnerRows[0]!.group!,
       labels: actualRunnerRows[0]!.labels,
       image: input.runnerImage,
@@ -229,7 +232,10 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
       disclosureDigest: digest(disclosures),
       baselineDigest: digest(input.scorecard.rows.filter((row) => row.check.includes("baseline"))),
       examinedDigest: digest(input.scorecard.conservation.map((row) => ({ slug: row.slug, examinedUnits: row.examinedUnits }))),
-      evidenceDigest: digest(input.scorecard.conservation),
+      // The stored conservation digest includes timing/cache-bearing envelope evidence. Those
+      // legitimately differ between cold/warm and serial/concurrent runs, so bind comparison to
+      // the recalculable conservation facts that must remain identical instead.
+      evidenceDigest: digest(targets.map((slug) => conservationFacts(input.scorecard, slug))),
     },
     assertions: {
       baselines: input.scorecard.rows.length > 0 && input.scorecard.rows.every((row) => row.pass),

@@ -139,6 +139,11 @@ const shardProfileRequest = (flag("--shard-profile") ?? "auto") as CorpusShardPr
 const shardCacheProvenance = (flag("--shard-cache-provenance") ?? "uncertain") as CorpusShardCacheProvenance;
 const workerArtifactsDir = flag("--worker-artifacts-dir");
 const failAfterStart = flag("--fail-after-start") ?? process.env.HARVEY_CORPUS_FAIL_AFTER_START;
+const plantedWorkerScript = process.env.HARVEY_CORPUS_TEST_WORKER_SCRIPT;
+if (plantedWorkerScript && (process.env.NODE_ENV !== "test" || process.env.HARVEY_CORPUS_TEST_MODE !== "1")) {
+  console.error("HARVEY_CORPUS_TEST_WORKER_SCRIPT is a test-only spawned-CLI seam and requires NODE_ENV=test plus HARVEY_CORPUS_TEST_MODE=1");
+  process.exit(2);
+}
 // Resolve once while cwd is Harvey. Package managers later run with cwd set to each disposable
 // target checkout; passing their --store-dir a relative path would otherwise put the cache inside
 // the target, where M4/quality-scan can mistake cached package sources for client code.
@@ -179,8 +184,8 @@ if (!Number.isInteger(targetConcurrency) || targetConcurrency < 1 || targetConcu
   console.error(`--target-concurrency must be 1, 2, or 3; got ${flag("--target-concurrency") ?? "1"}`);
   process.exit(2);
 }
-if (!["serial", "target-workers", "intra-target-overlap", "split-carbon"].includes(executionDesign)) {
-  console.error(`--execution-design must be serial, target-workers, intra-target-overlap, or split-carbon; got ${executionDesign}`);
+if (!["serial", "target-workers", "intra-target-overlap"].includes(executionDesign)) {
+  console.error(`--execution-design must be serial, target-workers, or intra-target-overlap; split-carbon has no independently admitted runner lane and is non-admissible; got ${executionDesign}`);
   process.exit(2);
 }
 if (!["cold", "warm"].includes(executionProfile)) {
@@ -292,7 +297,7 @@ if (!targetWorker && !onlySlug && (args.includes("--target-concurrency") || args
   const artifactsDir = resolve(workerArtifactsDir ?? (jsonOut ? `${jsonOut}.workers` : "corpus-worker-artifacts"));
   const execution = await executeCorpusTargetWorkers({
     repoRoot,
-    scriptPath: fileURLToPath(import.meta.url),
+    scriptPath: plantedWorkerScript ? resolve(plantedWorkerScript) : fileURLToPath(import.meta.url),
     baseArgs,
     slugs: targets.map((target) => target.slug),
     requestedConcurrency: targetConcurrency,
@@ -501,7 +506,7 @@ async function runScanner(options: ScannerInvocation & {
     : options.scanner === "detect-static"
       ? await runCorpusScanner({ ...common, script: "detect-static", scanner: "detect-static", cache })
       : await runCorpusScanner({ ...common, script: "mutation-scan", scanner: "mutation-detect-only", cache });
-  if (result.cacheRecord) options.records.push(result.cacheRecord);
+  options.records.push(result.cacheRecord);
   return result.findings;
 }
 

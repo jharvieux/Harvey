@@ -20,6 +20,9 @@ describe("discovered corpus relevance (#1870)", () => {
 
   it.each([
     ["producer", "src/cli/corpus-drift.ts"],
+    ["producer", "src/cli/static-detect.ts"],
+    ["producer", "src/cli/quality-scan.ts"],
+    ["producer", "src/cli/mutation-scan.ts"],
     ["helper", "src/corpus-scanner-runner.ts"],
     ["rules", "src/scan/rules/gitleaks-supabase.toml"],
     ["manifest", "src/scan/external-corpus.ts"],
@@ -31,6 +34,23 @@ describe("discovered corpus relevance (#1870)", () => {
     const decision = decideCorpusRelevance(current, current, [{ status: "M", path }]);
     expect(decision).toMatchObject({ relevant: true, verdict: "full-scan" });
     expect(decision.matched[0]?.path).toBe(path);
+  });
+
+  it.each([
+    "src/cli/static-detect.ts",
+    "src/cli/quality-scan.ts",
+    "src/cli/mutation-scan.ts",
+  ])("fails the real scanner-root relevance control when %s is disconnected", (path) => {
+    expect(decideCorpusRelevance(current, current, [{ status: "M", path }]).relevant).toBe(true);
+    const disconnected: CorpusClosureReceipt = {
+      ...current,
+      inputs: current.inputs.filter((input) => input.path !== path),
+    };
+    expect(decideCorpusRelevance(disconnected, disconnected, [{ status: "M", path }])).toMatchObject({
+      relevant: false,
+      verdict: "declared-no-op",
+      disjoint: [path],
+    });
   });
 
   it("declares representative report, site, and unrelated-library changes disjoint", () => {

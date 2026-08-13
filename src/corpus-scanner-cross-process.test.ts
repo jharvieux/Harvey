@@ -221,7 +221,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
 
     writeFileSync(join(checkoutB, "src", "mutation-scan.ts"), `${readFileSync(join(checkoutB, "src", "mutation-scan.ts"), "utf8")}\nexport async function dynamicClosureFalsifier(name: string) { return import(name); }\n`);
     const dynamicClosure = await run(checkoutB, targetB, { HOME: alternateHome });
-    expect(dynamicClosure.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "fresh" });
+    expect(dynamicClosure.statuses).toEqual({ "detect-static": "hit", "quality-scan": "hit", "mutation-detect-only": "non-cacheable" });
     expect(dynamicClosure.events).toContainEqual(expect.stringContaining("implementation closure is non-cacheable"));
   }, 60_000);
 
@@ -295,7 +295,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       const changed = await run();
 
       expect([cold.unused, warm.unused, changed.unused]).toEqual(["packages/app/src/b.ts", "packages/app/src/b.ts", "packages/app/src/a.ts"]);
-      expect([cold.cache, warm.cache, changed.cache]).toEqual(["fresh", "fresh", "fresh"]);
+      expect([cold.cache, warm.cache, changed.cache]).toEqual(["non-cacheable", "non-cacheable", "non-cacheable"]);
       expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
       expect(warm.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
       expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
@@ -387,7 +387,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       const changed = await run();
 
       expect([cold.unused, changed.unused]).toEqual(["src/b.ts", "src/a.ts"]);
-      expect([cold.cache, changed.cache]).toEqual(["fresh", "fresh"]);
+      expect([cold.cache, changed.cache]).toEqual(["non-cacheable", "non-cacheable"]);
       expect(cold.preparation).toMatchObject({ status: "miss", complete: true, cacheable: false });
       expect(changed.preparation).toMatchObject({ status: "hit", complete: true, cacheable: false, key: cold.preparation.key });
       expect(changed.preparation.reason).toContain("stateful-knip-config@1.0.0 (postinstall)");
@@ -406,8 +406,11 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       const mutationResult = await runCorpusScanner({
         repoRoot: process.cwd(), targetDir, targetConfig: "lifecycle mutation isolation", script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"], cache: sourceCache,
       });
-      expect(staticResult.cacheRecord).toBeUndefined();
-      expect(mutationResult.cacheRecord).toBeUndefined();
+      expect(staticResult.cacheRecord).toMatchObject({ scanner: "detect-static", cache: "non-cacheable", reason: expect.stringContaining("lifecycle") });
+      expect(mutationResult.cacheRecord).toMatchObject({ scanner: "mutation-detect-only", cache: "non-cacheable", reason: expect.stringContaining("lifecycle") });
+      expect(staticResult.cacheRecord.scope.unitsExamined).toBeGreaterThan(0);
+      expect(mutationResult.cacheRecord.scope.unitsExamined).toBe(0);
+      expect(mutationResult.findings).toContainEqual(expect.objectContaining({ id: "M8-00" }));
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -524,13 +527,20 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       },
     });
     const result = await run();
-    expect(result.cacheRecord).toBeUndefined();
+    expect(result.cacheRecord).toMatchObject({
+      scanner: "quality-scan",
+      cache: "non-cacheable",
+      reason: expect.stringContaining("clean and fallback installs failed"),
+      scope: { unitsExamined: expect.any(Number) },
+    });
+    expect(result.cacheRecord.scope.unitsExamined).toBeGreaterThan(0);
     expect(result.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
     expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
     expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
 
     const failedDegraded = await run([targetDir, "--timeout", "0.001"]);
+    expect(failedDegraded.cacheRecord).toMatchObject({ scanner: "quality-scan", cache: "non-cacheable", scope: { unitsExamined: 3 } });
     expect(failedDegraded.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
     expect(failedDegraded.findings.some((finding) => finding.id === "M5-98")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);

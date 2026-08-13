@@ -10,7 +10,7 @@ runner and no selector variable on 2026-08-12, so no larger-runner result is cla
 ## Evidence envelope
 
 Every sample binds the workflow run and attempt, exact head and benchmark seed, repeat, actual
-runner name/group/labels/image, CPU and cgroup-memory admission, Node/pnpm/tool versions, pinned
+runner name class/group/labels/image (while retaining each hosted VM's raw unique name), CPU and cgroup-memory admission, Node/pnpm/tool versions, pinned
 target commits, cache transport keys and provenance, raw job ids/timestamps, scorecard artifacts,
 and per-target conservation. Critical path is the span from the first shard start to the last shard
 finish. Summed runner time is the sum of shard intervals; it is never substituted for critical
@@ -21,7 +21,10 @@ Cold samples require forced recomputation against the exact seed with no rejecti
 miss. Warm samples require validated all-hit receipts. Every sample must retain passing baseline,
 liveness, forced-cold, and recomputed conservation assertions. A mixed head, seed, target
 population, runner identity, duplicate repeat/run, OOM, retry, stranded artifact, stale conservation
-vector, or missing provenance rejects the cohort rather than weakening it.
+vector, or missing provenance rejects the cohort rather than weakening it. The decision artifact
+retains every raw sample with a stable digest and per-cohort median/p95/total/max critical path,
+aggregate runner time, CPU, RSS, billed minutes, dollar estimate, and cache counts, so its choices
+can be recalculated without consulting an ephemeral workflow log.
 
 ## Predeclared decisions
 
@@ -40,9 +43,9 @@ The versioned thresholds live in `src/corpus-benchmark.ts` and are hashed before
   cold fallback.
 
 Any measured metric within five percentage points of its own threshold, or a critical-path
-coefficient of variation above 10%, extends that cohort from three to five runs. The
-`split-carbon` input is a pilot label, not evidence: until it produces an independently admitted
-lane, the evaluator rejects it.
+coefficient of variation above 10%, extends that cohort from three to five runs. `split-carbon`
+is absent from workflow and CLI choices because no separate job/runner lane exists. The evaluator
+retains it only as an explicit non-admissible negative-control disposition.
 
 ## Shard profiles and transport
 
@@ -53,7 +56,7 @@ population with verified-warm cache provenance; an uncertain cache, stale popula
 cold request selects cold. Unknown warm targets fail loud. Production uses the fail-safe cold
 profile while the hosted three-versus-four cohort is pending.
 
-Transport schema/key family v6 restores every trusted old shard and merges only validated
+Transport key family v7 restores every trusted old shard and merges only validated
 content-addressed inner artifacts. The merge requires the exact seed/ref/head and complete source
 namespace population, rejects conflicting duplicates and mutable paths, then lets a target move
 from a three-shard seed into a four-shard run without losing its finding or examined-scope bytes.
@@ -61,10 +64,9 @@ from a three-shard seed into a four-shard run without losing its finding or exam
 ## Hosted collection
 
 Use one non-empty seed and one unchanged branch head. First author its seed bundle. Then dispatch
-three cold and three warm runs for each pilot design (`serial`, `target-workers` at two,
-`intra-target-overlap` at two); `split-carbon` remains a negative control until it has a real lane.
-After selecting a design, dispatch concurrency one, two, and three on three shards in both profiles,
-plus the production concurrency on four shards in both profiles. Run the injected post-start failure
+three cold and three warm runs for the complete predeclared three-shard matrix: `serial` at one,
+`target-workers` at one, two, and three, and `intra-target-overlap` at two. After selecting a design,
+dispatch that same design/concurrency on four shards in both profiles. Run the injected post-start failure
 drill separately. Extend named cohorts to five only when the evaluator requests it. Do not dispatch
 the unavailable larger-runner half.
 

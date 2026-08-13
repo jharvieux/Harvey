@@ -73,7 +73,7 @@ on:
       execution_design:
         description: "Benchmark implementation shape. Production remains serial until the committed evaluator qualifies a candidate."
         type: choice
-        options: [serial, target-workers, intra-target-overlap, split-carbon]
+        options: [serial, target-workers, intra-target-overlap]
         default: serial
       shard_count:
         description: "Benchmark PR-shape shard count. Production remains three until the committed evaluator qualifies four."
@@ -406,7 +406,7 @@ jobs:
           # Retry attempts request attempt 1's exact key. `cache-hit` below distinguishes that
           # artifact from an older rolling-prefix fallback, whose registry bytes have no lineage
           # to this run and therefore may not be reused as though they did.
-          key: corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-1-${{ github.sha }}
+          key: corpus-phase-run-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-1-${{ github.sha }}
 
       # A PR-prefix fallback can be newer than main and shadow the trusted seed, only to be rejected
       # by provenance after restore. Separate key families make that impossible: retries get only
@@ -417,9 +417,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.sha }}
+          key: corpus-phase-main-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-
+            corpus-phase-main-v7-${{ runner.os }}-shard${{ matrix.shard }}-
 
       - name: Restore exact benchmark seed shard 1
         id: benchmark-cache-1
@@ -427,9 +427,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-1
-          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-
+            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-
 
       - name: Restore exact benchmark seed shard 2
         id: benchmark-cache-2
@@ -437,9 +437,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-2
-          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-
+            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-
 
       - name: Restore exact benchmark seed shard 3
         id: benchmark-cache-3
@@ -447,9 +447,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-3
-          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-
+            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-
 
       - name: Restore exact benchmark seed shard 4
         id: benchmark-cache-4
@@ -457,9 +457,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-4
-          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-
+            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-
 
       - name: Merge every trusted old shard at the content-addressed layer
         if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
@@ -677,14 +677,14 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-run-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save exact benchmark-seed corpus phase results
         if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity != ''
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-benchmark-v6-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # Only a successful default-branch shard can publish a trusted rolling seed. A cancelled,
       # timed-out, drifted or setup-failed leg never reaches this step and cannot shadow the prior
@@ -694,7 +694,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          key: corpus-phase-main-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8

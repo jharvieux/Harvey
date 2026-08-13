@@ -772,7 +772,11 @@ export function prepareCorpusDependencies(options: DependencyPreparationOptions)
   };
   const key = digestValue({ schema: DEPENDENCY_PREPARATION_SCHEMA, identity });
   const receiptPath = join(cacheDir, "dependency-preparation", "receipts", `${key}.json`);
-  const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager);
+  // Keep the relocatable manager store inside the same preparation identity as its receipt.
+  // A manager-level "latest" directory is a mutable pointer: it can combine bytes prepared for
+  // different target trees even though the receipt itself is content-addressed. The key namespace
+  // makes every transported store answer exactly one preparation identity.
+  const storeDir = join(cacheDir, "dependency-preparation", "stores", `${process.platform}-${process.arch}`, manager, key);
   const preInstallNonCacheableQuality = combineReasons(
     qualityNonCacheableReason(options.targetDir),
     lockfileLifecycleReason(manager, lockText),

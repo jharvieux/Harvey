@@ -190,6 +190,41 @@ export async function runBoundedCorpusTasks<T>(tasks: readonly (() => Promise<T>
   return results;
 }
 
+/**
+ * Conservatively bounds shard RSS by treating each worker's measured peak as resident for its
+ * whole execution interval. Peaks from workers that could not have coexisted are never summed.
+ */
+export function conservativePeakRssBytes(
+  terminals: readonly Pick<CorpusWorkerTerminal, "startedAt" | "finishedAt" | "peakRssBytes">[],
+): number {
+  const events: Array<{ at: number; kind: "start" | "finish"; bytes: number }> = [];
+  let peak = 0;
+  for (const terminal of terminals) {
+    const startedAt = Date.parse(terminal.startedAt);
+    const finishedAt = Date.parse(terminal.finishedAt);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) {
+      throw new Error(`target worker has an invalid resource interval: ${terminal.startedAt}..${terminal.finishedAt}`);
+    }
+    if (!Number.isFinite(terminal.peakRssBytes) || terminal.peakRssBytes < 0) {
+      throw new Error(`target worker has an invalid peak RSS: ${terminal.peakRssBytes}`);
+    }
+    peak = Math.max(peak, terminal.peakRssBytes);
+    if (startedAt === finishedAt || terminal.peakRssBytes === 0) continue;
+    events.push(
+      { at: startedAt, kind: "start", bytes: terminal.peakRssBytes },
+      { at: finishedAt, kind: "finish", bytes: terminal.peakRssBytes },
+    );
+  }
+  events.sort((left, right) => left.at - right.at
+    || (left.kind === right.kind ? 0 : left.kind === "finish" ? -1 : 1));
+  let resident = 0;
+  for (const event of events) {
+    resident += event.kind === "start" ? event.bytes : -event.bytes;
+    peak = Math.max(peak, resident);
+  }
+  return peak;
+}
+
 function parseCpuTime(value: string): number {
   const [dayPart, clock] = value.includes("-") ? value.split("-") : ["0", value];
   const parts = clock!.split(":").map(Number);
@@ -365,6 +400,9 @@ export function aggregateCorpusWorkerResults(terminals: readonly CorpusWorkerTer
 }
 
 export async function executeCorpusTargetWorkers(options: WorkerOptions): Promise<{ manifest: CorpusExecutionManifest; scorecard?: ReturnType<typeof aggregateCorpusWorkerResults> }> {
+  if (options.design === "split-carbon") {
+    throw new Error("split-carbon is non-admissible: this coordinator has no independent runner lane for that design");
+  }
   const now = options.now ?? (() => new Date());
   const startedAt = now();
   const resourceAdmission = admitCorpusConcurrency(options.requestedConcurrency, options.slugs.length, options.environment);
@@ -509,7 +547,7 @@ export async function executeCorpusTargetWorkers(options: WorkerOptions): Promis
     aggregate: {
       criticalPathMs: finishedAt.getTime() - startedAt.getTime(),
       summedWorkerMs: durations.reduce((sum, duration) => sum + duration, 0),
-      peakRssBytes: Math.max(0, ...terminals.map((terminal) => terminal.peakRssBytes)),
+      peakRssBytes: conservativePeakRssBytes(terminals),
       cpuSeconds: terminals.reduce((sum, terminal) => sum + terminal.cpuSeconds, 0),
       oomCount: terminals.filter((terminal) => terminal.oomDetected).length,
       retryCount: terminals.filter((terminal) => terminal.retryDetected).length,

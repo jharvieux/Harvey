@@ -12,6 +12,8 @@ import {
   writeCorpusCacheTransport,
   type CorpusCacheTransportManifest,
 } from "./corpus-cache-transport.js";
+import { CORPUS_CACHEABLE_SCANNERS } from "./corpus-scanner-cache.js";
+import { MECHANICAL_PHASES } from "./scan/mechanical-phase-cache.js";
 
 const source = (overrides: Partial<CorpusCacheTransportManifest> = {}): CorpusCacheTransportManifest => {
   const manifest = {
@@ -184,6 +186,18 @@ describe("corpus cache transport scope across refs (#1867)", () => {
       namespace: "1",
       headSha: "c".repeat(40),
     }).accepted).toBe(false);
+
+    const staleStoreGrammar = source({ key: source().key.replace("-v7-", "-v6-") });
+    expect(decideCorpusCacheRestore(staleStoreGrammar, {
+      matchedKey: staleStoreGrammar.key,
+      event: "pull_request",
+      ref: "refs/pull/200/merge",
+      runId: "2000",
+      defaultRef: "refs/heads/main",
+      platform: "Linux",
+      namespace: "1",
+      headSha: "c".repeat(40),
+    }).reason).toContain("invalid transport provenance");
   });
 
   it("accepts a cross-run benchmark transport only for the exact seed, ref, and head", () => {
@@ -288,6 +302,81 @@ describe("corpus cache transport scope across refs (#1867)", () => {
 
     const unknown = make("3", "unknown", "mutable-pointer.json");
     expect(() => mergeCorpusCacheTransports({ sources: [unknown], destination: temporaryDestination(), current, requiredNamespaces: ["3"] })).toThrow(/non-content-addressed path/);
+  });
+
+  it("accepts only the complete content-addressed grammar for every portable cache family", () => {
+    const seed = "portable-grammar-seed";
+    const headSha = "f".repeat(40);
+    const digest = "4".repeat(64);
+    const legitimate = [
+      ...MECHANICAL_PHASES.map((phase) => `${phase}/${digest}.json`),
+      `semgrep-families/local-auth.rules/${digest}.json`,
+      ...CORPUS_CACHEABLE_SCANNERS.map((scanner) => `corpus-scanners/${scanner}/${digest}.json`),
+      `dependency-preparation/receipts/${digest}.json`,
+      `dependency-preparation/stores/linux-x64/npm/${digest}/_cacache/content-v2/sha512/aa/bb`,
+      `dependency-preparation/stores/darwin-arm64/pnpm/${digest}/v10/files/aa/content`,
+      `dependency-preparation/stores/win32-ia32/yarn/${digest}/npm-scope-package-1.0.0.tgz`,
+    ];
+    const makePortable = (path: string) => {
+      const dir = mkdtempSync(join(tmpdir(), "harvey-cache-portable-grammar-"));
+      dirs.push(dir);
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), "portable\n");
+      const manifest = source({
+        family: "benchmark",
+        event: "workflow_dispatch",
+        ref: "refs/heads/feature/benchmark",
+        runId: "8000",
+        headSha,
+        benchmarkSeed: seed,
+        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace: "1", runId: "8000", runAttempt: "1", headSha, benchmarkSeed: seed }),
+      });
+      return { dir, namespace: "1", matchedKey: writeCorpusCacheTransport(dir, manifest).key };
+    };
+    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "8001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed };
+    for (const path of legitimate) {
+      expect(() => mergeCorpusCacheTransports({ sources: [makePortable(path)], destination: temporaryDestination(), current, requiredNamespaces: ["1"] }), path).not.toThrow();
+    }
+  });
+
+  it.each([
+    "dependency-preparation/stores/linux-x64/npm/latest",
+    `dependency-preparation/stores/linux-x64/npm/${"5".repeat(63)}/content`,
+    `dependency-preparation/stores/plan9-x64/npm/${"5".repeat(64)}/content`,
+    `dependency-preparation/stores/linux-x64/bun/${"5".repeat(64)}/content`,
+    `dependency-preparation/stores/linux-x64/npm/${"5".repeat(64)}`,
+    `dependency-preparation/receipt/${"5".repeat(64)}.json`,
+    `dependency-preparation/receipts/${"5".repeat(64)}.json/extra`,
+    `semgrep-family/auth/${"5".repeat(64)}.json`,
+    `semgrep-families/../${"5".repeat(64)}.json`,
+    `semgrep-families/auth/${"5".repeat(63)}.json`,
+    `corpus-scanners/unknown/${"5".repeat(64)}.json`,
+    `corpus-scanner/detect-static/${"5".repeat(64)}.json`,
+    `structural/${"5".repeat(64)}.json`,
+    `structural-ast/${"5".repeat(64)}.json.bak`,
+  ])("rejects mutable pointers, lookalikes, and unknown portable namespaces: %s", (path) => {
+    const seed = "nonportable-grammar-seed";
+    const headSha = "9".repeat(40);
+    const dir = mkdtempSync(join(tmpdir(), "harvey-cache-nonportable-grammar-"));
+    dirs.push(dir);
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), "not portable\n");
+    const manifest = source({
+      family: "benchmark",
+      event: "workflow_dispatch",
+      ref: "refs/heads/feature/benchmark",
+      runId: "9000",
+      headSha,
+      benchmarkSeed: seed,
+      key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace: "1", runId: "9000", runAttempt: "1", headSha, benchmarkSeed: seed }),
+    });
+    const transport = { dir, namespace: "1", matchedKey: writeCorpusCacheTransport(dir, manifest).key };
+    expect(() => mergeCorpusCacheTransports({
+      sources: [transport],
+      destination: temporaryDestination(),
+      current: { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "9001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed },
+      requiredNamespaces: ["1"],
+    })).toThrow(/non-content-addressed path/);
   });
 
   function temporaryDestination(): string {

@@ -38,7 +38,15 @@ type CorpusScannerRunOptions = CommonScannerRunOptions & (
 
 interface CorpusScannerRunResult {
   findings: Finding[];
-  cacheRecord?: CorpusScannerRecord;
+  cacheRecord: CorpusScannerRecord;
+}
+
+function freshRecord(
+  scanner: CorpusScannerRunOptions["scanner"],
+  value: { findings: Finding[]; scope: CorpusScannerRecord["scope"] },
+  reason: string,
+): CorpusScannerRecord {
+  return { scanner, findings: value.findings, scope: value.scope, cache: "non-cacheable", reason };
 }
 
 export async function runCorpusScanner(options: CorpusScannerRunOptions): Promise<CorpusScannerRunResult> {
@@ -95,7 +103,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
       ? qualityFreshReason
       : qualityPreparation?.sourceTreeReason ?? "corpus scanner cache disabled");
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
-    return { findings: value.findings };
+    return { findings: value.findings, cacheRecord: freshRecord(options.scanner, value, reason) };
   }
 
   let cache;
@@ -118,7 +126,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     const value = execute();
     const reason = `scanner implementation closure is non-cacheable: ${error instanceof Error ? error.message : String(error)}`;
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
-    return { findings: value.findings };
+    return { findings: value.findings, cacheRecord: freshRecord(options.scanner, value, reason) };
   }
   const record = await executeCorpusScanner(cache, execute);
   options.onEvent?.(`SCANNER ${options.scanner} — ${record.cache}; ${record.scope.unitsExamined} unit(s); ${record.reason}`);

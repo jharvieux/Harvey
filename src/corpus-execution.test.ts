@@ -6,6 +6,7 @@ import {
   admitCorpusConcurrency,
   aggregateCorpusWorkerResults,
   assertCorpusConservation,
+  conservativePeakRssBytes,
   executeCorpusTargetWorkers,
   runBoundedCorpusTasks,
 } from "./corpus-execution.js";
@@ -41,8 +42,8 @@ writeFileSync(out, JSON.stringify({
   findings: { [slug]: [finding] },
   detectors: { [slug]: [{ detector: "fake", unitsExamined: 2 }] },
   mechanicalContexts: { [slug]: { filesExamined: 1, evidence: slug + " context" } },
-  mechanicalRuns: { [slug]: { findings: [finding], evidence: slug + " mechanical" } },
-  scannerRecords: { [slug]: [{ scope: { unitsExamined: 3 }, evidence: slug + " scanner" }] },
+  mechanicalRuns: { [slug]: { findings: [finding], evidence: slug + " mechanical", executionPlan: { families: ["auth"] }, semgrepDiagnostics: { errors: [], skipped: [] } } },
+  scannerRecords: { [slug]: [{ scanner: "detect-static", cache: "non-cacheable", reason: "fresh evidence", scope: { unitsExamined: 3 }, evidence: slug + " scanner" }] },
   dependencyPreparations: { [slug]: [{ digest: slug + " dependency" }] },
   phaseSeconds: { [slug]: { scan: 1 } },
   runtimeReceipts: { [slug]: { node: "v24", pnpm: "10" } }
@@ -78,6 +79,18 @@ function clone<T>(value: T): T {
 }
 
 describe("#1873 bounded corpus target execution", () => {
+  it("sums only worker peaks whose execution intervals overlap", () => {
+    const at = (seconds: number): string => new Date(Date.UTC(2026, 7, 12, 0, 0, seconds)).toISOString();
+    expect(conservativePeakRssBytes([
+      { startedAt: at(0), finishedAt: at(20), peakRssBytes: 400 },
+      { startedAt: at(10), finishedAt: at(30), peakRssBytes: 600 },
+    ])).toBe(1_000);
+    expect(conservativePeakRssBytes([
+      { startedAt: at(0), finishedAt: at(10), peakRssBytes: 400 },
+      { startedAt: at(10), finishedAt: at(20), peakRssBytes: 600 },
+    ])).toBe(600);
+  });
+
   it("overlaps at most the admitted scanner lanes and preserves declaration order", async () => {
     const exercise = async (concurrency: number): Promise<{ results: string[]; peak: number }> => {
       let active = 0;
@@ -211,6 +224,11 @@ describe("#1873 bounded corpus target execution", () => {
       (value) => { value.rows[0]!.check = "M1 assertion"; },
       (value) => { (value.scannerRecords.alpha![0] as { scope: { unitsExamined: number } }).scope.unitsExamined = 99; },
       (value) => { (value.mechanicalRuns.alpha as { evidence: string }).evidence = "changed evidence"; },
+      (value) => { value.scannerRecords.alpha!.pop(); },
+      (value) => { value.dependencyPreparations.alpha!.pop(); },
+      (value) => { delete (value.mechanicalRuns.alpha as { executionPlan?: unknown }).executionPlan; },
+      (value) => { delete (value.mechanicalRuns.alpha as { semgrepDiagnostics?: unknown }).semgrepDiagnostics; },
+      (value) => { value.detectors.alpha!.pop(); },
     ];
     for (const mutate of mutations) {
       const changed = clone(baseline);

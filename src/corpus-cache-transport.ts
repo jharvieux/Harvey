@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { CORPUS_CACHEABLE_SCANNERS } from "./corpus-scanner-cache.js";
 import { readEntriesLstatSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
 import { MECHANICAL_PHASES } from "./scan/mechanical-phase-cache.js";
 
@@ -47,8 +48,8 @@ interface CorpusCacheTransportDecision {
 }
 
 const MANIFEST = "transport-provenance.json";
-const KEY = /^corpus-phase-(run|main)-v6-([A-Za-z0-9_.-]+)-shard([1-9]\d*)-(\d+)-(\d+)-([0-9a-f]{40})$/;
-const BENCHMARK_KEY = /^corpus-phase-benchmark-v6-([A-Za-z0-9_.-]+)-seed([0-9a-f]{16})-shard([1-9]\d*)-(\d+)-(\d+)-([0-9a-f]{40})$/;
+const KEY = /^corpus-phase-(run|main)-v7-([A-Za-z0-9_.-]+)-shard([1-9]\d*)-(\d+)-(\d+)-([0-9a-f]{40})$/;
+const BENCHMARK_KEY = /^corpus-phase-benchmark-v7-([A-Za-z0-9_.-]+)-seed([0-9a-f]{16})-shard([1-9]\d*)-(\d+)-(\d+)-([0-9a-f]{40})$/;
 
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -95,10 +96,10 @@ export function corpusCacheTransportKey(input: {
   if (!/^\d+$/.test(input.runId) || !/^\d+$/.test(input.runAttempt)) throw new Error("transport provenance run identity is invalid");
   if (!/^[0-9a-f]{40}$/.test(input.headSha)) throw new Error("transport provenance headSha is not a 40-character lowercase commit SHA");
   if (input.family === "benchmark") {
-    return `corpus-phase-benchmark-v6-${input.platform}-seed${benchmarkSeedDigest(input.benchmarkSeed ?? "")}-shard${input.namespace}-${input.runId}-${input.runAttempt}-${input.headSha}`;
+    return `corpus-phase-benchmark-v7-${input.platform}-seed${benchmarkSeedDigest(input.benchmarkSeed ?? "")}-shard${input.namespace}-${input.runId}-${input.runAttempt}-${input.headSha}`;
   }
   if (input.benchmarkSeed !== undefined) throw new Error(`${input.family} transport must not carry a benchmark seed`);
-  return `corpus-phase-${input.family}-v6-${input.platform}-shard${input.namespace}-${input.runId}-${input.runAttempt}-${input.headSha}`;
+  return `corpus-phase-${input.family}-v7-${input.platform}-shard${input.namespace}-${input.runId}-${input.runAttempt}-${input.headSha}`;
 }
 
 function inspectPayload(dir: string): { bytes: number; symlinks: string[] } {
@@ -246,24 +247,35 @@ interface CorpusCacheMergeReceipt {
   conflicts: 0;
 }
 
-const CONTENT_ROOTS = new Set<string>([
-  ...MECHANICAL_PHASES,
-  "semgrep-families",
-  "corpus-scanners",
-  "dependency-preparation",
-]);
-
 function portableCachePath(path: string): boolean {
   const parts = path.split("/");
-  const root = parts[0];
-  if (!root || !CONTENT_ROOTS.has(root)) return false;
-  if (root === "semgrep-families") return parts.length === 3 && /^[0-9a-f]{64}\.json$/.test(parts[2] ?? "");
-  if (root === "corpus-scanners") return parts.length === 3 && /^[0-9a-f]{64}\.json$/.test(parts[2] ?? "");
-  if (root === "dependency-preparation") {
-    if (parts[1] === "receipts") return parts.length === 3 && /^[0-9a-f]{64}\.json$/.test(parts[2] ?? "");
-    return parts[1] === "stores" && parts.length >= 4;
+  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return false;
+  const [root, namespace, artifact] = parts;
+  const artifactName = /^[0-9a-f]{64}\.json$/;
+  if (MECHANICAL_PHASES.includes(root as (typeof MECHANICAL_PHASES)[number])) {
+    return parts.length === 2 && artifactName.test(namespace ?? "");
   }
-  return parts.length === 2 && /^[0-9a-f]{64}\.json$/.test(parts[1] ?? "");
+  if (root === "semgrep-families") {
+    return parts.length === 3
+      && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(namespace ?? "")
+      && artifactName.test(artifact ?? "");
+  }
+  if (root === "corpus-scanners") {
+    return parts.length === 3
+      && CORPUS_CACHEABLE_SCANNERS.includes(namespace as (typeof CORPUS_CACHEABLE_SCANNERS)[number])
+      && artifactName.test(artifact ?? "");
+  }
+  if (root !== "dependency-preparation") return false;
+  if (namespace === "receipts") return parts.length === 3 && artifactName.test(artifact ?? "");
+  if (namespace !== "stores" || parts.length < 6) return false;
+  const platformArchitecture = parts[2] ?? "";
+  const manager = parts[3] ?? "";
+  const preparationKey = parts[4] ?? "";
+  const platform = "(?:aix|android|darwin|freebsd|haiku|linux|openbsd|sunos|win32)";
+  const architecture = "(?:arm|arm64|ia32|loong64|mips|mipsel|ppc|ppc64|riscv64|s390|s390x|x64)";
+  return new RegExp(`^${platform}-${architecture}$`).test(platformArchitecture)
+    && /^(?:npm|pnpm|yarn)$/.test(manager)
+    && /^[0-9a-f]{64}$/.test(preparationKey);
 }
 
 /** Merge trusted shard transports at the content-addressed layer so a 3→4 move keeps its artifacts. */

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { CORPUS_SCANNER_ENTRY_POINTS } from "../corpus-scanner-cache.js";
 import { readRecursiveSafe, statSafe } from "../fs-walk.js";
 import {
   discoverImplementationClosure,
@@ -61,14 +62,15 @@ interface CorpusRelevanceDecision {
   uncertainties: Array<{ revision: string; kind: string; path: string; detail: string }>;
 }
 
-export const CORPUS_ENTRY_POINTS = [
+const CORPUS_ENTRY_POINTS: readonly string[] = [
   "src/cli/corpus-drift.ts",
   "src/cli/replay-current-mechanical.ts",
   "src/cli/materialize-current-semgrep.ts",
   "src/cli/corpus-pins.ts",
   "src/cli/corpus-cache-transport.ts",
   "src/cli/validate-current-mechanical-readiness.ts",
-] as const;
+  ...Object.values(CORPUS_SCANNER_ENTRY_POINTS),
+];
 
 const WORKFLOW = ".github/workflows/corpus-drift.yml";
 
@@ -150,7 +152,7 @@ export function discoverCorpusClosure(root: string, revision: string): CorpusClo
     const path = normalize(root, absolute);
     const category: CorpusInputCategory = path.startsWith("tools/")
       ? "tools"
-      : rootSet.has(path as (typeof CORPUS_ENTRY_POINTS)[number])
+      : rootSet.has(path)
         ? "producer"
         : "helper";
     inputs.push(receipt(category, path, root, category === "producer" ? "corpus executable entry point" : "transitive corpus implementation"));

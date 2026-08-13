@@ -77,8 +77,8 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(5);
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow).toContain("corpus-phase-run-v6-${{ runner.os }}-shard${{ matrix.shard }}-");
-    expect(workflow).toContain("corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("corpus-phase-run-v7-${{ runner.os }}-shard${{ matrix.shard }}-");
+    expect(workflow).toContain("corpus-phase-main-v7-${{ runner.os }}-shard${{ matrix.shard }}-");
     expect(workflow).toContain("steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key");
     expect(workflow).toContain("Validate corpus phase-cache transport provenance");
     expect(workflow).toContain("Record corpus phase-cache transport provenance");
@@ -98,7 +98,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'");
     expect(workflow.match(/github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group' \|\| github\.event_name == 'push'/g)).toHaveLength(5);
     expect(workflow).toContain("Save successful main-shard corpus phase results");
-    expect(workflow).toContain("key: corpus-phase-main-v6-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow).toContain("key: corpus-phase-main-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
     expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");
     expect(workflow).not.toContain("Save shard3 main-visible corpus phase results");
     expect(workflow).toContain("success() && steps.score.outcome == 'success'");
@@ -235,13 +235,15 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'");
   });
 
-  it("does not let the selectable split-carbon label masquerade as measured parallel work", () => {
-    expect(corpusCli).toContain("--execution-design must be serial, target-workers, intra-target-overlap, or split-carbon");
+  it("keeps split-carbon explicitly non-admissible until a separate runner lane exists", () => {
+    expect(workflow).toContain("options: [serial, target-workers, intra-target-overlap]");
+    expect(workflow).not.toContain("options: [serial, target-workers, intra-target-overlap, split-carbon]");
+    expect(corpusCli).toContain("split-carbon has no independently admitted runner lane and is non-admissible");
     expect(corpusCli).toContain("process-isolated ${executionDesign}");
     const execution = readFileSync(join(root, "src", "corpus-execution.ts"), "utf8");
-    expect(execution).toContain("`${options.design} holds this coordinator to one serial target worker`");
+    expect(execution).toContain("split-carbon is non-admissible: this coordinator has no independent runner lane");
     const benchmark = readFileSync(join(root, "src", "corpus-benchmark.ts"), "utf8");
     expect(benchmark).toContain('if (sample.design === "serial" && sample.effectiveConcurrency !== 1)');
-    expect(benchmark).toContain('"split-carbon": 3');
+    expect(benchmark).toContain("non-admissible negative control: no independently admitted workflow job/runner lane exists");
   });
 });

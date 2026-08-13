@@ -7,6 +7,14 @@ import { isCorpusScannerOwnedScope } from "./corpus-scanner-scope.js";
 
 export const CORPUS_CACHEABLE_SCANNERS = ["detect-static", "quality-scan", "mutation-detect-only"] as const;
 export type CorpusCacheableScanner = (typeof CORPUS_CACHEABLE_SCANNERS)[number];
+
+/** The executable roots whose transitive implementations define each corpus scanner cache. */
+export const CORPUS_SCANNER_ENTRY_POINTS: Record<CorpusCacheableScanner, string> = {
+  "detect-static": "src/cli/static-detect.ts",
+  "quality-scan": "src/cli/quality-scan.ts",
+  "mutation-detect-only": "src/cli/mutation-scan.ts",
+};
+
 export type CorpusScannerCacheMode = "off" | "read-write" | "verify";
 export type CorpusScannerCacheStatus = "hit" | "miss" | "recomputed" | "non-cacheable";
 

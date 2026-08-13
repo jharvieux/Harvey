@@ -87,7 +87,7 @@ try {
   const benchmarkSeed = required("--benchmark-seed");
   const runnerRole = parseChoice<CorpusRunnerRole>("--runner-role", ["pr", "schedule"]);
   const profile = parseChoice<CorpusCacheProfile>("--profile", ["cold", "warm"]);
-  const design = parseChoice<CorpusExecutionDesign>("--design", ["serial", "target-workers", "intra-target-overlap", "split-carbon"]);
+  const design = parseChoice<CorpusExecutionDesign>("--design", ["serial", "target-workers", "intra-target-overlap"]);
   const expectedShards = Array.from({ length: shardCount }, (_, index) => index + 1);
   const allEvidenceFiles = readRecursiveSafe(evidenceDir).sort();
   const evidenceFiles = allEvidenceFiles.filter((path) => /^(?:benchmark-cache-merge-receipt|benchmark-transport|benchmark-runner)-\d+\.json$/.test(path));

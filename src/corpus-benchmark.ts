@@ -16,6 +16,7 @@ export interface CorpusBenchmarkSample {
   requestedRunner: string;
   actualRunner: {
     jobs: Array<{ id: number; name: string }>;
+    nameClass: string;
     group: string;
     labels: string[];
     image: string;
@@ -120,11 +121,36 @@ export const CORPUS_BENCHMARK_THRESHOLDS: CorpusBenchmarkThresholds = {
   },
 };
 
+interface MetricSummary {
+  median: number;
+  p95: number;
+  total: number;
+  max: number;
+}
+
+interface CorpusBenchmarkCohortReport {
+  id: string;
+  label: string;
+  identity: ReturnType<typeof cohortIdentity>;
+  repeats: number[];
+  sampleDigests: string[];
+  metrics: {
+    criticalPathMs: MetricSummary;
+    aggregateRunnerMs: MetricSummary;
+    aggregateCpuSeconds: MetricSummary;
+    peakRssBytes: MetricSummary;
+    billedMinutes: MetricSummary;
+    estimatedCostUsd: MetricSummary;
+    cache: Record<"hits" | "misses" | "recomputed" | "rejected" | "strandedArtifacts", MetricSummary>;
+  };
+  samples: Array<{ digest: string; sample: CorpusBenchmarkSample }>;
+}
+
 interface CorpusBenchmarkDecision {
   schema: 1;
   thresholdVersion: string;
   thresholdDigest: string;
-  provenance: { headSha: string; benchmarkSeed: string; targetDigest: string; sampleRunIds: number[] };
+  provenance: { headSha: string; benchmarkSeed: string; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
   concurrency: {
     selected: { design: CorpusExecutionDesign; concurrency: number };
     eligible: string[];
@@ -140,6 +166,7 @@ interface CorpusBenchmarkDecision {
     reasons: string[];
   };
   extendToFive: string[];
+  evidence: { sampleDigest: string; cohorts: CorpusBenchmarkCohortReport[] };
 }
 
 function stable(value: unknown): string {
@@ -148,8 +175,18 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function digest(value: unknown): string {
+  return createHash("sha256").update(stable(value)).digest("hex");
+}
+
+export function corpusRunnerNameClass(name: string, group: string): string {
+  return group === "GitHub Actions" && /^GitHub Actions \d+$/.test(name)
+    ? "GitHub Actions <hosted-id>"
+    : name;
+}
+
 export function corpusBenchmarkThresholdDigest(): string {
-  return createHash("sha256").update(stable(CORPUS_BENCHMARK_THRESHOLDS)).digest("hex");
+  return digest(CORPUS_BENCHMARK_THRESHOLDS);
 }
 
 function median(values: readonly number[]): number {
@@ -180,14 +217,59 @@ function improvement(candidate: number, baseline: number): number {
   return -increase(candidate, baseline);
 }
 
-function cohort(samples: readonly CorpusBenchmarkSample[], predicate: (sample: CorpusBenchmarkSample) => boolean, label: string): CorpusBenchmarkSample[] {
-  const rows = samples.filter(predicate);
+function cohortIdentity(sample: CorpusBenchmarkSample): {
+  headSha: string;
+  benchmarkSeed: string;
+  runnerRole: CorpusRunnerRole;
+  requestedRunner: string;
+  actualRunner: Omit<CorpusBenchmarkSample["actualRunner"], "jobs">;
+  profile: CorpusCacheProfile;
+  design: CorpusExecutionDesign;
+  concurrency: number;
+  effectiveConcurrency: number;
+  shardCount: number;
+  population: CorpusBenchmarkSample["population"];
+  toolVersions: Record<string, string>;
+  targetCommits: Record<string, string>;
+} {
+  const actualRunner = {
+    nameClass: sample.actualRunner.nameClass,
+    group: sample.actualRunner.group,
+    labels: sample.actualRunner.labels,
+    image: sample.actualRunner.image,
+    cpuLimit: sample.actualRunner.cpuLimit,
+    memoryLimitBytes: sample.actualRunner.memoryLimitBytes,
+  };
+  return {
+    headSha: sample.headSha,
+    benchmarkSeed: sample.benchmarkSeed,
+    runnerRole: sample.runnerRole,
+    requestedRunner: sample.requestedRunner,
+    actualRunner,
+    profile: sample.profile,
+    design: sample.design,
+    concurrency: sample.concurrency,
+    effectiveConcurrency: sample.effectiveConcurrency,
+    shardCount: sample.shardCount,
+    population: sample.population,
+    toolVersions: sample.raw.toolVersions,
+    targetCommits: sample.raw.targetCommits,
+  };
+}
+
+function assertCohortRows(rows: readonly CorpusBenchmarkSample[], label: string): CorpusBenchmarkSample[] {
   const repeats = new Set(rows.map((sample) => sample.repeat));
   const runs = new Set(rows.map((sample) => `${sample.runId}/${sample.runAttempt}`));
   if (rows.length < 3 || repeats.size < 3) throw new Error(`${label}: requires at least three distinct real repeats; got ${rows.length} sample(s), ${repeats.size} repeat(s)`);
   if (rows.length !== repeats.size) throw new Error(`${label}: repeats are duplicated; got ${rows.length} sample(s), ${repeats.size} repeat id(s)`);
   if (rows.length !== runs.size) throw new Error(`${label}: one hosted run was counted more than once`);
-  return rows;
+  const identities = new Set(rows.map((sample) => stable(cohortIdentity(sample))));
+  if (identities.size !== 1) throw new Error(`${label}: cohort mixes actual runner, tool/runtime, target/evidence, role, profile, design, concurrency, shard, or requested-runner identities`);
+  return [...rows].sort((left, right) => left.repeat - right.repeat);
+}
+
+function cohort(samples: readonly CorpusBenchmarkSample[], predicate: (sample: CorpusBenchmarkSample) => boolean, label: string): CorpusBenchmarkSample[] {
+  return assertCohortRows(samples.filter(predicate), label);
 }
 
 function assertSample(sample: CorpusBenchmarkSample): void {
@@ -198,11 +280,20 @@ function assertSample(sample: CorpusBenchmarkSample): void {
   if (![3, 4].includes(sample.shardCount)) throw new Error(`run ${sample.runId}: shard count is invalid`);
   if (sample.effectiveConcurrency < 1 || sample.effectiveConcurrency > sample.concurrency) throw new Error(`run ${sample.runId}: effective concurrency is invalid`);
   if (sample.design === "serial" && sample.effectiveConcurrency !== 1) throw new Error(`run ${sample.runId}: serial design claims concurrent execution`);
-  if (sample.design === "split-carbon" && sample.effectiveConcurrency === 1) throw new Error(`run ${sample.runId}: split-carbon did not execute a separate lane and may not enter the benchmark`);
+  if (sample.design === "target-workers" && sample.effectiveConcurrency !== sample.concurrency) throw new Error(`run ${sample.runId}: target-worker sample was resource-admitted below its requested concurrency`);
+  if (sample.design === "intra-target-overlap" && sample.effectiveConcurrency !== 2) throw new Error(`run ${sample.runId}: intra-target-overlap sample did not admit both scanner lanes`);
   if (sample.criticalPathMs <= 0 || sample.aggregateRunnerMs <= 0 || sample.billedMinutes <= 0) throw new Error(`run ${sample.runId}: timing/cost receipt is incomplete`);
   if (!Number.isFinite(sample.estimatedCostUsd) || sample.estimatedCostUsd < 0) throw new Error(`run ${sample.runId}: dollar-cost receipt is invalid`);
   if (sample.criticalPathMs > sample.aggregateRunnerMs) throw new Error(`run ${sample.runId}: critical path exceeds summed runner time`);
   if (sample.peakRssBytes <= 0 || sample.actualRunner.memoryLimitBytes <= 0 || sample.actualRunner.cpuLimit <= 0) throw new Error(`run ${sample.runId}: CPU/RSS receipt is incomplete`);
+  if (!sample.actualRunner.group || !sample.actualRunner.image || !sample.actualRunner.nameClass || sample.actualRunner.labels.length === 0) throw new Error(`run ${sample.runId}: actual runner identity is incomplete`);
+  if (sample.actualRunner.jobs.length !== sample.shardCount
+    || new Set(sample.actualRunner.jobs.map((job) => job.id)).size !== sample.shardCount
+    || sample.actualRunner.jobs.some((job) => !Number.isInteger(job.id) || job.id <= 0 || !job.name)) {
+    throw new Error(`run ${sample.runId}: actual runner job rows are incomplete or duplicated`);
+  }
+  const nameClasses = new Set(sample.actualRunner.jobs.map((job) => corpusRunnerNameClass(job.name, sample.actualRunner.group)));
+  if (nameClasses.size !== 1 || !nameClasses.has(sample.actualRunner.nameClass)) throw new Error(`run ${sample.runId}: actual runner name class disagrees with raw hosted runner names`);
   if (sample.population.targets.length === 0 || new Set(sample.population.targets).size !== sample.population.targets.length) throw new Error(`run ${sample.runId}: target population is empty or duplicated`);
   for (const [name, digest] of Object.entries(sample.population).filter(([key]) => key.endsWith("Digest"))) {
     if (!/^[0-9a-f]{64}$/.test(String(digest))) throw new Error(`run ${sample.runId}: ${name} is not a SHA-256 digest`);
@@ -214,30 +305,62 @@ function assertSample(sample: CorpusBenchmarkSample): void {
   if (sample.oomCount !== 0 || sample.retryCount !== 0) throw new Error(`run ${sample.runId}: OOM/retry is a regression`);
   if (sample.cache.strandedArtifacts !== 0) throw new Error(`run ${sample.runId}: content-addressed artifacts were stranded`);
   if (sample.raw.jobIds.length !== sample.shardCount || new Set(sample.raw.jobIds).size !== sample.shardCount) throw new Error(`run ${sample.runId}: raw shard job population is incomplete or duplicated`);
+  if (stable([...sample.raw.jobIds].sort((a, b) => a - b)) !== stable(sample.actualRunner.jobs.map((job) => job.id).sort((a, b) => a - b))) throw new Error(`run ${sample.runId}: raw shard jobs disagree with actual runner jobs`);
   if (sample.cache.transportKeys.length === 0 || sample.cache.provenanceDigests.length === 0 || sample.raw.artifactDigests.length === 0) throw new Error(`run ${sample.runId}: cache/artifact provenance is incomplete`);
   if (![...sample.cache.provenanceDigests, ...sample.raw.artifactDigests].every((value) => /^[0-9a-f]{64}$/.test(value))) throw new Error(`run ${sample.runId}: cache/artifact digest is invalid`);
+  if (!sample.raw.workflowUrl || Object.keys(sample.raw.toolVersions).length === 0 || Object.values(sample.raw.toolVersions).some((value) => !value)) throw new Error(`run ${sample.runId}: raw workflow/tool provenance is incomplete`);
+  const targetCommitEntries = Object.entries(sample.raw.targetCommits).sort(([left], [right]) => left.localeCompare(right));
+  if (stable(targetCommitEntries.map(([slug]) => slug)) !== stable([...sample.population.targets].sort())
+    || targetCommitEntries.some(([, commit]) => !/^[0-9a-f]{40}$/.test(commit))) {
+    throw new Error(`run ${sample.runId}: raw target commit rows are missing, foreign, or invalid`);
+  }
+  for (const value of [sample.aggregateCpuSeconds, sample.setupNetworkMs, sample.dependencyMs, sample.targetProcessCpuMs, sample.estimatedCostUsd]) {
+    if (!Number.isFinite(value) || value < 0) throw new Error(`run ${sample.runId}: raw resource/cost metrics are incomplete`);
+  }
+  for (const name of ["hits", "misses", "recomputed", "rejected", "strandedArtifacts"] as const) {
+    const value = sample.cache[name];
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`run ${sample.runId}: cache ${name} metric is invalid`);
+  }
 }
 
-function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; targetDigest: string } {
-  const heads = new Set(samples.map((sample) => sample.headSha));
-  const seeds = new Set(samples.map((sample) => sample.benchmarkSeed));
-  const targetDigests = new Set(samples.map((sample) => sample.population.targetDigest));
-  for (const [label, values] of [["head", heads], ["benchmark seed", seeds], ["target population", targetDigests]] as const) {
-    if (values.size !== 1) throw new Error(`benchmark mixes ${label} identities: ${[...values].join(", ")}`);
-  }
-  return { headSha: [...heads][0]!, benchmarkSeed: [...seeds][0]!, targetDigest: [...targetDigests][0]! };
+function comparableEvidence(sample: CorpusBenchmarkSample): unknown {
+  return {
+    headSha: sample.headSha,
+    benchmarkSeed: sample.benchmarkSeed,
+    population: sample.population,
+    toolVersions: sample.raw.toolVersions,
+    targetCommits: sample.raw.targetCommits,
+    assertions: sample.assertions,
+  };
+}
+
+function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; targetDigest: string; evidenceDigest: string } {
+  if (samples.length === 0) throw new Error("benchmark has no raw sample rows");
+  const evidence = new Set(samples.map((sample) => stable(comparableEvidence(sample))));
+  if (evidence.size !== 1) throw new Error("benchmark mixes head, seed, target/evidence, tool/runtime, target-commit, or assertion identities");
+  const first = samples[0]!;
+  return {
+    headSha: first.headSha,
+    benchmarkSeed: first.benchmarkSeed,
+    targetDigest: first.population.targetDigest,
+    evidenceDigest: first.population.evidenceDigest,
+  };
 }
 
 function allAssertionsEqual(left: CorpusBenchmarkSample, right: CorpusBenchmarkSample): boolean {
+  return stable(comparableEvidence(left)) === stable(comparableEvidence(right));
+}
+
+function sameRunnerEnvironment(left: CorpusBenchmarkSample, right: CorpusBenchmarkSample): boolean {
   const comparable = (sample: CorpusBenchmarkSample): unknown => ({
-    targetDigest: sample.population.targetDigest,
-    targets: sample.population.targets,
-    rowDigest: sample.population.rowDigest,
-    findingDigest: sample.population.findingDigest,
-    disclosureDigest: sample.population.disclosureDigest,
-    baselineDigest: sample.population.baselineDigest,
-    examinedDigest: sample.population.examinedDigest,
-    assertions: sample.assertions,
+    runnerRole: sample.runnerRole,
+    requestedRunner: sample.requestedRunner,
+    nameClass: sample.actualRunner.nameClass,
+    group: sample.actualRunner.group,
+    labels: sample.actualRunner.labels,
+    image: sample.actualRunner.image,
+    cpuLimit: sample.actualRunner.cpuLimit,
+    memoryLimitBytes: sample.actualRunner.memoryLimitBytes,
   });
   return stable(comparable(left)) === stable(comparable(right));
 }
@@ -257,30 +380,103 @@ const DESIGN_COMPLEXITY: Record<CorpusExecutionDesign, number> = {
   "split-carbon": 3,
 };
 
+const REQUIRED_STANDARD_SHAPES: ReadonlyArray<{ design: Exclude<CorpusExecutionDesign, "split-carbon">; concurrency: number }> = [
+  { design: "serial", concurrency: 1 },
+  { design: "target-workers", concurrency: 1 },
+  { design: "target-workers", concurrency: 2 },
+  { design: "target-workers", concurrency: 3 },
+  { design: "intra-target-overlap", concurrency: 2 },
+];
+
+function metricSummary(values: readonly number[]): MetricSummary {
+  return {
+    median: median(values),
+    p95: nearestRankP95(values),
+    total: values.reduce((sum, value) => sum + value, 0),
+    max: Math.max(...values),
+  };
+}
+
+function describeCohort(identity: ReturnType<typeof cohortIdentity>): string {
+  return `${identity.runnerRole}/${identity.requestedRunner}/${identity.actualRunner.nameClass}/${identity.profile}/${identity.design}-${identity.concurrency}/shards-${identity.shardCount}`;
+}
+
+function buildCohortReports(samples: readonly CorpusBenchmarkSample[]): CorpusBenchmarkCohortReport[] {
+  const groups = new Map<string, CorpusBenchmarkSample[]>();
+  for (const sample of samples) {
+    const key = stable(cohortIdentity(sample));
+    const rows = groups.get(key) ?? [];
+    rows.push(sample);
+    groups.set(key, rows);
+  }
+  return [...groups.entries()].map(([identityText, unsorted]) => {
+    const identity = cohortIdentity(unsorted[0]!);
+    const label = describeCohort(identity);
+    const rows = assertCohortRows(unsorted, label);
+    const sampleRows = rows.map((sample) => ({ digest: digest(sample), sample }));
+    const cacheMetric = (field: "hits" | "misses" | "recomputed" | "rejected" | "strandedArtifacts"): MetricSummary => metricSummary(rows.map((sample) => sample.cache[field]));
+    return {
+      id: digest(identityText),
+      label,
+      identity,
+      repeats: rows.map((sample) => sample.repeat),
+      sampleDigests: sampleRows.map((row) => row.digest),
+      metrics: {
+        criticalPathMs: metricSummary(rows.map((sample) => sample.criticalPathMs)),
+        aggregateRunnerMs: metricSummary(rows.map((sample) => sample.aggregateRunnerMs)),
+        aggregateCpuSeconds: metricSummary(rows.map((sample) => sample.aggregateCpuSeconds)),
+        peakRssBytes: metricSummary(rows.map((sample) => sample.peakRssBytes)),
+        billedMinutes: metricSummary(rows.map((sample) => sample.billedMinutes)),
+        estimatedCostUsd: metricSummary(rows.map((sample) => sample.estimatedCostUsd)),
+        cache: {
+          hits: cacheMetric("hits"),
+          misses: cacheMetric("misses"),
+          recomputed: cacheMetric("recomputed"),
+          rejected: cacheMetric("rejected"),
+          strandedArtifacts: cacheMetric("strandedArtifacts"),
+        },
+      },
+      samples: sampleRows,
+    };
+  }).sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function assertRepeatPair(left: readonly CorpusBenchmarkSample[], right: readonly CorpusBenchmarkSample[], label: string): void {
+  if (stable(left.map((sample) => sample.repeat)) !== stable(right.map((sample) => sample.repeat))) {
+    throw new Error(`${label}: compared cohorts do not carry the same repeat population`);
+  }
+}
+
 export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[]): CorpusBenchmarkDecision {
   samples.forEach(assertSample);
+  if (new Set(samples.map((sample) => `${sample.runId}/${sample.runAttempt}`)).size !== samples.length) {
+    throw new Error("benchmark raw sample rows reuse a workflow run/attempt across cohorts");
+  }
   const provenance = assertMatchedPopulation(samples);
   const isStandardPr = (sample: CorpusBenchmarkSample): boolean => sample.runnerRole === "pr" && sample.requestedRunner === "ubuntu-latest";
-  const baseline = {
-    cold: cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "cold" && sample.design === "serial" && sample.concurrency === 1 && sample.shardCount === 3, "cold serial baseline"),
-    warm: cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === "serial" && sample.concurrency === 1 && sample.shardCount === 3, "warm serial baseline"),
-  };
-  const candidateShapes = [...new Set(samples
-    .filter((sample) => isStandardPr(sample) && sample.shardCount === 3)
-    .map((sample) => `${sample.design}:${sample.concurrency}`))]
-    .filter((candidate) => candidate !== "serial:1")
-    .sort();
+  const standard = new Map<string, { cold: CorpusBenchmarkSample[]; warm: CorpusBenchmarkSample[] }>();
+  for (const shape of REQUIRED_STANDARD_SHAPES) {
+    const name = `${shape.design}:${shape.concurrency}`;
+    standard.set(name, {
+      cold: cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "cold" && sample.design === shape.design && sample.concurrency === shape.concurrency && sample.shardCount === 3, `${name} cold`),
+      warm: cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === shape.design && sample.concurrency === shape.concurrency && sample.shardCount === 3, `${name} warm`),
+    });
+  }
+  const baseline = standard.get("serial:1")!;
+  const candidateShapes = REQUIRED_STANDARD_SHAPES.slice(1).map((shape) => `${shape.design}:${shape.concurrency}`);
   const eligible: string[] = [];
-  const rejected: Array<{ shape: string; reasons: string[] }> = [];
+  const rejected: Array<{ shape: string; reasons: string[] }> = [{
+    shape: "split-carbon",
+    reasons: ["non-admissible negative control: no independently admitted workflow job/runner lane exists"],
+  }];
   const extendToFive: string[] = [];
   for (const candidate of candidateShapes) {
-    const [design, rawConcurrency] = candidate.split(":") as [CorpusExecutionDesign, string];
-    const concurrency = Number(rawConcurrency);
-    const cold = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "cold" && sample.design === design && sample.concurrency === concurrency && sample.shardCount === 3, `${candidate} cold`);
-    const warm = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === design && sample.concurrency === concurrency && sample.shardCount === 3, `${candidate} warm`);
+    const { cold, warm } = standard.get(candidate)!;
     const reasons: string[] = [];
     for (const profile of ["cold", "warm"] as const) {
       if (![...cold, ...warm].filter((sample) => sample.profile === profile).every((sample) => baseline[profile].every((base) => allAssertionsEqual(sample, base)))) reasons.push(`${profile} population/evidence differs`);
+      if (![...cold, ...warm].filter((sample) => sample.profile === profile).every((sample) => baseline[profile].every((base) => sameRunnerEnvironment(sample, base)))) reasons.push(`${profile} actual runner environment differs`);
+      assertRepeatPair(baseline[profile], profile === "cold" ? cold : warm, `${candidate} ${profile}`);
     }
     const warmGain = improvement(median(warm.map((sample) => sample.criticalPathMs)), median(baseline.warm.map((sample) => sample.criticalPathMs)));
     const coldGain = improvement(median(cold.map((sample) => sample.criticalPathMs)), median(baseline.cold.map((sample) => sample.criticalPathMs)));
@@ -306,7 +502,7 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
   const candidateMeasurements = eligible
     .map((candidate) => {
       const [design, rawConcurrency] = candidate.split(":") as [CorpusExecutionDesign, string];
-      const rows = samples.filter((sample) => isStandardPr(sample) && sample.design === design && sample.concurrency === Number(rawConcurrency) && sample.shardCount === 3);
+      const rows = Object.values(standard.get(candidate)!).flat();
       return { candidate, design, concurrency: Number(rawConcurrency), median: median(rows.map((sample) => sample.criticalPathMs)) };
     });
   const fastestCandidate = candidateMeasurements.length > 0 ? Math.min(...candidateMeasurements.map((candidate) => candidate.median)) : undefined;
@@ -318,24 +514,33 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
   const concurrencySelection = selectedCandidate ?? { candidate: "serial:1", design: "serial" as const, concurrency: 1, median: Infinity };
 
   const runnerDecision = (role: CorpusRunnerRole): CorpusBenchmarkDecision["runners"][CorpusRunnerRole] => {
-    const current = samples.filter((sample) => sample.runnerRole === role && sample.requestedRunner === "ubuntu-latest" && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 3);
     const alternatives = [...new Set(samples.filter((sample) => sample.runnerRole === role && sample.requestedRunner !== "ubuntu-latest").map((sample) => sample.requestedRunner))];
     if (alternatives.length === 0) return { selected: "ubuntu-latest", adoptedLarger: false, reasons: ["no repository-visible larger-runner sample exists"] };
+    const rowsFor = (runner: string, profile: CorpusCacheProfile): CorpusBenchmarkSample[] => cohort(
+      samples,
+      (sample) => sample.runnerRole === role
+        && sample.requestedRunner === runner
+        && sample.profile === profile
+        && sample.design === concurrencySelection.design
+        && sample.concurrency === concurrencySelection.concurrency
+        && sample.shardCount === 3,
+      `${role} ${runner} ${profile}`,
+    );
+    const currentByProfile = { cold: rowsFor("ubuntu-latest", "cold"), warm: rowsFor("ubuntu-latest", "warm") };
+    const current = [...currentByProfile.cold, ...currentByProfile.warm];
     const qualifying: Array<{ runner: string; medianGain: number; costIncrease: number }> = [];
     const reasons: string[] = [];
     for (const runner of alternatives) {
-      const rows = samples.filter((sample) => sample.runnerRole === role && sample.requestedRunner === runner && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 3);
-      for (const profile of ["cold", "warm"] as const) {
-        cohort(current, (sample) => sample.profile === profile, `${role} current ${profile}`);
-        cohort(rows, (sample) => sample.profile === profile, `${role} ${runner} ${profile}`);
-      }
+      const candidateByProfile = { cold: rowsFor(runner, "cold"), warm: rowsFor(runner, "warm") };
+      const rows = [...candidateByProfile.cold, ...candidateByProfile.warm];
+      for (const profile of ["cold", "warm"] as const) assertRepeatPair(currentByProfile[profile], candidateByProfile[profile], `${role} ${runner} ${profile}`);
       if (!rows.every((row) => current.every((base) => allAssertionsEqual(row, base)))) { reasons.push(`${runner}: population/evidence differs`); continue; }
       if (![...current, ...rows].every((row) => row.estimatedCostUsd > 0)) { reasons.push(`${runner}: dollar cost estimate is missing; runner adoption is forbidden`); continue; }
       const medianGain = improvement(median(rows.map((sample) => sample.criticalPathMs)), median(current.map((sample) => sample.criticalPathMs)));
       const p95Gain = improvement(nearestRankP95(rows.map((sample) => sample.criticalPathMs)), nearestRankP95(current.map((sample) => sample.criticalPathMs)));
       const costIncrease = increase(median(rows.map((sample) => sample.estimatedCostUsd)), median(current.map((sample) => sample.estimatedCostUsd)));
-      const currentCold = new Map(current.filter((sample) => sample.profile === "cold").map((sample) => [sample.repeat, sample.criticalPathMs]));
-      const worstCold = Math.max(...rows.filter((sample) => sample.profile === "cold").map((sample) => increase(sample.criticalPathMs, currentCold.get(sample.repeat)!)));
+      const currentCold = new Map(currentByProfile.cold.map((sample) => [sample.repeat, sample.criticalPathMs]));
+      const worstCold = Math.max(...candidateByProfile.cold.map((sample) => increase(sample.criticalPathMs, currentCold.get(sample.repeat)!)));
       const prQualified = medianGain >= CORPUS_BENCHMARK_THRESHOLDS.largerPrRunner.medianCriticalImprovement
         && p95Gain >= CORPUS_BENCHMARK_THRESHOLDS.largerPrRunner.p95CriticalImprovement
         && costIncrease <= CORPUS_BENCHMARK_THRESHOLDS.largerPrRunner.costMaxIncrease
@@ -352,12 +557,16 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
     return selected ? { selected: selected.runner, adoptedLarger: true, reasons: [`qualified median gain ${selected.medianGain.toFixed(3)} at cost increase ${selected.costIncrease.toFixed(3)}`] } : { selected: "ubuntu-latest", adoptedLarger: false, reasons };
   };
 
-  const threeCold = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "cold" && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 3, "three-shard cold");
-  const threeWarm = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 3, "three-shard warm");
+  const selectedStandard = standard.get(`${concurrencySelection.design}:${concurrencySelection.concurrency}`)!;
+  const threeCold = selectedStandard.cold;
+  const threeWarm = selectedStandard.warm;
   const fourCold = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "cold" && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 4, "four-shard cold");
   const fourWarm = cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === concurrencySelection.design && sample.concurrency === concurrencySelection.concurrency && sample.shardCount === 4, "four-shard warm");
+  assertRepeatPair(threeCold, fourCold, "three/four shard cold");
+  assertRepeatPair(threeWarm, fourWarm, "three/four shard warm");
   const shardReasons: string[] = [];
   if (![...fourCold, ...fourWarm].every((sample) => [...threeCold, ...threeWarm].every((base) => allAssertionsEqual(sample, base)))) shardReasons.push("three/four shard population or evidence differs");
+  if (![...fourCold, ...fourWarm].every((sample) => [...threeCold, ...threeWarm].every((base) => sameRunnerEnvironment(sample, base)))) shardReasons.push("three/four shard actual runner environment differs");
   const warmGain = improvement(median(fourWarm.map((sample) => sample.criticalPathMs)), median(threeWarm.map((sample) => sample.criticalPathMs)));
   const coldP95Regression = increase(nearestRankP95(fourCold.map((sample) => sample.criticalPathMs)), nearestRankP95(threeCold.map((sample) => sample.criticalPathMs)));
   const aggregateIncrease = Math.max(
@@ -373,14 +582,17 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
     [aggregateIncrease, CORPUS_BENCHMARK_THRESHOLDS.fourShards.aggregateMaxIncrease]]
     .some(([value, threshold]) => nearThreshold(value!, threshold!)) || highVariation([...fourCold, ...fourWarm])) extendToFive.push("four-shards");
 
+  const cohorts = buildCohortReports(samples);
+  const sampleDigest = digest(cohorts.flatMap((report) => report.sampleDigests).sort());
   return {
     schema: 1,
     thresholdVersion: CORPUS_BENCHMARK_THRESHOLDS.version,
     thresholdDigest: corpusBenchmarkThresholdDigest(),
-    provenance: { ...provenance, sampleRunIds: [...new Set(samples.map((sample) => sample.runId))].sort((a, b) => a - b) },
+    provenance: { ...provenance, sampleRunIds: [...new Set(samples.map((sample) => sample.runId))].sort((a, b) => a - b), sampleDigest },
     concurrency: { selected: { design: concurrencySelection.design, concurrency: concurrencySelection.concurrency }, eligible, rejected },
     runners: { pr: runnerDecision("pr"), schedule: runnerDecision("schedule") },
     shards: { selected: fourQualified ? 4 : 3, coldFallback: 3, reasons: fourQualified ? [`qualified warm=${warmGain.toFixed(3)}, cold-p95=${coldP95Regression.toFixed(3)}, aggregate=${aggregateIncrease.toFixed(3)}`] : shardReasons },
     extendToFive: [...new Set(extendToFive)].sort(),
+    evidence: { sampleDigest, cohorts },
   };
 }
