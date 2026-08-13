@@ -117,6 +117,8 @@ function build(card = scorecard(), apiJobs = jobs()) {
     runAttempt: 1,
     headSha,
     benchmarkSeed,
+    benchmarkSeedRunId: 99,
+    benchmarkSeedRunAttempt: 1,
     repeat: 1,
     runnerRole: "pr",
     requestedRunner: "ubuntu-latest",

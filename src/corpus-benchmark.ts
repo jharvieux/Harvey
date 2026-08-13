@@ -63,6 +63,8 @@ export interface CorpusBenchmarkSample {
   workflow: "corpus-drift.yml";
   headSha: string;
   benchmarkSeed: string;
+  benchmarkSeedRunId: number;
+  benchmarkSeedRunAttempt: number;
   repeat: number;
   runnerRole: CorpusRunnerRole;
   requestedRunner: string;
@@ -233,6 +235,47 @@ interface CorpusBenchmarkDecision {
   };
   extendToFive: string[];
   evidence: { sampleDigest: string; cohorts: CorpusBenchmarkCohortReport[] };
+  next: CorpusBenchmarkNextRuns;
+}
+
+export interface CorpusBenchmarkPilotDecision {
+  schema: 1;
+  stage: "pilot";
+  thresholdVersion: string;
+  thresholdDigest: string;
+  provenance: { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; targetDigest: string; evidenceDigest: string; sampleRunIds: number[]; sampleDigest: string };
+  concurrency: CorpusBenchmarkDecision["concurrency"];
+  extendToFive: string[];
+  evidence: CorpusBenchmarkDecision["evidence"];
+  next: CorpusBenchmarkNextRuns & { design: CorpusExecutionDesign; concurrency: number; requiredProfiles: ["cold", "warm"] };
+}
+
+interface CorpusBenchmarkNextRuns {
+  stage: "extend-standard" | "four-shard" | "complete";
+  requiredShardCounts: Array<3 | 4>;
+  repeats: number[];
+  requiredRuns: CorpusBenchmarkRequiredRun[];
+  rerunPilotAfter: boolean;
+}
+
+interface CorpusBenchmarkRequiredRun {
+  cohort: string;
+  design: CorpusExecutionDesign;
+  concurrency: number;
+  shardCount: 3 | 4;
+  profile: CorpusCacheProfile;
+  repeat: number;
+}
+
+function corpusBenchmarkRequiredRuns(cohortIds: readonly string[], repeats: readonly number[]): CorpusBenchmarkRequiredRun[] {
+  const parse = (cohort: string): Omit<CorpusBenchmarkRequiredRun, "cohort" | "repeat"> => {
+    const standard = /^(serial|target-workers|intra-target-overlap):(\d+):(cold|warm)$/.exec(cohort);
+    if (standard) return { design: standard[1] as CorpusExecutionDesign, concurrency: Number(standard[2]), shardCount: 3, profile: standard[3] as CorpusCacheProfile };
+    const selected = /^selected:(serial|target-workers|intra-target-overlap):(\d+):shards-(4):(cold|warm)$/.exec(cohort);
+    if (selected) return { design: selected[1] as CorpusExecutionDesign, concurrency: Number(selected[2]), shardCount: 4, profile: selected[4] as CorpusCacheProfile };
+    throw new Error(`benchmark extension cohort id is not dispatchable: ${cohort}`);
+  };
+  return [...new Set(cohortIds)].sort().flatMap((cohort) => repeats.map((repeat) => ({ cohort, ...parse(cohort), repeat })));
 }
 
 function stable(value: unknown): string {
@@ -499,6 +542,8 @@ function assertSampleEnvelope(sample: CorpusBenchmarkSample): void {
   const sources = provenance.transports.sources;
   const outputs = provenance.transports.outputs;
   if (sources.length === 0 || outputs.length !== sample.shardCount) throw new Error(`${label}: source/output transport population is incomplete`);
+  if (sources.some((source) => source.runId !== String(sample.benchmarkSeedRunId))) throw new Error(`${label}: source transport belongs to sample run rather than immutable seed run ${sample.benchmarkSeedRunId}`);
+  if (sources.some((source) => source.runAttempt !== String(sample.benchmarkSeedRunAttempt))) throw new Error(`${label}: source transport belongs to another seed-run attempt rather than immutable seed attempt ${sample.benchmarkSeedRunAttempt}`);
   const allTransports = [...sources, ...outputs];
   if (new Set(allTransports.map((transport) => transport.key)).size !== allTransports.length) throw new Error(`${label}: transport keys are duplicated across source/output roles`);
   const expectedSeedDigest = directDigest(sample.benchmarkSeed).slice(0, 16);
@@ -572,6 +617,8 @@ function assertSample(sample: CorpusBenchmarkSample): void {
   if (sample.schema !== 1 || sample.workflow !== "corpus-drift.yml") throw new Error(`run ${sample.runId}: unsupported benchmark sample`);
   if (!/^[0-9a-f]{40}$/.test(sample.headSha)) throw new Error(`run ${sample.runId}: headSha is invalid`);
   if (!Number.isInteger(sample.repeat) || sample.repeat < 1) throw new Error(`run ${sample.runId}: repeat is invalid`);
+  if (!Number.isInteger(sample.benchmarkSeedRunId) || sample.benchmarkSeedRunId < 1 || sample.benchmarkSeedRunId === sample.runId) throw new Error(`run ${sample.runId}: immutable benchmark seed-run identity is missing or aliases the sample run`);
+  if (!Number.isInteger(sample.benchmarkSeedRunAttempt) || sample.benchmarkSeedRunAttempt < 1) throw new Error(`run ${sample.runId}: immutable benchmark seed-run attempt is missing`);
   if (!Number.isInteger(sample.concurrency) || sample.concurrency < 1 || sample.concurrency > 3) throw new Error(`run ${sample.runId}: concurrency is invalid`);
   if (![3, 4].includes(sample.shardCount)) throw new Error(`run ${sample.runId}: shard count is invalid`);
   if (sample.effectiveConcurrency < 1 || sample.effectiveConcurrency > sample.concurrency) throw new Error(`run ${sample.runId}: effective concurrency is invalid`);
@@ -619,6 +666,8 @@ function comparableEvidence(sample: CorpusBenchmarkSample): unknown {
   return {
     headSha: sample.headSha,
     benchmarkSeed: sample.benchmarkSeed,
+    benchmarkSeedRunId: sample.benchmarkSeedRunId,
+    benchmarkSeedRunAttempt: sample.benchmarkSeedRunAttempt,
     population: invariantPopulation(sample),
     cacheProvenance: sample.cache.provenance.invariant,
     outputTransportScope: outputTransportScope(sample),
@@ -628,7 +677,7 @@ function comparableEvidence(sample: CorpusBenchmarkSample): unknown {
   };
 }
 
-function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; targetDigest: string; evidenceDigest: string } {
+function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { headSha: string; benchmarkSeed: string; benchmarkSeedRunId: number; benchmarkSeedRunAttempt: number; targetDigest: string; evidenceDigest: string } {
   if (samples.length === 0) throw new Error("benchmark has no raw sample rows");
   const evidence = new Set(samples.map((sample) => stable(comparableEvidence(sample))));
   if (evidence.size !== 1) throw new Error("benchmark mixes head, seed, target/evidence, tool/runtime, target-commit, or assertion identities");
@@ -636,6 +685,8 @@ function assertMatchedPopulation(samples: readonly CorpusBenchmarkSample[]): { h
   return {
     headSha: first.headSha,
     benchmarkSeed: first.benchmarkSeed,
+    benchmarkSeedRunId: first.benchmarkSeedRunId,
+    benchmarkSeedRunAttempt: first.benchmarkSeedRunAttempt,
     targetDigest: first.population.targetDigest,
     evidenceDigest: first.population.evidenceDigest,
   };
@@ -741,14 +792,10 @@ function assertRepeatPair(left: readonly CorpusBenchmarkSample[], right: readonl
   }
 }
 
-export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[]): CorpusBenchmarkDecision {
-  samples.forEach(assertSample);
-  if (new Set(samples.map((sample) => `${sample.runId}/${sample.runAttempt}`)).size !== samples.length) {
-    throw new Error("benchmark raw sample rows reuse a workflow run/attempt across cohorts");
-  }
-  const provenance = assertMatchedPopulation(samples);
-  const isStandardPr = (sample: CorpusBenchmarkSample): boolean => sample.runnerRole === "pr" && sample.requestedRunner === "ubuntu-latest";
-  const standard = new Map<string, { cold: CorpusBenchmarkSample[]; warm: CorpusBenchmarkSample[] }>();
+type StandardCohorts = Map<string, { cold: CorpusBenchmarkSample[]; warm: CorpusBenchmarkSample[] }>;
+
+function collectStandardCohorts(samples: readonly CorpusBenchmarkSample[], isStandardPr: (sample: CorpusBenchmarkSample) => boolean): StandardCohorts {
+  const standard: StandardCohorts = new Map();
   for (const shape of REQUIRED_STANDARD_SHAPES) {
     const name = `${shape.design}:${shape.concurrency}`;
     standard.set(name, {
@@ -756,21 +803,36 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
       warm: cohort(samples, (sample) => isStandardPr(sample) && sample.profile === "warm" && sample.design === shape.design && sample.concurrency === shape.concurrency && sample.shardCount === 3, `${name} warm`),
     });
   }
+  return standard;
+}
+
+function evaluateConcurrency(standard: StandardCohorts): {
+  selected: { design: CorpusExecutionDesign; concurrency: number };
+  eligible: string[];
+  rejected: Array<{ shape: string; reasons: string[] }>;
+  extendToFive: string[];
+} {
   const baseline = standard.get("serial:1")!;
+  assertRepeatPair(baseline.cold, baseline.warm, "serial cold/warm");
+  const repeatPopulation = baseline.cold.map((sample) => sample.repeat);
+  if (stable(repeatPopulation) !== stable([1, 2, 3]) && stable(repeatPopulation) !== stable([1, 2, 3, 4, 5])) {
+    throw new Error(`standard pilot repeat population must be exactly 1-3 or 1-5; got ${repeatPopulation.join(",")}`);
+  }
   const candidateShapes = REQUIRED_STANDARD_SHAPES.slice(1).map((shape) => `${shape.design}:${shape.concurrency}`);
   const eligible: string[] = [];
   const rejected: Array<{ shape: string; reasons: string[] }> = [{
     shape: "split-carbon",
     reasons: ["non-admissible negative control: no independently admitted workflow job/runner lane exists"],
   }];
-  const extendToFive: string[] = [];
+  let extendAllStandardPairs = false;
   for (const candidate of candidateShapes) {
     const { cold, warm } = standard.get(candidate)!;
     const reasons: string[] = [];
     for (const profile of ["cold", "warm"] as const) {
-      if (![...cold, ...warm].filter((sample) => sample.profile === profile).every((sample) => baseline[profile].every((base) => allAssertionsEqual(sample, base)))) reasons.push(`${profile} population/evidence differs`);
-      if (![...cold, ...warm].filter((sample) => sample.profile === profile).every((sample) => baseline[profile].every((base) => sameRunnerEnvironment(sample, base)))) reasons.push(`${profile} actual runner environment differs`);
-      assertRepeatPair(baseline[profile], profile === "cold" ? cold : warm, `${candidate} ${profile}`);
+      const rows = profile === "cold" ? cold : warm;
+      if (!rows.every((sample) => baseline[profile].every((base) => allAssertionsEqual(sample, base)))) reasons.push(`${profile} population/evidence differs`);
+      if (!rows.every((sample) => baseline[profile].every((base) => sameRunnerEnvironment(sample, base)))) reasons.push(`${profile} actual runner environment differs`);
+      assertRepeatPair(baseline[profile], rows, `${candidate} ${profile}`);
     }
     const warmGain = improvement(median(warm.map((sample) => sample.criticalPathMs)), median(baseline.warm.map((sample) => sample.criticalPathMs)));
     const coldGain = improvement(median(cold.map((sample) => sample.criticalPathMs)), median(baseline.cold.map((sample) => sample.criticalPathMs)));
@@ -791,21 +853,140 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
       [coldP95Regression, CORPUS_BENCHMARK_THRESHOLDS.concurrency.coldP95MaxRegression],
       [aggregateIncrease, CORPUS_BENCHMARK_THRESHOLDS.concurrency.aggregateMaxIncrease],
       [rssFraction, CORPUS_BENCHMARK_THRESHOLDS.concurrency.peakRssLimitFraction]]
-      .some(([value, threshold]) => nearThreshold(value!, threshold!)) || highVariation([...cold, ...warm])) extendToFive.push(candidate);
+      .some(([value, threshold]) => nearThreshold(value!, threshold!)) || highVariation([...cold, ...warm])) extendAllStandardPairs = true;
   }
-  const candidateMeasurements = eligible
-    .map((candidate) => {
-      const [design, rawConcurrency] = candidate.split(":") as [CorpusExecutionDesign, string];
-      const rows = Object.values(standard.get(candidate)!).flat();
-      return { candidate, design, concurrency: Number(rawConcurrency), median: median(rows.map((sample) => sample.criticalPathMs)) };
-    });
-  const fastestCandidate = candidateMeasurements.length > 0 ? Math.min(...candidateMeasurements.map((candidate) => candidate.median)) : undefined;
-  const selectedCandidate = fastestCandidate === undefined ? undefined : candidateMeasurements
-    .filter((candidate) => increase(candidate.median, fastestCandidate) <= CORPUS_BENCHMARK_THRESHOLDS.concurrency.preferSmallerWithin)
+  const measurements = eligible.map((candidate) => {
+    const [design, rawConcurrency] = candidate.split(":") as [CorpusExecutionDesign, string];
+    const rows = Object.values(standard.get(candidate)!).flat();
+    return { candidate, design, concurrency: Number(rawConcurrency), median: median(rows.map((sample) => sample.criticalPathMs)) };
+  });
+  const fastest = measurements.length > 0 ? Math.min(...measurements.map((candidate) => candidate.median)) : undefined;
+  const selected = fastest === undefined ? undefined : measurements
+    .filter((candidate) => increase(candidate.median, fastest) <= CORPUS_BENCHMARK_THRESHOLDS.concurrency.preferSmallerWithin)
     .sort((left, right) => DESIGN_COMPLEXITY[left.design] - DESIGN_COMPLEXITY[right.design]
       || left.concurrency - right.concurrency
       || left.median - right.median)[0];
-  const concurrencySelection = selectedCandidate ?? { candidate: "serial:1", design: "serial" as const, concurrency: 1, median: Infinity };
+  return {
+    selected: selected ? { design: selected.design, concurrency: selected.concurrency } : { design: "serial", concurrency: 1 },
+    eligible,
+    rejected,
+    extendToFive: extendAllStandardPairs && repeatPopulation.length === 3
+      ? REQUIRED_STANDARD_SHAPES.flatMap((shape) => [`${shape.design}:${shape.concurrency}:cold`, `${shape.design}:${shape.concurrency}:warm`])
+      : [],
+  };
+}
+
+function isRequiredStandardShape(sample: CorpusBenchmarkSample): boolean {
+  return REQUIRED_STANDARD_SHAPES.some((shape) => sample.design === shape.design && sample.concurrency === shape.concurrency);
+}
+
+function pilotDecisionCore(decision: CorpusBenchmarkPilotDecision): Omit<CorpusBenchmarkPilotDecision, "next"> {
+  const core: Partial<CorpusBenchmarkPilotDecision> = { ...decision };
+  delete core.next;
+  return core as Omit<CorpusBenchmarkPilotDecision, "next">;
+}
+
+function existingSelectedFourRepeats(
+  samples: readonly CorpusBenchmarkSample[],
+  isStandardPr: (sample: CorpusBenchmarkSample) => boolean,
+  selection: { design: CorpusExecutionDesign; concurrency: number },
+  standard: StandardCohorts,
+): number[] {
+  const rows = (profile: CorpusCacheProfile): CorpusBenchmarkSample[] => samples.filter((sample) => isStandardPr(sample)
+    && sample.shardCount === 4
+    && sample.profile === profile
+    && sample.design === selection.design
+    && sample.concurrency === selection.concurrency);
+  const rawCold = rows("cold");
+  const rawWarm = rows("warm");
+  if (rawCold.length === 0 && rawWarm.length === 0) return [];
+  const cold = assertCohortRows(rawCold, "existing selected four-shard cold");
+  const warm = assertCohortRows(rawWarm, "existing selected four-shard warm");
+  assertRepeatPair(cold, warm, "existing selected four-shard cold/warm");
+  const selectedStandard = standard.get(`${selection.design}:${selection.concurrency}`)!;
+  for (const profile of ["cold", "warm"] as const) {
+    const four = profile === "cold" ? cold : warm;
+    if (!four.every((sample) => selectedStandard[profile].every((base) => allAssertionsEqual(sample, base)))) {
+      throw new Error(`existing selected four-shard ${profile}: population/evidence differs`);
+    }
+    if (!four.every((sample) => selectedStandard[profile].every((base) => sameRunnerEnvironment(sample, base)))) {
+      throw new Error(`existing selected four-shard ${profile}: actual runner environment differs`);
+    }
+  }
+  const available = cold.map((sample) => sample.repeat);
+  const required = selectedStandard.cold.map((sample) => sample.repeat);
+  if (available.some((repeat) => !required.includes(repeat)) || stable(available) !== stable(required.slice(0, available.length))) {
+    throw new Error(`existing selected four-shard repeat population is partial or non-prefix: ${available.join(",")}`);
+  }
+  return available;
+}
+
+export function evaluateCorpusBenchmarkPilot(samples: readonly CorpusBenchmarkSample[]): CorpusBenchmarkPilotDecision {
+  samples.forEach(assertSample);
+  if (new Set(samples.map((sample) => `${sample.runId}/${sample.runAttempt}`)).size !== samples.length) {
+    throw new Error("benchmark raw sample rows reuse a workflow run/attempt across cohorts");
+  }
+  assertMatchedPopulation(samples);
+  const isStandardPr = (sample: CorpusBenchmarkSample): boolean => sample.runnerRole === "pr" && sample.requestedRunner === "ubuntu-latest";
+  const standardThree = samples.filter((sample) => isStandardPr(sample) && sample.shardCount === 3);
+  if (standardThree.some((sample) => !isRequiredStandardShape(sample))) {
+    throw new Error("pilot standard PR three-shard rows contain an undeclared design/concurrency shape");
+  }
+  const provenance = assertMatchedPopulation(standardThree);
+  const standard = collectStandardCohorts(standardThree, isStandardPr);
+  const concurrency = evaluateConcurrency(standard);
+  const cohorts = buildCohortReports(standardThree);
+  const sampleDigest = digest(cohorts.flatMap((report) => report.sampleDigests).sort());
+  const standardRepeats = standard.get("serial:1")!.cold.map((sample) => sample.repeat);
+  const needsStandardExtension = concurrency.extendToFive.length > 0;
+  const selectedFourCohorts = ["cold", "warm"].map((profile) => `selected:${concurrency.selected.design}:${concurrency.selected.concurrency}:shards-4:${profile}`);
+  const existingFourRepeats = needsStandardExtension ? [] : existingSelectedFourRepeats(samples, isStandardPr, concurrency.selected, standard);
+  const missingFourRepeats = standardRepeats.filter((repeat) => !existingFourRepeats.includes(repeat));
+  const requiredRuns = needsStandardExtension
+    ? corpusBenchmarkRequiredRuns(concurrency.extendToFive, [4, 5])
+    : corpusBenchmarkRequiredRuns(selectedFourCohorts, missingFourRepeats);
+  return {
+    schema: 1,
+    stage: "pilot",
+    thresholdVersion: CORPUS_BENCHMARK_THRESHOLDS.version,
+    thresholdDigest: corpusBenchmarkThresholdDigest(),
+    provenance: { ...provenance, sampleRunIds: [...new Set(standardThree.map((sample) => sample.runId))].sort((a, b) => a - b), sampleDigest },
+    concurrency: { selected: concurrency.selected, eligible: concurrency.eligible, rejected: concurrency.rejected },
+    extendToFive: concurrency.extendToFive,
+    evidence: { sampleDigest, cohorts },
+    next: {
+      stage: needsStandardExtension ? "extend-standard" : requiredRuns.length > 0 ? "four-shard" : "complete",
+      design: concurrency.selected.design,
+      concurrency: concurrency.selected.concurrency,
+      requiredShardCounts: needsStandardExtension ? [3] : requiredRuns.length > 0 ? [4] : [],
+      requiredProfiles: ["cold", "warm"],
+      repeats: needsStandardExtension ? [4, 5] : missingFourRepeats,
+      requiredRuns,
+      rerunPilotAfter: needsStandardExtension,
+    },
+  };
+}
+
+export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[], pilotDecision: CorpusBenchmarkPilotDecision): CorpusBenchmarkDecision {
+  samples.forEach(assertSample);
+  if (new Set(samples.map((sample) => `${sample.runId}/${sample.runAttempt}`)).size !== samples.length) {
+    throw new Error("benchmark raw sample rows reuse a workflow run/attempt across cohorts");
+  }
+  const provenance = assertMatchedPopulation(samples);
+  const isStandardPr = (sample: CorpusBenchmarkSample): boolean => sample.runnerRole === "pr" && sample.requestedRunner === "ubuntu-latest";
+  const standardThree = samples.filter((sample) => isStandardPr(sample) && sample.shardCount === 3 && isRequiredStandardShape(sample));
+  const expectedPilot = evaluateCorpusBenchmarkPilot(standardThree);
+  if (!pilotDecision || stable(pilotDecisionCore(pilotDecision)) !== stable(pilotDecisionCore(expectedPilot))) {
+    throw new Error("pilot decision receipt is missing, stale, or mismatched with the exact standard three-shard rows");
+  }
+  if (expectedPilot.next.rerunPilotAfter) {
+    throw new Error("pilot decision requires the complete standard repeat-4/5 extension and a regenerated receipt before four-shard evaluation");
+  }
+  const standard = collectStandardCohorts(samples, isStandardPr);
+  const concurrencySelection = pilotDecision.concurrency.selected;
+  const eligible = pilotDecision.concurrency.eligible;
+  const rejected = pilotDecision.concurrency.rejected;
+  const extendToFive: string[] = [];
 
   const runnerDecision = (role: CorpusRunnerRole): CorpusBenchmarkDecision["runners"][CorpusRunnerRole] => {
     const alternatives = [...new Set(samples.filter((sample) => sample.runnerRole === role && sample.requestedRunner !== "ubuntu-latest").map((sample) => sample.requestedRunner))];
@@ -871,10 +1052,20 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
   if (coldP95Regression > CORPUS_BENCHMARK_THRESHOLDS.fourShards.coldP95MaxRegression) shardReasons.push(`cold p95 regression ${coldP95Regression.toFixed(3)}`);
   if (aggregateIncrease > CORPUS_BENCHMARK_THRESHOLDS.fourShards.aggregateMaxIncrease) shardReasons.push(`aggregate runner increase ${aggregateIncrease.toFixed(3)}`);
   const fourQualified = shardReasons.length === 0;
+  let requiresPilotRerun = false;
   if ([[warmGain, CORPUS_BENCHMARK_THRESHOLDS.fourShards.warmMedianImprovement],
     [coldP95Regression, CORPUS_BENCHMARK_THRESHOLDS.fourShards.coldP95MaxRegression],
     [aggregateIncrease, CORPUS_BENCHMARK_THRESHOLDS.fourShards.aggregateMaxIncrease]]
-    .some(([value, threshold]) => nearThreshold(value!, threshold!)) || highVariation([...fourCold, ...fourWarm])) extendToFive.push("four-shards");
+    .some(([value, threshold]) => nearThreshold(value!, threshold!)) || highVariation([...fourCold, ...fourWarm])) {
+    requiresPilotRerun = threeCold.length === 3;
+  }
+  if (requiresPilotRerun) {
+    extendToFive.push(
+      ...REQUIRED_STANDARD_SHAPES.flatMap((shape) => [`${shape.design}:${shape.concurrency}:cold`, `${shape.design}:${shape.concurrency}:warm`]),
+      `selected:${concurrencySelection.design}:${concurrencySelection.concurrency}:shards-4:cold`,
+      `selected:${concurrencySelection.design}:${concurrencySelection.concurrency}:shards-4:warm`,
+    );
+  }
 
   const cohorts = buildCohortReports(samples);
   const sampleDigest = digest(cohorts.flatMap((report) => report.sampleDigests).sort());
@@ -888,5 +1079,15 @@ export function evaluateCorpusBenchmark(samples: readonly CorpusBenchmarkSample[
     shards: { selected: fourQualified ? 4 : 3, coldFallback: 3, reasons: fourQualified ? [`qualified warm=${warmGain.toFixed(3)}, cold-p95=${coldP95Regression.toFixed(3)}, aggregate=${aggregateIncrease.toFixed(3)}`] : shardReasons },
     extendToFive: [...new Set(extendToFive)].sort(),
     evidence: { sampleDigest, cohorts },
+    next: requiresPilotRerun ? {
+      stage: "extend-standard",
+      requiredShardCounts: [3],
+      repeats: [4, 5],
+      requiredRuns: corpusBenchmarkRequiredRuns(
+        REQUIRED_STANDARD_SHAPES.flatMap((shape) => [`${shape.design}:${shape.concurrency}:cold`, `${shape.design}:${shape.concurrency}:warm`]),
+        [4, 5],
+      ),
+      rerunPilotAfter: true,
+    } : { stage: "complete", requiredShardCounts: [], repeats: [], requiredRuns: [], rerunPilotAfter: false },
   };
 }

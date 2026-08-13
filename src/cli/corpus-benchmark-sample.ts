@@ -69,6 +69,9 @@ try {
   const shardCount = integer("--shard-count");
   const headSha = required("--head-sha");
   const benchmarkSeed = required("--benchmark-seed");
+  const benchmarkSeedRunId = integer("--benchmark-seed-run-id");
+  const benchmarkSeedRunAttempt = integer("--benchmark-seed-run-attempt");
+  if (benchmarkSeedRunId === runId) throw new Error("benchmark seed bundle and performance sample must be different workflow runs");
   const runnerRole = parseChoice<CorpusRunnerRole>("--runner-role", ["pr", "schedule"]);
   const profile = parseChoice<CorpusCacheProfile>("--profile", ["cold", "warm"]);
   const design = parseChoice<CorpusExecutionDesign>("--design", ["serial", "target-workers", "intra-target-overlap"]);
@@ -136,6 +139,9 @@ try {
   };
   const sourceTransports = [...new Map(merges.flatMap((receipt) => receipt.sources).map((receipt) => [receipt.key, transportEvidence("source", receipt)])).values()]
     .sort((left, right) => left.namespace.localeCompare(right.namespace));
+  if (sourceTransports.some((receipt) => receipt.runId !== String(benchmarkSeedRunId) || receipt.runAttempt !== String(benchmarkSeedRunAttempt))) {
+    throw new Error(`cache source transport is not from immutable benchmark seed run ${benchmarkSeedRunId}/${benchmarkSeedRunAttempt}`);
+  }
   const outputTransports = transports.map((receipt) => transportEvidence("output", receipt)).sort((left, right) => left.namespace.localeCompare(right.namespace));
   const sourceFiles = merges[0]!.files;
   const semanticMerge = (receipt: CorpusCacheMergeReceipt): string => JSON.stringify({
@@ -169,6 +175,8 @@ try {
     runAttempt,
     headSha,
     benchmarkSeed,
+    benchmarkSeedRunId,
+    benchmarkSeedRunAttempt,
     repeat,
     runnerRole,
     requestedRunner: required("--requested-runner"),

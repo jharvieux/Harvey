@@ -106,6 +106,14 @@ on:
         description: "Author the exact warm transport bundle for this seed; this setup run is not a performance sample."
         type: boolean
         default: false
+      benchmark_seed_run_id:
+        description: "Immutable workflow run id that authored this seed bundle. Required on every performance sample; empty only while authoring the bundle."
+        type: string
+        default: ""
+      benchmark_seed_run_attempt:
+        description: "Workflow run attempt that authored the immutable seed bundle. Required with benchmark_seed_run_id."
+        type: string
+        default: ""
       cache_seed_shards:
         description: "Source partition whose trusted content-addressed transports are merged before a benchmark sample."
         type: choice
@@ -175,8 +183,8 @@ jobs:
           LARGER_RUNNER: ${{ vars.CORPUS_BENCHMARK_RUNNER_LABEL }}
         run: |
           set -euo pipefail
-          role=pr
-          [ "${{ github.event_name }}" = "schedule" ] && role=schedule
+          role='pr'
+          [ "${{ github.event_name }}" = "schedule" ] && role='schedule'
           if [ -n "${{ inputs.benchmark_run_identity }}" ]; then
             role='${{ inputs.benchmark_runner_role }}'
             if ! [[ '${{ inputs.benchmark_repeat }}' =~ ^[1-9][0-9]*$ ]]; then
@@ -185,6 +193,14 @@ jobs:
             fi
             if [ -z '${{ inputs.benchmark_seed }}' ]; then
               echo "::error::benchmark_seed must be non-empty for a benchmark run"
+              exit 2
+            fi
+            if [ "${{ inputs.benchmark_seed_bundle }}" != "true" ] && ! [[ '${{ inputs.benchmark_seed_run_id }}' =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::benchmark_seed_run_id must name the immutable seed-bundle workflow run for every performance sample"
+              exit 2
+            fi
+            if [ "${{ inputs.benchmark_seed_bundle }}" != "true" ] && ! [[ '${{ inputs.benchmark_seed_run_attempt }}' =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::benchmark_seed_run_attempt must name the immutable seed-bundle workflow attempt for every performance sample"
               exit 2
             fi
           fi
@@ -200,9 +216,11 @@ jobs:
           fi
           seed_digest=none
           if [ -n '${{ inputs.benchmark_seed }}' ]; then seed_digest=$(printf '%s' '${{ inputs.benchmark_seed }}' | sha256sum | cut -c1-16); fi
-          echo "runner=$runner" >> "$GITHUB_OUTPUT"
-          echo "role=$role" >> "$GITHUB_OUTPUT"
-          echo "seed-digest=$seed_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "runner=$runner"
+            echo "role=$role"
+            echo "seed-digest=$seed_digest"
+          } >> "$GITHUB_OUTPUT"
           echo "CORPUS RUNNER SELECTOR: role=$role runner=$runner; PR and schedule defaults are independently configurable and fall back to ubuntu-latest."
       - id: filter
         name: Discover the base + head corpus implementation closure
@@ -427,9 +445,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-1
-          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          restore-keys: |
-            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}
 
       - name: Restore exact benchmark seed shard 2
         id: benchmark-cache-2
@@ -437,9 +453,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-2
-          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          restore-keys: |
-            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard2-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}
 
       - name: Restore exact benchmark seed shard 3
         id: benchmark-cache-3
@@ -447,9 +461,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-3
-          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          restore-keys: |
-            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard3-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}
 
       - name: Restore exact benchmark seed shard 4
         id: benchmark-cache-4
@@ -457,9 +469,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .harvey-benchmark-seed-shard-4
-          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          restore-keys: |
-            corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-
+          key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard4-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}
 
       - name: Merge every trusted old shard at the content-addressed layer
         if: steps.filter.outputs.relevant == 'true' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle
@@ -483,6 +493,8 @@ jobs:
             --platform '${{ runner.os }}' \
             --head-sha '${{ github.sha }}' \
             --benchmark-seed '${{ inputs.benchmark_seed }}' \
+            --benchmark-seed-run-id '${{ inputs.benchmark_seed_run_id }}' \
+            --benchmark-seed-run-attempt '${{ inputs.benchmark_seed_run_attempt }}' \
             --out benchmark-cache-merge-receipt.json
 
       - name: Restore the run's exact shared Semgrep bytes
@@ -680,7 +692,7 @@ jobs:
           key: corpus-phase-run-v7-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save exact benchmark-seed corpus phase results
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity != ''
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity != '' && inputs.benchmark_seed_bundle
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache
@@ -761,7 +773,7 @@ jobs:
       # REAL `ci-corpus-drift-alert` issue — a false alarm indistinguishable from a genuine corpus
       # failure — which is why #1586's criterion 4 was left unproven rather than dispatched.
       - name: Open or update the drift tracking issue
-        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-corpus-drift-alert
@@ -975,6 +987,8 @@ jobs:
             --run-attempt '${{ github.run_attempt }}' \
             --head-sha '${{ github.sha }}' \
             --benchmark-seed '${{ inputs.benchmark_seed }}' \
+            --benchmark-seed-run-id '${{ inputs.benchmark_seed_run_id }}' \
+            --benchmark-seed-run-attempt '${{ inputs.benchmark_seed_run_attempt }}' \
             --repeat '${{ inputs.benchmark_repeat }}' \
             --runner-role '${{ needs.prepare-current-inputs.outputs.runner-role }}' \
             --requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}' \

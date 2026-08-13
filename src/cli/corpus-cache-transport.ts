@@ -36,6 +36,8 @@ if (command === "restore") {
     namespace: flag("--namespace"),
     headSha: flag("--head-sha"),
     ...(optionalFlag("--benchmark-seed") ? { benchmarkSeed: optionalFlag("--benchmark-seed") } : {}),
+    ...(optionalFlag("--benchmark-seed-run-id") ? { benchmarkSeedRunId: optionalFlag("--benchmark-seed-run-id") } : {}),
+    ...(optionalFlag("--benchmark-seed-run-attempt") ? { benchmarkSeedRunAttempt: optionalFlag("--benchmark-seed-run-attempt") } : {}),
   });
   const source = decision.source
     ? `; source=${decision.source.event} ${decision.source.ref} run=${decision.source.runId} attempt=${decision.source.runAttempt} sha=${decision.source.headSha}`
@@ -87,6 +89,8 @@ if (command === "restore") {
       platform: flag("--platform"),
       headSha: flag("--head-sha"),
       benchmarkSeed: flag("--benchmark-seed"),
+      benchmarkSeedRunId: flag("--benchmark-seed-run-id"),
+      benchmarkSeedRunAttempt: flag("--benchmark-seed-run-attempt"),
     },
     requiredNamespaces: flag("--required-namespaces").split(","),
   });

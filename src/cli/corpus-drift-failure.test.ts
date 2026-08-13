@@ -93,5 +93,5 @@ describe("corpus-drift spawned all-settled failure control", () => {
       expect(existsSync(terminal.resourcePath), `${terminal.slug} resource trace`).toBe(true);
       expect(readFileSync(terminal.stderrPath, "utf8"), `${terminal.slug} retained log`).toContain("retained-log");
     }
-  }, 30_000);
+  });
 });

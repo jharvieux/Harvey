@@ -53,6 +53,8 @@ interface CorpusBenchmarkSampleInput {
   runAttempt: number;
   headSha: string;
   benchmarkSeed: string;
+  benchmarkSeedRunId: number;
+  benchmarkSeedRunAttempt: number;
   repeat: number;
   runnerRole: CorpusRunnerRole;
   requestedRunner: string;
@@ -330,6 +332,8 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
     workflow: "corpus-drift.yml",
     headSha: input.headSha,
     benchmarkSeed: input.benchmarkSeed,
+    benchmarkSeedRunId: input.benchmarkSeedRunId,
+    benchmarkSeedRunAttempt: input.benchmarkSeedRunAttempt,
     repeat: input.repeat,
     runnerRole: input.runnerRole,
     requestedRunner: input.requestedRunner,

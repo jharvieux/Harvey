@@ -219,6 +219,8 @@ describe("corpus cache transport scope across refs (#1867)", () => {
       namespace: "1",
       headSha: benchmark.headSha,
       benchmarkSeed: benchmark.benchmarkSeed,
+      benchmarkSeedRunId: benchmark.runId,
+      benchmarkSeedRunAttempt: benchmark.runAttempt,
     };
     expect(decideCorpusCacheRestore(benchmark, current)).toMatchObject({ accepted: true, reason: expect.stringContaining("exact benchmark seed") });
     expect(decideCorpusCacheRestore(benchmark, { ...current, benchmarkSeed: "other" }).accepted).toBe(false);
@@ -242,10 +244,10 @@ describe("corpus cache transport scope across refs (#1867)", () => {
         family: "benchmark",
         event: "workflow_dispatch",
         ref: "refs/heads/feature/benchmark",
-        runId: `40${namespace}`,
+        runId: "4000",
         headSha,
         benchmarkSeed: seed,
-        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: `40${namespace}`, runAttempt: "1", headSha, benchmarkSeed: seed }),
+        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: "4000", runAttempt: "1", headSha, benchmarkSeed: seed }),
       });
       const written = writeCorpusCacheTransport(dir, manifest);
       return { dir, namespace, matchedKey: written.key };
@@ -263,6 +265,8 @@ describe("corpus cache transport scope across refs (#1867)", () => {
         platform: "Linux",
         headSha,
         benchmarkSeed: seed,
+        benchmarkSeedRunId: "4000",
+        benchmarkSeedRunAttempt: "1",
       },
       requiredNamespaces: ["1", "2", "3"],
     });
@@ -286,14 +290,14 @@ describe("corpus cache transport scope across refs (#1867)", () => {
         family: "benchmark",
         event: "workflow_dispatch",
         ref: "refs/heads/feature/benchmark",
-        runId: `60${namespace}`,
+        runId: "6000",
         headSha,
         benchmarkSeed: seed,
-        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: `60${namespace}`, runAttempt: "1", headSha, benchmarkSeed: seed }),
+        key: corpusCacheTransportKey({ family: "benchmark", platform: "Linux", namespace, runId: "6000", runAttempt: "1", headSha, benchmarkSeed: seed }),
       });
       return { dir, namespace, matchedKey: writeCorpusCacheTransport(dir, manifest).key };
     };
-    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "7000", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed };
+    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "7000", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed, benchmarkSeedRunId: "6000", benchmarkSeedRunAttempt: "1" };
     const one = make("1", "one");
     expect(() => mergeCorpusCacheTransports({ sources: [one], destination: temporaryDestination(), current, requiredNamespaces: ["1", "2"] })).toThrow(/missing 2/);
 
@@ -333,7 +337,7 @@ describe("corpus cache transport scope across refs (#1867)", () => {
       });
       return { dir, namespace: "1", matchedKey: writeCorpusCacheTransport(dir, manifest).key };
     };
-    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "8001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed };
+    const current = { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "8001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed, benchmarkSeedRunId: "8000", benchmarkSeedRunAttempt: "1" };
     for (const path of legitimate) {
       expect(() => mergeCorpusCacheTransports({ sources: [makePortable(path)], destination: temporaryDestination(), current, requiredNamespaces: ["1"] }), path).not.toThrow();
     }
@@ -374,7 +378,7 @@ describe("corpus cache transport scope across refs (#1867)", () => {
     expect(() => mergeCorpusCacheTransports({
       sources: [transport],
       destination: temporaryDestination(),
-      current: { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "9001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed },
+      current: { event: "workflow_dispatch", ref: "refs/heads/feature/benchmark", runId: "9001", defaultRef: "refs/heads/main", platform: "Linux", headSha, benchmarkSeed: seed, benchmarkSeedRunId: "9000", benchmarkSeedRunAttempt: "1" },
       requiredNamespaces: ["1"],
     })).toThrow(/non-content-addressed path/);
   });

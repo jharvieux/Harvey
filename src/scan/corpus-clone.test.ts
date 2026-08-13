@@ -2,10 +2,10 @@
 // operates on a LOCAL git repo built with plain `git` commands, and `cloneAtPinCached`'s cache-HIT
 // path is proven to skip the network entirely by pointing its "repo" at one that does not exist —
 // a real fetch attempt would throw, so a clean copy proves the network was never touched.
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { cloneAtPinCached, isFreshClone } from "./corpus-clone.js";
@@ -32,6 +32,38 @@ function commitOneFile(dir: string): string {
   git(dir, "add", "marker.txt");
   git(dir, "commit", "-q", "-m", "pin");
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"]).toString().trim();
+}
+
+function closeResult(child: ChildProcess): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stderr }));
+  });
+}
+
+function waitForFileOrChildExit(path: string, child: ChildProcess): Promise<void> {
+  if (existsSync(path)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const watcher = watch(dirname(path), () => {
+      if (!existsSync(path)) return;
+      watcher.close();
+      child.removeListener("close", onClose);
+      resolve();
+    });
+    const onClose = (code: number | null): void => {
+      watcher.close();
+      reject(new Error(`cached-clone child exited ${code} before Git upload-pack began`));
+    };
+    child.once("close", onClose);
+    if (existsSync(path)) {
+      watcher.close();
+      child.removeListener("close", onClose);
+      resolve();
+    }
+  });
 }
 
 describe("isFreshClone", () => {
@@ -97,6 +129,57 @@ describe("cloneAtPinCached", () => {
     expect(readlinkSync(join(into, "link.txt"))).toBe("marker.txt");
     expect(execFileSync("git", ["-C", into, "status", "--porcelain"]).toString()).toBe("");
     expect(isFreshClone(into, linkedSha)).toBe(true);
+  });
+
+  it("materializes through Git while cache maintenance mutates objects concurrently", async () => {
+    const root = tmp("cache-concurrent-maintenance-");
+    const cacheDir = join(root, "cache");
+    const repo = "fixture/concurrent-maintenance";
+    const cached = join(cacheDir, repo.replace(/\//g, "__"));
+    mkdirSync(cached, { recursive: true });
+    const sha = commitOneFile(cached);
+    const into = join(root, "work");
+    const started = join(root, "upload-pack-started");
+    const release = join(root, "release-upload-pack");
+    const hook = join(root, "pack-objects-hook.sh");
+    const worker = join(root, "clone-worker.ts");
+    writeFileSync(hook, `#!/bin/sh\nset -eu\n: > "$HARVEY_UPLOAD_STARTED"\nwhile [ ! -e "$HARVEY_UPLOAD_RELEASE" ]; do sleep 0.01; done\nexec "$@"\n`);
+    chmodSync(hook, 0o755);
+    writeFileSync(worker, `import { cloneAtPinCached } from ${JSON.stringify(new URL("./corpus-clone.ts", import.meta.url).href)};\ncloneAtPinCached(process.argv[2], process.argv[3], process.argv[4], process.argv[5]);\n`);
+    const globalConfig = join(root, "gitconfig");
+    writeFileSync(globalConfig, `[uploadpack]\n\tpackObjectsHook = ${hook}\n`);
+    const environment = {
+      ...process.env,
+      HARVEY_UPLOAD_STARTED: started,
+      HARVEY_UPLOAD_RELEASE: release,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const clone = spawn("node_modules/.bin/tsx", [worker, repo, sha, into, cacheDir], {
+      cwd: new URL("../..", import.meta.url).pathname,
+      env: environment,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const cloneDone = closeResult(clone);
+    await waitForFileOrChildExit(started, clone);
+
+    // The hook is paused after upload-pack starts. Launch real maintenance, then release the pack
+    // producer only after the OS reports that the maintenance process exists. This anchors the
+    // overlap to two observable process/file events instead of a sleep. A recursive fs.cp never
+    // invokes upload-pack, so reverting the transport fix makes this control fail before release.
+    const maintenance = spawn("git", ["-C", cached, "gc", "--prune=now"], { env: environment, stdio: ["ignore", "ignore", "pipe"] });
+    const maintenanceDone = closeResult(maintenance);
+    await new Promise<void>((resolve, reject) => {
+      maintenance.once("spawn", resolve);
+      maintenance.once("error", reject);
+    });
+    writeFileSync(release, "continue\n");
+    const [cloneResult, maintenanceResult] = await Promise.all([cloneDone, maintenanceDone]);
+    expect(maintenanceResult, maintenanceResult.stderr).toMatchObject({ code: 0 });
+    expect(cloneResult, cloneResult.stderr).toMatchObject({ code: 0 });
+    expect(readFileSync(join(into, "marker.txt"), "utf8")).toBe("pinned content\n");
+    expect(existsSync(join(into, ".git", "objects", "info", "alternates"))).toBe(false);
+    expect(isFreshClone(into, sha)).toBe(true);
   });
 
   it("fails rather than trusting a cached clone when its declared GitHub origin no longer serves the pin", () => {

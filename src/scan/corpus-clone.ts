@@ -7,15 +7,37 @@
 // loudly, not re-baseline).
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+
+function disableAutomaticMaintenance(dir: string): void {
+  // `git fetch` can return after starting `git maintenance run --auto` in the background. A
+  // filesystem copy of the repository can then race that process as it replaces loose-object or
+  // pack directories. Keep both the cache-population fetch and the disposable verification fetch
+  // synchronous from the caller's point of view: explicit maintenance is still possible, but no
+  // command in this helper leaves a repository mutator behind after returning.
+  execFileSync("git", ["-C", dir, "config", "gc.auto", "0"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "config", "maintenance.auto", "false"], { stdio: "ignore" });
+}
 
 export function cloneAtPin(repo: string, commit: string, into: string): void {
   const git = (...a: string[]): void => void execFileSync("git", ["-C", into, ...a], { stdio: ["ignore", "ignore", "pipe"] });
   execFileSync("git", ["init", "-q", into], { stdio: "inherit" });
+  disableAutomaticMaintenance(into);
   git("remote", "add", "origin", `https://github.com/${repo}`);
   git("fetch", "-q", "--depth", "1", "origin", commit);
   git("checkout", "-q", "FETCH_HEAD");
+}
+
+function materializeCachedClone(cached: string, commit: string, into: string): void {
+  // Do not recursively walk a live Git object store. Even a valid cache may be undergoing an
+  // explicit maintenance operation in another process; Git's upload-pack/index-pack protocol is
+  // designed to remain coherent across a concurrent repack, whereas fs.cp observes transient
+  // directory removals and crashed corpus workers in CI. `--no-local` also prevents hardlinks or
+  // alternates from coupling the disposable checkout back to the shared cache.
+  execFileSync("git", ["clone", "-q", "--no-local", "--no-checkout", cached, into], { stdio: ["ignore", "ignore", "pipe"] });
+  disableAutomaticMaintenance(into);
+  execFileSync("git", ["-C", into, "checkout", "-q", commit], { stdio: ["ignore", "ignore", "pipe"] });
 }
 
 // A pin never changes without an edit to src/scan/external-corpus.ts, so its clone is safe to
@@ -45,7 +67,7 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     rmSync(cached, { recursive: true, force: true });
     cloneAtPin(repo, commit, cached);
   }
-  cpSync(cached, into, { recursive: true, verbatimSymlinks: true });
+  materializeCachedClone(cached, commit, into);
   if (verifyRemote) {
     // A cache proves only that we fetched this commit once. Corpus drift must also prove the
     // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
@@ -53,7 +75,7 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
     // maintenance/repack after returning, and CI observed that process removing
     // `.git/objects/pack` while cpSync copied the cache for the next target. The cache is a
     // read-only input on every scoring path; only the cache action's dedicated save path writes it.
-    execFileSync("git", ["-C", into, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
+    execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", into, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
   }
 }
 

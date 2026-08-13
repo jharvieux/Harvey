@@ -4,9 +4,11 @@ import {
   CORPUS_BENCHMARK_THRESHOLDS,
   corpusBenchmarkProvenanceIntegrity,
   corpusBenchmarkThresholdDigest,
-  evaluateCorpusBenchmark,
+  evaluateCorpusBenchmark as evaluateCorpusBenchmarkWithPilot,
+  evaluateCorpusBenchmarkPilot,
   type CorpusBenchmarkArtifactEvidence,
   type CorpusBenchmarkCacheProvenance,
+  type CorpusBenchmarkPilotDecision,
   type CorpusBenchmarkSample,
   type CorpusBenchmarkTransportEvidence,
 } from "./corpus-benchmark.js";
@@ -28,6 +30,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
   const runAttempt = overrides.runAttempt ?? 1;
   const headSha = "a".repeat(40);
   const benchmarkSeed = "matched-seed";
+  const benchmarkSeedRunId = 50_000;
   const ref = "refs/heads/benchmark";
   const platform = "linux-x64";
   const targetCommits = { alpha: "b".repeat(40), beta: "c".repeat(40) };
@@ -74,7 +77,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
     const key = corpusCacheTransportKey({ family: "benchmark", platform, namespace, runId: transportRunId, runAttempt: String(runAttempt), headSha, benchmarkSeed });
     return { role, key, family: "benchmark", event: "workflow_dispatch", ref, platform, namespace, runId: transportRunId, runAttempt: String(runAttempt), headSha, benchmarkSeed, seedDigest, payloadBytes: 100 + Number(namespace) };
   };
-  const sources = ["1", "2", "3"].map((namespace) => transport("source", namespace, String(50_000 + runId)));
+  const sources = ["1", "2", "3"].map((namespace) => transport("source", namespace, String(benchmarkSeedRunId)));
   const outputs = Array.from({ length: shardCount }, (_, index) => transport("output", String(index + 1), String(runId)));
   const sourceFiles = [{ path: `corpus-scanners/detect-static/${hash("source")}.json`, sha256: hash("source body"), bytes: 123, sourceNamespaces: ["1", "2", "3"] }];
   const sourceContentDigest = directHash(JSON.stringify(sourceFiles));
@@ -123,6 +126,8 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
     workflow: "corpus-drift.yml",
     headSha,
     benchmarkSeed,
+    benchmarkSeedRunId,
+    benchmarkSeedRunAttempt: 1,
     repeat: overrides.repeat ?? 1,
     runnerRole: overrides.runnerRole ?? "pr",
     requestedRunner: overrides.requestedRunner ?? "ubuntu-latest",
@@ -153,8 +158,12 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
 
 let nextRunId = 100;
 
+function repeats(overrides: Partial<CorpusBenchmarkSample>, values: readonly number[]): CorpusBenchmarkSample[] {
+  return values.map((repeat) => sample({ ...overrides, repeat, runId: nextRunId++ }));
+}
+
 function triplet(overrides: Partial<CorpusBenchmarkSample>): CorpusBenchmarkSample[] {
-  return [1, 2, 3].map((repeat) => sample({ ...overrides, repeat, runId: nextRunId++ }));
+  return repeats(overrides, [1, 2, 3]);
 }
 
 function resample(row: CorpusBenchmarkSample, overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmarkSample {
@@ -222,21 +231,33 @@ function reseal(sampleRow: CorpusBenchmarkSample): void {
   });
 }
 
+const REQUIRED_TEST_SHAPES = [
+  { design: "serial" as const, concurrency: 1, criticalPathMs: 1_000, aggregateRunnerMs: 2_000 },
+  { design: "target-workers" as const, concurrency: 1, criticalPathMs: 990, aggregateRunnerMs: 1_900 },
+  { design: "target-workers" as const, concurrency: 2, criticalPathMs: 800, aggregateRunnerMs: 1_900 },
+  { design: "target-workers" as const, concurrency: 3, criticalPathMs: 780, aggregateRunnerMs: 1_900 },
+  { design: "intra-target-overlap" as const, concurrency: 2, criticalPathMs: 790, aggregateRunnerMs: 1_900 },
+];
+
 function qualifyingMatrix(): CorpusBenchmarkSample[] {
   return [
     ...triplet({ profile: "cold", design: "serial", concurrency: 1, shardCount: 3, criticalPathMs: 1_000, aggregateRunnerMs: 2_000 }),
     ...triplet({ profile: "warm", design: "serial", concurrency: 1, shardCount: 3, criticalPathMs: 1_000, aggregateRunnerMs: 2_000 }),
-    ...triplet({ profile: "cold", design: "target-workers", concurrency: 1, shardCount: 3, criticalPathMs: 950, aggregateRunnerMs: 2_000 }),
-    ...triplet({ profile: "warm", design: "target-workers", concurrency: 1, shardCount: 3, criticalPathMs: 950, aggregateRunnerMs: 2_000 }),
-    ...triplet({ profile: "cold", design: "target-workers", concurrency: 2, shardCount: 3, criticalPathMs: 800, aggregateRunnerMs: 2_100 }),
-    ...triplet({ profile: "warm", design: "target-workers", concurrency: 2, shardCount: 3, criticalPathMs: 800, aggregateRunnerMs: 2_100 }),
-    ...triplet({ profile: "cold", design: "target-workers", concurrency: 3, shardCount: 3, criticalPathMs: 780, aggregateRunnerMs: 2_100 }),
-    ...triplet({ profile: "warm", design: "target-workers", concurrency: 3, shardCount: 3, criticalPathMs: 780, aggregateRunnerMs: 2_100 }),
-    ...triplet({ profile: "cold", design: "intra-target-overlap", concurrency: 2, shardCount: 3, criticalPathMs: 790, aggregateRunnerMs: 2_050 }),
-    ...triplet({ profile: "warm", design: "intra-target-overlap", concurrency: 2, shardCount: 3, criticalPathMs: 790, aggregateRunnerMs: 2_050 }),
-    ...triplet({ profile: "cold", design: "target-workers", concurrency: 2, shardCount: 4, criticalPathMs: 820, aggregateRunnerMs: 2_500 }),
-    ...triplet({ profile: "warm", design: "target-workers", concurrency: 2, shardCount: 4, criticalPathMs: 650, aggregateRunnerMs: 2_500 }),
+    ...triplet({ profile: "cold", design: "target-workers", concurrency: 1, shardCount: 3, criticalPathMs: 990, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "warm", design: "target-workers", concurrency: 1, shardCount: 3, criticalPathMs: 990, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "cold", design: "target-workers", concurrency: 2, shardCount: 3, criticalPathMs: 800, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "warm", design: "target-workers", concurrency: 2, shardCount: 3, criticalPathMs: 800, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "cold", design: "target-workers", concurrency: 3, shardCount: 3, criticalPathMs: 780, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "warm", design: "target-workers", concurrency: 3, shardCount: 3, criticalPathMs: 780, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "cold", design: "intra-target-overlap", concurrency: 2, shardCount: 3, criticalPathMs: 790, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "warm", design: "intra-target-overlap", concurrency: 2, shardCount: 3, criticalPathMs: 790, aggregateRunnerMs: 1_900 }),
+    ...triplet({ profile: "cold", design: "target-workers", concurrency: 2, shardCount: 4, criticalPathMs: 820, aggregateRunnerMs: 2_200 }),
+    ...triplet({ profile: "warm", design: "target-workers", concurrency: 2, shardCount: 4, criticalPathMs: 600, aggregateRunnerMs: 2_200 }),
   ];
+}
+
+function evaluateCorpusBenchmark(rows: readonly CorpusBenchmarkSample[]) {
+  return evaluateCorpusBenchmarkWithPilot(rows, evaluateCorpusBenchmarkPilot(rows));
 }
 
 describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
@@ -277,6 +298,135 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
     });
     expect(serialCold?.samples).toHaveLength(3);
     expect(serialCold?.samples.every((row) => row.digest.match(/^[0-9a-f]{64}$/) && row.sample.raw.workflowUrl)).toBe(true);
+  });
+
+  it("emits a truthful pilot selection before four-shard samples exist while full acceptance still fail-closes", () => {
+    const pilotRows = qualifyingMatrix().filter((row) => row.shardCount === 3);
+    const pilot = evaluateCorpusBenchmarkPilot(pilotRows);
+    expect(pilot).toMatchObject({
+      stage: "pilot",
+      concurrency: { selected: { design: "target-workers", concurrency: 2 } },
+      next: { stage: "four-shard", requiredShardCounts: [4], requiredProfiles: ["cold", "warm"], repeats: [1, 2, 3], rerunPilotAfter: false },
+    });
+    expect(pilot.next.requiredRuns).toHaveLength(6);
+    expect(() => evaluateCorpusBenchmarkWithPilot(pilotRows, pilot)).toThrow(/four-shard cold: requires at least three distinct real repeats/);
+  });
+
+  it("requests only the pair-complete standard extension before promising four-shard runs", () => {
+    const pilotRows = qualifyingMatrix().filter((row) => row.shardCount === 3);
+    for (const row of pilotRows) {
+      if (row.design === "target-workers" && row.concurrency === 1) row.criticalPathMs = 950;
+    }
+    const pilot = evaluateCorpusBenchmarkPilot(pilotRows);
+    expect(pilot.extendToFive).toHaveLength(10);
+    expect(pilot.extendToFive).toEqual(expect.arrayContaining([
+      "serial:1:cold", "serial:1:warm",
+      "target-workers:2:cold", "target-workers:2:warm",
+      "intra-target-overlap:2:cold", "intra-target-overlap:2:warm",
+    ]));
+    expect(pilot.next).toMatchObject({ stage: "extend-standard", repeats: [4, 5], requiredShardCounts: [3], rerunPilotAfter: true });
+    expect(pilot.next.requiredRuns).toHaveLength(20);
+    expect(pilot.next.requiredRuns.every((run) => [4, 5].includes(run.repeat) && run.shardCount === 3)).toBe(true);
+    expect(pilot.next.requiredRuns.some((run) => run.shardCount === 4)).toBe(false);
+    expect(() => evaluateCorpusBenchmarkWithPilot(pilotRows, pilot)).toThrow(/complete standard repeat-4\/5 extension/);
+  });
+
+  it("stages a stable shard extension as 20 standard runs, a pilot rerun, then four matching runs", () => {
+    const matrix = qualifyingMatrix();
+    for (const row of matrix) {
+      if (row.shardCount === 4 && row.profile === "warm") row.criticalPathMs = 680;
+    }
+    const firstPilot = evaluateCorpusBenchmarkPilot(matrix.filter((row) => row.shardCount === 3));
+    const full = evaluateCorpusBenchmarkWithPilot(matrix, firstPilot);
+    expect(full.extendToFive).toHaveLength(12);
+    expect(full.next).toMatchObject({ stage: "extend-standard", repeats: [4, 5], rerunPilotAfter: true });
+    expect(full.next.requiredRuns).toHaveLength(20);
+
+    const extended = [
+      ...matrix,
+      ...REQUIRED_TEST_SHAPES.flatMap((shape) => ["cold", "warm"].flatMap((profile) => repeats({ profile: profile as "cold" | "warm", design: shape.design, concurrency: shape.concurrency, shardCount: 3, criticalPathMs: shape.criticalPathMs, aggregateRunnerMs: shape.aggregateRunnerMs }, [4, 5]))),
+    ];
+    const extendedPilot = evaluateCorpusBenchmarkPilot(extended);
+    expect(extendedPilot.concurrency.selected).toEqual(firstPilot.concurrency.selected);
+    expect(extendedPilot.next).toMatchObject({ stage: "four-shard", repeats: [4, 5], rerunPilotAfter: false });
+    expect(extendedPilot.next.requiredRuns).toHaveLength(4);
+    const complete = [...extended, ...["cold", "warm"].flatMap((profile) => repeats({
+      profile: profile as "cold" | "warm",
+      design: extendedPilot.concurrency.selected.design,
+      concurrency: extendedPilot.concurrency.selected.concurrency,
+      shardCount: 4,
+      criticalPathMs: profile === "cold" ? 820 : 680,
+      aggregateRunnerMs: 2_200,
+    }, [4, 5]))];
+    expect(() => evaluateCorpusBenchmarkWithPilot(complete, extendedPilot)).not.toThrow();
+  });
+
+  it("invalidates an old pilot when extended standard rows change selection and accepts only a regenerated matching cohort", () => {
+    const matrix = qualifyingMatrix();
+    const oldPilot = evaluateCorpusBenchmarkPilot(matrix.filter((row) => row.shardCount === 3));
+    const extended = [
+      ...matrix,
+      ...REQUIRED_TEST_SHAPES.flatMap((shape) => ["cold", "warm"].flatMap((profile) => repeats({
+        profile: profile as "cold" | "warm",
+        design: shape.design,
+        concurrency: shape.concurrency,
+        shardCount: 3,
+        criticalPathMs: shape.design === "target-workers" && shape.concurrency === 2 && profile === "cold" ? 1_800 : shape.criticalPathMs,
+        aggregateRunnerMs: shape.aggregateRunnerMs,
+      }, [4, 5]))),
+    ];
+    expect(() => evaluateCorpusBenchmarkWithPilot(extended, oldPilot)).toThrow(/pilot decision receipt is missing, stale, or mismatched/);
+
+    const newPilot = evaluateCorpusBenchmarkPilot(extended);
+    expect(newPilot.concurrency.selected).toEqual({ design: "target-workers", concurrency: 3 });
+    expect(newPilot.next.requiredRuns).toHaveLength(10);
+    const newFour = ["cold", "warm"].flatMap((profile) => repeats({
+      profile: profile as "cold" | "warm",
+      design: newPilot.concurrency.selected.design,
+      concurrency: newPilot.concurrency.selected.concurrency,
+      shardCount: 4,
+      criticalPathMs: profile === "cold" ? 800 : 600,
+      aggregateRunnerMs: 2_200,
+    }, [1, 2, 3, 4, 5]));
+    expect(() => evaluateCorpusBenchmarkWithPilot([...extended, ...newFour], newPilot)).not.toThrow();
+  });
+
+  it("fails closed on a missing or mismatched pilot receipt", () => {
+    const matrix = qualifyingMatrix();
+    expect(() => evaluateCorpusBenchmarkWithPilot(matrix, undefined as unknown as CorpusBenchmarkPilotDecision)).toThrow(/pilot decision receipt is missing/);
+    const pilot = evaluateCorpusBenchmarkPilot(matrix.filter((row) => row.shardCount === 3));
+    const mismatched = JSON.parse(JSON.stringify(pilot)) as CorpusBenchmarkPilotDecision;
+    mismatched.concurrency.selected = { design: "serial", concurrency: 1 };
+    expect(() => evaluateCorpusBenchmarkWithPilot(matrix, mismatched)).toThrow(/pilot decision receipt is missing, stale, or mismatched/);
+  });
+
+  it("binds every sample to one immutable seed-bundle run", () => {
+    const contaminated = qualifyingMatrix();
+    contaminated[0]!.benchmarkSeedRunId = contaminated[0]!.runId + 1;
+    expect(() => evaluateCorpusBenchmark(contaminated)).toThrow(/mixes head, seed|seed-run|immutable seed/);
+    const aliased = qualifyingMatrix();
+    aliased[0]!.benchmarkSeedRunId = aliased[0]!.runId;
+    expect(() => evaluateCorpusBenchmark(aliased)).toThrow(/seed-run identity/);
+  });
+
+  it("rejects a later sample whose source cache was authored by an earlier sample run", () => {
+    const contaminated = qualifyingMatrix();
+    const victim = contaminated[1]!;
+    const sampleRun = contaminated[0]!.runId;
+    victim.cache.provenance.transports.sources.forEach((source) => {
+      source.runId = String(sampleRun);
+      source.key = corpusCacheTransportKey({
+        family: "benchmark",
+        platform: source.platform,
+        namespace: source.namespace,
+        runId: source.runId,
+        runAttempt: source.runAttempt,
+        headSha: source.headSha,
+        benchmarkSeed: source.benchmarkSeed,
+      });
+    });
+    reseal(victim);
+    expect(() => evaluateCorpusBenchmark(contaminated)).toThrow(/source transport belongs to sample run|immutable seed/);
   });
 
   it("keeps concurrency and shard selection inside the standard PR runner cohort", () => {
@@ -425,7 +575,7 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
   it("refuses a concurrency candidate whose simultaneous peak exceeds 75% of runner memory", () => {
     const matrix = qualifyingMatrix();
     for (const row of matrix) {
-      if (row.design === "target-workers" && row.concurrency === 2 && row.shardCount === 3) row.peakRssBytes = 12_001;
+      if (row.design === "target-workers" && row.concurrency === 2 && row.shardCount === 3) row.peakRssBytes = 15_000;
     }
     matrix.push(
       ...triplet({ profile: "cold", design: "target-workers", concurrency: 3, shardCount: 4, criticalPathMs: 800, aggregateRunnerMs: 2_500 }),

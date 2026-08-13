@@ -9,7 +9,8 @@ runner and no selector variable on 2026-08-12, so no larger-runner result is cla
 
 ## Evidence envelope
 
-Every sample binds the workflow run and attempt, exact head and benchmark seed, repeat, actual
+Every sample binds the workflow run and attempt, exact head, benchmark seed, and the immutable
+workflow run that authored that seed bundle, plus repeat, actual
 runner name class/group/labels/image (while retaining each hosted VM's raw unique name), CPU and cgroup-memory admission, Node/pnpm/tool versions, pinned
 target commits, cache transport keys and provenance, raw job ids/timestamps, scorecard artifacts,
 and per-target conservation. Critical path is the span from the first shard start to the last shard
@@ -43,7 +44,12 @@ The versioned thresholds live in `src/corpus-benchmark.ts` and are hashed before
   cold fallback.
 
 Any measured metric within five percentage points of its own threshold, or a critical-path
-coefficient of variation above 10%, extends that cohort from three to five runs. `split-carbon`
+coefficient of variation above 10%, extends the complete comparison pair from three to five runs.
+For concurrency this means all five standard shapes in both profiles. A shard-stage extension means
+those same ten three-shard cohorts plus the selected design at four shards in both profiles: twelve
+cohorts × repeats four and five, exactly 24 additional runs. The evaluator emits those exact
+pair-complete cohort ids; a named subset is never sufficient because repeat populations must match.
+`split-carbon`
 is absent from workflow and CLI choices because no separate job/runner lane exists. The evaluator
 retains it only as an explicit non-admissible negative-control disposition.
 
@@ -60,15 +66,32 @@ Transport key family v7 restores every trusted old shard and merges only validat
 content-addressed inner artifacts. The merge requires the exact seed/ref/head and complete source
 namespace population, rejects conflicting duplicates and mutable paths, then lets a target move
 from a three-shard seed into a four-shard run without losing its finding or examined-scope bytes.
+Only the immutable seed-bundle run saves an Actions cache. It uses the manifest-compatible
+`corpus-phase-benchmark-v7` family, and every sample restores the exact run id and attempt with no
+rolling fallback. Sample outputs are uploaded evidence artifacts; they never write into the seed
+namespace or any second Actions-cache family.
 
 ## Hosted collection
 
-Use one non-empty seed and one unchanged branch head. First author its seed bundle. Then dispatch
+Use one non-empty seed and one unchanged branch head. First author its seed bundle and retain that
+workflow run id; pass it as `benchmark_seed_run_id` on every sample. Then dispatch
 three cold and three warm runs for the complete predeclared three-shard matrix: `serial` at one,
 `target-workers` at one, two, and three, and `intra-target-overlap` at two. After selecting a design,
-dispatch that same design/concurrency on four shards in both profiles. Run the injected post-start failure
-drill separately. Extend named cohorts to five only when the evaluator requests it. Do not dispatch
-the unavailable larger-runner half.
+run `pnpm corpus-benchmark --pilot --samples <pilot.json> --out <selection.json>`; its output is the
+truthful mechanical selection receipt for the final three-versus-four stage. If its `next` block says
+`extend-standard`, dispatch exactly the 20 standard repeat-4/5 runs and rerun the pilot before any
+four-shard dispatch. Otherwise dispatch its exact six four-shard runs. Full evaluation requires
+`--pilot-decision <selection.json>` and rejects a receipt whose standard-row or cohort digest, selected
+design, seed, head, or thresholds no longer matches. It never silently reselects from later rows.
+
+The base campaign is 38 workflow runs: one seed bundle, 30 standard pilot samples, six selected
+four-shard samples, and the isolated failure drill. A near-threshold shard result first adds 20
+standard repeats and forces a new pilot receipt. If the selected design is stable, the new receipt
+requests only the four matching repeat-4/5 runs: +24, 62 total. If selection changes, it requests a
+fresh five-repeat four-shard pair for the new design: +30, 68 total worst case. The evaluator never
+promises those four-shard runs before the extended pilot is recomputed. The full evaluator still
+rejects a missing or partial final cohort. The failure drill never opens or updates the real
+drift-alert issue. Do not dispatch the unavailable larger-runner half.
 
 Each hosted run uploads its merged scorecard, raw Actions jobs, transport/merge/runner receipts,
 worker logs and resource traces, and the derived benchmark sample. Production defaults change only

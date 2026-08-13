@@ -39,6 +39,8 @@ interface CorpusCacheRestoreContext {
   namespace: string;
   headSha: string;
   benchmarkSeed?: string;
+  benchmarkSeedRunId?: string;
+  benchmarkSeedRunAttempt?: string;
 }
 
 interface CorpusCacheTransportDecision {
@@ -182,7 +184,9 @@ export function decideCorpusCacheRestore(
   if (source.family === "benchmark"
     && source.ref === current.ref
     && source.headSha === current.headSha
-    && source.benchmarkSeed === current.benchmarkSeed) {
+    && source.benchmarkSeed === current.benchmarkSeed
+    && source.runId === current.benchmarkSeedRunId
+    && source.runAttempt === current.benchmarkSeedRunAttempt) {
     return { accepted: true, source, reason: `exact benchmark seed ${source.benchmarkSeed} on ${source.ref} at ${source.headSha}` };
   }
   return {
@@ -290,6 +294,8 @@ export function mergeCorpusCacheTransports(options: {
   requiredNamespaces: readonly string[];
 }): CorpusCacheMergeReceipt {
   if (!options.current.benchmarkSeed) throw new Error("cross-shard cache merge requires an exact benchmark seed");
+  if (!options.current.benchmarkSeedRunId || !/^[1-9]\d*$/.test(options.current.benchmarkSeedRunId)) throw new Error("cross-shard cache merge requires the immutable benchmark seed-run id");
+  if (!options.current.benchmarkSeedRunAttempt || !/^[1-9]\d*$/.test(options.current.benchmarkSeedRunAttempt)) throw new Error("cross-shard cache merge requires the immutable benchmark seed-run attempt");
   const expectedNamespaces = [...new Set(options.requiredNamespaces)].sort();
   if (expectedNamespaces.length === 0) throw new Error("cross-shard cache merge requires at least one source namespace");
   const accepted = options.sources.flatMap((source) => {

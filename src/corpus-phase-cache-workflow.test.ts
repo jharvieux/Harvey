@@ -232,7 +232,25 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("corpus-benchmark-sample.json");
     expect(workflow).toContain("--run-attempt '${{ github.run_attempt }}'");
     expect(workflow).toContain("--benchmark-seed '${{ inputs.benchmark_seed }}'");
+    expect(workflow).toContain("--benchmark-seed-run-id '${{ inputs.benchmark_seed_run_id }}'");
     expect(workflow).toContain("--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'");
+  });
+
+  it("restores only an immutable seed-bundle run and cannot contaminate it with sample outputs", () => {
+    expect(workflow).toContain("benchmark_seed_run_id:");
+    expect(workflow).toContain("benchmark_seed_run_id must name the immutable seed-bundle workflow run");
+    expect(workflow).toContain("key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard1-${{ inputs.benchmark_seed_run_id }}-${{ inputs.benchmark_seed_run_attempt }}-${{ github.sha }}");
+    expect(workflow).toContain("key: corpus-phase-benchmark-v7-${{ runner.os }}-seed${{ needs.prepare-current-inputs.outputs.benchmark-seed-digest }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow).not.toContain("Save sample output without polluting the immutable seed namespace");
+    expect(workflow).not.toContain("corpus-phase-benchmark-sample-v7-");
+    expect(workflow).not.toMatch(/Restore exact benchmark seed shard 1[\s\S]{0,450}restore-keys:/);
+  });
+
+  it("suppresses real tracking-issue mutation for the injected target failure drill only", () => {
+    const alertCondition = "failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+    expect(workflow).toContain(alertCondition);
+    expect(workflow).toContain('benchmark_flags+=(--fail-after-start "${{ inputs.fail_after_start }}")');
+    expect(workflow).toContain("uses: ./.github/actions/alert-issue");
   });
 
   it("keeps split-carbon explicitly non-admissible until a separate runner lane exists", () => {
