@@ -14,6 +14,7 @@ import {
   CURRENT_MECHANICAL_PREPARATION,
   currentTargetPinsSha256,
   currentHarnessReceipt,
+  currentRuntimeReceipt,
   mergeCurrentMechanicalShards,
   prepareCurrentMechanicalTarget,
   type CurrentMechanicalExecutionArtifact,
@@ -49,7 +50,7 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
     targetPinsSha256: currentTargetPinsSha256([target]),
     allTargets: [target],
     semgrepRegistry: { schema: 1, aggregateSha256: packAggregate, files: Array.from({ length: 6 }, (_, ordinal) => ({ ordinal, name: `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`, bytes: 1, sha256: packDigest, bodyBase64: packBody.toString("base64") })) },
-    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1", git: "1" },
+    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1", trufflehog: "trufflehog 3.96.0", trufflehogSha256: digest, git: "1" },
     shard: { index: 1, count: 1 },
     targets: {
       target: {
@@ -84,6 +85,13 @@ function expectDifference(mutate: (value: CurrentMechanicalExecutionArtifact) =>
 }
 
 describe("fresh current mechanical producer ↔ replay readiness", () => {
+  it("retains the actual TruffleHog version and executable digest in the runtime identity", () => {
+    const runtime = currentRuntimeReceipt();
+    expect(runtime).toHaveProperty("trufflehog");
+    expect(runtime).toHaveProperty("trufflehogSha256");
+    if (runtime.trufflehog !== "unavailable") expect(runtime.trufflehogSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it("wires the required aggregate to shared bytes and two fresh sides without claiming historical proof", () => {
     const workflow = readFileSync(new URL("../.github/workflows/corpus-drift.yml", import.meta.url), "utf8");
     const producer = readFileSync(new URL("./cli/corpus-drift.ts", import.meta.url), "utf8");

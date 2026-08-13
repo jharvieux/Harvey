@@ -7,7 +7,7 @@ import { readEntriesSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
 import { cloneAtPinCached } from "./scan/corpus-clone.js";
 import type { MechanicalContextMetrics } from "./scan/mechanical-context.js";
 import type { MechanicalPhaseCacheOptions, MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
-import { binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
+import { binarySha256, binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
 import { buildMechanicalPhaseCache } from "./scan/mechanical-phase-identity.js";
 import { shardTargets } from "./scan/corpus-shards.js";
 import type { SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
@@ -104,7 +104,7 @@ export interface CurrentMechanicalExecutionArtifact {
   targetPinsSha256: string;
   allTargets: CurrentMechanicalTargetDefinition[];
   semgrepRegistry: SemgrepPackReceipt;
-  runtime: { node: string; platform: string; arch: string; semgrep: string; gitleaks: string; git: string };
+  runtime: { node: string; platform: string; arch: string; semgrep: string; gitleaks: string; trufflehog: string; trufflehogSha256: string; git: string };
   shard: { index: number; count: number };
   targets: Record<string, CurrentMechanicalTargetReceipt>;
 }
@@ -417,6 +417,8 @@ export function currentRuntimeReceipt(): CurrentMechanicalExecutionArtifact["run
     arch: process.arch,
     semgrep: binaryVersion("semgrep"),
     gitleaks: binaryVersion("gitleaks"),
+    trufflehog: binaryVersion("trufflehog"),
+    trufflehogSha256: binarySha256("trufflehog"),
     git: binaryVersion("git"),
   };
 }

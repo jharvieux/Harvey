@@ -244,6 +244,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("Build the provenance-bound benchmark sample");
     expect(workflow).toContain("pnpm corpus-benchmark-sample");
     expect(workflow).toContain("benchmark-cache-merge-receipt-${{ matrix.shard }}.json");
+    expect(workflow).toContain("benchmark-prior-scorecard-${{ matrix.shard }}.json");
     expect(workflow).toContain("benchmark-transport-${{ matrix.shard }}.json");
     expect(workflow).toContain("benchmark-runner-${{ matrix.shard }}.json");
     expect(workflow).toContain("shardProfiles: map(.shardProfile)");
@@ -252,6 +253,21 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--benchmark-seed '${{ inputs.benchmark_seed }}'");
     expect(workflow).toContain("--benchmark-seed-run-id '${{ inputs.benchmark_seed_run_id }}'");
     expect(workflow).toContain("--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'");
+  });
+
+  it("binds every timed benchmark sample to the immutable seed scorecard identity and bytes", () => {
+    expect(workflow).toContain("Fetch the exact prior scorecard input (#1564/#1868)");
+    expect(workflow).toContain("run_id='${{ inputs.benchmark_seed_run_id }}'");
+    expect(workflow).toContain("expected_attempt='${{ inputs.benchmark_seed_run_attempt }}'");
+    expect(workflow).toContain('if [ "$actual_attempt" != "$expected_attempt" ]');
+    expect(workflow).toContain("[ \"$source_head\" != '${{ github.sha }}' ]");
+    expect(workflow).toContain("must expose exactly one live corpus-drift-scorecard artifact");
+    expect(workflow).toContain('[[ "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]]');
+    expect(workflow).toContain('post_attempt=$(gh api "repos/${{ github.repository }}/actions/runs/$run_id" --jq .run_attempt)');
+    expect(workflow).toContain("scorecard_sha=$(sha256sum prior-drift/corpus-drift.json");
+    expect(workflow).toContain('artifactName:"corpus-drift-scorecard"');
+    expect(workflow).toContain("benchmark-prior-scorecard-*.json");
+    expect(workflow).toContain("benchmark prior scorecard source $run_id is not the successful immutable seed attempt");
   });
 
   it("restores only an immutable seed-bundle run and cannot contaminate it with sample outputs", () => {
@@ -264,11 +280,68 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).not.toMatch(/Restore exact benchmark seed shard 1[\s\S]{0,450}restore-keys:/);
   });
 
-  it("keeps the production alert on freshness lanes and isolates benchmark/drill failures", () => {
-    const alertCondition = "failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && inputs.benchmark_run_identity == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+  it("keeps the production alert on every ordinary freshness failure and isolates benchmark/drill failures", () => {
+    const alertCondition = "failure() && !inputs.liveness_drill && inputs.benchmark_run_identity == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
     expect(workflow).toContain(alertCondition);
+    expect(workflow).not.toContain("!inputs.liveness_drill && inputs.fail_after_start == ''");
     expect(workflow).toContain('benchmark_flags+=(--fail-after-start "${{ inputs.fail_after_start }}")');
+    expect(workflow.match(/--fail-after-start/g)).toHaveLength(1);
+    expect(workflow).toMatch(/if \[ -n "\$\{\{ inputs\.benchmark_run_identity \}\}" \]; then[\s\S]{0,900}if \[ -n "\$\{\{ inputs\.fail_after_start \}\}" \]; then[\s\S]{0,150}benchmark_flags\+=\(--fail-after-start/);
     expect(workflow).toContain("uses: ./.github/actions/alert-issue");
+
+    const events = ["schedule", "workflow_dispatch", "pull_request", "merge_group", "push"] as const;
+    const identities = ["", "benchmark-sample"] as const;
+    const failTargets = ["", "proposit"] as const;
+    const livenessDrills = [false, true] as const;
+    const failures = [false, true] as const;
+    const alertDrills = [false, true] as const;
+    const rows: Array<{
+      event: typeof events[number];
+      identity: typeof identities[number];
+      failTarget: typeof failTargets[number];
+      livenessDrill: boolean;
+      failure: boolean;
+      alertDrill: boolean;
+      forwarded: boolean;
+      alertAction: boolean;
+      productionAlert: boolean;
+      drillAlert: boolean;
+    }> = [];
+    for (const event of events) for (const identity of identities) for (const failTarget of failTargets) for (const livenessDrill of livenessDrills) for (const failure of failures) for (const alertDrill of alertDrills) {
+      const alertAction = failure && !livenessDrill && identity === "" && (event === "schedule" || event === "workflow_dispatch");
+      rows.push({
+        event,
+        identity,
+        failTarget,
+        livenessDrill,
+        failure,
+        alertDrill,
+        forwarded: identity !== "" && failTarget !== "",
+        alertAction,
+        productionAlert: alertAction && !alertDrill,
+        drillAlert: alertAction && alertDrill,
+      });
+    }
+
+    expect(rows).toHaveLength(160);
+    expect(rows.filter((row) => row.forwarded)).toHaveLength(40);
+    expect(rows.filter((row) => row.alertAction)).toHaveLength(8);
+    expect(rows.filter((row) => row.productionAlert)).toHaveLength(4);
+    expect(rows.filter((row) => row.drillAlert)).toHaveLength(4);
+    expect(rows.find((row) => row.event === "workflow_dispatch" && row.identity === "" && row.failTarget === "proposit" && !row.livenessDrill && row.failure && !row.alertDrill)).toMatchObject({ forwarded: false, alertAction: true, productionAlert: true, drillAlert: false });
+    expect(rows.find((row) => row.event === "workflow_dispatch" && row.identity === "benchmark-sample" && row.failTarget === "proposit" && !row.livenessDrill && row.failure && !row.alertDrill)).toMatchObject({ forwarded: true, alertAction: false, productionAlert: false, drillAlert: false });
+    expect(rows.find((row) => row.event === "schedule" && row.identity === "" && row.failTarget === "" && !row.livenessDrill && !row.failure && !row.alertDrill)).toMatchObject({ alertAction: false, productionAlert: false, drillAlert: false });
+    expect(rows.find((row) => row.event === "schedule" && row.identity === "" && row.failTarget === "" && row.livenessDrill && row.failure && !row.alertDrill)).toMatchObject({ alertAction: false, productionAlert: false, drillAlert: false });
+    expect(rows.find((row) => row.event === "workflow_dispatch" && row.identity === "" && row.failTarget === "" && !row.livenessDrill && row.failure && row.alertDrill)).toMatchObject({ alertAction: true, productionAlert: false, drillAlert: true });
+
+    // The old condition's only extra input was failTarget. These rows are the falsifier: an
+    // ordinary failure value stays local to the dispatch, yet the old condition suppressed its alert.
+    const legacyAlertAction = (row: (typeof rows)[number]): boolean => row.alertAction && row.failTarget === "";
+    expect(rows.filter((row) => row.alertAction && !legacyAlertAction(row))).toHaveLength(4);
+    expect(rows.filter((row) => row.productionAlert && !legacyAlertAction(row))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "schedule", identity: "", failTarget: "proposit", failure: true, alertDrill: false, forwarded: false, productionAlert: true }),
+      expect.objectContaining({ event: "workflow_dispatch", identity: "", failTarget: "proposit", failure: true, alertDrill: false, forwarded: false, productionAlert: true }),
+    ]));
   });
 
   it("keeps split-carbon explicitly non-admissible until a separate runner lane exists", () => {

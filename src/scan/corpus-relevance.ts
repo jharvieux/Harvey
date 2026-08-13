@@ -64,6 +64,13 @@ interface CorpusRelevanceDecision {
 
 const CORPUS_ENTRY_POINTS: readonly string[] = [
   "src/cli/corpus-drift.ts",
+  // The decision and evidence consumers are part of the gate they control. If one of these moves,
+  // the old closure must not declare the scorer/relevance change a no-op merely because the
+  // scanner producers themselves were untouched.
+  "src/cli/corpus-relevance.ts",
+  "src/cli/corpus-relevance-history.ts",
+  "src/cli/corpus-benchmark.ts",
+  "src/cli/corpus-benchmark-sample.ts",
   "src/cli/replay-current-mechanical.ts",
   "src/cli/materialize-current-semgrep.ts",
   "src/cli/corpus-pins.ts",

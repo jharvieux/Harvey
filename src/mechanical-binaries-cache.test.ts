@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { readFileSync } from "node:fs";
 import { readNamesSafe } from "./fs-walk.js";
+import { TRUFFLEHOG_PINNED_VERSION } from "./scan/fixture-drift-contracts.js";
 
 const ACTION_DIR = join(process.cwd(), ".github", "actions", "mechanical-binaries");
 const SCRIPT = join(ACTION_DIR, "assert-complete.sh");
@@ -53,6 +54,15 @@ function assertComplete(binDir: string, pathDir?: string): { status: number; out
 }
 
 describe("#1516 the mechanical-binaries cache is asserted complete BEFORE it is saved", () => {
+  it("pins TruffleHog to the captured release and rejects the former mutable-main installer", () => {
+    const yml = readFileSync(join(ACTION_DIR, "action.yml"), "utf8");
+    expect(yml).toContain(`TRUFFLEHOG=${TRUFFLEHOG_PINNED_VERSION}`);
+    expect(yml).toContain(`releases/download/v\${{ steps.versions.outputs.trufflehog }}/trufflehog_\${{ steps.versions.outputs.trufflehog }}_linux_amd64.tar.gz`);
+    expect(yml).toContain('trufflehog identity differs from the pinned release');
+    expect(yml).not.toContain("trufflesecurity/trufflehog/main/scripts/install.sh");
+    expect(yml).not.toContain("TRUFFLEHOG=head");
+  });
+
   it("passes a tree holding all four, executable", () => {
     const dir = tree(TOOLS);
     try {

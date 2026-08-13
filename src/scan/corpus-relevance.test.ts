@@ -5,6 +5,21 @@ import { decideCorpusRelevance, discoverCorpusClosure, type CorpusClosureReceipt
 
 const root = process.cwd();
 
+const DECISION_AND_BENCHMARK_ROOTS = [
+  "src/cli/corpus-relevance.ts",
+  "src/cli/corpus-relevance-history.ts",
+  "src/cli/corpus-benchmark.ts",
+  "src/cli/corpus-benchmark-sample.ts",
+] as const;
+
+const DECISION_AND_BENCHMARK_SURFACE = [
+  ...DECISION_AND_BENCHMARK_ROOTS,
+  "src/scan/corpus-relevance.ts",
+  "src/corpus-relevance-history.ts",
+  "src/corpus-benchmark.ts",
+  "src/corpus-benchmark-sample.ts",
+] as const;
+
 describe("discovered corpus relevance (#1870)", () => {
   const current = discoverCorpusClosure(root, "head");
 
@@ -34,6 +49,42 @@ describe("discovered corpus relevance (#1870)", () => {
     const decision = decideCorpusRelevance(current, current, [{ status: "M", path }]);
     expect(decision).toMatchObject({ relevant: true, verdict: "full-scan" });
     expect(decision.matched[0]?.path).toBe(path);
+  });
+
+  it.each(DECISION_AND_BENCHMARK_SURFACE)("makes the directly participating decision/scorer path %s relevant", (path) => {
+    const decision = decideCorpusRelevance(current, current, [{ status: "M", path }]);
+    expect(decision).toMatchObject({ relevant: true, verdict: "full-scan" });
+    expect(decision.matched[0]).toMatchObject({ path });
+
+    const disconnected: CorpusClosureReceipt = {
+      ...current,
+      inputs: current.inputs.filter((input) => input.path !== path),
+    };
+    expect(decideCorpusRelevance(disconnected, disconnected, [{ status: "M", path }])).toMatchObject({
+      relevant: false,
+      verdict: "declared-no-op",
+      disjoint: [path],
+    });
+  });
+
+  it("ratchets the four package-script entry points against deletion or rename", () => {
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(Object.fromEntries([
+      ["corpus-relevance", manifest.scripts["corpus-relevance"]],
+      ["corpus-relevance-history", manifest.scripts["corpus-relevance-history"]],
+      ["corpus-benchmark", manifest.scripts["corpus-benchmark"]],
+      ["corpus-benchmark-sample", manifest.scripts["corpus-benchmark-sample"]],
+    ])).toEqual({
+      "corpus-relevance": "tsx src/cli/corpus-relevance.ts",
+      "corpus-relevance-history": "tsx src/cli/corpus-relevance-history.ts",
+      "corpus-benchmark": "tsx src/cli/corpus-benchmark.ts",
+      "corpus-benchmark-sample": "tsx src/cli/corpus-benchmark-sample.ts",
+    });
+    expect(current.roots).toEqual(expect.arrayContaining([...DECISION_AND_BENCHMARK_ROOTS]));
+    expect(current.uncertainties).toEqual([]);
+    for (const path of DECISION_AND_BENCHMARK_ROOTS) {
+      expect(current.inputs).toContainEqual(expect.objectContaining({ category: "producer", path }));
+    }
   });
 
   it.each([

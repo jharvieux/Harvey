@@ -35,7 +35,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
   const platform = "linux-x64";
   const targetCommits = { alpha: "b".repeat(40), beta: "c".repeat(40) };
   const targets = Object.keys(targetCommits).sort();
-  const toolVersions = { node: "v24" };
+  const toolVersions = { node: "v24", trufflehog: "trufflehog 3.96.0", trufflehogSha256: digest("7") };
   const conservationVectors = targets.map((slug) => ({ slug, modules: ["M4"], checks: 1, findings: 1, disclosures: 0, baselines: 1, examinedUnits: 5, digest: hash({ slug, profile, runId }) }));
   const invariantVectors = targets.map((slug) => ({
     slug,
@@ -84,6 +84,7 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
   const artifacts: CorpusBenchmarkArtifactEvidence[] = [
     { name: "actions/jobs.json", family: "actions/jobs", sha256: hash({ runId, name: "jobs" }) },
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-cache-merge-receipt-${index + 1}.json`, family: "evidence/benchmark-cache-merge-receipt", sha256: hash({ runId, name: "merge", index }) })),
+    ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-prior-scorecard-${index + 1}.json`, family: "evidence/benchmark-prior-scorecard", sha256: hash({ runId, name: "prior", index }) })),
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-runner-${index + 1}.json`, family: "evidence/benchmark-runner", sha256: hash({ runId, name: "runner", index }) })),
     ...Array.from({ length: shardCount }, (_, index) => ({ name: `evidence/benchmark-transport-${index + 1}.json`, family: "evidence/benchmark-transport", sha256: hash({ runId, name: "transport", index }) })),
     { name: "scorecard/corpus-drift.json", family: "scorecard/corpus-drift", sha256: hash({ runId, name: "scorecard" }) },
@@ -151,7 +152,29 @@ function sample(overrides: Partial<CorpusBenchmarkSample> = {}): CorpusBenchmark
     retryCount: 0,
     billedMinutes: overrides.billedMinutes ?? 2,
     estimatedCostUsd: overrides.estimatedCostUsd ?? 1,
-    raw: { workflowUrl: `https://example.test/run/${runId}`, jobIds: Array.from({ length: shardCount }, (_, index) => index + 1), artifactDigests: [...new Set(artifacts.map((artifact) => artifact.sha256))].sort(), artifacts, conservationVectors, invariantVectors, toolVersions, targetCommits },
+    raw: {
+      workflowUrl: `https://example.test/run/${runId}`,
+      jobIds: Array.from({ length: shardCount }, (_, index) => index + 1),
+      artifactDigests: [...new Set(artifacts.map((artifact) => artifact.sha256))].sort(),
+      artifacts,
+      conservationVectors,
+      invariantVectors,
+      priorScorecard: {
+        schema: 1,
+        sourceRunId: benchmarkSeedRunId,
+        sourceRunAttempt: 1,
+        sourceHeadSha: headSha,
+        sourceEvent: "workflow_dispatch",
+        sourceWorkflowPath: ".github/workflows/corpus-drift.yml",
+        artifactId: 60_000,
+        artifactName: "corpus-drift-scorecard",
+        artifactDigest: `sha256:${digest("8")}`,
+        scorecardSha256: digest("9"),
+        scorecardBytes: 1_024,
+      },
+      toolVersions,
+      targetCommits,
+    },
     ...overrides,
   };
 }
@@ -473,7 +496,7 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
 
     const mixed = qualifyingMatrix();
     mixed[0]!.headSha = "f".repeat(40);
-    expect(() => evaluateCorpusBenchmark(mixed)).toThrow(/seed\/head|mixes head, seed/);
+    expect(() => evaluateCorpusBenchmark(mixed)).toThrow(/seed\/head|mixes head, seed|prior scorecard identity/);
     const population = qualifyingMatrix();
     population[0]!.population.findingDigest = digest("9");
     expect(() => evaluateCorpusBenchmark(population)).toThrow(/target\/evidence/);
@@ -504,6 +527,10 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
     const mixedTools = qualifyingMatrix();
     mixedTools[0]!.raw.toolVersions.node = "v25";
     expect(() => evaluateCorpusBenchmark(mixedTools)).toThrow(/tool\/runtime|evidenceDigest/);
+
+    const mixedPrior = qualifyingMatrix();
+    mixedPrior[0]!.raw.priorScorecard.scorecardSha256 = digest("f");
+    expect(() => evaluateCorpusBenchmark(mixedPrior)).toThrow(/prior-scorecard/);
   });
 
   it("rejects isolated mutations anywhere in the transport, artifact, conservation, dependency, cache, scanner, Semgrep, phase, or runtime envelope", () => {
@@ -547,6 +574,13 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
         row.raw.toolVersions.node = "v25";
         (row.raw.invariantVectors[0]!.evidence as { runtime: { node: string } }).runtime.node = "v25";
         (row.raw.invariantVectors[0]!.toolInputs as { runtime: { node: string } }).runtime.node = "v25";
+      }],
+      ["TruffleHog executable identity", (row) => {
+        row.raw.toolVersions.trufflehogSha256 = digest("6");
+        for (const vector of row.raw.invariantVectors) {
+          (vector.evidence as { runtime: { trufflehogSha256: string } }).runtime.trufflehogSha256 = digest("6");
+          (vector.toolInputs as { runtime: { trufflehogSha256: string } }).runtime.trufflehogSha256 = digest("6");
+        }
       }],
     ];
     for (const [name, mutate] of invariantMutations) {

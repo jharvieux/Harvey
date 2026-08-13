@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCorpusBenchmarkSample, type CorpusBenchmarkApiJob, type CorpusBenchmarkScorecard } from "../corpus-benchmark-sample.js";
-import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkTransportEvidence, CorpusCacheProfile, CorpusRunnerRole } from "../corpus-benchmark.js";
+import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkPriorScorecardEvidence, CorpusBenchmarkTransportEvidence, CorpusCacheProfile, CorpusRunnerRole } from "../corpus-benchmark.js";
 import { parseCorpusCacheTransportKey, type CorpusCacheMergeReceipt, type CorpusCacheTransportManifest } from "../corpus-cache-transport.js";
 import type { CorpusExecutionDesign } from "../corpus-execution.js";
 import { readRecursiveSafe } from "../fs-walk.js";
@@ -77,15 +77,16 @@ try {
   const design = parseChoice<CorpusExecutionDesign>("--design", ["serial", "target-workers", "intra-target-overlap"]);
   const expectedShards = Array.from({ length: shardCount }, (_, index) => index + 1);
   const allEvidenceFiles = readRecursiveSafe(evidenceDir).sort();
-  const evidenceFiles = allEvidenceFiles.filter((path) => /^(?:benchmark-cache-merge-receipt|benchmark-transport|benchmark-runner)-\d+\.json$/.test(path));
+  const evidenceFiles = allEvidenceFiles.filter((path) => /^(?:benchmark-cache-merge-receipt|benchmark-prior-scorecard|benchmark-transport|benchmark-runner)-\d+\.json$/.test(path));
   const byKind = (kind: string): string[] => evidenceFiles.filter((path) => path.startsWith(`${kind}-`));
-  for (const kind of ["benchmark-cache-merge-receipt", "benchmark-transport", "benchmark-runner"]) {
+  for (const kind of ["benchmark-cache-merge-receipt", "benchmark-prior-scorecard", "benchmark-transport", "benchmark-runner"]) {
     const files = byKind(kind);
     if (files.length !== shardCount) throw new Error(`${kind} population has ${files.length} files; expected ${shardCount}`);
     const indices = files.map((path) => Number(/-(\d+)\.json$/.exec(path)?.[1])).sort((a, b) => a - b);
     if (JSON.stringify(indices) !== JSON.stringify(expectedShards)) throw new Error(`${kind} shard population differs: ${indices.join(",")}`);
   }
   const merges = byKind("benchmark-cache-merge-receipt").map((path) => parseJson<CorpusCacheMergeReceipt>(join(evidenceDir, path)));
+  const priorScorecards = byKind("benchmark-prior-scorecard").map((path) => parseJson<CorpusBenchmarkPriorScorecardEvidence>(join(evidenceDir, path)));
   const transports = byKind("benchmark-transport").map((path) => parseJson<CorpusCacheTransportManifest>(join(evidenceDir, path)));
   const runners = byKind("benchmark-runner").map((path) => parseJson<RunnerReceipt>(join(evidenceDir, path)));
   if (merges.some((receipt) => receipt.schema !== 1 || receipt.benchmarkSeed !== benchmarkSeed || receipt.headSha !== headSha || !/^[0-9a-f]{64}$/.test(receipt.aggregateSha256))) {
@@ -191,6 +192,7 @@ try {
     provenanceDigests: [...merges.map((receipt) => receipt.aggregateSha256), ...byKind("benchmark-transport").map(artifactDigest)],
     artifactDigests: artifacts.map((artifact) => artifact.sha256),
     artifacts,
+    priorScorecards,
     cacheProvenance: {
       schema: 1,
       invariant: {

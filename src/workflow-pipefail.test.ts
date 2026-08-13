@@ -168,8 +168,10 @@ describe("a piped CI step keeps its first stage's exit code (#1422)", () => {
       .flatMap(({ steps }) => steps)
       .flatMap((step) => shellLines(step.run ?? ""))
       .filter((l) => PIPELINE.test(l));
-    expect(continued.some((l) => l.startsWith("curl ") && l.includes("| tar -xz"))).toBe(true);
-    expect(continued.some((l) => l.startsWith("curl ") && l.includes("| sh -s"))).toBe(true);
+    const releaseTarballs = continued.filter((line) => line.startsWith("curl ") && line.includes("| tar -xz"));
+    expect(releaseTarballs).toHaveLength(2);
+    expect(releaseTarballs.some((line) => line.includes("trufflehog_"))).toBe(true);
+    expect(releaseTarballs.some((line) => line.includes("gitleaks_"))).toBe(true);
   });
 
   it("fires on an unguarded pipeline inside a composite action", () => {

@@ -25,7 +25,7 @@ runs:
         set -euo pipefail
         OSV=2.3.8
         GITLEAKS=8.30.1
-        TRUFFLEHOG=head
+        TRUFFLEHOG=3.96.0
         # #1266: semgrep was the one tool `pipx install semgrep` left UNPINNED, contradicting this
         # action's own "pins EVERY version" comment above. MEASURED 2026-07-30: a runner resolved
         # 1.172.0 while the committed fixture (src/scan/__fixtures__/semgrep/) and
@@ -79,8 +79,11 @@ runs:
         # the osv-scanner `curl -o` into it failed with `curl: (23)` on a fresh runner.
         mkdir -p "$HOME/.local/bin"
         pipx install "semgrep==${{ steps.versions.outputs.semgrep }}"
-        curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-          | sh -s -- -b "$HOME/.local/bin"
+        # Fetch the versioned release asset directly. The old installer came from mutable `main`
+        # and used its implicit latest release, while the cache key claimed the identity was
+        # `head`; neither byte identity could be compared by a benchmark that times this setup.
+        curl -sSfL "https://github.com/trufflesecurity/trufflehog/releases/download/v${{ steps.versions.outputs.trufflehog }}/trufflehog_${{ steps.versions.outputs.trufflehog }}_linux_amd64.tar.gz" \
+          | tar -xz -C "$HOME/.local/bin" trufflehog
         curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
           https://github.com/google/osv-scanner/releases/download/v${{ steps.versions.outputs.osv }}/osv-scanner_linux_amd64
         chmod +x "$HOME/.local/bin/osv-scanner"
@@ -118,4 +121,9 @@ runs:
           "$HOME/.local/bin/$b" --version >/dev/null 2>&1 || "$HOME/.local/bin/$b" version >/dev/null 2>&1 || {
             echo "::error::$b present in ~/.local/bin but not runnable — cache is poisoned; bump the key suffix in the versions step"; exit 1; }
         done
+        trufflehog_version=$("$HOME/.local/bin/trufflehog" --version 2>&1)
+        if [ "$trufflehog_version" != "trufflehog ${{ steps.versions.outputs.trufflehog }}" ]; then
+          echo "::error::trufflehog identity differs from the pinned release: $trufflehog_version"
+          exit 1
+        fi
         echo "mechanical binaries OK: $(semgrep --version) | osv-scanner $(osv-scanner --version 2>&1 | head -1)"

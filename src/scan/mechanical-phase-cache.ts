@@ -293,6 +293,17 @@ export function binaryVersion(binary: string): string {
   }
 }
 
+/** Exact executable bytes for timing/provenance receipts; version banners alone do not detect a repacked tool. */
+export function binarySha256(binary: string): string {
+  try {
+    const resolved = execFileSync("which", [binary], { encoding: "utf8", timeout: 10_000 }).trim();
+    if (!resolved) return "unavailable";
+    return createHash("sha256").update(readFileSync(resolved)).digest("hex");
+  } catch {
+    return "unavailable";
+  }
+}
+
 export function resolveGitTree(dir: string): string {
   try {
     return execFileSync("git", ["-C", dir, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
