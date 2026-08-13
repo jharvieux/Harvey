@@ -60,7 +60,7 @@ function benchmarkSeedDigest(seed: string): string {
   return sha256(seed).slice(0, 16);
 }
 
-interface ParsedTransportKey {
+interface ParsedCorpusCacheTransportKey {
   family: CorpusCacheTransportFamily;
   platform: string;
   namespace: string;
@@ -70,7 +70,7 @@ interface ParsedTransportKey {
   seedDigest?: string;
 }
 
-function parseTransportKey(value: string): ParsedTransportKey | undefined {
+export function parseCorpusCacheTransportKey(value: string): ParsedCorpusCacheTransportKey | undefined {
   const ordinary = KEY.exec(value);
   if (ordinary) {
     const [, family, platform, namespace, runId, runAttempt, headSha] = ordinary;
@@ -141,7 +141,7 @@ function parseManifest(value: unknown): CorpusCacheTransportManifest {
     if (typeof manifest[field] !== "string" || manifest[field]!.length === 0) throw new Error(`transport provenance is missing ${field}`);
   }
   if (!/^\d{4}-\d{2}-\d{2}T/.test(manifest.writtenAt!)) throw new Error("transport provenance writtenAt is not an ISO timestamp");
-  const key = parseTransportKey(manifest.key!);
+  const key = parseCorpusCacheTransportKey(manifest.key!);
   if (!key) throw new Error("transport provenance key does not encode platform, namespace, run, attempt, and headSha");
   if (manifest.family !== "run" && manifest.family !== "main" && manifest.family !== "benchmark") throw new Error("transport provenance family is invalid");
   if (manifest.family === "benchmark" && (typeof manifest.benchmarkSeed !== "string" || manifest.benchmarkSeed.trim().length === 0)) throw new Error("benchmark transport provenance is missing benchmarkSeed");
@@ -169,7 +169,7 @@ export function decideCorpusCacheRestore(
   if (source.key !== current.matchedKey) {
     return { accepted: false, source, reason: `matched key ${current.matchedKey} disagrees with provenance key ${source.key}` };
   }
-  const matched = parseTransportKey(source.key);
+  const matched = parseCorpusCacheTransportKey(source.key);
   if (!matched || matched.platform !== current.platform || matched.namespace !== current.namespace) {
     return { accepted: false, source, reason: `source key ${source.key} is not for ${current.platform} shard${current.namespace}` };
   }
@@ -226,7 +226,7 @@ interface CorpusCacheMergeSource {
   namespace: string;
 }
 
-interface CorpusCacheMergeReceipt {
+export interface CorpusCacheMergeReceipt {
   schema: 1;
   destination: string;
   benchmarkSeed: string;
@@ -235,6 +235,10 @@ interface CorpusCacheMergeReceipt {
   sources: Array<{
     namespace: string;
     key: string;
+    family: "benchmark";
+    event: string;
+    ref: string;
+    platform: string;
     runId: string;
     runAttempt: string;
     headSha: string;
@@ -346,6 +350,10 @@ export function mergeCorpusCacheTransports(options: {
     sources: accepted.map(({ source, manifest }) => ({
       namespace: source.namespace,
       key: manifest.key,
+      family: "benchmark",
+      event: manifest.event,
+      ref: manifest.ref,
+      platform: parseCorpusCacheTransportKey(manifest.key)!.platform,
       runId: manifest.runId,
       runAttempt: manifest.runAttempt,
       headSha: manifest.headSha,

@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import { corpusRunnerNameClass, type CorpusBenchmarkSample, type CorpusCacheProfile, type CorpusRunnerRole } from "./corpus-benchmark.js";
-import type { CorpusExecutionDesign, CorpusExecutionManifest } from "./corpus-execution.js";
+import {
+  corpusBenchmarkProvenanceIntegrity,
+  corpusRunnerNameClass,
+  type CorpusBenchmarkArtifactEvidence,
+  type CorpusBenchmarkCacheProvenance,
+  type CorpusBenchmarkSample,
+  type CorpusCacheProfile,
+  type CorpusRunnerRole,
+} from "./corpus-benchmark.js";
+import { corpusTargetConservationVector, type CorpusExecutionDesign, type CorpusExecutionManifest, type CorpusScorecard } from "./corpus-execution.js";
 import type { CorpusShardProfileSelection } from "./scan/corpus-shards.js";
 
 export interface CorpusBenchmarkApiStep {
@@ -23,7 +31,7 @@ export interface CorpusBenchmarkApiJob {
   steps: CorpusBenchmarkApiStep[];
 }
 
-export interface CorpusBenchmarkScorecard {
+export interface CorpusBenchmarkScorecard extends CorpusScorecard {
   rows: Array<{ slug: string; check: string; pass: boolean; module?: string; [key: string]: unknown }>;
   findings: Record<string, Array<{ confidence?: string; severity?: string; [key: string]: unknown }>>;
   detectors: Record<string, unknown[]>;
@@ -58,6 +66,10 @@ interface CorpusBenchmarkSampleInput {
   transportKeys: string[];
   provenanceDigests: string[];
   artifactDigests: string[];
+  artifacts: CorpusBenchmarkArtifactEvidence[];
+  cacheProvenance: Omit<CorpusBenchmarkCacheProvenance, "invariant" | "integrityDigest"> & {
+    invariant: Omit<CorpusBenchmarkCacheProvenance["invariant"], "targetDigest" | "evidenceDigest" | "dependencyInputDigest" | "cacheInputDigest" | "toolInputDigest">;
+  };
   billedMs?: number;
   estimatedCostUsd?: number;
 }
@@ -96,33 +108,131 @@ function assertMapPopulation(scorecard: CorpusBenchmarkScorecard, targets: reado
   if (new Set(conservationTargets).size !== targets.length || stable(conservationTargets) !== expected) throw new Error(`conservation target population differs: expected ${expected}, got ${stable(conservationTargets)}`);
 }
 
-function conservationFacts(scorecard: CorpusBenchmarkScorecard, slug: string): Record<string, unknown> {
-  const rows = scorecard.rows.filter((row) => row.slug === slug);
-  const findings = scorecard.findings[slug] ?? [];
-  const detectors = scorecard.detectors[slug] ?? [];
-  const scannerRecords = scorecard.scannerRecords[slug] ?? [];
-  return {
-    slug,
-    modules: [...new Set(rows.map((row) => row.module ?? row.check.split(" ")[0]).filter(Boolean))].sort(),
-    checks: rows.length,
-    findings: findings.length,
-    disclosures: findings.filter((finding) => finding.confidence === "N/A" || finding.severity === "Info").length,
-    baselines: rows.filter((row) => row.check.includes("baseline")).length,
-    examinedUnits: scannerRecords.reduce((sum, record) => sum + Number((record as { scope?: { unitsExamined?: number } }).scope?.unitsExamined ?? 0), 0)
-      + detectors.reduce<number>((sum, record) => sum + Number((record as { unitsExamined?: number }).unitsExamined ?? 0), 0),
-  };
-}
-
-function assertConservation(scorecard: CorpusBenchmarkScorecard, targets: readonly string[]): void {
+function assertConservation(scorecard: CorpusBenchmarkScorecard, targets: readonly string[]): Array<Record<string, unknown>> {
   const stored = new Map(scorecard.conservation.map((row) => [String(row.slug), row]));
   if (stored.size !== targets.length) throw new Error(`conservation target population has ${stored.size} unique rows; expected ${targets.length}`);
+  const recomputed: Array<Record<string, unknown>> = [];
   for (const slug of targets) {
     const row = stored.get(slug);
     if (!row) throw new Error(`${slug}: conservation row is missing`);
-    const facts = conservationFacts(scorecard, slug);
-    const retained = Object.fromEntries(Object.keys(facts).map((key) => [key, row[key]]));
-    if (stable(retained) !== stable(facts)) throw new Error(`${slug}: stored conservation facts differ from raw target/module/check/finding/disclosure/baseline/examined-unit evidence`);
+    const canonical = corpusTargetConservationVector(scorecard, slug);
+    if (stable(row) !== stable(canonical)) throw new Error(`${slug}: stored full conservation envelope differs from raw mechanical/dependency/scanner/runtime/Semgrep/examined/cache evidence`);
+    recomputed.push(canonical);
   }
+  return recomputed;
+}
+
+function omitFields(value: unknown, fields: readonly string[]): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !fields.includes(key)));
+}
+
+function invariantProducer(value: unknown): unknown {
+  const producer = omitFields(value, ["durationMs"]) as Record<string, unknown>;
+  if (producer && (producer.status === "ran" || producer.status === "cached")) producer.status = "executed";
+  return producer;
+}
+
+function invariantDependencyPreparation(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const row = { ...(value as Record<string, unknown>) };
+  const status = row.status;
+  const reason = row.reason;
+  if ((status === "hit" || status === "miss") && typeof reason === "string") {
+    const prefix = status === "hit"
+      ? "validated receipt and offline materialization"
+      : "clean content-addressed preparation";
+    if (reason === prefix) {
+      row.reason = "complete content-addressed dependency preparation";
+    } else if (reason.startsWith(`${prefix}; quality-scan remains non-cacheable because `)) {
+      row.reason = `complete content-addressed dependency preparation; quality-scan remains non-cacheable because ${reason.slice(`${prefix}; quality-scan remains non-cacheable because `.length)}`;
+    }
+    row.status = "materialized";
+  }
+  return row;
+}
+
+function invariantScannerRecord(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const row = { ...(value as Record<string, unknown>) };
+  if (row.cache === "hit" || row.cache === "recomputed") {
+    const expectedReason = row.cache === "hit"
+      ? "complete content-addressed artifact"
+      : "forced-cold result matched cached artifact";
+    if (row.reason === expectedReason) row.reason = "complete content-addressed artifact";
+    row.cache = "verified";
+  }
+  return row;
+}
+
+const MECHANICAL_CACHE_HIT_REASONS = new Set([
+  "resolved registry packs, local rules, implementation, target tree, and Semgrep version are keyed",
+  "in-process configuration checks depend only on the keyed target tree and implementation",
+  "in-process structural/AST checks depend only on the keyed target tree, options, runtime, and implementation",
+  "deterministic corpus candidate lane: pinned target tree plus exact gitleaks rules/version; no provider verification",
+  "immutable digested advisory snapshot plus offline lockfile/manifest checks; live registry fallbacks disabled",
+]);
+
+function invariantMechanicalRun(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const run = value as Record<string, unknown>;
+  const phases = Array.isArray(run.phases) ? run.phases.map((phase) => {
+    const phaseRow = phase as Record<string, unknown>;
+    const recognizedCacheState = (phaseRow.cache === "hit" && typeof phaseRow.reason === "string" && MECHANICAL_CACHE_HIT_REASONS.has(phaseRow.reason))
+      || (phaseRow.cache === "recomputed" && phaseRow.reason === "forced-cold result matched cached artifact");
+    const normalized = omitFields(phase, ["durationMs"]) as Record<string, unknown>;
+    if (recognizedCacheState) {
+      normalized.cache = "verified";
+      normalized.reason = "complete content-addressed artifact";
+    }
+    return { ...normalized, ...(Array.isArray(normalized.producers) ? { producers: normalized.producers.map(invariantProducer) } : {}) };
+  }) : run.phases;
+  const invariantRun = omitFields(run, ["durationMs"]) as Record<string, unknown>;
+  return {
+    ...invariantRun,
+    ...(phases === undefined ? {} : { phases }),
+    ...(Array.isArray(run.detectors) ? { detectors: run.detectors.map(invariantProducer) } : {}),
+  };
+}
+
+function invariantTargetEvidence(scorecard: CorpusBenchmarkScorecard, slug: string): {
+  slug: string;
+  evidence: unknown;
+  dependencyInputs: unknown;
+  cacheInputs: unknown;
+  toolInputs: unknown;
+} {
+  const dependencyInputs = (scorecard.dependencyPreparations[slug] ?? []).map(invariantDependencyPreparation);
+  const scannerRecords = (scorecard.scannerRecords[slug] ?? []).map(invariantScannerRecord);
+  const mechanicalRun = invariantMechanicalRun(scorecard.mechanicalRuns[slug]);
+  const evidence = {
+    rows: scorecard.rows.filter((row) => row.slug === slug),
+    findings: scorecard.findings[slug] ?? [],
+    detectors: (scorecard.detectors[slug] ?? []).map(invariantProducer),
+    mechanicalContext: scorecard.mechanicalContexts[slug],
+    mechanicalRun,
+    scannerRecords,
+    dependencyPreparations: dependencyInputs,
+    phaseNames: Object.keys(scorecard.phaseSeconds[slug] ?? {}).sort(),
+    runtime: scorecard.runtimeReceipts[slug],
+    currentMechanical: scorecard.currentMechanicalExecution?.targets[slug],
+  };
+  const mechanicalPhases = ((mechanicalRun as { phases?: unknown[] } | undefined)?.phases ?? []).map((phase) => {
+    const row = phase as { phase?: unknown; key?: unknown; scope?: unknown; producers?: unknown };
+    return { phase: row.phase, key: row.key, scope: row.scope, producers: row.producers };
+  });
+  const cacheInputs = {
+    mechanicalPhases,
+    scanners: scannerRecords.map((record) => {
+      const row = record as { scanner?: unknown; key?: unknown; scope?: unknown };
+      return { scanner: row.scanner, key: row.key, scope: row.scope };
+    }),
+  };
+  const toolInputs = {
+    runtime: scorecard.runtimeReceipts[slug],
+    currentMechanical: scorecard.currentMechanicalExecution?.targets[slug],
+  };
+  return { slug, evidence, dependencyInputs, cacheInputs, toolInputs };
 }
 
 export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): CorpusBenchmarkSample {
@@ -130,7 +240,8 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
   if (targets.length === 0 || new Set(targets).size !== targets.length) throw new Error("target commit population is empty or duplicated");
   for (const [slug, commit] of Object.entries(input.targetCommits)) if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`${slug}: target commit is not a 40-character SHA`);
   assertMapPopulation(input.scorecard, targets);
-  assertConservation(input.scorecard, targets);
+  const conservationVectors = assertConservation(input.scorecard, targets);
+  const invariantVectors = targets.map((slug) => invariantTargetEvidence(input.scorecard, slug));
   const jobs = input.jobs.filter((job) => /^corpus shard \d+$/.test(job.name));
   if (jobs.length !== input.shardCount) throw new Error(`Actions job population has ${jobs.length} corpus shards; expected ${input.shardCount}`);
   if (jobs.some((job) => job.status !== "completed" || job.conclusion !== "success")) throw new Error("a corpus shard job did not complete successfully");
@@ -184,6 +295,34 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
   if (runtimeRows.length === 0 || new Set(runtimeRows.map(stable)).size !== 1) throw new Error("runtime/tool versions are missing or mixed across targets");
   const billedMs = input.billedMs ?? intervals.reduce((sum, interval) => sum + Math.ceil(interval.duration / 60_000) * 60_000, 0);
   const aggregateCpuSeconds = executions.reduce((sum, manifest) => sum + manifest.aggregate.cpuSeconds, 0);
+  const targetDigest = digest(Object.entries(input.targetCommits).sort(([left], [right]) => left.localeCompare(right)));
+  const evidenceDigest = digest(invariantVectors.map(({ slug, evidence }) => ({ slug, evidence })));
+  const dependencyInputDigest = digest(invariantVectors.map(({ slug, dependencyInputs }) => ({ slug, dependencyInputs })));
+  const cacheInputDigest = digest(invariantVectors.map(({ slug, cacheInputs }) => ({ slug, cacheInputs })));
+  const toolInputDigest = digest(invariantVectors.map(({ slug, toolInputs }) => ({ slug, toolInputs })));
+  const cacheProvenanceWithoutIntegrity: Omit<CorpusBenchmarkCacheProvenance, "integrityDigest"> = {
+    ...input.cacheProvenance,
+    invariant: {
+      ...input.cacheProvenance.invariant,
+      targetDigest,
+      evidenceDigest,
+      dependencyInputDigest,
+      cacheInputDigest,
+      toolInputDigest,
+    },
+  };
+  const artifacts = [...input.artifacts].sort((left, right) => left.name.localeCompare(right.name));
+  const transportKeys = [...new Set(input.transportKeys)].sort();
+  const provenanceDigests = [...new Set(input.provenanceDigests)].sort();
+  const cacheProvenance: CorpusBenchmarkCacheProvenance = {
+    ...cacheProvenanceWithoutIntegrity,
+    integrityDigest: corpusBenchmarkProvenanceIntegrity({
+      provenance: cacheProvenanceWithoutIntegrity,
+      transportKeys,
+      provenanceDigests,
+      artifacts,
+    }),
+  };
   return {
     schema: 1,
     runId: input.runId,
@@ -220,22 +359,24 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
       misses: cacheCount("miss"),
       recomputed: cacheCount("recomputed"),
       rejected: cacheCount("rejected"),
-      transportKeys: [...new Set(input.transportKeys)].sort(),
-      provenanceDigests: [...new Set(input.provenanceDigests)].sort(),
+      transportKeys,
+      provenanceDigests,
       strandedArtifacts: 0,
+      provenance: cacheProvenance,
     },
     population: {
-      targetDigest: digest(Object.entries(input.targetCommits).sort(([left], [right]) => left.localeCompare(right))),
+      targetDigest,
       targets,
       rowDigest: digest(input.scorecard.rows.map(({ slug, check, pass, module }) => ({ slug, check, pass, module })).sort((left, right) => stable(left).localeCompare(stable(right)))),
       findingDigest: digest(findings),
       disclosureDigest: digest(disclosures),
       baselineDigest: digest(input.scorecard.rows.filter((row) => row.check.includes("baseline"))),
       examinedDigest: digest(input.scorecard.conservation.map((row) => ({ slug: row.slug, examinedUnits: row.examinedUnits }))),
-      // The stored conservation digest includes timing/cache-bearing envelope evidence. Those
-      // legitimately differ between cold/warm and serial/concurrent runs, so bind comparison to
-      // the recalculable conservation facts that must remain identical instead.
-      evidenceDigest: digest(targets.map((slug) => conservationFacts(input.scorecard, slug))),
+      evidenceDigest,
+      conservationDigest: digest(conservationVectors),
+      dependencyInputDigest,
+      cacheInputDigest,
+      toolInputDigest,
     },
     assertions: {
       baselines: input.scorecard.rows.length > 0 && input.scorecard.rows.every((row) => row.pass),
@@ -251,6 +392,9 @@ export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): C
       workflowUrl: input.workflowUrl,
       jobIds: jobs.map((job) => job.id).sort((a, b) => a - b),
       artifactDigests: [...new Set(input.artifactDigests)].sort(),
+      artifacts,
+      conservationVectors,
+      invariantVectors,
       toolVersions: runtimeRows[0]!,
       targetCommits: input.targetCommits,
     },

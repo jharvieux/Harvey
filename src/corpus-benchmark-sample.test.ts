@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildCorpusBenchmarkSample, type CorpusBenchmarkApiJob, type CorpusBenchmarkScorecard } from "./corpus-benchmark-sample.js";
-import type { CorpusExecutionManifest } from "./corpus-execution.js";
+import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkTransportEvidence } from "./corpus-benchmark.js";
+import { corpusCacheTransportKey } from "./corpus-cache-transport.js";
+import { corpusTargetConservationVector, type CorpusExecutionManifest } from "./corpus-execution.js";
 import { corpusShardTargetDigest, type CorpusShardProfileSelection } from "./scan/corpus-shards.js";
 
 const commits = { alpha: "a".repeat(40), beta: "b".repeat(40) };
+const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 function execution(index: number): CorpusExecutionManifest {
   return {
@@ -26,22 +30,49 @@ function profileSelection(): CorpusShardProfileSelection {
 function scorecard(): CorpusBenchmarkScorecard {
   const rows = Object.keys(commits).map((slug) => ({ slug, check: "M4 baseline", module: "M4", pass: true }));
   const findings = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ severity: "Low", confidence: "High" }]]));
-  const detectors = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ unitsExamined: 2 }]]));
-  const scannerRecords = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ cache: "recomputed", scope: { unitsExamined: 3 } }]]));
-  return {
+  const detectors = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ detector: "fixture", unitsExamined: 2, examinedUnitIdentities: [`${slug}/route.ts`] }]]));
+  const scannerRecords = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ scanner: "detect-static", cache: "recomputed", reason: "forced-cold result matched cached artifact", key: hash(`${slug}:scanner`), scope: { unitsExamined: 3, description: `${slug} source` } }]]));
+  const card: CorpusBenchmarkScorecard = {
     rows,
     findings,
     detectors,
     mechanicalContexts: { alpha: {}, beta: {} },
-    mechanicalRuns: { alpha: { phases: [{ cache: "recomputed" }] }, beta: { phases: [{ cache: "recomputed" }] } },
+    mechanicalRuns: Object.fromEntries(Object.keys(commits).map((slug) => [slug, {
+      executionPlan: { families: ["auth", "tenant"] },
+      semgrepDiagnostics: { errors: [], skipped: [], sha256: hash("empty diagnostics") },
+      phases: [{
+        phase: "semgrep",
+        cache: "recomputed",
+        reason: "forced-cold result matched cached artifact",
+        durationMs: 100,
+        scope: { unitsExamined: 2, description: `${slug} Semgrep files` },
+        evidence: { semgrepDiagnostics: { errors: [], skipped: [], sha256: hash("empty diagnostics") } },
+      }],
+    }])),
     scannerRecords,
-    dependencyPreparations: { alpha: [], beta: [] },
+    dependencyPreparations: Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{
+      status: "hit",
+      complete: true,
+      cacheable: true,
+      key: hash(`${slug}:dependencies`),
+      packageManager: "pnpm",
+      packageManagerVersion: "10",
+      lockfileDigest: hash(`${slug}:lockfile`),
+      reason: "validated receipt and offline materialization",
+      sourceTreeCacheable: true,
+    }]])),
     phaseSeconds: { alpha: { install: 1, "detect-static": 2 }, beta: { install: 1, "quality-scan": 2 } },
     runtimeReceipts: { alpha: { node: "v24", pnpm: "10" }, beta: { node: "v24", pnpm: "10" } },
-    conservation: Object.keys(commits).map((slug) => ({ slug, modules: ["M4"], checks: 1, findings: 1, disclosures: 0, baselines: 1, examinedUnits: 5, digest: slug })),
+    conservation: [],
     executions: [execution(1), execution(2), execution(3)],
     shardProfiles: [profileSelection(), profileSelection(), profileSelection()],
   };
+  refreshConservation(card);
+  return card;
+}
+
+function refreshConservation(card: CorpusBenchmarkScorecard): void {
+  card.conservation = Object.keys(commits).map((slug) => corpusTargetConservationVector(card, slug));
 }
 
 function jobs(): CorpusBenchmarkApiJob[] {
@@ -63,13 +94,29 @@ function jobs(): CorpusBenchmarkApiJob[] {
 }
 
 function build(card = scorecard(), apiJobs = jobs()) {
+  const headSha = "c".repeat(40);
+  const benchmarkSeed = "seed";
+  const seedDigest = hash(benchmarkSeed).slice(0, 16);
+  const ref = "refs/heads/benchmark";
+  const platform = "linux-x64";
+  const transport = (role: "source" | "output", namespace: string, transportRunId: string): CorpusBenchmarkTransportEvidence => {
+    const key = corpusCacheTransportKey({ family: "benchmark", platform, namespace, runId: transportRunId, runAttempt: "1", headSha, benchmarkSeed });
+    return { role, key, family: "benchmark", event: "workflow_dispatch", ref, platform, namespace, runId: transportRunId, runAttempt: "1", headSha, benchmarkSeed, seedDigest, payloadBytes: 100 };
+  };
+  const sources = [transport("source", "1", "99")];
+  const outputs = ["1", "2", "3"].map((namespace) => transport("output", namespace, "123"));
+  const sourceFiles = [{ path: `${hash("cache")}.json`, sha256: hash("cache-body"), bytes: 10, sourceNamespaces: ["1"] }];
+  const artifacts: CorpusBenchmarkArtifactEvidence[] = [
+    { name: "actions/jobs.json", family: "actions/jobs", sha256: hash("jobs") },
+    { name: "scorecard/corpus-drift.json", family: "scorecard/corpus-drift", sha256: hash("scorecard") },
+  ];
   return buildCorpusBenchmarkSample({
     scorecard: card,
     jobs: apiJobs,
     runId: 123,
     runAttempt: 1,
-    headSha: "c".repeat(40),
-    benchmarkSeed: "seed",
+    headSha,
+    benchmarkSeed,
     repeat: 1,
     runnerRole: "pr",
     requestedRunner: "ubuntu-latest",
@@ -80,9 +127,26 @@ function build(card = scorecard(), apiJobs = jobs()) {
     shardCount: 3,
     workflowUrl: "https://example.test/run/123",
     targetCommits: commits,
-    transportKeys: ["key"],
+    transportKeys: [...sources, ...outputs].map((row) => row.key),
     provenanceDigests: ["d".repeat(64)],
-    artifactDigests: ["e".repeat(64)],
+    artifactDigests: artifacts.map((artifact) => artifact.sha256),
+    artifacts,
+    cacheProvenance: {
+      schema: 1,
+      invariant: {
+        benchmarkSeed,
+        headSha,
+        ref,
+        platform,
+        sourceNamespaces: ["1"],
+        sourceContentDigest: hash(JSON.stringify(sourceFiles)),
+        sourceTransports: sources.map((row) => ({ family: row.family, event: row.event, ref: row.ref, platform: row.platform, namespace: row.namespace, headSha: row.headSha, benchmarkSeed: row.benchmarkSeed, seedDigest: row.seedDigest, payloadBytes: row.payloadBytes })),
+      },
+      shape: { outputNamespaces: ["1", "2", "3"], artifactFamilies: [{ family: "actions/jobs", count: 1 }, { family: "scorecard/corpus-drift", count: 1 }] },
+      transports: { sources, outputs },
+      sourceFiles,
+      receiptDigests: [],
+    },
   });
 }
 
@@ -112,9 +176,61 @@ describe("corpus benchmark sample evidence envelope", () => {
 
     const stale = scorecard();
     stale.findings.alpha!.push({ severity: "High" });
-    expect(() => build(stale)).toThrow(/stored conservation facts differ/);
+    expect(() => build(stale)).toThrow(/stored full conservation envelope differs/);
     const overclaimed = scorecard();
     overclaimed.conservation[0]!.findings = 2;
-    expect(() => build(overclaimed)).toThrow(/stored conservation facts differ/);
+    expect(() => build(overclaimed)).toThrow(/stored full conservation envelope differs/);
+  });
+
+  it("rejects stale dependency, scanner, runtime, Semgrep-plan/diagnostic, phase, scope, and cache evidence", () => {
+    const mutations: Array<(card: CorpusBenchmarkScorecard) => void> = [
+      (card) => { (card.dependencyPreparations.alpha![0] as { reason: string }).reason = "changed dependency reason"; },
+      (card) => { (card.scannerRecords.alpha![0] as { reason: string }).reason = "changed scanner reason"; },
+      (card) => { card.runtimeReceipts.alpha!.node = "v25"; },
+      (card) => { (card.mechanicalRuns.alpha as { executionPlan: { families: string[] } }).executionPlan.families.push("changed"); },
+      (card) => { (card.mechanicalRuns.alpha as { semgrepDiagnostics: { errors: unknown[] } }).semgrepDiagnostics.errors.push("changed"); },
+      (card) => { ((card.mechanicalRuns.alpha as { phases: Array<{ evidence: { semgrepDiagnostics: { skipped: unknown[] } } }> }).phases[0]!.evidence.semgrepDiagnostics.skipped).push("changed"); },
+      (card) => { (card.scannerRecords.alpha![0] as { scope: { unitsExamined: number } }).scope.unitsExamined = 99; },
+      (card) => { (card.scannerRecords.alpha![0] as { cache: string }).cache = "hit"; },
+    ];
+    for (const mutate of mutations) {
+      const card = scorecard();
+      mutate(card);
+      expect(() => build(card)).toThrow(/stored full conservation envelope differs/);
+    }
+  });
+
+  it("normalizes only recognized hit/recompute wording and retains arbitrary dependency, scanner, and phase reasons", () => {
+    const cold = build();
+    const hit = scorecard();
+    for (const slug of Object.keys(commits)) {
+      Object.assign((hit.mechanicalRuns[slug] as { phases: Array<Record<string, unknown>> }).phases[0]!, {
+        cache: "hit",
+        reason: "resolved registry packs, local rules, implementation, target tree, and Semgrep version are keyed",
+      });
+      Object.assign(hit.scannerRecords[slug]![0]!, { cache: "hit", reason: "complete content-addressed artifact" });
+      Object.assign(hit.dependencyPreparations[slug]![0] as Record<string, unknown>, { status: "miss", reason: "clean content-addressed preparation" });
+    }
+    refreshConservation(hit);
+    const normalized = build(hit);
+    expect(normalized.population).toMatchObject({
+      evidenceDigest: cold.population.evidenceDigest,
+      dependencyInputDigest: cold.population.dependencyInputDigest,
+      cacheInputDigest: cold.population.cacheInputDigest,
+      toolInputDigest: cold.population.toolInputDigest,
+    });
+    expect(normalized.population.conservationDigest).not.toBe(cold.population.conservationDigest);
+
+    const mutations: Array<(card: CorpusBenchmarkScorecard) => void> = [
+      (card) => { (card.dependencyPreparations.alpha![0] as { reason: string }).reason = "arbitrary dependency reason"; },
+      (card) => { (card.scannerRecords.alpha![0] as { reason: string }).reason = "arbitrary scanner reason"; },
+      (card) => { ((card.mechanicalRuns.alpha as { phases: Array<{ reason: string }> }).phases[0]!).reason = "arbitrary phase reason"; },
+    ];
+    for (const mutate of mutations) {
+      const changed = scorecard();
+      mutate(changed);
+      refreshConservation(changed);
+      expect(build(changed).population.evidenceDigest).not.toBe(cold.population.evidenceDigest);
+    }
   });
 });

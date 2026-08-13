@@ -277,7 +277,7 @@ function digest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
-interface CorpusScorecard {
+export interface CorpusScorecard {
   rows: Array<{ slug?: string; check?: string; module?: string; detail?: string }>;
   findings: Record<string, unknown[]>;
   detectors: Record<string, unknown[]>;

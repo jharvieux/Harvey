@@ -1,8 +1,60 @@
 import { createHash } from "node:crypto";
+import { parseCorpusCacheTransportKey } from "./corpus-cache-transport.js";
 import type { CorpusExecutionDesign } from "./corpus-execution.js";
 
 export type CorpusCacheProfile = "cold" | "warm";
 export type CorpusRunnerRole = "pr" | "schedule";
+
+export interface CorpusBenchmarkArtifactEvidence {
+  name: string;
+  family: string;
+  sha256: string;
+}
+
+export interface CorpusBenchmarkTransportEvidence {
+  role: "source" | "output";
+  key: string;
+  family: "benchmark";
+  event: string;
+  ref: string;
+  platform: string;
+  namespace: string;
+  runId: string;
+  runAttempt: string;
+  headSha: string;
+  benchmarkSeed: string;
+  seedDigest: string;
+  payloadBytes: number;
+}
+
+export interface CorpusBenchmarkCacheProvenance {
+  schema: 1;
+  invariant: {
+    benchmarkSeed: string;
+    headSha: string;
+    ref: string;
+    platform: string;
+    targetDigest: string;
+    evidenceDigest: string;
+    dependencyInputDigest: string;
+    cacheInputDigest: string;
+    toolInputDigest: string;
+    sourceNamespaces: string[];
+    sourceContentDigest: string;
+    sourceTransports: Array<Omit<CorpusBenchmarkTransportEvidence, "role" | "key" | "runId" | "runAttempt">>;
+  };
+  shape: {
+    outputNamespaces: string[];
+    artifactFamilies: Array<{ family: string; count: number }>;
+  };
+  transports: {
+    sources: CorpusBenchmarkTransportEvidence[];
+    outputs: CorpusBenchmarkTransportEvidence[];
+  };
+  sourceFiles: Array<{ path: string; sha256: string; bytes: number; sourceNamespaces: string[] }>;
+  receiptDigests: string[];
+  integrityDigest: string;
+}
 
 export interface CorpusBenchmarkSample {
   schema: 1;
@@ -43,6 +95,7 @@ export interface CorpusBenchmarkSample {
     transportKeys: string[];
     provenanceDigests: string[];
     strandedArtifacts: number;
+    provenance: CorpusBenchmarkCacheProvenance;
   };
   population: {
     targetDigest: string;
@@ -53,6 +106,10 @@ export interface CorpusBenchmarkSample {
     baselineDigest: string;
     examinedDigest: string;
     evidenceDigest: string;
+    conservationDigest: string;
+    dependencyInputDigest: string;
+    cacheInputDigest: string;
+    toolInputDigest: string;
   };
   assertions: {
     baselines: boolean;
@@ -68,6 +125,15 @@ export interface CorpusBenchmarkSample {
     workflowUrl: string;
     jobIds: number[];
     artifactDigests: string[];
+    artifacts: CorpusBenchmarkArtifactEvidence[];
+    conservationVectors: Array<Record<string, unknown>>;
+    invariantVectors: Array<{
+      slug: string;
+      evidence: unknown;
+      dependencyInputs: unknown;
+      cacheInputs: unknown;
+      toolInputs: unknown;
+    }>;
     toolVersions: Record<string, string>;
     targetCommits: Record<string, string>;
   };
@@ -179,6 +245,20 @@ function digest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+export function corpusBenchmarkProvenanceIntegrity(input: {
+  provenance: Omit<CorpusBenchmarkCacheProvenance, "integrityDigest">;
+  transportKeys: readonly string[];
+  provenanceDigests: readonly string[];
+  artifacts: readonly CorpusBenchmarkArtifactEvidence[];
+}): string {
+  return digest({
+    provenance: input.provenance,
+    transportKeys: [...input.transportKeys].sort(),
+    provenanceDigests: [...input.provenanceDigests].sort(),
+    artifacts: [...input.artifacts].sort((left, right) => left.name.localeCompare(right.name)),
+  });
+}
+
 export function corpusRunnerNameClass(name: string, group: string): string {
   return group === "GitHub Actions" && /^GitHub Actions \d+$/.test(name)
     ? "GitHub Actions <hosted-id>"
@@ -217,21 +297,68 @@ function improvement(candidate: number, baseline: number): number {
   return -increase(candidate, baseline);
 }
 
-function cohortIdentity(sample: CorpusBenchmarkSample): {
-  headSha: string;
-  benchmarkSeed: string;
-  runnerRole: CorpusRunnerRole;
-  requestedRunner: string;
-  actualRunner: Omit<CorpusBenchmarkSample["actualRunner"], "jobs">;
-  profile: CorpusCacheProfile;
-  design: CorpusExecutionDesign;
-  concurrency: number;
-  effectiveConcurrency: number;
-  shardCount: number;
-  population: CorpusBenchmarkSample["population"];
-  toolVersions: Record<string, string>;
-  targetCommits: Record<string, string>;
-} {
+function invariantPopulation(sample: CorpusBenchmarkSample): Omit<CorpusBenchmarkSample["population"], "conservationDigest"> {
+  return {
+    targetDigest: sample.population.targetDigest,
+    targets: sample.population.targets,
+    rowDigest: sample.population.rowDigest,
+    findingDigest: sample.population.findingDigest,
+    disclosureDigest: sample.population.disclosureDigest,
+    baselineDigest: sample.population.baselineDigest,
+    examinedDigest: sample.population.examinedDigest,
+    evidenceDigest: sample.population.evidenceDigest,
+    dependencyInputDigest: sample.population.dependencyInputDigest,
+    cacheInputDigest: sample.population.cacheInputDigest,
+    toolInputDigest: sample.population.toolInputDigest,
+  };
+}
+
+function invariantSourceTransport(transport: CorpusBenchmarkTransportEvidence): CorpusBenchmarkCacheProvenance["invariant"]["sourceTransports"][number] {
+  return {
+    family: transport.family,
+    event: transport.event,
+    ref: transport.ref,
+    platform: transport.platform,
+    namespace: transport.namespace,
+    headSha: transport.headSha,
+    benchmarkSeed: transport.benchmarkSeed,
+    seedDigest: transport.seedDigest,
+    payloadBytes: transport.payloadBytes,
+  };
+}
+
+function outputTransportShape(transport: CorpusBenchmarkTransportEvidence): Omit<CorpusBenchmarkTransportEvidence, "key" | "runId" | "runAttempt" | "payloadBytes"> {
+  return {
+    role: transport.role,
+    family: transport.family,
+    event: transport.event,
+    ref: transport.ref,
+    platform: transport.platform,
+    namespace: transport.namespace,
+    headSha: transport.headSha,
+    benchmarkSeed: transport.benchmarkSeed,
+    seedDigest: transport.seedDigest,
+  };
+}
+
+function outputTransportScope(sample: CorpusBenchmarkSample): unknown[] {
+  return [...new Map(sample.cache.provenance.transports.outputs.map((transport) => {
+    const shape = outputTransportShape(transport);
+    const scope = {
+      role: shape.role,
+      family: shape.family,
+      event: shape.event,
+      ref: shape.ref,
+      platform: shape.platform,
+      headSha: shape.headSha,
+      benchmarkSeed: shape.benchmarkSeed,
+      seedDigest: shape.seedDigest,
+    };
+    return [stable(scope), scope] as const;
+  })).values()].sort((left, right) => stable(left).localeCompare(stable(right)));
+}
+
+function cohortIdentity(sample: CorpusBenchmarkSample) {
   const actualRunner = {
     nameClass: sample.actualRunner.nameClass,
     group: sample.actualRunner.group,
@@ -251,7 +378,12 @@ function cohortIdentity(sample: CorpusBenchmarkSample): {
     concurrency: sample.concurrency,
     effectiveConcurrency: sample.effectiveConcurrency,
     shardCount: sample.shardCount,
-    population: sample.population,
+    population: invariantPopulation(sample),
+    cacheProvenance: {
+      invariant: sample.cache.provenance.invariant,
+      shape: sample.cache.provenance.shape,
+      outputs: sample.cache.provenance.transports.outputs.map(outputTransportShape).sort((left, right) => stable(left).localeCompare(stable(right))),
+    },
     toolVersions: sample.raw.toolVersions,
     targetCommits: sample.raw.targetCommits,
   };
@@ -270,6 +402,170 @@ function assertCohortRows(rows: readonly CorpusBenchmarkSample[], label: string)
 
 function cohort(samples: readonly CorpusBenchmarkSample[], predicate: (sample: CorpusBenchmarkSample) => boolean, label: string): CorpusBenchmarkSample[] {
   return assertCohortRows(samples.filter(predicate), label);
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function directDigest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalArtifactFamily(name: string): string {
+  return name.replace(/(?:-\d+)?\.json$/, "");
+}
+
+function assertSampleEnvelope(sample: CorpusBenchmarkSample): void {
+  const label = `run ${sample.runId}`;
+  const populationTargets = [...sample.population.targets].sort();
+  if (stable(sample.population.targets) !== stable(populationTargets)) throw new Error(`${label}: target population is not canonically ordered`);
+
+  const targetCommitEntries = Object.entries(sample.raw.targetCommits).sort(([left], [right]) => left.localeCompare(right));
+  if (stable(targetCommitEntries.map(([slug]) => slug)) !== stable(populationTargets)
+    || targetCommitEntries.some(([, commit]) => !/^[0-9a-f]{40}$/.test(commit))) {
+    throw new Error(`${label}: raw target commit rows are missing, foreign, or invalid`);
+  }
+  if (sample.population.targetDigest !== digest(targetCommitEntries)) throw new Error(`${label}: target digest differs from the complete pinned target population`);
+
+  const conservationVectors = sample.raw.conservationVectors;
+  const conservationTargets = conservationVectors.map((row) => String(row.slug)).sort();
+  if (conservationVectors.length !== populationTargets.length
+    || new Set(conservationTargets).size !== populationTargets.length
+    || stable(conservationTargets) !== stable(populationTargets)) {
+    throw new Error(`${label}: canonical conservation-vector target population is missing, duplicated, or foreign`);
+  }
+  for (const vector of conservationVectors) {
+    for (const field of ["checks", "findings", "disclosures", "baselines", "examinedUnits"] as const) {
+      if (!Number.isSafeInteger(vector[field]) || Number(vector[field]) < 0) throw new Error(`${label}: ${String(vector.slug)} conservation ${field} is invalid`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(String(vector.digest))) throw new Error(`${label}: ${String(vector.slug)} canonical conservation envelope digest is invalid`);
+  }
+  if (sample.population.conservationDigest !== digest(conservationVectors)) throw new Error(`${label}: conservation digest differs from the complete canonical envelope population`);
+  if (sample.population.examinedDigest !== digest(conservationVectors.map((row) => ({ slug: row.slug, examinedUnits: row.examinedUnits })))) {
+    throw new Error(`${label}: examined-scope digest differs from the canonical conservation population`);
+  }
+
+  const invariantVectors = sample.raw.invariantVectors;
+  const invariantTargets = invariantVectors.map((row) => String(row.slug)).sort();
+  if (invariantVectors.length !== populationTargets.length
+    || new Set(invariantTargets).size !== populationTargets.length
+    || stable(invariantTargets) !== stable(populationTargets)) {
+    throw new Error(`${label}: invariant evidence-vector target population is missing, duplicated, or foreign`);
+  }
+  const expectedInvariantDigests = {
+    evidenceDigest: digest(invariantVectors.map(({ slug, evidence }) => ({ slug, evidence }))),
+    dependencyInputDigest: digest(invariantVectors.map(({ slug, dependencyInputs }) => ({ slug, dependencyInputs }))),
+    cacheInputDigest: digest(invariantVectors.map(({ slug, cacheInputs }) => ({ slug, cacheInputs }))),
+    toolInputDigest: digest(invariantVectors.map(({ slug, toolInputs }) => ({ slug, toolInputs }))),
+  };
+  for (const [field, expected] of Object.entries(expectedInvariantDigests)) {
+    if (sample.population[field as keyof typeof expectedInvariantDigests] !== expected) throw new Error(`${label}: ${field} differs from its complete raw invariant evidence population`);
+  }
+  for (const vector of invariantVectors) {
+    const evidenceRuntime = (vector.evidence as { runtime?: unknown } | undefined)?.runtime;
+    const toolRuntime = (vector.toolInputs as { runtime?: unknown } | undefined)?.runtime;
+    if (stable(evidenceRuntime) !== stable(sample.raw.toolVersions) || stable(toolRuntime) !== stable(sample.raw.toolVersions)) {
+      throw new Error(`${label}: ${vector.slug} raw runtime/tool identity differs from the benchmark tool receipt`);
+    }
+  }
+
+  const artifacts = sample.raw.artifacts;
+  if (artifacts.length === 0 || new Set(artifacts.map((artifact) => artifact.name)).size !== artifacts.length) throw new Error(`${label}: named artifact population is empty or duplicated`);
+  if (stable(artifacts.map((artifact) => artifact.name)) !== stable(artifacts.map((artifact) => artifact.name).sort())) throw new Error(`${label}: named artifact population is not canonically ordered`);
+  if (artifacts.some((artifact) => !artifact.name || artifact.family !== canonicalArtifactFamily(artifact.name) || !/^[0-9a-f]{64}$/.test(artifact.sha256))) {
+    throw new Error(`${label}: named artifact identity or digest is invalid`);
+  }
+  if (!artifacts.some((artifact) => artifact.name === "scorecard/corpus-drift.json") || !artifacts.some((artifact) => artifact.name === "actions/jobs.json")) {
+    throw new Error(`${label}: scorecard or Actions jobs artifact identity is missing`);
+  }
+  const artifactDigests = sortedUnique(artifacts.map((artifact) => artifact.sha256));
+  if (stable(sample.raw.artifactDigests) !== stable(artifactDigests)) throw new Error(`${label}: raw artifact digests differ from the named artifact population`);
+  const artifactFamilyCounts = [...artifacts.reduce((counts, artifact) => counts.set(artifact.family, (counts.get(artifact.family) ?? 0) + 1), new Map<string, number>())]
+    .map(([family, count]) => ({ family, count }))
+    .sort((left, right) => left.family.localeCompare(right.family));
+
+  const provenance = sample.cache.provenance;
+  if (provenance.schema !== 1) throw new Error(`${label}: unsupported cache provenance schema`);
+  const invariant = provenance.invariant;
+  if (invariant.benchmarkSeed !== sample.benchmarkSeed || invariant.headSha !== sample.headSha || !invariant.ref || !invariant.platform) {
+    throw new Error(`${label}: invariant cache seed/head/ref/platform identity differs from the sample`);
+  }
+  for (const field of ["targetDigest", "evidenceDigest", "dependencyInputDigest", "cacheInputDigest", "toolInputDigest"] as const) {
+    if (invariant[field] !== sample.population[field]) throw new Error(`${label}: cache provenance ${field} differs from the verified population`);
+  }
+  if (stable(provenance.shape.artifactFamilies) !== stable(artifactFamilyCounts)) throw new Error(`${label}: artifact family census differs from the named artifact population`);
+
+  const sources = provenance.transports.sources;
+  const outputs = provenance.transports.outputs;
+  if (sources.length === 0 || outputs.length !== sample.shardCount) throw new Error(`${label}: source/output transport population is incomplete`);
+  const allTransports = [...sources, ...outputs];
+  if (new Set(allTransports.map((transport) => transport.key)).size !== allTransports.length) throw new Error(`${label}: transport keys are duplicated across source/output roles`);
+  const expectedSeedDigest = directDigest(sample.benchmarkSeed).slice(0, 16);
+  for (const transport of allTransports) {
+    const parsed = parseCorpusCacheTransportKey(transport.key);
+    if (!parsed || parsed.family !== "benchmark" || parsed.seedDigest !== expectedSeedDigest
+      || parsed.platform !== transport.platform || parsed.namespace !== transport.namespace
+      || parsed.runId !== transport.runId || parsed.runAttempt !== transport.runAttempt || parsed.headSha !== transport.headSha
+      || transport.family !== "benchmark" || transport.seedDigest !== parsed.seedDigest
+      || transport.headSha !== sample.headSha || transport.benchmarkSeed !== sample.benchmarkSeed
+      || transport.ref !== invariant.ref || transport.platform !== invariant.platform
+      || !transport.event || !Number.isSafeInteger(transport.payloadBytes) || transport.payloadBytes < 0) {
+      throw new Error(`${label}: ${transport.role} transport key/receipt identity is malformed or disagrees with the benchmark`);
+    }
+    if ((transport.role === "source") !== sources.includes(transport) || (transport.role === "output") !== outputs.includes(transport)) {
+      throw new Error(`${label}: transport role disagrees with its structured source/output population`);
+    }
+    if (transport.role === "output" && (transport.runId !== String(sample.runId) || transport.runAttempt !== String(sample.runAttempt))) {
+      throw new Error(`${label}: output transport belongs to another workflow run/attempt`);
+    }
+  }
+  const sourceNamespaces = sources.map((transport) => transport.namespace).sort();
+  const outputNamespaces = outputs.map((transport) => transport.namespace).sort();
+  if (new Set(sources.map((transport) => transport.event)).size !== 1
+    || new Set(sources.map((transport) => `${transport.runId}/${transport.runAttempt}`)).size !== 1
+    || new Set(outputs.map((transport) => transport.event)).size !== 1) {
+    throw new Error(`${label}: source/output transport population mixes event or source-run identities`);
+  }
+  if (stable(sourceNamespaces) !== stable(sortedUnique(invariant.sourceNamespaces)) || sourceNamespaces.length !== invariant.sourceNamespaces.length) {
+    throw new Error(`${label}: source transport namespace population differs from invariant provenance`);
+  }
+  if (stable(outputNamespaces) !== stable(sortedUnique(provenance.shape.outputNamespaces)) || outputNamespaces.length !== provenance.shape.outputNamespaces.length) {
+    throw new Error(`${label}: output transport namespace population differs from its benchmark shape`);
+  }
+  const normalizedSources = sources.map(invariantSourceTransport).sort((left, right) => stable(left).localeCompare(stable(right)));
+  const storedSources = [...invariant.sourceTransports].sort((left, right) => stable(left).localeCompare(stable(right)));
+  if (stable(normalizedSources) !== stable(storedSources)) throw new Error(`${label}: invariant source transport identity differs from its full structured receipts`);
+
+  if (provenance.sourceFiles.length === 0 || new Set(provenance.sourceFiles.map((file) => file.path)).size !== provenance.sourceFiles.length) {
+    throw new Error(`${label}: exact seed source-file population is empty or duplicated`);
+  }
+  for (const file of provenance.sourceFiles) {
+    if (!file.path || !/^[0-9a-f]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes < 0
+      || file.sourceNamespaces.length === 0 || stable(file.sourceNamespaces) !== stable(sortedUnique(file.sourceNamespaces))
+      || file.sourceNamespaces.some((namespace) => !invariant.sourceNamespaces.includes(namespace))) {
+      throw new Error(`${label}: exact seed source-file provenance is malformed or foreign`);
+    }
+  }
+  if (invariant.sourceContentDigest !== directDigest(JSON.stringify(provenance.sourceFiles))) throw new Error(`${label}: exact seed source-content digest differs from its file population`);
+
+  const expectedTransportKeys = sortedUnique(allTransports.map((transport) => transport.key));
+  if (stable(sample.cache.transportKeys) !== stable(expectedTransportKeys)) throw new Error(`${label}: raw transport keys differ from the structured source/output receipts`);
+  const mergeArtifactDigests = artifacts.filter((artifact) => artifact.family === "evidence/benchmark-cache-merge-receipt").map((artifact) => artifact.sha256).sort();
+  const transportArtifactDigests = artifacts.filter((artifact) => artifact.family === "evidence/benchmark-transport").map((artifact) => artifact.sha256).sort();
+  if (mergeArtifactDigests.length !== sample.shardCount || transportArtifactDigests.length !== sample.shardCount) throw new Error(`${label}: cache merge/output transport receipt artifact population is incomplete`);
+  if (stable(provenance.receiptDigests) !== stable([...mergeArtifactDigests, ...transportArtifactDigests].sort())) throw new Error(`${label}: receipt digests differ from the named transport artifacts`);
+  if (stable(sample.cache.provenanceDigests) !== stable(sortedUnique([invariant.sourceContentDigest, ...transportArtifactDigests]))) {
+    throw new Error(`${label}: cache provenance digests differ from the exact seed/output receipt identities`);
+  }
+  const { integrityDigest, ...withoutIntegrity } = provenance;
+  const expectedIntegrity = corpusBenchmarkProvenanceIntegrity({
+    provenance: withoutIntegrity,
+    transportKeys: sample.cache.transportKeys,
+    provenanceDigests: sample.cache.provenanceDigests,
+    artifacts,
+  });
+  if (integrityDigest !== expectedIntegrity) throw new Error(`${label}: cache/transport/artifact provenance integrity digest differs from its complete envelope`);
 }
 
 function assertSample(sample: CorpusBenchmarkSample): void {
@@ -309,11 +605,7 @@ function assertSample(sample: CorpusBenchmarkSample): void {
   if (sample.cache.transportKeys.length === 0 || sample.cache.provenanceDigests.length === 0 || sample.raw.artifactDigests.length === 0) throw new Error(`run ${sample.runId}: cache/artifact provenance is incomplete`);
   if (![...sample.cache.provenanceDigests, ...sample.raw.artifactDigests].every((value) => /^[0-9a-f]{64}$/.test(value))) throw new Error(`run ${sample.runId}: cache/artifact digest is invalid`);
   if (!sample.raw.workflowUrl || Object.keys(sample.raw.toolVersions).length === 0 || Object.values(sample.raw.toolVersions).some((value) => !value)) throw new Error(`run ${sample.runId}: raw workflow/tool provenance is incomplete`);
-  const targetCommitEntries = Object.entries(sample.raw.targetCommits).sort(([left], [right]) => left.localeCompare(right));
-  if (stable(targetCommitEntries.map(([slug]) => slug)) !== stable([...sample.population.targets].sort())
-    || targetCommitEntries.some(([, commit]) => !/^[0-9a-f]{40}$/.test(commit))) {
-    throw new Error(`run ${sample.runId}: raw target commit rows are missing, foreign, or invalid`);
-  }
+  assertSampleEnvelope(sample);
   for (const value of [sample.aggregateCpuSeconds, sample.setupNetworkMs, sample.dependencyMs, sample.targetProcessCpuMs, sample.estimatedCostUsd]) {
     if (!Number.isFinite(value) || value < 0) throw new Error(`run ${sample.runId}: raw resource/cost metrics are incomplete`);
   }
@@ -327,7 +619,9 @@ function comparableEvidence(sample: CorpusBenchmarkSample): unknown {
   return {
     headSha: sample.headSha,
     benchmarkSeed: sample.benchmarkSeed,
-    population: sample.population,
+    population: invariantPopulation(sample),
+    cacheProvenance: sample.cache.provenance.invariant,
+    outputTransportScope: outputTransportScope(sample),
     toolVersions: sample.raw.toolVersions,
     targetCommits: sample.raw.targetCommits,
     assertions: sample.assertions,
