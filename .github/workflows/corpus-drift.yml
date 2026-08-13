@@ -591,10 +591,13 @@ jobs:
           # `prepare-current-inputs` fetched these exact six YAML files once for the whole run.
           # Producers are reuse-only: no shard may race the live registry independently.
           HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse
-          # PR/queue/push runs measure Harvey against immutable external inputs. The daily/manual
-          # lane uses current providers and compares live OSV bytes with the committed snapshot;
-          # client audit CLIs do not set this corpus-only variable and keep their live defaults.
-          HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
+          # PR/queue/push runs and every provenance-bound benchmark seed/sample measure Harvey
+          # against committed external inputs. Only the daily and ORDINARY manual freshness lanes
+          # compare live OSV bytes with the committed snapshot. A non-empty benchmark identity is
+          # also passed to the CLI as a second fail-closed guard against mutable cohort input.
+          # Client audit CLIs do not set either corpus-only variable and keep their live defaults.
+          HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity == '')) && 'live-verify' || 'snapshot' }}
+          HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY: ${{ inputs.benchmark_run_identity }}
           HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
           # Kept in step with the matrix above: 3 on a PR, queue entry, or main push; 1 on the
@@ -763,9 +766,10 @@ jobs:
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138). On a scheduled failure,
       # find-or-update ONE tracking issue by the marker label. Still never fires on PR/push — those
-      # failures are already visible on the PR — but `workflow_dispatch` is now permanently in the
+      # failures are already visible on the PR. An ORDINARY `workflow_dispatch` remains in the
       # condition (#1287), because this path had never executed once and a cron-only alert cannot be
-      # proven to work.
+      # proven to work. Provenance-bound benchmark dispatches are evidence collection, not the
+      # scheduled freshness signal, and must not mutate its production alert issue.
       #
       # EXCLUDED on a liveness drill (#1586 criterion 4, #1569). The two drills each switch off the
       # other's machinery: `alert_drill` skips the liveness assert above, and `liveness_drill` skips
@@ -773,7 +777,7 @@ jobs:
       # REAL `ci-corpus-drift-alert` issue — a false alarm indistinguishable from a genuine corpus
       # failure — which is why #1586's criterion 4 was left unproven rather than dispatched.
       - name: Open or update the drift tracking issue
-        if: failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && inputs.benchmark_run_identity == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: ./.github/actions/alert-issue
         with:
           marker: ci-corpus-drift-alert

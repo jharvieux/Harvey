@@ -155,6 +155,7 @@ const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR
   : undefined;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
+const benchmarkRunIdentity = process.env.HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY ?? "";
 const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
@@ -178,6 +179,16 @@ if (forceColdCache && !phaseCacheDir) {
 }
 if (!["live", "snapshot", "live-verify"].includes(externalStateMode)) {
   console.error(`HARVEY_CORPUS_EXTERNAL_STATE_MODE must be live, snapshot, or live-verify; got ${externalStateMode}`);
+  process.exit(2);
+}
+// Benchmark timing rows are comparable only when every worker consumes the same committed,
+// digested advisory bytes. Keep this independent of the workflow expression: a future YAML edit
+// that accidentally maps a benchmark dispatch back onto live/live-verify must fail before any
+// target starts rather than authoring a mixed mutable cohort or seed transport.
+if (benchmarkRunIdentity && externalStateMode !== "snapshot") {
+  console.error(
+    `HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY=${benchmarkRunIdentity} requires HARVEY_CORPUS_EXTERNAL_STATE_MODE=snapshot; benchmark seed/sample runs cannot consume mutable live advisory state`,
+  );
   process.exit(2);
 }
 if (!Number.isInteger(targetConcurrency) || targetConcurrency < 1 || targetConcurrency > 3) {

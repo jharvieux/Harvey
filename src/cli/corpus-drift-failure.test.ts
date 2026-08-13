@@ -10,6 +10,7 @@ import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const directory = mkdtempSync(join(tmpdir(), "harvey-corpus-cli-failure-"));
 const artifacts = join(directory, "workers");
+const benchmarkArtifacts = join(directory, "benchmark-workers");
 const worker = join(directory, "fixture-worker.mjs");
 
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -70,6 +71,39 @@ function runPiped(failureSlug: string): Promise<{ code: number | null; stdout: s
   });
 }
 
+function runBenchmarkBoundary(mode: "live" | "live-verify" | "snapshot"): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn("node_modules/.bin/tsx", [
+      "src/cli/corpus-drift.ts",
+      "--target-concurrency", "3",
+      "--execution-design", "target-workers",
+      "--worker-artifacts-dir", benchmarkArtifacts,
+    ], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        HARVEY_CORPUS_TEST_MODE: "1",
+        HARVEY_CORPUS_TEST_WORKER_SCRIPT: worker,
+        HARVEY_CORPUS_CPU_LIMIT: "8",
+        HARVEY_CORPUS_MEMORY_LIMIT_BYTES: "12000000000",
+        HARVEY_CORPUS_MEMORY_PER_WORKER_BYTES: "1000000000",
+        HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY: "hosted-seed-or-sample",
+        HARVEY_CORPUS_EXTERNAL_STATE_MODE: mode,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", rejectRun);
+    child.once("close", (code) => resolveRun({ code, stdout, stderr }));
+  });
+}
+
 describe("corpus-drift spawned all-settled failure control", () => {
   it("retains every terminal receipt/log and the final failure banner through piped stdio", async () => {
     const failureSlug = EXTERNAL_CORPUS[0]!.slug;
@@ -93,5 +127,21 @@ describe("corpus-drift spawned all-settled failure control", () => {
       expect(existsSync(terminal.resourcePath), `${terminal.slug} resource trace`).toBe(true);
       expect(readFileSync(terminal.stderrPath, "utf8"), `${terminal.slug} retained log`).toContain("retained-log");
     }
+  });
+
+  it("rejects mutable external state before a benchmark worker starts and accepts snapshot mode", async () => {
+    for (const mode of ["live", "live-verify"] as const) {
+      const rejected = await runBenchmarkBoundary(mode);
+      expect(rejected.code).toBe(2);
+      expect(rejected.stderr).toContain("benchmark seed/sample runs cannot consume mutable live advisory state");
+      expect(existsSync(join(benchmarkArtifacts, "execution-manifest.json"))).toBe(false);
+    }
+
+    const accepted = await runBenchmarkBoundary("snapshot");
+    expect(accepted.code).toBe(0);
+    expect(accepted.stderr).toContain("CORPUS TARGET AGGREGATION PASS");
+    const manifest = JSON.parse(readFileSync(join(benchmarkArtifacts, "execution-manifest.json"), "utf8")) as CorpusExecutionManifest;
+    expect(manifest.terminals).toHaveLength(EXTERNAL_CORPUS.length);
+    expect(manifest.terminals.every((terminal) => terminal.state === "succeeded")).toBe(true);
   });
 });

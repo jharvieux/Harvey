@@ -196,6 +196,24 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
+  it("keeps benchmark advisory input immutable while schedule and ordinary dispatch stay live-verify", () => {
+    const modeExpression = "${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity == '')) && 'live-verify' || 'snapshot' }}";
+    expect(workflow).toContain(`HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${modeExpression}`);
+    expect(workflow).toContain("HARVEY_CORPUS_BENCHMARK_RUN_IDENTITY: ${{ inputs.benchmark_run_identity }}");
+    expect(workflow).not.toContain("(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify'");
+    expect(corpusCli).toContain("benchmark seed/sample runs cannot consume mutable live advisory state");
+
+    // The workflow expression's truth table is deliberate: schedule and an ordinary click are
+    // freshness lanes; PR/push/queue and either benchmark shape are reproducible snapshot lanes.
+    const intendedMode = (event: string, benchmarkIdentity: string): "snapshot" | "live-verify" =>
+      event === "schedule" || (event === "workflow_dispatch" && benchmarkIdentity === "") ? "live-verify" : "snapshot";
+    expect(intendedMode("schedule", "")).toBe("live-verify");
+    expect(intendedMode("workflow_dispatch", "")).toBe("live-verify");
+    expect(intendedMode("workflow_dispatch", "seed-bundle")).toBe("snapshot");
+    expect(intendedMode("workflow_dispatch", "sample-repeat-1")).toBe("snapshot");
+    expect(intendedMode("pull_request", "")).toBe("snapshot");
+  });
+
   it("uses one discovered fail-open relevance receipt instead of copied workflow filters", () => {
     expect(workflow).toContain("pnpm corpus-relevance --base \"$base\" --head HEAD --out corpus-relevance.json");
     expect(workflow).toContain("name: corpus-relevance-receipt");
@@ -246,8 +264,8 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).not.toMatch(/Restore exact benchmark seed shard 1[\s\S]{0,450}restore-keys:/);
   });
 
-  it("suppresses real tracking-issue mutation for the injected target failure drill only", () => {
-    const alertCondition = "failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
+  it("keeps the production alert on freshness lanes and isolates benchmark/drill failures", () => {
+    const alertCondition = "failure() && !inputs.liveness_drill && inputs.fail_after_start == '' && inputs.benchmark_run_identity == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')";
     expect(workflow).toContain(alertCondition);
     expect(workflow).toContain('benchmark_flags+=(--fail-after-start "${{ inputs.fail_after_start }}")');
     expect(workflow).toContain("uses: ./.github/actions/alert-issue");

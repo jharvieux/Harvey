@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const checkSlopsquat = vi.fn(async () => []);
 const checkLicenseCompliance = vi.fn(async () => []);
 const scanSecrets = vi.fn(() => []);
+const runOsvScanner = vi.fn(() => ({ result: {} }));
 // #950: default mock matches runSemgrep's real { result, failure? } return shape — a bare ""
 // (the pre-#950 shape this mock used to return) would make `semgrep.failure` silently undefined
 // on a string rather than proving the wiring, since parseSemgrepFindings below is ALSO mocked to
@@ -26,6 +27,10 @@ vi.mock("./supply-chain.js", async (importOriginal) => {
   return { ...actual, checkSlopsquat, checkLicenseCompliance };
 });
 vi.mock("./secrets.js", () => ({ scanSecrets, resolveBundleScan: vi.fn(() => ({})) }));
+vi.mock("./dependencies.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./dependencies.js")>();
+  return { ...actual, runOsvScanner };
+});
 // Only runSemgrep is faked (it's the one that shells out to the real binary); parseSemgrepFindings/
 // checkMissingCsp/checkPublicDirSensitive/semgrepUnavailableFinding stay real so the #950 failure-
 // wiring test below exercises mechanical.ts's actual branch, not a second layer of mocking.
@@ -46,6 +51,8 @@ describe("runMechanicalScan skipNetworkChecks", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture", dependencies: { react: "18.2.0" } }));
     checkSlopsquat.mockClear();
     checkLicenseCompliance.mockClear();
+    runOsvScanner.mockReset();
+    runOsvScanner.mockReturnValue({ result: {} });
   });
 
   afterEach(() => {
@@ -77,6 +84,40 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect.objectContaining({ candidates: [{ name: "react", version: "18.2.0", direct: true }], completeness: "incomplete" }),
       { skipRegistry: undefined },
     );
+  });
+
+  it("uses immutable advisory bytes without invoking live OSV", async () => {
+    const digest = "a".repeat(64);
+    const result = await runMechanicalScanDetailed({
+      dir,
+      skipNetworkChecks: true,
+      advisorySnapshot: {
+        result: { results: [] },
+        digest,
+        capturedAt: "2026-08-12T00:00:00.000Z",
+        expiresAt: "2026-08-19T00:00:00.000Z",
+        osvScannerVersion: "2.3.8",
+      },
+    });
+    expect(runOsvScanner).not.toHaveBeenCalled();
+    expect(result.phases.find((phase) => phase.phase === "dependency-advisory")?.scope.description).toContain(
+      `immutable OSV snapshot ${digest}`,
+    );
+  });
+
+  it("executes live OSV and fails closed when freshness differs from the committed snapshot", async () => {
+    runOsvScanner.mockReturnValue({
+      result: { results: [{ source: { path: "package-lock.json" }, packages: [] }] },
+    });
+    await expect(runMechanicalScanDetailed({
+      dir,
+      advisoryParitySnapshot: {
+        result: { results: [] },
+        digest: "b".repeat(64),
+        capturedAt: "2026-08-12T00:00:00.000Z",
+      },
+    })).rejects.toThrow("live OSV advisory state differs from committed corpus snapshot");
+    expect(runOsvScanner).toHaveBeenCalledTimes(1);
   });
 
   it("preserves real mechanical findings and examined scopes across a cold then warm faithful large fixture", async () => {
