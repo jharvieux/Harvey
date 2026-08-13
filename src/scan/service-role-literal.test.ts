@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { buildImportGraph, collectPathAliases } from "../detectors/app-router.js";
+import { parseFresh, type SourceInput } from "../detectors/common.js";
 import { detectServiceRoleLiteralFindings } from "./service-role-literal.js";
 
 // #664 — decode-based hardening of the #611 Gap A class. Real base64 JWT decode (not a
@@ -12,13 +14,17 @@ const jwt = (payload: Record<string, unknown>) => `${header}.${b64url(payload)}.
 const serviceRoleJwt = jwt({ iss: "supabase", ref: "test", role: "service_role" });
 const anonJwt = jwt({ iss: "supabase", ref: "test", role: "anon" });
 const demoJwt = jwt({ iss: "supabase-demo", role: "service_role" });
+const detect = (files: SourceInput[]) => {
+  const sources = new Map(files.map((file) => [file.path, parseFresh(file.path, file.text)]));
+  return detectServiceRoleLiteralFindings(files, buildImportGraph(sources, new Set(sources.keys()), collectPathAliases(files)), collectPathAliases(files));
+};
 
 describe("service-role-literal (#664 — decoded-JWT service_role literal reaching createClient)", () => {
   it("flags a same-file literal decoding to role:service_role", () => {
     const text = `import { createClient } from "@supabase/supabase-js";
 export const admin = createClient(url, "${serviceRoleJwt}");
 `;
-    const findings = detectServiceRoleLiteralFindings([{ path: "src/lib/client.ts", text }]);
+    const findings = detect([{ path: "src/lib/client.ts", text }]);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ severity: "Critical", precisionTier: "high" });
     expect(findings[0]?.evidence).toContain("service-role-literal");
@@ -29,7 +35,7 @@ export const admin = createClient(url, "${serviceRoleJwt}");
 const KEY = "${serviceRoleJwt}";
 export const admin = createClient(url, KEY);
 `;
-    expect(detectServiceRoleLiteralFindings([{ path: "src/lib/client.ts", text }])).toHaveLength(1);
+    expect(detect([{ path: "src/lib/client.ts", text }])).toHaveLength(1);
   });
 
   it("flags a cross-file import: the literal is exported from another module", () => {
@@ -38,7 +44,7 @@ export const admin = createClient(url, KEY);
 import { SERVICE_KEY } from "./keyStore";
 export const admin = createClient(url, SERVICE_KEY);
 `;
-    const findings = detectServiceRoleLiteralFindings([
+    const findings = detect([
       { path: "src/lib/keyStore.ts", text: store },
       { path: "src/lib/client.ts", text: client },
     ]);
@@ -51,7 +57,7 @@ export const admin = createClient(url, SERVICE_KEY);
     const sameFile = `import { createClient } from "@supabase/supabase-js";
 export const supabase = createClient(url, "${anonJwt}");
 `;
-    expect(detectServiceRoleLiteralFindings([{ path: "src/lib/anon.ts", text: sameFile }])).toHaveLength(0);
+    expect(detect([{ path: "src/lib/anon.ts", text: sameFile }])).toHaveLength(0);
 
     const store = `export const ANON_KEY = "${anonJwt}";\n`;
     const client = `import { createClient } from "@supabase/supabase-js";
@@ -59,7 +65,7 @@ import { ANON_KEY } from "./keyStore";
 export const supabase = createClient(url, ANON_KEY);
 `;
     expect(
-      detectServiceRoleLiteralFindings([
+      detect([
         { path: "src/lib/keyStore.ts", text: store },
         { path: "src/lib/client.ts", text: client },
       ]),
@@ -70,20 +76,20 @@ export const supabase = createClient(url, ANON_KEY);
     const text = `import { createClient } from "@supabase/supabase-js";
 export const local = createClient("http://127.0.0.1:54321", "${demoJwt}");
 `;
-    expect(detectServiceRoleLiteralFindings([{ path: "src/lib/local.ts", text }])).toHaveLength(0);
+    expect(detect([{ path: "src/lib/local.ts", text }])).toHaveLength(0);
   });
 
   it("stays silent on a process.env-sourced key (no literal to resolve)", () => {
     const text = `import { createClient } from "@supabase/supabase-js";
 export const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 `;
-    expect(detectServiceRoleLiteralFindings([{ path: "src/lib/admin.ts", text }])).toHaveLength(0);
+    expect(detect([{ path: "src/lib/admin.ts", text }])).toHaveLength(0);
   });
 
   it("stays silent on a malformed (non-3-segment) string that isn't a JWT", () => {
     const text = `import { createClient } from "@supabase/supabase-js";
 export const admin = createClient(url, "not-a-jwt-literal");
 `;
-    expect(detectServiceRoleLiteralFindings([{ path: "src/lib/admin.ts", text }])).toHaveLength(0);
+    expect(detect([{ path: "src/lib/admin.ts", text }])).toHaveLength(0);
   });
 });

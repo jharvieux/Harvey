@@ -38,7 +38,7 @@ import {
   rootIdentifier,
 } from "../detectors/owner-id.js";
 import { NON_SHIPPING_FILE, NON_SHIPPING_PATH } from "./prisma-tenant-scope.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 const PAGES_API_FILE = /(^|\/)pages\/api\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
@@ -143,8 +143,4 @@ export function bolaOwnerScannedFiles(files: readonly SourceInput[]): SourceInpu
 
 export function detectBolaOwnerFindings(files: SourceInput[]): Finding[] {
   return bolaOwnerScannedFiles(files).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanBolaOwner(projectDir: string): Finding[] {
-  return detectBolaOwnerFindings(walkSourceFiles(projectDir));
 }

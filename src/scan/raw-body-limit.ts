@@ -13,7 +13,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 // Only request-shaped receivers. `.on("data", …)` on an arbitrary stream (a file read, a child
 // process) accumulating into memory is not a request-size defect, and flagging it would put this
@@ -110,8 +110,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectRawBodyNoLimitFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanRawBodyNoLimit(projectDir: string): Finding[] {
-  return detectRawBodyNoLimitFindings(walkSourceFiles(projectDir));
 }

@@ -31,7 +31,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
@@ -139,8 +139,4 @@ export function detectAuditLogTenantFindings(files: SourceInput[]): Finding[] {
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanAuditLogTenant(projectDir: string): Finding[] {
-  return detectAuditLogTenantFindings(walkSourceFiles(projectDir));
 }

@@ -29,6 +29,22 @@ describe("lockfile parsing", () => {
     });
   });
 
+  it("normalizes deprecated package-lock license objects without leaking non-strings", () => {
+    const text = JSON.stringify({
+      packages: {
+        "node_modules/legacy": { version: "1.0.0", license: { type: " MIT ", url: "https://example.invalid/license" } },
+        "node_modules/malformed": { version: "2.0.0", license: { url: "https://example.invalid/unknown" } },
+      },
+    });
+    expect(parsePackageLock(text)).toEqual({
+      components: [
+        { name: "legacy", version: "1.0.0", license: "MIT" },
+        { name: "malformed", version: "2.0.0" },
+      ],
+      unmatched: 0,
+    });
+  });
+
   it("falls back to the v1 nested `dependencies` tree", () => {
     const text = JSON.stringify({ dependencies: { axios: { version: "1.7.2", dependencies: { follow: { version: "1.15.4" } } } } });
     expect(parsePackageLock(text)).toEqual({

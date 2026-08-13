@@ -1416,13 +1416,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// diff above can't catch it — and paths.skipped is a distinct silence again. Named here so",
     "// premise, not the symptom: these names are not registry packages, so the registry cannot",
     "// #1351 — the resolved-tree half checkInstallScripts cannot see (a dependency's OWN install",
-    "// #1194 — the OTHER half of tenant scoping, which #760/#901 structurally cannot see: the tenant",
-    "// access cannot be reconstructed afterwards, which undercuts the sheet's own detective control.",
-    "// Column names are strings inside the query chain, so tsc cannot see the break.",
-    "// and the finding itself states the two things a static pass cannot see (a disable in another",
   ],
   "src/scan/migration-column-drift.ts": [
-    "// root schema.sql is a snapshot, and a snapshot cannot state that anything was ever dropped.",
     "// Blank comments rather than delete them, so a commented-out DROP can't register while line",
   ],
   "src/scan/osv-fixture-contract.ts": [

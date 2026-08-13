@@ -53,10 +53,9 @@ describe("immutable corpus advisory snapshots (#1876)", () => {
     expect(() => loadCorpusAdvisorySnapshot("target", "commit-a", { dir, now: new Date("2026-08-12") })).toThrow("is corrupt");
   });
 
-  it("loads every committed free-tier snapshot before its declared expiry", async () => {
-    const { EXTERNAL_CORPUS, FREE_TIER_EXPECTATIONS } = await import("./scan/external-corpus.js");
-    for (const expected of FREE_TIER_EXPECTATIONS) {
-      const target = EXTERNAL_CORPUS.find((candidate) => candidate.slug === expected.slug)!;
+  it("loads a committed snapshot for every pinned corpus target before its declared expiry", async () => {
+    const { EXTERNAL_CORPUS } = await import("./scan/external-corpus.js");
+    for (const target of EXTERNAL_CORPUS) {
       const loaded = loadCorpusAdvisorySnapshot(target.slug, target.commit, { now: new Date("2026-08-12T02:00:00Z") });
       expect(loaded.digest).toMatch(/^[a-f0-9]{64}$/);
       expect(loaded.osvScannerVersion).toContain("2.3.8");

@@ -16,18 +16,14 @@
 // or a plain exported map wiring `process.env.X` into named fields), so it is a signal to review,
 // not a ground-truth verdict.
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
 import { mechanicalFinding } from "./common.js";
-import { detectTargetFramework, envConvention, type EnvConvention, type TargetFramework } from "./framework-detect.js";
+import { envConvention, type EnvConvention, type TargetFramework } from "./framework-detect.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage", "out"]);
 
 // A file that DECLARES the env surface — recognized by SHAPE, not just a name, so neither a
 // `lib/env.js` that merely does `process.env.NODE_ENV = "..."` nor a helper that validates one
@@ -236,18 +232,4 @@ export function detectEnvSchemaFindings(files: SourceInput[], framework: TargetF
   }
 
   return findings;
-}
-
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
-    if (SKIP_DIRS.has(entry)) continue;
-    if (isDirectory) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
-export function scanEnvSchema(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectEnvSchemaFindings(files, detectTargetFramework(projectDir));
 }

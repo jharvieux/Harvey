@@ -57,10 +57,11 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
-import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
+import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
+import type { MechanicalContextMetrics } from "../scan/mechanical-context.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
-import { binaryVersion, digestFiles, digestParts, resolveGitTree } from "../scan/mechanical-phase-cache.js";
+import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
 import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
 import {
   EXTERNAL_CORPUS,
@@ -84,6 +85,22 @@ import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
 import { shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
+import {
+  assertPreparedTargetUnchanged,
+  buildCurrentMechanicalPhasePlan,
+  CURRENT_MECHANICAL_POPULATION,
+  CURRENT_MECHANICAL_PREPARATION,
+  currentHarnessReceipt,
+  currentRuntimeReceipt,
+  currentTargetPinsSha256,
+  newExecutionId,
+  prepareCurrentMechanicalTarget,
+  semgrepPackReceipt,
+  validateRestoredSemgrepPackArtifact,
+  type CurrentMechanicalExecutionArtifact,
+  type CurrentMechanicalTargetDefinition,
+  type PreparedMechanicalTarget,
+} from "../corpus-mechanical-readiness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -108,10 +125,24 @@ const install = args.includes("--install");
 const m8 = args.includes("--m8");
 const forceColdCache = args.includes("--force-cold-cache");
 const phaseCacheDir = process.env.HARVEY_CORPUS_PHASE_CACHE_DIR;
+const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
+const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
+  process.exit(2);
+}
+if (registrySnapshotMode === "reuse" && !registrySnapshotDir) {
+  console.error("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE=reuse requires HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR; immutable registry input must not share the mutable phase-cache directory");
+  process.exit(2);
+}
+if (registrySnapshotDir && phaseCacheDir && resolve(registrySnapshotDir) === resolve(phaseCacheDir)) {
+  console.error("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR must differ from HARVEY_CORPUS_PHASE_CACHE_DIR; rejecting a phase-cache transport recursively clears that directory");
+  process.exit(2);
+}
+if (currentReadiness && (externalStateMode !== "snapshot" || !phaseCacheDir || !registrySnapshotDir || registrySnapshotMode !== "reuse")) {
+  console.error("HARVEY_CURRENT_MECHANICAL_READINESS requires snapshot external state, separate phase-cache and registry-snapshot directories, and the one shared Semgrep pack in reuse mode");
   process.exit(2);
 }
 if (forceColdCache && !phaseCacheDir) {
@@ -133,6 +164,29 @@ if (shardSpec && onlySlug) {
   console.error("--shard and --target are different addressing modes — pass one or the other, not both");
   process.exit(2);
 }
+
+const currentShard = (() => {
+  const [rawIndex, rawCount] = (shardSpec ?? "1/1").split("/");
+  return { index: Number(rawIndex), count: Number(rawCount) };
+})();
+const allCurrentTargets: CurrentMechanicalTargetDefinition[] = EXTERNAL_CORPUS.map(({ slug, repo, commit, vendoredSubtrees }) => ({ slug, repo, commit, vendoredSubtrees }));
+const sharedRegistry = registrySnapshotMode === "reuse" ? validateRestoredSemgrepPackArtifact(registrySnapshotDir!) : undefined;
+const currentExecution: CurrentMechanicalExecutionArtifact | undefined = currentReadiness ? {
+  schema: 2,
+  kind: "current-mechanical-execution",
+  population: CURRENT_MECHANICAL_POPULATION,
+  side: "hosted-producer",
+  executionId: newExecutionId("hosted-producer", currentShard),
+  ...currentHarnessReceipt(repoRoot),
+  commands: [process.argv.join(" ")],
+  options: { skipNetworkChecks: true, skipBundleScan: true, advisoryMode: "snapshot", phaseCache: "hosted-content-addressed", bundleDir: null, handrolledIndicators: false, authGuards: [] },
+  targetPinsSha256: currentTargetPinsSha256(allCurrentTargets),
+  allTargets: allCurrentTargets,
+  semgrepRegistry: semgrepPackReceipt(sharedRegistry!.files!, sharedRegistry!.identity!),
+  runtime: currentRuntimeReceipt(),
+  shard: currentShard,
+  targets: {},
+} : undefined;
 
 let targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : EXTERNAL_CORPUS;
 if (targets.length === 0) {
@@ -414,9 +468,13 @@ const rows: Row[] = [];
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
 // as a FUTURE run's --baseline-findings input (see the JSON write at the bottom of this file).
 const findingsBySlug: Record<string, Finding[]> = {};
+const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
+const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
 
 for (const target of targets) {
-  const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
+  const targetRoot = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
+  const dir = join(targetRoot, "checkout");
+  const preparedDir = join(targetRoot, "mechanical-prepared");
   console.error(`\n=== ${target.slug} (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
   // #1586: the shard weights in corpus-shards.ts are an estimate derived once, from banner
   // intervals in one run's log. Printing each target's real elapsed time means any run re-measures
@@ -425,25 +483,106 @@ for (const target of targets) {
   phaseTarget = target.slug;
   phaseSeconds[target.slug] = {};
   try {
-    // #1571: a per-run copy from $HARVEY_CORPUS_CACHE_DIR's pristine checkout when CI has one
-    // (set by .github/actions/corpus-clone-cache) — a bare network clone otherwise, exactly as
-    // before. `dir` stays a disposable mkdtemp copy either way, so --install/scanning below can
-    // still mutate or delete it freely.
-    timed("clone", () => cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR, true));
-
-    // #1524: strip any vendored reference subtree BEFORE any scanner or install sees this disposable
-    // clone — schemaPath/installTargetDeps below still resolve against `dir` itself, which this
-    // never touches, only named subdirectories under it.
-    for (const sub of target.vendoredSubtrees ?? []) {
-      const subDir = join(dir, sub);
-      if (!existsSync(subDir)) throw new Error(`${target.slug}: vendoredSubtrees names "${sub}", not found in the cloned tree — the manifest entry is stale`);
-      console.error(`  #1524: removing vendored subtree ${sub}/ before scanning (not this target's own code)`);
-      rmSync(subDir, { recursive: true, force: true });
+    // One authoritative preparation boundary for hosted scoring and the independent replay: exact
+    // pin, remove declared reference subtrees, then capture before dependency installation can
+    // mutate manifests or filesystem scope. Mechanical reads the immutable prepared copy; every
+    // installable M4-M10 consumer below reads the equal manifest-pruned mutable scanDir.
+    let prepared: PreparedMechanicalTarget | undefined;
+    timed("clone", () => {
+      prepared = prepareCurrentMechanicalTarget({
+        target,
+        checkoutDir: dir,
+        preparedDir,
+        cloneCacheDir: process.env.HARVEY_CORPUS_CACHE_DIR,
+      });
+    });
+    const targetTreeIdentity = `${prepared!.checkoutTree}:${JSON.stringify(target.vendoredSubtrees ?? [])}:${prepared!.preparedTreeSha256}`;
+    const scanDir = prepared!.scanDir;
+    const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+    const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
+    const skipNetworkChecks = externalStateMode === "snapshot";
+    const secretCandidateIdentity = deterministicSnapshot ? digestParts([
+      targetTreeIdentity,
+      digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
+      binaryVersion("gitleaks"),
+    ]) : undefined;
+    const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
+      side: "hosted-producer",
+      repoRoot,
+      cacheDir: phaseCacheDir!,
+      targetRevision: target.commit,
+      targetTree: targetTreeIdentity,
+      advisoryDigest: deterministicSnapshot.digest,
+      advisoryVersion: deterministicSnapshot.osvScannerVersion,
+      secretCandidateIdentity,
+      registry: { identity: sharedRegistry!.identity!, files: sharedRegistry!.files! },
+      producerMode: forceColdCache ? "verify" : "read-write",
+      onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+    }) : undefined;
+    const mechanicalRun = !m8 ? await runMechanicalScanDetailed({
+      dir: preparedDir,
+      skipNetworkChecks,
+      skipBundleScan: true,
+      advisorySnapshot: deterministicSnapshot,
+      advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
+      secretCandidateIdentity,
+      phaseCache: currentPlan?.phaseCache ?? (phaseCacheDir ? buildMechanicalPhaseCache({
+        repoRoot,
+        cacheDir: phaseCacheDir,
+        mode: forceColdCache ? "verify" : "read-write",
+        targetRevision: target.commit,
+        targetTree: targetTreeIdentity,
+        optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: true, skipNetworkChecks, handrolledIndicators: false, authGuards: [], externalStateMode }),
+        deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
+          advisoryDigest: deterministicSnapshot.digest,
+          advisoryVersion: deterministicSnapshot.osvScannerVersion,
+          secretCandidateIdentity,
+        } : undefined,
+        registryPackIdentity: sharedRegistry,
+        registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
+        onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
+      }) : undefined),
+    }) : undefined;
+    if (mechanicalRun) {
+      assertPreparedTargetUnchanged(prepared!);
+      detectorRecordsBySlug[target.slug] = mechanicalRun.detectors;
+      mechanicalContextBySlug[target.slug] = mechanicalRun.context;
+      for (const phase of mechanicalRun.phases) {
+        const name = `mechanical:${phase.phase}`;
+        (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
+        console.error(`  ${target.slug}: PHASE ${phase.phase} ${(phase.durationMs / 1000).toFixed(1)}s — ${phase.cache}; ${phase.scope.unitsExamined} unit(s); ${phase.reason}`);
+      }
+      if (currentExecution) {
+        if (!deterministicSnapshot || !secretCandidateIdentity) throw new Error(`${target.slug}: current readiness requires deterministic external-state receipts`);
+        currentExecution.targets[target.slug] = {
+          slug: target.slug,
+          repo: target.repo,
+          pin: target.commit,
+          checkoutHead: prepared!.checkoutHead,
+          checkoutTree: prepared!.checkoutTree,
+          preparedTreeSha256: prepared!.preparedTreeSha256,
+          emptyGitlinks: prepared!.emptyGitlinks,
+          preparation: CURRENT_MECHANICAL_PREPARATION,
+          removedVendoredSubtrees: prepared!.removedVendoredSubtrees,
+          captureBeforeInstall: true,
+          installMutationAtCapture: false,
+          skipBundleScan: true,
+          bundleDigest: digestParts(["bundle-pinned-off-v1"]),
+          advisorySha256: deterministicSnapshot.digest,
+          advisoryVersion: deterministicSnapshot.osvScannerVersion,
+          secretCandidateIdentity,
+          findings: mechanicalRun.findings,
+          producers: mechanicalRun.detectors,
+          context: mechanicalRun.context,
+          executionPlan: currentPlan!.executionPlan,
+          cachePolicy: currentPlan!.cachePolicy,
+          semgrepDiagnostics: mechanicalRun.semgrepDiagnostics,
+        };
+      }
     }
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
-    if (install) timed("install", () => installTargetDeps(dir, target.m8?.installFlags ?? []));
-    const targetTreeIdentity = `${resolveGitTree(dir)}:${JSON.stringify(target.vendoredSubtrees ?? [])}`;
+    if (install) timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? []));
     const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
@@ -459,7 +598,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, dir, target.m8));
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
@@ -485,9 +624,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [dir, "--detect-only"], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -497,7 +636,7 @@ for (const target of targets) {
     // this target then carry the per-module scope so the difference is explicit.
     const m5Root = target.scanRoots?.["M5-knip"];
     if (m5Root) {
-      const rootDir = join(dir, m5Root);
+      const rootDir = join(scanDir, m5Root);
       if (!existsSync(rootDir)) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
@@ -512,7 +651,7 @@ for (const target of targets) {
     // per the coverage guard. A schemaPath that doesn't resolve in the cloned tree is a stale
     // manifest entry, not an absent module — that throws rather than silently scoring 0.
     if (target.schemaPath) {
-      const schemaPath = join(dir, target.schemaPath);
+      const schemaPath = join(scanDir, target.schemaPath);
       if (!existsSync(schemaPath)) {
         throw new Error(`${target.slug}: schemaPath "${target.schemaPath}" not found in the cloned tree — the manifest's path is stale`);
       }
@@ -556,46 +695,8 @@ for (const target of targets) {
     // than the synthetic findings #244 could only assert over.
     const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
     if (expectation) {
-      const snapshot = externalStateMode === "live" ? undefined : loadCorpusAdvisorySnapshot(target.slug, target.commit);
-      const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
-      const secretCandidateIdentity = deterministicSnapshot ? digestParts([
-        targetTreeIdentity,
-        digestFiles([join(repoRoot, "src", "scan", "rules", "gitleaks-supabase.toml")], repoRoot),
-        binaryVersion("gitleaks"),
-      ]) : undefined;
-      // Timed around the SCAN, not just the report build: the scan is the whole cost (proposit's
-      // free-tier pass measured 84s of its 96s), and timing the cheap half would have left it in
-      // the untimed `other` bucket — a phase table whose largest row is "other" answers nothing.
-      const mechanicalRun = await runMechanicalScanDetailed({
-        dir,
-        skipNetworkChecks: deterministicSnapshot !== undefined,
-        advisorySnapshot: deterministicSnapshot,
-        advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
-        secretCandidateIdentity,
-        phaseCache: phaseCacheDir ? buildMechanicalPhaseCache({
-          repoRoot,
-          cacheDir: phaseCacheDir,
-          mode: forceColdCache ? "verify" : "read-write",
-          targetRevision: target.commit,
-          targetTree: targetTreeIdentity,
-          optionIdentity: JSON.stringify({ bundleDir: null, skipBundleScan: false, skipNetworkChecks: deterministicSnapshot !== undefined, handrolledIndicators: false, authGuards: [], externalStateMode }),
-          deterministicExternalState: deterministicSnapshot && secretCandidateIdentity ? {
-            advisoryDigest: deterministicSnapshot.digest,
-            advisoryVersion: deterministicSnapshot.osvScannerVersion,
-            secretCandidateIdentity,
-          } : undefined,
-          registrySnapshotMode: registrySnapshotMode as "refresh" | "reuse" | "unavailable",
-          onEvent: (message) => console.error(`  ${target.slug}: ${message}`),
-        }) : undefined,
-      });
-      const mechanical = mechanicalRun.findings;
-      for (const phase of mechanicalRun.phases) {
-        const name = `mechanical:${phase.phase}`;
-        (phaseSeconds[phaseTarget] ??= {})[name] = ((phaseSeconds[phaseTarget] ??= {})[name] ?? 0) + phase.durationMs / 1000;
-        console.error(`  ${target.slug}: PHASE ${phase.phase} ${(phase.durationMs / 1000).toFixed(1)}s — ${phase.cache}; ${phase.scope.unitsExamined} unit(s); ${phase.reason}`);
-      }
       const reportAt = Date.now();
-      const report = buildQuickScanReport(mechanical);
+      const report = buildQuickScanReport(mechanicalRun!.findings);
       (phaseSeconds[phaseTarget] ??= {})["free-tier report"] = (Date.now() - reportAt) / 1000;
       rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
     }
@@ -611,8 +712,15 @@ for (const target of targets) {
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => `${k} ${v.toFixed(1)}s`);
     console.error(`  ${target.slug}: ${Math.round(total)}s — ${parts.join(", ")}`);
-    if (keep) console.error(`  (kept clone: ${dir})`);
-    else rmSync(dir, { recursive: true, force: true });
+    if (keep) console.error(`  (kept target workspace: ${targetRoot})`);
+    else rmSync(targetRoot, { recursive: true, force: true });
+  }
+}
+
+if (!m8) {
+  const missingMechanicalTargets = targets.map((target) => target.slug).filter((slug) => !(slug in detectorRecordsBySlug));
+  if (missingMechanicalTargets.length > 0) {
+    throw new Error(`runMechanicalScanDetailed population missing for pinned target(s): ${missingMechanicalTargets.join(", ")}`);
   }
 }
 
@@ -664,7 +772,13 @@ recordMeasured("corpus-drift", rows.length, `baseline checks over ${targets.leng
 // #1564: `findings` alongside `rows` so THIS run's own --json output can serve as a
 // FUTURE run's --baseline-findings — no separate artifact, no second scan, just the same data this
 // run already computed, kept instead of discarded.
-if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({ rows, findings: findingsBySlug }, null, 2)}\n`);
+if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify({
+  rows,
+  findings: findingsBySlug,
+  detectors: detectorRecordsBySlug,
+  mechanicalContexts: mechanicalContextBySlug,
+  ...(currentExecution ? { currentMechanicalExecution: currentExecution } : {}),
+}, null, 2)}\n`);
 
 // #1485 — the manifest's declared false-positive FLOORS, checked here as well as in the unit suite,
 // because this is the job that watches the baselines move. A floor that starts producing graded rows

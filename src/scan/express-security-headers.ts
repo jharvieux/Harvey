@@ -22,7 +22,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { parse, type SourceInput } from "../detectors/common.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 import { appCreations, expressBindings } from "./express-powered-by.js";
 
 // The four response headers whose absence is a defect rather than a preference, and the same four
@@ -75,8 +75,4 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 
 export function detectExpressSecurityHeaderFindings(files: SourceInput[]): Finding[] {
   return files.flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
-}
-
-export function scanExpressSecurityHeaders(projectDir: string): Finding[] {
-  return detectExpressSecurityHeaderFindings(walkSourceFiles(projectDir));
 }

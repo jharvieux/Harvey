@@ -39,7 +39,6 @@ import {
   type SemgrepFamilyRecord,
 } from "./semgrep-family-cache.js";
 
-export { canonicalizeSemgrepOutput } from "./semgrep-family-cache.js";
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
 // `<batch>.yml` here (no shared file → conflict-free parallel batches).
@@ -47,7 +46,7 @@ const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 
 // The maintained registry packs every real engagement scan fetches (runSemgrep below) — shared with
 // runRegistryPacksOnFile's single-file replay (#1368) so the two can never drift apart.
-const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
+export const REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"] as const;
 const materializedRegistryMemo = new Map<string, { identity?: string; files?: string[]; failure?: string }>();
 
 interface RegistryPackSnapshotManifest {
@@ -55,7 +54,7 @@ interface RegistryPackSnapshotManifest {
   identity: string;
 }
 
-function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
+export function registryPackIdentity(bodies: readonly { pack: string; body: string }[]): string {
   const hash = createHash("sha256");
   for (const { pack, body } of bodies) {
     hash.update(pack);
@@ -195,6 +194,14 @@ export interface SemgrepOutput {
   // rule id that was evaluated and found nothing" from "not a rule id this scan ever ran at all" —
   // registry packs carry no local file a re-run can read the id list from the way harvey-* rules do.
   time?: { rules?: string[] };
+}
+
+export interface SemgrepExecutionPlanReceipt {
+  schema: 1;
+  strategy: "partitioned-families";
+  families: Array<{ ordinal: number; id: string; configSha256: string }>;
+  primaryArgv: string[];
+  fallbackArgv: string[];
 }
 
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
@@ -541,19 +548,41 @@ function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[
   return families;
 }
 
+const SEMGREP_FAMILY_PRIMARY_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap"] as const;
+const SEMGREP_FAMILY_FALLBACK_PREFIX = ["-j", "1"] as const;
+const SEMGREP_FAMILY_TAIL = [
+  "--exclude", "node_modules",
+  "--disable-nosem",
+  "--timeout", "0",
+  "--json",
+  "--verbose",
+  "--time",
+] as const;
+
+/** Semantic plan receipt built from the same constants and family registry execution consumes. */
+export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepExecutionPlanReceipt {
+  const families = semgrepRuleFamilies(registryConfigs);
+  return {
+    schema: 1,
+    strategy: "partitioned-families",
+    families: families.map((family, ordinal) => ({
+      ordinal,
+      id: family.id,
+      configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
+    })),
+    primaryArgv: [...SEMGREP_FAMILY_PRIMARY_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+    fallbackArgv: [...SEMGREP_FAMILY_FALLBACK_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+  };
+}
+
 function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
   const args = [
     "--config", family.configPath,
-    "--exclude", "node_modules",
-    "--disable-nosem",
-    "--timeout", "0",
-    "--json",
-    "--verbose",
-    "--time",
+    ...SEMGREP_FAMILY_TAIL,
     dir,
   ];
-  let run = execSemgrep(["--x-ignore-semgrepignore-files", "--x-parmap", ...args]);
-  if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
+  let run = execSemgrep([...SEMGREP_FAMILY_PRIMARY_PREFIX, ...args]);
+  if ("failure" in run && !run.enoent) run = execSemgrep([...SEMGREP_FAMILY_FALLBACK_PREFIX, ...args]);
   if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
   const parsed = parseEnvelope(run.out);
   if (parsed.failure) return parsed;

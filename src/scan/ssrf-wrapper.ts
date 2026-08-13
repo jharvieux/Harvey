@@ -38,7 +38,7 @@ import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { collectPathAliases, resolveImport } from "../detectors/app-router.js";
-import { mechanicalFinding, walkSourceFiles } from "./common.js";
+import { mechanicalFinding } from "./common.js";
 
 // Owned by harvey-ssrf-fetch's metavariable-regex (base.yml) — excluded here so the two checks
 // never double-report the same call site.
@@ -160,7 +160,7 @@ function findWrapperCalls(sf: ts.SourceFile, wrapperAliases: Set<string>): CallS
   return sites;
 }
 
-export function detectSsrfWrapperFindings(files: SourceInput[]): Finding[] {
+export function detectSsrfWrapperFindings(files: SourceInput[], importGraph?: ReadonlyMap<string, readonly string[]>): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const allPaths = new Set(sources.keys());
   const aliases = collectPathAliases(files);
@@ -182,6 +182,7 @@ export function detectSsrfWrapperFindings(files: SourceInput[]): Finding[] {
       if (!ts.isNamedImports(stmt.importClause.namedBindings)) continue;
       const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
       if (!resolved) continue;
+      if (importGraph && !(importGraph.get(path) ?? []).includes(resolved)) continue;
       for (const el of stmt.importClause.namedBindings.elements) {
         const exportedName = (el.propertyName ?? el.name).text;
         const def = wrapperDefs.get(`${resolved}#${exportedName}`);
@@ -213,8 +214,4 @@ export function detectSsrfWrapperFindings(files: SourceInput[]): Finding[] {
     }
   }
   return findings;
-}
-
-export function scanSsrfWrapper(projectDir: string): Finding[] {
-  return detectSsrfWrapperFindings(walkSourceFiles(projectDir));
 }
