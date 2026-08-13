@@ -23,6 +23,21 @@ describe("corpus scanner examined-unit census", () => {
     expect(countCorpusScannerUnits(dir)).toBe(2);
   });
 
+  it("does not count a manifest-pruned tracked subtree that no scanner can examine", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-pruned-scope-"));
+    dirs.push(dir);
+    execFileSync("git", ["init", "-q", dir]);
+    writeFileSync(join(dir, "package.json"), "{}\n");
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "app.ts"), "export const app = true;\n");
+    mkdirSync(join(dir, "repos", "effect"), { recursive: true });
+    writeFileSync(join(dir, "repos", "effect", "vendored.ts"), "export const vendored = true;\n");
+    execFileSync("git", ["-C", dir, "add", "."]);
+    rmSync(join(dir, "repos"), { recursive: true });
+
+    expect(countCorpusScannerUnits(dir)).toBe(2);
+  });
+
   it("falls back to source-like files while excluding generated and dependency trees", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-scanner-scope-fallback-"));
     dirs.push(dir);

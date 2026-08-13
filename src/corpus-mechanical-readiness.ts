@@ -3,16 +3,16 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
-import { readRecursiveSafe, statSafe } from "./fs-walk.js";
+import { readEntriesSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
 import { cloneAtPinCached } from "./scan/corpus-clone.js";
 import type { MechanicalContextMetrics } from "./scan/mechanical-context.js";
 import type { MechanicalProducerRecord } from "./scan/mechanical-phase-cache.js";
-import { binaryVersion, digestFiles, digestParts, digestTree, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
+import { binaryVersion, digestFiles, digestParts, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
 import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
-export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/remove-vendored/copy-before-install/bundle-off-v2" as const;
+export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/shared-pruned-scan-root/copy-before-install/bundle-off-v3" as const;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export interface CurrentMechanicalTargetDefinition {
@@ -84,6 +84,7 @@ export interface CurrentMechanicalExecutionArtifact {
 export interface PreparedMechanicalTarget {
   checkoutDir: string;
   preparedDir: string;
+  scanDir: string;
   checkoutHead: string;
   checkoutTree: string;
   preparedTreeSha256: string;
@@ -212,16 +213,34 @@ export function prepareCurrentMechanicalTarget(options: {
     if (!existsSync(path)) throw new Error(`${target.slug}: vendored subtree ${subtree} is absent before preparation`);
   }
   options.onPreparationStage?.("checkout-validated", checkoutDir);
-  materializePinnedTrackedTree(checkoutDir, preparedDir);
+  const trackedGitlinks = materializePinnedTrackedTree(checkoutDir, preparedDir, removedVendoredSubtrees);
   for (const subtree of removedVendoredSubtrees) rmSync(join(preparedDir, subtree), { recursive: true, force: true });
   for (const subtree of removedVendoredSubtrees) if (existsSync(join(preparedDir, subtree))) {
     throw new Error(`${target.slug}: vendored subtree ${subtree} survived the prepared copy`);
   }
-  const preparedTreeSha256 = digestTree(preparedDir);
-  return { checkoutDir, preparedDir, checkoutHead, checkoutTree, preparedTreeSha256, removedVendoredSubtrees };
+  const preparedTreeSha256 = digestScanPopulation(preparedDir);
+
+  // corpus-drift's M4-M10 consumers need a mutable tree because dependency installation is part of
+  // their real execution contract. Give them the same manifest-pruned population as the immutable
+  // mechanical input before that mutation starts. This used to prune only `preparedDir`, leaving the
+  // legacy scanners on the untouched checkout (effective's vendored repos/effect then expanded its
+  // M5-M8 baselines by thousands of rows). Empty gitlinks are filesystem surface, not nested bytes:
+  // keep them explicit unless their containing subtree is itself excluded by the target manifest.
+  for (const subtree of removedVendoredSubtrees) rmSync(join(checkoutDir, subtree), { recursive: true, force: true });
+  for (const gitlink of trackedGitlinks) if (!removedVendoredSubtrees.some((subtree) => gitlink === subtree || gitlink.startsWith(`${subtree}/`))) {
+    mkdirSync(join(checkoutDir, gitlink), { recursive: true });
+  }
+  for (const subtree of removedVendoredSubtrees) if (existsSync(join(checkoutDir, subtree))) {
+    throw new Error(`${target.slug}: vendored subtree ${subtree} survived the mutable scan-tree preparation`);
+  }
+  const scanTreeSha256 = digestScanPopulation(checkoutDir);
+  if (scanTreeSha256 !== preparedTreeSha256) {
+    throw new Error(`${target.slug}: mutable scan tree differs from the pinned prepared population before install: ${scanTreeSha256} != ${preparedTreeSha256}`);
+  }
+  return { checkoutDir, preparedDir, scanDir: checkoutDir, checkoutHead, checkoutTree, preparedTreeSha256, removedVendoredSubtrees };
 }
 
-function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string): void {
+function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, excludedSubtrees: readonly string[]): string[] {
   if (existsSync(preparedDir)) throw new Error(`prepared target destination already exists: ${preparedDir}`);
   const listed = execFileSync("git", ["-C", checkoutDir, "ls-files", "--stage", "-z"], { encoding: "buffer" });
   const entries = listed.toString("utf8").split("\0").filter(Boolean).map((row) => {
@@ -234,9 +253,11 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string):
     }
     return { mode, path };
   });
+  const gitlinks: string[] = [];
   try {
     mkdirSync(preparedDir);
     for (const entry of entries) {
+      if (excludedSubtrees.some((subtree) => entry.path === subtree || entry.path.startsWith(`${subtree}/`))) continue;
       // A gitlink without an initialized worktree is represented by Git as an empty directory. The
       // pinned inbox-zero revision carries exactly that shape (and no .gitmodules URL from which its
       // 160000 object could be fetched). Preserve the pinned checkout's real filesystem surface:
@@ -250,6 +271,7 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string):
           throw new Error(`tracked gitlink ${entry.path} has materialized content that is not bound by the parent target tree`);
         }
         mkdirSync(join(preparedDir, entry.path), { recursive: true });
+        gitlinks.push(entry.path);
         continue;
       }
       if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") throw new Error(`tracked path ${entry.path} has unsupported Git mode ${entry.mode}`);
@@ -271,10 +293,27 @@ function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string):
     rmSync(preparedDir, { recursive: true, force: true });
     throw new Error(`pinned tracked-tree materialization failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  return gitlinks;
+}
+
+function digestScanPopulation(dir: string): string {
+  const files: string[] = [];
+  const walk = (current: string, prefix: string): void => {
+    for (const entry of readEntriesSafe(current).entries) {
+      if (entry.name === ".git") continue;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory) walk(entry.path, relative);
+      else if (statSafe(entry.path)?.isFile()) files.push(relative);
+    }
+  };
+  walk(dir, "");
+  const parts: Array<string | Buffer> = [];
+  for (const relative of files.sort()) parts.push(relative, readFileSync(join(dir, relative)));
+  return digestParts(parts);
 }
 
 export function assertPreparedTargetUnchanged(prepared: PreparedMechanicalTarget): void {
-  const after = digestTree(prepared.preparedDir);
+  const after = digestScanPopulation(prepared.preparedDir);
   if (after !== prepared.preparedTreeSha256) throw new Error(`prepared mechanical target mutated during execution: ${after} != ${prepared.preparedTreeSha256}`);
 }
 

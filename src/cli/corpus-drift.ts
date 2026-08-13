@@ -482,9 +482,10 @@ for (const target of targets) {
   phaseTarget = target.slug;
   phaseSeconds[target.slug] = {};
   try {
-    // One authoritative producer boundary for both hosted scoring and the independent replay:
-    // exact pin, remove declared reference subtrees, then copy before any dependency install can
-    // mutate manifests or filesystem scope. The mechanical scan receives only this prepared copy.
+    // One authoritative preparation boundary for hosted scoring and the independent replay: exact
+    // pin, remove declared reference subtrees, then capture before dependency installation can
+    // mutate manifests or filesystem scope. Mechanical reads the immutable prepared copy; every
+    // installable M4-M10 consumer below reads the equal manifest-pruned mutable scanDir.
     let prepared: PreparedMechanicalTarget | undefined;
     timed("clone", () => {
       prepared = prepareCurrentMechanicalTarget({
@@ -495,6 +496,7 @@ for (const target of targets) {
       });
     });
     const targetTreeIdentity = `${prepared!.checkoutTree}:${JSON.stringify(target.vendoredSubtrees ?? [])}:${prepared!.preparedTreeSha256}`;
+    const scanDir = prepared!.scanDir;
     const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
     const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
     const skipNetworkChecks = externalStateMode === "snapshot";
@@ -562,7 +564,7 @@ for (const target of targets) {
     }
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
-    if (install) timed("install", () => installTargetDeps(dir, target.m8?.installFlags ?? []));
+    if (install) timed("install", () => installTargetDeps(scanDir, target.m8?.installFlags ?? []));
     const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
@@ -578,7 +580,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, dir, target.m8));
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
@@ -604,9 +606,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [dir], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [dir, "--detect-only"], targetDir: dir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -616,7 +618,7 @@ for (const target of targets) {
     // this target then carry the per-module scope so the difference is explicit.
     const m5Root = target.scanRoots?.["M5-knip"];
     if (m5Root) {
-      const rootDir = join(dir, m5Root);
+      const rootDir = join(scanDir, m5Root);
       if (!existsSync(rootDir)) {
         throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
       }
@@ -631,7 +633,7 @@ for (const target of targets) {
     // per the coverage guard. A schemaPath that doesn't resolve in the cloned tree is a stale
     // manifest entry, not an absent module — that throws rather than silently scoring 0.
     if (target.schemaPath) {
-      const schemaPath = join(dir, target.schemaPath);
+      const schemaPath = join(scanDir, target.schemaPath);
       if (!existsSync(schemaPath)) {
         throw new Error(`${target.slug}: schemaPath "${target.schemaPath}" not found in the cloned tree — the manifest's path is stale`);
       }
