@@ -3,6 +3,7 @@ import {
   CORPUS_BENCHMARK_PRIOR_SCORECARD_POLICY,
   corpusBenchmarkProvenanceIntegrity,
   corpusRunnerNameClass,
+  isLegacyCorpusBenchmarkPriorScorecardArtifact,
   type CorpusBenchmarkArtifactEvidence,
   type CorpusBenchmarkCacheProvenance,
   type CorpusBenchmarkPriorScorecardPolicy,
@@ -256,6 +257,10 @@ function invariantTargetEvidence(scorecard: CorpusBenchmarkScorecard, slug: stri
 }
 
 export function buildCorpusBenchmarkSample(input: CorpusBenchmarkSampleInput): CorpusBenchmarkSample {
+  const legacyPriorScorecard = input.artifacts.find(isLegacyCorpusBenchmarkPriorScorecardArtifact);
+  if (legacyPriorScorecard) {
+    throw new Error(`legacy prior-scorecard evidence is forbidden for benchmark samples: ${legacyPriorScorecard.name} (${legacyPriorScorecard.family})`);
+  }
   const priorScorecardPolicy = assertPriorScorecardPolicy(input);
   const targets = Object.keys(input.targetCommits).sort();
   if (targets.length === 0 || new Set(targets).size !== targets.length) throw new Error("target commit population is empty or duplicated");

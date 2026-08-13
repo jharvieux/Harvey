@@ -11,6 +11,28 @@ export interface CorpusBenchmarkArtifactEvidence {
   sha256: string;
 }
 
+const LEGACY_PRIOR_SCORECARD_FAMILY = "evidence/benchmark-prior-scorecard";
+const LEGACY_PRIOR_SCORECARD_FILE_PREFIX = "benchmark-prior-scorecard-";
+const CURRENT_PRIOR_SCORECARD_POLICY_FILE = /^benchmark-prior-scorecard-policy-[1-9]\d*\.json$/;
+
+export function corpusBenchmarkArtifactFamily(name: string): string {
+  return name.replace(/(?:-\d+)?\.json$/, "");
+}
+
+// e03fb03 emitted benchmark-prior-scorecard-<shard>.json. The policy receipts that replaced
+// those live inputs deliberately retain the shared stem, so only the exact current numbered form
+// is admissible. The family arm also catches a renamed artifact whose retained metadata still
+// identifies the obsolete live-scorecard evidence.
+export function isLegacyCorpusBenchmarkPriorScorecardArtifact(
+  artifact: Pick<CorpusBenchmarkArtifactEvidence, "name" | "family">,
+): boolean {
+  const filename = artifact.name.split(/[\\/]/).at(-1) ?? artifact.name;
+  const legacyFilename = filename === "benchmark-prior-scorecard.json"
+    || (filename.startsWith(LEGACY_PRIOR_SCORECARD_FILE_PREFIX)
+      && !CURRENT_PRIOR_SCORECARD_POLICY_FILE.test(filename));
+  return artifact.family === LEGACY_PRIOR_SCORECARD_FAMILY || legacyFilename;
+}
+
 export interface CorpusBenchmarkPriorScorecardPolicy {
   schema: 1;
   mode: "disabled-for-benchmark";
@@ -469,10 +491,6 @@ function directDigest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function canonicalArtifactFamily(name: string): string {
-  return name.replace(/(?:-\d+)?\.json$/, "");
-}
-
 function assertSampleEnvelope(sample: CorpusBenchmarkSample): void {
   const label = `run ${sample.runId}`;
   const populationTargets = [...sample.population.targets].sort();
@@ -528,9 +546,13 @@ function assertSampleEnvelope(sample: CorpusBenchmarkSample): void {
   }
 
   const artifacts = sample.raw.artifacts;
+  const legacyPriorScorecard = artifacts.find(isLegacyCorpusBenchmarkPriorScorecardArtifact);
+  if (legacyPriorScorecard) {
+    throw new Error(`${label}: legacy prior-scorecard evidence is forbidden for benchmark samples: ${legacyPriorScorecard.name} (${legacyPriorScorecard.family})`);
+  }
   if (artifacts.length === 0 || new Set(artifacts.map((artifact) => artifact.name)).size !== artifacts.length) throw new Error(`${label}: named artifact population is empty or duplicated`);
   if (stable(artifacts.map((artifact) => artifact.name)) !== stable(artifacts.map((artifact) => artifact.name).sort())) throw new Error(`${label}: named artifact population is not canonically ordered`);
-  if (artifacts.some((artifact) => !artifact.name || artifact.family !== canonicalArtifactFamily(artifact.name) || !/^[0-9a-f]{64}$/.test(artifact.sha256))) {
+  if (artifacts.some((artifact) => !artifact.name || artifact.family !== corpusBenchmarkArtifactFamily(artifact.name) || !/^[0-9a-f]{64}$/.test(artifact.sha256))) {
     throw new Error(`${label}: named artifact identity or digest is invalid`);
   }
   if (!artifacts.some((artifact) => artifact.name === "scorecard/corpus-drift.json") || !artifacts.some((artifact) => artifact.name === "actions/jobs.json")) {

@@ -504,6 +504,7 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
   });
 
   it("binds truthful runner/tool cohort identity while normalizing unique hosted VM suffixes", () => {
+    expect(() => evaluateCorpusBenchmark(qualifyingMatrix())).not.toThrow();
     const hosted = qualifyingMatrix().map((row) => ({
       ...row,
       actualRunner: {
@@ -539,6 +540,17 @@ describe("#1873/#1868/#1875 corpus benchmark evaluator", () => {
     mixedPolicyBytes[0]!.raw.artifacts.find((artifact) => artifact.family === "evidence/benchmark-prior-scorecard-policy")!.sha256 = digest("f");
     reseal(mixedPolicyBytes[0]!);
     expect(() => evaluateCorpusBenchmark(mixedPolicyBytes)).toThrow(/prior-scorecard policy artifacts do not contain identical bytes/);
+
+    const legacyPriorScorecard = qualifyingMatrix();
+    for (const row of legacyPriorScorecard) {
+      row.raw.artifacts.push({
+        name: "evidence/benchmark-prior-scorecard-1.json",
+        family: "evidence/benchmark-prior-scorecard",
+        sha256: hash({ runId: row.runId, name: "legacy-prior-scorecard" }),
+      });
+      reseal(row);
+    }
+    expect(() => evaluateCorpusBenchmark(legacyPriorScorecard)).toThrow(/legacy prior-scorecard evidence is forbidden/);
   });
 
   it("rejects isolated mutations anywhere in the transport, artifact, conservation, dependency, cache, scanner, Semgrep, phase, or runtime envelope", () => {

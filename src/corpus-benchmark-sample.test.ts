@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildCorpusBenchmarkSample, type CorpusBenchmarkApiJob, type CorpusBenchmarkScorecard } from "./corpus-benchmark-sample.js";
 import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkPriorScorecardPolicy, CorpusBenchmarkTransportEvidence } from "./corpus-benchmark.js";
 import { corpusCacheTransportKey } from "./corpus-cache-transport.js";
 import { corpusTargetConservationVector, type CorpusExecutionManifest } from "./corpus-execution.js";
+import { EXTERNAL_CORPUS } from "./scan/external-corpus.js";
 import { corpusShardTargetDigest, type CorpusShardProfileSelection } from "./scan/corpus-shards.js";
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const temporaryDirectories: string[] = [];
 const commits = { alpha: "a".repeat(40), beta: "b".repeat(40) };
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
 const DISABLED_PRIOR_SCORECARD_POLICY = {
@@ -13,6 +21,10 @@ const DISABLED_PRIOR_SCORECARD_POLICY = {
   mode: "disabled-for-benchmark",
   reason: "prior-scorecard-is-diagnostic-only",
 } as const satisfies CorpusBenchmarkPriorScorecardPolicy;
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 function execution(index: number): CorpusExecutionManifest {
   return {
@@ -28,21 +40,22 @@ function execution(index: number): CorpusExecutionManifest {
   };
 }
 
-function profileSelection(): CorpusShardProfileSelection {
-  return { requested: "cold", selected: "cold", cacheProvenance: "uncertain", targetDigest: corpusShardTargetDigest(Object.keys(commits)), sourceDigest: "f".repeat(64), runId: 31549148174, runAttempt: 1, reason: "cold requested explicitly" };
+function profileSelection(targetCommits: Record<string, string> = commits): CorpusShardProfileSelection {
+  return { requested: "cold", selected: "cold", cacheProvenance: "uncertain", targetDigest: corpusShardTargetDigest(Object.keys(targetCommits)), sourceDigest: "f".repeat(64), runId: 31549148174, runAttempt: 1, reason: "cold requested explicitly" };
 }
 
-function scorecard(): CorpusBenchmarkScorecard {
-  const rows = Object.keys(commits).map((slug) => ({ slug, check: "M4 baseline", module: "M4", pass: true }));
-  const findings = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ severity: "Low", confidence: "High" }]]));
-  const detectors = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ detector: "fixture", unitsExamined: 2, examinedUnitIdentities: [`${slug}/route.ts`] }]]));
-  const scannerRecords = Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{ scanner: "detect-static", cache: "recomputed", reason: "forced-cold result matched cached artifact", key: hash(`${slug}:scanner`), scope: { unitsExamined: 3, description: `${slug} source` } }]]));
+function scorecard(targetCommits: Record<string, string> = commits): CorpusBenchmarkScorecard {
+  const slugs = Object.keys(targetCommits);
+  const rows = slugs.map((slug) => ({ slug, check: "M4 baseline", module: "M4", pass: true }));
+  const findings = Object.fromEntries(slugs.map((slug) => [slug, [{ severity: "Low", confidence: "High" }]]));
+  const detectors = Object.fromEntries(slugs.map((slug) => [slug, [{ detector: "fixture", unitsExamined: 2, examinedUnitIdentities: [`${slug}/route.ts`] }]]));
+  const scannerRecords = Object.fromEntries(slugs.map((slug) => [slug, [{ scanner: "detect-static", cache: "recomputed", reason: "forced-cold result matched cached artifact", key: hash(`${slug}:scanner`), scope: { unitsExamined: 3, description: `${slug} source` } }]]));
   const card: CorpusBenchmarkScorecard = {
     rows,
     findings,
     detectors,
-    mechanicalContexts: { alpha: {}, beta: {} },
-    mechanicalRuns: Object.fromEntries(Object.keys(commits).map((slug) => [slug, {
+    mechanicalContexts: Object.fromEntries(slugs.map((slug) => [slug, {}])),
+    mechanicalRuns: Object.fromEntries(slugs.map((slug) => [slug, {
       executionPlan: { families: ["auth", "tenant"] },
       semgrepDiagnostics: { errors: [], skipped: [], sha256: hash("empty diagnostics") },
       phases: [{
@@ -55,7 +68,7 @@ function scorecard(): CorpusBenchmarkScorecard {
       }],
     }])),
     scannerRecords,
-    dependencyPreparations: Object.fromEntries(Object.keys(commits).map((slug) => [slug, [{
+    dependencyPreparations: Object.fromEntries(slugs.map((slug) => [slug, [{
       status: "hit",
       complete: true,
       cacheable: true,
@@ -66,18 +79,18 @@ function scorecard(): CorpusBenchmarkScorecard {
       reason: "validated receipt and offline materialization",
       sourceTreeCacheable: true,
     }]])),
-    phaseSeconds: { alpha: { install: 1, "detect-static": 2 }, beta: { install: 1, "quality-scan": 2 } },
-    runtimeReceipts: { alpha: { node: "v24", pnpm: "10" }, beta: { node: "v24", pnpm: "10" } },
+    phaseSeconds: Object.fromEntries(slugs.map((slug) => [slug, { install: 1, "detect-static": 2 }])),
+    runtimeReceipts: Object.fromEntries(slugs.map((slug) => [slug, { node: "v24", pnpm: "10" }])),
     conservation: [],
     executions: [execution(1), execution(2), execution(3)],
-    shardProfiles: [profileSelection(), profileSelection(), profileSelection()],
+    shardProfiles: [profileSelection(targetCommits), profileSelection(targetCommits), profileSelection(targetCommits)],
   };
-  refreshConservation(card);
+  refreshConservation(card, targetCommits);
   return card;
 }
 
-function refreshConservation(card: CorpusBenchmarkScorecard): void {
-  card.conservation = Object.keys(commits).map((slug) => corpusTargetConservationVector(card, slug));
+function refreshConservation(card: CorpusBenchmarkScorecard, targetCommits: Record<string, string> = commits): void {
+  card.conservation = Object.keys(targetCommits).map((slug) => corpusTargetConservationVector(card, slug));
 }
 
 function jobs(): CorpusBenchmarkApiJob[] {
@@ -103,6 +116,7 @@ function build(
   apiJobs = jobs(),
   suppliedPolicies?: CorpusBenchmarkPriorScorecardPolicy[],
   policyArtifactHashes = [hash("prior-policy"), hash("prior-policy"), hash("prior-policy")],
+  extraArtifacts: CorpusBenchmarkArtifactEvidence[] = [],
 ) {
   const headSha = "c".repeat(40);
   const benchmarkSeed = "seed";
@@ -120,6 +134,7 @@ function build(
   const artifacts: CorpusBenchmarkArtifactEvidence[] = [
     { name: "actions/jobs.json", family: "actions/jobs", sha256: hash("jobs") },
     ...[1, 2, 3].map((index) => ({ name: `evidence/benchmark-prior-scorecard-policy-${index}.json`, family: "evidence/benchmark-prior-scorecard-policy", sha256: policyArtifactHashes[index - 1]! })),
+    ...extraArtifacts,
     { name: "scorecard/corpus-drift.json", family: "scorecard/corpus-drift", sha256: hash("scorecard") },
   ].sort((left, right) => left.name.localeCompare(right.name));
   return buildCorpusBenchmarkSample({
@@ -165,7 +180,108 @@ function build(
   });
 }
 
+function runBenchmarkSampleCli(legacyFilename?: string) {
+  const directory = mkdtempSync(join(tmpdir(), "harvey-benchmark-prior-policy-"));
+  temporaryDirectories.push(directory);
+  const evidenceDir = join(directory, "evidence");
+  mkdirSync(evidenceDir);
+  const headSha = "c".repeat(40);
+  const benchmarkSeed = "seed";
+  const targetCommits = Object.fromEntries(EXTERNAL_CORPUS.map((target) => [target.slug, target.commit]));
+  const sourceFiles = [{ path: `${hash("cache")}.json`, sha256: hash("cache-body"), bytes: 10, sourceNamespaces: ["1", "2", "3"] }];
+  const sourceTransports = ["1", "2", "3"].map((namespace) => ({
+    namespace,
+    key: corpusCacheTransportKey({ family: "benchmark", platform: "linux-x64", namespace, runId: "99", runAttempt: "1", headSha, benchmarkSeed }),
+    family: "benchmark" as const,
+    event: "workflow_dispatch",
+    ref: "refs/heads/benchmark",
+    platform: "linux-x64",
+    runId: "99",
+    runAttempt: "1",
+    headSha,
+    benchmarkSeed,
+    payloadBytes: 10,
+  }));
+  const writeJson = (path: string, value: unknown): void => writeFileSync(path, `${JSON.stringify(value)}\n`);
+  const aggregateSha256 = hash(JSON.stringify(sourceFiles));
+  for (const shard of [1, 2, 3]) {
+    writeJson(join(evidenceDir, `benchmark-cache-merge-receipt-${shard}.json`), {
+      schema: 1,
+      destination: `.harvey-corpus-phase-cache-${shard}`,
+      benchmarkSeed,
+      headSha,
+      requiredNamespaces: ["1", "2", "3"],
+      sources: sourceTransports,
+      files: sourceFiles,
+      aggregateSha256,
+      duplicatePaths: 0,
+      conflicts: 0,
+    });
+    writeJson(join(evidenceDir, `benchmark-prior-scorecard-policy-${shard}.json`), DISABLED_PRIOR_SCORECARD_POLICY);
+    const key = corpusCacheTransportKey({ family: "benchmark", platform: "linux-x64", namespace: String(shard), runId: "123", runAttempt: "1", headSha, benchmarkSeed });
+    writeJson(join(evidenceDir, `benchmark-transport-${shard}.json`), {
+      schema: 4,
+      key,
+      family: "benchmark",
+      event: "workflow_dispatch",
+      ref: "refs/heads/benchmark",
+      runId: "123",
+      runAttempt: "1",
+      headSha,
+      writtenAt: "2026-08-13T00:00:00Z",
+      payload: { bytes: 10, maxBytes: 1_000, symlinks: 0 },
+      benchmarkSeed,
+    });
+    writeJson(join(evidenceDir, `benchmark-runner-${shard}.json`), {
+      schema: 1,
+      shard,
+      imageOS: "ubuntu24",
+      imageVersion: "20260813",
+      runnerOS: "Linux",
+      runnerArch: "X64",
+    });
+  }
+  if (legacyFilename) writeJson(join(evidenceDir, legacyFilename), { schema: 1, sourceRunId: 99 });
+  const scorecardPath = join(directory, "corpus-drift.json");
+  const jobsPath = join(directory, "jobs.json");
+  writeJson(scorecardPath, scorecard(targetCommits));
+  writeJson(jobsPath, jobs());
+  return spawnSync("node_modules/.bin/tsx", [
+    "src/cli/corpus-benchmark-sample.ts",
+    "--scorecard", scorecardPath,
+    "--jobs", jobsPath,
+    "--evidence-dir", evidenceDir,
+    "--out", join(directory, "sample.json"),
+    "--run-id", "123",
+    "--run-attempt", "1",
+    "--repeat", "1",
+    "--concurrency", "2",
+    "--shard-count", "3",
+    "--head-sha", headSha,
+    "--benchmark-seed", benchmarkSeed,
+    "--benchmark-seed-run-id", "99",
+    "--benchmark-seed-run-attempt", "1",
+    "--runner-role", "pr",
+    "--profile", "cold",
+    "--design", "target-workers",
+    "--requested-runner", "ubuntu-latest",
+    "--workflow-url", "https://example.test/run/123",
+  ], { cwd: REPO_ROOT, encoding: "utf8" });
+}
+
 describe("corpus benchmark sample evidence envelope", () => {
+  it("rejects legacy prior-scorecard files in the CLI census before sample construction", () => {
+    const currentPolicyOnly = runBenchmarkSampleCli();
+    expect(currentPolicyOnly.status, currentPolicyOnly.stderr).toBe(0);
+
+    for (const filename of ["benchmark-prior-scorecard-1.json", "benchmark-prior-scorecard-renamed-17.json"]) {
+      const legacy = runBenchmarkSampleCli(filename);
+      expect(legacy.status, filename).toBe(1);
+      expect(legacy.stderr, filename).toContain(`legacy prior-scorecard evidence is forbidden before benchmark sample construction: ${filename}`);
+      expect(legacy.stderr, filename).not.toContain("population has");
+    }
+  });
+
   it("retains separate critical/summed timing, actual runner, resources, tools, cache, and population evidence", () => {
     const sample = build();
     expect(sample).toMatchObject({ criticalPathMs: 62_000, aggregateRunnerMs: 180_000, aggregateCpuSeconds: 15, peakRssBytes: 4_000, setupNetworkMs: 30_000, dependencyMs: 2_000, targetProcessCpuMs: 15_000 });
@@ -191,6 +307,17 @@ describe("corpus benchmark sample evidence envelope", () => {
     const extra = { ...base, sourceRunId: 99 } as CorpusBenchmarkPriorScorecardPolicy;
     expect(() => build(scorecard(), jobs(), [extra, structuredClone(extra), structuredClone(extra)])).toThrow(/exact disabled-for-benchmark policy/);
     expect(() => build(scorecard(), jobs(), undefined, [hash("prior-policy"), hash("changed-policy"), hash("prior-policy")])).toThrow(/do not contain identical bytes/);
+
+    for (const legacyArtifact of [
+      { name: "evidence/benchmark-prior-scorecard-1.json", family: "evidence/benchmark-prior-scorecard", sha256: hash("legacy-numbered") },
+      { name: "evidence/benchmark-prior-scorecard-renamed-17.json", family: "evidence/benchmark-prior-scorecard-renamed", sha256: hash("legacy-renamed") },
+      { name: "evidence/renamed.json", family: "evidence/benchmark-prior-scorecard", sha256: hash("legacy-family") },
+    ]) {
+      expect(
+        () => build(scorecard(), jobs(), undefined, [hash("prior-policy"), hash("prior-policy"), hash("prior-policy")], [legacyArtifact]),
+        legacyArtifact.name,
+      ).toThrow(/legacy prior-scorecard evidence is forbidden/);
+    }
   });
 
   it("allows distinct machine names but fails loud on mixed runner shapes and stale conservation in both directions", () => {

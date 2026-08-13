@@ -3,7 +3,15 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCorpusBenchmarkSample, type CorpusBenchmarkApiJob, type CorpusBenchmarkScorecard } from "../corpus-benchmark-sample.js";
-import type { CorpusBenchmarkArtifactEvidence, CorpusBenchmarkPriorScorecardPolicy, CorpusBenchmarkTransportEvidence, CorpusCacheProfile, CorpusRunnerRole } from "../corpus-benchmark.js";
+import {
+  corpusBenchmarkArtifactFamily,
+  isLegacyCorpusBenchmarkPriorScorecardArtifact,
+  type CorpusBenchmarkArtifactEvidence,
+  type CorpusBenchmarkPriorScorecardPolicy,
+  type CorpusBenchmarkTransportEvidence,
+  type CorpusCacheProfile,
+  type CorpusRunnerRole,
+} from "../corpus-benchmark.js";
 import { parseCorpusCacheTransportKey, type CorpusCacheMergeReceipt, type CorpusCacheTransportManifest } from "../corpus-cache-transport.js";
 import type { CorpusExecutionDesign } from "../corpus-execution.js";
 import { readRecursiveSafe } from "../fs-walk.js";
@@ -77,6 +85,15 @@ try {
   const design = parseChoice<CorpusExecutionDesign>("--design", ["serial", "target-workers", "intra-target-overlap"]);
   const expectedShards = Array.from({ length: shardCount }, (_, index) => index + 1);
   const allEvidenceFiles = readRecursiveSafe(evidenceDir).sort();
+  const legacyPriorScorecard = allEvidenceFiles
+    .map((path) => {
+      const name = `evidence/${path}`;
+      return { path, name, family: corpusBenchmarkArtifactFamily(name) };
+    })
+    .find(isLegacyCorpusBenchmarkPriorScorecardArtifact);
+  if (legacyPriorScorecard) {
+    throw new Error(`legacy prior-scorecard evidence is forbidden before benchmark sample construction: ${legacyPriorScorecard.path}`);
+  }
   const evidenceFiles = allEvidenceFiles.filter((path) => /^(?:benchmark-cache-merge-receipt|benchmark-prior-scorecard-policy|benchmark-transport|benchmark-runner)-\d+\.json$/.test(path));
   const byKind = (kind: string): string[] => evidenceFiles.filter((path) => path.startsWith(`${kind}-`));
   for (const kind of ["benchmark-cache-merge-receipt", "benchmark-prior-scorecard-policy", "benchmark-transport", "benchmark-runner"]) {
@@ -109,7 +126,7 @@ try {
   ];
   const artifacts: CorpusBenchmarkArtifactEvidence[] = artifactPaths.map(({ name, path }) => ({
     name,
-    family: name.replace(/(?:-\d+)?\.json$/, ""),
+    family: corpusBenchmarkArtifactFamily(name),
     sha256: sha256(readFileSync(path)),
   }));
   const artifactDigest = (name: string): string => {
