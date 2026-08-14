@@ -957,7 +957,10 @@ jobs:
         id: parts
         if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != ''))
         uses: actions/download-artifact@v4
-        continue-on-error: true
+        # A declared no-op PR intentionally has no scorecard artifacts. Every relevant route must
+        # fail immediately when collection itself fails; the merge step below independently checks
+        # the exact file/shard population in case the artifact action succeeds on a partial set.
+        continue-on-error: ${{ needs.prepare-current-inputs.outputs.relevant != 'true' }}
         with:
           pattern: corpus-drift-scorecard-part-*
           merge-multiple: true
@@ -983,11 +986,43 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           parts=(parts/corpus-drift-shard*.json)
-          if [ ${#parts[@]} -eq 0 ]; then
+          relevant='${{ needs.prepare-current-inputs.outputs.relevant }}'
+          collection_outcome='${{ steps.parts.outcome }}'
+          event='${{ github.event_name }}'
+          expected_parts=3
+          if [ "$event" = workflow_dispatch ] && [ -n '${{ inputs.benchmark_run_identity }}' ]; then
+            expected_parts='${{ inputs.shard_count }}'
+          fi
+          if [ "$relevant" != true ]; then
+            if [ ${#parts[@]} -ne 0 ]; then
+              echo "::error::declared-no-op corpus route unexpectedly produced ${#parts[@]} shard scorecard(s)"
+              exit 1
+            fi
             echo "merged=false" >> "$GITHUB_OUTPUT"
-            echo "No shard scorecards to merge — this run short-circuited or scored nothing. Nothing to reassemble."
+            echo "No shard scorecards to merge — the retained relevance receipt declared this PR a no-op. Nothing was scored or reassembled."
             exit 0
           fi
+          if [ "$collection_outcome" != success ]; then
+            echo "::error::relevant corpus route could not collect its shard scorecards (collector outcome: $collection_outcome)"
+            exit 1
+          fi
+          if [ ${#parts[@]} -ne "$expected_parts" ]; then
+            echo "::error::relevant corpus route collected ${#parts[@]} shard scorecard(s), expected exactly $expected_parts"
+            exit 1
+          fi
+          for shard in $(seq 1 "$expected_parts"); do
+            part="parts/corpus-drift-shard${shard}.json"
+            if [ ! -f "$part" ]; then
+              echo "::error::relevant corpus route is missing exact shard scorecard $part"
+              exit 1
+            fi
+            if [ "$event" = pull_request ] && ! jq -e --argjson shard "$shard" --argjson count "$expected_parts" \
+              '.execution.shard == {index:$shard,count:$count} and .currentMechanicalExecution.shard == {index:$shard,count:$count}' \
+              "$part" >/dev/null; then
+              echo "::error::PR shard scorecard $part is relabeled, duplicated, or missing its authoritative parent-shard evidence"
+              exit 1
+            fi
+          done
           echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
           jq -s '{
             rows: (map(.rows) | add),

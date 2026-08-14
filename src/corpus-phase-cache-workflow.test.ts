@@ -22,7 +22,7 @@ interface WorkflowStep {
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, string>;
-  "continue-on-error"?: boolean;
+  "continue-on-error"?: boolean | string;
 }
 interface WorkflowJob { needs?: string | string[]; steps: WorkflowStep[] }
 interface ParsedWorkflow {
@@ -188,6 +188,55 @@ function temporary(prefix: string): string {
   return dir;
 }
 
+interface MergePartFixture {
+  fileShard: number;
+  evidenceShard?: number;
+}
+
+function runShardMergeGuard(options: {
+  relevant: boolean;
+  collectionOutcome: "success" | "failure";
+  parts: MergePartFixture[];
+}): { status: number | null; stdout: string; stderr: string; githubOutput: string } {
+  const directory = temporary("corpus-shard-merge-guard-");
+  const partsDir = join(directory, "parts");
+  mkdirSync(partsDir);
+  for (const fixture of options.parts) {
+    const evidenceShard = fixture.evidenceShard ?? fixture.fileShard;
+    writeFileSync(join(partsDir, `corpus-drift-shard${fixture.fileShard}.json`), `${JSON.stringify({
+      rows: [],
+      findings: {},
+      detectors: {},
+      mechanicalContexts: {},
+      mechanicalRuns: {},
+      scannerRecords: {},
+      dependencyPreparations: {},
+      phaseSeconds: {},
+      runtimeReceipts: {},
+      conservation: [],
+      shardProfile: {},
+      execution: { shard: { index: evidenceShard, count: 3 } },
+      currentMechanicalExecution: { shard: { index: evidenceShard, count: 3 } },
+    })}\n`);
+  }
+  const output = join(directory, "github-output.txt");
+  writeFileSync(output, "");
+  const merge = workflowStep(parsedWorkflow.jobs.drift.steps, "Merge the shard scorecards into corpus-drift.json");
+  const run = merge.run!
+    .replaceAll("${{ needs.prepare-current-inputs.outputs.relevant }}", String(options.relevant))
+    .replaceAll("${{ steps.parts.outcome }}", options.collectionOutcome)
+    .replaceAll("${{ github.event_name }}", "pull_request")
+    .replaceAll("${{ inputs.benchmark_run_identity }}", "")
+    .replaceAll("${{ inputs.shard_count }}", "3");
+  if (run.includes("${{")) throw new Error(`unresolved merge-guard expression: ${run}`);
+  const result = spawnSync("/bin/bash", ["-c", run], {
+    cwd: directory,
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_OUTPUT: output },
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, githubOutput: readFileSync(output, "utf8") };
+}
+
 function seedSemgrepArtifact(dir: string, marker: string): string {
   const bodies = REGISTRY_PACKS.map((pack, ordinal) => ({ pack, body: `rules:\n  - id: ${marker}-${ordinal}\n    message: ${pack}\n` }));
   const identity = registryPackIdentity(bodies);
@@ -231,6 +280,55 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("fail-fast: false");
     expect(workflow).toMatch(/drift:\n\s+name: clone\s+pinned\s+commits\s+\+\s+score\s+baselines\n\s+needs: \[prepare-current-inputs, shard, current-replay\]\n\s+if: always\(\)/);
     expect(workflow).toContain(`if [ "$result" != "success" ]`);
+  });
+
+  it("fails relevant PRs on collector, population, or parent-shard loss while preserving declared no-op", () => {
+    const collector = workflowStep(parsedWorkflow.jobs.drift.steps, "Collect the shard scorecards");
+    expect(collector["continue-on-error"]).toBe("${{ needs.prepare-current-inputs.outputs.relevant != 'true' }}");
+
+    const complete = runShardMergeGuard({
+      relevant: true,
+      collectionOutcome: "success",
+      parts: [1, 2, 3].map((fileShard) => ({ fileShard })),
+    });
+    expect(complete.status).toBe(0);
+    expect(complete.githubOutput).toContain("merged=true");
+
+    const noOp = runShardMergeGuard({ relevant: false, collectionOutcome: "failure", parts: [] });
+    expect(noOp.status).toBe(0);
+    expect(noOp.stdout).toContain("retained relevance receipt declared this PR a no-op");
+    expect(noOp.githubOutput).toBe("merged=false\n");
+
+    const lostCollector = runShardMergeGuard({
+      relevant: true,
+      collectionOutcome: "failure",
+      parts: [1, 2, 3].map((fileShard) => ({ fileShard })),
+    });
+    expect(lostCollector.status).toBe(1);
+    expect(lostCollector.stdout).toContain("could not collect its shard scorecards");
+
+    for (const parts of [
+      [] as MergePartFixture[],
+      [{ fileShard: 1 }, { fileShard: 2 }],
+      [{ fileShard: 1 }, { fileShard: 2 }, { fileShard: 3 }, { fileShard: 4 }],
+    ]) {
+      const wrongPopulation = runShardMergeGuard({ relevant: true, collectionOutcome: "success", parts });
+      expect(wrongPopulation.status, JSON.stringify(parts)).toBe(1);
+      expect(wrongPopulation.stdout, JSON.stringify(parts)).toContain(`collected ${parts.length} shard scorecard(s), expected exactly 3`);
+      expect(wrongPopulation.githubOutput).toBe("");
+    }
+
+    const relabeled = runShardMergeGuard({
+      relevant: true,
+      collectionOutcome: "success",
+      parts: [{ fileShard: 1 }, { fileShard: 2, evidenceShard: 1 }, { fileShard: 3 }],
+    });
+    expect(relabeled.status).toBe(1);
+    expect(relabeled.stdout).toContain("relabeled, duplicated, or missing its authoritative parent-shard evidence");
+
+    const noOpWithArtifact = runShardMergeGuard({ relevant: false, collectionOutcome: "success", parts: [{ fileShard: 1 }] });
+    expect(noOpWithArtifact.status).toBe(1);
+    expect(noOpWithArtifact.stdout).toContain("declared-no-op corpus route unexpectedly produced 1 shard scorecard");
   });
 
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
