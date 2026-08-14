@@ -190,7 +190,10 @@ function temporary(prefix: string): string {
 
 interface MergePartFixture {
   fileShard: number;
-  evidenceShard?: number;
+  executionIndex?: number;
+  executionCount?: number;
+  currentIndex?: number;
+  currentCount?: number;
 }
 
 function runShardMergeGuard(options: {
@@ -202,7 +205,6 @@ function runShardMergeGuard(options: {
   const partsDir = join(directory, "parts");
   mkdirSync(partsDir);
   for (const fixture of options.parts) {
-    const evidenceShard = fixture.evidenceShard ?? fixture.fileShard;
     writeFileSync(join(partsDir, `corpus-drift-shard${fixture.fileShard}.json`), `${JSON.stringify({
       rows: [],
       findings: {},
@@ -215,8 +217,14 @@ function runShardMergeGuard(options: {
       runtimeReceipts: {},
       conservation: [],
       shardProfile: {},
-      execution: { shard: { index: evidenceShard, count: 3 } },
-      currentMechanicalExecution: { shard: { index: evidenceShard, count: 3 } },
+      execution: { shard: {
+        index: fixture.executionIndex ?? fixture.fileShard,
+        count: fixture.executionCount ?? 3,
+      } },
+      currentMechanicalExecution: { shard: {
+        index: fixture.currentIndex ?? fixture.fileShard,
+        count: fixture.currentCount ?? 3,
+      } },
     })}\n`);
   }
   const output = join(directory, "github-output.txt");
@@ -318,13 +326,20 @@ describe("#1864 corpus phase-cache workflow contract", () => {
       expect(wrongPopulation.githubOutput).toBe("");
     }
 
-    const relabeled = runShardMergeGuard({
-      relevant: true,
-      collectionOutcome: "success",
-      parts: [{ fileShard: 1 }, { fileShard: 2, evidenceShard: 1 }, { fileShard: 3 }],
-    });
-    expect(relabeled.status).toBe(1);
-    expect(relabeled.stdout).toContain("relabeled, duplicated, or missing its authoritative parent-shard evidence");
+    for (const { label, corrupt } of [
+      { label: "execution index only", corrupt: { executionIndex: 1 } },
+      { label: "execution count only", corrupt: { executionCount: 4 } },
+      { label: "current index only", corrupt: { currentIndex: 1 } },
+      { label: "current count only", corrupt: { currentCount: 4 } },
+    ] satisfies Array<{ label: string; corrupt: Omit<MergePartFixture, "fileShard"> }>) {
+      const relabeled = runShardMergeGuard({
+        relevant: true,
+        collectionOutcome: "success",
+        parts: [{ fileShard: 1 }, { fileShard: 2, ...corrupt }, { fileShard: 3 }],
+      });
+      expect(relabeled.status, label).toBe(1);
+      expect(relabeled.stdout, label).toContain("relabeled, duplicated, or missing its authoritative parent-shard evidence");
+    }
 
     const noOpWithArtifact = runShardMergeGuard({ relevant: false, collectionOutcome: "success", parts: [{ fileShard: 1 }] });
     expect(noOpWithArtifact.status).toBe(1);
