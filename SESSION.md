@@ -52,7 +52,7 @@ The tracker grew by 29 issues. The growth reflects real remainder, performance-e
 
 ## Preserved local work
 
-- Primary checkout `/Users/johnharvieux/ClaudeCodeProjects/Harvey`: preserve its approved `README.md` patch (`HarveyQA` and `john@harvey-qa.com`). At operator direction, the superseded local `AGENTS.md`/`SESSION.md` edits, `.codex` agent drafts, and `MODULES.md` were removed from the checkout and retained for recovery in named local stashes `stash@{0}` and `stash@{1}`.
+- Primary checkout `/Users/johnharvieux/ClaudeCodeProjects/Harvey`: its approved `README.md` patch (`HarveyQA` and `john@harvey-qa.com`) is preserved in follow-up PR #1922 and, until that PR merges, as the local diff. At operator direction, the superseded local `AGENTS.md`/`SESSION.md` edits, `.codex` agent drafts, and `MODULES.md` were removed from the checkout and retained for recovery in named local stashes `stash@{0}` and `stash@{1}`.
 - Stopped #1887 checkout `/private/tmp/harvey-sweep-corpus-performance-1868`: preserve its clean, unpushed local head for a future scoped salvage decision.
 
 ## Exact next action
