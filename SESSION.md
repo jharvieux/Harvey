@@ -52,7 +52,7 @@ The tracker grew by 29 issues. The growth reflects real remainder, performance-e
 
 ## Preserved local work
 
-- Primary checkout `/Users/johnharvieux/ClaudeCodeProjects/Harvey`: preserve the dirty `feature/fix-stryker-ts7` worktree until its separate review decides what to retain. The sweep did not edit it.
+- Primary checkout `/Users/johnharvieux/ClaudeCodeProjects/Harvey`: preserve its approved `README.md` patch (`HarveyQA` and `john@harvey-qa.com`). At operator direction, the superseded local `AGENTS.md`/`SESSION.md` edits, `.codex` agent drafts, and `MODULES.md` were removed from the checkout and retained for recovery in named local stashes `stash@{0}` and `stash@{1}`.
 - Stopped #1887 checkout `/private/tmp/harvey-sweep-corpus-performance-1868`: preserve its clean, unpushed local head for a future scoped salvage decision.
 
 ## Exact next action
