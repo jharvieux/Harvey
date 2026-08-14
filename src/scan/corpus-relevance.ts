@@ -18,12 +18,14 @@ type CorpusInputCategory =
   | "taxonomy"
   | "manifest"
   | "baseline"
+  | "ledger"
   | "workflow"
   | "action"
   | "tools"
   | "package"
   | "lock"
-  | "runtime";
+  | "runtime"
+  | "external-state";
 
 export interface CorpusInputReceipt {
   category: CorpusInputCategory;
@@ -80,6 +82,7 @@ const CORPUS_ENTRY_POINTS: readonly string[] = [
 ];
 
 const WORKFLOW = ".github/workflows/corpus-drift.yml";
+const CORPUS_ADVISORY_SNAPSHOT_DIR = "src/scan/__fixtures__/corpus-advisories/";
 
 interface ExplicitInput {
   category: Exclude<CorpusInputCategory, "producer" | "helper" | "tools" | "action">;
@@ -96,8 +99,12 @@ const CORPUS_NON_IMPORT_INPUTS: readonly ExplicitInput[] = [
   { category: "taxonomy", consumer: "module matching and baseline scoring", select: (path) => path === "src/findings.ts" || path === "src/cwe-map.ts" },
   { category: "manifest", consumer: "pinned corpus target enumeration", select: (path) => path === "src/scan/external-corpus.ts" },
   { category: "baseline", consumer: "per-target corpus score expectations", select: (path) => path === "src/scan/external-corpus.ts" },
+  { category: "ledger", consumer: "audit-coverage module initialization reached by quick-scan corpus scoring", select: (path) => path === "audit-execution-log.json" },
+  { category: "external-state", consumer: "loadCorpusAdvisorySnapshot for corpus drift and current-mechanical replay", select: (path) => path.startsWith(CORPUS_ADVISORY_SNAPSHOT_DIR) },
   { category: "workflow", consumer: "required corpus-drift execution", select: (path) => path === WORKFLOW },
   { category: "package", consumer: "pnpm script and JavaScript dependency identity", select: (path) => path === "package.json" },
+  { category: "package", consumer: "pnpm workspace topology and install configuration for corpus execution", select: (path) => path === "pnpm-workspace.yaml" },
+  { category: "package", consumer: "pnpm workspace dependency identity for corpus execution", select: (path) => path === "site/package.json" },
   { category: "lock", consumer: "resolved JavaScript toolchain identity", select: (path) => path === "pnpm-lock.yaml" },
   { category: "runtime", consumer: "Actions Node runtime selection", select: (path) => path === ".nvmrc" },
 ] as const;
@@ -203,6 +210,8 @@ export function decideCorpusRelevance(
     if (consumers.length > 0) {
       matched.push({ path: change.path, status: change.status, consumers });
       reasons.push(`${change.status} ${change.path} reaches ${[...new Set(consumers.map((input) => `${input.category}:${input.consumer}`))].join(", ")}`);
+    } else if (change.status.startsWith("A") || change.status.startsWith("C")) {
+      reasons.push(`${change.status} ${change.path} is a newly added, unregistered path that cannot be proved disjoint from the corpus closure`);
     } else if (paths.some((path) => !known.has(path))) {
       reasons.push(`${change.status} ${change.path} is absent from both discovered revisions and cannot be proved disjoint`);
     } else {
