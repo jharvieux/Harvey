@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import type { CorpusExecutionManifest } from "../corpus-execution.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
+import { shardTargets } from "../scan/corpus-shards.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const directory = mkdtempSync(join(tmpdir(), "harvey-corpus-cli-failure-"));
@@ -71,6 +72,24 @@ function runPiped(failureSlug: string): Promise<{ code: number | null; stdout: s
   });
 }
 
+function runAddressing(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn("node_modules/.bin/tsx", ["src/cli/corpus-drift.ts", ...args], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, NODE_ENV: "test" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", rejectRun);
+    child.once("close", (code) => resolveRun({ code, stdout, stderr }));
+  });
+}
+
 function runBenchmarkBoundary(mode: "live" | "live-verify" | "snapshot", extraArgs: string[] = []): Promise<{ code: number | null; stdout: string; stderr: string }> {
   rmSync(benchmarkArtifacts, { recursive: true, force: true });
   return new Promise((resolveRun, rejectRun) => {
@@ -107,6 +126,23 @@ function runBenchmarkBoundary(mode: "live" | "live-verify" | "snapshot", extraAr
 }
 
 describe("corpus-drift spawned all-settled failure control", () => {
+  it("keeps target+shard private and rejects an internal worker outside its parent shard before scanning", async () => {
+    const slugs = EXTERNAL_CORPUS.map((target) => target.slug);
+    const mine = new Set(shardTargets(slugs, 1, 3));
+    const foreign = slugs.find((slug) => !mine.has(slug))!;
+    const out = join(directory, "foreign-worker-must-not-write.json");
+
+    const publicUse = await runAddressing(["--target", foreign, "--shard", "1/3"]);
+    expect(publicUse.code).toBe(2);
+    expect(publicUse.stderr).toContain("--shard and --target are different addressing modes");
+
+    const internalUse = await runAddressing(["--target", foreign, "--target-worker", "--shard", "1/3", "--json", out]);
+    expect(internalUse.code).toBe(2);
+    expect(internalUse.stderr).toContain(`${foreign} is outside its declared parent shard 1/3`);
+    expect(internalUse.stderr).not.toContain(`=== ${foreign}`);
+    expect(existsSync(out)).toBe(false);
+  });
+
   it("retains every terminal receipt/log and the final failure banner through piped stdio", async () => {
     const failureSlug = EXTERNAL_CORPUS[0]!.slug;
     const result = await runPiped(failureSlug);

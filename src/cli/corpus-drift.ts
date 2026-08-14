@@ -236,10 +236,11 @@ if (!["uncertain", "verified-warm"].includes(shardCacheProvenance)) {
 // #1586: `--shard i/n` selects this runner's slice of the corpus so corpus-drift.yml can score the
 // targets in parallel across n machines. Deterministic and coordination-free — every runner computes
 // the same partition and takes its own index. `--target` addresses ONE target for a local run; the
-// two are different addressing modes and combining them is a mistake worth failing on rather than
-// silently letting one win.
+// two are different PUBLIC addressing modes and combining them is a mistake worth failing on rather
+// than silently letting one win. The process-isolated coordinator is the one exception: it passes
+// both to bind a one-target child to its authoritative parent shard.
 const shardSpec = flag("--shard");
-if (shardSpec && onlySlug) {
+if (shardSpec && onlySlug && !targetWorker) {
   console.error("--shard and --target are different addressing modes — pass one or the other, not both");
   process.exit(2);
 }
@@ -296,6 +297,10 @@ if (shardSpec) {
     mine = new Set(shardTargets(EXTERNAL_CORPUS.map((t) => t.slug), shardIndex, shardCount, shardProfile.selected));
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
+    process.exit(2);
+  }
+  if (targetWorker && onlySlug && !mine.has(onlySlug)) {
+    console.error(`target worker ${onlySlug} is outside its declared parent shard ${shardIndex}/${shardCount}`);
     process.exit(2);
   }
   targets = targets.filter((t) => mine.has(t.slug));

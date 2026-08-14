@@ -71,7 +71,7 @@ on:
         options: ['1', '2', '3']
         default: '1'
       execution_design:
-        description: "Benchmark implementation shape. Production remains serial until the committed evaluator qualifies a candidate."
+        description: "Benchmark implementation shape. Ordinary relevant PRs separately run the target-workers/2 canary; this input does not change that route."
         type: choice
         options: [serial, target-workers, intra-target-overlap]
         default: serial
@@ -307,6 +307,9 @@ jobs:
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
   #
   # Production remains three fail-safe cold-profile shards while the hosted comparison is pending.
+  # Inside those shards, an ordinary relevant PR is the target-workers/2 canary approved under
+  # #1873. Every queue/push/schedule/ordinary-dispatch path remains serial, and one canary does not
+  # satisfy #1873's multi-run acceptance campaign or authorize a production-wide switch.
   # The committed cold and warm weights come from the exact-head run 31549148174 attempts 1 and 2;
   # they are selected only with matching target/cache provenance. Benchmark dispatch may request
   # four shards, but the evaluator must qualify it before production changes. The split itself lives
@@ -620,6 +623,14 @@ jobs:
             cold_flag=(--force-cold-cache)
             echo "Explicit forced-cold cache equivalence is enabled: every deterministic phase must compare with a restored artifact. Daily live-provider validation is warm."
           fi
+          candidate_flags=()
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ -z "${{ inputs.benchmark_run_identity }}" ]; then
+            candidate_flags=(
+              --target-concurrency 2
+              --execution-design target-workers
+              --cache-profile warm
+            )
+          fi
           benchmark_flags=()
           shard_profile_flags=(--shard-profile auto --shard-cache-provenance uncertain)
           if [ -n "${{ inputs.benchmark_run_identity }}" ]; then
@@ -648,7 +659,7 @@ jobs:
           if [ -z '${{ inputs.benchmark_run_identity }}' ] && [ -f prior-drift/corpus-drift.json ]; then
             baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
           fi
-          pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}" "${benchmark_flags[@]}" "${shard_profile_flags[@]}"
+          pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}" "${candidate_flags[@]}" "${benchmark_flags[@]}" "${shard_profile_flags[@]}"
 
       - name: Measure content-addressed cache size
         if: always() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
@@ -698,6 +709,51 @@ jobs:
             --arg runnerArch '${{ runner.arch }}' \
             '{schema:1,shard:$shard,imageOS:$imageOS,imageVersion:$imageVersion,runnerOS:$runnerOS,runnerArch:$runnerArch}' \
             > "benchmark-runner-${{ matrix.shard }}.json"
+
+      # Raw check-in evidence, not a derived "cache hit" count. The aggregate sealer also keeps
+      # the attempt-specific Actions job rows, whose runner group/labels complement this image
+      # receipt. Exact matched cache keys remain visible even when the inner content-addressed
+      # records later report a rejected/recomputed phase.
+      - name: Retain ordinary PR runner and cache provenance
+        if: always() && github.event_name == 'pull_request' && inputs.benchmark_run_identity == '' && steps.score.outcome == 'success'
+        env:
+          REQUESTED_RUNNER: ${{ needs.prepare-current-inputs.outputs.runner }}
+          ACTUAL_RUNNER_NAME: ${{ runner.name }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+          ACTUAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CLONE_CACHE_HIT: ${{ steps.corpus-cache.outputs.cache-hit }}
+          RUN_PHASE_MATCHED_KEY: ${{ steps.phase-cache.outputs.cache-matched-key }}
+          MAIN_PHASE_MATCHED_KEY: ${{ steps.main-phase-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          test -s corpus-pins.txt
+          pin_digest=$(sha256sum corpus-pins.txt | cut -d' ' -f1)
+          clone_key="corpus-clone-cache-v2-${pin_digest}"
+          selected_phase_key=$RUN_PHASE_MATCHED_KEY
+          [ -n "$selected_phase_key" ] || selected_phase_key=$MAIN_PHASE_MATCHED_KEY
+          image_os=${ImageOS-}
+          image_version=${ImageVersion-}
+          jq -n \
+            --argjson shard '${{ matrix.shard }}' \
+            --arg requestedRunner "$REQUESTED_RUNNER" \
+            --arg name "$ACTUAL_RUNNER_NAME" \
+            --arg os "$ACTUAL_RUNNER_OS" \
+            --arg arch "$ACTUAL_RUNNER_ARCH" \
+            --arg environment "$ACTUAL_RUNNER_ENVIRONMENT" \
+            --arg imageOS "$image_os" \
+            --arg imageVersion "$image_version" \
+            '{schema:1,shard:$shard,requestedRunner:$requestedRunner,actual:{name:$name,os:$os,arch:$arch,environment:$environment,imageOS:$imageOS,imageVersion:$imageVersion}}' \
+            > "corpus-checkin-runner-${{ matrix.shard }}.json"
+          jq -n \
+            --argjson shard '${{ matrix.shard }}' \
+            --arg cloneKey "$clone_key" \
+            --arg cloneHit "$CLONE_CACHE_HIT" \
+            --arg runPhaseMatchedKey "$RUN_PHASE_MATCHED_KEY" \
+            --arg mainPhaseMatchedKey "$MAIN_PHASE_MATCHED_KEY" \
+            --arg selectedPhaseKey "$selected_phase_key" \
+            '{schema:1,shard:$shard,clone:{key:$cloneKey,hit:($cloneHit == "true")},phase:{runMatchedKey:$runPhaseMatchedKey,mainMatchedKey:$mainPhaseMatchedKey,selectedMatchedKey:$selectedPhaseKey}}' \
+            > "corpus-checkin-cache-${{ matrix.shard }}.json"
 
       - name: Save current-run corpus phase results for an exact retry
         if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && inputs.benchmark_run_identity == ''
@@ -760,6 +816,8 @@ jobs:
             benchmark-prior-scorecard-policy-*.json
             benchmark-transport-*.json
             benchmark-runner-*.json
+            corpus-checkin-runner-*.json
+            corpus-checkin-cache-*.json
           if-no-files-found: warn
 
       # #1509: this job failed at SETUP for days (the poisoned pipx cache) and reported nothing a
@@ -981,6 +1039,62 @@ jobs:
           pnpm validate:current-mechanical-readiness --producer ../current-hosted-producer.json --replay ../current-independent-replay.json
           echo "This proves two fresh current registry executions agree. It is NOT #1851.6/.7 historical manual→registry proof; #1886 remains open and exclusive."
         working-directory: source
+
+      - name: Collect the executed-head relevance receipt for PR check-in
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'pull_request' && needs.prepare-current-inputs.outputs.relevant == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: corpus-relevance-receipt
+          path: checkin-relevance
+
+      # Query the current attempt, not the run's latest/default attempt. At this point all three
+      # producer shards and all three replay jobs are terminal; this aggregate job necessarily is
+      # not, so the sample records aggregateFinalCompletedAt=null and makes no required-context
+      # duration claim. The retained raw row lets a later campaign attach that terminal interval.
+      - name: Read raw Actions jobs for the PR check-in envelope
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'pull_request' && needs.prepare-current-inputs.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100" \
+            | jq '{jobs: map(.jobs) | add}' > corpus-checkin-jobs.json
+
+      - name: Build the provenance-bound PR check-in sample
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'pull_request' && needs.prepare-current-inputs.outputs.relevant == 'true'
+        run: |
+          pnpm exec tsx src/cli/corpus-checkin-sample.ts \
+            --scorecard ../corpus-drift.json \
+            --relevance ../checkin-relevance/corpus-relevance.json \
+            --jobs ../corpus-checkin-jobs.json \
+            --evidence-dir ../parts \
+            --producer ../current-hosted-producer.json \
+            --replay ../current-independent-replay.json \
+            --out ../corpus-checkin-performance-sample.json \
+            --run-id '${{ github.run_id }}' \
+            --run-attempt '${{ github.run_attempt }}' \
+            --actions-head-sha '${{ github.event.pull_request.head.sha }}' \
+            --execution-head-sha '${{ github.sha }}' \
+            --event pull_request \
+            --ref '${{ github.ref }}' \
+            --requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'
+        working-directory: source
+
+      - name: Upload the PR check-in sample and every raw input
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'pull_request' && needs.prepare-current-inputs.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-checkin-performance-sample
+          path: |
+            corpus-checkin-performance-sample.json
+            corpus-checkin-jobs.json
+            corpus-drift.json
+            current-hosted-producer.json
+            current-independent-replay.json
+            checkin-relevance/corpus-relevance.json
+            parts/**
+          if-no-files-found: error
 
       - name: Read raw Actions jobs for the benchmark timing envelope
         if: steps.merge.outputs.merged == 'true' && github.event_name == 'workflow_dispatch' && inputs.benchmark_run_identity != '' && !inputs.benchmark_seed_bundle

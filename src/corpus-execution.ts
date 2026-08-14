@@ -48,6 +48,12 @@ export interface CorpusWorkerTerminal {
   failure?: string;
 }
 
+export interface CorpusOomKillReceipt {
+  source: "/sys/fs/cgroup/memory.events";
+  before: number | null;
+  after: number | null;
+}
+
 export interface CorpusExecutionManifest {
   schema: 1;
   design: CorpusExecutionDesign;
@@ -56,6 +62,8 @@ export interface CorpusExecutionManifest {
   admission: CorpusAdmissionReceipt;
   startedAt: string;
   finishedAt: string;
+  /** Added for raw-authoritative check-in samples; older retained benchmark fixtures predate it. */
+  oomKills?: CorpusOomKillReceipt;
   terminals: CorpusWorkerTerminal[];
   aggregate: {
     criticalPathMs: number;
@@ -261,10 +269,10 @@ function processTreeSample(rootPid: number): Omit<CorpusResourcePoint, "at"> {
   };
 }
 
-function cgroupOomKills(): number {
+function cgroupOomKills(): number | null {
   const events = readText("/sys/fs/cgroup/memory.events");
   const match = events?.match(/^oom_kill\s+(\d+)$/m);
-  return match ? Number(match[1]) : 0;
+  return match ? Number(match[1]) : null;
 }
 
 function stable(value: unknown): string {
@@ -434,6 +442,7 @@ export async function executeCorpusTargetWorkers(options: WorkerOptions): Promis
         ...options.baseArgs,
         "--target", slug,
         "--target-worker",
+        "--shard", `${options.shard.index}/${options.shard.count}`,
         "--json", resultPath,
         "--target-concurrency", String(options.requestedConcurrency),
         "--execution-design", options.design,
@@ -532,7 +541,9 @@ export async function executeCorpusTargetWorkers(options: WorkerOptions): Promis
   }
   terminals.sort((a, b) => a.ordinal - b.ordinal);
   const oomAfter = cgroupOomKills();
-  if (oomAfter > oomBefore) for (const terminal of terminals) terminal.oomDetected = true;
+  if (oomBefore !== null && oomAfter !== null && oomAfter > oomBefore) {
+    for (const terminal of terminals) terminal.oomDetected = true;
+  }
   const finishedAt = now();
   const durations = terminals.map((terminal) => Date.parse(terminal.finishedAt) - Date.parse(terminal.startedAt));
   const manifest: CorpusExecutionManifest = {
@@ -543,6 +554,7 @@ export async function executeCorpusTargetWorkers(options: WorkerOptions): Promis
     admission,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
+    oomKills: { source: "/sys/fs/cgroup/memory.events", before: oomBefore, after: oomAfter },
     terminals,
     aggregate: {
       criticalPathMs: finishedAt.getTime() - startedAt.getTime(),

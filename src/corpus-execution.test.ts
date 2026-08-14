@@ -31,6 +31,7 @@ const args = process.argv.slice(2);
 const flag = name => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
 const slug = flag("--target");
 const out = flag("--json");
+const shard = flag("--shard");
 const delays = JSON.parse(process.env.FAKE_DELAYS ?? "{}");
 await new Promise(resolve => setTimeout(resolve, Number(delays[slug] ?? 5)));
 if (flag("--fail-after-start") === slug) { console.error("planted post-start failure " + slug); process.exit(7); }
@@ -46,9 +47,15 @@ writeFileSync(out, JSON.stringify({
   scannerRecords: { [slug]: [{ scanner: "detect-static", cache: "non-cacheable", reason: "fresh evidence", scope: { unitsExamined: 3 }, evidence: slug + " scanner" }] },
   dependencyPreparations: { [slug]: [{ digest: slug + " dependency" }] },
   phaseSeconds: { [slug]: { scan: 1 } },
-  runtimeReceipts: { [slug]: { node: "v24", pnpm: "10" } }
+  runtimeReceipts: { [slug]: { node: "v24", pnpm: "10" } },
+  ...(process.env.FAKE_CURRENT === "1" ? { currentMechanicalExecution: {
+    executionId: "worker:" + slug,
+    commands: ["fake " + slug],
+    shard: { index: Number(shard.split("/")[0]), count: Number(shard.split("/")[1]) },
+    targets: { [slug]: { slug } }
+  } } : {})
 }) + "\\n");
-console.log("worker stdout " + slug);
+console.log("worker stdout " + slug + " shard " + shard);
 console.error("worker stderr " + slug);
 `);
   return path;
@@ -152,12 +159,30 @@ describe("#1873 bounded corpus target execution", () => {
       environment: { ...process.env, HARVEY_CORPUS_CPU_LIMIT: "8", HARVEY_CORPUS_MEMORY_LIMIT_BYTES: "12000000000", HARVEY_CORPUS_MEMORY_PER_WORKER_BYTES: "1000000000", FAKE_DELAYS: JSON.stringify({ alpha: 120, beta: 70, gamma: 10 }) },
     });
     expect(execution.manifest.terminals.map((terminal) => terminal.slug)).toEqual(["alpha", "beta", "gamma"]);
+    const oomKills = execution.manifest.oomKills;
+    expect(oomKills?.source).toBe("/sys/fs/cgroup/memory.events");
+    expect(oomKills?.before === null || typeof oomKills?.before === "number").toBe(true);
+    expect(oomKills?.after === null || typeof oomKills?.after === "number").toBe(true);
     expect(execution.manifest.terminals.map((terminal) => terminal.outputDir)).toHaveLength(new Set(execution.manifest.terminals.map((terminal) => terminal.outputDir)).size);
     expect(execution.scorecard?.rows.map((row) => row.slug)).toEqual(["alpha", "beta", "gamma"]);
     for (const terminal of execution.manifest.terminals) {
       expect(readFileSync(terminal.stdoutPath, "utf8")).toContain(`worker stdout ${terminal.slug}`);
       expect(readFileSync(terminal.stderrPath, "utf8")).toContain(`worker stderr ${terminal.slug}`);
       expect(existsSync(terminal.resourcePath)).toBe(true);
+    }
+  });
+
+  it("binds every child and merged current-mechanical evidence to the parent shard", async () => {
+    const directory = temporary("corpus-workers-parent-shard-");
+    const base = executionOptions(directory, ["alpha", "beta"], 2);
+    const execution = await executeCorpusTargetWorkers({
+      ...base,
+      environment: { ...base.environment, FAKE_CURRENT: "1" },
+    });
+    expect(execution.scorecard?.currentMechanicalExecution?.shard).toEqual({ index: 1, count: 3 });
+    expect(Object.keys(execution.scorecard?.currentMechanicalExecution?.targets ?? {})).toEqual(["alpha", "beta"]);
+    for (const terminal of execution.manifest.terminals) {
+      expect(readFileSync(terminal.stdoutPath, "utf8")).toContain(`worker stdout ${terminal.slug} shard 1/3`);
     }
   });
 

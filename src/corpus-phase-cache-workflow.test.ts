@@ -16,7 +16,14 @@ const workflow = readFileSync(path, "utf8");
 const mechanical = readFileSync(join(root, "src", "scan", "mechanical.ts"), "utf8");
 const corpusCli = readFileSync(join(root, "src", "cli", "corpus-drift.ts"), "utf8");
 const replayCli = readFileSync(join(root, "src", "cli", "replay-current-mechanical.ts"), "utf8");
-interface WorkflowStep { name?: string; if?: string; run?: string }
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, string>;
+  "continue-on-error"?: boolean;
+}
 interface WorkflowJob { needs?: string | string[]; steps: WorkflowStep[] }
 interface ParsedWorkflow {
   on: Record<string, unknown> & {
@@ -25,6 +32,7 @@ interface ParsedWorkflow {
   jobs: {
     "prepare-current-inputs": WorkflowJob;
     shard: WorkflowJob;
+    drift: WorkflowJob;
   };
 }
 const parsedWorkflow = parse(workflow) as ParsedWorkflow;
@@ -138,6 +146,36 @@ function evaluateStepCondition(condition: string | undefined, inputs: CacheModeI
     }
     throw new Error(`unsupported workflow condition atom: ${atom}`);
   });
+}
+
+interface ExecutionRouteInputs {
+  benchmark_run_identity: string;
+  target_concurrency: "1" | "2" | "3";
+  execution_design: "serial" | "target-workers" | "intra-target-overlap";
+  cache_profile: "cold" | "warm";
+  fail_after_start: string;
+}
+
+function executeFlagBlock(
+  run: string | undefined,
+  marker: string,
+  arrayName: "candidate_flags" | "benchmark_flags",
+  event: string,
+  inputs: ExecutionRouteInputs,
+): string[] {
+  let block = multilineIfBlockContaining(run, marker);
+  block = block.replaceAll("${{ github.event_name }}", event);
+  block = block.replace(/\$\{\{\s*inputs\.([a-z_]+)\s*\}\}/g, (_token, name: keyof ExecutionRouteInputs) => {
+    const value = inputs[name];
+    if (value === undefined || !/^[a-z0-9_-]*$/i.test(value)) throw new Error(`unsafe or missing route input ${name}`);
+    return value;
+  });
+  if (block.includes("${{")) throw new Error(`unresolved route expression: ${block}`);
+  // macOS's Bash 3.2 treats an intentionally empty array as unbound under `set -u`; the workflow
+  // itself runs Bash 5 on Linux. Keep errexit/pipefail here and inspect the empty route directly.
+  const result = spawnSync("/bin/bash", ["-c", `set -eo pipefail\n${arrayName}=()\n${block}\nprintf '%s\\n' "\${${arrayName}[@]}"`], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`route block failed: ${result.stderr || block}`);
+  return result.stdout.split("\n").filter(Boolean);
 }
 
 afterEach(() => {
@@ -471,6 +509,101 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("default: '3'");
     expect(workflow).toContain("--shard-profile auto --shard-cache-provenance uncertain");
     expect(workflow).toContain("--shard-profile warm --shard-cache-provenance verified-warm");
+  });
+
+  it("routes only an ordinary relevant PR through the target-workers/2 canary", () => {
+    const score = shardStep("Score the corpus against its baselines");
+    const noOp = shardStep("Declare the no-op (a short-circuit must not read like a scoring run)");
+    const requiredGate = workflowStep(parsedWorkflow.jobs.drift.steps, "Every shard must have succeeded");
+    const ordinary: ExecutionRouteInputs = {
+      benchmark_run_identity: "",
+      target_concurrency: "3",
+      execution_design: "intra-target-overlap",
+      cache_profile: "cold",
+      fail_after_start: "",
+    };
+    const benchmark: ExecutionRouteInputs = {
+      benchmark_run_identity: "sample-repeat-1",
+      target_concurrency: "3",
+      execution_design: "intra-target-overlap",
+      cache_profile: "cold",
+      fail_after_start: "proposit",
+    };
+    const flags = (event: string, inputs: ExecutionRouteInputs): string[] => [
+      ...executeFlagBlock(score.run, "--execution-design target-workers", "candidate_flags", event, inputs),
+      ...executeFlagBlock(score.run, '--target-concurrency "${{ inputs.target_concurrency }}"', "benchmark_flags", event, inputs),
+    ];
+    const rows = [
+      { event: "pull_request", relevant: true, inputs: ordinary, scorer: true, noOp: false, expected: ["--target-concurrency", "2", "--execution-design", "target-workers", "--cache-profile", "warm"] },
+      { event: "pull_request", relevant: false, inputs: ordinary, scorer: false, noOp: true, expected: [] },
+      { event: "merge_group", relevant: true, inputs: ordinary, scorer: true, noOp: false, expected: [] },
+      { event: "push", relevant: true, inputs: ordinary, scorer: true, noOp: false, expected: [] },
+      { event: "schedule", relevant: true, inputs: ordinary, scorer: true, noOp: false, expected: [] },
+      { event: "workflow_dispatch", relevant: true, inputs: ordinary, scorer: true, noOp: false, expected: [] },
+      { event: "workflow_dispatch", relevant: true, inputs: benchmark, scorer: true, noOp: false, expected: ["--target-concurrency", "3", "--execution-design", "intra-target-overlap", "--cache-profile", "cold", "--fail-after-start", "proposit"] },
+    ];
+    for (const row of rows) {
+      const actual = row.scorer ? flags(row.event, row.inputs) : [];
+      expect(actual, `${row.event}/${row.relevant}/${row.inputs.benchmark_run_identity || "ordinary"}`).toEqual(row.expected);
+      expect(row.noOp).toBe(row.event === "pull_request" && !row.relevant);
+    }
+
+    expect(score.if).toBe("steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill");
+    expect(noOp.if).toBe("needs.prepare-current-inputs.outputs.relevant != 'true'");
+    expect(score.run?.match(/pnpm corpus-drift\b/g)).toHaveLength(1);
+    expect(score.run).toContain('"${candidate_flags[@]}" "${benchmark_flags[@]}"');
+    expect(score.run).not.toMatch(/(?:\|\||if\s+!)\s*pnpm corpus-drift/);
+    expect(score["continue-on-error"]).not.toBe(true);
+    expect(requiredGate.run).toContain(`if [ "$result" != "success" ]`);
+    expect(requiredGate["continue-on-error"]).not.toBe(true);
+  });
+
+  it("seals the relevant PR canary only after replay and retains every raw input", () => {
+    const driftSteps = parsedWorkflow.jobs.drift.steps;
+    const compare = workflowStep(driftSteps, "Current registry producer ↔ independent replay equivalence/readiness");
+    const relevance = workflowStep(driftSteps, "Collect the executed-head relevance receipt for PR check-in");
+    const jobs = workflowStep(driftSteps, "Read raw Actions jobs for the PR check-in envelope");
+    const build = workflowStep(driftSteps, "Build the provenance-bound PR check-in sample");
+    const upload = workflowStep(driftSteps, "Upload the PR check-in sample and every raw input");
+    const receipt = shardStep("Retain ordinary PR runner and cache provenance");
+    const partUpload = shardStep("Upload drift scorecard");
+    const condition = "steps.merge.outputs.merged == 'true' && github.event_name == 'pull_request' && needs.prepare-current-inputs.outputs.relevant == 'true'";
+
+    expect(driftSteps.indexOf(compare)).toBeLessThan(driftSteps.indexOf(relevance));
+    expect(driftSteps.indexOf(relevance)).toBeLessThan(driftSteps.indexOf(jobs));
+    expect(driftSteps.indexOf(jobs)).toBeLessThan(driftSteps.indexOf(build));
+    expect(driftSteps.indexOf(build)).toBeLessThan(driftSteps.indexOf(upload));
+    expect(relevance.if).toBe(condition);
+    expect(jobs.if).toBe(condition);
+    expect(build.if).toBe(condition);
+    expect(upload.if).toBe(condition);
+    expect(jobs.run).toContain("/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100");
+    expect(build.run).toContain("pnpm exec tsx src/cli/corpus-checkin-sample.ts");
+    for (const argument of [
+      "--scorecard ../corpus-drift.json",
+      "--relevance ../checkin-relevance/corpus-relevance.json",
+      "--jobs ../corpus-checkin-jobs.json",
+      "--evidence-dir ../parts",
+      "--producer ../current-hosted-producer.json",
+      "--replay ../current-independent-replay.json",
+      "--actions-head-sha '${{ github.event.pull_request.head.sha }}'",
+      "--execution-head-sha '${{ github.sha }}'",
+      "--event pull_request",
+      "--requested-runner '${{ needs.prepare-current-inputs.outputs.runner }}'",
+    ]) expect(build.run, argument).toContain(argument);
+    expect(upload.with?.name).toBe("corpus-checkin-performance-sample");
+    expect(upload.with?.path).toContain("parts/**");
+    expect(upload.with?.path).toContain("checkin-relevance/corpus-relevance.json");
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(receipt.if).toBe("always() && github.event_name == 'pull_request' && inputs.benchmark_run_identity == '' && steps.score.outcome == 'success'");
+    expect(receipt.run).toContain("corpus-checkin-runner-${{ matrix.shard }}.json");
+    expect(receipt.run).toContain("corpus-checkin-cache-${{ matrix.shard }}.json");
+    expect(receipt.env?.RUN_PHASE_MATCHED_KEY).toBe("${{ steps.phase-cache.outputs.cache-matched-key }}");
+    expect(receipt.env?.MAIN_PHASE_MATCHED_KEY).toBe("${{ steps.main-phase-cache.outputs.cache-matched-key }}");
+    expect(partUpload.run).toBeUndefined();
+    expect(partUpload.with?.path).toContain("corpus-drift*.json.workers/**");
+    expect(partUpload.with?.path).toContain("corpus-checkin-runner-*.json");
+    expect(partUpload.with?.path).toContain("corpus-checkin-cache-*.json");
   });
 
   it("retains one sample envelope from the merged scorecard and raw Actions jobs", () => {
