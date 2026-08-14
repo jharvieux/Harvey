@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,14 +17,99 @@ const mechanical = readFileSync(join(root, "src", "scan", "mechanical.ts"), "utf
 const corpusCli = readFileSync(join(root, "src", "cli", "corpus-drift.ts"), "utf8");
 const replayCli = readFileSync(join(root, "src", "cli", "replay-current-mechanical.ts"), "utf8");
 interface WorkflowStep { name?: string; if?: string; run?: string }
-const parsedWorkflow = parse(workflow) as { jobs: { shard: { steps: WorkflowStep[] } } };
+interface WorkflowJob { needs?: string | string[]; steps: WorkflowStep[] }
+interface ParsedWorkflow {
+  on: Record<string, unknown> & {
+    workflow_dispatch: { inputs: Record<string, { default: string | boolean }> };
+  };
+  jobs: {
+    "prepare-current-inputs": WorkflowJob;
+    shard: WorkflowJob;
+  };
+}
+const parsedWorkflow = parse(workflow) as ParsedWorkflow;
+const prepareSteps = parsedWorkflow.jobs["prepare-current-inputs"].steps;
 const shardSteps = parsedWorkflow.jobs.shard.steps;
-const shardStep = (name: string): WorkflowStep => {
-  const step = shardSteps.find((candidate) => candidate.name === name);
-  if (!step) throw new Error(`workflow shard step is missing: ${name}`);
+const workflowStep = (steps: WorkflowStep[], name: string): WorkflowStep => {
+  const step = steps.find((candidate) => candidate.name === name);
+  if (!step) throw new Error(`workflow step is missing: ${name}`);
   return step;
 };
+const prepareStep = (name: string): WorkflowStep => workflowStep(prepareSteps, name);
+const shardStep = (name: string): WorkflowStep => {
+  return workflowStep(shardSteps, name);
+};
 const temporaryDirectories: string[] = [];
+
+interface CacheModeInputs {
+  benchmark_run_identity: string;
+  benchmark_seed_bundle: boolean;
+  force_cold_cache: boolean;
+  cache_profile: "cold" | "warm";
+  cache_seed_shards: "3" | "4";
+  liveness_drill: boolean;
+}
+
+interface CacheEventMode {
+  name: string;
+  event: "workflow_dispatch" | "schedule" | "push" | "pull_request";
+  inputs: CacheModeInputs;
+}
+
+function workflowDispatchDefault(name: keyof CacheModeInputs): string | boolean {
+  const input = parsedWorkflow.on.workflow_dispatch.inputs[name];
+  if (!input) throw new Error(`workflow_dispatch input is missing: ${name}`);
+  return input.default;
+}
+
+function conditionBefore(run: string | undefined, marker: string): string {
+  if (!run) throw new Error(`workflow run script is missing before ${marker}`);
+  const markerAt = run.indexOf(marker);
+  if (markerAt < 0) throw new Error(`workflow run script is missing marker: ${marker}`);
+  const conditions = [...run.slice(0, markerAt).matchAll(/^\s*if (.+); then\s*$/gm)];
+  const condition = conditions.at(-1)?.[1];
+  if (!condition) throw new Error(`workflow run script has no condition before ${marker}`);
+  return condition;
+}
+
+function evaluateShellCondition(condition: string, inputs: CacheModeInputs): boolean {
+  const rendered = condition.replace(/\$\{\{\s*inputs\.([a-z_]+)\s*\}\}/g, (_token, name: keyof CacheModeInputs) => {
+    const value = String(inputs[name]);
+    if (!/^[a-z0-9_-]*$/i.test(value)) throw new Error(`unsafe workflow test input for ${name}`);
+    return value;
+  });
+  if (rendered.includes("${{")) throw new Error(`unresolved workflow expression in shell condition: ${rendered}`);
+  const result = spawnSync("/bin/bash", ["-c", `if ${rendered}; then exit 0; else exit 1; fi`], { encoding: "utf8" });
+  if (result.status !== 0 && result.status !== 1) {
+    throw new Error(`shell condition could not be evaluated: ${result.stderr || rendered}`);
+  }
+  return result.status === 0;
+}
+
+function evaluateStepCondition(condition: string | undefined, inputs: CacheModeInputs): boolean {
+  if (!condition) return true;
+  return condition.split(/\s+&&\s+/).every((rawAtom) => {
+    const atom = rawAtom.trim();
+    if (atom === "success()" || atom === "steps.score.outcome == 'success'" || atom === "steps.filter.outputs.relevant == 'true'") return true;
+    const emptyComparison = atom.match(/^inputs\.([a-z_]+)\s*(==|!=)\s*''$/);
+    if (emptyComparison) {
+      const value = inputs[emptyComparison[1] as keyof CacheModeInputs];
+      return emptyComparison[2] === "==" ? value === "" : value !== "";
+    }
+    const valueComparison = atom.match(/^inputs\.([a-z_]+)\s*(==|!=)\s*'([^']+)'$/);
+    if (valueComparison) {
+      const value = inputs[valueComparison[1] as keyof CacheModeInputs];
+      return valueComparison[2] === "==" ? value === valueComparison[3] : value !== valueComparison[3];
+    }
+    const booleanInput = atom.match(/^(!)?inputs\.([a-z_]+)$/);
+    if (booleanInput) {
+      const value = inputs[booleanInput[2] as keyof CacheModeInputs];
+      if (typeof value !== "boolean") throw new Error(`workflow condition treats non-boolean input as boolean: ${atom}`);
+      return booleanInput[1] ? !value : value;
+    }
+    throw new Error(`unsupported workflow condition atom: ${atom}`);
+  });
+}
 
 afterEach(() => {
   for (const dir of temporaryDirectories.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -203,6 +289,95 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
     expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(1);
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
+  });
+
+  it("routes parsed event modes through seed authoring, restore, and cold verification", () => {
+    const defaults: CacheModeInputs = {
+      benchmark_run_identity: workflowDispatchDefault("benchmark_run_identity") as string,
+      benchmark_seed_bundle: workflowDispatchDefault("benchmark_seed_bundle") as boolean,
+      force_cold_cache: workflowDispatchDefault("force_cold_cache") as boolean,
+      cache_profile: workflowDispatchDefault("cache_profile") as CacheModeInputs["cache_profile"],
+      cache_seed_shards: workflowDispatchDefault("cache_seed_shards") as CacheModeInputs["cache_seed_shards"],
+      liveness_drill: workflowDispatchDefault("liveness_drill") as boolean,
+    };
+    expect(defaults).toEqual({
+      benchmark_run_identity: "",
+      benchmark_seed_bundle: false,
+      force_cold_cache: false,
+      cache_profile: "warm",
+      cache_seed_shards: "3",
+      liveness_drill: false,
+    });
+
+    const validation = prepareStep("Resolve independent PR/schedule runner and exact benchmark seed");
+    const validationCondition = conditionBefore(validation.run, "benchmark_seed_bundle=true cannot be combined with force_cold_cache=true");
+    expect(validation.run).toMatch(/::error::benchmark_seed_bundle=true cannot be combined with force_cold_cache=true; seed authoring creates a cache and cannot verify an already-restored cold sample/);
+    const score = shardStep("Score the corpus against its baselines");
+    const coldCondition = conditionBefore(score.run, "cold_flag=(--force-cold-cache)");
+    const seedSave = shardStep("Save exact benchmark-seed corpus phase results");
+    const seedRestores = shardSteps.filter((step) => step.name?.startsWith("Restore exact benchmark seed shard"));
+    expect(seedRestores).toHaveLength(4);
+
+    const shardNeeds = parsedWorkflow.jobs.shard.needs;
+    const dependencies = Array.isArray(shardNeeds) ? shardNeeds : [shardNeeds];
+    expect(dependencies).toContain("prepare-current-inputs");
+
+    const modes: Array<CacheEventMode & {
+      expected: {
+        rejected: boolean;
+        scorer: boolean;
+        exactSeedRestores: number;
+        cacheMode: "blocked-before-scorer" | "read-write" | "verify";
+        savesSeed: boolean;
+      };
+    }> = [
+      { name: "ordinary manual", event: "workflow_dispatch", inputs: defaults, expected: { rejected: false, scorer: true, exactSeedRestores: 0, cacheMode: "read-write", savesSeed: false } },
+      { name: "scheduled", event: "schedule", inputs: defaults, expected: { rejected: false, scorer: true, exactSeedRestores: 0, cacheMode: "read-write", savesSeed: false } },
+      { name: "push", event: "push", inputs: defaults, expected: { rejected: false, scorer: true, exactSeedRestores: 0, cacheMode: "read-write", savesSeed: false } },
+      { name: "pull request", event: "pull_request", inputs: defaults, expected: { rejected: false, scorer: true, exactSeedRestores: 0, cacheMode: "read-write", savesSeed: false } },
+      {
+        name: "seed cold",
+        event: "workflow_dispatch",
+        inputs: { ...defaults, benchmark_run_identity: "seed-bundle", benchmark_seed_bundle: true, cache_profile: "cold" },
+        expected: { rejected: false, scorer: true, exactSeedRestores: 0, cacheMode: "read-write", savesSeed: true },
+      },
+      {
+        name: "sample cold",
+        event: "workflow_dispatch",
+        inputs: { ...defaults, benchmark_run_identity: "sample-cold", cache_profile: "cold" },
+        expected: { rejected: false, scorer: true, exactSeedRestores: 3, cacheMode: "verify", savesSeed: false },
+      },
+      {
+        name: "sample warm",
+        event: "workflow_dispatch",
+        inputs: { ...defaults, benchmark_run_identity: "sample-warm", cache_profile: "warm" },
+        expected: { rejected: false, scorer: true, exactSeedRestores: 3, cacheMode: "read-write", savesSeed: false },
+      },
+      {
+        name: "invalid explicit seed plus force",
+        event: "workflow_dispatch",
+        inputs: { ...defaults, benchmark_run_identity: "seed-invalid", benchmark_seed_bundle: true, force_cold_cache: true, cache_profile: "cold" },
+        expected: { rejected: true, scorer: false, exactSeedRestores: 0, cacheMode: "blocked-before-scorer", savesSeed: false },
+      },
+    ];
+
+    const receipts = modes.map((mode) => {
+      const eventEnabled = Object.prototype.hasOwnProperty.call(parsedWorkflow.on, mode.event);
+      const rejected = evaluateShellCondition(validationCondition, mode.inputs);
+      const scorer = eventEnabled && !rejected && dependencies.includes("prepare-current-inputs") && evaluateStepCondition(score.if, mode.inputs);
+      const exactSeedRestores = scorer ? seedRestores.filter((step) => evaluateStepCondition(step.if, mode.inputs)).length : 0;
+      const forcedCold = scorer && evaluateShellCondition(coldCondition, mode.inputs);
+      const savesSeed = scorer && evaluateStepCondition(seedSave.if, mode.inputs);
+      return {
+        name: mode.name,
+        rejected,
+        scorer,
+        exactSeedRestores,
+        cacheMode: !scorer ? "blocked-before-scorer" : forcedCold ? "verify" : "read-write",
+        savesSeed,
+      };
+    });
+    expect(receipts).toEqual(modes.map(({ name, expected }) => ({ name, ...expected })));
   });
 
   it("keeps benchmark advisory input immutable while schedule and ordinary dispatch stay live-verify", () => {

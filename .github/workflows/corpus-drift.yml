@@ -185,6 +185,10 @@ jobs:
           set -euo pipefail
           role='pr'
           [ "${{ github.event_name }}" = "schedule" ] && role='schedule'
+          if [ "${{ inputs.benchmark_seed_bundle }}" = "true" ] && [ "${{ inputs.force_cold_cache }}" = "true" ]; then
+            echo "::error::benchmark_seed_bundle=true cannot be combined with force_cold_cache=true; seed authoring creates a cache and cannot verify an already-restored cold sample"
+            exit 2
+          fi
           if [ -n "${{ inputs.benchmark_run_identity }}" ]; then
             role='${{ inputs.benchmark_runner_role }}'
             if ! [[ '${{ inputs.benchmark_repeat }}' =~ ^[1-9][0-9]*$ ]]; then
@@ -612,7 +616,7 @@ jobs:
         run: |
           set -euo pipefail
           cold_flag=()
-          if [ "${{ inputs.force_cold_cache }}" = "true" ] || { [ -n "${{ inputs.benchmark_run_identity }}" ] && [ "${{ inputs.cache_profile }}" = "cold" ]; }; then
+          if [ "${{ inputs.force_cold_cache }}" = "true" ] || { [ -n "${{ inputs.benchmark_run_identity }}" ] && [ "${{ inputs.cache_profile }}" = "cold" ] && [ "${{ inputs.benchmark_seed_bundle }}" != "true" ]; }; then
             cold_flag=(--force-cold-cache)
             echo "Explicit forced-cold cache equivalence is enabled: every deterministic phase must compare with a restored artifact. Daily live-provider validation is warm."
           fi
