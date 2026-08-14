@@ -73,6 +73,8 @@ const CORPUS_ENTRY_POINTS: readonly string[] = [
   "src/cli/corpus-relevance-history.ts",
   "src/cli/corpus-benchmark.ts",
   "src/cli/corpus-benchmark-sample.ts",
+  "src/corpus-checkin-sample.ts",
+  "src/cli/corpus-checkin-sample.ts",
   "src/cli/replay-current-mechanical.ts",
   "src/cli/materialize-current-semgrep.ts",
   "src/cli/corpus-pins.ts",

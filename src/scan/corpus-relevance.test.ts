@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,9 +24,23 @@ const DECISION_AND_BENCHMARK_SURFACE = [
   "src/corpus-benchmark-sample.ts",
 ] as const;
 
+const CORPUS_CHECKIN_ENTRY_POINT_FIXTURES = [
+  {
+    path: "src/corpus-checkin-sample.ts",
+    source: 'export const sealCorpusCheckinSample = (): string => "fixture";\n',
+  },
+  {
+    path: "src/cli/corpus-checkin-sample.ts",
+    source: 'import { sealCorpusCheckinSample } from "../corpus-checkin-sample.js";\nvoid sealCorpusCheckinSample();\n',
+  },
+] as const;
+
 describe("discovered corpus relevance (#1870)", () => {
-  const current = discoverCorpusClosure(root, "head");
   const scratchDirs: string[] = [];
+  const repository = discoverCorpusClosure(root, "repository");
+  const unrelatedSource = repository.inventory.find((path) =>
+    path.startsWith("src/") && path.endsWith(".ts") && !repository.inputs.some((input) => input.path === path));
+  if (!unrelatedSource) throw new Error("corpus-relevance fixture needs a discovered unrelated source control");
 
   afterEach(() => scratchDirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
@@ -34,21 +48,32 @@ describe("discovered corpus relevance (#1870)", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-relevance-"));
     scratchDirs.push(dir);
     const paths = new Set([
-      ...current.inputs.map((input) => input.path),
+      ...repository.inputs.map((input) => input.path),
+      ...CORPUS_CHECKIN_ENTRY_POINT_FIXTURES.map((entry) => entry.path),
       ADVISORY_MANIFEST,
       ADVISORY_PAYLOAD,
       "audit-execution-log.json",
       "docs/go-no-go.md",
       "pnpm-workspace.yaml",
+      "site/app/page.tsx",
       "site/package.json",
+      unrelatedSource,
     ]);
     for (const path of paths) {
       const destination = join(dir, path);
       mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(join(root, path), destination);
+      const source = join(root, path);
+      if (existsSync(source)) copyFileSync(source, destination);
+      else {
+        const integrationFixture = CORPUS_CHECKIN_ENTRY_POINT_FIXTURES.find((entry) => entry.path === path);
+        if (!integrationFixture) throw new Error(`missing corpus-relevance fixture source for ${path}`);
+        writeFileSync(destination, integrationFixture.source);
+      }
     }
     return dir;
   };
+
+  const current = discoverCorpusClosure(fixture(), "head");
 
   it("emits path/digest/consumer receipts for every required input category", () => {
     const required = ["rules", "config", "schema", "taxonomy", "manifest", "baseline", "ledger", "external-state", "workflow", "action", "tools", "package", "lock", "runtime"];
@@ -199,6 +224,44 @@ describe("discovered corpus relevance (#1870)", () => {
     }
   });
 
+  it("ratchets both PR check-in entry points into the shared implementation closure", () => {
+    const expected = CORPUS_CHECKIN_ENTRY_POINT_FIXTURES.map((entry) => entry.path);
+    expect(current.roots).toEqual(expect.arrayContaining(expected));
+    expect(current.uncertainties).toEqual([]);
+    for (const path of expected) {
+      expect(current.inputs).toContainEqual(expect.objectContaining({
+        category: "producer",
+        path,
+        consumer: "corpus executable entry point",
+      }));
+    }
+  });
+
+  it.each(CORPUS_CHECKIN_ENTRY_POINT_FIXTURES)(
+    "changes closure identity and forces relevance when $path changes",
+    ({ path }) => {
+      const baseDir = fixture();
+      const headDir = fixture();
+      writeFileSync(join(headDir, path), Buffer.concat([readFileSync(join(headDir, path)), Buffer.from("\nphysical check-in change\n")]));
+      const base = discoverCorpusClosure(baseDir, "base");
+      const head = discoverCorpusClosure(headDir, "head");
+      const before = base.inputs.find((input) => input.path === path);
+      const after = head.inputs.find((input) => input.path === path);
+
+      expect(before).toMatchObject({ category: "producer", path });
+      expect(after?.digest).not.toBe(before?.digest);
+      expect(head.digest).not.toBe(base.digest);
+      expect(decideCorpusRelevance(base, head, [{ status: "M", path }])).toMatchObject({
+        relevant: true,
+        verdict: "full-scan",
+        matched: [expect.objectContaining({
+          path,
+          consumers: expect.arrayContaining([expect.objectContaining({ category: "producer", path })]),
+        })],
+      });
+    },
+  );
+
   it.each([
     "src/cli/static-detect.ts",
     "src/cli/quality-scan.ts",
@@ -217,9 +280,8 @@ describe("discovered corpus relevance (#1870)", () => {
   });
 
   it("declares representative report, site, and unrelated-library changes disjoint", () => {
-    const unrelated = current.inventory.find((path) => path.startsWith("src/") && path.endsWith(".ts") && !current.inputs.some((input) => input.path === path));
-    expect(unrelated).toBeTruthy();
-    const changed = ["docs/go-no-go.md", "site/app/page.tsx", unrelated!].map((path) => ({ status: "M", path }));
+    expect(current.inventory).toContain(unrelatedSource);
+    const changed = ["docs/go-no-go.md", "site/app/page.tsx", unrelatedSource].map((path) => ({ status: "M", path }));
     const decision = decideCorpusRelevance(current, current, changed);
     expect(decision).toMatchObject({ relevant: false, verdict: "declared-no-op" });
     expect(decision.disjoint).toEqual(changed.map((change) => change.path).sort());
