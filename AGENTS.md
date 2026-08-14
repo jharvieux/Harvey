@@ -39,6 +39,7 @@ When a task matches an available skill, read its complete `SKILL.md` before acti
 - A disclosure row is incomplete unless its reason reaches the rendered client deliverable. An internal finding or green ledger is not sufficient.
 - Preserve the conservation equation: `produced == delivered + deduped + suppressed + capped + not-applicable`. Every non-delivered finding needs a reason. A requested export that produced no file is a failure.
 - A probe reports what it examined, not only what it found. Use `Examined { findings, unitsExamined, scope }` or `NotAssessed { reason, provenance, falsifier }`. Zero examined units is invalid.
+- New mechanical finding producers must be owned by their live phase registry, declare implementation, taxonomy, applicability, examined-unit, fallback, and evidence metadata, consume the shared `MechanicalScanContext`, and pass the discovery, registry, evidence-link, and readonly-context tests.
 - Infrastructure and unsupported-language/source shapes are disclosed as not assessed rather than omitted. The disclosure family is extensible; no existing row is the final one.
 - M1 semantic remains an interactive `vuln-scan` then `triage` skill pair. Do not describe it as a slash command or pretend it has an orchestrated self-emit path.
 - Measure claims against the current tree. Dates, finding counts, test counts, required contexts, runner timings, and open-gap lists become stale; rerun the owning command or read the current status document.

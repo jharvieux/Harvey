@@ -440,17 +440,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "| 3 | Read-only Supabase Management API token + project ref | Highest ask | Broadest — DB *and* config advisors via `get_advisors` | Use when the client is comfortable with platform-level access; covers the auth/platform-config items §3 can't detect from SQL. |",
     "\"Don't know\" is itself a finding: unverified security posture. Tag it taxonomy `Config`, severity",
   ],
-  "SESSION.md": [
-    "2. **Open decisions:** #1708 (4 taint rules, product judgment), #1679 (fixture contradicts its own premise), #779 (live `service_role` JWT in a public repo), #1770 (rotate three Supabase tokens visible in the process table), #1579 (AGENTS.md scope grant), #1791 (`ruled-unmet` acceptance grammar), #1817 (a negative control of mine that cannot fail), #1821, #1823, #1824, #1830, and the `/config/auth` authorisation question.",
-    "- **`supervised-declines` caught this session's own PR #1809** for proposing CLAUDE.md wording without relaying the question to an issue. Correct catch. Its own defect — no way to record a triaged false positive, and a rolling 1-day window that ages real flags out — is #1821.",
-    "staleness, is why the claim cannot stand. Had 1.3x been right, a re-measure would have appeared to",
-    "- **#1318's claim ratchet** failed `verify` on the word *\"cannot\"* in a comment defending that guard.",
-    "invariant test varies only one linked PR, so it cannot see it. Population 2 of the last 100 closed.",
-    "and **it cannot tell which.** The PR contains #1306 (\"N+1 still fires on seed/build scripts\"), so a −1",
-    "6. M7's false-positive floor target scores **0% precision** — the control cannot fail in the",
-    "| **#1305 option (b)** (2026-07-30) | (b) asked for a ruling that the free tier stays M1-mechanical-only; the 2026-07-28 rulings answered in the OPPOSITE direction. Foreclosed in substance, unstated in words — and the acceptance gate reads it as an open criterion, so **#1305 cannot close until it is formally withdrawn.** Proposed wording on the issue. |",
-    "- **PR #1406** (reason registry, `#1311`/`#1349`/`#1253`). **Never verified** — the operator halted new agents before its acceptance verifier was dispatched. **Do not merge on the executor's own claim**; every other PR this sweep had a verifier and 12 of 19 issue-verdicts moved as a result.",
-  ],
   "src/acceptance-conservation.test.ts": [
     "// The gate shipped asserting it \"cannot tell a real command from an invented one\" — true only of",
     "// `repository`, which reports a repo the token cannot READ as one that does not EXIST.",
