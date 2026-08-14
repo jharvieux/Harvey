@@ -72,13 +72,42 @@ function conditionBefore(run: string | undefined, marker: string): string {
   return condition;
 }
 
-function evaluateShellCondition(condition: string, inputs: CacheModeInputs): boolean {
-  const rendered = condition.replace(/\$\{\{\s*inputs\.([a-z_]+)\s*\}\}/g, (_token, name: keyof CacheModeInputs) => {
+function renderWorkflowInputs(shell: string, inputs: CacheModeInputs): string {
+  const rendered = shell.replace(/\$\{\{\s*inputs\.([a-z_]+)\s*\}\}/g, (_token, name: keyof CacheModeInputs) => {
     const value = String(inputs[name]);
     if (!/^[a-z0-9_-]*$/i.test(value)) throw new Error(`unsafe workflow test input for ${name}`);
     return value;
   });
   if (rendered.includes("${{")) throw new Error(`unresolved workflow expression in shell condition: ${rendered}`);
+  return rendered;
+}
+
+function multilineIfBlockContaining(run: string | undefined, marker: string): string {
+  if (!run) throw new Error(`workflow run script is missing before ${marker}`);
+  const lines = run.split("\n");
+  const markerLine = lines.findIndex((line) => line.includes(marker));
+  if (markerLine < 0) throw new Error(`workflow run script is missing marker: ${marker}`);
+
+  const openBlocks: number[] = [];
+  for (let index = 0; index <= markerLine; index += 1) {
+    if (/^\s*if\b.*;\s*then\s*$/.test(lines[index]!)) openBlocks.push(index);
+    if (/^\s*fi\s*$/.test(lines[index]!)) openBlocks.pop();
+  }
+  const blockStart = openBlocks.at(-1);
+  if (blockStart === undefined) throw new Error(`workflow marker is not inside a multiline if block: ${marker}`);
+
+  let depth = 0;
+  for (let index = blockStart; index < lines.length; index += 1) {
+    if (/^\s*if\b.*;\s*then\s*$/.test(lines[index]!)) depth += 1;
+    if (!/^\s*fi\s*$/.test(lines[index]!)) continue;
+    depth -= 1;
+    if (depth === 0) return lines.slice(blockStart, index + 1).join("\n");
+  }
+  throw new Error(`workflow if block is not closed around marker: ${marker}`);
+}
+
+function evaluateShellCondition(condition: string, inputs: CacheModeInputs): boolean {
+  const rendered = renderWorkflowInputs(condition, inputs);
   const result = spawnSync("/bin/bash", ["-c", `if ${rendered}; then exit 0; else exit 1; fi`], { encoding: "utf8" });
   if (result.status !== 0 && result.status !== 1) {
     throw new Error(`shell condition could not be evaluated: ${result.stderr || rendered}`);
@@ -289,6 +318,28 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("cold_flag=(--force-cold-cache)");
     expect(workflow.match(/"\$\{cold_flag\[@\]\}"/g)).toHaveLength(1);
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
+  });
+
+  it("executes the explicit seed-plus-force rejection body with exit 2", () => {
+    const diagnostic = "benchmark_seed_bundle=true cannot be combined with force_cold_cache=true; seed authoring creates a cache and cannot verify an already-restored cold sample";
+    const validation = prepareStep("Resolve independent PR/schedule runner and exact benchmark seed");
+    const guard = multilineIfBlockContaining(validation.run, diagnostic);
+    const invalidInputs: CacheModeInputs = {
+      benchmark_run_identity: "seed-invalid",
+      benchmark_seed_bundle: true,
+      force_cold_cache: true,
+      cache_profile: "cold",
+      cache_seed_shards: "3",
+      liveness_drill: false,
+    };
+    const result = spawnSync("/bin/bash", ["-c", `set -euo pipefail\n${renderWorkflowInputs(guard, invalidInputs)}`], { encoding: "utf8" });
+    const failureContext = `seed-plus-force guard must execute exit 2 inside its diagnostic-bearing body; stdout=${JSON.stringify(result.stdout)} stderr=${JSON.stringify(result.stderr)}`;
+
+    expect(result.error, failureContext).toBeUndefined();
+    expect(result.signal, failureContext).toBeNull();
+    expect(result.status, failureContext).toBe(2);
+    expect(result.stdout, failureContext).toBe(`::error::${diagnostic}\n`);
+    expect(result.stderr, failureContext).toBe("");
   });
 
   it("routes parsed event modes through seed authoring, restore, and cold verification", () => {
