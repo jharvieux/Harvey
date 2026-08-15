@@ -17269,6 +17269,24 @@
     ]
   },
   {
+    "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-headers-override-malformed-ts-135",
+    "title": "src/inngest/external-send-idempotency-headers-override-malformed.ts — idempotency key does not identify one stable scoped operation",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Idempotency key does not identify a stable scoped operation",
+    "location": "src/inngest/external-send-idempotency-headers-override-malformed.ts:2",
+    "status": "Open",
+    "evidence": "Heuristic \"external-send-idempotency-key\" classified the https://api.resend.com key as clock-or-attempt-derived: `Date.now().toString()` depends on time or attempt-local state, so a retry changes the key. SCOPE OF THIS CHECK: it reads the provider's exact key option and local expression bindings in THIS FILE only. FALSIFIER: evaluate the key for two retry attempts of the same logical operation and show byte-for-byte equality.",
+    "impact": "If a retry changes the key, the provider performs the logical operation twice. If different tenant/entity/operation tuples share the key, the provider suppresses legitimate work as a duplicate.",
+    "fix": "Derive the key from the domain's immutable tenant/entity/operation identity so identical logical operations reproduce one key and different scoped operations cannot collide. Payload hashing is optional, not a universal requirement.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-malformed-ts-261",
     "title": "src/inngest/external-send-idempotency-malformed.ts — idempotency key does not identify one stable scoped operation",
     "severity": "Medium",
@@ -17378,6 +17396,24 @@
     "cwe": [
       "CWE-837: Improper Enforcement of a Single, Unique Action"
     ]
+  },
+  {
+    "id": "RETRY-unsafe-idempotency-key-src-inngest-external-send-idempotency-provider-override-malformed-ts-179",
+    "title": "src/inngest/external-send-idempotency-provider-override-malformed.ts — idempotency key does not identify one stable scoped operation",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Idempotency key does not identify a stable scoped operation",
+    "location": "src/inngest/external-send-idempotency-provider-override-malformed.ts:4",
+    "status": "Open",
+    "evidence": "Heuristic \"external-send-idempotency-key\" classified the Stripe paymentIntents.create key as random-per-attempt: `crypto.randomUUID()` creates a new value on each attempt, so one logical operation cannot reproduce its key. SCOPE OF THIS CHECK: it reads the provider's exact key option and local expression bindings in THIS FILE only. FALSIFIER: replace the random source with immutable tenant/entity/operation identifiers and show two evaluations for the same operation are equal.",
+    "impact": "If a retry changes the key, the provider performs the logical operation twice. If different tenant/entity/operation tuples share the key, the provider suppresses legitimate work as a duplicate.",
+    "fix": "Derive the key from the domain's immutable tenant/entity/operation identity so identical logical operations reproduce one key and different scoped operations cannot collide. Payload hashing is optional, not a universal requirement.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
   },
   {
     "id": "RETRY-no-idempotency-key-src-inngest-external-send-idempotency-ts-485",

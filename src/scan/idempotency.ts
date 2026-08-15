@@ -63,6 +63,7 @@ interface KeyAnalysis {
   classification: string;
   detail: string;
   falsifier: string;
+  fingerprint?: string;
 }
 
 type BindingKind =
@@ -631,6 +632,26 @@ function isUnshadowedGlobal(identifier: ts.Identifier, name: string, bindings: S
   return identifier.text === name && bindings.lookup(identifier).kind === "unbound";
 }
 
+function isStructuredTupleWrapper(call: ts.CallExpression, bindings: SourceFileBindingIndex): boolean {
+  return (
+    call.arguments.length === 1 &&
+    ts.isArrayLiteralExpression(unwrapExpression(call.arguments[0]!)) &&
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "stringify" &&
+    ts.isIdentifier(call.expression.expression) &&
+    isUnshadowedGlobal(call.expression.expression, "JSON", bindings)
+  );
+}
+
+function isPureBuiltinKeyWrapper(call: ts.CallExpression, bindings: SourceFileBindingIndex): boolean {
+  if (isStructuredTupleWrapper(call, bindings)) return true;
+  return (
+    call.arguments.length === 1 &&
+    ts.isIdentifier(call.expression) &&
+    (isUnshadowedGlobal(call.expression, "String", bindings) || isUnshadowedGlobal(call.expression, "encodeURIComponent", bindings))
+  );
+}
+
 function objectLiteralOf(
   expression: ts.Expression,
   observation: ts.Node,
@@ -659,16 +680,37 @@ function objectLiteralOf(
   return objectLiteralOf(eligibility.initializer, observation, sf, bindings, aliasBudget - 1, seen);
 }
 
-function keyInObject(object: ts.ObjectLiteralExpression, keyName: string, sf: ts.SourceFile): KeySlot {
-  for (const property of object.properties) {
+function keyInObject(
+  object: ts.ObjectLiteralExpression,
+  keyName: string,
+  observation: ts.Node,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+  seen = new Set<ts.ObjectLiteralExpression>(),
+): KeySlot {
+  if (seen.has(object)) return { kind: "unknown", detail: `the object spread graph for \`${keyName}\` is cyclic` };
+  const nextSeen = new Set(seen);
+  nextSeen.add(object);
+  for (let index = object.properties.length - 1; index >= 0; index -= 1) {
+    const property = object.properties[index]!;
+    if (ts.isSpreadAssignment(property)) {
+      const spread = objectLiteralOf(property.expression, observation, sf, bindings);
+      if (spread.kind === "unknown") {
+        return { kind: "unknown", detail: `a later object spread may overwrite \`${keyName}\` (${spread.detail})` };
+      }
+      const spreadSlot = keyInObject(spread.object, keyName, observation, sf, bindings, nextSeen);
+      if (spreadSlot.kind !== "absent") return spreadSlot;
+      continue;
+    }
+    if (ts.isComputedPropertyName(property.name) && !ts.isStringLiteralLike(property.name.expression)) {
+      return { kind: "unknown", detail: `a computed property may overwrite \`${keyName}\`` };
+    }
     if (propertyName(property, sf)?.toLowerCase() !== keyName.toLowerCase()) continue;
     if (ts.isPropertyAssignment(property)) return { kind: "present", expression: property.initializer };
     if (ts.isShorthandPropertyAssignment(property)) return { kind: "present", expression: property.name };
     return { kind: "unknown", detail: `the \`${keyName}\` property is not a statically readable value` };
   }
-  return object.properties.some(ts.isSpreadAssignment)
-    ? { kind: "unknown", detail: `the object uses a spread, so the \`${keyName}\` slot cannot be proven present or absent` }
-    : { kind: "absent" };
+  return { kind: "absent" };
 }
 
 function stripeKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFileBindingIndex): KeySlot {
@@ -676,7 +718,7 @@ function stripeKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceF
   if (!options) return { kind: "absent" };
   const resolved = objectLiteralOf(options, node, sf, bindings);
   return resolved.kind === "object"
-    ? keyInObject(resolved.object, "idempotencyKey", sf)
+    ? keyInObject(resolved.object, "idempotencyKey", node, sf, bindings)
     : { kind: "unknown", detail: `the Stripe request-options expression is not a local object literal (${resolved.detail})` };
 }
 
@@ -685,19 +727,12 @@ function fetchKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFi
   if (!options) return { kind: "absent" };
   const resolved = objectLiteralOf(options, node, sf, bindings);
   if (resolved.kind === "unknown") return { kind: "unknown", detail: `the fetch options expression is not a local object literal (${resolved.detail})` };
-  const headersProperty = resolved.object.properties.find((property) => propertyName(property, sf)?.toLowerCase() === "headers");
-  if (!headersProperty) {
-    return resolved.object.properties.some(ts.isSpreadAssignment)
-      ? { kind: "unknown", detail: "the fetch options use a spread, so the headers cannot be proven" }
-      : { kind: "absent" };
-  }
-  if (!ts.isPropertyAssignment(headersProperty) && !ts.isShorthandPropertyAssignment(headersProperty)) {
-    return { kind: "unknown", detail: "the fetch headers are not a statically readable value" };
-  }
-  const headersExpression = ts.isPropertyAssignment(headersProperty) ? headersProperty.initializer : headersProperty.name;
+  const headersSlot = keyInObject(resolved.object, "headers", node, sf, bindings);
+  if (headersSlot.kind !== "present") return headersSlot;
+  const headersExpression = headersSlot.expression;
   const headers = objectLiteralOf(headersExpression, node, sf, bindings);
   return headers.kind === "object"
-    ? keyInObject(headers.object, "Idempotency-Key", sf)
+    ? keyInObject(headers.object, "Idempotency-Key", node, sf, bindings)
     : { kind: "unknown", detail: `the fetch headers expression is unproven: ${headers.detail}` };
 }
 
@@ -753,10 +788,60 @@ function enclosingFunction(node: ts.Node): ts.SignatureDeclarationBase | undefin
   return undefined;
 }
 
+function declarationPropertyName(name: ts.PropertyName | undefined): string | undefined {
+  if (!name) return undefined;
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) return name.expression.text;
+  return undefined;
+}
+
+function parameterSemanticNames(parameter: ts.ParameterDeclaration): string[] {
+  const names = new Set<string>();
+  forEachBindingIdentifier(parameter.name, (identifier) => names.add(identifier.text));
+  const visitBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) return;
+    for (const element of name.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      const semanticName = declarationPropertyName(element.propertyName);
+      if (semanticName) names.add(semanticName);
+      visitBinding(element.name);
+    }
+  };
+  visitBinding(parameter.name);
+  const visitType = (node: ts.TypeNode): void => {
+    if (ts.isTypeLiteralNode(node)) {
+      for (const member of node.members) {
+        const semanticName = declarationPropertyName(member.name);
+        if (semanticName) names.add(semanticName);
+        if (ts.isPropertySignature(member) && member.type) visitType(member.type);
+      }
+      return;
+    }
+    if (ts.isParenthesizedTypeNode(node)) visitType(node.type);
+    if (ts.isArrayTypeNode(node)) visitType(node.elementType);
+    if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) for (const child of node.types) visitType(child);
+  };
+  if (parameter.type) visitType(parameter.type);
+  return [...names];
+}
+
 function parameterBindingNames(fn: ts.SignatureDeclarationBase | undefined): string[] {
-  const names: string[] = [];
-  for (const parameter of fn?.parameters ?? []) forEachBindingIdentifier(parameter.name, (identifier) => names.push(identifier.text));
-  return names;
+  const names = new Set<string>();
+  for (const parameter of fn?.parameters ?? []) for (const name of parameterSemanticNames(parameter)) names.add(name);
+  return [...names];
+}
+
+function parameterBindingSemanticNames(binding: IndexedBinding): string[] {
+  const names = new Set<string>([binding.name]);
+  let current: ts.Node | undefined = binding.identifier;
+  while (current && current !== binding.declaration) {
+    if (ts.isBindingElement(current)) {
+      const semanticName = declarationPropertyName(current.propertyName);
+      if (semanticName) names.add(semanticName);
+    }
+    current = current.parent;
+  }
+  return [...names];
 }
 
 function boundedNodeText(node: ts.Node, sf: ts.SourceFile): string {
@@ -803,7 +888,7 @@ function analyzeKey(
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(sf);
       const volatileCall = /(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid|Date\.now|performance\.now|process\.hrtime)$/i.test(callee);
-      const pureWrapper = /^(?:String|encodeURIComponent|sha(?:1|256|512)|hash)$/i.test(callee);
+      const pureWrapper = isPureBuiltinKeyWrapper(node, bindings);
       if (!volatileCall && !pureWrapper) {
         unknownCall ??= callee;
       }
@@ -845,8 +930,10 @@ function analyzeKey(
       }
       const binding = lookup.binding;
       if (binding.kind === "parameter" && binding.owner === fn) {
-        contributorNames.add(binding.name);
-        identityNames.add(binding.name);
+        for (const name of parameterBindingSemanticNames(binding)) {
+          contributorNames.add(name);
+          identityNames.add(name);
+        }
         return true;
       }
       if (binding.kind !== "variable") {
@@ -882,6 +969,104 @@ function analyzeKey(
       if (visit(child)) origin = true;
     });
     return origin;
+  };
+
+  type CompositionPart = { kind: "literal" | "dynamic"; value: string };
+  type Composition = { kind: "known"; parts: CompositionPart[]; structured: boolean } | { kind: "unknown" };
+  const compositionStack = new Set<IndexedBinding>();
+  const compositionOf = (raw: ts.Expression): Composition => {
+    const node = unwrapExpression(raw);
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isNumericLiteral(node)) {
+      return { kind: "known", parts: [{ kind: "literal", value: node.text }], structured: false };
+    }
+    if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword || node.kind === ts.SyntaxKind.NullKeyword) {
+      return { kind: "known", parts: [{ kind: "literal", value: node.getText(sf) }], structured: false };
+    }
+    if (ts.isTemplateExpression(node)) {
+      const parts: CompositionPart[] = [{ kind: "literal", value: node.head.text }];
+      for (const span of node.templateSpans) {
+        const expressionPart = compositionOf(span.expression);
+        if (expressionPart.kind === "unknown") return expressionPart;
+        parts.push(...expressionPart.parts, { kind: "literal", value: span.literal.text });
+      }
+      return { kind: "known", parts, structured: false };
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = compositionOf(node.left);
+      const right = compositionOf(node.right);
+      return left.kind === "known" && right.kind === "known"
+        ? { kind: "known", parts: [...left.parts, ...right.parts], structured: false }
+        : { kind: "unknown" };
+    }
+    if (ts.isCallExpression(node) && isStructuredTupleWrapper(node, bindings)) {
+      const tuple = unwrapExpression(node.arguments[0]!);
+      if (!ts.isArrayLiteralExpression(tuple)) return { kind: "unknown" };
+      const parts: CompositionPart[] = [];
+      for (const element of tuple.elements) {
+        if (ts.isSpreadElement(element)) return { kind: "unknown" };
+        const part = compositionOf(element);
+        if (part.kind === "unknown" || part.parts.length !== 1) return { kind: "unknown" };
+        parts.push(...part.parts);
+      }
+      return { kind: "known", parts, structured: true };
+    }
+    if (ts.isCallExpression(node) && isPureBuiltinKeyWrapper(node, bindings)) return compositionOf(node.arguments[0]!);
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      let root: ts.Expression = node;
+      while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
+      if (ts.isIdentifier(root)) {
+        const lookup = bindings.lookup(root);
+        if (lookup.kind === "resolved" && lookup.binding.kind === "parameter" && lookup.binding.owner === fn) {
+          return { kind: "known", parts: [{ kind: "dynamic", value: boundedNodeText(node, sf) }], structured: false };
+        }
+      }
+      return { kind: "unknown" };
+    }
+    if (ts.isIdentifier(node)) {
+      const lookup = bindings.lookup(node);
+      if (lookup.kind !== "resolved") return { kind: "unknown" };
+      const binding = lookup.binding;
+      if (binding.kind === "parameter" && binding.owner === fn) {
+        return {
+          kind: "known",
+          parts: [{ kind: "dynamic", value: parameterBindingSemanticNames(binding).sort().join("/") }],
+          structured: false,
+        };
+      }
+      if (binding.kind !== "variable" || compositionStack.has(binding)) return { kind: "unknown" };
+      const eligibility = eligibleConstInitializer(binding, node, call, bindings);
+      if (eligibility.kind === "ineligible") return { kind: "unknown" };
+      compositionStack.add(binding);
+      const composition = compositionOf(eligibility.initializer);
+      compositionStack.delete(binding);
+      return composition;
+    }
+    return { kind: "unknown" };
+  };
+
+  const normalizeComposition = (parts: CompositionPart[]): CompositionPart[] => {
+    const normalized: CompositionPart[] = [];
+    for (const part of parts) {
+      const prior = normalized.at(-1);
+      if (part.kind === "literal" && prior?.kind === "literal") prior.value += part.value;
+      else normalized.push({ ...part });
+    }
+    return normalized;
+  };
+
+  const hasInjectiveFraming = (composition: Composition): composition is Extract<Composition, { kind: "known" }> => {
+    if (composition.kind === "unknown") return false;
+    const parts = normalizeComposition(composition.parts);
+    const dynamicIndexes = parts.flatMap((part, index) => (part.kind === "dynamic" ? [index] : []));
+    if (dynamicIndexes.length === 0) return false;
+    if (composition.structured) return true;
+    return dynamicIndexes.every((index) => {
+      const before = parts[index - 1];
+      const after = parts[index + 1];
+      const framedBefore = before?.kind === "literal" && /[^a-z0-9]$/i.test(before.value);
+      const framedAfter = after?.kind === "literal" && /^[^a-z0-9]/i.test(after.value);
+      return framedBefore || framedAfter;
+    });
   };
   visit(unwrapExpression(expression));
 
@@ -954,22 +1139,64 @@ function analyzeKey(
     };
   }
 
+  const composition = compositionOf(expression);
+  if (!hasInjectiveFraming(composition)) {
+    return {
+      safe: false,
+      classification: "collision-prone-key-framing",
+      detail: `\`${text}\` does not use a delimited composition or a structured tuple, so distinct identity tuples can concatenate to the same provider key`,
+      falsifier: "evaluate adversarial tenant/entity/operation tuples with shifted boundaries and show that no two tuples produce the same key",
+    };
+  }
+
+  const fingerprint = normalizeComposition(composition.parts)
+    .map((part) => `${part.kind === "literal" ? "L" : "D"}:${JSON.stringify(part.value)}`)
+    .join("|");
+
   return {
     safe: true,
     classification: "stable-scoped-operation-key",
     detail: `\`${text}\` combines an immutable identity with an operation discriminator${tenantRequired ? " and the available tenant identity" : ""}`,
     falsifier: "change any tenant, entity, or operation input and observe a collision, or retry unchanged inputs and observe a different key",
+    fingerprint,
   };
 }
 
 function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile, bindings: SourceFileBindingIndex): Finding[] {
   if (!RETRYABLE_PATH.test(path)) return [];
   const findings: Finding[] = [];
+  const safeFingerprints = new Map<ts.Node, Map<string, ExternalSendTarget>>();
   for (const call of calls(sf)) {
     const target = externalSendTarget(call, sf, bindings);
     if (!target) continue;
     if (target.key.kind === "present") {
       const analysis = analyzeKey(target.key.expression, call, sf, bindings);
+      if (analysis.safe && analysis.fingerprint) {
+        const owner = enclosingFunction(call) ?? sf;
+        const ownerFingerprints = safeFingerprints.get(owner) ?? new Map<string, ExternalSendTarget>();
+        const prior = ownerFingerprints.get(analysis.fingerprint);
+        if (!prior) {
+          ownerFingerprints.set(analysis.fingerprint, target);
+          safeFingerprints.set(owner, ownerFingerprints);
+          continue;
+        }
+        findings.push(
+          mechanicalFinding({
+            id: `RETRY-duplicate-idempotency-key-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${target.key.expression.getStart(sf)}`,
+            title: `${path} — distinct provider calls reuse one scoped-operation key`,
+            severity: "Medium",
+            category: "Business logic",
+            taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
+            location: loc(path, sf, target.key.expression),
+            evidence: `Heuristic "external-send-idempotency-key" classified this as duplicate-scoped-operation-key: ${target.api} and an earlier ${prior.api} call in the same function have the same tenant/entity/operation composition fingerprint. SCOPE OF THIS CHECK: distinct provider call sites in THIS FUNCTION only. FALSIFIER: show that the two calls are one provider operation rather than distinct effects, or give each effect a distinct stable operation discriminator.`,
+            impact:
+              "When distinct external effects share one provider key, the later effect can be suppressed as a duplicate even though its payload or API operation is different.",
+            fix: "Use a distinct stable operation discriminator for each provider effect while preserving the same tenant/entity identity and retry stability.",
+            precisionTier: "review",
+          }),
+        );
+        continue;
+      }
       if (analysis.safe) continue;
       findings.push(
         mechanicalFinding({
