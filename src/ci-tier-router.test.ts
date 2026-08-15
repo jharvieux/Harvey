@@ -23,7 +23,7 @@ const CI_YML = fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.
 
 /**
  * The router's classification loop, lifted verbatim from the `filter` step: from the `code=false`
- * initialiser through the two `$GITHUB_OUTPUT` writes. The `git diff` that produces `$files` is
+ * initialiser through the three `$GITHUB_OUTPUT` writes. The `git diff` that produces `$files` is
  * deliberately NOT included — this test supplies the change set instead, which is the only way to
  * exercise arms no PR in the repo's history has hit.
  *
@@ -32,7 +32,7 @@ const CI_YML = fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.
  */
 function routerScript(yaml: string = readFileSync(CI_YML, "utf8")): string {
   const start = yaml.indexOf("\n          code=false\n");
-  const end = yaml.indexOf('echo "workflows=$workflows" >> "$GITHUB_OUTPUT"');
+  const end = yaml.indexOf('} >> "$GITHUB_OUTPUT"', start);
   if (start === -1 || end === -1) {
     throw new Error(`could not find the tier router's classification loop in ${CI_YML} — it was renamed or restructured, and this guard is no longer reading the shipped code`);
   }
@@ -43,73 +43,161 @@ function routerScript(yaml: string = readFileSync(CI_YML, "utf8")): string {
   return body;
 }
 
-function route(files: string[]): { code: boolean; workflows: boolean } {
+type Route = { code: boolean; workflows: boolean; docs: boolean };
+
+function parseRouteOutput(out: string): Route {
+  const values = new Map(out.trim().split("\n").map((line) => line.split("=", 2) as [string, string]));
+  for (const key of ["code", "workflows", "docs"] as const) {
+    if (!/^(true|false)$/.test(values.get(key) ?? "")) throw new Error(`router did not emit one boolean ${key} output: ${out}`);
+  }
+  return { code: values.get("code") === "true", workflows: values.get("workflows") === "true", docs: values.get("docs") === "true" };
+}
+
+function runRouter(script: string, input = ""): Route {
   const dir = mkdtempSync(join(tmpdir(), "harvey-tier-router-"));
   const outFile = join(dir, "github_output");
   try {
-    // `bash`, not `sh`: GitHub's default shell for a `run:` block on ubuntu-latest is bash, and the
-    // router uses a `<<<` here-string, which is a bashism. Running it under sh would fail for a
-    // reason the real job never hits.
-    const script = `set -eu\n: > "$GITHUB_OUTPUT"\nfiles=$(cat)\n${routerScript()}\n`;
-    execFileSync("bash", ["-c", script], { input: files.join("\n"), env: { ...process.env, GITHUB_OUTPUT: outFile }, encoding: "utf8" });
-    const out = readFileSync(outFile, "utf8");
-    return { code: /^code=true$/m.test(out), workflows: /^workflows=true$/m.test(out) };
+    execFileSync("bash", ["-c", `set -eu\n: > "$GITHUB_OUTPUT"\n${script}\n`], {
+      input,
+      env: { ...process.env, GITHUB_OUTPUT: outFile },
+      encoding: "utf8",
+    });
+    return parseRouteOutput(readFileSync(outFile, "utf8"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
+function route(files: string[], yaml: string = readFileSync(CI_YML, "utf8")): Route {
+  // `bash`, not `sh`: GitHub's default shell for a `run:` block on ubuntu-latest is bash, and the
+  // router uses a `<<<` here-string, which is a bashism. Running it under sh would fail for a
+  // reason the real job never hits.
+  return runRouter(`files=$(cat)\n${routerScript(yaml)}`, files.join("\n"));
+}
+
+function routeNonPullRequest(eventName: "push" | "merge_group" | "schedule" | "workflow_dispatch", yaml: string = readFileSync(CI_YML, "utf8")): Route {
+  const startToken = '\n          if [ "${{ github.event_name }}" != "pull_request" ]; then\n';
+  const start = yaml.indexOf(startToken);
+  const endToken = "\n          fi";
+  const end = yaml.indexOf(endToken, start + startToken.length);
+  if (start === -1 || end === -1) throw new Error("could not find the non-pull-request router arm");
+  const body = yaml.slice(start, end + endToken.length).replace("${{ github.event_name }}", eventName);
+  return runRouter(body);
+}
+
+function jobBlock(name: string, yaml: string = readFileSync(CI_YML, "utf8")): string {
+  const header = `\n  ${name}:\n`;
+  const start = yaml.indexOf(header);
+  if (start === -1) throw new Error(`could not find ${name} job`);
+  const rest = yaml.slice(start + header.length);
+  const next = rest.search(/^ {2}[a-zA-Z0-9_-]+:\s*$/m);
+  return yaml.slice(start, next === -1 ? yaml.length : start + header.length + next);
+}
+
+function eventBlock(name: string, yaml: string = readFileSync(CI_YML, "utf8")): string {
+  const onEnd = yaml.indexOf("\nconcurrency:");
+  const events = yaml.slice(0, onEnd);
+  const header = `\n  ${name}:`;
+  const start = events.indexOf(header);
+  if (start === -1) throw new Error(`could not find ${name} event`);
+  const rest = events.slice(start + header.length);
+  const next = rest.search(/^ {2}[a-zA-Z0-9_-]+:\s*$/m);
+  return events.slice(start, next === -1 ? events.length : start + header.length + next);
+}
+
 describe("the CI tier router (#1025)", () => {
-  it("skips build for a prose-only docs PR — the tier's whole point", () => {
-    expect(route(["docs/design/free-tier-recall-measurement.md"])).toEqual({ code: false, workflows: false });
-    expect(route(["SESSION.md"])).toEqual({ code: false, workflows: false });
-    expect(route(["docs/tier1-runbook.md", "docs/runbooks/README.md", "SESSION.md"])).toEqual({ code: false, workflows: false });
+  it("routes the exact cheap-docs whitelist to claim checks without the full build", () => {
+    const docsOnly = { code: false, workflows: false, docs: true };
+    expect(route(["README.md"])).toEqual(docsOnly);
+    expect(route(["SESSION.md"])).toEqual(docsOnly);
+    expect(route(["docs/design/free-tier-recall-measurement.md"])).toEqual(docsOnly);
+    expect(route(["docs/tier1-runbook.md", "docs/runbooks/README.md", "SESSION.md"])).toEqual(docsOnly);
   });
 
   // `docs/*.md` is a `case` pattern, not a glob: `*` matches `/` here. The tier would silently
   // narrow to top-level docs only if anyone "corrected" it to `docs/**/*.md`, and every nested doc
   // would then start paying a full verify.
   it("treats a NESTED docs path as prose too", () => {
-    expect(route(["docs/gtm/03-pricing-packaging.md"]).code).toBe(false);
+    expect(route(["docs/gtm/03-pricing-packaging.md"])).toEqual({ code: false, workflows: false, docs: true });
   });
 
-  it("runs the full verify for a briefs/** PR — briefs are tool input the scanners read at runtime", () => {
-    expect(route(["briefs/anti-patterns.md"])).toEqual({ code: true, workflows: false });
-    expect(route(["briefs/fp-rules.txt"]).code).toBe(true);
+  it("keeps Markdown outside the exact whitelist on the full-build catch-all", () => {
+    for (const f of [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "MODULES.md",
+      "packages/widget/README.md",
+      "briefs/anti-patterns.md",
+      "targets/calibration/README.md",
+      "src/scan/__fixtures__/semgrep/PROVENANCE.md",
+    ]) {
+      expect(route([f]), f).toEqual({ code: true, workflows: false, docs: false });
+    }
+  });
+
+  it("runs the full verify for briefs/** — briefs are tool input the scanners read at runtime", () => {
+    expect(route(["briefs/anti-patterns.md"])).toEqual({ code: true, workflows: false, docs: false });
+    expect(route(["briefs/fp-rules.txt"])).toEqual({ code: true, workflows: false, docs: false });
   });
 
   it("runs the full verify for code, targets and manifests", () => {
     for (const f of ["src/findings.ts", "targets/calibration/app/page.tsx", "package.json", "dry-run/findings.json"]) {
-      expect(route([f]), f).toEqual({ code: true, workflows: false });
+      expect(route([f]), f).toEqual({ code: true, workflows: false, docs: false });
     }
   });
 
   it("routes a workflow-only PR to actionlint and not to build", () => {
-    expect(route([".github/workflows/ci.yml"])).toEqual({ code: false, workflows: true });
+    expect(route([".github/workflows/ci.yml"])).toEqual({ code: false, workflows: true, docs: false });
+  });
+
+  it("accumulates docs and workflow routes instead of making them exclusive", () => {
+    expect(route(["README.md", ".github/workflows/ci.yml"])).toEqual({ code: false, workflows: true, docs: true });
   });
 
   // A composite action is NOT under .github/workflows/, so it falls to the catch-all and runs the
   // full verify. That is the safe direction and worth pinning: the six alert paths all call into
   // .github/actions/alert-issue, and routing it to actionlint alone would test none of it.
   it("does not treat everything under .github/ as a workflow", () => {
-    expect(route([".github/actions/alert-issue/action.yml"])).toEqual({ code: true, workflows: false });
-    expect(route([".github/alert-paths.json"]).code).toBe(true);
+    expect(route([".github/actions/alert-issue/action.yml"])).toEqual({ code: true, workflows: false, docs: false });
+    expect(route([".github/alert-paths.json"])).toEqual({ code: true, workflows: false, docs: false });
   });
 
   it("takes the widest tier when a change set mixes them — one prose file cannot exempt a code PR", () => {
-    expect(route(["docs/design/x.md", "src/findings.ts"])).toEqual({ code: true, workflows: false });
-    expect(route(["docs/design/x.md", ".github/workflows/ci.yml", "src/findings.ts"])).toEqual({ code: true, workflows: true });
+    expect(route(["README.md", "src/findings.ts"])).toEqual({ code: true, workflows: false, docs: true });
+    expect(route(["docs/design/x.md", ".github/workflows/ci.yml", "src/findings.ts"])).toEqual({ code: true, workflows: true, docs: true });
   });
 
   // A non-.md file under docs/ is not prose: `docs/design/m6-eval-runs/*.agreement.txt` is data,
   // and the arm names `.md` specifically. If it ever became `docs/*`, a data change would skip
   // verify.
   it("does not exempt a non-markdown file under docs/", () => {
-    expect(route(["docs/design/m6-eval-runs/run3.agreement.txt"]).code).toBe(true);
+    expect(route(["docs/design/m6-eval-runs/run3.agreement.txt"])).toEqual({ code: true, workflows: false, docs: false });
+  });
+
+  it("runs every route on push, merge queue, schedule, and manual dispatch events", () => {
+    for (const event of ["push", "merge_group", "schedule", "workflow_dispatch"] as const) {
+      expect(eventBlock(event), `${event} trigger`).toBeTruthy();
+      expect(routeNonPullRequest(event), event).toEqual({ code: true, workflows: true, docs: true });
+    }
+  });
+
+  it("keeps pull_request unfiltered and the always-reporting verify aggregate wired to docs claims", () => {
+    expect(eventBlock("pull_request")).not.toMatch(/^ {4}paths(?:-ignore)?:/m);
+
+    const docsClaims = jobBlock("docs-claims");
+    expect(docsClaims).toMatch(/^ {4}needs: changes$/m);
+    expect(docsClaims).toMatch(/^ {4}if: needs\.changes\.outputs\.docs == 'true'$/m);
+    expect(docsClaims).toContain("- run: pnpm exec vitest run src/recorded-reasons.test.ts");
+    expect(docsClaims).not.toContain("pnpm verify");
+
+    const verify = jobBlock("verify");
+    expect(verify).toMatch(/^ {4}if: always\(\)$/m);
+    expect(verify).toMatch(/^ {4}needs: \[[^\]]*docs-claims[^\]]*\]$/m);
+    expect(verify.match(/needs\['docs-claims'\]\.result/g)).toHaveLength(2);
   });
 
   // Without this the whole suite degrades silently the day someone restructures the step: the
-  // extraction would return "" and every `route()` call would report `{code:false, workflows:false}`
+  // extraction would return "" and every `route()` call would report all three routes false
   // — which passes three of the assertions above.
   it("refuses a workflow whose router it cannot find, rather than asserting against an empty string", () => {
     const gutted = readFileSync(CI_YML, "utf8").replace("\n          code=false\n", "\n          initialise\n");

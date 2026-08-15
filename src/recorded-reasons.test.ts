@@ -490,11 +490,12 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   // Filtered to the planted file, not scored against the whole list: scored globally this reddens for
   // any unrelated breach elsewhere in the repo, which is how it and the row below failed together in
   // run 30313783920 and named neither cause. A control has to isolate the rule it names.
-  it("fires when a claim-shaped comment is planted in a real repo file", () => {
+  it("fires when a claim-shaped line is planted in the real SESSION.md venue", () => {
+    const target = "SESSION.md";
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
-    const planted = sources.map((s) => (s.file === "CLAUDE.md" ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
+    const planted = sources.map((s) => (s.file === target ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
     const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
-    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === "CLAUDE.md");
+    const row = claimDrift(CLAIM_BASELINE, claims).find((d) => d.file === target);
     expect(row?.added.map((c) => c.text)).toEqual(["This cannot be measured by any existing tier."]);
   });
 
