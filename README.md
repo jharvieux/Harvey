@@ -1,5 +1,7 @@
 # HarveyQA
 
+<!-- Hosted mixed-path routing control. -->
+
 HarveyQA is an independent software quality company that helps engineering teams find and fix the risks hidden in complex web applications. We combine automated analysis with expert review to give teams a practical, evidence-backed view of their codebase's security, reliability, performance, and maintainability.
 
 ## What we do

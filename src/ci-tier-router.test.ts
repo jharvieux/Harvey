@@ -1,3 +1,5 @@
+// Hosted mixed-path routing control.
+
 // #1025 — an executable guard on the CI tier router in `.github/workflows/ci.yml`.
 //
 // The router decides whether `build` (which runs `pnpm verify`) and `heavy-cli` run at all. A
