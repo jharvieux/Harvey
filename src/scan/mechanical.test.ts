@@ -5,7 +5,7 @@
 // (secrets, semgrep) shell out to real binaries and are mocked here purely so this test stays
 // fast and offline like the rest of the suite (matching pnpm verify's own deterministic-offline
 // convention) — they aren't what this test is about.
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,8 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 });
 
 const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
+const { MechanicalScanContext } = await import("./mechanical-context.js");
+const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
 const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 
@@ -251,6 +253,54 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
     const findings = await runMechanicalScan({ dir, skipNetworkChecks: true });
     expect(findings.some((f) => f.id === "SUP-IOC-flatmap-stream")).toBe(false);
     expect(findings.find((f) => f.id === "SUP-SCOPE-00")?.evidence).toContain("2 manifests (pnpm-workspace.yaml)");
+  });
+
+  it("binds dependency-registry receipts to the sorted contained workspace population", async () => {
+    const container = mkdtempSync(join(tmpdir(), "harvey-mechanical-workspace-boundary-"));
+    try {
+      const root = join(container, "repo");
+      const outside = join(container, "outside");
+      mkdirSync(join(root, "packages", "zeta"), { recursive: true });
+      mkdirSync(join(root, "packages", "alpha"), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "root",
+        workspaces: ["./packages//*", "../outside", "linked"],
+        dependencies: { rootdep: "1.0.0" },
+      }));
+      writeFileSync(join(root, "packages", "zeta", "package.json"), JSON.stringify({ name: "zeta", dependencies: { zetadep: "1.0.0" } }));
+      writeFileSync(join(root, "packages", "alpha", "package.json"), JSON.stringify({ name: "alpha", dependencies: { alphadep: "1.0.0" } }));
+      writeFileSync(join(outside, "package.json"), JSON.stringify({ name: "escaped", dependencies: { escapeddep: "1.0.0" } }));
+      symlinkSync(outside, join(root, "linked"), "dir");
+
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({
+          context,
+          scanDir: root,
+          pkg: { dependencies: { rootdep: "1.0.0" } },
+          osv: { failure: "offline fixture" },
+          skipNetworkChecks: true,
+        }, "supply");
+        expect(result.records.find((record) => record.detector === "manifest-install-scripts")?.examinedUnitIdentities).toEqual([
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "package.json" },
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "packages/alpha/package.json" },
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "packages/zeta/package.json" },
+        ]);
+        expect(result.records.find((record) => record.detector === "dependency-pinning")?.examinedUnitIdentities).toEqual([
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "package.json#rootdep" },
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/alpha/package.json#alphadep" },
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/zeta/package.json#zetadep" },
+        ]);
+        expect(result.findings.find((finding) => finding.id === "SUP-SCOPE-00")?.evidence).toContain(
+          "2 declared workspace glob(s) matched no package.json and were skipped: ../outside, linked",
+        );
+      } finally {
+        context.dispose();
+      }
+    } finally {
+      rmSync(container, { recursive: true, force: true });
+    }
   });
 });
 

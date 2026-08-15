@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,6 +44,33 @@ describe("#1851 immutable one-scan context", () => {
     const second = new MechanicalScanContext(root);
     expect(second.identity.contentDigest).not.toBe(digest);
     second.dispose();
+  });
+
+  it("retains the canonical in-root workspace population while rejecting physical and parent escapes", () => {
+    const container = mkdtempSync(join(tmpdir(), "harvey-shared-workspace-boundary-"));
+    roots.push(container);
+    const root = join(container, "repo");
+    const outside = join(container, "outside");
+    mkdirSync(join(root, "packages", "zeta"), { recursive: true });
+    mkdirSync(join(root, "packages", "alpha"), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      name: "root",
+      workspaces: ["./packages//*", "../outside", "linked"],
+    }));
+    writeFileSync(join(root, "packages", "zeta", "package.json"), JSON.stringify({ name: "zeta" }));
+    writeFileSync(join(root, "packages", "alpha", "package.json"), JSON.stringify({ name: "alpha" }));
+    writeFileSync(join(outside, "package.json"), JSON.stringify({ name: "escaped" }));
+    symlinkSync(outside, join(root, "linked"), "dir");
+
+    const context = new MechanicalScanContext(root);
+    expect(context.workspace.manifests.map(({ label, name }) => ({ label, name }))).toEqual([
+      { label: "package.json", name: "root" },
+      { label: "packages/alpha/package.json", name: "alpha" },
+      { label: "packages/zeta/package.json", name: "zeta" },
+    ]);
+    expect(context.workspace.unresolvedGlobs).toEqual(["../outside", "linked"]);
+    context.dispose();
   });
 
   it("includes lockfile-derived dependency state in identity and freezes nested context values", () => {
