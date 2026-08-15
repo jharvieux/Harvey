@@ -4,6 +4,8 @@
 // why auth is deliberately deferred, or `isAdmin = true` in a test fixture.
 
 import type { Finding } from "../findings.js";
+import type { SourceInput } from "../detectors/common.js";
+import type { PathScopedClass } from "./path-scope.js";
 import { mechanicalFinding } from "./common.js";
 
 interface SourceFile {
@@ -31,12 +33,28 @@ const SENSITIVE_ROUTE_SEGMENT = /(^|\/)(debug|seed|admin|api\/dev)(\/|$|\.)/i;
 const AUTH_HINT = /(getServerSession|getSession|getUser|getCurrentUser|getAuthUser|getAuthenticatedUser|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient|jwt\.verify|jwtVerify|verifyToken|verifySession|verifyJwt|verifyJWT|decodeToken)/;
 const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 
+function leftoverSensitiveRoutePath(path: string): boolean {
+  return ROUTE_FILE.test(path) && SENSITIVE_ROUTE_SEGMENT.test(path);
+}
+
+export function leftoverSensitiveRouteFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => leftoverSensitiveRoutePath(file.path));
+}
+
 // B7 (#71): a login/signup/OTP/password-reset route with no rate-limiter hint — an attacker can
 // brute-force credentials/OTP codes with unlimited attempts. Same grep-and-hint shape as the
 // sensitive-route check above (review tier — a limiter living in middleware/an edge config this
 // file can't see is a false negative, not a gate concern).
 const AUTH_SENSITIVE_ROUTE = /(^|\/)(login|signin|sign-in|signup|sign-up|register|otp|reset-password|forgot-password)(\/|$|\.)/i;
 const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
+
+function leftoverAuthRateLimitPath(path: string): boolean {
+  return ROUTE_FILE.test(path) && AUTH_SENSITIVE_ROUTE.test(path);
+}
+
+export function leftoverAuthRateLimitFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => leftoverAuthRateLimitPath(file.path));
+}
 
 // #1046 — the INVERSE of the check above, and the case it actively clears. AUTH-no-rate-limit fires
 // on the ABSENCE of a limiter hint, so a limiter backed by a process-local Map matches the hint and
@@ -222,6 +240,22 @@ const WEBHOOK_PATH = /webhook/i;
 const WEBHOOK_PRIVILEGED_WRITE = /\.(insert|update|delete|upsert|rpc)\s*\(|admin\.from|supabaseAdmin/i;
 const WEBHOOK_SIG_HINT = /createHmac|constructEvent|timingSafeEqual|verif\w*Signature|x-signature|stripe-signature|hub-signature|svix|webhook[_-]?secret/i;
 
+function leftoverWebhookPath(path: string): boolean {
+  return ROUTE_FILE.test(path) && WEBHOOK_PATH.test(path);
+}
+
+export function leftoverWebhookFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => leftoverWebhookPath(file.path));
+}
+
+function leftoverUnscopedDmlPath(path: string): boolean {
+  return ROUTE_FILE.test(path);
+}
+
+export function leftoverUnscopedDmlFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => leftoverUnscopedDmlPath(file.path));
+}
+
 // #353 UPDATE-UNSCOPED: a raw UPDATE/DELETE SQL string with no WHERE clause, handed to a raw-SQL
 // sink (`.query(`/`.execute(`/`.unsafe(`/`.raw(`) in a route handler. The SQL either scopes the
 // write with a WHERE or it does not — a textual fact, like USING (true) (#333). The benign sibling
@@ -255,6 +289,49 @@ function hasUnscopedDml(content: string): boolean {
   return false;
 }
 
+export const LEFTOVER_AUTH_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  {
+    rowId: "M1-PATHSCOPE-LEFTOVER-SENSITIVE-ROUTE-00",
+    detector: "leftover-auth",
+    classId: "Unauthenticated debug/admin route",
+    ownerFile: "src/scan/leftover-auth.ts",
+    selectorSymbol: "leftoverSensitiveRouteFiles",
+    convention: "route modules under a `debug`, `seed`, `admin`, or `api/dev` path segment",
+    select: leftoverSensitiveRouteFiles,
+    classes: "an unauthenticated sensitive debug, seed, admin, or development route",
+  },
+  {
+    rowId: "M1-PATHSCOPE-LEFTOVER-AUTH-RATE-LIMIT-00",
+    detector: "leftover-auth",
+    classId: "Missing rate limit on auth endpoint",
+    ownerFile: "src/scan/leftover-auth.ts",
+    selectorSymbol: "leftoverAuthRateLimitFiles",
+    convention: "route modules under login, signup, OTP, or password-reset path segments",
+    select: leftoverAuthRateLimitFiles,
+    classes: "an authentication endpoint missing a rate limiter",
+  },
+  {
+    rowId: "M1-PATHSCOPE-LEFTOVER-WEBHOOK-00",
+    detector: "leftover-auth",
+    classId: "Inbound webhook with no signature verification",
+    ownerFile: "src/scan/leftover-auth.ts",
+    selectorSymbol: "leftoverWebhookFiles",
+    convention: "route modules whose path contains `webhook`",
+    select: leftoverWebhookFiles,
+    classes: "an inbound privileged webhook with no signature verification",
+  },
+  {
+    rowId: "M1-PATHSCOPE-LEFTOVER-UNSCOPED-DML-00",
+    detector: "leftover-auth",
+    classId: "Unscoped service-role UPDATE/DELETE (no WHERE)",
+    ownerFile: "src/scan/leftover-auth.ts",
+    selectorSymbol: "leftoverUnscopedDmlFiles",
+    convention: "Next route modules and Pages Router API modules",
+    select: leftoverUnscopedDmlFiles,
+    classes: "a raw UPDATE or DELETE without a WHERE clause in a request route",
+  },
+];
+
 function slug(path: string): string {
   return path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -279,7 +356,7 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
       );
     }
   }
-  if (ROUTE_FILE.test(file.path) && SENSITIVE_ROUTE_SEGMENT.test(file.path) && !AUTH_HINT.test(file.content)) {
+  if (leftoverSensitiveRoutePath(file.path) && !AUTH_HINT.test(file.content)) {
     findings.push(
       mechanicalFinding({
         id: `AUTH-sensitive-route-${slug(file.path)}`,
@@ -295,7 +372,7 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
       }),
     );
   }
-  if (ROUTE_FILE.test(file.path) && AUTH_SENSITIVE_ROUTE.test(file.path) && !RATE_LIMIT_HINT.test(file.content)) {
+  if (leftoverAuthRateLimitPath(file.path) && !RATE_LIMIT_HINT.test(file.content)) {
     findings.push(
       mechanicalFinding({
         id: `AUTH-no-rate-limit-${slug(file.path)}`,
@@ -364,7 +441,7 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
     );
   }
   // Inbound webhook route doing a privileged write with no signature-verification hint.
-  if (ROUTE_FILE.test(file.path) && WEBHOOK_PATH.test(file.path) && WEBHOOK_PRIVILEGED_WRITE.test(file.content) && !WEBHOOK_SIG_HINT.test(file.content)) {
+  if (leftoverWebhookPath(file.path) && WEBHOOK_PRIVILEGED_WRITE.test(file.content) && !WEBHOOK_SIG_HINT.test(file.content)) {
     findings.push(
       mechanicalFinding({
         id: `AUTH-webhook-no-sig-${slug(file.path)}`,
@@ -381,7 +458,7 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
     );
   }
   // #353 — raw UPDATE/DELETE with no WHERE, on a raw-SQL sink in a route handler.
-  if (ROUTE_FILE.test(file.path) && hasUnscopedDml(file.content)) {
+  if (leftoverUnscopedDmlPath(file.path) && hasUnscopedDml(file.content)) {
     findings.push(
       mechanicalFinding({
         id: `AUTH-unscoped-write-${slug(file.path)}`,

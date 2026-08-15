@@ -36,6 +36,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { PathScopedClass } from "../scan/path-scope.js";
 import { parse, type NextId, type SourceInput } from "./common.js";
 import { isTestFile } from "./test-intent.js";
 
@@ -72,7 +73,7 @@ function makeFinding(
 // package.json — is proof enough; a jest/mocha project shows none of these and the pass is silent.
 const VITEST_API = /\bfrom\s+['"]vitest['"]|import\.meta\.vitest|\bvi\.(spyOn|hoisted|mock|fn|mocked|stubGlobal|stubEnv)\b/;
 
-function isVitestProject(files: SourceInput[]): boolean {
+function isVitestProject(files: readonly SourceInput[]): boolean {
   for (const f of files) {
     if (posix.basename(f.path) === "package.json") {
       try {
@@ -86,6 +87,60 @@ function isVitestProject(files: SourceInput[]): boolean {
   }
   return false;
 }
+
+export function vitestTestFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => PARSEABLE.test(file.path) && isTestFile(file.path));
+}
+
+export function vitestInSourceFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => PARSEABLE.test(file.path) && !isTestFile(file.path));
+}
+
+const vitestClass = (
+  rowId: string,
+  classId: string,
+  selectorSymbol: string,
+  select: PathScopedClass["select"],
+  convention: string,
+  classes: string,
+): PathScopedClass => ({
+  rowId,
+  detector: "vitest-intent",
+  classId,
+  ownerFile: "src/detectors/vitest-intent.ts",
+  selectorSymbol,
+  convention,
+  select,
+  applicable: (files) => isVitestProject(files),
+  classes,
+});
+
+export const VITEST_INTENT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  vitestClass(
+    "M1-PATHSCOPE-M8-VITEST-UNRESTORED-SPY-00",
+    "M8 — Unrestored vi.spyOn",
+    "vitestTestFiles",
+    vitestTestFiles,
+    "parseable Vitest `*.test.*`, `*.spec.*`, and `__tests__/**` modules",
+    "a Vitest spy whose replacement leaks into later tests",
+  ),
+  vitestClass(
+    "M1-PATHSCOPE-M8-VITEST-IN-SOURCE-00",
+    "M8 — In-source testing coverage-crediting",
+    "vitestInSourceFiles",
+    vitestInSourceFiles,
+    "parseable non-test product modules in a Vitest project",
+    "an in-source `import.meta.vitest` block that inflates its module's coverage",
+  ),
+  vitestClass(
+    "M1-PATHSCOPE-M8-VITEST-HOISTED-00",
+    "M8 — vi.hoisted misuse",
+    "vitestTestFiles",
+    vitestTestFiles,
+    "parseable Vitest `*.test.*`, `*.spec.*`, and `__tests__/**` modules",
+    "a `vi.hoisted` factory reading an uninitialized module-scope binding",
+  ),
+];
 
 // --- UNRESTORED-SPY ----------------------------------------------------------------
 
@@ -293,11 +348,13 @@ export function detectVitestIntentFindings(files: SourceInput[]): Finding[] {
   let n = 0;
   const nextId: NextId = () => `VITEST-${String(++n).padStart(2, "0")}`;
   const findings: Finding[] = [];
+  const testPaths = new Set(vitestTestFiles(parseable).map((file) => file.path));
+  const inSourcePaths = new Set(vitestInSourceFiles(parseable).map((file) => file.path));
   for (const file of parseable) {
     const sf = parse(file.path, file.text);
-    if (isTestFile(file.path)) {
+    if (testPaths.has(file.path)) {
       findings.push(...detectUnrestoredSpy(file, sf, nextId), ...detectHoistedMisuse(file, sf, nextId));
-    } else {
+    } else if (inSourcePaths.has(file.path)) {
       findings.push(...detectInSourceTest(file, sf, nextId));
     }
   }

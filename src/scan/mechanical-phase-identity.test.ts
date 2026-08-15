@@ -60,14 +60,14 @@ describe("mechanical phase implementation identities (#1864)", () => {
     }
   });
 
-  it("an auth-guard helper edit invalidates Semgrep without falsely invalidating unrelated phases", () => {
+  it("an auth-guard helper edit invalidates every consuming phase but not configuration", () => {
     const root = fixture();
     const before = build(root);
     writeFileSync(join(root, "src", "scan", "auth-guard-discovery.ts"), "\n// phase cache direct dependency control\n", { flag: "a" });
     const after = build(root);
     expect(after.semgrep).not.toBe(before.semgrep);
     expect(after.configuration).toBe(before.configuration);
-    expect(after["structural-ast"]).toBe(before["structural-ast"]);
+    expect(after["structural-ast"]).not.toBe(before["structural-ast"]);
   });
 
   it("a structural detector edit invalidates only structural/AST", () => {
