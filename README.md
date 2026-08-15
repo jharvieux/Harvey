@@ -38,3 +38,5 @@ Rendering a report additionally needs `pnpm exec playwright install chromium`, t
 node report-template/render.mjs <findings.json> [outDir]
 ```
 # Harvey
+
+<!-- issue-1763-hosted-control: readme-only -->
