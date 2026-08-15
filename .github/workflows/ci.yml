@@ -46,17 +46,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Tier router: inspect the change set and decide which heavy jobs are needed.
-  # Prose-doc-only PRs (SESSION.md, docs/**.md) skip both. Workflow-only PRs need
-  # actionlint, not the full JS verify (tsc/eslint/vitest/knip never read workflow
-  # YAML). Everything else — code, config, briefs/**, targets/** — runs the full
-  # verify. A push to main runs everything as a post-merge safety net.
+  # Tier router: inspect the change set and decide which jobs are needed.
+  # Prose-doc-only PRs (README.md, SESSION.md, docs/**.md) run only the cheap claim
+  # ratchet. Workflow-only PRs need actionlint, not the full JS verify
+  # (tsc/eslint/vitest/knip never read workflow YAML). Everything else — code,
+  # config, briefs/**, targets/** — runs the full verify. A non-PR event runs every
+  # tier as a post-merge or scheduled safety net.
   changes:
     name: changes
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,8 +66,11 @@ jobs:
       - id: filter
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "workflows=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "code=true"
+              echo "workflows=true"
+              echo "docs=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
@@ -73,20 +78,42 @@ jobs:
           echo "$files"
           code=false
           workflows=false
+          docs=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
               .github/workflows/*) workflows=true ;;
-              # Everything under docs/ is prose (SESSION.md too) — skip the build.
-              # Every functional/tool-input doc lives under briefs/, targets/, or
-              # src/, which all fall through to the catch-all below. No per-file
-              # exceptions needed (#994).
-              SESSION.md|docs/*.md) ;;
+              # Root README.md is a neutral cheap-route control; SESSION.md and every
+              # Markdown file under docs/ are live claim venues. Functional/tool-input
+              # docs under briefs/, targets/, src/, and project READMEs outside docs/ all
+              # fall through to the code catch-all below. Keep this whitelist exact (#1763).
+              README.md|SESSION.md|docs/*.md) docs=true ;;
               *) code=true ;;
             esac
           done <<< "$files"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+          {
+            echo "code=$code"
+            echo "workflows=$workflows"
+            echo "docs=$docs"
+          } >> "$GITHUB_OUTPUT"
+
+  # #1763: prose-only changes used to bypass the one ratchet that reads their claims, then reveal
+  # the breach only after merge when main ran the full build. Keep the expensive build tiered, but
+  # always run this focused test when the exact cheap-docs whitelist above is touched.
+  docs-claims:
+    name: docs claims
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run src/recorded-reasons.test.ts
 
   build:
     name: build
@@ -377,18 +404,18 @@ jobs:
       - run: ./actionlint -color
 
   # Required status check. Always runs so branch protection's "verify" always gets a
-  # result, and fails only if a heavy job that actually ran failed. Skipped jobs
+  # result, and fails only if a required job that actually ran failed. Skipped jobs
   # (the whole point of the tiers) leave this green.
   verify:
     name: verify
-    needs: [changes, build, heavy-cli, actionlint]
+    needs: [changes, docs-claims, build, heavy-cli, actionlint]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Gate on required jobs
         run: |
-          echo "changes=${{ needs.changes.result }} build=${{ needs.build.result }} heavy-cli=${{ needs['heavy-cli'].result }} actionlint=${{ needs.actionlint.result }}"
-          for r in '${{ needs.changes.result }}' '${{ needs.build.result }}' '${{ needs['heavy-cli'].result }}' '${{ needs.actionlint.result }}'; do
+          echo "changes=${{ needs.changes.result }} docs-claims=${{ needs['docs-claims'].result }} build=${{ needs.build.result }} heavy-cli=${{ needs['heavy-cli'].result }} actionlint=${{ needs.actionlint.result }}"
+          for r in '${{ needs.changes.result }}' '${{ needs['docs-claims'].result }}' '${{ needs.build.result }}' '${{ needs['heavy-cli'].result }}' '${{ needs.actionlint.result }}'; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass."
               exit 1
@@ -449,4 +476,3 @@ jobs:
           token: ${{ github.token }}
           repo: ${{ github.repository }}
           body: "CI failed on `main` itself (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, commit ${{ github.sha }}). Every subsequent PR now inherits this failure, so fix or revert before merging anything else. Note what this usually is NOT: a PR that was wrong. `strict: false` means the merged pair is tested for the first time here, so the common cause is two individually-green PRs whose combination breaks a repo-wide gate — `fs-walk`, `validate-reasons`, `validate-disclosure-venue`, the BOUNDED_RULES ratchet, `selfMatchingMatchKeys`, `test-only-exports` or the parity census — with neither PR appearing in the other's diff (#1507, #1451/#1445). Read the failing job before assuming the last merge is the culprit. Close this issue once `main` is green."
-
