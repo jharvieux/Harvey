@@ -409,8 +409,8 @@ describe("explainDrift (#1564)", () => {
   });
 });
 
-// #1580 — the shipping call site, not the primitive. corpus-drift.ts's `for (const r of failed)` loop
-// prints exactly what driftExplanationLines returns, and the case that mattered was the one the loop
+// #1580 — helper behavior only. src/cli/corpus-drift.test.ts executes corpus-drift.ts's real failed-row
+// reporter; these focused helper assertions prove the lines it returns. The case that mattered was the one the loop
 // used to print NOTHING for: the count delta is measured against the COMMITTED manifest baseline
 // while the row diff is measured against the PREVIOUS RUN, so a standing, un-rebaselined drift
 // explains itself on the first run and is silent on every scheduled run after — the runs most likely
