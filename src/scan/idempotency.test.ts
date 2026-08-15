@@ -244,7 +244,11 @@ describe("webhook-ordering (item 27)", () => {
     const out = handler(`await supabase.from("subscriptions").update({ status: event.status }).eq("ref", event.ref);`);
     expect(out[0]!.evidence).toContain("`created`");
     expect(out[0]!.evidence).toContain("SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only");
+    expect(out[0]!.evidence).toContain("NO webhook-path prefilter");
     expect(out[0]!.evidence).toContain("FIELD PRECISION IS UNMEASURED");
+    expect(out[0]!.evidence).toContain("pnpm corpus-drift --install --shard N/3");
+    expect(out[0]!.evidence).toContain("13,104 source units across 17 pinned targets");
+    expect(out[0]!.evidence).toContain("5eaeb965920aacf2e83c1f78def674691b2f214935990d8ffb85b3d7f73311ff");
   });
 
   it("is silent when the handler compares the event's ordering field against stored state", () => {

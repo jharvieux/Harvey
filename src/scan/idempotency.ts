@@ -502,15 +502,17 @@ function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile): Finding[
 // express-powered-by.ts / raw-body-limit.ts / gha-permissions.ts, prove an absence with the very
 // same range problem and answer it the same way — review tier, bound stated in the finding.
 //
-// FIELD PRECISION IS UNMEASURED, and that is the real bound. MEASURED 2026-07-31 by running this
-// predicate over all 17 pinned EXTERNAL_CORPUS clones (13,113 loadable source files): 61,346
-// functions with a first identifier parameter, 176 whose `.update`/`.upsert` payload derives from
-// it, 6 of those in a webhook-shaped path, and ZERO whose parameter carries an ordering field at
-// all. So the corpus produced no true positives AND no false positives — an FP rate over zero
-// firings is undefined, not zero, and the finding says so rather than implying a clean field
-// reading. The measurement did earn one narrowing: 2 of those 6 were `crypto.createHmac(…)
-// .update(rawBody)` — a signature digest, not a database write — so the write must be a Supabase
-// `.from(…)` chain or a `prisma`-style model call, never a bare `.update(...)`.
+// The production predicate has NO webhook-path prefilter; detectIdempotencyFindings applies it to
+// every admitted shipping TS/JS source. FIELD PRECISION IS UNMEASURED, and that is the real bound.
+// MEASURED 2026-08-15 with the production registry command
+// `pnpm corpus-drift --install --shard N/3 --json corpus-drift-shardN.json
+// --baseline-findings prior-drift/corpus-drift.json` for N=1,2,3 in Actions run 31873008063: the
+// `idempotency` detector ledger reports 17 pinned targets, 13,104 `unitsExamined` source units, and
+// 0 findings. The merged `corpus-drift.json` has SHA-256
+// `5eaeb965920aacf2e83c1f78def674691b2f214935990d8ffb85b3d7f73311ff`. Zero firings means the FP
+// rate is undefined, not zero, and the finding says so rather than implying a clean field reading.
+// The write target remains a Supabase `.from(…)` chain or a `prisma`-style model call, never a bare
+// `.update(...)`, excluding signature-digest methods from the candidate population.
 const ORDERING_FIELD = /^(created|created_at|createdAt|timestamp|version|sequence|event_time|eventTime|occurred_at|occurredAt)$/;
 const ORM_ROOT = /^(prisma|db|tx|client)$/i;
 const RELATIONAL_FILTER = /^(gt|gte|lt|lte)$/;
@@ -587,7 +589,7 @@ function webhookOrdering(path: string, sf: ts.SourceFile): Finding[] {
         category: "Business logic",
         taxonomy: "Webhook state applied without an ordering guard",
         location: loc(path, sf, write),
-        evidence: `Heuristic "webhook-ordering" matched a handler whose event parameter \`${param}\` carries the ordering field \`${field}\`, writing event-derived state into \`${writeTarget(write)}\`, with no comparison against a stored last-applied value anywhere in this function. SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only. A comparison performed inside a wrapper in another module, a database trigger, or a conditional \`WHERE ${field} > …\` built elsewhere is OUTSIDE what this pass can see. FIELD PRECISION IS UNMEASURED: MEASURED 2026-07-31 over all 17 pinned corpus repos (61,346 candidate functions), this shape occurred ZERO times, so the rule has no true or false positives on real code yet — treat it as a prompt to check, not as a confirmed defect.`,
+        evidence: `Heuristic "webhook-ordering" matched a handler whose event parameter \`${param}\` carries the ordering field \`${field}\`, writing event-derived state into \`${writeTarget(write)}\`, with no comparison against a stored last-applied value anywhere in this function. SCOPE OF THIS CHECK: it reads THIS FUNCTION BODY only, with NO webhook-path prefilter. A comparison performed inside a wrapper in another module, a database trigger, or a conditional \`WHERE ${field} > …\` built elsewhere is OUTSIDE what this pass can see. FIELD PRECISION IS UNMEASURED: MEASURED 2026-08-15 with \`pnpm corpus-drift --install --shard N/3 --json corpus-drift-shardN.json --baseline-findings prior-drift/corpus-drift.json\` for N=1,2,3 in Actions run 31873008063, the production \`idempotency\` registry ledger examined 13,104 source units across 17 pinned targets and emitted ZERO findings (merged artifact SHA-256 \`5eaeb965920aacf2e83c1f78def674691b2f214935990d8ffb85b3d7f73311ff\`). Zero firings leave the false-positive rate undefined — treat this as a prompt to check, not as a confirmed defect.`,
         impact:
           "Under at-least-once, unordered delivery a stale event arriving after a fresher one overwrites newer state — a cancelled subscription reactivated by a late `updated` delivery, a downgraded plan restored. Replay dedup does not prevent it: the two deliveries are genuinely different events.",
         fix: `Compare the event's \`${field}\` against the last-applied value on the row and skip the write when it is not newer — a conditional update (\`... .gt("${field}", stored)\`, or \`WHERE ${field} < $new\`) keeps the check atomic with the write.`,
