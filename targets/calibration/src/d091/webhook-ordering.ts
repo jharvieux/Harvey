@@ -13,9 +13,22 @@ import { supabase } from "../lib/supabaseAnonClient";
 // function body and stating that bound in the finding.
 
 export async function applySubscriptionEvent(event: { id: string; created: number; status: string; customerRef: string }) {
+  const { data: receipt, error: receiptLookupError } = await supabase
+    .from("d091_webhook_events")
+    .select("event_id")
+    .eq("event_id", event.id)
+    .maybeSingle();
+  if (receiptLookupError) throw receiptLookupError;
+  if (receipt) return;
+
   const { error } = await supabase
     .from("d091_subscriptions")
     .update({ status: event.status })
     .eq("customer_ref", event.customerRef);
   if (error) throw error;
+
+  const { error: receiptInsertError } = await supabase
+    .from("d091_webhook_events")
+    .insert({ event_id: event.id, received_at: event.created });
+  if (receiptInsertError) throw receiptInsertError;
 }
