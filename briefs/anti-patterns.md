@@ -530,3 +530,5 @@ dataflow" reason #1230 attached to all nine was false for seven of them.
 2. Add to this catalog with: symptom, examples, why-slips-through, prevention.
 3. Implement the cheapest prevention layer first (doctrine line → ESLint → slop-check → probe). Add layers only if simpler ones don't catch.
 4. Backfill: grep the codebase for existing instances and either fix them or document waivers.
+
+<!-- hosted-briefs-control-1763-20260814-a7f2 -->
