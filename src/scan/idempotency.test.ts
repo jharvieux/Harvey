@@ -99,6 +99,16 @@ describe("dedup-before-dispatch (item 10)", () => {
 });
 
 describe("external-send idempotency key (item 24)", () => {
+  const expectSingleReview = (text: string, path?: string) => {
+    const out = scan(text, path);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.taxonomy).toBe("Idempotency key does not identify a stable scoped operation");
+    expect(out[0]!.precisionTier).toBe("review");
+    expect(out[0]!.evidence).toContain("FALSIFIER:");
+    expect(out[0]!.evidence.length).toBeLessThan(1_600);
+    return out[0]!;
+  };
+
   it("fires on a Stripe create with no request options, from a retryable path", () => {
     const out = scan(`export const charge = (stripe: Stripe, id: string) => stripe.paymentIntents.create({ amount: 100, metadata: { id } });`);
     expect(out).toHaveLength(1);
@@ -203,6 +213,475 @@ describe("external-send idempotency key (item 24)", () => {
     expect(out[0]!.evidence).toContain("the Stripe request-options expression is not a local object literal");
     expect(out[0]!.evidence).toContain("local provider options in THIS FILE only");
     expect(out[0]!.evidence).toContain("FALSIFIER:");
+  });
+
+  it.each([
+    [
+      "constructor parameter",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        class Billing {
+          constructor(stripe: Stripe, options: Stripe.RequestOptions) {
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        }
+      `,
+      "parameter binding",
+    ],
+    [
+      "setter parameter",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        class Billing {
+          set charge(options: Stripe.RequestOptions) {
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        }
+      `,
+      "parameter binding",
+    ],
+    [
+      "getter-local opaque options",
+      `
+        class Billing {
+          get charge() {
+            const options = this.providerOptions;
+            return stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        }
+      `,
+      "expression is not a local object literal",
+    ],
+  ])("stops at a %s binding instead of borrowing an outer initializer", (_name, source, evidence) => {
+    expect(expectSingleReview(source).evidence).toContain(evidence);
+  });
+
+  it("recognizes constructor and setter parameter identities, including destructuring", () => {
+    expect(
+      scan(`
+        class Billing {
+          constructor(stripe: Stripe, tenantId: string, bookingId: string) {
+            stripe.paymentIntents.create(
+              { amount: 100 },
+              { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+            );
+          }
+          set receipt({ tenantId, bookingId }: { tenantId: string; bookingId: string }) {
+            fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: { "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` },
+            });
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("keeps namespace-local consts out of SourceFile lookup", () => {
+    const finding = expectSingleReview(`
+      namespace Defaults {
+        export const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+      }
+      export function charge(stripe: Stripe) {
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      }
+    `);
+    expect(finding.evidence).toContain("no visible local binding");
+  });
+
+  it("lets a namespace import block a safe outer initializer", () => {
+    const finding = expectSingleReview(`
+      const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+      namespace Billing {
+        import options = Provider.options;
+        export function charge(stripe: Stripe) {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        }
+      }
+    `);
+    expect(finding.evidence).toContain("import binding");
+  });
+
+  it("keeps a SourceFile import opaque even when a namespace has a safe same-named const", () => {
+    const finding = expectSingleReview(`
+      import { options } from "./provider-options";
+      namespace Defaults {
+        export const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+      }
+      export function charge(stripe: Stripe) {
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      }
+    `);
+    expect(finding.evidence).toContain("import binding");
+  });
+
+  it("accepts a function-local const inside a namespace without crossing the module boundary", () => {
+    expect(
+      scan(`
+        namespace Billing {
+          export function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+            const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "class static block var",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        class Billing {
+          static {
+            var options;
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        }
+      `,
+      "mutable or resource-managed",
+    ],
+    [
+      "named function-expression self binding",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        const run = function options(stripe: Stripe) {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        };
+      `,
+      "function-self binding",
+    ],
+    [
+      "named class-expression self binding",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        const Billing = class options {
+          static run(stripe: Stripe) {
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+        };
+      `,
+      "class-self binding",
+    ],
+    [
+      "enum-member binding",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        enum Attempts {
+          options = 1,
+          charge = stripe.paymentIntents.create({ amount: 100 }, options) as any,
+        }
+      `,
+      "enum-member binding",
+    ],
+  ])("does not fall through a %s to a same-spelled outer const", (_name, source, evidence) => {
+    expect(expectSingleReview(source).evidence).toContain(evidence);
+  });
+
+  it("requires switch aliases to dominate in the same clause", () => {
+    const finding = expectSingleReview(`
+      const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+      switch (kind) {
+        case "prepare":
+          const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+          break;
+        case "charge":
+          stripe.paymentIntents.create({ amount: 100 }, options);
+          break;
+      }
+    `);
+    expect(finding.evidence).toContain("same switch clause");
+  });
+
+  it("accepts a switch alias declared earlier in the same clause", () => {
+    expect(
+      scan(`
+        function charge(stripe: Stripe, tenantId: string, bookingId: string, kind: string) {
+          switch (kind) {
+            case "charge":
+              const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+              stripe.paymentIntents.create({ amount: 100 }, options);
+              break;
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("accepts an outer const that dominates the whole switch", () => {
+    expect(
+      scan(`
+        function charge(stripe: Stripe, tenantId: string, bookingId: string, kind: string) {
+          const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+          switch (kind) {
+            case "charge":
+              stripe.paymentIntents.create({ amount: 100 }, options);
+              break;
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "let alias",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        {
+          let options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        }
+      `,
+      "mutable or resource-managed",
+    ],
+    [
+      "property-reassigned const alias",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        options.idempotencyKey = nextKey;
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      `,
+      "mutated or escapes",
+    ],
+    [
+      "conditionally initialized const alias",
+      `
+        const options = enabled
+          ? { idempotencyKey: "charge:tenant_1:booking_1:v1" }
+          : { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      `,
+      "conditionally evaluated",
+    ],
+    [
+      "escaped object alias",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        configure(options);
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      `,
+      "mutated or escapes",
+    ],
+    [
+      "using alias",
+      `
+        using options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      `,
+      "mutable or resource-managed",
+    ],
+    [
+      "duplicate const binding",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        const options = { idempotencyKey: "charge:tenant_2:booking_2:v1" };
+        stripe.paymentIntents.create({ amount: 100 }, options);
+      `,
+      "contains 2 declarations",
+    ],
+  ])("reviews a %s instead of claiming safety", (_name, source, evidence) => {
+    expect(expectSingleReview(source).evidence).toContain(evidence);
+  });
+
+  it("reviews a reassigned primitive key alias", () => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        const key = \`charge:\${tenantId}:\${bookingId}:v1\`;
+        key = nextKey;
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+      }
+    `);
+    expect(finding.evidence).toContain("mutated or escapes");
+  });
+
+  it.each([
+    [
+      "same-scope TDZ const",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+          const options = opaqueOptions;
+        }
+      `,
+    ],
+    [
+      "hoisted function declaration",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+          function options() {}
+        }
+      `,
+    ],
+    [
+      "class TDZ declaration",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+          class options {}
+        }
+      `,
+    ],
+  ])("stops at a %s rather than using the latest prior initializer", (_name, source) => {
+    expectSingleReview(source);
+  });
+
+  it.each([
+    [
+      "destructured parameter",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        function charge(stripe: Stripe, { options }: { options: Stripe.RequestOptions }) {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        }
+      `,
+      "parameter binding",
+    ],
+    [
+      "destructured local",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        {
+          const { options } = config;
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        }
+      `,
+      "not a simple local const",
+    ],
+    [
+      "destructured for-of binding",
+      `
+        const options = { idempotencyKey: "charge:tenant_1:booking_1:v1" };
+        for (const { options } of requests) {
+          stripe.paymentIntents.create({ amount: 100 }, options);
+        }
+      `,
+      "not a simple local const",
+    ],
+  ])("treats a %s as opaque and never falls outward", (_name, source, evidence) => {
+    expect(expectSingleReview(source).evidence).toContain(evidence);
+  });
+
+  it.each([
+    ["random-per-attempt", "const suffix = crypto.randomUUID();"],
+    ["clock-or-attempt-derived", "const suffix = Date.now();"],
+  ])("expands a nested alias and classifies its %s suffix", (classification, declaration) => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        ${declaration}
+        const key = \`charge:\${tenantId}:\${bookingId}:\${suffix}\`;
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+      }
+    `);
+    expect(finding.evidence).toContain(classification);
+  });
+
+  it("expands nested aliases without trusting an opaque helper", () => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        const suffix = makeSuffix(bookingId);
+        const key = \`charge:\${tenantId}:\${bookingId}:\${suffix}\`;
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+      }
+    `);
+    expect(finding.evidence).toContain("mechanically-unproven-key-helper");
+  });
+
+  it("tracks recursive aliases by declaration identity", () => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        const key = key;
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+      }
+    `);
+    expect(finding.evidence).toContain("cyclic");
+  });
+
+  it("does not count same-spelled tenant/entity shadow constants as parameter identity", () => {
+    expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        {
+          const tenantId = "fixed-tenant";
+          const bookingId = "fixed-booking";
+          stripe.paymentIntents.create(
+            { amount: 100 },
+            { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+          );
+        }
+      }
+    `);
+  });
+
+  it("accepts transitive immutable aliases derived from the actual parameters", () => {
+    expect(
+      scan(`
+        function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          const tenant = tenantId;
+          const entity = bookingId;
+          const key = \`charge:\${tenant}:\${entity}:v1\`;
+          stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("rejects a key alias captured across a nested function boundary", () => {
+    const finding = expectSingleReview(`
+      function schedule(stripe: Stripe, tenantId: string, bookingId: string) {
+        const key = \`charge:\${tenantId}:\${bookingId}:v1\`;
+        return () => stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+      }
+    `);
+    expect(finding.evidence).toContain("crosses an eager-execution/function boundary");
+  });
+
+  it("treats JavaScript with as dynamically scoped before inspecting otherwise-safe options", () => {
+    const finding = expectSingleReview(
+      `
+        function charge(stripe, tenantId, bookingId, scope) {
+          with (scope) {
+            stripe.paymentIntents.create(
+              { amount: 100 },
+              { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+            );
+          }
+        }
+      `,
+      "src/lib/jobs/charge.js",
+    );
+    expect(finding.evidence).toContain("inside JavaScript `with`");
+  });
+
+  it("preserves local options, local headers, ordinary block/catch, and classic-for controls", () => {
+    expect(
+      scan(`
+        function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          {
+            const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+            stripe.paymentIntents.create({ amount: 100 }, options);
+          }
+          try {
+            throw new Error("retry");
+          } catch (error) {
+            const headers = { "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` };
+            fetch("https://api.resend.com/emails", { method: "POST", headers });
+          }
+          for (
+            const conditionOptions = { idempotencyKey: \`prepare:\${tenantId}:\${bookingId}:v1\` },
+              options = { idempotencyKey: \`renew:\${tenantId}:\${bookingId}:v1\` };
+            (stripe.paymentIntents.create({ amount: 100 }, conditionOptions), shouldRun);
+          ) {
+            stripe.subscriptions.create({ customer: bookingId }, options);
+            break;
+          }
+        }
+      `),
+    ).toEqual([]);
   });
 
   it("accepts scoped stable keys in Stripe and REST provider option shapes", () => {

@@ -65,6 +65,42 @@ interface KeyAnalysis {
   falsifier: string;
 }
 
+type BindingKind =
+  | "variable"
+  | "parameter"
+  | "catch"
+  | "import"
+  | "function"
+  | "class"
+  | "enum"
+  | "module"
+  | "function-self"
+  | "class-self"
+  | "enum-member";
+
+interface IndexedBinding {
+  name: string;
+  identifier: ts.Identifier;
+  declaration: ts.Node;
+  owner: ts.Node;
+  kind: BindingKind;
+  simple: boolean;
+  variable?: ts.VariableDeclaration;
+}
+
+type BindingLookup =
+  | { kind: "resolved"; binding: IndexedBinding }
+  | { kind: "unknown"; detail: string }
+  | { kind: "unbound" };
+
+type ObjectResolution =
+  | { kind: "object"; object: ts.ObjectLiteralExpression }
+  | { kind: "unknown"; detail: string };
+
+type AliasEligibility =
+  | { kind: "eligible"; initializer: ts.Expression }
+  | { kind: "ineligible"; detail: string };
+
 function isLoop(n: ts.Node): boolean {
   return ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n) || ts.isWhileStatement(n) || ts.isDoStatement(n);
 }
@@ -209,95 +245,418 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
   return current;
 }
 
-function isFunctionScope(node: ts.Node): node is ts.SignatureDeclarationBase & ts.Node {
-  return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
-}
-
-function isBlockScope(node: ts.Node): boolean {
+function isRuntimeFunctionLike(node: ts.Node): node is ts.SignatureDeclarationBase & ts.Node {
   return (
-    ts.isBlock(node) ||
-    ts.isCaseBlock(node) ||
-    ts.isForStatement(node) ||
-    ts.isForInStatement(node) ||
-    ts.isForOfStatement(node)
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node)
   );
 }
 
-function variableScope(declaration: ts.VariableDeclaration): ts.Node | undefined {
+function isForEnvironment(node: ts.Node): boolean {
+  return ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node);
+}
+
+function isEnvironmentOwner(node: ts.Node): boolean {
+  return (
+    ts.isSourceFile(node) ||
+    ts.isModuleDeclaration(node) ||
+    isRuntimeFunctionLike(node) ||
+    ts.isClassStaticBlockDeclaration(node) ||
+    ts.isBlock(node) ||
+    ts.isCatchClause(node) ||
+    isForEnvironment(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isClassExpression(node) ||
+    ts.isEnumDeclaration(node)
+  );
+}
+
+function lexicalOwner(node: ts.Node): ts.Node | undefined {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (ts.isModuleBlock(current)) return current.parent;
+    if (
+      ts.isSourceFile(current) ||
+      ts.isBlock(current) ||
+      ts.isCatchClause(current) ||
+      isForEnvironment(current) ||
+      ts.isCaseBlock(current) ||
+      isRuntimeFunctionLike(current) ||
+      ts.isClassStaticBlockDeclaration(current) ||
+      ts.isModuleDeclaration(current)
+    ) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function variableOwner(declaration: ts.VariableDeclaration): ts.Node | undefined {
   const list = declaration.parent;
   if (!ts.isVariableDeclarationList(list)) return undefined;
   const blockScoped = (list.flags & ts.NodeFlags.BlockScoped) !== 0;
+  if (blockScoped) return lexicalOwner(list);
   let current: ts.Node | undefined = list.parent;
   while (current) {
-    if (ts.isSourceFile(current) || (blockScoped ? isBlockScope(current) : isFunctionScope(current))) return current;
+    if (ts.isModuleBlock(current)) return current.parent;
+    if (
+      ts.isSourceFile(current) ||
+      ts.isModuleDeclaration(current) ||
+      isRuntimeFunctionLike(current) ||
+      ts.isClassStaticBlockDeclaration(current)
+    ) {
+      return current;
+    }
     current = current.parent;
   }
   return undefined;
 }
 
-function bindingContains(name: ts.BindingName, target: string): boolean {
-  if (ts.isIdentifier(name)) return name.text === target;
-  return name.elements.some((element) => !ts.isOmittedExpression(element) && bindingContains(element.name, target));
+function forEachBindingIdentifier(name: ts.BindingName, visit: (identifier: ts.Identifier) => void): void {
+  if (ts.isIdentifier(name)) {
+    visit(name);
+    return;
+  }
+  for (const element of name.elements) {
+    if (!ts.isOmittedExpression(element)) forEachBindingIdentifier(element.name, visit);
+  }
 }
 
-function scopeShadowsIdentifier(scope: ts.Node, name: string): boolean {
-  if (isFunctionScope(scope) && scope.parameters.some((parameter) => bindingContains(parameter.name, name))) return true;
-  return ts.isBlock(scope) && ts.isCatchClause(scope.parent) && !!scope.parent.variableDeclaration && bindingContains(scope.parent.variableDeclaration.name, name);
+function declarationNameIdentifier(node: ts.DeclarationName | undefined): ts.Identifier | undefined {
+  return node && ts.isIdentifier(node) ? node : undefined;
 }
 
-function visibleScopes(identifier: ts.Identifier): ts.Node[] {
-  const scopes: ts.Node[] = [];
-  let current: ts.Node | undefined = identifier.parent;
+class SourceFileBindingIndex {
+  private readonly environments = new Map<ts.Node, Map<string, IndexedBinding[]>>();
+  private readonly lookupCache = new WeakMap<ts.Identifier, BindingLookup>();
+
+  constructor(private readonly sf: ts.SourceFile) {
+    this.build(sf);
+  }
+
+  lookup(identifier: ts.Identifier): BindingLookup {
+    const cached = this.lookupCache.get(identifier);
+    if (cached) return cached;
+    for (const owner of this.visibleOwners(identifier)) {
+      const bindings = this.environments.get(owner)?.get(identifier.text);
+      if (!bindings) continue;
+      const result: BindingLookup =
+        bindings.length === 1
+          ? { kind: "resolved", binding: bindings[0]! }
+          : {
+              kind: "unknown",
+              detail: `the visible environment contains ${bindings.length} declarations named \`${identifier.text}\``,
+            };
+      this.lookupCache.set(identifier, result);
+      return result;
+    }
+    const result: BindingLookup = { kind: "unbound" };
+    this.lookupCache.set(identifier, result);
+    return result;
+  }
+
+  private visibleOwners(identifier: ts.Identifier): ts.Node[] {
+    const owners: ts.Node[] = [];
+    let current: ts.Node | undefined = identifier.parent;
+    while (current) {
+      if (ts.isModuleBlock(current)) {
+        owners.push(current.parent);
+      } else if (isEnvironmentOwner(current)) {
+        owners.push(current);
+      }
+      current = current.parent;
+    }
+    return owners;
+  }
+
+  private add(binding: IndexedBinding): void {
+    let names = this.environments.get(binding.owner);
+    if (!names) {
+      names = new Map();
+      this.environments.set(binding.owner, names);
+    }
+    const bindings = names.get(binding.name) ?? [];
+    bindings.push(binding);
+    names.set(binding.name, bindings);
+  }
+
+  private addBindingName(
+    name: ts.BindingName,
+    declaration: ts.Node,
+    owner: ts.Node | undefined,
+    kind: BindingKind,
+    variable?: ts.VariableDeclaration,
+  ): void {
+    if (!owner) return;
+    forEachBindingIdentifier(name, (identifier) => {
+      this.add({
+        name: identifier.text,
+        identifier,
+        declaration,
+        owner,
+        kind,
+        simple: ts.isIdentifier(name),
+        variable,
+      });
+    });
+  }
+
+  private addNamedDeclaration(node: ts.Declaration & { name?: ts.DeclarationName }, kind: BindingKind): void {
+    const identifier = declarationNameIdentifier(node.name);
+    const owner = lexicalOwner(node);
+    if (!identifier || !owner) return;
+    this.add({ name: identifier.text, identifier, declaration: node, owner, kind, simple: true });
+  }
+
+  private addImportBindings(node: ts.ImportDeclaration): void {
+    const owner = lexicalOwner(node);
+    const clause = node.importClause;
+    if (!owner || !clause) return;
+    if (clause.name) this.add({ name: clause.name.text, identifier: clause.name, declaration: clause, owner, kind: "import", simple: true });
+    const bindings = clause.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      this.add({ name: bindings.name.text, identifier: bindings.name, declaration: bindings, owner, kind: "import", simple: true });
+    } else if (bindings && ts.isNamedImports(bindings)) {
+      for (const specifier of bindings.elements) {
+        this.add({ name: specifier.name.text, identifier: specifier.name, declaration: specifier, owner, kind: "import", simple: true });
+      }
+    }
+  }
+
+  private build(root: ts.Node): void {
+    const visit = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent)) {
+        this.addBindingName(node.name, node, variableOwner(node), "variable", node);
+      } else if (ts.isParameter(node)) {
+        let owner: ts.Node | undefined = node.parent;
+        while (owner && !isRuntimeFunctionLike(owner)) owner = owner.parent;
+        this.addBindingName(node.name, node, owner, "parameter");
+      } else if (ts.isCatchClause(node) && node.variableDeclaration) {
+        this.addBindingName(node.variableDeclaration.name, node.variableDeclaration, node, "catch");
+      } else if (ts.isImportDeclaration(node)) {
+        this.addImportBindings(node);
+      } else if (ts.isImportEqualsDeclaration(node)) {
+        const owner = lexicalOwner(node);
+        if (owner) this.add({ name: node.name.text, identifier: node.name, declaration: node, owner, kind: "import", simple: true });
+      } else if (ts.isFunctionDeclaration(node)) {
+        this.addNamedDeclaration(node, "function");
+      } else if (ts.isClassDeclaration(node)) {
+        this.addNamedDeclaration(node, "class");
+      } else if (ts.isEnumDeclaration(node)) {
+        this.addNamedDeclaration(node, "enum");
+        for (const member of node.members) {
+          const identifier = declarationNameIdentifier(member.name);
+          if (identifier) this.add({ name: identifier.text, identifier, declaration: member, owner: node, kind: "enum-member", simple: true });
+        }
+      } else if (ts.isModuleDeclaration(node)) {
+        this.addNamedDeclaration(node, "module");
+      } else if (ts.isFunctionExpression(node) && node.name) {
+        this.add({ name: node.name.text, identifier: node.name, declaration: node, owner: node, kind: "function-self", simple: true });
+      } else if (ts.isClassExpression(node) && node.name) {
+        this.add({ name: node.name.text, identifier: node.name, declaration: node, owner: node, kind: "class-self", simple: true });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+  }
+}
+
+function eagerRegion(node: ts.Node): ts.Node {
+  let current: ts.Node | undefined = node;
   while (current) {
-    if (ts.isSourceFile(current) || isBlockScope(current) || isFunctionScope(current)) scopes.push(current);
+    if (isRuntimeFunctionLike(current) || ts.isClassStaticBlockDeclaration(current) || ts.isModuleDeclaration(current)) return current;
+    if (ts.isSourceFile(current)) return current;
     current = current.parent;
   }
-  return scopes;
+  return node.getSourceFile();
 }
 
-function declarationsInScope(scope: ts.Node, name: string): ts.VariableDeclaration[] {
-  const declarations: ts.VariableDeclaration[] = [];
+function nearestCaseClause(node: ts.Node): ts.CaseOrDefaultClause | undefined {
+  let current: ts.Node | undefined = node;
+  while (current) {
+    if (ts.isCaseClause(current) || ts.isDefaultClause(current)) return current;
+    if (isRuntimeFunctionLike(current) || ts.isSourceFile(current)) return undefined;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function containsConditionalEvaluation(node: ts.Node): boolean {
+  let conditional = false;
+  const visit = (current: ts.Node): void => {
+    if (conditional) return;
+    if (
+      ts.isConditionalExpression(current) ||
+      (ts.isBinaryExpression(current) &&
+        (current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+          current.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+          current.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken))
+    ) {
+      conditional = true;
+      return;
+    }
+    if (current !== node && isRuntimeFunctionLike(current)) return;
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return conditional;
+}
+
+function isWriteTarget(node: ts.Node): boolean {
+  const parent = node.parent;
+  if (ts.isBinaryExpression(parent) && parent.left === node) {
+    return parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment;
+  }
+  return (
+    (ts.isPrefixUnaryExpression(parent) &&
+      (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)) ||
+    ts.isDeleteExpression(parent) ||
+    (ts.isPostfixUnaryExpression(parent) && (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken))
+  );
+}
+
+function rootOfAccess(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) current = current.expression;
+  return current;
+}
+
+function initializerMayBeMutable(initializer: ts.Expression): boolean {
+  const value = unwrapExpression(initializer);
+  return (
+    ts.isObjectLiteralExpression(value) ||
+    ts.isArrayLiteralExpression(value) ||
+    ts.isNewExpression(value) ||
+    ts.isFunctionExpression(value) ||
+    ts.isArrowFunction(value) ||
+    ts.isClassExpression(value)
+  );
+}
+
+function hasObservableMutationOrEscape(
+  binding: IndexedBinding,
+  use: ts.Identifier,
+  observation: ts.Node,
+  bindings: SourceFileBindingIndex,
+): boolean {
+  const initializer = binding.variable?.initializer;
+  if (!initializer) return false;
+  const mutableValue = initializerMayBeMutable(initializer);
+  const start = initializer.getEnd();
+  const end = observation.getStart(observation.getSourceFile());
+  let unsafe = false;
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && variableScope(node) === scope) {
-      declarations.push(node);
+    if (unsafe || node.getEnd() <= start || node.getStart(node.getSourceFile()) >= end) return;
+    if (ts.isIdentifier(node) && node !== use && node.text === binding.name) {
+      const lookup = bindings.lookup(node);
+      if (lookup.kind !== "resolved" || lookup.binding !== binding) return;
+      let access: ts.Expression = node;
+      while (
+        (ts.isPropertyAccessExpression(access.parent) || ts.isElementAccessExpression(access.parent)) &&
+        access.parent.expression === access
+      ) {
+        access = access.parent;
+      }
+      const parent = access.parent;
+      if (
+        isWriteTarget(access) ||
+        (mutableValue &&
+          ((ts.isCallExpression(parent) && (parent.expression === access || parent.arguments.includes(access))) ||
+            (ts.isNewExpression(parent) && parent.arguments?.includes(access)) ||
+            ts.isReturnStatement(parent) ||
+            ts.isYieldExpression(parent) ||
+            (ts.isPropertyAssignment(parent) && parent.initializer === access) ||
+            (ts.isArrayLiteralExpression(parent) && parent.elements.includes(access)) ||
+            (ts.isVariableDeclaration(parent) && parent.initializer === access) ||
+            (ts.isBinaryExpression(parent) && parent.right === access)))
+      ) {
+        unsafe = true;
+        return;
+      }
+      if (access !== node && rootOfAccess(access) === node && isWriteTarget(access)) unsafe = true;
     }
     ts.forEachChild(node, visit);
   };
-  visit(scope);
-  return declarations;
+  visit(observation.getSourceFile());
+  return unsafe;
 }
 
-function initializerOf(identifier: ts.Identifier, sf: ts.SourceFile): ts.Expression | undefined {
-  const before = identifier.getStart(sf);
-  for (const scope of visibleScopes(identifier)) {
-    const declarations = declarationsInScope(scope, identifier.text);
-    if (declarations.length > 0) {
-      const declaration = declarations
-        .filter((candidate) => candidate.getStart(sf) < before)
-        .sort((a, b) => b.getStart(sf) - a.getStart(sf))[0];
-      return declaration?.initializer;
-    }
-    if (scopeShadowsIdentifier(scope, identifier.text)) return undefined;
+function eligibleConstInitializer(
+  binding: IndexedBinding,
+  use: ts.Identifier,
+  observation: ts.Node,
+  bindings: SourceFileBindingIndex,
+): AliasEligibility {
+  const declaration = binding.variable;
+  if (binding.kind !== "variable" || !declaration || !binding.simple || !ts.isIdentifier(declaration.name)) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` is a ${binding.kind} binding, not a simple local const` };
   }
-  return undefined;
-}
-
-function resolveExpression(expression: ts.Expression, sf: ts.SourceFile, seen = new Set<string>()): ts.Expression {
-  const unwrapped = unwrapExpression(expression);
-  if (!ts.isIdentifier(unwrapped) || seen.has(unwrapped.text)) return unwrapped;
-  const initializer = initializerOf(unwrapped, sf);
-  if (!initializer) return unwrapped;
-  seen.add(unwrapped.text);
-  return resolveExpression(initializer, sf, seen);
-}
-
-function objectLiteralOf(expression: ts.Expression, sf: ts.SourceFile): ts.ObjectLiteralExpression | undefined {
-  const resolved = resolveExpression(expression, sf);
-  if (ts.isObjectLiteralExpression(resolved)) return resolved;
-  if (ts.isNewExpression(resolved) && ts.isIdentifier(resolved.expression) && resolved.expression.text === "Headers" && resolved.arguments?.[0]) {
-    return objectLiteralOf(resolved.arguments[0], sf);
+  const list = declaration.parent;
+  if (
+    !ts.isVariableDeclarationList(list) ||
+    (list.flags & ts.NodeFlags.Const) === 0 ||
+    (list.flags & ts.NodeFlags.Using) !== 0
+  ) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` is mutable or resource-managed rather than a simple const` };
   }
-  return undefined;
+  if (!declaration.initializer) return { kind: "ineligible", detail: `\`${binding.name}\` has no initializer` };
+  if (eagerRegion(declaration) !== eagerRegion(use)) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` crosses an eager-execution/function boundary` };
+  }
+  if (declaration.getStart(declaration.getSourceFile()) >= use.getStart(use.getSourceFile())) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` is read before its initializer structurally dominates the use` };
+  }
+  const declarationClause = nearestCaseClause(declaration);
+  const useClause = nearestCaseClause(use);
+  if (ts.isCaseBlock(binding.owner) && declarationClause !== useClause) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` is not initialized earlier in this same switch clause` };
+  }
+  if (containsConditionalEvaluation(declaration.initializer)) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` has a conditionally evaluated initializer` };
+  }
+  if (hasObservableMutationOrEscape(binding, use, observation, bindings)) {
+    return { kind: "ineligible", detail: `\`${binding.name}\` is observably mutated or escapes before the provider call` };
+  }
+  return { kind: "eligible", initializer: declaration.initializer };
+}
+
+function isUnshadowedGlobal(identifier: ts.Identifier, name: string, bindings: SourceFileBindingIndex): boolean {
+  return identifier.text === name && bindings.lookup(identifier).kind === "unbound";
+}
+
+function objectLiteralOf(
+  expression: ts.Expression,
+  observation: ts.Node,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+  aliasBudget = 1,
+  seen = new Set<IndexedBinding>(),
+): ObjectResolution {
+  const value = unwrapExpression(expression);
+  if (ts.isObjectLiteralExpression(value)) return { kind: "object", object: value };
+  if (ts.isNewExpression(value) && ts.isIdentifier(value.expression) && isUnshadowedGlobal(value.expression, "Headers", bindings)) {
+    const argument = value.arguments?.[0];
+    return argument
+      ? objectLiteralOf(argument, observation, sf, bindings, aliasBudget, seen)
+      : { kind: "unknown", detail: "the Headers constructor has no statically readable initializer" };
+  }
+  if (!ts.isIdentifier(value)) return { kind: "unknown", detail: "the expression is not a local object literal" };
+  const lookup = bindings.lookup(value);
+  if (lookup.kind === "unbound") return { kind: "unknown", detail: `\`${value.text}\` has no visible local binding` };
+  if (lookup.kind === "unknown") return { kind: "unknown", detail: lookup.detail };
+  if (seen.has(lookup.binding)) return { kind: "unknown", detail: `the \`${value.text}\` object alias is cyclic` };
+  if (aliasBudget <= 0) return { kind: "unknown", detail: `the \`${value.text}\` object uses more than one local alias hop` };
+  const eligibility = eligibleConstInitializer(lookup.binding, value, observation, bindings);
+  if (eligibility.kind === "ineligible") return { kind: "unknown", detail: eligibility.detail };
+  seen.add(lookup.binding);
+  return objectLiteralOf(eligibility.initializer, observation, sf, bindings, aliasBudget - 1, seen);
 }
 
 function keyInObject(object: ts.ObjectLiteralExpression, keyName: string, sf: ts.SourceFile): KeySlot {
@@ -312,21 +671,23 @@ function keyInObject(object: ts.ObjectLiteralExpression, keyName: string, sf: ts
     : { kind: "absent" };
 }
 
-function stripeKey(node: ts.CallExpression, sf: ts.SourceFile): KeySlot {
+function stripeKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFileBindingIndex): KeySlot {
   const options = node.arguments[1];
   if (!options) return { kind: "absent" };
-  const object = objectLiteralOf(options, sf);
-  return object ? keyInObject(object, "idempotencyKey", sf) : { kind: "unknown", detail: "the Stripe request-options expression is not a local object literal" };
+  const resolved = objectLiteralOf(options, node, sf, bindings);
+  return resolved.kind === "object"
+    ? keyInObject(resolved.object, "idempotencyKey", sf)
+    : { kind: "unknown", detail: `the Stripe request-options expression is not a local object literal (${resolved.detail})` };
 }
 
-function fetchKey(node: ts.CallExpression, sf: ts.SourceFile): KeySlot {
+function fetchKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFileBindingIndex): KeySlot {
   const options = node.arguments[1];
   if (!options) return { kind: "absent" };
-  const object = objectLiteralOf(options, sf);
-  if (!object) return { kind: "unknown", detail: "the fetch options expression is not a local object literal" };
-  const headersProperty = object.properties.find((property) => propertyName(property, sf)?.toLowerCase() === "headers");
+  const resolved = objectLiteralOf(options, node, sf, bindings);
+  if (resolved.kind === "unknown") return { kind: "unknown", detail: `the fetch options expression is not a local object literal (${resolved.detail})` };
+  const headersProperty = resolved.object.properties.find((property) => propertyName(property, sf)?.toLowerCase() === "headers");
   if (!headersProperty) {
-    return object.properties.some(ts.isSpreadAssignment)
+    return resolved.object.properties.some(ts.isSpreadAssignment)
       ? { kind: "unknown", detail: "the fetch options use a spread, so the headers cannot be proven" }
       : { kind: "absent" };
   }
@@ -334,19 +695,36 @@ function fetchKey(node: ts.CallExpression, sf: ts.SourceFile): KeySlot {
     return { kind: "unknown", detail: "the fetch headers are not a statically readable value" };
   }
   const headersExpression = ts.isPropertyAssignment(headersProperty) ? headersProperty.initializer : headersProperty.name;
-  const headers = objectLiteralOf(headersExpression, sf);
-  return headers
-    ? keyInObject(headers, "Idempotency-Key", sf)
-    : { kind: "unknown", detail: "the fetch headers expression is not a local object literal or Headers initializer" };
+  const headers = objectLiteralOf(headersExpression, node, sf, bindings);
+  return headers.kind === "object"
+    ? keyInObject(headers.object, "Idempotency-Key", sf)
+    : { kind: "unknown", detail: `the fetch headers expression is unproven: ${headers.detail}` };
+}
+
+function isInsideWithBody(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node;
+  while (current?.parent) {
+    if (ts.isWithStatement(current.parent) && current !== current.parent.expression) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 // (24) An external send from a retryable path. Provider-specific extraction returns the exact key
 // slot rather than accepting any idempotency-looking text elsewhere in request options.
-function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile): ExternalSendTarget | undefined {
+function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFileBindingIndex): ExternalSendTarget | undefined {
   if (ts.isIdentifier(node.expression) && node.expression.text === "fetch") {
     const url = node.arguments[0];
     const host = url && ts.isStringLiteralLike(url) ? IDEMPOTENT_HOST.exec(url.text) : null;
-    return host ? { call: node, key: fetchKey(node, sf), api: host[0] } : undefined;
+    return host
+      ? {
+          call: node,
+          key: isInsideWithBody(node)
+            ? { kind: "unknown", detail: "the provider call is inside JavaScript `with`, so dynamic name resolution is unproven" }
+            : fetchKey(node, sf, bindings),
+          api: host[0],
+        }
+      : undefined;
   }
   // stripe.<resource>.create(params, options)
   if (
@@ -355,7 +733,13 @@ function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile): Externa
     ts.isPropertyAccessExpression(node.expression.expression) &&
     /stripe/i.test(node.expression.expression.expression.getText(sf))
   ) {
-    return { call: node, key: stripeKey(node, sf), api: `Stripe ${node.expression.expression.name.text}.create` };
+    return {
+      call: node,
+      key: isInsideWithBody(node)
+        ? { kind: "unknown", detail: "the provider call is inside JavaScript `with`, so dynamic name resolution is unproven" }
+        : stripeKey(node, sf, bindings),
+      api: `Stripe ${node.expression.expression.name.text}.create`,
+    };
   }
   return undefined;
 }
@@ -363,29 +747,50 @@ function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile): Externa
 function enclosingFunction(node: ts.Node): ts.SignatureDeclarationBase | undefined {
   let current = node.parent;
   while (current) {
-    if (
-      ts.isFunctionDeclaration(current) ||
-      ts.isFunctionExpression(current) ||
-      ts.isArrowFunction(current) ||
-      ts.isMethodDeclaration(current)
-    ) {
-      return current;
-    }
+    if (isRuntimeFunctionLike(current)) return current;
     current = current.parent;
   }
   return undefined;
 }
 
-function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.SourceFile): KeyAnalysis {
-  const resolved = resolveExpression(expression, sf);
-  const text = resolved.getText(sf);
-  const identifiers = new Set<string>();
+function parameterBindingNames(fn: ts.SignatureDeclarationBase | undefined): string[] {
+  const names: string[] = [];
+  for (const parameter of fn?.parameters ?? []) forEachBindingIdentifier(parameter.name, (identifier) => names.push(identifier.text));
+  return names;
+}
+
+function boundedNodeText(node: ts.Node, sf: ts.SourceFile): string {
+  const text = node.getText(sf).replace(/\s+/g, " ");
+  return text.length <= 180 ? text : `${text.slice(0, 177)}…`;
+}
+
+function analyzeKey(
+  expression: ts.Expression,
+  call: ts.CallExpression,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+): KeyAnalysis {
+  const text = boundedNodeText(expression, sf);
+  const contributorNames = new Set<string>();
+  const identityNames = new Set<string>();
   const literals: string[] = [];
   let unknownCall: string | undefined;
   let volatile: string | undefined;
+  const opaque = new Set<string>();
+  const expansionStack = new Set<IndexedBinding>();
+  const fn = enclosingFunction(call);
 
-  const visit = (node: ts.Node): void => {
-    const nodeText = node.getText(sf);
+  const visit = (node: ts.Node): boolean => {
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) ||
+      ts.isNonNullExpression(node) ||
+      ts.isSatisfiesExpression(node)
+    ) {
+      return visit(node.expression);
+    }
+    const nodeText = boundedNodeText(node, sf);
     if (!volatile && ts.isCallExpression(node) && /(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid)\s*\(/i.test(nodeText)) {
       volatile = "random-per-attempt";
     } else if (
@@ -397,25 +802,88 @@ function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.S
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(sf);
-      if (!/(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid|Date\.now|performance\.now|process\.hrtime)$/i.test(callee) &&
-          !/^(?:String|encodeURIComponent|sha(?:1|256|512)|hash)$/i.test(callee)) {
+      const volatileCall = /(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid|Date\.now|performance\.now|process\.hrtime)$/i.test(callee);
+      const pureWrapper = /^(?:String|encodeURIComponent|sha(?:1|256|512)|hash)$/i.test(callee);
+      if (!volatileCall && !pureWrapper) {
         unknownCall ??= callee;
       }
+      let origin = false;
+      for (const argument of node.arguments) if (visit(argument)) origin = true;
+      return pureWrapper && origin;
+    }
+    if (ts.isNewExpression(node)) {
+      for (const argument of node.arguments ?? []) visit(argument);
+      if (!/^new\s+Date\s*\(/.test(nodeText)) opaque.add(`constructor expression \`${boundedNodeText(node.expression, sf)}\` is not a proven immutable key transform`);
+      return false;
     }
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
       literals.push(node.text);
+      return false;
+    }
+    if (ts.isPropertyAccessExpression(node)) {
+      const origin = visit(node.expression);
+      if (origin) {
+        contributorNames.add(node.name.text);
+        identityNames.add(node.name.text);
+      }
+      return origin;
+    }
+    if (ts.isElementAccessExpression(node)) {
+      const origin = visit(node.expression);
+      if (node.argumentExpression) visit(node.argumentExpression);
+      return origin;
     }
     if (ts.isIdentifier(node)) {
-      const parent = node.parent;
-      const isPropertyName =
-        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
-        ((ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent)) && parent.name === node) ||
-        (ts.isCallExpression(parent) && parent.expression === node);
-      if (!isPropertyName) identifiers.add(node.text);
+      const lookup = bindings.lookup(node);
+      if (lookup.kind === "unbound") {
+        opaque.add(`identifier \`${node.text}\` has no visible lexical binding`);
+        return false;
+      }
+      if (lookup.kind === "unknown") {
+        opaque.add(lookup.detail);
+        return false;
+      }
+      const binding = lookup.binding;
+      if (binding.kind === "parameter" && binding.owner === fn) {
+        contributorNames.add(binding.name);
+        identityNames.add(binding.name);
+        return true;
+      }
+      if (binding.kind !== "variable") {
+        opaque.add(`\`${binding.name}\` resolves to a ${binding.kind} binding instead of an enclosing-function parameter or immutable local alias`);
+        return false;
+      }
+      if (expansionStack.has(binding)) {
+        opaque.add(`local key alias \`${binding.name}\` is cyclic`);
+        return false;
+      }
+      const eligibility = eligibleConstInitializer(binding, node, call, bindings);
+      if (eligibility.kind === "ineligible") {
+        opaque.add(eligibility.detail);
+        return false;
+      }
+      expansionStack.add(binding);
+      const origin = visit(unwrapExpression(eligibility.initializer));
+      expansionStack.delete(binding);
+      return origin;
     }
-    ts.forEachChild(node, visit);
+    if (node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword) {
+      opaque.add(`\`${nodeText}\` is not an enclosing-function parameter or immutable local alias`);
+      return false;
+    }
+    if (node !== expression && isRuntimeFunctionLike(node)) {
+      opaque.add("a nested function value is not a statically proven idempotency key");
+      return false;
+    }
+    if (ts.isPropertyAssignment(node)) return visit(node.initializer);
+    if (ts.isShorthandPropertyAssignment(node)) return visit(node.name);
+    let origin = false;
+    ts.forEachChild(node, (child) => {
+      if (visit(child)) origin = true;
+    });
+    return origin;
   };
-  visit(resolved);
+  visit(unwrapExpression(expression));
 
   if (volatile === "random-per-attempt") {
     return {
@@ -425,7 +893,7 @@ function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.S
       falsifier: "replace the random source with immutable tenant/entity/operation identifiers and show two evaluations for the same operation are equal",
     };
   }
-  if (volatile === "clock-derived" || [...identifiers].some((name) => ATTEMPT_IDENTITY.test(name))) {
+  if (volatile === "clock-derived" || [...identityNames].some((name) => ATTEMPT_IDENTITY.test(name))) {
     return {
       safe: false,
       classification: "clock-or-attempt-derived",
@@ -434,23 +902,40 @@ function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.S
     };
   }
 
-  const identityNames = [...identifiers].filter((name) => ENTITY_IDENTITY.test(name));
-  if (identityNames.length === 0) {
+  if (unknownCall) {
     return {
       safe: false,
-      classification: identifiers.size === 0 ? "unsafe-global-constant" : "missing-entity-scope",
+      classification: "mechanically-unproven-key-helper",
+      detail: `the helper call \`${unknownCall}(…)\` hides whether \`${text}\` is retry-stable and collision-safe`,
+      falsifier: "inline or expose the helper's deterministic tenant/entity/operation composition so this pass can verify it",
+    };
+  }
+
+  if (opaque.size > 0) {
+    return {
+      safe: false,
+      classification: "mechanically-unproven-key-binding",
+      detail: [...opaque][0]!,
+      falsifier: "replace the opaque binding with a dominating immutable local const derived only from this function's tenant/entity parameters and a literal operation discriminator",
+    };
+  }
+
+  const entityNames = [...identityNames].filter((name) => ENTITY_IDENTITY.test(name));
+  if (entityNames.length === 0) {
+    return {
+      safe: false,
+      classification: contributorNames.size === 0 ? "unsafe-global-constant" : "missing-entity-scope",
       detail:
-        identifiers.size === 0
+        contributorNames.size === 0
           ? `\`${text}\` has no immutable operation identity and can collide across every call site execution`
           : `\`${text}\` does not include a recognisable immutable entity/operation identifier`,
       falsifier: "evaluate the key for two different entities in the same scope and show the values differ",
     };
   }
 
-  const fn = enclosingFunction(call);
-  const parameterNames = fn?.parameters.map((parameter) => parameter.name.getText(sf)) ?? [];
+  const parameterNames = parameterBindingNames(fn);
   const tenantRequired = parameterNames.some((name) => TENANT_IDENTITY.test(name));
-  const tenantPresent = [...identifiers].some((name) => TENANT_IDENTITY.test(name));
+  const tenantPresent = [...identityNames].some((name) => TENANT_IDENTITY.test(name));
   if (tenantRequired && !tenantPresent) {
     return {
       safe: false,
@@ -469,15 +954,6 @@ function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.S
     };
   }
 
-  if (unknownCall) {
-    return {
-      safe: false,
-      classification: "mechanically-unproven-key-helper",
-      detail: `the helper call \`${unknownCall}(…)\` hides whether \`${text}\` is retry-stable and collision-safe`,
-      falsifier: "inline or expose the helper's deterministic tenant/entity/operation composition so this pass can verify it",
-    };
-  }
-
   return {
     safe: true,
     classification: "stable-scoped-operation-key",
@@ -486,14 +962,14 @@ function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.S
   };
 }
 
-function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile): Finding[] {
+function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile, bindings: SourceFileBindingIndex): Finding[] {
   if (!RETRYABLE_PATH.test(path)) return [];
   const findings: Finding[] = [];
   for (const call of calls(sf)) {
-    const target = externalSendTarget(call, sf);
+    const target = externalSendTarget(call, sf, bindings);
     if (!target) continue;
     if (target.key.kind === "present") {
-      const analysis = analyzeKey(target.key.expression, call, sf);
+      const analysis = analyzeKey(target.key.expression, call, sf, bindings);
       if (analysis.safe) continue;
       findings.push(
         mechanicalFinding({
@@ -678,7 +1154,13 @@ function referencesBinding(root: ts.Node, name: string): boolean {
 }
 
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
-  return [...claimBeforeSend(path, sf), ...dedupBeforeDispatch(path, sf), ...externalSendNoIdempotencyKey(path, sf), ...webhookOrdering(path, sf)];
+  const bindings = new SourceFileBindingIndex(sf);
+  return [
+    ...claimBeforeSend(path, sf),
+    ...dedupBeforeDispatch(path, sf),
+    ...externalSendNoIdempotencyKey(path, sf, bindings),
+    ...webhookOrdering(path, sf),
+  ];
 }
 
 export function detectIdempotencyFindings(files: SourceInput[]): Finding[] {
