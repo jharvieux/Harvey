@@ -33,3 +33,5 @@ __pycache__/
 .stryker-tmp/
 reports/guard-mutation/
 stryker.probe.config.json
+
+# Hosted required-context control probe: sweep-1763-20260814
