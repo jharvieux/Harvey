@@ -133,3 +133,37 @@ find_or_update() {
   fi
   printf '%s\t%s\t%s\n' "$status" "$num" "$url"
 }
+
+# The production (`DRILL != true`) adapter. Keep the find-or-update invocation, wire-format parse,
+# status validation, and operator-facing message together here so action.yml and the focused test
+# execute the same production seam. The drill consumes the same wire format for its two stricter
+# assertions, but it must not replace this adapter: otherwise production-only parse/status drift can
+# stay green while every drill still exercises find_or_update successfully (#1348).
+run_production_find_or_update() {
+  local title="$1" body="$2" result status num url
+  # Captured as a plain top-level assignment (not nested inside another command's word) so callers
+  # using `set -e` abort if find_or_update returns non-zero.
+  result=$(find_or_update real "$title" "$body") || return $?
+  IFS=$'\t' read -r status num url <<<"$result"
+
+  case "$status" in
+    created)
+      if [ -z "$num" ] || [ -z "$url" ]; then
+        echo "::error::find_or_update returned an incomplete created result: '$result'." >&2
+        return 1
+      fi
+      echo "Opened tracking issue $url."
+      ;;
+    commented)
+      if [ -z "$num" ]; then
+        echo "::error::find_or_update returned an incomplete commented result: '$result'." >&2
+        return 1
+      fi
+      echo "Commented on existing tracking issue #${num}."
+      ;;
+    *)
+      echo "::error::find_or_update returned unknown status '${status:-<empty>}': '$result'." >&2
+      return 1
+      ;;
+  esac
+}
