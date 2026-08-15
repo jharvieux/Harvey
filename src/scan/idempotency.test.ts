@@ -186,6 +186,25 @@ describe("external-send idempotency key (item 24)", () => {
     expect(out[0]!.evidence).toContain("FALSIFIER:");
   });
 
+  it("does not resolve Stripe options from a sibling function's same-named local", () => {
+    const out = scan(`
+      function prepareOptions(tenantId: string, bookingId: string) {
+        const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+        return options;
+      }
+
+      export const charge = (
+        stripe: Stripe,
+        bookingId: string,
+        options: Stripe.RequestOptions,
+      ) => stripe.paymentIntents.create({ amount: 100 }, options);
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("the Stripe request-options expression is not a local object literal");
+    expect(out[0]!.evidence).toContain("local provider options in THIS FILE only");
+    expect(out[0]!.evidence).toContain("FALSIFIER:");
+  });
+
   it("accepts scoped stable keys in Stripe and REST provider option shapes", () => {
     expect(
       scan(`

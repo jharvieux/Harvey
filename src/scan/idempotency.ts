@@ -209,23 +209,83 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
   return current;
 }
 
-function initializerOf(name: string, before: number, sf: ts.SourceFile): ts.Expression | undefined {
-  let best: ts.VariableDeclaration | undefined;
+function isFunctionScope(node: ts.Node): node is ts.SignatureDeclarationBase & ts.Node {
+  return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node);
+}
+
+function isBlockScope(node: ts.Node): boolean {
+  return (
+    ts.isBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node)
+  );
+}
+
+function variableScope(declaration: ts.VariableDeclaration): ts.Node | undefined {
+  const list = declaration.parent;
+  if (!ts.isVariableDeclarationList(list)) return undefined;
+  const blockScoped = (list.flags & ts.NodeFlags.BlockScoped) !== 0;
+  let current: ts.Node | undefined = list.parent;
+  while (current) {
+    if (ts.isSourceFile(current) || (blockScoped ? isBlockScope(current) : isFunctionScope(current))) return current;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function bindingContains(name: ts.BindingName, target: string): boolean {
+  if (ts.isIdentifier(name)) return name.text === target;
+  return name.elements.some((element) => !ts.isOmittedExpression(element) && bindingContains(element.name, target));
+}
+
+function scopeShadowsIdentifier(scope: ts.Node, name: string): boolean {
+  if (isFunctionScope(scope) && scope.parameters.some((parameter) => bindingContains(parameter.name, name))) return true;
+  return ts.isBlock(scope) && ts.isCatchClause(scope.parent) && !!scope.parent.variableDeclaration && bindingContains(scope.parent.variableDeclaration.name, name);
+}
+
+function visibleScopes(identifier: ts.Identifier): ts.Node[] {
+  const scopes: ts.Node[] = [];
+  let current: ts.Node | undefined = identifier.parent;
+  while (current) {
+    if (ts.isSourceFile(current) || isBlockScope(current) || isFunctionScope(current)) scopes.push(current);
+    current = current.parent;
+  }
+  return scopes;
+}
+
+function declarationsInScope(scope: ts.Node, name: string): ts.VariableDeclaration[] {
+  const declarations: ts.VariableDeclaration[] = [];
   const visit = (node: ts.Node): void => {
-    if (node.getStart(sf) >= before) return;
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && node.initializer) {
-      if (!best || node.getStart(sf) > best.getStart(sf)) best = node;
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && variableScope(node) === scope) {
+      declarations.push(node);
     }
     ts.forEachChild(node, visit);
   };
-  visit(sf);
-  return best?.initializer;
+  visit(scope);
+  return declarations;
+}
+
+function initializerOf(identifier: ts.Identifier, sf: ts.SourceFile): ts.Expression | undefined {
+  const before = identifier.getStart(sf);
+  for (const scope of visibleScopes(identifier)) {
+    const declarations = declarationsInScope(scope, identifier.text);
+    if (declarations.length > 0) {
+      const declaration = declarations
+        .filter((candidate) => candidate.getStart(sf) < before)
+        .sort((a, b) => b.getStart(sf) - a.getStart(sf))[0];
+      return declaration?.initializer;
+    }
+    if (scopeShadowsIdentifier(scope, identifier.text)) return undefined;
+  }
+  return undefined;
 }
 
 function resolveExpression(expression: ts.Expression, sf: ts.SourceFile, seen = new Set<string>()): ts.Expression {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isIdentifier(unwrapped) || seen.has(unwrapped.text)) return unwrapped;
-  const initializer = initializerOf(unwrapped.text, unwrapped.getStart(sf), sf);
+  const initializer = initializerOf(unwrapped, sf);
   if (!initializer) return unwrapped;
   seen.add(unwrapped.text);
   return resolveExpression(initializer, sf, seen);
