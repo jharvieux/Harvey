@@ -16,6 +16,15 @@
 // Run: pnpm detector-census
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  buildEffectivenessInventory,
+  discoverProductionProducerCalls,
+  EFFECTIVENESS_INVENTORY,
+  EFFECTIVENESS_INVENTORY_JSON,
+  serializeEffectivenessInventory,
+  validateEffectivenessInventory,
+} from "../effectiveness-registry.js";
+import type { EffectivenessInventory } from "../effectiveness-schema.js";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 import {
   MECHANICAL_REGISTRY,
@@ -24,6 +33,29 @@ import {
 } from "../scan/mechanical-engine-registry.js";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
+
+function effectivenessJson(): string {
+  const inventory: EffectivenessInventory = buildEffectivenessInventory({ root: ROOT });
+  const problems = validateEffectivenessInventory(inventory, { root: ROOT });
+  if (problems.length > 0) throw new Error(`effectiveness inventory invalid:\n${problems.join("\n")}`);
+
+  const registered = new Set(inventory.producers.flatMap((producer) =>
+    producer.implementations.map((item) => `${item.file}#${item.symbol}`)));
+  const discovered = discoverProductionProducerCalls(ROOT, registered);
+  if (JSON.stringify(discovered) !== JSON.stringify(inventory.receipt.composedCalls)) {
+    throw new Error("effectiveness discovery receipt drifted from the live production call graph");
+  }
+
+  const serialized = serializeEffectivenessInventory(inventory);
+  if (serialized !== EFFECTIVENESS_INVENTORY_JSON || JSON.stringify(inventory) !== JSON.stringify(EFFECTIVENESS_INVENTORY)) {
+    throw new Error("effectiveness inventory drifted from its deterministic module export");
+  }
+  return serialized;
+}
+
+if (process.argv.includes("--effectiveness-json")) {
+  console.log(effectivenessJson());
+} else {
 const registryProblems = validateMechanicalEngineRegistry(ROOT);
 if (registryProblems.length > 0) throw new Error(`mechanical engine registry invalid:\n${registryProblems.join("\n")}`);
 
@@ -123,3 +155,4 @@ console.log(
     "(pnpm validate:calibration). Re-run this tool after any detector change — never quote a\n" +
     "stored number.",
 );
+}

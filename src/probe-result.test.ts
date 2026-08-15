@@ -77,6 +77,7 @@ describe("the typed-result migration is disclosed, not half-done in silence", ()
   it("FAILS LOUD when a runner declares itself typed and hands back a legacy outcome", () => {
     const registry: ModuleRunner[] = AUDIT_MODULES.map((module) => ({
       module,
+      producers: [],
       ...(module === "M9" ? { typed: true as const } : {}),
       run: () => ({ status: "ran" as const, detail: "laundered back to the legacy shape" }),
     }));

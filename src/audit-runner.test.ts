@@ -76,7 +76,7 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   ...over,
 });
 
-const probe = (module: AuditModule, outcome: ProbeOutcome): ModuleRunner => ({ module, run: () => outcome });
+const probe = (module: AuditModule, outcome: ProbeOutcome): ModuleRunner => ({ module, producers: [], run: () => outcome });
 const allRan = (): ModuleRunner[] => AUDIT_MODULES.map((m) => probe(m, { status: "ran", detail: `ran ${m}` }));
 
 describe("assertRegistryComplete (#229 — a module with no runner is the skip itself)", () => {
@@ -133,7 +133,7 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
   it("routes a crashed runner to failures instead of excusing it as an environment gap", () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M4"),
-      { module: "M4" as const, run: () => { throw new Error("jscpd binary missing"); } },
+      { module: "M4" as const, producers: [], run: () => { throw new Error("jscpd binary missing"); } },
     ];
     const { recorded, failures } = runAudit(runners, ctx());
     expect(failures).toEqual([{ module: "M4", error: "jscpd binary missing" }]);
@@ -148,7 +148,7 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
   it("keeps running the remaining modules after one crashes, so one bug can't truncate the audit", () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M1"),
-      { module: "M1" as const, run: () => { throw new Error("boom"); } },
+      { module: "M1" as const, producers: [], run: () => { throw new Error("boom"); } },
     ];
     const { recorded } = runAudit(runners, ctx());
     expect(recorded).toHaveLength(10);
@@ -525,7 +525,7 @@ describe("M10 classifies a Prisma app's schema.prisma when no migrations have be
 // --findings-out failed schema validation, so the engagement findings.json was never written.
 describe("monorepo fan-out namespaces finding ids by instance (#620)", () => {
   const withId = (id: string): Finding => ({ id } as unknown as Finding);
-  const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+  const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
 
   it("distinguishes the same finding id emitted by two apps so ids stay unique", () => {
     const runners = swap("M5", () => [
@@ -1756,7 +1756,7 @@ describe("formatFailures", () => {
 // wrote NOTHING because `assembleEngagementDocument`'s output failed report-schema validation on
 // two duplicate ids. Both roots are fixed at their detectors; this is the net under the next one.
 describe("duplicate finding ids are disambiguated, never dropped and never fatal (#1470)", () => {
-  const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+  const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
   const at = (id: string, location: string): Finding => ({ id, location } as unknown as Finding);
 
   it("gives two DIFFERENT findings that share an id two different ids", () => {

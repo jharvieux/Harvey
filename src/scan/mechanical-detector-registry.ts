@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import type { ProducerPopulationClass } from "../effectiveness-schema.js";
 import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
@@ -69,6 +70,8 @@ export interface MechanicalDetectorDefinition {
   id: string;
   order: number;
   module: MechanicalDetectorModule;
+  /** True defect producer or a disclosure-only structural row; mixed producers stay true. */
+  populationClass: Extract<ProducerPopulationClass, "true-finding-producer" | "disclosure-only">;
   implementation: { file: string; exportName: string };
   findingIds: readonly string[];
   taxonomies: readonly string[];
@@ -114,9 +117,10 @@ function assurance(id: string, file: string, exportName: string): Pick<Mechanica
   };
 }
 
-function detector(input: Omit<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities"> & Partial<Pick<MechanicalDetectorDefinition, "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities">>): MechanicalDetectorDefinition {
+function detector(input: Omit<MechanicalDetectorDefinition, "populationClass" | "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities"> & Partial<Pick<MechanicalDetectorDefinition, "populationClass" | "applicableFiles" | "prerequisites" | "fallback" | "positiveFixture" | "benignTwin" | "conservation" | "corpus" | "cadence" | "examinedUnits" | "examinedUnitIdentities">>): MechanicalDetectorDefinition {
   const defaults = assurance(input.id, input.implementation.file, input.implementation.exportName);
   return Object.freeze({
+    populationClass: "true-finding-producer",
     applicableFiles: { description: "all tracked JavaScript/TypeScript source files in the shared inventory", select: sourceFiles },
     prerequisites: Object.freeze([]),
     fallback: "An empty applicable population is recorded in the detector execution census; detector-specific scope disclosures remain findings.",
@@ -189,6 +193,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   }),
   detector({
     id: "path-scope-disclosure", order: 280, module: "M1", implementation: { file: "src/scan/path-scope.ts", exportName: "pathScopeNotAssessedRows" }, findingIds: ["M1-PATHSCOPE-*"], taxonomies: ["Coverage — *"],
+    populationClass: "disclosure-only",
     positiveFixture: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: zero-population paths emit their counted disclosure controls."),
     benignTwin: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: non-zero populations suppress the disclosure twin."),
     invoke: (_context, selected) => pathScopeNotAssessedRows(selected),
