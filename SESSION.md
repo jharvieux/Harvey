@@ -58,3 +58,5 @@ The tracker grew by 29 issues. The growth reflects real remainder, performance-e
 ## Exact next action
 
 Start the next `source-command-issue-sweep` from current `main`, re-fetch the tracker, and use the existing execution contracts rather than re-diagnosing them. Run #1880's controlled same-head cold/warm corpus cohort before making another CI acceptance-speed claim, then execute the remaining READY issues in priority/dependency order. The operator can return a settled excluded issue to scope by removing its routing label.
+
+Issue 1763 hosted control: this claim cannot be satisfied.
