@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "../detectors/common.js";
 import { loadSources } from "../detectors/load-sources.js";
-import { findingIdentity } from "../audit-diff.js";
+import { findingIdentity, type FindingIdentityOptions } from "../audit-diff.js";
 import { findingMarker } from "../trackers/findings-to-tickets.js";
 import { rerunDetector } from "./detector-rerun.js";
 import type { DetectorRun } from "./verify.js";
@@ -50,7 +50,7 @@ export interface GateReport {
   counts: Record<GateStatus, number>;
 }
 
-interface GateOptions {
+interface GateOptions extends Pick<FindingIdentityOptions, "caseSensitive"> {
   // Marker namespace — must match the --engagement the tickets were filed under, or write-back
   // lookups will miss. Default "harvey", same as findings-to-tickets.
   engagement?: string;
@@ -80,7 +80,8 @@ export async function runGate(findings: Finding[], targetDir: string, opts: Gate
   const counts: Record<GateStatus, number> = { resolved: 0, persistent: 0, regressed: 0, unverifiable: 0 };
 
   for (const f of findings) {
-    const identity = findingIdentity(f);
+    const identityOptions = { root: targetDir, caseSensitive: opts.caseSensitive };
+    const identity = findingIdentity(f, identityOptions);
     const previousStatus = priorByIdentity.get(identity);
     const run = await rerun(f, targetDir, sources);
 
@@ -93,7 +94,7 @@ export async function runGate(findings: Finding[], targetDir: string, opts: Gate
     results.push({
       findingId: f.id,
       identity,
-      marker: findingMarker(f, engagement),
+      marker: findingMarker(f, engagement, identityOptions),
       title: f.title,
       taxonomy: f.taxonomy,
       location: f.location,

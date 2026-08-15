@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyBaseline, diffAgainstBaseline, findingIdentity, normalizeLocation } from "./audit-diff.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "./findings.js";
@@ -37,8 +40,8 @@ describe("finding identity (#457)", () => {
     expect(diff.counts).toEqual({ resolved: 1, persistent: 0, new: 1 });
   });
 
-  it("normalizeLocation strips lines, columns, github anchors, and case", () => {
-    expect(normalizeLocation("lib/Rls.ts:42:10")).toBe("lib/rls.ts");
+  it("normalizeLocation strips lines, columns, and github anchors without folding file case", () => {
+    expect(normalizeLocation("lib/Rls.ts:42:10")).toBe("lib/Rls.ts");
     expect(normalizeLocation("lib/rls.ts#L42-L48")).toBe("lib/rls.ts");
     expect(normalizeLocation("app/api/chat/route.ts (line 210)")).toBe("app/api/chat/route.ts");
   });
@@ -46,6 +49,40 @@ describe("finding identity (#457)", () => {
   it("findingIdentity ignores line but keeps taxonomy+path", () => {
     expect(findingIdentity(finding({ location: "lib/rls.ts:42" }))).toBe(findingIdentity(finding({ location: "lib/rls.ts:99" })));
     expect(findingIdentity(finding({ taxonomy: "a" }))).not.toBe(findingIdentity(finding({ taxonomy: "b" })));
+  });
+
+  it("canonicalizes equivalent rooted spellings and symlinks but preserves case-sensitive files", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-finding-identity-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src", "a.ts"), "export {}\n");
+      symlinkSync("src/a.ts", join(root, "alias.ts"));
+      const options = { root, caseSensitive: true };
+      const locations = [
+        "src/a.ts:7",
+        "./src//a.ts:19",
+        "src\\.\\a.ts#L42",
+        join(root, "src", "a.ts") + ":88",
+        "alias.ts:3",
+      ];
+      expect(new Set(locations.map((location) => findingIdentity(finding({ location }), options))).size).toBe(1);
+
+      const diff = diffAgainstBaseline(
+        [finding({ id: "old", location: "./src//a.ts:7" })],
+        [finding({ id: "new", location: "alias.ts:99" })],
+        options,
+      );
+      expect(diff.counts).toEqual({ resolved: 0, persistent: 1, new: 0 });
+      expect(findingIdentity(finding({ location: "src/Foo.ts" }), options)).not.toBe(
+        findingIdentity(finding({ location: "src/foo.ts" }), options),
+      );
+      expect(findingIdentity(finding({ location: "src/Foo.ts" }), { ...options, caseSensitive: false })).toBe(
+        findingIdentity(finding({ location: "src/foo.ts" }), { ...options, caseSensitive: false }),
+      );
+      expect(normalizeLocation("../outside.ts", options)).toMatch(/^external:/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

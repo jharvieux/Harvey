@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import { TrackerError } from "./http.js";
@@ -85,6 +88,29 @@ describe("findingToTicket mapping", () => {
     const a = findingMarker(finding({ location: "supabase/migrations/003.sql:42" }));
     const b = findingMarker(finding({ location: "supabase/migrations/003.sql:99" }));
     expect(a).toBe(b);
+  });
+
+  it("deduplicates root, separator, dot, and symlink aliases without conflating case-sensitive files", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-tracker-identity-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src", "a.ts"), "export {}\n");
+      symlinkSync("src/a.ts", join(root, "alias.ts"));
+      const options = { root, caseSensitive: true };
+      const equivalent = [
+        "src/a.ts:7", "./src//a.ts:19", "src\\.\\a.ts#L42",
+        join(root, "src", "a.ts") + ":88", "alias.ts:3",
+      ];
+      expect(new Set(equivalent.map((location) => findingMarker(finding({ location }), "harvey", options))).size).toBe(1);
+      expect(findingMarker(finding({ location: "src/Foo.ts" }), "harvey", options)).not.toBe(
+        findingMarker(finding({ location: "src/foo.ts" }), "harvey", options),
+      );
+      expect(findingMarker(finding({ location: "src/Foo.ts" }), "harvey", { ...options, caseSensitive: false })).toBe(
+        findingMarker(finding({ location: "src/foo.ts" }), "harvey", { ...options, caseSensitive: false }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("scopes the marker by engagement so two clients don't collide", () => {
