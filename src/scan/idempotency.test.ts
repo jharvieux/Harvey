@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { detectIdempotencyFindings } from "./idempotency.js";
+import { MECHANICAL_DETECTORS } from "./mechanical-detector-registry.js";
 
 const scan = (text: string, path = "src/lib/jobs/reminders.ts") => detectIdempotencyFindings([{ path, text }]);
 
@@ -116,9 +117,95 @@ describe("external-send idempotency key (item 24)", () => {
         export const charge = (stripe: Stripe, id: string) =>
           stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: \`charge:\${id}\` });
         export const notify = (p: unknown, id: string) =>
-          fetch("https://api.resend.com/emails", { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify(p) });
+          fetch("https://api.resend.com/emails", { method: "POST", headers: { "Idempotency-Key": \`notify:\${id}\` }, body: JSON.stringify(p) });
       `),
     ).toEqual([]);
+  });
+
+  it.each([
+    ["random-per-attempt", "crypto.randomUUID()"],
+    ["random-per-attempt", "Math.random().toString(36)"],
+    ["clock-or-attempt-derived", "`charge:${bookingId}:${Date.now()}`"],
+    ["unsafe-global-constant", '"all-charges"'],
+  ])("flags a %s key", (classification, expression) => {
+    const out = scan(`
+      export const charge = (stripe: Stripe, bookingId: string) =>
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: ${expression} });
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.taxonomy).toBe("Idempotency key does not identify a stable scoped operation");
+    expect(out[0]!.evidence).toContain(classification);
+    expect(out[0]!.evidence).toContain("FALSIFIER:");
+    expect(out[0]!.precisionTier).toBe("review");
+  });
+
+  it("requires the available tenant identity in a multi-tenant operation key", () => {
+    const out = scan(`
+      export const charge = (stripe: Stripe, tenantId: string, bookingId: string) =>
+        stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: \`charge:\${bookingId}:v1\` });
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("missing-tenant-scope");
+    expect(out[0]!.evidence).toContain("same entity identifier in two tenants");
+  });
+
+  it.each([
+    ["missing-operation-scope", "bookingId"],
+    ["missing-entity-scope", "`charge:${amountCents}`"],
+  ])("flags %s instead of accepting token presence", (classification, expression) => {
+    const out = scan(`
+      export const charge = (stripe: Stripe, bookingId: string, amountCents: number) =>
+        stripe.paymentIntents.create({ amount: amountCents }, { idempotencyKey: ${expression} });
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain(classification);
+  });
+
+  it("does not accept idempotency-looking metadata outside Stripe's real option slot", () => {
+    const out = scan(`
+      export const charge = (stripe: Stripe, bookingId: string) =>
+        stripe.paymentIntents.create({ amount: 100 }, { metadata: { idempotencyNote: bookingId } });
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.taxonomy).toBe("External send without a deterministic idempotency key");
+    expect(out[0]!.evidence).toContain("Unrelated idempotency-looking metadata");
+  });
+
+  it("emits a bounded review finding when a helper hides key semantics", () => {
+    const out = scan(`
+      declare function makeProviderKey(tenantId: string, bookingId: string, operation: string): string;
+      export const charge = (stripe: Stripe, tenantId: string, bookingId: string) =>
+        stripe.paymentIntents.create(
+          { amount: 100 },
+          { idempotencyKey: makeProviderKey(tenantId, bookingId, "charge") },
+        );
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("mechanically-unproven-key-helper");
+    expect(out[0]!.evidence).toContain("THIS FILE only");
+    expect(out[0]!.evidence).toContain("FALSIFIER:");
+  });
+
+  it("accepts scoped stable keys in Stripe and REST provider option shapes", () => {
+    expect(
+      scan(`
+        export async function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          const key = \`charge:\${tenantId}:\${bookingId}:v1\`;
+          await stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
+          return fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: new Headers({ "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` }),
+          });
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("is owned by the live registry with exact source-file examined-unit accounting", () => {
+    const registered = MECHANICAL_DETECTORS.find((detector) => detector.id === "idempotency");
+    expect(registered?.taxonomies).toContain("Idempotency key does not identify a stable scoped operation");
+    expect(registered?.applicableFiles.description).toContain("shared inventory");
+    expect(registered?.examinedUnits({} as never, [{ path: "src/inngest/job.ts", text: "" }])).toBe(1);
   });
 
   it("is silent outside a retryable path — the platform, not the user, is what makes a retry likely", () => {

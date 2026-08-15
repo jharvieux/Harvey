@@ -41,7 +41,29 @@ const DEDUP_TABLE = /(webhook_events?|processed_events?|idempotency|idempotent|d
 const DISPATCH_CALLEE = /^(handle|dispatch|process|apply|route|execute|perform|on)[A-Z][A-Za-z0-9_]*$/;
 const RETRYABLE_PATH = /(^|\/)(inngest|cron|crons|queue|queues|worker|workers|jobs?|tasks?|webhooks?|scheduler|schedules?)(\/|\.|$)/i;
 const IDEMPOTENT_HOST = /https?:\/\/api\.(stripe|resend|apify|sendgrid|postmarkapp|mailgun|twilio|adyen|square(?:up)?)\.com/i;
-const IDEMPOTENCY_OPTION = /idempotenc/i;
+const IDEMPOTENCY_KEY_TAXONOMY = "Idempotency key does not identify a stable scoped operation";
+const TENANT_IDENTITY = /(?:^|_)(tenant|org(?:anization)?|workspace|team|account)_?(?:id|key|ref)?$/i;
+const ENTITY_IDENTITY = /(?:id|uuid|key|ref|reference)$/i;
+const ATTEMPT_IDENTITY = /(?:^|_)(?:attempt|retry|nonce|timestamp|time|now)(?:_|$)/i;
+const OPERATION_WORD = /[a-z][a-z0-9_-]{2,}/i;
+
+type KeySlot =
+  | { kind: "absent" }
+  | { kind: "unknown"; detail: string }
+  | { kind: "present"; expression: ts.Expression };
+
+interface ExternalSendTarget {
+  api: string;
+  call: ts.CallExpression;
+  key: KeySlot;
+}
+
+interface KeyAnalysis {
+  safe: boolean;
+  classification: string;
+  detail: string;
+  falsifier: string;
+}
 
 function isLoop(n: ts.Node): boolean {
   return ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n) || ts.isWhileStatement(n) || ts.isDoStatement(n);
@@ -166,13 +188,105 @@ function dedupBeforeDispatch(path: string, sf: ts.SourceFile): Finding[] {
   return findings;
 }
 
-// (24) An external send from a retryable path with no idempotency key. `optionsOf` returns the
-// argument that would carry the key, or undefined when the call is not one we can speak to.
-function optionsOf(node: ts.CallExpression, sf: ts.SourceFile): { arg: ts.Expression | undefined; api: string } | undefined {
+function propertyName(property: ts.ObjectLiteralElementLike, sf: ts.SourceFile): string | undefined {
+  if (!property.name) return undefined;
+  if (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) || ts.isNumericLiteral(property.name)) return property.name.text;
+  if (ts.isComputedPropertyName(property.name) && ts.isStringLiteralLike(property.name.expression)) return property.name.expression.text;
+  return property.name.getText(sf).replace(/["'`]/g, "");
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function initializerOf(name: string, before: number, sf: ts.SourceFile): ts.Expression | undefined {
+  let best: ts.VariableDeclaration | undefined;
+  const visit = (node: ts.Node): void => {
+    if (node.getStart(sf) >= before) return;
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && node.initializer) {
+      if (!best || node.getStart(sf) > best.getStart(sf)) best = node;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return best?.initializer;
+}
+
+function resolveExpression(expression: ts.Expression, sf: ts.SourceFile, seen = new Set<string>()): ts.Expression {
+  const unwrapped = unwrapExpression(expression);
+  if (!ts.isIdentifier(unwrapped) || seen.has(unwrapped.text)) return unwrapped;
+  const initializer = initializerOf(unwrapped.text, unwrapped.getStart(sf), sf);
+  if (!initializer) return unwrapped;
+  seen.add(unwrapped.text);
+  return resolveExpression(initializer, sf, seen);
+}
+
+function objectLiteralOf(expression: ts.Expression, sf: ts.SourceFile): ts.ObjectLiteralExpression | undefined {
+  const resolved = resolveExpression(expression, sf);
+  if (ts.isObjectLiteralExpression(resolved)) return resolved;
+  if (ts.isNewExpression(resolved) && ts.isIdentifier(resolved.expression) && resolved.expression.text === "Headers" && resolved.arguments?.[0]) {
+    return objectLiteralOf(resolved.arguments[0], sf);
+  }
+  return undefined;
+}
+
+function keyInObject(object: ts.ObjectLiteralExpression, keyName: string, sf: ts.SourceFile): KeySlot {
+  for (const property of object.properties) {
+    if (propertyName(property, sf)?.toLowerCase() !== keyName.toLowerCase()) continue;
+    if (ts.isPropertyAssignment(property)) return { kind: "present", expression: property.initializer };
+    if (ts.isShorthandPropertyAssignment(property)) return { kind: "present", expression: property.name };
+    return { kind: "unknown", detail: `the \`${keyName}\` property is not a statically readable value` };
+  }
+  return object.properties.some(ts.isSpreadAssignment)
+    ? { kind: "unknown", detail: `the object uses a spread, so the \`${keyName}\` slot cannot be proven present or absent` }
+    : { kind: "absent" };
+}
+
+function stripeKey(node: ts.CallExpression, sf: ts.SourceFile): KeySlot {
+  const options = node.arguments[1];
+  if (!options) return { kind: "absent" };
+  const object = objectLiteralOf(options, sf);
+  return object ? keyInObject(object, "idempotencyKey", sf) : { kind: "unknown", detail: "the Stripe request-options expression is not a local object literal" };
+}
+
+function fetchKey(node: ts.CallExpression, sf: ts.SourceFile): KeySlot {
+  const options = node.arguments[1];
+  if (!options) return { kind: "absent" };
+  const object = objectLiteralOf(options, sf);
+  if (!object) return { kind: "unknown", detail: "the fetch options expression is not a local object literal" };
+  const headersProperty = object.properties.find((property) => propertyName(property, sf)?.toLowerCase() === "headers");
+  if (!headersProperty) {
+    return object.properties.some(ts.isSpreadAssignment)
+      ? { kind: "unknown", detail: "the fetch options use a spread, so the headers cannot be proven" }
+      : { kind: "absent" };
+  }
+  if (!ts.isPropertyAssignment(headersProperty) && !ts.isShorthandPropertyAssignment(headersProperty)) {
+    return { kind: "unknown", detail: "the fetch headers are not a statically readable value" };
+  }
+  const headersExpression = ts.isPropertyAssignment(headersProperty) ? headersProperty.initializer : headersProperty.name;
+  const headers = objectLiteralOf(headersExpression, sf);
+  return headers
+    ? keyInObject(headers, "Idempotency-Key", sf)
+    : { kind: "unknown", detail: "the fetch headers expression is not a local object literal or Headers initializer" };
+}
+
+// (24) An external send from a retryable path. Provider-specific extraction returns the exact key
+// slot rather than accepting any idempotency-looking text elsewhere in request options.
+function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile): ExternalSendTarget | undefined {
   if (ts.isIdentifier(node.expression) && node.expression.text === "fetch") {
     const url = node.arguments[0];
     const host = url && ts.isStringLiteralLike(url) ? IDEMPOTENT_HOST.exec(url.text) : null;
-    return host ? { arg: node.arguments[1], api: host[0] } : undefined;
+    return host ? { call: node, key: fetchKey(node, sf), api: host[0] } : undefined;
   }
   // stripe.<resource>.create(params, options)
   if (
@@ -181,18 +295,183 @@ function optionsOf(node: ts.CallExpression, sf: ts.SourceFile): { arg: ts.Expres
     ts.isPropertyAccessExpression(node.expression.expression) &&
     /stripe/i.test(node.expression.expression.expression.getText(sf))
   ) {
-    return { arg: node.arguments[1], api: `Stripe ${node.expression.expression.name.text}.create` };
+    return { call: node, key: stripeKey(node, sf), api: `Stripe ${node.expression.expression.name.text}.create` };
   }
   return undefined;
+}
+
+function enclosingFunction(node: ts.Node): ts.SignatureDeclarationBase | undefined {
+  let current = node.parent;
+  while (current) {
+    if (
+      ts.isFunctionDeclaration(current) ||
+      ts.isFunctionExpression(current) ||
+      ts.isArrowFunction(current) ||
+      ts.isMethodDeclaration(current)
+    ) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function analyzeKey(expression: ts.Expression, call: ts.CallExpression, sf: ts.SourceFile): KeyAnalysis {
+  const resolved = resolveExpression(expression, sf);
+  const text = resolved.getText(sf);
+  const identifiers = new Set<string>();
+  const literals: string[] = [];
+  let unknownCall: string | undefined;
+  let volatile: string | undefined;
+
+  const visit = (node: ts.Node): void => {
+    const nodeText = node.getText(sf);
+    if (!volatile && ts.isCallExpression(node) && /(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid)\s*\(/i.test(nodeText)) {
+      volatile = "random-per-attempt";
+    } else if (
+      !volatile &&
+      ((ts.isCallExpression(node) && /(?:Date\.now|performance\.now|process\.hrtime)\s*\(/.test(nodeText)) ||
+        (ts.isNewExpression(node) && /^new\s+Date\s*\(/.test(nodeText)))
+    ) {
+      volatile = "clock-derived";
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(sf);
+      if (!/(?:Math\.random|randomUUID|randomBytes|uuid(?:\.v4)?|nanoid|Date\.now|performance\.now|process\.hrtime)$/i.test(callee) &&
+          !/^(?:String|encodeURIComponent|sha(?:1|256|512)|hash)$/i.test(callee)) {
+        unknownCall ??= callee;
+      }
+    }
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      literals.push(node.text);
+    }
+    if (ts.isIdentifier(node)) {
+      const parent = node.parent;
+      const isPropertyName =
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        ((ts.isPropertyAssignment(parent) || ts.isShorthandPropertyAssignment(parent)) && parent.name === node) ||
+        (ts.isCallExpression(parent) && parent.expression === node);
+      if (!isPropertyName) identifiers.add(node.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(resolved);
+
+  if (volatile === "random-per-attempt") {
+    return {
+      safe: false,
+      classification: volatile,
+      detail: `\`${text}\` creates a new value on each attempt, so one logical operation cannot reproduce its key`,
+      falsifier: "replace the random source with immutable tenant/entity/operation identifiers and show two evaluations for the same operation are equal",
+    };
+  }
+  if (volatile === "clock-derived" || [...identifiers].some((name) => ATTEMPT_IDENTITY.test(name))) {
+    return {
+      safe: false,
+      classification: "clock-or-attempt-derived",
+      detail: `\`${text}\` depends on time or attempt-local state, so a retry changes the key`,
+      falsifier: "evaluate the key for two retry attempts of the same logical operation and show byte-for-byte equality",
+    };
+  }
+
+  const identityNames = [...identifiers].filter((name) => ENTITY_IDENTITY.test(name));
+  if (identityNames.length === 0) {
+    return {
+      safe: false,
+      classification: identifiers.size === 0 ? "unsafe-global-constant" : "missing-entity-scope",
+      detail:
+        identifiers.size === 0
+          ? `\`${text}\` has no immutable operation identity and can collide across every call site execution`
+          : `\`${text}\` does not include a recognisable immutable entity/operation identifier`,
+      falsifier: "evaluate the key for two different entities in the same scope and show the values differ",
+    };
+  }
+
+  const fn = enclosingFunction(call);
+  const parameterNames = fn?.parameters.map((parameter) => parameter.name.getText(sf)) ?? [];
+  const tenantRequired = parameterNames.some((name) => TENANT_IDENTITY.test(name));
+  const tenantPresent = [...identifiers].some((name) => TENANT_IDENTITY.test(name));
+  if (tenantRequired && !tenantPresent) {
+    return {
+      safe: false,
+      classification: "missing-tenant-scope",
+      detail: `\`${text}\` omits the tenant-like identity available to this function (\`${parameterNames.join(", ")}\`)`,
+      falsifier: "evaluate the key for the same entity identifier in two tenants and show the values differ",
+    };
+  }
+
+  if (!literals.some((literal) => OPERATION_WORD.test(literal))) {
+    return {
+      safe: false,
+      classification: "missing-operation-scope",
+      detail: `\`${text}\` has an entity identity but no stable operation discriminator`,
+      falsifier: "evaluate two different operations for the same tenant/entity and show their keys differ",
+    };
+  }
+
+  if (unknownCall) {
+    return {
+      safe: false,
+      classification: "mechanically-unproven-key-helper",
+      detail: `the helper call \`${unknownCall}(…)\` hides whether \`${text}\` is retry-stable and collision-safe`,
+      falsifier: "inline or expose the helper's deterministic tenant/entity/operation composition so this pass can verify it",
+    };
+  }
+
+  return {
+    safe: true,
+    classification: "stable-scoped-operation-key",
+    detail: `\`${text}\` combines an immutable identity with an operation discriminator${tenantRequired ? " and the available tenant identity" : ""}`,
+    falsifier: "change any tenant, entity, or operation input and observe a collision, or retry unchanged inputs and observe a different key",
+  };
 }
 
 function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile): Finding[] {
   if (!RETRYABLE_PATH.test(path)) return [];
   const findings: Finding[] = [];
   for (const call of calls(sf)) {
-    const target = optionsOf(call, sf);
+    const target = externalSendTarget(call, sf);
     if (!target) continue;
-    if (target.arg && IDEMPOTENCY_OPTION.test(target.arg.getText(sf))) continue;
+    if (target.key.kind === "present") {
+      const analysis = analyzeKey(target.key.expression, call, sf);
+      if (analysis.safe) continue;
+      findings.push(
+        mechanicalFinding({
+          id: `RETRY-unsafe-idempotency-key-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${target.key.expression.getStart(sf)}`,
+          title: `${path} — idempotency key does not identify one stable scoped operation`,
+          severity: "Medium",
+          category: "Business logic",
+          taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
+          location: loc(path, sf, target.key.expression),
+          evidence: `Heuristic "external-send-idempotency-key" classified the ${target.api} key as ${analysis.classification}: ${analysis.detail}. SCOPE OF THIS CHECK: it reads the provider's exact key option and local expression bindings in THIS FILE only. FALSIFIER: ${analysis.falsifier}.`,
+          impact:
+            "If a retry changes the key, the provider performs the logical operation twice. If different tenant/entity/operation tuples share the key, the provider suppresses legitimate work as a duplicate.",
+          fix:
+            "Derive the key from the domain's immutable tenant/entity/operation identity so identical logical operations reproduce one key and different scoped operations cannot collide. Payload hashing is optional, not a universal requirement.",
+          precisionTier: "review",
+        }),
+      );
+      continue;
+    }
+    if (target.key.kind === "unknown") {
+      findings.push(
+        mechanicalFinding({
+          id: `RETRY-unproven-idempotency-key-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${target.call.getStart(sf)}`,
+          title: `${path} — external send's idempotency key cannot be verified mechanically`,
+          severity: "Medium",
+          category: "Business logic",
+          taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
+          location: loc(path, sf, target.call),
+          evidence: `Heuristic "external-send-idempotency-key" inspected ${target.api}, but ${target.key.detail}. SCOPE OF THIS CHECK: local provider options in THIS FILE only. FALSIFIER: expose the exact key expression locally and show immutable tenant/entity/operation inputs that are equal across retries and distinct across different operations.`,
+          impact:
+            "The visible code cannot establish whether retries deduplicate or whether distinct scoped operations collide; treating an opaque option as safe would silently suppress review of both failure modes.",
+          fix:
+            "Make the provider's exact key option statically visible, derived from the domain's immutable tenant/entity/operation identity. Do not add a payload hash unless that is the domain invariant.",
+          precisionTier: "review",
+        }),
+      );
+      continue;
+    }
     findings.push(
       mechanicalFinding({
         id: `RETRY-no-idempotency-key-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${call.getStart(sf)}`,
@@ -201,10 +480,10 @@ function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile): Finding[
         category: "Business logic",
         taxonomy: "External send without a deterministic idempotency key",
         location: loc(path, sf, call),
-        evidence: `Heuristic "external-send-idempotency" matched a call to ${target.api} from a retryable path (\`${path}\`) whose options carry no idempotency key.`,
+        evidence: `Heuristic "external-send-idempotency" matched a call to ${target.api} from a retryable path (\`${path}\`) whose exact provider option carries no idempotency key. Unrelated idempotency-looking metadata does not satisfy this check.`,
         impact:
           "The platform retries this step on any failure after the call was already accepted, so the operation lands twice. The provider's dedup window is minutes to hours and single-run tests never retry, so the duplicate only appears in production.",
-        fix: "Pass an idempotency key derived from immutable identifiers (`sha256(tenant_id|entity_id|operation|version)`) — the Stripe SDK's `idempotencyKey` request option, or an `Idempotency-Key` header on the REST call.",
+        fix: "Pass an idempotency key derived from the domain's immutable tenant/entity/operation identity — the Stripe SDK's `idempotencyKey` request option, or an `Idempotency-Key` header on the REST call. Hashing is optional; stable scoped identity is the invariant.",
         precisionTier: "review",
       }),
     );
