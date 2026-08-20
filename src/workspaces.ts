@@ -446,9 +446,10 @@ function discoverWorkspaceRecords(repoRoot: string): {
     }
   }
   const records: WorkspaceRecord[] = [];
+  const inventoryPackages: WorkspaceInventoryPackage[] = [];
   const unresolvedGlobs: string[] = [];
   const unreadable: string[] = [];
-  const byId = new Map<WorkspaceId, WorkspaceRecord>();
+  const byId = new Map<WorkspaceId, WorkspaceInventoryPackage>();
   const applicationWorkspaceIds = new Set<WorkspaceId>();
   const observedUnreadable = new Set<string>();
 
@@ -465,20 +466,31 @@ function discoverWorkspaceRecords(repoRoot: string): {
     }
     try {
       const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8")) as WorkspaceManifest;
-      const record: WorkspaceRecord = {
+      const inventoryPackage: WorkspaceInventoryPackage = {
         id,
         dir,
         manifestPath,
         ...(typeof manifest.name === "string" ? { name: manifest.name } : {}),
         scripts: scriptEvidence(manifestPath, manifest.scripts),
         discoveredBy: [discoveredBy],
-        manifest: { ...manifest, label: manifestPath },
       };
+      const record: WorkspaceRecord = { ...inventoryPackage, manifest: { ...manifest, label: manifestPath } };
+      inventoryPackages.push(inventoryPackage);
       records.push(record);
-      byId.set(id, record);
+      byId.set(id, inventoryPackage);
       if (application) applicationWorkspaceIds.add(id);
       return true;
     } catch {
+      const inventoryPackage: WorkspaceInventoryPackage = {
+        id,
+        dir,
+        manifestPath,
+        scripts: [],
+        discoveredBy: [discoveredBy],
+      };
+      inventoryPackages.push(inventoryPackage);
+      byId.set(id, inventoryPackage);
+      if (application) applicationWorkspaceIds.add(id);
       if (!observedUnreadable.has(manifestPath)) {
         observedUnreadable.add(manifestPath);
         unreadable.push(manifestPath);
@@ -491,6 +503,15 @@ function discoverWorkspaceRecords(repoRoot: string): {
   if (existsSync(join(logicalRoot, "package.json"))) {
     read(logicalRoot, { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }, false);
   } else {
+    const rootPackage: WorkspaceInventoryPackage = {
+      id: workspaceIdForDir("."),
+      dir: ".",
+      manifestPath: "package.json",
+      scripts: [],
+      discoveredBy: [{ kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }],
+    };
+    inventoryPackages.push(rootPackage);
+    byId.set(rootPackage.id, rootPackage);
     observations.push({ kind: "unreadable-manifest", path: "package.json", reason: "root manifest is missing" });
   }
   for (const glob of globs) {
@@ -517,7 +538,7 @@ function discoverWorkspaceRecords(repoRoot: string): {
       observations.push({ kind: "unresolved-glob", glob, sourcePath: sourceDetails.sourcePath, reason: "glob matched no included directory containing package.json" });
     }
   }
-  const packages = records.map((entry) => ({
+  const packages = inventoryPackages.map((entry) => ({
     id: entry.id,
     dir: entry.dir,
     manifestPath: entry.manifestPath,

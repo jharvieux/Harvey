@@ -135,6 +135,32 @@ describe("discoverReadinessPlan", () => {
     expect(processCanary.spawnSync).not.toHaveBeenCalled();
   });
 
+  it("keeps unreadable root and member manifests counted with explicit non-executable stages", () => {
+    const root = fixture();
+    writeFileSync(join(root, "package.json"), "{not json");
+
+    let plan = discoverReadinessPlan(root);
+    expect(plan.workspaces.map((workspace) => workspace.id)).toEqual(["workspace:root"]);
+    expect(plan.packageManager).toMatchObject({ status: "not-assessed", reason: "unreadable-manifest" });
+    expect(stage(plan, "workspace:root", "build")).toMatchObject({
+      assessment: "not-assessed",
+      reasonCode: "unreadable-manifest",
+      safety: "non-executable",
+    });
+
+    writePackage(root, ".", { name: "root", workspaces: ["apps/*"] });
+    writeFileSync(join(root, "package-lock.json"), "{}");
+    mkdirSync(join(root, "apps", "broken"), { recursive: true });
+    writeFileSync(join(root, "apps", "broken", "package.json"), "{still not json");
+    plan = discoverReadinessPlan(root);
+    expect(plan.workspaceInventory.applicationWorkspaceIds).toEqual(["workspace:apps/broken"]);
+    expect(stage(plan, "workspace:apps/broken", "test")).toMatchObject({
+      assessment: "not-assessed",
+      reasonCode: "unreadable-manifest",
+    });
+    expect(processCanary.spawn).not.toHaveBeenCalled();
+  });
+
   it("models supported postinstall codegen as an install effect and blocks build/test behind it", () => {
     const root = fixture();
     writePackage(root, ".", {

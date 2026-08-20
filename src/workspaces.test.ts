@@ -232,7 +232,13 @@ describe("discoverWorkspaceInventoryV1", () => {
     manifest("examples/demo", { name: "demo" });
 
     const inventory = discoverWorkspaceInventory(dir);
-    expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
+    expect(inventory.packages.map((entry) => entry.id)).toEqual([
+      "workspace:root",
+      "workspace:packages/app",
+      "workspace:packages/broken",
+    ]);
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:packages/app", "workspace:packages/broken"]);
+    expect(inventory.packages.find((entry) => entry.id === "workspace:packages/broken")?.scripts).toEqual([]);
     expect(inventory.observations).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "excluded", path: "packages/generated/package.json", glob: "!packages/generated" }),
       expect.objectContaining({ kind: "excluded", path: "examples/demo/package.json", glob: "!examples/*" }),

@@ -80,7 +80,7 @@ export type ReadinessStageV1 =
     })
   | (ReadinessStageBaseV1 & {
       assessment: "not-assessed";
-      reasonCode: "package-manager-not-selected" | "supported-config-without-script" | "unreadable-config" | "ambiguous-scripts";
+      reasonCode: "package-manager-not-selected" | "supported-config-without-script" | "unreadable-config" | "unreadable-manifest" | "ambiguous-scripts";
       reason: string;
       falsifier: string;
     });
@@ -214,13 +214,18 @@ function managerProvenance(resolution: PackageManagerResolution): ReadinessProve
   }));
 }
 
-function installStage(pkg: WorkspaceInventoryPackage, resolution: PackageManagerResolution): ReadinessStageV1 {
+function installStage(
+  pkg: WorkspaceInventoryPackage,
+  resolution: PackageManagerResolution,
+  manifestProblem?: { path: string; reason: string },
+): ReadinessStageV1 {
   const id = readinessStageId(workspaceIdForDir("."), "install");
   const scripts = scriptMap(pkg);
   const lifecycle = ["preinstall", "install", "postinstall"]
     .flatMap((name) => scripts.has(name) ? [[name, scripts.get(name)!] as const] : []);
   const provenance = normalizedProvenance([
     ...managerProvenance(resolution),
+    ...(manifestProblem ? [{ kind: "workspace-observation" as const, path: manifestProblem.path, detail: manifestProblem.reason }] : []),
     ...lifecycle.map(([name, body]) => manifestScriptProvenance(pkg, name, body)),
   ]);
   const base: ReadinessStageBaseV1 = {
@@ -261,12 +266,30 @@ function nonInstallStage(
   resolution: PackageManagerResolution,
   installId: ReadinessStageId,
   codegenId?: ReadinessStageId,
+  manifestProblem?: { path: string; reason: string },
 ): ReadinessStageV1 {
   const id = readinessStageId(pkg.id, kind);
   const scripts = scriptMap(pkg);
-  const config = configEvidence(repoRoot, pkg, kind);
   const prerequisites = [installId];
   if (codegenId && ["build", "typecheck", "test"].includes(kind)) prerequisites.push(codegenId);
+
+  if (manifestProblem) {
+    return {
+      id,
+      kind,
+      workspaceId: pkg.id,
+      prerequisiteStageIds: prerequisites,
+      safety: "non-executable",
+      requiredEnvNames: [],
+      provenance: [{ kind: "workspace-observation", path: manifestProblem.path, detail: manifestProblem.reason }],
+      assessment: "not-assessed",
+      reasonCode: "unreadable-manifest",
+      reason: `workspace manifest could not be used for ${kind} discovery: ${manifestProblem.reason}`,
+      falsifier: "Provide a readable package.json for this workspace and rediscover the plan.",
+    };
+  }
+
+  const config = configEvidence(repoRoot, pkg, kind);
 
   const postinstall = scripts.get("postinstall");
   const matchingScriptNames = SCRIPT_NAMES[kind].filter((name) => scripts.has(name));
@@ -439,18 +462,22 @@ export function discoverReadinessPlan(repoRoot: string, inventory = discoverWork
     discoveredBy: [],
   };
   const installId = readinessStageId(workspaceIdForDir("."), "install");
-  const stages: ReadinessStageV1[] = [installStage(rootPackage, packageManager)];
+  const manifestProblems = new Map(inventory.observations
+    .filter((observation) => observation.kind === "unreadable-manifest")
+    .map((observation) => [observation.path, observation]));
+  const stages: ReadinessStageV1[] = [installStage(rootPackage, packageManager, manifestProblems.get(rootPackage.manifestPath))];
 
   const workspaces: ReadinessWorkspaceV1[] = [];
   for (const pkg of inventory.packages) {
     const codegenId = readinessStageId(pkg.id, "codegen");
-    const codegen = nonInstallStage(repoRoot, pkg, "codegen", packageManager, installId);
+    const manifestProblem = manifestProblems.get(pkg.manifestPath);
+    const codegen = nonInstallStage(repoRoot, pkg, "codegen", packageManager, installId, undefined, manifestProblem);
     const packageStages: ReadinessStageV1[] = [
       codegen,
-      nonInstallStage(repoRoot, pkg, "build", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId),
-      nonInstallStage(repoRoot, pkg, "typecheck", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId),
-      nonInstallStage(repoRoot, pkg, "lint", packageManager, installId),
-      nonInstallStage(repoRoot, pkg, "test", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId),
+      nonInstallStage(repoRoot, pkg, "build", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId, manifestProblem),
+      nonInstallStage(repoRoot, pkg, "typecheck", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId, manifestProblem),
+      nonInstallStage(repoRoot, pkg, "lint", packageManager, installId, undefined, manifestProblem),
+      nonInstallStage(repoRoot, pkg, "test", packageManager, installId, codegen.assessment === "absent" ? undefined : codegenId, manifestProblem),
     ];
     stages.push(...packageStages);
     workspaces.push({
@@ -767,7 +794,7 @@ export function validateReadinessPlanV1(value: unknown): ReadinessPlanV1 {
     if (candidate.assessment === "absent" && !["missing-script-and-config", "placeholder-script"].includes(String(candidate.reasonCode))) {
       throw new Error(`absent stage ${candidate.id} has an invalid reasonCode`);
     }
-    if (candidate.assessment === "not-assessed" && !["package-manager-not-selected", "supported-config-without-script", "unreadable-config", "ambiguous-scripts"].includes(String(candidate.reasonCode))) {
+    if (candidate.assessment === "not-assessed" && !["package-manager-not-selected", "supported-config-without-script", "unreadable-config", "unreadable-manifest", "ambiguous-scripts"].includes(String(candidate.reasonCode))) {
       throw new Error(`not-assessed stage ${candidate.id} has an invalid reasonCode`);
     }
     const expectedSafety = candidate.assessment === "planned"
