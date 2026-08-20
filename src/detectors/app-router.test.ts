@@ -1757,6 +1757,104 @@ describe("import resolution across a monorepo's workspaces (#1461)", () => {
   });
 });
 
+describe("baseUrl-rooted bare import resolution (#1812)", () => {
+  it("resolves root candidates, index modules, ESM suffixes, and a local/package collision", () => {
+    const files: SourceInput[] = [
+      { path: "package.json", text: JSON.stringify({ dependencies: { react: "^19", zod: "^4" } }) },
+      {
+        path: "tsconfig.json",
+        text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }),
+      },
+      { path: "app/page.tsx", text: "" },
+      { path: "hooks/useTeam.ts", text: "export const useTeam = () => ({});" },
+      { path: "types/index.ts", text: "export interface Team {}" },
+      { path: "react.ts", text: "export default {};" },
+    ];
+    const paths = new Set(files.map((file) => file.path));
+    const aliases = collectPathAliases(files);
+    const from = "app/page.tsx";
+
+    expect(aliases.filter((alias) => alias.kind === "base-url")).toEqual([
+      { kind: "base-url", prefix: "", baseDir: "", scope: "" },
+    ]);
+    expect(resolveImport(from, "hooks/useTeam", paths, aliases)).toBe("hooks/useTeam.ts");
+    expect(resolveImport(from, "types", paths, aliases)).toBe("types/index.ts");
+    expect(resolveImport(from, "hooks/useTeam.js", paths, aliases)).toBe("hooks/useTeam.ts");
+    // TypeScript resolves an existing baseUrl-local source before the same-named dependency.
+    expect(resolveImport(from, "react", paths, aliases)).toBe("react.ts");
+    // A declared package with no loaded local candidate remains outside Harvey's source graph.
+    expect(resolveImport(from, "zod", paths, aliases)).toBeUndefined();
+  });
+
+  it("uses the deepest enclosing baseUrl, falls back to a parent, and never borrows a sibling", () => {
+    const files: SourceInput[] = [
+      { path: "tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: "." } }) },
+      { path: "apps/web/tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: "./src" } }) },
+      { path: "apps/admin/tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: "./src" } }) },
+      { path: "apps/web/app/page.tsx", text: "" },
+      { path: "apps/web/src/hooks/useTeam.ts", text: "export const web = true;" },
+      { path: "apps/admin/src/hooks/useTeam.ts", text: "export const admin = true;" },
+      { path: "apps/admin/src/adminOnly.ts", text: "export const adminOnly = true;" },
+      { path: "shared/fallback.ts", text: "export const shared = true;" },
+    ];
+    const paths = new Set(files.map((file) => file.path));
+    const aliases = collectPathAliases(files);
+    const from = "apps/web/app/page.tsx";
+
+    expect(resolveImport(from, "hooks/useTeam", paths, aliases)).toBe("apps/web/src/hooks/useTeam.ts");
+    expect(resolveImport(from, "shared/fallback", paths, aliases)).toBe("shared/fallback.ts");
+    expect(resolveImport(from, "adminOnly", paths, aliases)).toBeUndefined();
+  });
+
+  it("does not fall through to baseUrl after an applicable paths pattern misses", () => {
+    const files: SourceInput[] = [
+      {
+        path: "tsconfig.json",
+        text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "hooks/*": ["./generated/*"] } } }),
+      },
+      { path: "app/page.tsx", text: "" },
+      { path: "hooks/useTeam.ts", text: "export const useTeam = () => ({});" },
+      { path: "generated/useKnown.ts", text: "export const known = true;" },
+    ];
+    const paths = new Set(files.map((file) => file.path));
+    const aliases = collectPathAliases(files);
+
+    expect(resolveImport("app/page.tsx", "hooks/useKnown", paths, aliases)).toBe("generated/useKnown.ts");
+    expect(resolveImport("app/page.tsx", "hooks/useTeam", paths, aliases)).toBeUndefined();
+  });
+
+  it("creates a production import-graph edge and finding for the loaded local candidate", () => {
+    const reachable: SourceInput[] = [
+      { path: "package.json", text: JSON.stringify({ dependencies: { react: "^19" } }) },
+      {
+        path: "tsconfig.json",
+        text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./src/*"] } } }),
+      },
+      {
+        path: "app/page.tsx",
+        text: `'use client';\nimport { key } from "lib/secrets";\nexport default function Page() { return <p>{key}</p>; }\n`,
+      },
+      { path: "lib/secrets.ts", text: "export const key = process.env.STRIPE_SECRET_KEY;\n" },
+    ];
+    const reachableFindings = detectAppRouterFindings(reachable);
+    expect(reachableFindings.filter((finding) => finding.taxonomy === "M9 — Missing server-only guard")).toHaveLength(1);
+  });
+
+  it("leaves a declared package with no loaded same-named candidate outside the source graph", () => {
+    const externalNearMiss: SourceInput[] = [
+      { path: "package.json", text: JSON.stringify({ dependencies: { "lib-secrets": "^1" } }) },
+      { path: "tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: "." } }) },
+      {
+        path: "app/page.tsx",
+        text: `'use client';\nimport { key } from "lib-secrets";\nexport default function Page() { return <p>{key}</p>; }\n`,
+      },
+      { path: "lib/secrets.ts", text: "export const key = process.env.STRIPE_SECRET_KEY;\n" },
+    ];
+    const nearMissFindings = detectAppRouterFindings(externalNearMiss);
+    expect(nearMissFindings.filter((finding) => finding.taxonomy === "M9 — Missing server-only guard")).toHaveLength(0);
+  });
+});
+
 describe("client-reachability of a server-exclusive module (#1461)", () => {
   const GUARD = "M9 — Missing server-only guard";
   const secretModule = { path: "lib/secrets.ts", text: `export const key = process.env.STRIPE_SECRET_KEY;\n` };
