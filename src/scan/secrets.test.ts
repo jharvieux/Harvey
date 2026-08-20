@@ -299,6 +299,7 @@ describe("corpus-only deterministic secret candidates (#1876)", () => {
       vi.mocked(spawnSync).mockClear();
       const findings = scanSecrets(dir, dir);
       expect(vi.mocked(spawnSync).mock.calls.some(([binary]) => binary === "trufflehog")).toBe(true);
+      expect(vi.mocked(spawnSync).mock.calls.filter(([binary]) => binary === "trufflehog").every(([, args]) => args?.[0] === "--no-update")).toBe(true);
       expect(findings.some((finding) => finding.id === "SEC-CI-CANDIDATE-00")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -325,7 +326,7 @@ describe("corpus-only deterministic secret candidates (#1876)", () => {
 // ExtraData.rotation_guide, SourceMetadata.Data.Git.email/timestamp/commit/line, DecoderName —
 // comes from the tool.
 const capturedTruffleHog = JSON.parse(
-  readFileSync(new URL("./__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./__fixtures__/trufflehog/trufflehog-3.97.0-git-unverified.json", import.meta.url), "utf8"),
 ) as TruffleHogResult[];
 
 describe("TruffleHog rotation guidance and commit provenance reach the finding (#1078)", () => {
@@ -342,7 +343,7 @@ describe("TruffleHog rotation guidance and commit provenance reach the finding (
     const f = parseTruffleHogFindings([captured], "git-history")[0];
     expect(f?.fix).toContain("https://howtorotate.com/docs/tutorials/github/");
     expect(f?.evidence).toContain("Harvey Calibration <calibration@harvey.test>");
-    expect(f?.evidence).toContain("2026-07-26 21:43:32 +0000");
+    expect(f?.evidence).toContain("2026-08-20 04:55:59 +0000");
   });
 
   it("reports a non-PLAIN decoder — a base64-buried secret is a different finding and a different search", () => {

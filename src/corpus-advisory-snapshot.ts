@@ -8,14 +8,22 @@ export interface CorpusAdvisorySnapshotEntry {
   file: string;
   sha256: string;
   targetCommit: string;
+  capturedAt: string;
+  expiresAt: string;
+  osvScannerVersion: string;
 }
 
 export interface CorpusAdvisorySnapshotManifest {
+  schema: 2;
+  targets: Record<string, CorpusAdvisorySnapshotEntry>;
+}
+
+interface LegacyCorpusAdvisorySnapshotManifest {
   schema: 1;
   capturedAt: string;
   expiresAt: string;
   osvScannerVersion: string;
-  targets: Record<string, CorpusAdvisorySnapshotEntry>;
+  targets: Record<string, Pick<CorpusAdvisorySnapshotEntry, "file" | "sha256" | "targetCommit">>;
 }
 
 interface LoadedCorpusAdvisorySnapshot {
@@ -49,6 +57,65 @@ function isoMillis(value: string, field: string): number {
   return millis;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function entryFromUnknown(slug: string, value: unknown): CorpusAdvisorySnapshotEntry {
+  if (!isRecord(value)) throw new Error(`corpus advisory snapshot entry for ${slug} is not an object`);
+  for (const field of ["file", "sha256", "targetCommit", "capturedAt", "expiresAt", "osvScannerVersion"] as const) {
+    if (typeof value[field] !== "string" || value[field].length === 0) {
+      throw new Error(`corpus advisory snapshot entry for ${slug} has an invalid ${field}`);
+    }
+  }
+  return value as unknown as CorpusAdvisorySnapshotEntry;
+}
+
+export function parseCorpusAdvisorySnapshotManifest(value: unknown): CorpusAdvisorySnapshotManifest {
+  if (!isRecord(value) || value.schema !== 2 || !isRecord(value.targets)) {
+    throw new Error("corpus advisory snapshot manifest has an unsupported or incomplete schema");
+  }
+  const targets = Object.fromEntries(Object.entries(value.targets).map(([slug, entry]) => [slug, entryFromUnknown(slug, entry)]));
+  return { schema: 2, targets };
+}
+
+/**
+ * Upgrade is intentionally generator-only. The loader rejects schema 1 because its global epoch can
+ * be relabelled by a target-only refresh. During an actual migration, the old global provenance is
+ * copied onto every old entry before any selected target receives a new capture epoch.
+ */
+export function migrateCorpusAdvisorySnapshotManifest(value: unknown): CorpusAdvisorySnapshotManifest {
+  if (isRecord(value) && value.schema === 2) return parseCorpusAdvisorySnapshotManifest(value);
+  if (!isRecord(value) || value.schema !== 1 || !isRecord(value.targets)) {
+    throw new Error("corpus advisory snapshot manifest has an unsupported or incomplete schema");
+  }
+  const legacy = value as unknown as LegacyCorpusAdvisorySnapshotManifest;
+  isoMillis(legacy.capturedAt ?? "", "capturedAt");
+  isoMillis(legacy.expiresAt ?? "", "expiresAt");
+  if (typeof legacy.osvScannerVersion !== "string" || legacy.osvScannerVersion.length === 0) {
+    throw new Error("corpus advisory snapshot manifest has an invalid osvScannerVersion");
+  }
+  const targets = Object.fromEntries(
+    Object.entries(legacy.targets).map(([slug, entry]) => [
+      slug,
+      entryFromUnknown(slug, {
+        ...entry,
+        capturedAt: legacy.capturedAt,
+        expiresAt: legacy.expiresAt,
+        osvScannerVersion: legacy.osvScannerVersion,
+      }),
+    ]),
+  );
+  return { schema: 2, targets };
+}
+
+export function mergeCorpusAdvisorySnapshotEntries(
+  prior: CorpusAdvisorySnapshotManifest | undefined,
+  refreshed: Record<string, CorpusAdvisorySnapshotEntry>,
+): CorpusAdvisorySnapshotManifest {
+  return { schema: 2, targets: { ...(prior?.targets ?? {}), ...refreshed } };
+}
+
 export function loadCorpusAdvisorySnapshot(
   slug: string,
   expectedCommit: string,
@@ -57,14 +124,13 @@ export function loadCorpusAdvisorySnapshot(
   const dir = options.dir ?? CORPUS_ADVISORY_SNAPSHOT_DIR;
   const manifestPath = join(dir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Error(`corpus advisory snapshot manifest is missing: ${manifestPath}`);
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Partial<CorpusAdvisorySnapshotManifest>;
-  if (manifest.schema !== 1 || !manifest.targets || typeof manifest.osvScannerVersion !== "string") throw new Error("corpus advisory snapshot manifest has an unsupported or incomplete schema");
-  const capturedAt = isoMillis(manifest.capturedAt ?? "", "capturedAt");
-  const expiresAt = isoMillis(manifest.expiresAt ?? "", "expiresAt");
-  if (expiresAt <= capturedAt) throw new Error("corpus advisory snapshot expiresAt is not after capturedAt");
-  if ((options.now ?? new Date()).getTime() > expiresAt) throw new Error(`corpus advisory snapshot expired at ${manifest.expiresAt}; PR regression cannot report stale advisories as current`);
+  const manifest = parseCorpusAdvisorySnapshotManifest(JSON.parse(readFileSync(manifestPath, "utf8")));
   const entry = manifest.targets[slug];
   if (!entry) throw new Error(`corpus advisory snapshot has no entry for ${slug}`);
+  const capturedAt = isoMillis(entry.capturedAt, `${slug}.capturedAt`);
+  const expiresAt = isoMillis(entry.expiresAt, `${slug}.expiresAt`);
+  if (expiresAt <= capturedAt) throw new Error(`corpus advisory snapshot expiresAt for ${slug} is not after capturedAt`);
+  if ((options.now ?? new Date()).getTime() > expiresAt) throw new Error(`corpus advisory snapshot for ${slug} expired at ${entry.expiresAt}; PR regression cannot report stale advisories as current`);
   if (entry.targetCommit !== expectedCommit) throw new Error(`corpus advisory snapshot for ${slug} covers ${entry.targetCommit}, not pinned target ${expectedCommit}`);
   if (!/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error(`corpus advisory snapshot for ${slug} has an invalid digest`);
   const path = join(dir, entry.file);
@@ -81,9 +147,9 @@ export function loadCorpusAdvisorySnapshot(
   return {
     result,
     digest: entry.sha256,
-    capturedAt: manifest.capturedAt!,
-    expiresAt: manifest.expiresAt!,
-    osvScannerVersion: manifest.osvScannerVersion,
+    capturedAt: entry.capturedAt,
+    expiresAt: entry.expiresAt,
+    osvScannerVersion: entry.osvScannerVersion,
     targetCommit: entry.targetCommit,
   };
 }

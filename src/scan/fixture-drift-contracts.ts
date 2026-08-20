@@ -25,7 +25,7 @@ import type { LighthouseResult } from "../lighthouse.js";
 // the fixture — it must fail loud and prompt a re-verification, not silently pass.
 export const JSCPD_PINNED_VERSION = "4.2.5";
 export const KNIP_PINNED_VERSION = "5.88.1";
-export const TRUFFLEHOG_PINNED_VERSION = "3.96.0";
+export const TRUFFLEHOG_PINNED_VERSION = "3.97.0";
 export const VITALS_PINNED_VERSION = "0.2.0";
 export const STRYKER_PINNED_VERSION = "9.6.1";
 export const LIGHTHOUSE_PINNED_VERSION = "13.4.0";

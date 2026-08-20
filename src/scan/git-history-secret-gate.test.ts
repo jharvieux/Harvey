@@ -17,7 +17,7 @@ import {
 // emits exactly this one record for the planted PAT and NOTHING for the benign file.
 const positiveCapture = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("./__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json", import.meta.url)),
+    fileURLToPath(new URL("./__fixtures__/trufflehog-git-history/trufflehog-3.97.0-git-history.json", import.meta.url)),
     "utf8",
   ),
 ) as TruffleHogGitResult[];
@@ -82,6 +82,11 @@ const withStub = <T>(dir: string, fn: () => T): T => {
 const RECORD = JSON.stringify(positiveCapture[0]);
 
 describe("runTruffleHogGitJson — an incomplete run is not a clean scan (#1757)", () => {
+  it("disables the mutable self-updater before scanning", () => {
+    const stub = stubTruffleHog('[ "$1" = "--no-update" ] || exit 9\nexit 0');
+    expect(withStub(stub, () => runTruffleHogGitJson("/tmp/does-not-matter")).failure).toBeUndefined();
+  });
+
   it("parses a completed run", () => {
     const stub = stubTruffleHog(`echo '${RECORD}'\nexit 0`);
     const run = withStub(stub, () => runTruffleHogGitJson("/tmp/does-not-matter"));
