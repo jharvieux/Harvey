@@ -90,8 +90,13 @@ interface ProvenOperationKeyContract {
   signature: string;
 }
 
+type LogicalOperationContext =
+  | { kind: "named"; display: string; fingerprint: string }
+  | { kind: "unknown"; detail: string };
+
 interface ExternalOperationRecord {
   analysis: KeyAnalysis;
+  operationContext: LogicalOperationContext;
   path: string;
   sf: ts.SourceFile;
   target: ExternalSendTarget;
@@ -864,6 +869,35 @@ function enclosingFunction(node: ts.Node): ts.SignatureDeclarationBase | undefin
     current = current.parent;
   }
   return undefined;
+}
+
+function logicalOperationContext(node: ts.Node): LogicalOperationContext {
+  const fn = enclosingFunction(node);
+  if (!fn) return { kind: "unknown", detail: "the provider call has no enclosing named operation" };
+
+  const directName = declarationPropertyName((fn as ts.SignatureDeclarationBase & { name?: ts.PropertyName }).name);
+  const parentName =
+    !directName && ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
+      ? fn.parent.name.text
+      : !directName && ts.isPropertyAssignment(fn.parent)
+        ? declarationPropertyName(fn.parent.name)
+        : undefined;
+  const display = directName ?? parentName;
+  if (!display) return { kind: "unknown", detail: "the provider call's enclosing function has no static name" };
+
+  const terms = display
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const wrapperPrefixes = new Set(["do", "execute", "handle", "perform", "process", "retry", "run"]);
+  const wrapperSuffixes = new Set(["handler", "job", "task", "worker"]);
+  while (terms.length > 1 && wrapperPrefixes.has(terms[0]!)) terms.shift();
+  while (terms.length > 1 && wrapperSuffixes.has(terms.at(-1)!)) terms.pop();
+  const implementationQualifier = terms.findIndex((term) => ["by", "from", "using", "via", "with"].includes(term));
+  if (implementationQualifier > 0) terms.splice(implementationQualifier);
+  if (terms.length === 0) return { kind: "unknown", detail: `the enclosing function \`${display}\` has no operation-bearing name` };
+  return { kind: "named", display, fingerprint: terms.join("-") };
 }
 
 function declarationPropertyName(name: ts.PropertyName | undefined): string | undefined {
@@ -1640,7 +1674,7 @@ function externalOperationRecords(
     if (target.key.kind === "present") {
       const analysis = analyzeKey(target.key.expression, target, sf, bindings);
       if (analysis.safe && analysis.contract) {
-        records.push({ analysis, path, sf, target });
+        records.push({ analysis, operationContext: logicalOperationContext(target.call), path, sf, target });
         continue;
       }
       if (analysis.safe) continue;
@@ -1702,6 +1736,20 @@ function externalOperationRecords(
 
 function projectWideOperationContractFindings(records: ExternalOperationRecord[]): Finding[] {
   const findings: Finding[] = [];
+  const contextsProveSameOperation = (
+    left: LogicalOperationContext,
+    right: LogicalOperationContext,
+    operationDiscriminator: string,
+  ): boolean => {
+    if (left.kind === "unknown" || right.kind === "unknown") return false;
+    if (left.fingerprint === right.fingerprint) return true;
+    const discriminatorTerms = operationDiscriminator.split(/[^a-z0-9]+/).filter(Boolean);
+    const namesDiscriminator = (context: Extract<LogicalOperationContext, { kind: "named" }>): boolean => {
+      const nameTerms = new Set(context.fingerprint.split("-"));
+      return discriminatorTerms.length > 0 && discriminatorTerms.every((term) => nameTerms.has(term));
+    };
+    return namesDiscriminator(left) && namesDiscriminator(right);
+  };
   const domains = new Map<
     string,
     { byOperation: Map<string, ExternalOperationRecord>; bySignature: Map<string, ExternalOperationRecord> }
@@ -1717,29 +1765,50 @@ function projectWideOperationContractFindings(records: ExternalOperationRecord[]
     domains.set(record.target.providerDomain, domain);
     const sameOperation = domain.byOperation.get(operationIdentity);
     const sameSignature = domain.bySignature.get(contract.signature);
-    let classification: "cross-operation-key-collision" | "inconsistent-logical-operation-key-contract" | undefined;
+    let classification:
+      | "cross-operation-key-collision"
+      | "inconsistent-logical-operation-key-contract"
+      | "mechanically-unproven-logical-operation-collision"
+      | undefined;
     let prior: ExternalOperationRecord | undefined;
     if (sameSignature && sameSignature.target.logicalOperation !== record.target.logicalOperation) {
       classification = "cross-operation-key-collision";
+      prior = sameSignature;
+    } else if (
+      sameSignature &&
+      !contextsProveSameOperation(
+        sameSignature.operationContext,
+        record.operationContext,
+        contract.operationDiscriminator,
+      )
+    ) {
+      classification = "mechanically-unproven-logical-operation-collision";
       prior = sameSignature;
     } else if (sameOperation?.analysis.contract?.signature !== undefined && sameOperation.analysis.contract.signature !== contract.signature) {
       classification = "inconsistent-logical-operation-key-contract";
       prior = sameOperation;
     }
     if (classification && prior && record.target.key.kind === "present") {
-      const collision = classification === "cross-operation-key-collision";
+      const collision = classification !== "inconsistent-logical-operation-key-contract";
+      const contextEvidence = (candidate: ExternalOperationRecord): string =>
+        candidate.operationContext.kind === "named"
+          ? `enclosing operation \`${candidate.operationContext.display}\``
+          : candidate.operationContext.detail;
       findings.push(
         mechanicalFinding({
           id: `RETRY-project-idempotency-contract-${record.path.replace(/[^a-zA-Z0-9]+/g, "-")}-${record.target.key.expression.getStart(record.sf)}`,
-          title: collision
-            ? `${record.path} — different provider effects share one idempotency-key contract`
-            : `${record.path} — one provider effect uses inconsistent idempotency-key contracts`,
+          title:
+            classification === "mechanically-unproven-logical-operation-collision"
+              ? `${record.path} — distinct logical-operation contexts share one idempotency-key contract`
+              : collision
+                ? `${record.path} — different provider effects share one idempotency-key contract`
+                : `${record.path} — one provider effect uses inconsistent idempotency-key contracts`,
           severity: "Medium",
           category: "Business logic",
           taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
           location: loc(record.path, record.sf, record.target.key.expression),
           evidence: collision
-            ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` and ${prior.target.logicalOperation} in \`${prior.path}\` map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the call sites are the same provider effect, or give the different effects disjoint stable operation discriminators.`
+            ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` (${contextEvidence(record)}) and ${prior.target.logicalOperation} in \`${prior.path}\` (${contextEvidence(prior)}) map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the named call-site operations are retry entry points for the same logical effect, or give distinct effects disjoint stable operation discriminators and show their keys differ for one shared tenant/entity tuple.`
             : `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} uses a different proven encoding in \`${record.path}\` than in \`${prior.path}\` inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: show both call sites implement different provider effects, or make every site for this logical operation use one stable decodable contract.`,
           impact: collision
             ? "A provider may suppress one distinct external effect as a retry of another because both effects occupy the same key namespace."

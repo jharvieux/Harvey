@@ -952,6 +952,36 @@ describe("external-send idempotency key (item 24)", () => {
     ).toEqual([]);
   });
 
+  it("reviews distinct logical operations that reuse one provider method and scoped contract", () => {
+    const out = detectIdempotencyFindings([
+      {
+        path: "src/jobs/deposit.ts",
+        text: `function deposit(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["wallet", tenantId, bookingId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/workers/balance.ts",
+        text: `function balance(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["wallet", tenantId, bookingId]) },
+          );
+        }`,
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.precisionTier).toBe("review");
+    expect(out[0]!.evidence).toContain("mechanically-unproven-logical-operation-collision");
+    expect(out[0]!.evidence).toContain("enclosing operation `deposit`");
+    expect(out[0]!.evidence).toContain("enclosing operation `balance`");
+    expect(out[0]!.evidence).toContain("FALSIFIER:");
+    expect(out[0]!.evidence).toContain("show their keys differ for one shared tenant/entity tuple");
+  });
+
   it("reviews different logical operations that share one contract across files", () => {
     const out = detectIdempotencyFindings([
       {

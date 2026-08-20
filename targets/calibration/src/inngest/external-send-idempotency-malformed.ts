@@ -59,3 +59,17 @@ export function refundWithSharedProviderContract(stripe: Stripe, tenantId: strin
     { idempotencyKey: JSON.stringify(["shared-effect", tenantId, bookingId, "v1"]) },
   );
 }
+
+export function depositWithSharedMethodContract(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["wallet", tenantId, bookingId, "v1"]) },
+  );
+}
+
+export function balanceWithSharedMethodContract(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["wallet", tenantId, bookingId, "v1"]) },
+  );
+}
