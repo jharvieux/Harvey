@@ -537,6 +537,7 @@ for (const target of targets) {
     const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
       side: "hosted-producer",
       repoRoot,
+      targetRoot: preparedDir,
       cacheDir: phaseCacheDir!,
       targetRevision: target.commit,
       targetTree: targetTreeIdentity,

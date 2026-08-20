@@ -74,6 +74,7 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
     const plan = buildCurrentMechanicalPhasePlan({
       side: "independent-replay",
       repoRoot,
+      targetRoot: preparedDir,
       cacheDir: join(root, "replay-phase-cache"),
       targetRevision: target.commit,
       targetTree: targetTreeIdentity,

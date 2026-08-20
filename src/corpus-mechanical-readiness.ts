@@ -128,6 +128,7 @@ function currentMechanicalOptionIdentity(): string {
 export function buildCurrentMechanicalPhasePlan(options: {
   side: CurrentMechanicalExecutionArtifact["side"];
   repoRoot: string;
+  targetRoot: string;
   cacheDir: string;
   targetRevision: string;
   targetTree: string;
@@ -168,7 +169,7 @@ export function buildCurrentMechanicalPhasePlan(options: {
       phases: MECHANICAL_PHASES,
       implementation: phaseCache.implementation,
       externalInputs: phaseCache.externalInputs,
-      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep, undefined, options.repoRoot),
+      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep, undefined, options.targetRoot),
     },
     cachePolicy: {
       schema: 1,

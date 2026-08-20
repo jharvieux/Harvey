@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readRecursiveSafe } from "./fs-walk.js";
 import type { Finding } from "./findings.js";
 import {
@@ -199,10 +199,52 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
       mkdirSync(cacheDir);
       writeFileSync(join(cacheDir, "producer-artifact.json"), "{}\n");
       expect(() => buildCurrentMechanicalPhasePlan({
-        side: "independent-replay", repoRoot: new URL("..", import.meta.url).pathname, cacheDir,
+        side: "independent-replay", repoRoot: new URL("..", import.meta.url).pathname, targetRoot: new URL("..", import.meta.url).pathname, cacheDir,
         targetRevision: target.commit, targetTree: digest, advisoryDigest: digest, advisoryVersion: "osv-1", secretCandidateIdentity: digest,
         registry: { identity: digest, files: [] },
       })).toThrow(/namespace is not empty/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds the Semgrep execution-plan receipt to the prepared target, not Harvey's implementation root", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-current-plan-target-root-"));
+    try {
+      const repoRoot = resolve(new URL("..", import.meta.url).pathname);
+      const targetRoot = join(root, "prepared-target");
+      const registryRoot = join(root, "registry");
+      mkdirSync(targetRoot);
+      mkdirSync(registryRoot);
+      writeFileSync(join(targetRoot, "target-only.ts"), `export const targetOnly = ${JSON.stringify("x".repeat(82 * 1024))};\n`);
+      const registryFiles = REGISTRY_PACKS.map((pack, ordinal) => {
+        const path = join(registryRoot, `${ordinal}-${pack.replaceAll("/", "-")}.yml`);
+        writeFileSync(path, packBody);
+        return path;
+      });
+
+      const { executionPlan } = buildCurrentMechanicalPhasePlan({
+        side: "hosted-producer",
+        repoRoot,
+        targetRoot,
+        cacheDir: join(root, "phase-cache"),
+        targetRevision: target.commit,
+        targetTree: digest,
+        advisoryDigest: digest,
+        advisoryVersion: "osv-1",
+        secretCandidateIdentity: digest,
+        registry: { identity: packAggregate, files: registryFiles },
+      });
+
+      const injection = executionPlan.semgrep.families.find((family) => family.id === "local-injection")!;
+      expect(injection.subpartitions?.map((partition) => partition.id)).toEqual([
+        "isolated-log-injection/remainder",
+        "isolated-log-injection/file-001",
+        "complement",
+      ]);
+      expect(injection.subpartitions?.[0]?.excludedTargetPaths).toEqual(["target-only.ts"]);
+      expect(injection.subpartitions?.[1]?.target).toBe("<target-root>/target-only.ts");
+      expect(injection.subpartitions?.[1]?.argv.at(-1)).toBe("<target-root>/target-only.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
