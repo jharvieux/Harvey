@@ -47,12 +47,12 @@ describe("effectiveness producer inventory (#1910)", () => {
     const inventory = freshInventory();
     expect(validateEffectivenessInventory(inventory)).toEqual([]);
     expect(inventory.receipt).toMatchObject({
-      mechanicalDefinitions: 65,
+      mechanicalDefinitions: 72,
       localSemgrepFamilies: 10,
       localSemgrepRuleIds: 118,
       registrySemgrepPacks: 6,
     });
-    expect(inventory.receipt.mechanicalProducerIds).toHaveLength(65);
+    expect(inventory.receipt.mechanicalProducerIds).toHaveLength(72);
     expect(inventory.receipt.localSemgrepFamilyIds).toHaveLength(10);
     expect(inventory.receipt.localSemgrepRules).toHaveLength(118);
     expect(inventory.receipt.registrySemgrepPackIds).toEqual([
@@ -125,6 +125,35 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(new Set(appRouter.findingFamilies.map((row) => row.kind))).toEqual(
       new Set(["finding", "coverage-disclosure", "not-assessed"]),
     );
+  });
+
+  it("reconciles #1948 producers without manufacturing scored venue coverage", () => {
+    const inventory = freshInventory();
+    const unscored = [
+      "mechanical:structural-ast:m1-exception-flow",
+      "mechanical:structural-ast:m5-exception-flow",
+      "mechanical:structural-ast:m5-hardcoded-deployment",
+      "mechanical:structural-ast:m5-polyglot-quality",
+      "mechanical:structural-ast:m5-type-escape",
+      "mechanical:structural-ast:m8-vacuous-assertion",
+    ];
+    for (const id of unscored) {
+      expect(producer(inventory, id)).toMatchObject({
+        populationClass: "true-finding-producer",
+        venueIds: [],
+        exemptionId: expect.stringMatching(/^exemption:unscored:/),
+      });
+    }
+
+    const m5Polyglot = producer(inventory, "mechanical:structural-ast:m5-polyglot-quality");
+    expect(new Set(m5Polyglot.findingFamilies.map((row) => row.kind))).toEqual(
+      new Set(["finding", "coverage-disclosure"]),
+    );
+    expect(producer(inventory, "mechanical:structural-ast:m6-polyglot-coverage")).toMatchObject({
+      populationClass: "disclosure-only",
+      venueIds: [],
+      exemptionId: "exemption:not-a-producer:disclosure-only",
+    });
   });
 
   it("gives the current M2 true population one empirical no-cadence exemption", () => {

@@ -356,6 +356,22 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
     }
   });
 
+  it("runs the disclosure over the current loadedSources surface, including .mts/.cts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-path-scope-loaded-sources-"));
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "plain.mts"), "export const plain = true;\n");
+    const context = new MechanicalScanContext(dir);
+    try {
+      expect(context.sourceFiles).toEqual([]);
+      expect(context.loadedSources.map((file) => file.path)).toEqual(["src/plain.mts"]);
+      const findings = runRegisteredMechanicalDetectors(context).findings;
+      expect(findings.some((finding) => finding.id === "M1-PATHSCOPE-ENV-SCHEMA-00")).toBe(true);
+    } finally {
+      context.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the census CLI fail-loud flag exit at 2 before any clone is attempted", () => {
     const cli = join(REPO_ROOT, "src", "cli", "path-scope-census.ts");
     const result = spawnSync(process.execPath, ["--import", "tsx", cli, "--unknown-path-scope-flag"], {

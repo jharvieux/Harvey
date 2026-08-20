@@ -375,7 +375,21 @@ function buildVenues(gates: readonly ScoredGate[]): EffectivenessVenue[] {
 
 function venueIdsFor(binding: ProductionProducerBinding): string[] {
   if (binding.populationClass !== "true-finding-producer") return [];
-  if (binding.id.startsWith("mechanical:") || binding.id.startsWith("semgrep:")) return ["validate-calibration"];
+  // #1948 added module-tagged detector fixtures that validate-calibration deliberately excludes
+  // from its scored corpus. A unit/fixture pair is evidence, but it is not a scored venue. Keep
+  // those producers explicit and structurally exempt until a named SCORED_GATES consumer actually
+  // includes them; assigning the broad mechanical venue would manufacture M1/M5/M8 scores.
+  const unscoredMechanical = new Set([
+    "mechanical:structural-ast:m1-exception-flow",
+    "mechanical:structural-ast:m5-exception-flow",
+    "mechanical:structural-ast:m5-hardcoded-deployment",
+    "mechanical:structural-ast:m5-polyglot-quality",
+    "mechanical:structural-ast:m5-type-escape",
+    "mechanical:structural-ast:m8-vacuous-assertion",
+  ]);
+  if (binding.id.startsWith("mechanical:") || binding.id.startsWith("semgrep:")) {
+    return unscoredMechanical.has(binding.id) ? [] : ["validate-calibration"];
+  }
   if (binding.id === "detector:app-router") return ["validate-source-recall"];
   if (["detector:perf-code", "detector:test-intent", "detector:vitest-intent"].includes(binding.id)) return ["validate-precision"];
   return [];

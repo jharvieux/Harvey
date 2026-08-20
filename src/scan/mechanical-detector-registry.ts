@@ -194,9 +194,10 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "path-scope-disclosure", order: 280, module: "M1", implementation: { file: "src/scan/path-scope.ts", exportName: "pathScopeNotAssessedRows" }, findingIds: ["M1-PATHSCOPE-*"], taxonomies: ["Coverage — *"],
     populationClass: "disclosure-only",
+    applicableFiles: { description: "the full shared load-sources view consumed by the registered class selectors", select: (context) => context.loadedSources },
     positiveFixture: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: zero-population paths emit their counted disclosure controls."),
     benignTwin: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: non-zero populations suppress the disclosure twin."),
-    invoke: (_context, selected) => pathScopeNotAssessedRows(selected),
+    invoke: (context, selected) => pathScopeNotAssessedRows(selected, { framework: context.framework }),
   }),
   detector({ id: "secret-rotation", order: 290, module: "M1", implementation: { file: "src/scan/secret-rotation.ts", exportName: "detectSecretRotationFindings" }, findingIds: ["SECRET-rotation-pair-*"], taxonomies: ["Static secret verified with no rotation-pair acceptance window"], invoke: (_context, selected) => detectSecretRotationFindings([...selected]) }),
   detector({
@@ -295,6 +296,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     implementation: { file: "src/scan/polyglot-quality.ts", exportName: "detectM6PolyglotCoverageFindings" },
     findingIds: ["M6-SOURCE-COVERAGE-*"],
     taxonomies: ["M6 — Source coverage *"],
+    populationClass: "disclosure-only",
     applicableFiles: { description: "every identified product source path, including non-JavaScript populations that the M6 classifier cannot inspect", select: (context) => context.productSourceFiles },
     fallback: "Every non-empty unsupported language population emits an exact-count NotAssessed disclosure with provenance and a falsifier.",
     invoke: (_context, selected) => detectM6PolyglotCoverageFindings(selected),
