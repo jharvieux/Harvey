@@ -18,6 +18,7 @@ import {
   runRegistryPacksOnFile,
   runSemgrep,
   scanDidNotRun,
+  semgrepExecutionPlanReceipt,
   semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
@@ -91,8 +92,8 @@ function captured(suffix: string): SemgrepResult {
 // #950: semgrep absent from PATH must degrade to a disclosed coverage gap, not an uncaught
 // ENOENT crash (mirrors the osv-scanner pattern, #512). Only "semgrep" is faked here — every
 // other execFileSync call (there are none elsewhere in this file) would pass through untouched.
-// #1710: the thrown code is hoisted state so the invocation-pin tests below can exercise the
-// non-ENOENT fallback attempt too; every test leaves it at "ENOENT".
+// #1710: the thrown code is hoisted state so the invocation-pin tests below can exercise a
+// non-ENOENT failure too; every test leaves it at "ENOENT".
 const semgrepMock = vi.hoisted(() => ({ errCode: "ENOENT" }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -377,13 +378,8 @@ describe("runSemgrep degrades on a missing binary (#950)", () => {
   });
 });
 
-// #1710: the whole-tree invocation is PINNED — semgrep 1.164.0's default threaded parallelism
-// silently lost 17-29 of 530 carbon findings on every one of 10 measured runs, and the 5s
-// per-rule-per-file timeout adds a load-dependent second loss mode. The pin (--x-parmap
-// --timeout 0, fallback -j 1 --timeout 0) is the measured deterministic combination; see the
-// runSemgrep comment and docs/design/semgrep-determinism.md. These tests hold the CONTRACT: a
-// refactor that drops either flag, or lets the fallback revert to the lossy default mode, fails
-// here rather than silently reintroducing a nondeterministic required gate.
+// #1710: both whole-tree execution paths share the measured parmap worker topology. The tests hold
+// the contract and the failure direction; repeated real Carbon executions remain its falsifier.
 describe("runSemgrep pins the deterministic invocation (#1710)", () => {
   const semgrepArgvs = (): string[][] =>
     vi
@@ -391,27 +387,38 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       .mock.calls.filter((c) => c[0] === "semgrep")
       .map((c) => c[1] as string[]);
 
-  it("first attempt runs process-based parallelism with the per-rule timeout disabled", () => {
+  it("pins the measured nine-worker parmap topology with the per-rule timeout disabled", () => {
     vi.mocked(execFileSync).mockClear();
     runSemgrep("/some/target");
     const argvs = semgrepArgvs();
     expect(argvs).toHaveLength(1); // ENOENT: binary absent, so no second attempt
-    expect(argvs[0]).toContain("--x-parmap");
+    expect(argvs[0]?.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
     expect(argvs[0]?.join(" ")).toContain("--timeout 0");
   });
 
-  it("the fallback attempt (internal flag dropped upstream) pins -j 1 --timeout 0, never the lossy threaded default", () => {
+  it("fails closed without retrying through the unproved non-parmap topology", () => {
     semgrepMock.errCode = "EPERM";
     try {
       vi.mocked(execFileSync).mockClear();
-      runSemgrep("/some/target");
+      const result = runSemgrep("/some/target");
       const argvs = semgrepArgvs();
-      expect(argvs).toHaveLength(2);
-      expect(argvs[1]).not.toContain("--x-parmap");
-      expect(argvs[1]?.join(" ")).toContain("-j 1");
-      expect(argvs[1]?.join(" ")).toContain("--timeout 0");
+      expect(argvs).toHaveLength(1);
+      expect(result.failure).toContain("semgrep run did not complete");
+      expect(result.result).toEqual({});
     } finally {
       semgrepMock.errCode = "ENOENT";
+    }
+  });
+
+  it("receipts the same topology for every partitioned family", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-plan-"));
+    try {
+      const receipt = semgrepExecutionPlanReceipt(seedRegistrySnapshot(dir).files);
+      expect(receipt.schema).toBe(2);
+      expect(receipt.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
+      expect(receipt.argv.join(" ")).toContain("--timeout 0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

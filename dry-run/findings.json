@@ -2676,8 +2676,8 @@
     "mechanical": true,
     "precisionTier": "review",
     "cwe": [
-      "CWE-22",
-      "CWE-200"
+      "CWE-200",
+      "CWE-22"
     ],
     "dependency": "postcss",
     "reachability": {

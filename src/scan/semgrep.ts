@@ -197,11 +197,10 @@ export interface SemgrepOutput {
 }
 
 export interface SemgrepExecutionPlanReceipt {
-  schema: 1;
+  schema: 2;
   strategy: "partitioned-families";
   families: Array<{ ordinal: number; id: string; configSha256: string }>;
-  primaryArgv: string[];
-  fallbackArgv: string[];
+  argv: string[];
 }
 
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
@@ -505,16 +504,16 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     most of the losses left NO trace in errors[], paths.skipped or stderr. Not jitter around a
 //     mean: a silent recall loss. The 5s per-rule-per-file timeout adds a second, load-dependent
 //     loss mode on top (which rules cross 5s varies run to run; those ARE recorded in errors[]).
-//   * --x-parmap (the pre-thread process-based parallelism) with --timeout 0: byte-identical
-//     result sets across every repeat (7/7 on carbon, 6/6 on documenso), at or below default-mode
-//     runtime on every measured repo — process isolation removes whatever the threaded engine's
-//     shared state loses, and --timeout 0 removes the load-dependent timeout draw. `-j 1` alone is
-//     NOT enough: 1 of 6 single-threaded runs still dropped one taint finding.
-//   * --x-parmap is ALSO deprecated/internal, so the fallback attempt pins `-j 1 --timeout 0`
-//     (the best measured non-internal combination) rather than semgrep's default mode — a version
-//     that drops --x-parmap must degrade to "slower and near-deterministic", never to "silently
-//     lossy". The corpus-drift gate scores real quick-scans of six pinned trees, so a determinism
-//     regression in either mode surfaces there as free-tier drift.
+//   * Explicit nine-worker parmap produced exact current-pack Carbon findings and diagnostics in
+//     both monolithic and partitioned paths, with stable fragile-taint decisions across cold
+//     repeats. It was materially faster than the exact one-worker alternative.
+//   * `-j 1` without parmap is not the measured alternative and is not a safe fallback: 1 of 3
+//     historical runs dropped a row. Because
+//     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
+//     coverage rather than silently switch to an unproved execution engine.
+// Stability remains a falsifiable corpus property, not something these flags prove by themselves.
+const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
+
 export function runSemgrep(dir: string, registryConfigs: readonly string[] = REGISTRY_PACKS): { result: SemgrepOutput; failure?: string } {
   const args = [
     ...registryConfigs.flatMap((p) => ["--config", p]),
@@ -531,8 +530,7 @@ export function runSemgrep(dir: string, registryConfigs: readonly string[] = REG
     "--verbose",
     dir,
   ];
-  let run = execSemgrep(["--x-ignore-semgrepignore-files", "--x-parmap", ...args]);
-  if ("failure" in run && !run.enoent) run = execSemgrep(["-j", "1", ...args]);
+  const run = execSemgrep([...SEMGREP_PINNED_PREFIX, ...args]);
   if ("failure" in run) return { result: {}, failure: run.failure };
   return parseEnvelope(run.out);
 }
@@ -548,8 +546,6 @@ function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[
   return families;
 }
 
-const SEMGREP_FAMILY_PRIMARY_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap"] as const;
-const SEMGREP_FAMILY_FALLBACK_PREFIX = ["-j", "1"] as const;
 const SEMGREP_FAMILY_TAIL = [
   "--exclude", "node_modules",
   "--disable-nosem",
@@ -563,15 +559,14 @@ const SEMGREP_FAMILY_TAIL = [
 export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepExecutionPlanReceipt {
   const families = semgrepRuleFamilies(registryConfigs);
   return {
-    schema: 1,
+    schema: 2,
     strategy: "partitioned-families",
     families: families.map((family, ordinal) => ({
       ordinal,
       id: family.id,
       configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
     })),
-    primaryArgv: [...SEMGREP_FAMILY_PRIMARY_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
-    fallbackArgv: [...SEMGREP_FAMILY_FALLBACK_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+    argv: [...SEMGREP_PINNED_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
   };
 }
 
@@ -581,8 +576,7 @@ function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: Semgrep
     ...SEMGREP_FAMILY_TAIL,
     dir,
   ];
-  let run = execSemgrep([...SEMGREP_FAMILY_PRIMARY_PREFIX, ...args]);
-  if ("failure" in run && !run.enoent) run = execSemgrep([...SEMGREP_FAMILY_FALLBACK_PREFIX, ...args]);
+  const run = execSemgrep([...SEMGREP_PINNED_PREFIX, ...args]);
   if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
   const parsed = parseEnvelope(run.out);
   if (parsed.failure) return parsed;

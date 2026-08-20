@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "runId": 32334325227,
+  "prHead": "dec609433da4044ce9da24c23d2d1cde8aa6a5fe",
+  "artifactHead": "96169e3a508d2a96c49da8d0859e5b2d3ed9e4fa",
+  "harnessSha256": "2fc1e23278440d78dfe1e0256f6d2f0cdfea4af808e99784509fbf8d7c88b6e1",
+  "targetPinsSha256": "6f7e17ce418249f2186dcd1d9cdabba4654fa1d0fc62a869d2dd067c0833f090",
+  "commonRuntime": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64",
+    "semgrep": "1.164.0",
+    "gitleaks": "gitleaks version 8.30.1"
+  },
+  "producerShards": [
+    {
+      "index": 1,
+      "gitVersion": "git version 2.54.0",
+      "targets": ["carbon"]
+    },
+    {
+      "index": 2,
+      "gitVersion": "git version 2.55.0",
+      "targets": ["proposit", "subscription-payments", "boxyhq", "launch-mvp", "saas-lite", "tanstack-com", "cravab", "flori-web"]
+    },
+    {
+      "index": 3,
+      "gitVersion": "git version 2.54.0",
+      "targets": ["multi-tenant-starter", "mvp-boilerplate", "ghostfolio", "rallly", "inbox-zero", "documenso", "supabase-security-labs", "effective"]
+    }
+  ],
+  "carbonCrossGit": {
+    "producer": {
+      "gitVersion": "git version 2.54.0",
+      "preparationSha256": "320cf9f78bac1239de3700c68bc8205636028ac46cd530543256e4b4735d7528",
+      "executionPlanSha256": "fd81407994aa4b9b6c40c0c3520902f8a5387f405bb1f674c8f81816e12b176c",
+      "findingsSha256": "d04ae97b26a3a10fc6ff30312240c9b8046a3174b0e4608725785f09c5b778e0",
+      "normalizedProducersSha256": "e0636eeb7dae8c9e7952f5a1c989f48c207f483a5df54c61a03061508e519e9a",
+      "semgrepDiagnosticsSha256": "b14335052c6c19c536f9f19a4a6b10116e28282df0dcd502b92506fd4984b7be",
+      "findingCount": 1154,
+      "semgrepFindingCount": 532
+    },
+    "replay": {
+      "gitVersion": "git version 2.55.0",
+      "preparationSha256": "320cf9f78bac1239de3700c68bc8205636028ac46cd530543256e4b4735d7528",
+      "executionPlanSha256": "fd81407994aa4b9b6c40c0c3520902f8a5387f405bb1f674c8f81816e12b176c",
+      "findingsSha256": "100b55a605a3cd945bee24aaf320d918292d5dd64061fe108de516e07831ed5d",
+      "normalizedProducersSha256": "00575e4cb7d298ce93e1e0ffc470b52b282cae22f8e4ee112fdd1cc3240f3b7f",
+      "semgrepDiagnosticsSha256": "b14335052c6c19c536f9f19a4a6b10116e28282df0dcd502b92506fd4984b7be",
+      "findingCount": 1155,
+      "semgrepFindingCount": 533,
+      "uniqueFinding": "src.scan.rules.semgrep.harvey-log-injection@packages/database/supabase/functions/post-shipment/index.ts:1114"
+    }
+  }
+}
