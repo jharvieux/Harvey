@@ -387,12 +387,12 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       .mock.calls.filter((c) => c[0] === "semgrep")
       .map((c) => c[1] as string[]);
 
-  it("pins the measured one-worker parmap topology with the per-rule timeout disabled", () => {
+  it("pins the measured nine-worker parmap topology with the per-rule timeout disabled", () => {
     vi.mocked(execFileSync).mockClear();
     runSemgrep("/some/target");
     const argvs = semgrepArgvs();
     expect(argvs).toHaveLength(1); // ENOENT: binary absent, so no second attempt
-    expect(argvs[0]?.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
+    expect(argvs[0]?.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
     expect(argvs[0]?.join(" ")).toContain("--timeout 0");
   });
 
@@ -415,7 +415,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     try {
       const receipt = semgrepExecutionPlanReceipt(seedRegistrySnapshot(dir).files);
       expect(receipt.schema).toBe(2);
-      expect(receipt.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
+      expect(receipt.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
       expect(receipt.argv.join(" ")).toContain("--timeout 0");
     } finally {
       rmSync(dir, { recursive: true, force: true });

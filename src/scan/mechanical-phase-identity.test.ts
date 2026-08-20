@@ -45,11 +45,11 @@ describe("mechanical phase implementation identities (#1864)", () => {
     const semgrep = join(root, "src", "scan", "semgrep.ts");
     const original = readFileSync(semgrep, "utf8");
     for (const replacement of [
-      '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "2"]',
+      '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]',
       '["--x-ignore-semgrepignore-files", "--x-parmap"]',
     ]) {
       const source = original.replace(
-        '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]',
+        '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]',
         replacement,
       );
       expect(source).toContain(replacement);

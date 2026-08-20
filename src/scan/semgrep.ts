@@ -504,15 +504,15 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     most of the losses left NO trace in errors[], paths.skipped or stderr. Not jitter around a
 //     mean: a silent recall loss. The 5s per-rule-per-file timeout adds a second, load-dependent
 //     loss mode on top (which rules cross 5s varies run to run; those ARE recorded in errors[]).
-//   * Explicit nine-worker parmap was stable within each current-pack Carbon execution path, but
-//     monolithic and partitioned output differed. Keep one process worker so both whole-tree paths
-//     share one execution topology; repeated cold cross-path measurements guard that contract.
+//   * Explicit nine-worker parmap produced exact current-pack Carbon findings and diagnostics in
+//     both monolithic and partitioned paths, with stable fragile-taint decisions across cold
+//     repeats. It was materially faster than the exact one-worker alternative.
 //   * `-j 1` without parmap is not the measured alternative and is not a safe fallback: 1 of 3
 //     historical runs dropped a row. Because
 //     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
 //     coverage rather than silently switch to an unproved execution engine.
 // Stability remains a falsifiable corpus property, not something these flags prove by themselves.
-const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
+const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 
 export function runSemgrep(dir: string, registryConfigs: readonly string[] = REGISTRY_PACKS): { result: SemgrepOutput; failure?: string } {
   const args = [

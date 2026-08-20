@@ -77,7 +77,7 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           phases: MECHANICAL_PHASES,
           implementation: { semgrep: digest },
           externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
-          semgrep: { schema: 2, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], argv: ["--x-parmap", "-j", "1", "--timeout", "0"] },
+          semgrep: { schema: 2, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], argv: ["--x-parmap", "-j", "9", "--timeout", "0"] },
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
         semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
