@@ -4,9 +4,10 @@ Always-on instructions for Codex in this repository. Keep this file concise: Cod
 
 ## Shell commands
 
-Prefix every shell command with `rtk`. In a command chain, prefix every segment. Use raw commands only when debugging an `rtk`-filtered result; use `rtk proxy <command>` when exact output is required.
-
-Examples: `rtk git status`, `rtk read <file>`, `rtk grep <pattern>`, `rtk pnpm verify`, `rtk gh pr view <n>`.
+Use native commands by default. Do not route verification, tests, diffs, GitHub
+queries, or machine-readable output through RTK. If RTK is evaluated
+experimentally, treat it as display-only and independently verify native exit
+status and output; never use it as acceptance evidence.
 
 ## What this repository is
 
