@@ -4,6 +4,6 @@ export function chargeWithLaterSafeOverride(stripe: Stripe, tenantId: string, bo
   const unsafeDefaults = { idempotencyKey: crypto.randomUUID() };
   return stripe.paymentIntents.create(
     { amount: 100 },
-    { ...unsafeDefaults, idempotencyKey: `charge:${tenantId}:${bookingId}:v1` },
+    { ...unsafeDefaults, idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
   );
 }

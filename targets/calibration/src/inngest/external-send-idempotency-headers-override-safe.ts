@@ -4,7 +4,7 @@ export function sendReceiptWithLaterSafeHeaders(tenantId: string, bookingId: str
     method: "POST",
     headers: new Headers({
       ...unsafeDefaults,
-      "Idempotency-Key": `receipt:${tenantId}:${bookingId}:v1`,
+      "Idempotency-Key": JSON.stringify(["receipt", tenantId, bookingId, "v1"]),
     }),
   });
 }

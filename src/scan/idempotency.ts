@@ -56,6 +56,10 @@ interface ExternalSendTarget {
   api: string;
   call: ts.CallExpression;
   key: KeySlot;
+  logicalOperation: string;
+  operationDetail?: string;
+  payload?: ts.Expression;
+  providerDomain: string;
 }
 
 interface KeyAnalysis {
@@ -63,7 +67,34 @@ interface KeyAnalysis {
   classification: string;
   detail: string;
   falsifier: string;
-  fingerprint?: string;
+  contract?: ProvenOperationKeyContract;
+}
+
+type IdentityRole = "tenant" | "entity" | "other";
+type JsonPrimitiveType = "string" | "number" | "boolean";
+
+interface ValueOrigin {
+  display: string;
+  key: string;
+  parameter: ts.ParameterDeclaration;
+  path: string[];
+  primitiveType?: JsonPrimitiveType;
+  role: IdentityRole;
+  semanticName: string;
+}
+
+interface ProvenOperationKeyContract {
+  framing: "canonical-json-tuple" | "encoded-terms";
+  operationDiscriminator: string;
+  originKeys: Set<string>;
+  signature: string;
+}
+
+interface ExternalOperationRecord {
+  analysis: KeyAnalysis;
+  path: string;
+  sf: ts.SourceFile;
+  target: ExternalSendTarget;
 }
 
 type BindingKind =
@@ -736,6 +767,45 @@ function fetchKey(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFi
     : { kind: "unknown", detail: `the fetch headers expression is unproven: ${headers.detail}` };
 }
 
+function fetchPayload(node: ts.CallExpression, sf: ts.SourceFile, bindings: SourceFileBindingIndex): ts.Expression | undefined {
+  const options = node.arguments[1];
+  if (!options) return undefined;
+  const resolved = objectLiteralOf(options, node, sf, bindings);
+  if (resolved.kind === "unknown") return undefined;
+  const body = keyInObject(resolved.object, "body", node, sf, bindings);
+  return body.kind === "present" ? body.expression : undefined;
+}
+
+function staticFetchMethod(
+  node: ts.CallExpression,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+): { method?: string; detail?: string } {
+  const options = node.arguments[1];
+  if (!options) return { method: "GET" };
+  const resolved = objectLiteralOf(options, node, sf, bindings);
+  if (resolved.kind === "unknown") return { detail: resolved.detail };
+  const method = keyInObject(resolved.object, "method", node, sf, bindings);
+  if (method.kind === "absent") return { method: "GET" };
+  if (method.kind === "unknown") return { detail: method.detail };
+  const expression = unwrapExpression(method.expression);
+  return ts.isStringLiteralLike(expression)
+    ? { method: expression.text.toUpperCase() }
+    : { detail: `the fetch method '${boundedNodeText(expression, sf)}' is not a static string` };
+}
+
+function normalizedUrlPath(url: string): string {
+  const path = /^https?:\/\/[^/]+(\/[^?#]*)/i.exec(url)?.[1] ?? "/";
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+function normalizedProviderDomain(provider: string): string {
+  const normalized = provider.toLowerCase();
+  if (normalized === "squareup") return "square";
+  if (normalized === "postmarkapp") return "postmark";
+  return normalized;
+}
+
 function isInsideWithBody(node: ts.Node): boolean {
   let current: ts.Node | undefined = node;
   while (current?.parent) {
@@ -751,15 +821,20 @@ function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile, bindings
   if (ts.isIdentifier(node.expression) && node.expression.text === "fetch") {
     const url = node.arguments[0];
     const host = url && ts.isStringLiteralLike(url) ? IDEMPOTENT_HOST.exec(url.text) : null;
-    return host
-      ? {
-          call: node,
-          key: isInsideWithBody(node)
-            ? { kind: "unknown", detail: "the provider call is inside JavaScript `with`, so dynamic name resolution is unproven" }
-            : fetchKey(node, sf, bindings),
-          api: host[0],
-        }
-      : undefined;
+    if (!host || !url || !ts.isStringLiteralLike(url)) return undefined;
+    const operation = staticFetchMethod(node, sf, bindings);
+    const path = normalizedUrlPath(url.text);
+    return {
+      call: node,
+      key: isInsideWithBody(node)
+        ? { kind: "unknown", detail: "the provider call is inside JavaScript `with`, so dynamic name resolution is unproven" }
+        : fetchKey(node, sf, bindings),
+      api: host[0],
+      logicalOperation: operation.method ? `${operation.method} ${path}` : `unknown-method ${path}`,
+      operationDetail: operation.detail,
+      payload: fetchPayload(node, sf, bindings),
+      providerDomain: normalizedProviderDomain(host[1]!),
+    };
   }
   // stripe.<resource>.create(params, options)
   if (
@@ -774,6 +849,9 @@ function externalSendTarget(node: ts.CallExpression, sf: ts.SourceFile, bindings
         ? { kind: "unknown", detail: "the provider call is inside JavaScript `with`, so dynamic name resolution is unproven" }
         : stripeKey(node, sf, bindings),
       api: `Stripe ${node.expression.expression.name.text}.create`,
+      logicalOperation: `${node.expression.expression.name.text}.create`,
+      payload: node.arguments[0],
+      providerDomain: "stripe",
     };
   }
   return undefined;
@@ -795,53 +873,344 @@ function declarationPropertyName(name: ts.PropertyName | undefined): string | un
   return undefined;
 }
 
-function parameterSemanticNames(parameter: ts.ParameterDeclaration): string[] {
-  const names = new Set<string>();
-  forEachBindingIdentifier(parameter.name, (identifier) => names.add(identifier.text));
-  const visitBinding = (name: ts.BindingName): void => {
-    if (ts.isIdentifier(name)) return;
-    for (const element of name.elements) {
-      if (ts.isOmittedExpression(element)) continue;
-      const semanticName = declarationPropertyName(element.propertyName);
-      if (semanticName) names.add(semanticName);
-      visitBinding(element.name);
-    }
-  };
-  visitBinding(parameter.name);
-  const visitType = (node: ts.TypeNode): void => {
-    if (ts.isTypeLiteralNode(node)) {
-      for (const member of node.members) {
-        const semanticName = declarationPropertyName(member.name);
-        if (semanticName) names.add(semanticName);
-        if (ts.isPropertySignature(member) && member.type) visitType(member.type);
-      }
-      return;
-    }
-    if (ts.isParenthesizedTypeNode(node)) visitType(node.type);
-    if (ts.isArrayTypeNode(node)) visitType(node.elementType);
-    if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) for (const child of node.types) visitType(child);
-  };
-  if (parameter.type) visitType(parameter.type);
-  return [...names];
+function identityRole(name: string): IdentityRole {
+  if (TENANT_IDENTITY.test(name)) return "tenant";
+  if (ENTITY_IDENTITY.test(name)) return "entity";
+  return "other";
 }
 
-function parameterBindingNames(fn: ts.SignatureDeclarationBase | undefined): string[] {
-  const names = new Set<string>();
-  for (const parameter of fn?.parameters ?? []) for (const name of parameterSemanticNames(parameter)) names.add(name);
-  return [...names];
-}
-
-function parameterBindingSemanticNames(binding: IndexedBinding): string[] {
-  const names = new Set<string>([binding.name]);
-  let current: ts.Node | undefined = binding.identifier;
-  while (current && current !== binding.declaration) {
-    if (ts.isBindingElement(current)) {
-      const semanticName = declarationPropertyName(current.propertyName);
-      if (semanticName) names.add(semanticName);
+function bindingPath(identifier: ts.Identifier, parameter: ts.ParameterDeclaration): string[] {
+  const path: string[] = [];
+  let current: ts.Node = identifier;
+  while (current.parent && current.parent !== parameter) {
+    if (ts.isBindingElement(current.parent)) {
+      const element = current.parent;
+      const segment = declarationPropertyName(element.propertyName) ?? (ts.isIdentifier(element.name) ? element.name.text : undefined);
+      if (segment) path.unshift(segment);
     }
     current = current.parent;
   }
-  return [...names];
+  return path;
+}
+
+function localTypeDeclaration(sf: ts.SourceFile, name: string): ts.InterfaceDeclaration | ts.TypeAliasDeclaration | undefined {
+  return sf.statements.find(
+    (statement): statement is ts.InterfaceDeclaration | ts.TypeAliasDeclaration =>
+      (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) && statement.name.text === name,
+  );
+}
+
+interface ResolvedPropertyType {
+  optional: boolean;
+  type: ts.TypeNode;
+}
+
+function propertyType(
+  type: ts.TypeNode,
+  name: string,
+  sf: ts.SourceFile,
+  seen = new Set<string>(),
+): ResolvedPropertyType | undefined {
+  if (ts.isParenthesizedTypeNode(type)) return propertyType(type.type, name, sf, seen);
+  if (ts.isIntersectionTypeNode(type)) {
+    for (const member of type.types) {
+      const resolved = propertyType(member, name, sf, seen);
+      if (resolved) return resolved;
+    }
+    return undefined;
+  }
+  if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+    const typeName = type.typeName.text;
+    if (seen.has(typeName)) return undefined;
+    const declaration = localTypeDeclaration(sf, typeName);
+    if (!declaration) return undefined;
+    const nextSeen = new Set(seen);
+    nextSeen.add(typeName);
+    if (ts.isTypeAliasDeclaration(declaration)) return propertyType(declaration.type, name, sf, nextSeen);
+    for (const member of declaration.members) {
+      if (!ts.isPropertySignature(member) || declarationPropertyName(member.name) !== name || !member.type) continue;
+      return { type: member.type, optional: member.questionToken !== undefined };
+    }
+    for (const clause of declaration.heritageClauses ?? []) {
+      for (const inherited of clause.types) {
+        if (!ts.isIdentifier(inherited.expression)) continue;
+        const inheritedDeclaration = localTypeDeclaration(sf, inherited.expression.text);
+        if (!inheritedDeclaration) continue;
+        const inheritedType = ts.isTypeAliasDeclaration(inheritedDeclaration)
+          ? inheritedDeclaration.type
+          : ts.factory.createTypeReferenceNode(inheritedDeclaration.name.text, undefined);
+        const resolved = propertyType(inheritedType, name, sf, nextSeen);
+        if (resolved) return resolved;
+      }
+    }
+    return undefined;
+  }
+  if (!ts.isTypeLiteralNode(type)) return undefined;
+  for (const member of type.members) {
+    if (!ts.isPropertySignature(member) || declarationPropertyName(member.name) !== name || !member.type) continue;
+    return { type: member.type, optional: member.questionToken !== undefined };
+  }
+  return undefined;
+}
+
+function primitiveType(type: ts.TypeNode | undefined, sf: ts.SourceFile, seen = new Set<string>()): JsonPrimitiveType | undefined {
+  if (!type) return undefined;
+  if (ts.isParenthesizedTypeNode(type)) return primitiveType(type.type, sf, seen);
+  if (type.kind === ts.SyntaxKind.StringKeyword) return "string";
+  if (type.kind === ts.SyntaxKind.NumberKeyword) return "number";
+  if (type.kind === ts.SyntaxKind.BooleanKeyword) return "boolean";
+  if (ts.isLiteralTypeNode(type)) {
+    if (ts.isStringLiteral(type.literal)) return "string";
+    if (ts.isNumericLiteral(type.literal)) return "number";
+    if (type.literal.kind === ts.SyntaxKind.TrueKeyword || type.literal.kind === ts.SyntaxKind.FalseKeyword) return "boolean";
+    return undefined;
+  }
+  if (ts.isUnionTypeNode(type)) {
+    const members = type.types.map((member) => primitiveType(member, sf, new Set(seen)));
+    const first = members[0];
+    return first && members.every((member) => member === first) ? first : undefined;
+  }
+  if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+    const name = type.typeName.text;
+    if (seen.has(name)) return undefined;
+    const declaration = localTypeDeclaration(sf, name);
+    if (!declaration || ts.isInterfaceDeclaration(declaration)) return undefined;
+    const nextSeen = new Set(seen);
+    nextSeen.add(name);
+    return primitiveType(declaration.type, sf, nextSeen);
+  }
+  return undefined;
+}
+
+function primitiveTypeAt(parameter: ts.ParameterDeclaration, path: string[], sf: ts.SourceFile): JsonPrimitiveType | undefined {
+  let type = parameter.type;
+  if (path.length === 0) return primitiveType(type, sf);
+  for (const segment of path) {
+    if (!type) return undefined;
+    const resolved = propertyType(type, segment, sf);
+    if (!resolved || resolved.optional) return undefined;
+    type = resolved.type;
+  }
+  return primitiveType(type, sf);
+}
+
+function parameterOrigin(
+  parameter: ts.ParameterDeclaration,
+  path: string[],
+  semanticName: string,
+  display: string,
+  sf: ts.SourceFile,
+): ValueOrigin {
+  return {
+    display,
+    key: `${parameter.getStart(sf)}:${path.length > 0 ? path.join(".") : "$"}`,
+    parameter,
+    path,
+    primitiveType: primitiveTypeAt(parameter, path, sf),
+    role: identityRole(semanticName),
+    semanticName,
+  };
+}
+
+type OriginResolution = { kind: "resolved"; origin: ValueOrigin } | { kind: "unknown"; detail: string };
+
+function resolveValueOrigin(
+  expression: ts.Expression,
+  use: ts.Node,
+  call: ts.CallExpression,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+  seen = new Set<IndexedBinding>(),
+): OriginResolution {
+  const node = unwrapExpression(expression);
+  if (ts.isPropertyAccessExpression(node)) {
+    const base = resolveValueOrigin(node.expression, use, call, sf, bindings, seen);
+    if (base.kind === "unknown") return base;
+    const path = [...base.origin.path, node.name.text];
+    return {
+      kind: "resolved",
+      origin: parameterOrigin(base.origin.parameter, path, node.name.text, boundedNodeText(node, sf), sf),
+    };
+  }
+  if (ts.isElementAccessExpression(node) && node.argumentExpression && ts.isStringLiteralLike(node.argumentExpression)) {
+    const base = resolveValueOrigin(node.expression, use, call, sf, bindings, seen);
+    if (base.kind === "unknown") return base;
+    const path = [...base.origin.path, node.argumentExpression.text];
+    return {
+      kind: "resolved",
+      origin: parameterOrigin(base.origin.parameter, path, node.argumentExpression.text, boundedNodeText(node, sf), sf),
+    };
+  }
+  if (!ts.isIdentifier(node)) return { kind: "unknown", detail: `'${boundedNodeText(node, sf)}' is not a parameter value origin` };
+  const lookup = bindings.lookup(node);
+  if (lookup.kind === "unbound") return { kind: "unknown", detail: `identifier '${node.text}' has no visible lexical binding` };
+  if (lookup.kind === "unknown") return { kind: "unknown", detail: lookup.detail };
+  const binding = lookup.binding;
+  const fn = enclosingFunction(call);
+  if (binding.kind === "parameter") {
+    if (binding.owner !== fn || !ts.isParameter(binding.declaration)) {
+      return { kind: "unknown", detail: `'${binding.name}' is not a parameter of the provider call's enclosing function` };
+    }
+    const path = bindingPath(binding.identifier, binding.declaration);
+    const semanticName = path.at(-1) ?? binding.name;
+    return {
+      kind: "resolved",
+      origin: parameterOrigin(binding.declaration, path, semanticName, node.text, sf),
+    };
+  }
+  if (binding.kind !== "variable") {
+    return { kind: "unknown", detail: `'${binding.name}' resolves to a ${binding.kind} binding instead of immutable parameter provenance` };
+  }
+  if (seen.has(binding)) return { kind: "unknown", detail: `local key alias '${binding.name}' is cyclic` };
+  const eligibility = eligibleConstInitializer(binding, node, use, bindings);
+  if (eligibility.kind === "ineligible") return { kind: "unknown", detail: eligibility.detail };
+  const nextSeen = new Set(seen);
+  nextSeen.add(binding);
+  return resolveValueOrigin(eligibility.initializer, use, call, sf, bindings, nextSeen);
+}
+
+function typeIdentityPaths(
+  type: ts.TypeNode | undefined,
+  sf: ts.SourceFile,
+  prefix: string[] = [],
+  seen = new Set<string>(),
+  depth = 0,
+): string[][] {
+  if (!type || depth > 5) return [];
+  if (ts.isParenthesizedTypeNode(type)) return typeIdentityPaths(type.type, sf, prefix, seen, depth);
+  if (ts.isIntersectionTypeNode(type)) return type.types.flatMap((member) => typeIdentityPaths(member, sf, prefix, new Set(seen), depth));
+  if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+    const name = type.typeName.text;
+    if (seen.has(name)) return [];
+    const declaration = localTypeDeclaration(sf, name);
+    if (!declaration) return [];
+    const nextSeen = new Set(seen);
+    nextSeen.add(name);
+    if (ts.isTypeAliasDeclaration(declaration)) return typeIdentityPaths(declaration.type, sf, prefix, nextSeen, depth + 1);
+    const ownPaths = declaration.members.flatMap((member) => {
+      if (!ts.isPropertySignature(member) || !member.type) return [];
+      const memberName = declarationPropertyName(member.name);
+      if (!memberName) return [];
+      const path = [...prefix, memberName];
+      const own = identityRole(memberName) === "other" || primitiveType(member.type, sf) === undefined ? [] : [path];
+      return [...own, ...typeIdentityPaths(member.type, sf, path, new Set(nextSeen), depth + 1)];
+    });
+    const inheritedPaths = (declaration.heritageClauses ?? []).flatMap((clause) =>
+      clause.types.flatMap((inherited) =>
+        ts.isIdentifier(inherited.expression)
+          ? typeIdentityPaths(ts.factory.createTypeReferenceNode(inherited.expression.text, undefined), sf, prefix, new Set(nextSeen), depth + 1)
+          : [],
+      ),
+    );
+    return [...ownPaths, ...inheritedPaths];
+  }
+  if (!ts.isTypeLiteralNode(type)) return [];
+  return type.members.flatMap((member) => {
+    if (!ts.isPropertySignature(member) || !member.type) return [];
+    const name = declarationPropertyName(member.name);
+    if (!name) return [];
+    const path = [...prefix, name];
+    const own = identityRole(name) === "other" || primitiveType(member.type, sf) === undefined ? [] : [path];
+    return [...own, ...typeIdentityPaths(member.type, sf, path, new Set(seen), depth + 1)];
+  });
+}
+
+function declaredIdentityOrigins(fn: ts.SignatureDeclarationBase | undefined, sf: ts.SourceFile): ValueOrigin[] {
+  const origins = new Map<string, ValueOrigin>();
+  for (const parameter of fn?.parameters ?? []) {
+    if (ts.isIdentifier(parameter.name) && identityRole(parameter.name.text) !== "other") {
+      const origin = parameterOrigin(parameter, [], parameter.name.text, parameter.name.text, sf);
+      origins.set(origin.key, origin);
+    }
+    forEachBindingIdentifier(parameter.name, (identifier) => {
+      const path = bindingPath(identifier, parameter);
+      const semanticName = path.at(-1) ?? identifier.text;
+      if (identityRole(semanticName) === "other") return;
+      const origin = parameterOrigin(parameter, path, semanticName, identifier.text, sf);
+      origins.set(origin.key, origin);
+    });
+    for (const path of typeIdentityPaths(parameter.type, sf)) {
+      const semanticName = path.at(-1)!;
+      const root = ts.isIdentifier(parameter.name) ? parameter.name.text : "parameter";
+      const origin = parameterOrigin(parameter, path, semanticName, `${root}.${path.join(".")}`, sf);
+      origins.set(origin.key, origin);
+    }
+  }
+  return [...origins.values()];
+}
+
+function expressionIdentityOrigins(
+  expression: ts.Expression | undefined,
+  call: ts.CallExpression,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+): ValueOrigin[] {
+  if (!expression) return [];
+  const origins = new Map<string, ValueOrigin>();
+  const visit = (node: ts.Node, expansionStack = new Set<IndexedBinding>()): void => {
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isIdentifier(node)) {
+      const resolved = resolveValueOrigin(node as ts.Expression, node, call, sf, bindings);
+      if (resolved.kind === "resolved" && resolved.origin.role !== "other") {
+        origins.set(resolved.origin.key, resolved.origin);
+        return;
+      }
+      if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+        visit(node.expression, expansionStack);
+        return;
+      }
+      const lookup = bindings.lookup(node);
+      if (lookup.kind === "resolved" && lookup.binding.kind === "variable" && !expansionStack.has(lookup.binding)) {
+        const eligibility = eligibleConstInitializer(lookup.binding, node, call, bindings);
+        if (eligibility.kind === "eligible") {
+          const nextStack = new Set(expansionStack);
+          nextStack.add(lookup.binding);
+          visit(eligibility.initializer, nextStack);
+        }
+      }
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      for (const argument of node.arguments) visit(argument, expansionStack);
+      return;
+    }
+    if (node !== expression && isRuntimeFunctionLike(node)) return;
+    ts.forEachChild(node, (child) => visit(child, expansionStack));
+  };
+  visit(expression);
+  return [...origins.values()];
+}
+
+interface ScopeRequirement {
+  ambiguity?: string;
+  entity: ValueOrigin[];
+  tenant: ValueOrigin[];
+}
+
+function scopeRequirement(
+  target: ExternalSendTarget,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+): ScopeRequirement {
+  const fn = enclosingFunction(target.call);
+  const available = declaredIdentityOrigins(fn, sf);
+  const payload = expressionIdentityOrigins(target.payload, target.call, sf, bindings);
+  const select = (role: Exclude<IdentityRole, "other">): { origins: ValueOrigin[]; ambiguity?: string } => {
+    const payloadOrigins = payload.filter((origin) => origin.role === role);
+    if (payloadOrigins.length > 0) return { origins: payloadOrigins };
+    const availableOrigins = available.filter((origin) => origin.role === role);
+    if (availableOrigins.length <= 1) return { origins: availableOrigins };
+    return {
+      origins: [],
+      ambiguity: `the provider payload does not identify which of ${availableOrigins.length} available ${role} identities defines this operation`,
+    };
+  };
+  const tenant = select("tenant");
+  const entity = select("entity");
+  return {
+    tenant: tenant.origins,
+    entity: entity.origins,
+    ambiguity: tenant.ambiguity ?? entity.ambiguity,
+  };
 }
 
 function boundedNodeText(node: ts.Node, sf: ts.SourceFile): string {
@@ -851,14 +1220,13 @@ function boundedNodeText(node: ts.Node, sf: ts.SourceFile): string {
 
 function analyzeKey(
   expression: ts.Expression,
-  call: ts.CallExpression,
+  target: ExternalSendTarget,
   sf: ts.SourceFile,
   bindings: SourceFileBindingIndex,
 ): KeyAnalysis {
+  const call = target.call;
   const text = boundedNodeText(expression, sf);
-  const contributorNames = new Set<string>();
-  const identityNames = new Set<string>();
-  const literals: string[] = [];
+  const keyOrigins = new Map<string, ValueOrigin>();
   let unknownCall: string | undefined;
   let volatile: string | undefined;
   const opaque = new Set<string>();
@@ -901,22 +1269,23 @@ function analyzeKey(
       if (!/^new\s+Date\s*\(/.test(nodeText)) opaque.add(`constructor expression \`${boundedNodeText(node.expression, sf)}\` is not a proven immutable key transform`);
       return false;
     }
-    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
-      literals.push(node.text);
+    if (
+      ts.isStringLiteralLike(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node)
+    ) {
       return false;
     }
-    if (ts.isPropertyAccessExpression(node)) {
-      const origin = visit(node.expression);
-      if (origin) {
-        contributorNames.add(node.name.text);
-        identityNames.add(node.name.text);
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const resolution = resolveValueOrigin(node, node, call, sf, bindings);
+      if (resolution.kind === "resolved") {
+        keyOrigins.set(resolution.origin.key, resolution.origin);
+        return true;
       }
-      return origin;
-    }
-    if (ts.isElementAccessExpression(node)) {
-      const origin = visit(node.expression);
-      if (node.argumentExpression) visit(node.argumentExpression);
-      return origin;
+      opaque.add(resolution.detail);
+      return false;
     }
     if (ts.isIdentifier(node)) {
       const lookup = bindings.lookup(node);
@@ -930,11 +1299,13 @@ function analyzeKey(
       }
       const binding = lookup.binding;
       if (binding.kind === "parameter" && binding.owner === fn) {
-        for (const name of parameterBindingSemanticNames(binding)) {
-          contributorNames.add(name);
-          identityNames.add(name);
+        const resolution = resolveValueOrigin(node, node, call, sf, bindings);
+        if (resolution.kind === "resolved") {
+          keyOrigins.set(resolution.origin.key, resolution.origin);
+          return true;
         }
-        return true;
+        opaque.add(resolution.detail);
+        return false;
       }
       if (binding.kind !== "variable") {
         opaque.add(`\`${binding.name}\` resolves to a ${binding.kind} binding instead of an enclosing-function parameter or immutable local alias`);
@@ -971,77 +1342,106 @@ function analyzeKey(
     return origin;
   };
 
-  type CompositionPart = { kind: "literal" | "dynamic"; value: string };
-  type Composition = { kind: "known"; parts: CompositionPart[]; structured: boolean } | { kind: "unknown" };
+  type CompositionPart =
+    | { kind: "literal"; value: string }
+    | { encoded: boolean; kind: "dynamic"; origin: ValueOrigin };
+  type Composition =
+    | { framing: "json-tuple" | "raw"; kind: "known"; parts: CompositionPart[] }
+    | { detail: string; kind: "unknown" };
   const compositionStack = new Set<IndexedBinding>();
   const compositionOf = (raw: ts.Expression): Composition => {
     const node = unwrapExpression(raw);
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isNumericLiteral(node)) {
-      return { kind: "known", parts: [{ kind: "literal", value: node.text }], structured: false };
+      return { kind: "known", parts: [{ kind: "literal", value: node.text }], framing: "raw" };
     }
     if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword || node.kind === ts.SyntaxKind.NullKeyword) {
-      return { kind: "known", parts: [{ kind: "literal", value: node.getText(sf) }], structured: false };
+      return { kind: "known", parts: [{ kind: "literal", value: node.getText(sf) }], framing: "raw" };
     }
     if (ts.isTemplateExpression(node)) {
       const parts: CompositionPart[] = [{ kind: "literal", value: node.head.text }];
       for (const span of node.templateSpans) {
         const expressionPart = compositionOf(span.expression);
         if (expressionPart.kind === "unknown") return expressionPart;
+        if (expressionPart.framing === "json-tuple") {
+          return { kind: "unknown", detail: "a JSON tuple is nested inside string interpolation" };
+        }
         parts.push(...expressionPart.parts, { kind: "literal", value: span.literal.text });
       }
-      return { kind: "known", parts, structured: false };
+      return { kind: "known", parts, framing: "raw" };
     }
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = compositionOf(node.left);
       const right = compositionOf(node.right);
-      return left.kind === "known" && right.kind === "known"
-        ? { kind: "known", parts: [...left.parts, ...right.parts], structured: false }
-        : { kind: "unknown" };
+      if (left.kind === "unknown") return left;
+      if (right.kind === "unknown") return right;
+      if (left.framing === "json-tuple" || right.framing === "json-tuple") {
+        return { kind: "unknown", detail: "a JSON tuple is concatenated with another value" };
+      }
+      return { kind: "known", parts: [...left.parts, ...right.parts], framing: "raw" };
     }
     if (ts.isCallExpression(node) && isStructuredTupleWrapper(node, bindings)) {
       const tuple = unwrapExpression(node.arguments[0]!);
-      if (!ts.isArrayLiteralExpression(tuple)) return { kind: "unknown" };
+      if (!ts.isArrayLiteralExpression(tuple)) return { kind: "unknown", detail: "JSON.stringify does not wrap an array literal" };
       const parts: CompositionPart[] = [];
       for (const element of tuple.elements) {
-        if (ts.isSpreadElement(element)) return { kind: "unknown" };
-        const part = compositionOf(element);
-        if (part.kind === "unknown" || part.parts.length !== 1) return { kind: "unknown" };
-        parts.push(...part.parts);
-      }
-      return { kind: "known", parts, structured: true };
-    }
-    if (ts.isCallExpression(node) && isPureBuiltinKeyWrapper(node, bindings)) return compositionOf(node.arguments[0]!);
-    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-      let root: ts.Expression = node;
-      while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = root.expression;
-      if (ts.isIdentifier(root)) {
-        const lookup = bindings.lookup(root);
-        if (lookup.kind === "resolved" && lookup.binding.kind === "parameter" && lookup.binding.owner === fn) {
-          return { kind: "known", parts: [{ kind: "dynamic", value: boundedNodeText(node, sf) }], structured: false };
+        if (ts.isSpreadElement(element)) return { kind: "unknown", detail: "the JSON tuple contains a spread element" };
+        const value = unwrapExpression(element);
+        if (ts.isStringLiteralLike(value) || ts.isNumericLiteral(value)) {
+          parts.push({ kind: "literal", value: value.text });
+          continue;
         }
+        if (value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword || value.kind === ts.SyntaxKind.NullKeyword) {
+          parts.push({ kind: "literal", value: value.getText(sf) });
+          continue;
+        }
+        const resolution = resolveValueOrigin(value, value, call, sf, bindings);
+        if (resolution.kind === "unknown") return { kind: "unknown", detail: resolution.detail };
+        parts.push({ kind: "dynamic", origin: resolution.origin, encoded: false });
       }
-      return { kind: "unknown" };
+      return { kind: "known", parts, framing: "json-tuple" };
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.arguments.length === 1 &&
+      ts.isIdentifier(node.expression) &&
+      isUnshadowedGlobal(node.expression, "encodeURIComponent", bindings)
+    ) {
+      const resolution = resolveValueOrigin(node.arguments[0]!, node, call, sf, bindings);
+      return resolution.kind === "resolved"
+        ? { kind: "known", parts: [{ kind: "dynamic", origin: resolution.origin, encoded: true }], framing: "raw" }
+        : { kind: "unknown", detail: resolution.detail };
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.arguments.length === 1 &&
+      ts.isIdentifier(node.expression) &&
+      isUnshadowedGlobal(node.expression, "String", bindings)
+    ) {
+      return compositionOf(node.arguments[0]!);
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const resolution = resolveValueOrigin(node, node, call, sf, bindings);
+      return resolution.kind === "resolved"
+        ? { kind: "known", parts: [{ kind: "dynamic", origin: resolution.origin, encoded: false }], framing: "raw" }
+        : { kind: "unknown", detail: resolution.detail };
     }
     if (ts.isIdentifier(node)) {
-      const lookup = bindings.lookup(node);
-      if (lookup.kind !== "resolved") return { kind: "unknown" };
-      const binding = lookup.binding;
-      if (binding.kind === "parameter" && binding.owner === fn) {
-        return {
-          kind: "known",
-          parts: [{ kind: "dynamic", value: parameterBindingSemanticNames(binding).sort().join("/") }],
-          structured: false,
-        };
+      const resolution = resolveValueOrigin(node, node, call, sf, bindings);
+      if (resolution.kind === "resolved") {
+        return { kind: "known", parts: [{ kind: "dynamic", origin: resolution.origin, encoded: false }], framing: "raw" };
       }
-      if (binding.kind !== "variable" || compositionStack.has(binding)) return { kind: "unknown" };
+      const lookup = bindings.lookup(node);
+      if (lookup.kind !== "resolved") return { kind: "unknown", detail: resolution.detail };
+      const binding = lookup.binding;
+      if (binding.kind !== "variable" || compositionStack.has(binding)) return { kind: "unknown", detail: resolution.detail };
       const eligibility = eligibleConstInitializer(binding, node, call, bindings);
-      if (eligibility.kind === "ineligible") return { kind: "unknown" };
+      if (eligibility.kind === "ineligible") return { kind: "unknown", detail: eligibility.detail };
       compositionStack.add(binding);
       const composition = compositionOf(eligibility.initializer);
       compositionStack.delete(binding);
       return composition;
     }
-    return { kind: "unknown" };
+    return { kind: "unknown", detail: `'${boundedNodeText(node, sf)}' is not a canonical key composition` };
   };
 
   const normalizeComposition = (parts: CompositionPart[]): CompositionPart[] => {
@@ -1049,24 +1449,19 @@ function analyzeKey(
     for (const part of parts) {
       const prior = normalized.at(-1);
       if (part.kind === "literal" && prior?.kind === "literal") prior.value += part.value;
-      else normalized.push({ ...part });
+      else normalized.push(part.kind === "literal" ? { ...part } : { ...part, origin: { ...part.origin, path: [...part.origin.path] } });
     }
     return normalized;
   };
 
-  const hasInjectiveFraming = (composition: Composition): composition is Extract<Composition, { kind: "known" }> => {
-    if (composition.kind === "unknown") return false;
-    const parts = normalizeComposition(composition.parts);
+  const hasEncodedTermFraming = (parts: CompositionPart[]): boolean => {
     const dynamicIndexes = parts.flatMap((part, index) => (part.kind === "dynamic" ? [index] : []));
-    if (dynamicIndexes.length === 0) return false;
-    if (composition.structured) return true;
-    return dynamicIndexes.every((index) => {
-      const before = parts[index - 1];
-      const after = parts[index + 1];
-      const framedBefore = before?.kind === "literal" && /[^a-z0-9]$/i.test(before.value);
-      const framedAfter = after?.kind === "literal" && /^[^a-z0-9]/i.test(after.value);
-      return framedBefore || framedAfter;
-    });
+    if (dynamicIndexes.length === 0 || !dynamicIndexes.every((index) => parts[index]!.kind === "dynamic" && parts[index]!.encoded)) return false;
+    for (let index = 1; index < dynamicIndexes.length; index += 1) {
+      const between = parts.slice(dynamicIndexes[index - 1]! + 1, dynamicIndexes[index]);
+      if (!between.some((part) => part.kind === "literal" && /[:/|,;=@#$?&+]/.test(part.value))) return false;
+    }
+    return true;
   };
   visit(unwrapExpression(expression));
 
@@ -1078,7 +1473,7 @@ function analyzeKey(
       falsifier: "replace the random source with immutable tenant/entity/operation identifiers and show two evaluations for the same operation are equal",
     };
   }
-  if (volatile === "clock-derived" || [...identityNames].some((name) => ATTEMPT_IDENTITY.test(name))) {
+  if (volatile === "clock-derived" || [...keyOrigins.values()].some((origin) => ATTEMPT_IDENTITY.test(origin.semanticName))) {
     return {
       safe: false,
       classification: "clock-or-attempt-derived",
@@ -1105,96 +1500,147 @@ function analyzeKey(
     };
   }
 
-  const entityNames = [...identityNames].filter((name) => ENTITY_IDENTITY.test(name));
-  if (entityNames.length === 0) {
+  if (target.operationDetail) {
     return {
       safe: false,
-      classification: contributorNames.size === 0 ? "unsafe-global-constant" : "missing-entity-scope",
-      detail:
-        contributorNames.size === 0
-          ? `\`${text}\` has no immutable operation identity and can collide across every call site execution`
-          : `\`${text}\` does not include a recognisable immutable entity/operation identifier`,
-      falsifier: "evaluate the key for two different entities in the same scope and show the values differ",
-    };
-  }
-
-  const parameterNames = parameterBindingNames(fn);
-  const tenantRequired = parameterNames.some((name) => TENANT_IDENTITY.test(name));
-  const tenantPresent = [...identityNames].some((name) => TENANT_IDENTITY.test(name));
-  if (tenantRequired && !tenantPresent) {
-    return {
-      safe: false,
-      classification: "missing-tenant-scope",
-      detail: `\`${text}\` omits the tenant-like identity available to this function (\`${parameterNames.join(", ")}\`)`,
-      falsifier: "evaluate the key for the same entity identifier in two tenants and show the values differ",
-    };
-  }
-
-  if (!literals.some((literal) => OPERATION_WORD.test(literal))) {
-    return {
-      safe: false,
-      classification: "missing-operation-scope",
-      detail: `\`${text}\` has an entity identity but no stable operation discriminator`,
-      falsifier: "evaluate two different operations for the same tenant/entity and show their keys differ",
+      classification: "mechanically-unproven-provider-operation",
+      detail: `${target.operationDetail}, so this pass cannot bind the key to one provider effect`,
+      falsifier: "make the provider method and effect statically visible, then show one consistent key contract for that logical operation",
     };
   }
 
   const composition = compositionOf(expression);
-  if (!hasInjectiveFraming(composition)) {
+  if (composition.kind === "unknown") {
     return {
       safe: false,
       classification: "collision-prone-key-framing",
-      detail: `\`${text}\` does not use a delimited composition or a structured tuple, so distinct identity tuples can concatenate to the same provider key`,
-      falsifier: "evaluate adversarial tenant/entity/operation tuples with shifted boundaries and show that no two tuples produce the same key",
+      detail: `\`${text}\` is not a mechanically decodable key composition (${composition.detail})`,
+      falsifier: "use a typed JSON array tuple or encode every dynamic term separately with the unshadowed encodeURIComponent builtin",
     };
   }
 
-  const fingerprint = normalizeComposition(composition.parts)
-    .map((part) => `${part.kind === "literal" ? "L" : "D"}:${JSON.stringify(part.value)}`)
-    .join("|");
+  const parts = normalizeComposition(composition.parts);
+  const dynamicParts = parts.filter((part): part is Extract<CompositionPart, { kind: "dynamic" }> => part.kind === "dynamic");
+  if (dynamicParts.length === 0) {
+    return {
+      safe: false,
+      classification: "unsafe-global-constant",
+      detail: `\`${text}\` has no immutable operation identity and can collide across every call site execution`,
+      falsifier: "evaluate the key for two different entities in the same scope and show the values differ",
+    };
+  }
+
+  const requirement = scopeRequirement(target, sf, bindings);
+  if (requirement.ambiguity) {
+    return {
+      safe: false,
+      classification: "mechanically-unproven-scope-domain",
+      detail: `${requirement.ambiguity}; declaration spellings alone cannot select the logical operation's identity`,
+      falsifier: "make the provider payload's tenant/entity provenance explicit and show the key uses those exact immutable origins",
+    };
+  }
+
+  const origins = new Map(dynamicParts.map((part) => [part.origin.key, part.origin]));
+  const entityOrigins = [...origins.values()].filter((origin) => origin.role === "entity");
+  const missingEntities = requirement.entity.filter((origin) => !origins.has(origin.key));
+  if (entityOrigins.length === 0 || missingEntities.length > 0) {
+    return {
+      safe: false,
+      classification: "missing-entity-scope",
+      detail:
+        missingEntities.length > 0
+          ? `\`${text}\` omits provider-payload entity provenance (${missingEntities.map((origin) => `\`${origin.display}\``).join(", ")})`
+          : `\`${text}\` has no entity identity distinct from tenant provenance`,
+      falsifier: "evaluate the key for two different entities in the same tenant scope and show the values differ",
+    };
+  }
+
+  const missingTenants = requirement.tenant.filter((origin) => !origins.has(origin.key));
+  if (missingTenants.length > 0) {
+    return {
+      safe: false,
+      classification: "missing-tenant-scope",
+      detail: `\`${text}\` omits provider-payload or typed tenant provenance (${missingTenants.map((origin) => `\`${origin.display}\``).join(", ")})`,
+      falsifier: "evaluate the key for the same entity identifier in two tenants and show the values differ",
+    };
+  }
+
+  const operationLiterals = parts
+    .filter((part): part is Extract<CompositionPart, { kind: "literal" }> => part.kind === "literal")
+    .map((part) => part.value)
+    .filter((literal) => OPERATION_WORD.test(literal));
+  if (operationLiterals.length === 0) {
+    return {
+      safe: false,
+      classification: "missing-operation-scope",
+      detail: `\`${text}\` has entity provenance but no stable operation discriminator`,
+      falsifier: "evaluate two different provider effects for the same tenant/entity and show their keys differ",
+    };
+  }
+  const operationDiscriminator = OPERATION_WORD.exec(operationLiterals[0]!)![0]!.toLowerCase();
+
+  const untyped = dynamicParts.find((part) => part.origin.primitiveType === undefined);
+  if (untyped) {
+    return {
+      safe: false,
+      classification: "mechanically-unproven-key-origin-type",
+      detail: `\`${untyped.origin.display}\` is not a required string/number/boolean origin, so its serialization can collapse distinct values`,
+      falsifier: "give every dynamic key term a required primitive type and demonstrate distinct typed values serialize distinctly",
+    };
+  }
+
+  const framing: ProvenOperationKeyContract["framing"] | undefined =
+    composition.framing === "json-tuple"
+      ? "canonical-json-tuple"
+      : hasEncodedTermFraming(parts)
+        ? "encoded-terms"
+        : undefined;
+  if (!framing) {
+    return {
+      safe: false,
+      classification: "collision-prone-key-framing",
+      detail: `\`${text}\` is not a typed JSON tuple and does not separately encode every dynamic term, so distinct identity tuples can share one byte string`,
+      falsifier: "evaluate shifted-boundary tuples and either use a typed JSON array or individually encode every term with separators outside the encoded values",
+    };
+  }
+
+  const signature = [
+    framing,
+    ...parts.map((part) => {
+      if (part.kind === "literal") return `L:${JSON.stringify(part.value)}`;
+      const sameRoleCount = dynamicParts.filter((candidate) => candidate.origin.role === part.origin.role).length;
+      const semanticRole =
+        part.origin.role === "other" || sameRoleCount > 1
+          ? `${part.origin.role}:${part.origin.semanticName.toLowerCase()}`
+          : part.origin.role;
+      return `D:${semanticRole}`;
+    }),
+  ].join("|");
 
   return {
     safe: true,
     classification: "stable-scoped-operation-key",
-    detail: `\`${text}\` combines an immutable identity with an operation discriminator${tenantRequired ? " and the available tenant identity" : ""}`,
-    falsifier: "change any tenant, entity, or operation input and observe a collision, or retry unchanged inputs and observe a different key",
-    fingerprint,
+    detail: `\`${text}\` proves disjoint tenant/entity provenance, ${framing}, and a stable discriminator for ${target.logicalOperation}`,
+    falsifier: "change any required tenant/entity or provider effect and observe a collision, or retry unchanged inputs and observe a different key",
+    contract: { framing, operationDiscriminator, originKeys: new Set(origins.keys()), signature },
   };
 }
 
-function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile, bindings: SourceFileBindingIndex): Finding[] {
-  if (!RETRYABLE_PATH.test(path)) return [];
+function externalOperationRecords(
+  path: string,
+  sf: ts.SourceFile,
+  bindings: SourceFileBindingIndex,
+): { findings: Finding[]; records: ExternalOperationRecord[] } {
+  if (!RETRYABLE_PATH.test(path)) return { findings: [], records: [] };
   const findings: Finding[] = [];
-  const safeFingerprints = new Map<ts.Node, Map<string, ExternalSendTarget>>();
+  const records: ExternalOperationRecord[] = [];
   for (const call of calls(sf)) {
     const target = externalSendTarget(call, sf, bindings);
     if (!target) continue;
     if (target.key.kind === "present") {
-      const analysis = analyzeKey(target.key.expression, call, sf, bindings);
-      if (analysis.safe && analysis.fingerprint) {
-        const owner = enclosingFunction(call) ?? sf;
-        const ownerFingerprints = safeFingerprints.get(owner) ?? new Map<string, ExternalSendTarget>();
-        const prior = ownerFingerprints.get(analysis.fingerprint);
-        if (!prior) {
-          ownerFingerprints.set(analysis.fingerprint, target);
-          safeFingerprints.set(owner, ownerFingerprints);
-          continue;
-        }
-        findings.push(
-          mechanicalFinding({
-            id: `RETRY-duplicate-idempotency-key-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${target.key.expression.getStart(sf)}`,
-            title: `${path} — distinct provider calls reuse one scoped-operation key`,
-            severity: "Medium",
-            category: "Business logic",
-            taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
-            location: loc(path, sf, target.key.expression),
-            evidence: `Heuristic "external-send-idempotency-key" classified this as duplicate-scoped-operation-key: ${target.api} and an earlier ${prior.api} call in the same function have the same tenant/entity/operation composition fingerprint. SCOPE OF THIS CHECK: distinct provider call sites in THIS FUNCTION only. FALSIFIER: show that the two calls are one provider operation rather than distinct effects, or give each effect a distinct stable operation discriminator.`,
-            impact:
-              "When distinct external effects share one provider key, the later effect can be suppressed as a duplicate even though its payload or API operation is different.",
-            fix: "Use a distinct stable operation discriminator for each provider effect while preserving the same tenant/entity identity and retry stability.",
-            precisionTier: "review",
-          }),
-        );
+      const analysis = analyzeKey(target.key.expression, target, sf, bindings);
+      if (analysis.safe && analysis.contract) {
+        records.push({ analysis, path, sf, target });
         continue;
       }
       if (analysis.safe) continue;
@@ -1206,7 +1652,7 @@ function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile, bindings:
           category: "Business logic",
           taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
           location: loc(path, sf, target.key.expression),
-          evidence: `Heuristic "external-send-idempotency-key" classified the ${target.api} key as ${analysis.classification}: ${analysis.detail}. SCOPE OF THIS CHECK: it reads the provider's exact key option and local expression bindings in THIS FILE only. FALSIFIER: ${analysis.falsifier}.`,
+          evidence: `Heuristic "external-send-idempotency-key" classified the ${target.api} key as ${analysis.classification}: ${analysis.detail}. PROVIDER COLLISION DOMAIN: ${target.providerDomain}. LOGICAL OPERATION: ${target.logicalOperation}. SCOPE OF THIS CHECK: it reads exact provider slots and immutable provenance in THIS FILE only, then compares proven contracts across ALL ADMITTED PROJECT FILES. FALSIFIER: ${analysis.falsifier}.`,
           impact:
             "If a retry changes the key, the provider performs the logical operation twice. If different tenant/entity/operation tuples share the key, the provider suppresses legitimate work as a duplicate.",
           fix:
@@ -1250,6 +1696,63 @@ function externalSendNoIdempotencyKey(path: string, sf: ts.SourceFile, bindings:
         precisionTier: "review",
       }),
     );
+  }
+  return { findings, records };
+}
+
+function projectWideOperationContractFindings(records: ExternalOperationRecord[]): Finding[] {
+  const findings: Finding[] = [];
+  const domains = new Map<
+    string,
+    { byOperation: Map<string, ExternalOperationRecord>; bySignature: Map<string, ExternalOperationRecord> }
+  >();
+  for (const record of records) {
+    const contract = record.analysis.contract;
+    if (!contract) continue;
+    const operationIdentity = `${record.target.logicalOperation}::${contract.operationDiscriminator}`;
+    const domain = domains.get(record.target.providerDomain) ?? {
+      byOperation: new Map<string, ExternalOperationRecord>(),
+      bySignature: new Map<string, ExternalOperationRecord>(),
+    };
+    domains.set(record.target.providerDomain, domain);
+    const sameOperation = domain.byOperation.get(operationIdentity);
+    const sameSignature = domain.bySignature.get(contract.signature);
+    let classification: "cross-operation-key-collision" | "inconsistent-logical-operation-key-contract" | undefined;
+    let prior: ExternalOperationRecord | undefined;
+    if (sameSignature && sameSignature.target.logicalOperation !== record.target.logicalOperation) {
+      classification = "cross-operation-key-collision";
+      prior = sameSignature;
+    } else if (sameOperation?.analysis.contract?.signature !== undefined && sameOperation.analysis.contract.signature !== contract.signature) {
+      classification = "inconsistent-logical-operation-key-contract";
+      prior = sameOperation;
+    }
+    if (classification && prior && record.target.key.kind === "present") {
+      const collision = classification === "cross-operation-key-collision";
+      findings.push(
+        mechanicalFinding({
+          id: `RETRY-project-idempotency-contract-${record.path.replace(/[^a-zA-Z0-9]+/g, "-")}-${record.target.key.expression.getStart(record.sf)}`,
+          title: collision
+            ? `${record.path} — different provider effects share one idempotency-key contract`
+            : `${record.path} — one provider effect uses inconsistent idempotency-key contracts`,
+          severity: "Medium",
+          category: "Business logic",
+          taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
+          location: loc(record.path, record.sf, record.target.key.expression),
+          evidence: collision
+            ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` and ${prior.target.logicalOperation} in \`${prior.path}\` map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the call sites are the same provider effect, or give the different effects disjoint stable operation discriminators.`
+            : `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} uses a different proven encoding in \`${record.path}\` than in \`${prior.path}\` inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: show both call sites implement different provider effects, or make every site for this logical operation use one stable decodable contract.`,
+          impact: collision
+            ? "A provider may suppress one distinct external effect as a retry of another because both effects occupy the same key namespace."
+            : "Retries routed through different call sites can produce different keys for the same provider effect, defeating deduplication.",
+          fix: collision
+            ? "Give each provider effect a disjoint stable operation discriminator while preserving required tenant/entity provenance."
+            : "Use one canonical typed or per-term-encoded contract for this logical provider operation at every call site.",
+          precisionTier: "review",
+        }),
+      );
+    }
+    if (!sameOperation) domain.byOperation.set(operationIdentity, record);
+    if (!sameSignature) domain.bySignature.set(contract.signature, record);
   }
   return findings;
 }
@@ -1381,17 +1884,24 @@ function referencesBinding(root: ts.Node, name: string): boolean {
 }
 
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
-  const bindings = new SourceFileBindingIndex(sf);
   return [
     ...claimBeforeSend(path, sf),
     ...dedupBeforeDispatch(path, sf),
-    ...externalSendNoIdempotencyKey(path, sf, bindings),
     ...webhookOrdering(path, sf),
   ];
 }
 
 export function detectIdempotencyFindings(files: SourceInput[]): Finding[] {
-  return files
+  const admitted = files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
-    .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+    .map((file) => ({ path: file.path, sf: parse(file.path, file.text) }));
+  const findings = admitted.flatMap((file) => detectFile(file.path, file.sf));
+  const records: ExternalOperationRecord[] = [];
+  for (const file of admitted) {
+    const external = externalOperationRecords(file.path, file.sf, new SourceFileBindingIndex(file.sf));
+    findings.push(...external.findings);
+    records.push(...external.records);
+  }
+  findings.push(...projectWideOperationContractFindings(records));
+  return findings;
 }

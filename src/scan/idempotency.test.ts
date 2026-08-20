@@ -125,9 +125,9 @@ describe("external-send idempotency key (item 24)", () => {
     expect(
       scan(`
         export const charge = (stripe: Stripe, id: string) =>
-          stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: \`charge:\${id}\` });
+          stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: JSON.stringify(["charge", id]) });
         export const notify = (p: unknown, id: string) =>
-          fetch("https://api.resend.com/emails", { method: "POST", headers: { "Idempotency-Key": \`notify:\${id}\` }, body: JSON.stringify(p) });
+          fetch("https://api.resend.com/emails", { method: "POST", headers: { "Idempotency-Key": JSON.stringify(["notify", id]) }, body: JSON.stringify(p) });
       `),
     ).toEqual([]);
   });
@@ -263,13 +263,13 @@ describe("external-send idempotency key (item 24)", () => {
           constructor(stripe: Stripe, tenantId: string, bookingId: string) {
             stripe.paymentIntents.create(
               { amount: 100 },
-              { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+              { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
             );
           }
           set receipt({ tenantId, bookingId }: { tenantId: string; bookingId: string }) {
             fetch("https://api.resend.com/emails", {
               method: "POST",
-              headers: { "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` },
+              headers: { "Idempotency-Key": JSON.stringify(["receipt", tenantId, bookingId, "v1"]) },
             });
           }
         }
@@ -320,7 +320,7 @@ describe("external-send idempotency key (item 24)", () => {
       scan(`
         namespace Billing {
           export function charge(stripe: Stripe, tenantId: string, bookingId: string) {
-            const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+            const options = { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) };
             stripe.paymentIntents.create({ amount: 100 }, options);
           }
         }
@@ -400,7 +400,7 @@ describe("external-send idempotency key (item 24)", () => {
         function charge(stripe: Stripe, tenantId: string, bookingId: string, kind: string) {
           switch (kind) {
             case "charge":
-              const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+              const options = { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) };
               stripe.paymentIntents.create({ amount: 100 }, options);
               break;
           }
@@ -413,7 +413,7 @@ describe("external-send idempotency key (item 24)", () => {
     expect(
       scan(`
         function charge(stripe: Stripe, tenantId: string, bookingId: string, kind: string) {
-          const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+          const options = { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) };
           switch (kind) {
             case "charge":
               stripe.paymentIntents.create({ amount: 100 }, options);
@@ -623,7 +623,7 @@ describe("external-send idempotency key (item 24)", () => {
         function charge(stripe: Stripe, tenantId: string, bookingId: string) {
           const tenant = tenantId;
           const entity = bookingId;
-          const key = \`charge:\${tenant}:\${entity}:v1\`;
+        const key = JSON.stringify(["charge", tenant, entity, "v1"]);
           stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
         }
       `),
@@ -662,19 +662,19 @@ describe("external-send idempotency key (item 24)", () => {
       scan(`
         function charge(stripe: Stripe, tenantId: string, bookingId: string) {
           {
-            const options = { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` };
+            const options = { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) };
             stripe.paymentIntents.create({ amount: 100 }, options);
           }
           try {
             throw new Error("retry");
           } catch (error) {
-            const headers = { "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` };
+            const headers = { "Idempotency-Key": JSON.stringify(["receipt", tenantId, bookingId, "v1"]) };
             fetch("https://api.resend.com/emails", { method: "POST", headers });
           }
           for (
-            const conditionOptions = { idempotencyKey: \`prepare:\${tenantId}:\${bookingId}:v1\` },
-              options = { idempotencyKey: \`renew:\${tenantId}:\${bookingId}:v1\` };
-            (stripe.paymentIntents.create({ amount: 100 }, conditionOptions), shouldRun);
+            const conditionOptions = { idempotencyKey: JSON.stringify(["prepare", tenantId, bookingId, "v1"]) },
+              options = { idempotencyKey: JSON.stringify(["renew", tenantId, bookingId, "v1"]) };
+            (stripe.setupIntents.create({ customer: bookingId }, conditionOptions), shouldRun);
           ) {
             stripe.subscriptions.create({ customer: bookingId }, options);
             break;
@@ -688,11 +688,11 @@ describe("external-send idempotency key (item 24)", () => {
     expect(
       scan(`
         export async function charge(stripe: Stripe, tenantId: string, bookingId: string) {
-          const key = \`charge:\${tenantId}:\${bookingId}:v1\`;
+          const key = JSON.stringify(["charge", tenantId, bookingId, "v1"]);
           await stripe.paymentIntents.create({ amount: 100 }, { idempotencyKey: key });
           return fetch("https://api.resend.com/emails", {
             method: "POST",
-            headers: new Headers({ "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` }),
+            headers: new Headers({ "Idempotency-Key": JSON.stringify(["receipt", tenantId, bookingId, "v1"]) }),
           });
         }
       `),
@@ -719,13 +719,13 @@ describe("external-send idempotency key (item 24)", () => {
     },
   );
 
-  it("accepts only the unshadowed builtin String and encodeURIComponent wrappers", () => {
+  it("accepts only per-term unshadowed encodeURIComponent framing (an outer String is harmless)", () => {
     expect(
       scan(`
         function charge(stripe: Stripe, tenantId: string, bookingId: string) {
           stripe.paymentIntents.create(
             { amount: 100 },
-            { idempotencyKey: String(encodeURIComponent(\`charge:\${tenantId}:\${bookingId}:v1\`)) },
+            { idempotencyKey: String(\`charge:\${encodeURIComponent(tenantId)}:\${encodeURIComponent(bookingId)}:v1\`) },
           );
         }
       `),
@@ -760,11 +760,11 @@ describe("external-send idempotency key (item 24)", () => {
           const unsafeDefaults = { idempotencyKey: crypto.randomUUID() };
           stripe.paymentIntents.create(
             { amount: 100 },
-            { ...unsafeDefaults, idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+            { ...unsafeDefaults, idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
           );
           const unsafeHeaders = { "Idempotency-Key": crypto.randomUUID() };
           fetch("https://api.resend.com/emails", {
-            headers: new Headers({ ...unsafeHeaders, "Idempotency-Key": \`receipt:\${tenantId}:\${bookingId}:v1\` }),
+            headers: new Headers({ ...unsafeHeaders, "Idempotency-Key": JSON.stringify(["receipt", tenantId, bookingId, "v1"]) }),
           });
         }
       `),
@@ -805,7 +805,7 @@ describe("external-send idempotency key (item 24)", () => {
         ) {
           stripe.paymentIntents.create(
             { amount: 100 },
-            { idempotencyKey: \`charge:\${ctx.tenantId}:\${ctx.bookingId}:v1\` },
+            { idempotencyKey: JSON.stringify(["charge", ctx.tenantId, ctx.bookingId, "v1"]) },
           );
         }
         function chargeFromAlias(
@@ -814,7 +814,7 @@ describe("external-send idempotency key (item 24)", () => {
         ) {
           stripe.paymentIntents.create(
             { amount: 100 },
-            { idempotencyKey: \`charge:\${tid}:\${bookingId}:v1\` },
+            { idempotencyKey: JSON.stringify(["charge", tid, bookingId, "v1"]) },
           );
         }
       `),
@@ -844,21 +844,222 @@ describe("external-send idempotency key (item 24)", () => {
     ).toEqual([]);
   });
 
+  it("keeps tenant provenance disjoint from entity provenance", () => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string) {
+        stripe.paymentIntents.create(
+          { amount: 100 },
+          { idempotencyKey: JSON.stringify(["charge", tenantId]) },
+        );
+      }
+    `);
+    expect(finding.evidence).toContain("missing-entity-scope");
+    expect(finding.evidence).toContain("distinct from tenant provenance");
+  });
+
+  it("binds named-type identity roles to the provider payload instead of any same-role candidate", () => {
+    const finding = expectSingleReview(`
+      interface ChargeContext {
+        tenantId: string;
+        bookingId: string;
+        customerId: string;
+      }
+      function charge(stripe: Stripe, ctx: ChargeContext) {
+        stripe.paymentIntents.create(
+          { amount: 100, metadata: { bookingId: ctx.bookingId } },
+          { idempotencyKey: JSON.stringify(["charge", ctx.tenantId, ctx.customerId]) },
+        );
+      }
+    `);
+    expect(finding.evidence).toContain("missing-entity-scope");
+    expect(finding.evidence).toContain("ctx.bookingId");
+  });
+
+  it("follows inherited named types and immutable payload aliases when selecting required identity", () => {
+    const finding = expectSingleReview(`
+      interface BaseIdentity {
+        tenantId: string;
+        bookingId: string;
+      }
+      interface ChargeContext extends BaseIdentity {
+        customerId: string;
+      }
+      function charge(stripe: Stripe, ctx: ChargeContext) {
+        const payload = { amount: 100, metadata: { bookingId: ctx.bookingId } };
+        stripe.paymentIntents.create(
+          payload,
+          { idempotencyKey: JSON.stringify(["charge", ctx.tenantId, ctx.customerId]) },
+        );
+      }
+    `);
+    expect(finding.evidence).toContain("missing-entity-scope");
+    expect(finding.evidence).toContain("ctx.bookingId");
+  });
+
+  it("reviews JSON tuples whose dynamic terms lack required primitive types", () => {
+    const finding = expectSingleReview(
+      `
+        function charge(stripe, tenantId, bookingId) {
+          stripe.paymentIntents.create(
+            { amount: 100 },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }
+      `,
+      "src/lib/jobs/charge.js",
+    );
+    expect(finding.evidence).toContain("mechanically-unproven-key-origin-type");
+  });
+
+  it.each([
+    ["one-sided raw delimiters", "`charge:${encodeURIComponent(tenantId)}:${bookingId}`"],
+    ["whole-tuple encoding", "encodeURIComponent(`charge:${tenantId}:${bookingId}`)"],
+    ["adjacent encoded terms", "encodeURIComponent(tenantId) + encodeURIComponent(bookingId) + ':charge'"],
+  ])("reviews %s instead of claiming injective framing", (_name, expression) => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+        stripe.paymentIntents.create(
+          { amount: 100 },
+          { idempotencyKey: ${expression} },
+        );
+      }
+    `);
+    expect(finding.evidence).toContain("collision-prone-key-framing");
+  });
+
+  it("accepts the same logical-operation contract across sibling project files", () => {
+    expect(
+      detectIdempotencyFindings([
+        {
+          path: "src/jobs/charge-a.ts",
+          text: `function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+            return stripe.paymentIntents.create(
+              { amount: 100, metadata: { bookingId } },
+              { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+            );
+          }`,
+        },
+        {
+          path: "src/workers/charge-b.ts",
+          text: `function retryCharge(stripe: Stripe, orgId: string, orderId: string) {
+            return stripe.paymentIntents.create(
+              { amount: 100, metadata: { orderId } },
+              { idempotencyKey: JSON.stringify(["charge", orgId, orderId]) },
+            );
+          }`,
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("reviews different logical operations that share one contract across files", () => {
+    const out = detectIdempotencyFindings([
+      {
+        path: "src/jobs/charge.ts",
+        text: `function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/workers/refund.ts",
+        text: `function refund(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.refunds.create(
+            { payment_intent: bookingId },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }`,
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("cross-operation-key-collision");
+    expect(out[0]!.evidence).toContain("ALL ADMITTED PROJECT FILES");
+  });
+
+  it("reviews inconsistent contracts for one logical operation across files", () => {
+    const out = detectIdempotencyFindings([
+      {
+        path: "src/jobs/charge.ts",
+        text: `function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/workers/charge.ts",
+        text: `function retryCharge(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: \`charge:\${encodeURIComponent(tenantId)}:\${encodeURIComponent(bookingId)}\` },
+          );
+        }`,
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("inconsistent-logical-operation-key-contract");
+  });
+
+  it("preserves the order of multiple same-role identities in the project-wide contract", () => {
+    const out = detectIdempotencyFindings([
+      {
+        path: "src/jobs/charge.ts",
+        text: `function charge(stripe: Stripe, tenantId: string, bookingId: string, customerId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId, customerId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, customerId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/workers/charge.ts",
+        text: `function retryCharge(stripe: Stripe, tenantId: string, bookingId: string, customerId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId, customerId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, customerId, bookingId]) },
+          );
+        }`,
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("inconsistent-logical-operation-key-contract");
+  });
+
+  it("partitions identical contracts by provider collision domain", () => {
+    expect(
+      scan(`
+        function send(stripe: Stripe, tenantId: string, messageId: string) {
+          stripe.paymentIntents.create(
+            { amount: 100, metadata: { messageId } },
+            { idempotencyKey: JSON.stringify(["send", tenantId, messageId]) },
+          );
+          fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: { "Idempotency-Key": JSON.stringify(["send", tenantId, messageId]) },
+          });
+        }
+      `),
+    ).toEqual([]);
+  });
+
   it("reviews duplicate scoped-operation fingerprints across provider call sites", () => {
     const out = scan(`
       function charge(stripe: Stripe, tenantId: string, bookingId: string) {
         stripe.paymentIntents.create(
           { amount: 100 },
-          { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+          { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
         );
         stripe.refunds.create(
           { payment_intent: bookingId },
-          { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+          { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
         );
       }
     `);
     expect(out).toHaveLength(1);
-    expect(out[0]!.evidence).toContain("duplicate-scoped-operation-key");
+    expect(out[0]!.evidence).toContain("cross-operation-key-collision");
   });
 
   it("accepts distinct operation fingerprints for distinct provider call sites", () => {
@@ -867,11 +1068,11 @@ describe("external-send idempotency key (item 24)", () => {
         function charge(stripe: Stripe, tenantId: string, bookingId: string) {
           stripe.paymentIntents.create(
             { amount: 100 },
-            { idempotencyKey: \`charge:\${tenantId}:\${bookingId}:v1\` },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId, "v1"]) },
           );
           stripe.refunds.create(
             { payment_intent: bookingId },
-            { idempotencyKey: \`refund:\${tenantId}:\${bookingId}:v1\` },
+            { idempotencyKey: JSON.stringify(["refund", tenantId, bookingId, "v1"]) },
           );
         }
       `),

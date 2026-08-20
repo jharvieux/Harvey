@@ -31,3 +31,31 @@ export function chargeWithUnrelatedAssurance(stripe: Stripe, bookingId: string) 
     { metadata: { idempotencyNote: bookingId } },
   );
 }
+
+export function chargeWithTenantMisusedAsEntity(stripe: Stripe, tenantId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100 },
+    { idempotencyKey: JSON.stringify(["charge", tenantId, "v1"]) },
+  );
+}
+
+export function chargeWithRawTupleFraming(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100 },
+    { idempotencyKey: `charge:${tenantId}:${bookingId}:v1` },
+  );
+}
+
+export function chargeWithSharedProviderContract(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["shared-effect", tenantId, bookingId, "v1"]) },
+  );
+}
+
+export function refundWithSharedProviderContract(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.refunds.create(
+    { payment_intent: bookingId },
+    { idempotencyKey: JSON.stringify(["shared-effect", tenantId, bookingId, "v1"]) },
+  );
+}
