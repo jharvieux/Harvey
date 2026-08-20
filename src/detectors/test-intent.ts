@@ -23,6 +23,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { PathScopedClass } from "../scan/path-scope.js";
 import { parse, type NextId, type SourceInput } from "./common.js";
 
 export function isTestFile(path: string): boolean {
@@ -726,6 +727,47 @@ function isSecurityCritical(path: string): boolean {
   return pathWords(path).some((w) => CRITICAL_WORDS.has(w) || CRITICAL_PREFIXES.some((p) => w.startsWith(p)));
 }
 
+/** Production path population shared by the seven per-test-file intent families. */
+export function staticTestIntentFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => PARSEABLE.test(file.path) && isTestFile(file.path));
+}
+
+/** Production source population for the happy-path-only critical-code family. */
+export function securityCriticalSourceFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => PARSEABLE.test(file.path) && !isTestFile(file.path) && isSecurityCritical(file.path));
+}
+
+const testIntentClass = (rowId: string, classId: string, classes: string): PathScopedClass => ({
+  rowId,
+  detector: "test-intent",
+  classId,
+  ownerFile: "src/detectors/test-intent.ts",
+  selectorSymbol: "staticTestIntentFiles",
+  convention: "parseable `*.test.*`, `*.spec.*`, and `__tests__/**` modules",
+  select: staticTestIntentFiles,
+  classes,
+});
+
+export const TEST_INTENT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  testIntentClass("M1-PATHSCOPE-M8-MOCK-SUBJECT-00", "M8 — Mock of the subject under test", "a test that replaces the subject it claims to exercise"),
+  testIntentClass("M1-PATHSCOPE-M8-ASSERTION-FREE-00", "M8 — Assertion-free test", "a test body that exercises code but asserts no observable behavior"),
+  testIntentClass("M1-PATHSCOPE-M8-TAUTOLOGICAL-00", "M8 — Tautological assertion", "an assertion comparing a stable expression with itself"),
+  testIntentClass("M1-PATHSCOPE-M8-SNAPSHOT-ONLY-00", "M8 — Snapshot-only test", "a test whose only substantive assertions are snapshots"),
+  testIntentClass("M1-PATHSCOPE-M8-CALL-COUNT-ONLY-00", "M8 — Call-count-only test", "a test that asserts only that a call happened, not its arguments or result"),
+  testIntentClass("M1-PATHSCOPE-M8-SHAPE-ONLY-00", "M8 — Asserts response shape, not business values", "a response test that consumes data but asserts only status, existence, or nonzero shape"),
+  testIntentClass("M1-PATHSCOPE-M8-RLS-MOCKED-DB-00", "M8 — Tenant-isolation test mocks the DB client", "an RLS or tenant-isolation test that cannot reach the database policy it claims to prove"),
+  {
+    rowId: "M1-PATHSCOPE-M8-HAPPY-PATH-ONLY-00",
+    detector: "test-intent",
+    classId: "M8 — Happy-path-only tests on security-critical code",
+    ownerFile: "src/detectors/test-intent.ts",
+    selectorSymbol: "securityCriticalSourceFiles",
+    convention: "parseable non-test modules whose path words name auth/authz/authn, authorization/authentication/permission, RLS, tenant, payment, price/pricing, discount, or refund",
+    select: securityCriticalSourceFiles,
+    classes: "security- or money-critical source covered only by allowed/happy-path tests",
+  },
+];
+
 const DENIAL_NAME = /\bden(y|ies|ied|ial)\b|reject|unauthori[sz]ed|forbid|\bthrows?\b|invalid|\bnegative\b|boundar|\bedge\b|non-?member|\berrors?\b|\bfails?\b|disallow/i;
 const DENIAL_ARGS = new Set(["false", "null", "undefined"]);
 const DENIAL_MATCHERS = new Set(["toBeNull", "toBeUndefined", "toBeFalsy"]);
@@ -759,7 +801,6 @@ function coveringTestContexts(sourcePath: string, testCtxs: TestFileContext[], b
 function detectHappyPathOnly(files: SourceInput[], testCtxs: TestFileContext[], byPath: ReadonlyMap<string, SourceInput>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const src of files) {
-    if (isTestFile(src.path) || !isSecurityCritical(src.path)) continue;
     const covering = coveringTestContexts(src.path, testCtxs, byPath);
     if (covering.length === 0) continue;
     if (covering.some((ctx) => hasDenialEvidence(ctx))) continue;
@@ -796,8 +837,7 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
   const byPath = new Map(parseable.map((f) => [f.path, f]));
   const findings: Finding[] = [];
   const testCtxs: TestFileContext[] = [];
-  for (const file of parseable) {
-    if (!isTestFile(file.path)) continue;
+  for (const file of staticTestIntentFiles(parseable)) {
     const ctx = contextFor(file);
     testCtxs.push(ctx);
     findings.push(
@@ -810,6 +850,6 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
       ...detectRlsMockedDb(ctx, byPath, nextId),
     );
   }
-  findings.push(...detectHappyPathOnly(parseable, testCtxs, byPath, nextId));
+  findings.push(...detectHappyPathOnly(securityCriticalSourceFiles(parseable), testCtxs, byPath, nextId));
   return findings;
 }

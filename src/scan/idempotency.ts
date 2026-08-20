@@ -30,6 +30,7 @@ import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding } from "./common.js";
+import type { PathScopedClass } from "./path-scope.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
@@ -137,6 +138,33 @@ type ObjectResolution =
 type AliasEligibility =
   | { kind: "eligible"; initializer: ts.Expression }
   | { kind: "ineligible"; detail: string };
+
+/** Generic shipping-source filter shared by all four idempotency classes. */
+function idempotencySourceFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => SOURCE_EXT.test(file.path) && !NON_SHIPPING_PATH.test(file.path) && !NON_SHIPPING_FILE.test(file.path));
+}
+
+function isRetryableExternalSendPath(path: string): boolean {
+  return RETRYABLE_PATH.test(path);
+}
+
+/** The actual class population for external sends that need a deterministic idempotency key. */
+export function retryableExternalSendFiles(files: readonly SourceInput[]): SourceInput[] {
+  return idempotencySourceFiles(files).filter((file) => isRetryableExternalSendPath(file.path));
+}
+
+export const IDEMPOTENCY_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  {
+    rowId: "M1-PATHSCOPE-IDEMPOTENCY-EXTERNAL-SEND-00",
+    detector: "idempotency",
+    classId: "External send without a deterministic idempotency key",
+    ownerFile: "src/scan/idempotency.ts",
+    selectorSymbol: "retryableExternalSendFiles",
+    convention: "shipping source under Inngest, cron, queue, worker, job, task, webhook, or scheduler path segments",
+    select: retryableExternalSendFiles,
+    classes: "an external provider send from a retryable execution context without an idempotency key",
+  },
+];
 
 function isLoop(n: ts.Node): boolean {
   return ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n) || ts.isWhileStatement(n) || ts.isDoStatement(n);
@@ -1665,7 +1693,7 @@ function externalOperationRecords(
   sf: ts.SourceFile,
   bindings: SourceFileBindingIndex,
 ): { findings: Finding[]; records: ExternalOperationRecord[] } {
-  if (!RETRYABLE_PATH.test(path)) return { findings: [], records: [] };
+  if (!isRetryableExternalSendPath(path)) return { findings: [], records: [] };
   const findings: Finding[] = [];
   const records: ExternalOperationRecord[] = [];
   for (const call of calls(sf)) {
@@ -1961,12 +1989,13 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 }
 
 export function detectIdempotencyFindings(files: SourceInput[]): Finding[] {
-  const admitted = files
-    .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
+  const admittedSources = idempotencySourceFiles(files);
+  const admitted = admittedSources
     .map((file) => ({ path: file.path, sf: parse(file.path, file.text) }));
   const findings = admitted.flatMap((file) => detectFile(file.path, file.sf));
   const records: ExternalOperationRecord[] = [];
-  for (const file of admitted) {
+  const retryablePaths = new Set(retryableExternalSendFiles(admittedSources).map((file) => file.path));
+  for (const file of admitted.filter((candidate) => retryablePaths.has(candidate.path))) {
     const external = externalOperationRecords(file.path, file.sf, new SourceFileBindingIndex(file.sf));
     findings.push(...external.findings);
     records.push(...external.records);

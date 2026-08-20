@@ -39,19 +39,18 @@ describe("mechanical phase implementation identities (#1864)", () => {
     expect(after["structural-ast"]).toBe(before["structural-ast"]);
   });
 
-  it("a pinned Semgrep worker-topology edit or removal invalidates phase and family caches", () => {
+  it("a pinned Semgrep worker-topology or paired-family policy edit invalidates phase and family caches", () => {
     const root = fixture();
     const before = buildCache(root);
     const semgrep = join(root, "src", "scan", "semgrep.ts");
     const original = readFileSync(semgrep, "utf8");
-    for (const replacement of [
-      '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]',
-      '["--x-ignore-semgrepignore-files", "--x-parmap"]',
-    ]) {
-      const source = original.replace(
-        '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]',
-        replacement,
-      );
+    for (const [needle, replacement] of [
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]'],
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap"]'],
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "2"]'],
+      ['const SEMGREP_PAIRED_FAMILY = "local-injection";', 'const SEMGREP_PAIRED_FAMILY = "local-auth";'],
+    ] as const) {
+      const source = original.replace(needle, replacement);
       expect(source).toContain(replacement);
       writeFileSync(semgrep, source);
       const after = buildCache(root);
@@ -60,14 +59,14 @@ describe("mechanical phase implementation identities (#1864)", () => {
     }
   });
 
-  it("an auth-guard helper edit invalidates Semgrep without falsely invalidating unrelated phases", () => {
+  it("an auth-guard helper edit invalidates every consuming phase but not configuration", () => {
     const root = fixture();
     const before = build(root);
     writeFileSync(join(root, "src", "scan", "auth-guard-discovery.ts"), "\n// phase cache direct dependency control\n", { flag: "a" });
     const after = build(root);
     expect(after.semgrep).not.toBe(before.semgrep);
     expect(after.configuration).toBe(before.configuration);
-    expect(after["structural-ast"]).toBe(before["structural-ast"]);
+    expect(after["structural-ast"]).not.toBe(before["structural-ast"]);
   });
 
   it("a structural detector edit invalidates only structural/AST", () => {

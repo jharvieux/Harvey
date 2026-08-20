@@ -492,9 +492,11 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
     if (target.executionPlan?.schema !== 1 || stable(target.executionPlan.phases) !== stable(MECHANICAL_PHASES)
       || target.executionPlan.semgrep?.strategy !== "partitioned-families" || target.executionPlan.semgrep.families.length === 0
       || new Set(target.executionPlan.semgrep.families.map((family) => family.id)).size !== target.executionPlan.semgrep.families.length
-      || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal || !SHA256.test(family.configSha256))
-      || target.executionPlan.semgrep.schema !== 2
-      || !Array.isArray(target.executionPlan.semgrep.argv) || target.executionPlan.semgrep.argv.length === 0
+      || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal
+        || !SHA256.test(family.configSha256)
+        || !Array.isArray(family.argv) || family.argv.length === 0
+        || (family.verification !== "single" && family.verification !== "paired-cold-exact"))
+      || target.executionPlan.semgrep.schema !== 3
       || Object.keys(target.executionPlan.implementation).length === 0 || Object.keys(target.executionPlan.externalInputs).length === 0) {
       throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed`);
     }
