@@ -168,7 +168,7 @@ export function buildCurrentMechanicalPhasePlan(options: {
       phases: MECHANICAL_PHASES,
       implementation: phaseCache.implementation,
       externalInputs: phaseCache.externalInputs,
-      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
+      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep, undefined, options.repoRoot),
     },
     cachePolicy: {
       schema: 1,
@@ -489,14 +489,31 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
       || new Set(target.emptyGitlinks.map((entry) => entry.path)).size !== target.emptyGitlinks.length) {
       throw new Error(`${source}: ${slug} empty-gitlink receipt is missing or malformed`);
     }
+    const injectionPlan = target.executionPlan?.semgrep?.families.find((family) => family.id === "local-injection");
+    const injectionPartitions = injectionPlan?.subpartitions;
+    const injectionRemainder = injectionPartitions?.[0];
+    const injectionComplement = injectionPartitions?.at(-1);
     if (target.executionPlan?.schema !== 1 || stable(target.executionPlan.phases) !== stable(MECHANICAL_PHASES)
       || target.executionPlan.semgrep?.strategy !== "partitioned-families" || target.executionPlan.semgrep.families.length === 0
       || new Set(target.executionPlan.semgrep.families.map((family) => family.id)).size !== target.executionPlan.semgrep.families.length
       || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal
         || !SHA256.test(family.configSha256)
         || !Array.isArray(family.argv) || family.argv.length === 0
-        || (family.verification !== "single" && family.verification !== "paired-cold-exact"))
-      || target.executionPlan.semgrep.schema !== 3
+        || (family.verification !== "single" && family.verification !== "rule-partition-exact"))
+      || target.executionPlan.semgrep.schema !== 4
+      || injectionPlan?.verification !== "rule-partition-exact"
+      || !Array.isArray(injectionPartitions) || injectionPartitions.length < 2
+      || injectionRemainder?.id !== "isolated-log-injection/remainder"
+      || injectionComplement?.id !== "complement"
+      || injectionPartitions.slice(1, -1).some((partition, ordinal) => partition.id !== `isolated-log-injection/file-${String(ordinal + 1).padStart(3, "0")}`)
+      || injectionPartitions.some((partition) => !Array.isArray(partition.includedRuleIds) || partition.includedRuleIds.length === 0
+        || !Array.isArray(partition.excludedRuleIds) || partition.excludedRuleIds.length === 0
+        || !Array.isArray(partition.excludedTargetPaths)
+        || typeof partition.target !== "string" || !partition.target.startsWith("<target-root>")
+        || !Array.isArray(partition.argv) || partition.argv.length === 0)
+      || stable(injectionRemainder?.excludedTargetPaths ?? []) !== stable(injectionPartitions.slice(1, -1).map((partition) => partition.target.replace(/^<target-root>\/?/, "")))
+      || stable([...(injectionRemainder?.includedRuleIds ?? []), ...(injectionComplement?.includedRuleIds ?? [])].sort())
+        !== stable([...new Set([...(injectionRemainder?.includedRuleIds ?? []), ...(injectionRemainder?.excludedRuleIds ?? [])])].sort())
       || Object.keys(target.executionPlan.implementation).length === 0 || Object.keys(target.executionPlan.externalInputs).length === 0) {
       throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed`);
     }

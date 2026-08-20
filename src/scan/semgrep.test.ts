@@ -413,15 +413,34 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
-  it("receipts paired one-worker verification only for the unstable injection family", () => {
+  it("receipts the exhaustive source-derived rule partition only for the unstable injection family", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-plan-"));
     try {
-      const receipt = semgrepExecutionPlanReceipt(seedRegistrySnapshot(dir).files);
-      expect(receipt.schema).toBe(3);
+      const target = join(dir, "target");
+      mkdirSync(target);
+      writeFileSync(join(target, "small.ts"), "export {};\n");
+      writeFileSync(join(target, "large.ts"), "x".repeat(80 * 1024 + 1));
+      const receipt = semgrepExecutionPlanReceipt(seedRegistrySnapshot(dir).files, undefined, target);
+      expect(receipt.schema).toBe(4);
       const injection = receipt.families.find((family) => family.id === "local-injection");
       expect(injection?.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
       expect(injection?.argv.join(" ")).toContain("--timeout 0");
-      expect(injection?.verification).toBe("paired-cold-exact");
+      expect(injection?.verification).toBe("rule-partition-exact");
+      expect(injection?.subpartitions?.map((partition) => partition.id)).toEqual([
+        "isolated-log-injection/remainder", "isolated-log-injection/file-001", "complement",
+      ]);
+      const isolated = injection?.subpartitions?.[0];
+      const file = injection?.subpartitions?.[1];
+      const complement = injection?.subpartitions?.[2];
+      expect(isolated?.includedRuleIds).toEqual(["harvey-log-injection"]);
+      expect(complement?.excludedRuleIds).toEqual(["harvey-log-injection"]);
+      expect(isolated?.excludedRuleIds).toEqual(complement?.includedRuleIds);
+      expect(isolated?.excludedTargetPaths).toEqual(["large.ts"]);
+      expect(file?.target).toBe("<target-root>/large.ts");
+      expect(file?.excludedTargetPaths).toEqual([]);
+      expect(isolated?.argv.filter((arg) => arg === "--exclude-rule")).toHaveLength(isolated?.excludedRuleIds.length ?? -1);
+      expect(isolated?.argv).toContain("large.ts");
+      expect(complement?.argv).toContain("src.scan.rules.semgrep.harvey-log-injection");
       expect(receipt.families.filter((family) => family.id !== "local-injection").every((family) =>
         family.verification === "single" && family.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
@@ -430,66 +449,122 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
-  it("replaces monolithic injection output only after two exact cold one-worker executions", () => {
-    const output = (results: SemgrepResult[]): string => JSON.stringify({
+  it("fails loud when the source-derived injection family loses or duplicates the isolated rule", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partition-contract-"));
+    try {
+      const registry = seedRegistrySnapshot(dir).files;
+      const local = join(dir, "local-rules");
+      const target = join(dir, "target");
+      mkdirSync(local);
+      mkdirSync(target);
+      writeFileSync(join(local, "injection.yml"), "rules:\n  - id: harvey-other\n");
+      expect(() => semgrepExecutionPlanReceipt(registry, local, target)).toThrow(/harvey-log-injection exactly once; found 0/);
+      writeFileSync(join(local, "injection.yml"), "rules:\n  - id: harvey-log-injection\n  - id: harvey-other\n  - id: harvey-log-injection\n");
+      expect(() => semgrepExecutionPlanReceipt(registry, local, target)).toThrow(/duplicate rule ids.*harvey-log-injection/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces monolithic injection output with the bounded isolated-rule scans and exhaustive complement", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-direct-bounded-"));
+    const target = join(dir, "target");
+    mkdirSync(target);
+    const small = join(target, "a.ts");
+    const large = join(target, "large.ts");
+    writeFileSync(small, "export {};\n");
+    writeFileSync(large, "x".repeat(80 * 1024 + 1));
+    const output = (results: SemgrepResult[], scanned: string[], rules: string[]): string => JSON.stringify({
       version: "1.164.0", results, errors: [],
-      paths: { scanned: ["/some/target/a.ts"], skipped: [] },
-      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
+      paths: { scanned, skipped: [] }, time: { rules },
     });
     const row = (line: number): SemgrepResult => ({
-      check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line },
+      check_id: "src.scan.rules.semgrep.harvey-log-injection", path: small, start: { line },
       extra: { message: `line ${line}`, severity: "WARNING", metadata: { confidence: "MEDIUM" } },
     });
-    const other: SemgrepResult = { check_id: "registry.other", path: "/some/target/a.ts", start: { line: 1 } };
-    semgrepMock.outputs.push(output([other, row(10)]), output([row(10), row(20)]), output([row(20), row(10)]));
+    const other: SemgrepResult = { check_id: "src.scan.rules.semgrep.harvey-command-injection", path: small, start: { line: 1 } };
+    const registry = seedRegistrySnapshot(dir).files;
+    const plan = semgrepExecutionPlanReceipt(registry, undefined, target);
+    const injection = plan.families.find((family) => family.id === "local-injection")!;
+    const namespaced = (ids: string[]): string[] => ids.map((id) => `src.scan.rules.semgrep.${id}`);
+    semgrepMock.outputs.push(
+      output([other, row(10)], [small, large], namespaced(injection.subpartitions![2]!.includedRuleIds)),
+      output([row(10)], [small], namespaced(injection.subpartitions![0]!.includedRuleIds)),
+      output([row(20)], [large], namespaced(injection.subpartitions![1]!.includedRuleIds)),
+      output([other], [small, large], namespaced(injection.subpartitions![2]!.includedRuleIds)),
+    );
     vi.mocked(execFileSync).mockClear();
     try {
-      const run = runSemgrep("/some/target");
+      const run = runSemgrep(target, registry);
       expect(run.failure).toBeUndefined();
       expect(run.result.results?.map((result) => `${result.check_id}:${result.start?.line}`)).toEqual([
-        "registry.other:1",
+        "src.scan.rules.semgrep.harvey-command-injection:1",
         "src.scan.rules.semgrep.harvey-log-injection:10",
         "src.scan.rules.semgrep.harvey-log-injection:20",
       ]);
       const argvs = semgrepArgvs();
-      expect(argvs).toHaveLength(3);
+      expect(argvs).toHaveLength(4);
       expect(argvs[0]?.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
       expect(argvs.slice(1).every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
       expect(argvs.slice(1).every((argv) => argv.some((arg) => arg.endsWith("/injection.yml")))).toBe(true);
+      expect(argvs[1]?.filter((arg) => arg === "--exclude-rule").length).toBeGreaterThan(1);
+      expect(argvs[1]).not.toContain("src.scan.rules.semgrep.harvey-log-injection");
+      expect(argvs[1]).toContain("large.ts");
+      expect(argvs[2]?.at(-1)).toBe(large);
+      expect(argvs[3]?.filter((arg) => arg === "--exclude-rule")).toHaveLength(1);
+      expect(argvs[3]).toContain("src.scan.rules.semgrep.harvey-log-injection");
     } finally {
       semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("fails monolithic delivery when the paired cold injection outputs differ", () => {
+  it("fails monolithic delivery when the complement emits the isolated rule", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-complement-row-"));
+    const target = join(dir, "target");
+    mkdirSync(target);
+    writeFileSync(join(target, "a.ts"), "export {};\n");
     const output = (lines: number[]): string => JSON.stringify({
       version: "1.164.0",
-      results: lines.map((line) => ({ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line } })),
-      errors: [], paths: { scanned: ["/some/target/a.ts"], skipped: [] },
+      results: lines.map((line) => ({ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: join(target, "a.ts"), start: { line } })),
+      errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] },
       time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
     });
     semgrepMock.outputs.push(output([10]), output([10]), output([10, 20]));
     try {
-      const run = runSemgrep("/some/target");
+      const run = runSemgrep(target);
       expect(run.result).toEqual({});
-      expect(run.failure).toMatch(/paired cold.*local-injection.*differ/i);
+      expect(run.failure).toMatch(/local-injection\/complement emitted unaccounted rule.*harvey-log-injection/i);
     } finally {
       semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("executes the production partitioned injection seam twice at j1 and every other family once at j9", async () => {
+  it("executes the production injection rule and complement once each at j1 and every other family once at j9", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-policy-"));
     try {
       const target = join(dir, "target");
       mkdirSync(target);
       writeFileSync(join(target, "a.ts"), "export {};\n");
+      writeFileSync(join(target, "large.ts"), "x".repeat(80 * 1024 + 1));
       const registry = seedRegistrySnapshot(dir).files;
-      const plan = semgrepExecutionPlanReceipt(registry);
-      const output = JSON.stringify({
-        version: "1.164.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ["fixture-rule"] },
-      });
-      semgrepMock.outputs.push(...Array.from({ length: plan.families.length + 1 }, () => output));
+      const plan = semgrepExecutionPlanReceipt(registry, undefined, target);
+      for (const family of plan.families) {
+        if (family.id !== "local-injection") {
+          semgrepMock.outputs.push(JSON.stringify({ version: "1.164.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ["fixture-rule"] } }));
+          continue;
+        }
+        for (const partition of family.subpartitions!) {
+          const scanned = partition.id.endsWith("remainder") ? [join(target, "a.ts")]
+            : partition.id.includes("file-") ? [join(target, "large.ts")]
+            : [join(target, "a.ts"), join(target, "large.ts")];
+          semgrepMock.outputs.push(JSON.stringify({
+            version: "1.164.0", results: [], errors: [], paths: { scanned, skipped: [] },
+            time: { rules: partition.includedRuleIds.map((id) => `src.scan.rules.semgrep.${id}`) },
+          }));
+        }
+      }
       vi.mocked(execFileSync).mockClear();
       const run = await runSemgrepPartitioned(target, registry, {
         dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
@@ -498,8 +573,12 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(run.failure).toBeUndefined();
       const calls = semgrepArgvs();
       const injection = calls.filter((argv) => argv.some((arg) => arg.endsWith("/injection.yml")));
-      expect(injection).toHaveLength(2);
+      expect(injection).toHaveLength(3);
       expect(injection.every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
+      expect(injection[0]?.filter((arg) => arg === "--exclude-rule").length).toBeGreaterThan(1);
+      expect(injection[0]).toContain("large.ts");
+      expect(injection[1]?.at(-1)).toBe(join(target, "large.ts"));
+      expect(injection[2]?.filter((arg) => arg === "--exclude-rule")).toHaveLength(1);
       expect(calls.filter((argv) => !argv.some((arg) => arg.endsWith("/injection.yml"))).every((argv) =>
         argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
@@ -509,7 +588,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
-  it("fails partitioned delivery before a divergent injection pair can enter the family cache", async () => {
+  it("fails partitioned delivery before an unaccounted subpartition row can enter the family cache", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-mismatch-"));
     try {
       const target = join(dir, "target");
@@ -538,7 +617,79 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         implementation: "implementation", externalInputs: { semgrep: "1.164.0" },
       });
       expect(run.result).toEqual({});
-      expect(run.failure).toMatch(/paired cold.*local-injection.*differ/i);
+      expect(run.failure).toMatch(/local-injection\/complement emitted unaccounted rule.*harvey-log-injection/i);
+      expect(existsSync(join(cache, "semgrep-families", "local-injection"))).toBe(false);
+    } finally {
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before cache or return when a bounded file subscan reports any other target", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-file-scope-"));
+    try {
+      const target = join(dir, "target");
+      const cache = join(dir, "cache");
+      mkdirSync(target);
+      const small = join(target, "a.ts");
+      const large = join(target, "large.ts");
+      writeFileSync(small, "export {};\n");
+      writeFileSync(large, "x".repeat(80 * 1024 + 1));
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry, undefined, target);
+      const envelope = (scanned: string[], rules: string[]): string => JSON.stringify({
+        version: "1.164.0", results: [], errors: [], paths: { scanned, skipped: [] }, time: { rules },
+      });
+      for (const family of plan.families) {
+        if (family.id !== "local-injection") {
+          semgrepMock.outputs.push(envelope([small], ["fixture-rule"]));
+          continue;
+        }
+        const [remainder, file] = family.subpartitions!;
+        semgrepMock.outputs.push(
+          envelope([small], remainder!.includedRuleIds.map((id) => `src.scan.rules.semgrep.${id}`)),
+          envelope([small], file!.includedRuleIds.map((id) => `src.scan.rules.semgrep.${id}`)),
+        );
+        break;
+      }
+      const run = await runSemgrepPartitioned(target, registry, {
+        dir: cache, mode: "read-write", targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.164.0" },
+      });
+      expect(run.result).toEqual({});
+      expect(run.failure).toMatch(/file-001 did not scan exactly its one bounded target file/i);
+      expect(existsSync(join(cache, "semgrep-families", "local-injection"))).toBe(false);
+    } finally {
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before cache or return when the complement execution does not produce a JSON envelope", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-complement-failure-"));
+    try {
+      const target = join(dir, "target");
+      const cache = join(dir, "cache");
+      mkdirSync(target);
+      writeFileSync(join(target, "a.ts"), "export {};\n");
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry);
+      const empty = (rule: string): string => JSON.stringify({
+        version: "1.164.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: [rule] },
+      });
+      for (const family of plan.families) {
+        if (family.id === "local-injection") {
+          semgrepMock.outputs.push(empty("src.scan.rules.semgrep.harvey-log-injection"), "not-json");
+          break;
+        }
+        semgrepMock.outputs.push(empty(`fixture-${family.id}`));
+      }
+      const run = await runSemgrepPartitioned(target, registry, {
+        dir: cache, mode: "read-write", targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.164.0" },
+      });
+      expect(run.result).toEqual({});
+      expect(run.failure).toMatch(/local-injection.*printed something other than its JSON envelope/i);
       expect(existsSync(join(cache, "semgrep-families", "local-injection"))).toBe(false);
     } finally {
       semgrepMock.outputs.length = 0;

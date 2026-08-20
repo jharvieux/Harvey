@@ -21,15 +21,14 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
+import { extname, join, relative, resolve } from "node:path";
+import { readEntriesSafe, readNamesSafe, statSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-trust.js";
 import {
   assertSemgrepFamilyPlan,
   assertSemgrepFamilyVerification,
-  canonicalizeSemgrepOutput,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   mergeSemgrepFamilyOutputs,
@@ -198,14 +197,22 @@ export interface SemgrepOutput {
 }
 
 export interface SemgrepExecutionPlanReceipt {
-  schema: 3;
+  schema: 4;
   strategy: "partitioned-families";
   families: Array<{
     ordinal: number;
     id: string;
     configSha256: string;
     argv: string[];
-    verification: "single" | "paired-cold-exact";
+    verification: "single" | "rule-partition-exact";
+    subpartitions?: Array<{
+      id: string;
+      includedRuleIds: string[];
+      excludedRuleIds: string[];
+      excludedTargetPaths: string[];
+      target: string;
+      argv: string[];
+    }>;
   }>;
 }
 
@@ -515,10 +522,15 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     omitted one different harvey-log-injection row from the same exact Carbon bytes while the
 //     Semgrep diagnostics stayed equal. Two local j9 repeats happened to agree, so a j9 replay is
 //     not itself a sufficient guard.
-//   * The local-injection family uses one-worker parmap twice. Exact Carbon cold repeats produced
-//     the same 87 findings, diagnostics, and examined scope both times and retained both hosted-
-//     fragile rows; j9 produced the same lower-recall 83-row set in its two coincident repeats.
-//     The pair must agree before its output can be returned or enter the phase cache.
+//   * Repeating the same whole-family j1 shape twice was later falsified too: two independent
+//     hosted pairs each agreed internally but settled on different 532/533-row modes. Even a
+//     single large Carbon file settled on different 2/5-row modes when all 30 injection rules ran
+//     together. The unstable harvey-log-injection rule is therefore executed alone over bounded
+//     inputs: every targetable JS/TS file above 80 KiB once, then the exact remainder with those
+//     paths excluded. The source-derived 29-rule complement executes once over the whole target.
+//     Two complete cold 22-invocation Carbon partitions were byte-identical and conserved all 87
+//     findings, 4,152 scanned paths, and 30 rules against the monolithic family. The merge retains
+//     the 20 explicit exclusion receipts; it does not suppress or normalize them.
 //   * `-j 1` without parmap is not the measured alternative and is not a safe fallback: 1 of 3
 //     historical runs dropped a row. Because
 //     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
@@ -527,20 +539,129 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
 const SEMGREP_PAIRED_FAMILY = "local-injection";
+const SEMGREP_ISOLATED_RULE = "harvey-log-injection";
+const SEMGREP_LARGE_SOURCE_BYTES = 80 * 1024;
+const SEMGREP_DEFAULT_MAX_TARGET_BYTES = 1_000_000;
+const SEMGREP_TARGETABLE_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
+const SEMGREP_IGNORED_DISCOVERY_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 function semgrepFamilyPolicy(family: SemgrepFamily): {
   prefix: readonly string[];
-  verification: "single" | "paired-cold-exact";
+  verification: "single" | "rule-partition-exact";
 } {
   return family.id === SEMGREP_PAIRED_FAMILY
-    ? { prefix: SEMGREP_VERIFIED_PREFIX, verification: "paired-cold-exact" }
+    ? { prefix: SEMGREP_VERIFIED_PREFIX, verification: "rule-partition-exact" }
     : { prefix: SEMGREP_PINNED_PREFIX, verification: "single" };
 }
 
 function familyRuleIds(configPath: string): string[] {
   const ids = [...readFileSync(configPath, "utf8").matchAll(/^\s*-\s*id:\s*([\w-]+)\s*$/gm)].map((match) => match[1]!);
   if (ids.length === 0) throw new Error(`Semgrep family ${configPath} declares no rule ids`);
-  return ids;
+  const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+  if (duplicates.length > 0) throw new Error(`Semgrep family ${configPath} declares duplicate rule ids: ${[...new Set(duplicates)].sort().join(", ")}`);
+  return [...ids].sort();
+}
+
+interface SemgrepRuleSubpartition {
+  id: string;
+  includedRuleIds: string[];
+  excludedRuleIds: string[];
+  excludedTargetPaths: string[];
+  target: string;
+}
+
+function largeTargetableSourcePaths(dir: string, current: string = dir, out: string[] = []): string[] {
+  for (const entry of readEntriesSafe(current).entries) {
+    if (entry.isDirectory) {
+      if (!SEMGREP_IGNORED_DISCOVERY_DIRS.has(entry.name)) largeTargetableSourcePaths(dir, entry.path, out);
+      continue;
+    }
+    if (!SEMGREP_TARGETABLE_SOURCE_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+    const stat = statSafe(entry.path);
+    if (!stat?.isFile()) continue;
+    if (stat.size > SEMGREP_LARGE_SOURCE_BYTES && stat.size < SEMGREP_DEFAULT_MAX_TARGET_BYTES) {
+      out.push(relative(dir, entry.path).replaceAll("\\", "/"));
+    }
+  }
+  return out.sort();
+}
+
+function injectionRuleSubpartitions(family: SemgrepFamily, dir: string): SemgrepRuleSubpartition[] {
+  const all = familyRuleIds(family.configPath);
+  const isolatedCount = all.filter((id) => id === SEMGREP_ISOLATED_RULE).length;
+  if (isolatedCount !== 1) {
+    throw new Error(`Semgrep family ${family.configPath} must declare ${SEMGREP_ISOLATED_RULE} exactly once; found ${isolatedCount}`);
+  }
+  const complement = all.filter((id) => id !== SEMGREP_ISOLATED_RULE);
+  if (complement.length === 0) throw new Error(`Semgrep family ${family.configPath} has no complement beside ${SEMGREP_ISOLATED_RULE}`);
+  const large = largeTargetableSourcePaths(dir);
+  const partitions: SemgrepRuleSubpartition[] = [
+    {
+      id: "isolated-log-injection/remainder",
+      includedRuleIds: [SEMGREP_ISOLATED_RULE],
+      excludedRuleIds: complement,
+      excludedTargetPaths: large,
+      target: dir,
+    },
+    ...large.map((path, ordinal) => ({
+      id: `isolated-log-injection/file-${String(ordinal + 1).padStart(3, "0")}`,
+      includedRuleIds: [SEMGREP_ISOLATED_RULE],
+      excludedRuleIds: complement,
+      excludedTargetPaths: [],
+      target: join(dir, path),
+    })),
+    {
+      id: "complement",
+      includedRuleIds: complement,
+      excludedRuleIds: [SEMGREP_ISOLATED_RULE],
+      excludedTargetPaths: [],
+      target: dir,
+    },
+  ];
+  const accounted = [SEMGREP_ISOLATED_RULE, ...complement].sort();
+  if (JSON.stringify(accounted) !== JSON.stringify(all)) {
+    throw new Error(`Semgrep family ${family.configPath} rule subpartitions are not exhaustive and disjoint`);
+  }
+  if (new Set(partitions.map((partition) => partition.id)).size !== partitions.length) {
+    throw new Error(`Semgrep family ${family.configPath} target subpartitions are duplicated`);
+  }
+  return partitions;
+}
+
+function subpartitionExclusions(partition: SemgrepRuleSubpartition): string[] {
+  return [
+    ...partition.excludedRuleIds.flatMap((id) => ["--exclude-rule", `src.scan.rules.semgrep.${id}`]),
+    ...partition.excludedTargetPaths.flatMap((path) => ["--exclude", path]),
+  ];
+}
+
+function assertSubpartitionOutput(
+  family: SemgrepFamily,
+  partition: SemgrepRuleSubpartition,
+  output: SemgrepOutput,
+): void {
+  for (const result of output.results ?? []) {
+    const matches = partition.includedRuleIds.filter((id) => ruleIdMatches(result.check_id, id));
+    if (matches.length !== 1) {
+      throw new Error(`Semgrep ${family.id}/${partition.id} emitted unaccounted rule ${result.check_id}`);
+    }
+  }
+  const executed = [...new Set(output.time?.rules ?? [])].map((checkId) => {
+    const matches = partition.includedRuleIds.filter((id) => ruleIdMatches(checkId, id));
+    if (matches.length !== 1) throw new Error(`Semgrep ${family.id}/${partition.id} executed unaccounted rule ${checkId}`);
+    return matches[0]!;
+  }).sort();
+  if (JSON.stringify(executed) !== JSON.stringify([...partition.includedRuleIds].sort())) {
+    throw new Error(`Semgrep ${family.id}/${partition.id} did not execute its exact source-derived rule scope`);
+  }
+  const scanned = [...new Set((output.paths?.scanned ?? []).map((path) => resolve(path)))].sort();
+  const excluded = new Set(partition.excludedTargetPaths.map((path) => resolve(partition.target, path)));
+  if (scanned.some((path) => excluded.has(path))) {
+    throw new Error(`Semgrep ${family.id}/${partition.id} scanned a target file that its exact argv excludes`);
+  }
+  if (partition.id.includes("/file-") && JSON.stringify(scanned) !== JSON.stringify([resolve(partition.target)])) {
+    throw new Error(`Semgrep ${family.id}/${partition.id} did not scan exactly its one bounded target file`);
+  }
 }
 
 function withoutFamily(output: SemgrepOutput, ruleIds: readonly string[]): SemgrepOutput {
@@ -594,14 +715,14 @@ export function runSemgrep(dir: string, registryConfigs: readonly string[] = REG
   return { result: mergeVerifiedFamily(parsed.result, injection, verified.result) };
 }
 
-function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[] {
+function semgrepRuleFamilies(registryConfigs: readonly string[], localRulesRoot: string = CUSTOM_RULES): SemgrepFamily[] {
   if (registryConfigs.length !== REGISTRY_PACKS.length) {
     throw new Error(`Semgrep registry family count moved: expected ${REGISTRY_PACKS.length}, received ${registryConfigs.length}; every exact registry pack must be registered once`);
   }
   const registry = registryConfigs.map((configPath, index) => ({ id: `registry-${index}-${REGISTRY_PACKS[index]!.replaceAll("/", "-")}`, configPath }));
-  const local = discoverLocalSemgrepFamilies(CUSTOM_RULES);
+  const local = discoverLocalSemgrepFamilies(localRulesRoot);
   const families = [...registry, ...local];
-  assertSemgrepFamilyPlan(families, [...registryConfigs, ...localSemgrepConfigYardstick(CUSTOM_RULES)]);
+  assertSemgrepFamilyPlan(families, [...registryConfigs, ...localSemgrepConfigYardstick(localRulesRoot)]);
   return families;
 }
 
@@ -614,20 +735,46 @@ const SEMGREP_FAMILY_TAIL = [
   "--time",
 ] as const;
 
-/** Semantic plan receipt built from the same constants and family registry execution consumes. */
-export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepExecutionPlanReceipt {
-  const families = semgrepRuleFamilies(registryConfigs);
+function receiptTarget(dir: string, target: string): string {
+  const relativeTarget = relative(resolve(dir), resolve(target)).replaceAll("\\", "/");
+  return relativeTarget === "" ? "<target-root>" : `<target-root>/${relativeTarget}`;
+}
+
+/** Semantic plan receipt built from the same constants, target bytes, and family registry execution consumes. */
+export function semgrepExecutionPlanReceipt(
+  registryConfigs: readonly string[],
+  localRulesRoot: string = CUSTOM_RULES,
+  targetRoot: string = process.cwd(),
+): SemgrepExecutionPlanReceipt {
+  const families = semgrepRuleFamilies(registryConfigs, localRulesRoot);
   return {
-    schema: 3,
+    schema: 4,
     strategy: "partitioned-families",
     families: families.map((family, ordinal) => {
       const policy = semgrepFamilyPolicy(family);
+      const subpartitions = family.id === SEMGREP_PAIRED_FAMILY
+        ? injectionRuleSubpartitions(family, targetRoot).map((partition) => ({
+            id: partition.id,
+            includedRuleIds: partition.includedRuleIds,
+            excludedRuleIds: partition.excludedRuleIds,
+            excludedTargetPaths: partition.excludedTargetPaths,
+            target: receiptTarget(targetRoot, partition.target),
+            argv: [
+              ...policy.prefix,
+              "--config", "<family-config>",
+              ...subpartitionExclusions(partition),
+              ...SEMGREP_FAMILY_TAIL,
+              receiptTarget(targetRoot, partition.target),
+            ],
+          }))
+        : undefined;
       return {
         ordinal,
         id: family.id,
         configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
         argv: [...policy.prefix, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
         verification: policy.verification,
+        ...(subpartitions ? { subpartitions } : {}),
       };
     }),
   };
@@ -635,12 +782,13 @@ export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]):
 
 function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
   const policy = semgrepFamilyPolicy(family);
-  const args = [
-    "--config", family.configPath,
-    ...SEMGREP_FAMILY_TAIL,
-    dir,
-  ];
-  const once = (): { result: SemgrepOutput; failure?: string } => {
+  const once = (partition?: SemgrepRuleSubpartition): { result: SemgrepOutput; failure?: string } => {
+    const args = [
+      "--config", family.configPath,
+      ...(partition ? subpartitionExclusions(partition) : []),
+      ...SEMGREP_FAMILY_TAIL,
+      partition?.target ?? dir,
+    ];
     const run = execSemgrep([...policy.prefix, ...args]);
     if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
     const parsed = parseEnvelope(run.out);
@@ -652,18 +800,42 @@ function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: Semgrep
     parsed.result.paths.skipped ??= [];
     parsed.result.time ??= {};
     parsed.result.time.rules ??= [];
+    if (partition) {
+      try {
+        assertSubpartitionOutput(family, partition, parsed.result);
+      } catch (error) {
+        return { result: {}, failure: error instanceof Error ? error.message : String(error) };
+      }
+    }
     return parsed;
   };
-  const first = once();
-  if (first.failure || policy.verification === "single") return first;
-  const second = once();
-  if (second.failure) return second;
-  const left = canonicalizeSemgrepOutput(first.result);
-  const right = canonicalizeSemgrepOutput(second.result);
-  if (JSON.stringify(left) !== JSON.stringify(right)) {
-    return { result: {}, failure: `paired cold Semgrep executions for ${family.id} differ in findings, diagnostics, or examined scope` };
+  if (policy.verification === "single") return once();
+  let partitions: SemgrepRuleSubpartition[];
+  try {
+    partitions = injectionRuleSubpartitions(family, dir);
+  } catch (error) {
+    return { result: {}, failure: error instanceof Error ? error.message : String(error) };
   }
-  return { result: left };
+  const records: SemgrepFamilyRecord[] = [];
+  for (const partition of partitions) {
+    const execution = once(partition);
+    if (execution.failure) return execution;
+    records.push({
+      family: `${family.id}/${partition.id}`,
+      output: execution.result,
+      cache: "recomputed",
+      key: `direct-rule-partition:${partition.id}`,
+      unitsExamined: Math.max(1, new Set(execution.result.paths?.scanned ?? []).size),
+    });
+  }
+  const merged = mergeSemgrepFamilyOutputs(records);
+  const complement = records.at(-1)?.output.paths?.scanned ?? [];
+  const isolated = records.slice(0, -1).flatMap((record) => record.output.paths?.scanned ?? []);
+  const stablePaths = (paths: readonly string[]): string => JSON.stringify([...new Set(paths.map((path) => resolve(path)))].sort());
+  if (stablePaths(isolated) !== stablePaths(complement)) {
+    return { result: {}, failure: `Semgrep ${family.id} target subpartitions do not exactly conserve the complement's scanned file scope` };
+  }
+  return { result: merged };
 }
 
 export async function runSemgrepPartitioned(
@@ -672,7 +844,14 @@ export async function runSemgrepPartitioned(
   cache: SemgrepFamilyCacheOptions,
 ): Promise<{ result: SemgrepOutput; records: SemgrepFamilyRecord[]; failure?: string }> {
   const families = semgrepRuleFamilies(registryConfigs);
-  const portableCache = { ...cache, pathRoot: dir };
+  const portableCache = {
+    ...cache,
+    pathRoot: dir,
+    implementation: JSON.stringify({
+      mechanicalImplementation: cache.implementation,
+      executionPlan: semgrepExecutionPlanReceipt(registryConfigs, CUSTOM_RULES, dir),
+    }),
+  };
   rejectUnregisteredSemgrepFamilyArtifacts(portableCache, new Set(families.map((family) => family.id)));
   const records: SemgrepFamilyRecord[] = [];
   for (const family of families) {

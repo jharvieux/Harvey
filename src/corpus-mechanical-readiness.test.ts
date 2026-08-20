@@ -78,11 +78,18 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           implementation: { semgrep: digest },
           externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
           semgrep: {
-            schema: 3,
+            schema: 4,
             strategy: "partitioned-families",
             families: [
               { ordinal: 0, id: "registry-0", configSha256: digest, argv: ["--x-parmap", "-j", "9", "--timeout", "0"], verification: "single" },
-              { ordinal: 1, id: "local-injection", configSha256: "b".repeat(64), argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "paired-cold-exact" },
+              {
+                ordinal: 1, id: "local-injection", configSha256: "b".repeat(64), argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "rule-partition-exact",
+                subpartitions: [
+                  { id: "isolated-log-injection/remainder", includedRuleIds: ["harvey-log-injection"], excludedRuleIds: ["harvey-other"], excludedTargetPaths: ["large.ts"], target: "<target-root>", argv: ["--exclude-rule", "harvey-other", "--exclude", "large.ts", "<target-root>"] },
+                  { id: "isolated-log-injection/file-001", includedRuleIds: ["harvey-log-injection"], excludedRuleIds: ["harvey-other"], excludedTargetPaths: [], target: "<target-root>/large.ts", argv: ["--exclude-rule", "harvey-other", "<target-root>/large.ts"] },
+                  { id: "complement", includedRuleIds: ["harvey-other"], excludedRuleIds: ["harvey-log-injection"], excludedTargetPaths: [], target: "<target-root>", argv: ["--exclude-rule", "harvey-log-injection", "<target-root>"] },
+                ],
+              },
             ],
           },
         },
@@ -158,6 +165,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.argv.push("--changed-flag"); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.verification = "single"; }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.subpartitions![0]!.excludedRuleIds.length = 0; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
   });
 

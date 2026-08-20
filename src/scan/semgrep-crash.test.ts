@@ -6,9 +6,12 @@
 
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Each test assigns the semgrep behaviour it needs; non-semgrep binaries pass through untouched.
-let semgrepBehavior: () => string = () => {
+let semgrepBehavior: (args?: string[]) => string = () => {
   throw new Error("test forgot to set semgrepBehavior");
 };
 
@@ -19,7 +22,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     execFile: vi.fn((bin: string, args: string[], opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
       if (bin !== "semgrep") return actual.execFile(bin as never, args as never, opts as never, callback as never);
       try {
-        const stdout = semgrepBehavior();
+        const stdout = semgrepBehavior(args);
         queueMicrotask(() => callback(null, stdout, ""));
       } catch (err) {
         const failed = err as Error & { stdout?: string };
@@ -28,7 +31,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       return {} as never;
     }),
     execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
-      if (bin === "semgrep") return semgrepBehavior();
+      if (bin === "semgrep") return semgrepBehavior(args);
       return actual.execFileSync(bin as never, args as never, opts as never) as never;
     }),
   };
@@ -87,10 +90,36 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
   });
 
   it("a completed run (exit 0) still parses and reports no failure", () => {
-    semgrepBehavior = () => JSON.stringify({ version: "1.164.0", results: [], errors: [], paths: { scanned: ["/some/target/a.ts"] } });
-    const { result, failure } = runSemgrep("/some/target");
-    expect(failure).toBeUndefined();
-    expect(result.paths?.scanned).toEqual(["/some/target/a.ts"]);
+    const target = mkdtempSync(join(tmpdir(), "harvey-semgrep-crash-"));
+    const source = join(target, "a.ts");
+    writeFileSync(source, "export const ok = true;\n");
+    try {
+      semgrepBehavior = (args = []) => {
+        if (!args.includes("--time")) {
+          return JSON.stringify({ version: "1.164.0", results: [], errors: [], paths: { scanned: [source] } });
+        }
+        const configIndex = args.indexOf("--config");
+        const config = args[configIndex + 1]!;
+        const allRules = [...readFileSync(config, "utf8").matchAll(/^\s*-\s*id:\s*(harvey-[\w-]+)\s*$/gm)]
+          .map((match) => match[1]!);
+        const excludedRules = new Set(args.flatMap((arg, index) => arg === "--exclude-rule" ? [args[index + 1]!.split(".").at(-1)!] : []));
+        const executedRules = allRules
+          .filter((id) => !excludedRules.has(id))
+          .map((id) => `src.scan.rules.semgrep.${id}`);
+        return JSON.stringify({
+          version: "1.164.0",
+          results: [],
+          errors: [],
+          paths: { scanned: [source] },
+          time: { rules: executedRules },
+        });
+      };
+      const { result, failure } = runSemgrep(target);
+      expect(failure).toBeUndefined();
+      expect(result.paths?.scanned).toEqual([source]);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 
   it("the single-file re-run refuses an incomplete run the same way — its partial output must not feed the paths.scanned check", async () => {
