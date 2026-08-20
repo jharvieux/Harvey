@@ -1301,6 +1301,7 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
   const CHECKS: { check: string; dir: string; neg: string; framework?: TargetFramework }[] = [
     { check: "leak", dir: "server-client-leak", neg: "negative" },
     { check: "serveronly", dir: "missing-server-only", neg: "negative" },
+    { check: "serveronly-baseurl", dir: "missing-server-only-baseurl", neg: "negative" },
     { check: "action-auth", dir: "server-action-auth", neg: "negative" },
     { check: "action-validation", dir: "server-action-validation", neg: "negative" },
     { check: "cache", dir: "cache-config", neg: "negative" },
@@ -1383,6 +1384,35 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
       expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
     }
+  });
+
+  it("#1812 registered positive reaches the secret only through the production baseUrl edge", () => {
+    const entry = m9CheckEntries.find((e) => e.id === "M9C-SERVERONLY-BASEURL-POS");
+    expect(entry).toBeDefined();
+
+    const findings = detectAppRouterFindings(
+      loadPrefixed("missing-server-only-baseurl/positive", "m9-corpus/serveronly-baseurl/positive"),
+    );
+    const guardFindings = findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard");
+    expect(guardFindings.map((f) => f.location)).toEqual(["m9-corpus/serveronly-baseurl/positive/lib/secrets.ts:1"]);
+
+    const row = scoreEntry(entry!, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.caughtTier).toBe("review");
+  });
+
+  it("#1812 registered benign package remains external without a loaded local candidate", () => {
+    const entry = m9CheckEntries.find((e) => e.id === "M9C-SERVERONLY-BASEURL-NEG");
+    expect(entry).toBeDefined();
+
+    const sources = loadPrefixed("missing-server-only-baseurl/negative", "m9-corpus/serveronly-baseurl/negative");
+    expect(sources.some((source) => source.path.endsWith("/lib/secrets.ts") && source.text.includes("STRIPE_SECRET_KEY"))).toBe(true);
+    const findings = detectAppRouterFindings(sources);
+    expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toEqual([]);
+
+    const row = scoreEntry(entry!, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.highFlagged).toBe(false);
   });
 
   it("#1459: M1-boundary covers every M1 taxonomy the boundary pass emits", () => {

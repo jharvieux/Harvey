@@ -1,0 +1,7 @@
+{
+  "name": "baseurl-server-only-negative",
+  "private": true,
+  "dependencies": {
+    "lib-secrets": "^1.0.0"
+  }
+}
