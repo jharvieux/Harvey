@@ -63,10 +63,12 @@ describe("collectWorkspaceManifests", () => {
     root({ name: "monorepo", workspaces: { packages: ["apps/*"] } });
     manifest("apps/api", { name: "api" });
     expect(collectWorkspaceManifests(dir).manifests).toHaveLength(2);
+    expect(discoverWorkspaceInventory(dir).packages[1]?.discoveredBy[0]?.sourceField).toBe("workspaces.packages");
     root({ name: "monorepo", workspaces: ["apps/*"] });
     const scope = collectWorkspaceManifests(dir);
     expect(scope.manifests).toHaveLength(2);
     expect(scope.source).toBe("package.json#workspaces");
+    expect(discoverWorkspaceInventory(dir).packages[1]?.discoveredBy[0]?.sourceField).toBe("workspaces");
   });
 
   // THE trap this module exists to avoid. `examples/` and a standalone fixture root are not
@@ -222,16 +224,18 @@ describe("discoverWorkspaceInventoryV1", () => {
   it("retains negative, unresolved, invalid, and unreadable observations in stable order", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({
       name: "root",
-      workspaces: ["packages/*", "services/*", "../escape", "!packages/generated"],
+      workspaces: ["packages/*", "services/*", "../escape", "!packages/generated", "!examples/*"],
     }));
     manifest("packages/app", { name: "app" });
     manifest("packages/generated", { name: "generated" });
     manifest("packages/broken", "{not json");
+    manifest("examples/demo", { name: "demo" });
 
     const inventory = discoverWorkspaceInventory(dir);
     expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
     expect(inventory.observations).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "excluded", path: "packages/generated/package.json", glob: "!packages/generated" }),
+      expect.objectContaining({ kind: "excluded", path: "examples/demo/package.json", glob: "!examples/*" }),
       expect.objectContaining({ kind: "unreadable-manifest", path: "packages/broken/package.json" }),
       expect.objectContaining({ kind: "unresolved-glob", glob: "services/*" }),
       expect.objectContaining({ kind: "invalid-glob", glob: "../escape" }),
@@ -248,6 +252,18 @@ describe("discoverWorkspaceInventoryV1", () => {
     const inventory = discoverWorkspaceInventory(dir);
     expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
     expect(inventory.packages[1]?.discoveredBy.map((source) => source.glob)).toEqual(["aliases/*", "packages/*"]);
+  });
+
+  it("does not infer generated/vendor/fixture packages through ** but honours an explicit declaration", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["**"] }));
+    manifest("apps/web", { name: "web" });
+    manifest("generated/sdk", { name: "sdk" });
+    manifest("vendor/tool", { name: "tool" });
+    manifest("fixtures/case", { name: "fixture" });
+    expect(discoverWorkspaceInventory(dir).packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:apps/web"]);
+
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["fixtures/*"] }));
+    expect(discoverWorkspaceInventory(dir).packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:fixtures/case"]);
   });
 });
 

@@ -17,7 +17,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 
-export interface WorkspaceManifest {
+interface WorkspaceManifest {
   /** Path relative to the target root — "package.json" for the root manifest. */
   label: string;
   /** The package's own name — how sibling members depend on it (#1344). */
@@ -29,7 +29,7 @@ export interface WorkspaceManifest {
   scripts?: Record<string, string>;
 }
 
-export interface WorkspaceScope {
+interface WorkspaceScope {
   /** Root manifest first, then members in glob order. */
   manifests: WorkspaceManifest[];
   /** Where the globs came from, for the disclosure row. */
@@ -255,7 +255,11 @@ function joinRepoPath(dir: string, rest: string): string {
     .join("/");
 }
 
-export function parseWorkspaceGlobs(repoRoot: string): { globs: string[]; source: string } {
+function parseWorkspaceGlobs(repoRoot: string): {
+  globs: string[];
+  source: string;
+  sourceField: WorkspaceDiscoveryEvidence["sourceField"];
+} {
   const pnpm = join(repoRoot, "pnpm-workspace.yaml");
   if (existsSync(pnpm)) {
     const globs: string[] = [];
@@ -266,22 +270,31 @@ export function parseWorkspaceGlobs(repoRoot: string): { globs: string[]; source
       const m = raw.match(/^\s*-\s*["']?([^"'\s]+)["']?\s*$/);
       if (inPackages && m) globs.push(m[1]!);
     }
-    if (globs.length) return { globs, source: "pnpm-workspace.yaml" };
+    if (globs.length) return { globs, source: "pnpm-workspace.yaml", sourceField: "packages" };
   }
   const pkgPath = join(repoRoot, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { workspaces?: string[] | { packages?: string[] } };
       const ws = Array.isArray(pkg.workspaces) ? pkg.workspaces : pkg.workspaces?.packages;
-      if (ws?.length) return { globs: ws, source: "package.json#workspaces" };
+      if (ws?.length) {
+        return {
+          globs: ws,
+          source: "package.json#workspaces",
+          sourceField: Array.isArray(pkg.workspaces) ? "workspaces" : "workspaces.packages",
+        };
+      }
     } catch { /* not a workspace root */ }
   }
-  return { globs: ["."], source: "no workspace globs declared" }; // single-package repo
+  return { globs: ["."], source: "no workspace globs declared", sourceField: "root" }; // single-package repo
 }
 
 // Dirs a glob walk never descends into — build output, deps, VCS internals — so a `**` can't
 // wander into node_modules and enumerate every dependency as a "workspace".
-const GLOB_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", ".vercel"]);
+const GLOB_SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", ".vercel",
+  "generated", "vendor", "fixtures", "fixture", "examples",
+]);
 
 function physicalPathWithin(root: string, candidate: string): string | undefined {
   try {
@@ -325,7 +338,7 @@ function childDirs(dir: string, physicalRoot: string): string[] {
 // `**` glob (#548), silently under-enumerating both M5-knip workspaces and M2 pentest targets.
 // Callers filter the candidates to those carrying a package.json. Lexical parent/root escapes and
 // physical symlink escapes are rejected here before a candidate directory is enumerated.
-export function expandGlob(repoRoot: string, glob: string): string[] {
+function expandGlob(repoRoot: string, glob: string): string[] {
   const logicalRoot = resolve(repoRoot);
   const segments = globSegments(glob);
   if (!segments) return [];
@@ -368,10 +381,11 @@ interface WorkspaceRecord extends WorkspaceInventoryPackage {
   manifest: WorkspaceManifest;
 }
 
-function workspaceSourceDetails(source: string): Pick<WorkspaceDiscoveryEvidence, "sourcePath" | "sourceField"> {
-  if (source === "pnpm-workspace.yaml") return { sourcePath: source, sourceField: "packages" };
-  if (source === "package.json#workspaces") return { sourcePath: "package.json", sourceField: "workspaces" };
-  return { sourcePath: "package.json", sourceField: "root" };
+function workspaceSourceDetails(
+  source: string,
+  sourceField: WorkspaceDiscoveryEvidence["sourceField"],
+): Pick<WorkspaceDiscoveryEvidence, "sourcePath" | "sourceField"> {
+  return { sourcePath: source === "pnpm-workspace.yaml" ? source : "package.json", sourceField };
 }
 
 function canonicalWorkspaceDir(logicalRoot: string, candidate: string): string | undefined {
@@ -410,10 +424,10 @@ function discoverWorkspaceRecords(repoRoot: string): {
   unreadable: string[];
 } {
   const logicalRoot = resolve(repoRoot);
-  const { globs, source } = parseWorkspaceGlobs(logicalRoot);
-  const sourceDetails = workspaceSourceDetails(source);
+  const { globs, source, sourceField } = parseWorkspaceGlobs(logicalRoot);
+  const sourceDetails = workspaceSourceDetails(source, sourceField);
   const observations: WorkspaceInventoryObservation[] = [];
-  const excluded = new Map<string, { glob: string; path: string }>();
+  const excluded = new Set<string>();
   for (const declared of globs.filter((glob) => glob.startsWith("!"))) {
     const glob = declared.slice(1);
     if (!globSegments(glob)) {
@@ -423,7 +437,12 @@ function discoverWorkspaceRecords(repoRoot: string): {
     for (const candidate of expandGlob(logicalRoot, glob)) {
       if (!existsSync(join(candidate, "package.json"))) continue;
       const dir = canonicalWorkspaceDir(logicalRoot, candidate);
-      if (dir && !excluded.has(dir)) excluded.set(dir, { glob: declared, path: dir === "." ? "package.json" : `${dir}/package.json` });
+      if (!dir) continue;
+      excluded.add(dir);
+      const path = dir === "." ? "package.json" : `${dir}/package.json`;
+      if (!observations.some((row) => row.kind === "excluded" && row.path === path && row.glob === declared)) {
+        observations.push({ kind: "excluded", path, glob: declared, sourcePath: sourceDetails.sourcePath, reason: "negative-workspace-glob" });
+      }
     }
   }
   const records: WorkspaceRecord[] = [];
@@ -486,15 +505,12 @@ function discoverWorkspaceRecords(repoRoot: string): {
       if (!existsSync(join(candidate, "package.json"))) continue;
       const dir = canonicalWorkspaceDir(logicalRoot, candidate);
       if (!dir) continue;
-      const exclusion = excluded.get(dir);
-      if (exclusion) {
-        if (!observations.some((row) => row.kind === "excluded" && row.path === exclusion.path && row.glob === exclusion.glob)) {
-          observations.push({ kind: "excluded", path: exclusion.path, glob: exclusion.glob, sourcePath: sourceDetails.sourcePath, reason: "negative-workspace-glob" });
-        }
-        continue;
-      }
+      if (excluded.has(dir)) continue;
       matched += 1;
-      read(candidate, { kind: "workspace-glob", ...sourceDetails, glob }, true);
+      const discoveredBy: WorkspaceDiscoveryEvidence = source === "no workspace globs declared"
+        ? { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }
+        : { kind: "workspace-glob", ...sourceDetails, glob };
+      read(candidate, discoveredBy, true);
     }
     if (matched === 0) {
       unresolvedGlobs.push(glob);

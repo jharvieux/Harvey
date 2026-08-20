@@ -10,8 +10,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-// Not exported: nothing outside this file needs to name this type — callers get it as the inferred
-// return of detectPackageManager, or infer it structurally when passing "npm"/"pnpm"/"yarn" literals.
+// Shared by the legacy execution helpers and the evidence-bearing readiness contract.
 export type PackageManager = "npm" | "pnpm" | "yarn";
 
 export interface PackageManagerEvidenceSource {
@@ -73,6 +72,7 @@ export function resolvePackageManagerEvidence(dir: string): PackageManagerResolu
     }
     if (pkg.packageManager !== undefined) {
       if (typeof pkg.packageManager !== "string") {
+        evidence.push({ kind: "package-manager-field", path: "package.json", raw: JSON.stringify(pkg.packageManager) });
         return {
           status: "not-assessed",
           reason: "unsupported-version",
@@ -81,7 +81,8 @@ export function resolvePackageManagerEvidence(dir: string): PackageManagerResolu
         };
       }
       const raw = pkg.packageManager;
-      const managerName = raw.slice(0, raw.indexOf("@") < 0 ? undefined : raw.indexOf("@"));
+      const separator = raw.indexOf("@");
+      const managerName = separator < 0 ? raw : raw.slice(0, separator);
       if (!(["npm", "pnpm", "yarn"] as string[]).includes(managerName)) {
         evidence.push({ kind: "package-manager-field", path: "package.json", raw });
         return { status: "not-assessed", reason: "unsupported-manager", detail: `unsupported package manager declaration: ${raw}`, evidence };
