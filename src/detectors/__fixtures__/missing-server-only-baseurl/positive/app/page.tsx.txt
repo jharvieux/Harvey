@@ -1,0 +1,7 @@
+"use client";
+
+import { key } from "lib/secrets";
+
+export default function Page() {
+  return <p>{key}</p>;
+}
