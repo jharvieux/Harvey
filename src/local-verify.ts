@@ -73,6 +73,7 @@ export function main(): void {
     "src/local-verify.test.ts",
     "src/recorded-reasons.test.ts",
     "src/ci-tier-router.test.ts",
+    "src/corpus-tier-router.test.ts",
   ]);
 }
 

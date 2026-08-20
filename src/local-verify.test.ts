@@ -28,6 +28,9 @@ describe("path-sensitive local verification", () => {
       ".github/actions/alert-issue/action.yml",
       "dry-run/findings.json",
       ".codex/config.toml",
+      ".codex/agents/unclassified.txt",
+      ".codex/agents/team/nested.toml",
+      "docs/data.json",
       "notes.txt",
     ]) {
       expect(isFocusedLocalVerificationPath(path), path).toBe(false);

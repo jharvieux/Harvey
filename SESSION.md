@@ -1,6 +1,6 @@
 # SESSION — 2026-08-20 issue-sweep merge-train wrap-up
 
-_Last updated: 2026-08-20. The approved merge train and its missed instruction-file
+_Last updated: 2026-08-20. The approved merge train and its missed operating-policy
 wrap-up are complete. No workflow resumes automatically from this checkpoint._
 
 ## Outcome
@@ -23,7 +23,7 @@ The merge-train base before this instruction-only checkpoint was
 - Verified closed: #1925, #1926, #1927, #1928, #1929, and #1931.
 - Intentionally open: #1787, #1899, and #1930. Their full acceptance criteria were
   not represented by the merged close-sets.
-- The PR carrying this checkpoint has an empty issue close-set.
+- PR #1950 carries this checkpoint with an empty issue close-set.
 
 ## Instruction updates
 
@@ -37,11 +37,16 @@ The merge-train base before this instruction-only checkpoint was
   path only for operating Markdown, Markdown under `docs/`, and Codex agent TOML;
   every executable, generated, manifest, workflow, mixed, empty, or unknown change set
   fails safe to the full `pnpm verify` suite.
+- Hosted CI uses the same focused classification for those paths: the ordinary CI job
+  runs policy/claim and TOML checks without the full build or heavy CLI matrix, and both
+  corpus routers declare a no-op rather than cloning and scoring external targets. The
+  routers still fail safe to full execution for source, manifests, workflow changes,
+  mixed sets, and unknown paths.
 
 The first two changes were produced during the prior sweep session and should have been
-landed as its consolidated instruction-only wrap-up instead of being left in the
-primary checkout. The path-sensitive local gate was added during finalization at the
-operator's direction.
+landed as its consolidated operating-policy wrap-up instead of being left in the
+primary checkout. The path-sensitive local and hosted gates were aligned during
+finalization at the operator's direction.
 
 ## Local and durable state
 
