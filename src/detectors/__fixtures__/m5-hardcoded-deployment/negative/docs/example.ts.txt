@@ -1,0 +1,1 @@
+export const sampleClient = new ApiClient({ endpoint: "https://sample.prod.harvey-platform.com" });

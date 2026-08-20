@@ -1,0 +1,17 @@
+"""
+Documentation containing `assert True` and self.assertTrue(True) is not code.
+"""
+
+from app.status import read_status
+
+
+def test_observed_python_condition():
+    # assert True is an example in a comment.
+    text = "assert 1 == 1"
+    assert read_status() == "ready"
+    assert text.startswith("assert")
+
+
+def test_deliberate_python_smoke():
+    # Deliberate smoke check: verifies the pytest plugin wiring is active.
+    assert True

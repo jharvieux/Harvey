@@ -1,0 +1,15 @@
+import { expect, expectTypeOf, test } from "vitest";
+import { readStatus } from "./status.js";
+
+test("asserts observed behavior", () => {
+  expect(readStatus()).toBe("ready");
+  expectTypeOf<ReturnType<typeof readStatus>>().toEqualTypeOf<string>();
+  const prose = "expect(true).toBe(true)";
+  // expect(1).toEqual(1) is documentation, not executable code.
+  expect(prose).toContain("expect");
+});
+
+test("deliberate runner smoke check", () => {
+  // Deliberate smoke check: verifies the Vitest runner wiring is loaded.
+  expect(true).toBe(true);
+});

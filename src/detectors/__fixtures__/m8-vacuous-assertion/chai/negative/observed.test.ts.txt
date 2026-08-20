@@ -1,0 +1,17 @@
+import { assert, expect } from "chai";
+import { renderStatus } from "./status.js";
+
+describe("observed Chai assertions", () => {
+  it("checks production output", () => {
+    expect(renderStatus()).to.equal("ready");
+    assert.equal(renderStatus(), "ready");
+    renderStatus().should.equal("ready");
+  });
+});
+
+describe("documented Chai smoke", () => {
+  it("documents its narrow purpose", () => {
+    // Deliberate smoke check: ensures the Chai plugin wiring is installed.
+    expect(true).to.be.true;
+  });
+});

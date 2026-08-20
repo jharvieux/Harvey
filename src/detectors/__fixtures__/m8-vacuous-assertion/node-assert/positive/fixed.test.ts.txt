@@ -1,0 +1,8 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+test("fixed Node assertions", () => {
+  assert.equal(1, 1);
+  assert.strictEqual(!false, true);
+  assert.ok(true);
+});

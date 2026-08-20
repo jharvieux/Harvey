@@ -17,6 +17,7 @@ import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./scan/framework-detect.js";
+import { parseSourcePopulationReceipt, type SourcePopulationReceipt } from "./scan/polyglot-quality.js";
 
 // #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
 // so a pass artifact that was present but rejected fails loud rather than being silently ignored.
@@ -232,6 +233,17 @@ const productFilesScanned = (output: string): number | undefined => {
   const m = output.match(/\((\d+) product source[,)]/);
   return m ? Number(m[1]) : undefined;
 };
+const identifiedSourceFilesScanned = (output: string): number | undefined => {
+  const m = output.match(/identified (\d+) source files/);
+  return m ? Number(m[1]) : undefined;
+};
+
+const populationGap = (receipt: SourcePopulationReceipt): string | undefined => {
+  const gaps = receipt.populations.filter((row) => row.identified.count > 0 && row.status !== "examined");
+  return gaps.length
+    ? `Source-language coverage: ${gaps.map((row) => `${row.language} ${row.status} (${row.examined.count}/${row.identified.count} examined; ${row.reason})`).join("; ")}`
+    : undefined;
+};
 
 // quick-scan's free report prints the #1044 codebase-size line to stdout — "4,778 lines of
 // application code across 400 file(s)". #1109 MEASURED 2026-07-26 (`pnpm quick-scan --dir
@@ -349,7 +361,7 @@ const m1: ModuleRunner = {
     const tierScope = m1TierScope((ctx.detectOrm ?? detectOrm)(ctx.targetDir));
     const mechanical = [
       ...briefProvenanceFinding(ctx.targetDir),
-      ...readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00"),
+      ...readCaptured(ctx, outPath).filter((f) => !["M5 — ", "M6 — ", "M8 — "].some((prefix) => f.taxonomy.startsWith(prefix)) && f.id !== "M1-SFC-00"),
     ];
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
@@ -654,15 +666,50 @@ const m4: ModuleRunner = { module: "M4", typed: true, run: perApp(m4Run) };
 // M4-99. The tell is scopesAnalysed: >0 means knip ran somewhere, so the M5-00 is a coverage gap,
 // not an "it never ran".
 const m5Run = (ctx: RunContext): ProbeResult => {
+  const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M5-static.json") : undefined;
+  const staticCommand = `pnpm detect-static ${ctx.targetDir}`;
+  const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
+  const staticReceipt = staticRun.ok ? parseSourcePopulationReceipt(staticRun.output, "M5") : undefined;
+  const staticFindings = staticReceipt ? readCaptured(ctx, staticOutPath).filter((finding) => finding.taxonomy.startsWith("M5 — ")) : [];
+  const identified = staticReceipt?.populations.reduce((sum, row) => sum + row.identified.count, 0) ?? 0;
+  const sourceExamined = staticReceipt?.populations.reduce((sum, row) => sum + row.examined.count, 0) ?? 0;
+  const sourceGap = staticReceipt ? populationGap(staticReceipt) : `M5 source tier did not produce a population receipt: ${trimOut(staticRun.output)}`;
+  const withSourceTier = (base: ProbeResult): ProbeResult => {
+    if (!staticReceipt || identified === 0 || sourceExamined === 0) {
+      if (base.kind === "not-assessed") return base;
+      return {
+        ...base,
+        detail: `${base.detail}; ${staticCommand} (source tier)`,
+        findings: [...(base.findings ?? []), ...staticFindings],
+        reason: [base.reason, sourceGap].filter(Boolean).join(" "),
+      };
+    }
+    if (base.kind === "not-assessed") {
+      return {
+        kind: "examined",
+        detail: `${staticCommand} (source tier; knip tier not assessed)`,
+        unitsExamined: sourceExamined,
+        scope: `identified product source files (${identified} identified; exact per-language receipt emitted)`,
+        findings: staticFindings,
+        reason: [`${base.reason} [${base.provenance}; falsifier: ${base.falsifier}]`, sourceGap].filter(Boolean).join(" "),
+      };
+    }
+    return {
+      ...base,
+      detail: `${base.detail}; ${staticCommand} (source tier; ${identified} identified, ${sourceExamined} examined)`,
+      findings: [...(base.findings ?? []), ...staticFindings],
+      reason: [base.reason, sourceGap].filter(Boolean).join(" ") || undefined,
+    };
+  };
   const depsInstalled = hasNodeModules(ctx);
   const outPath = captureOut(ctx, "M5");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
   const { ok, output, stderr } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-  if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
+  if (!ok) return withSourceTier({ kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command });
   // The verdict array is read from the captured --out file when capturing (quality-scan writes a
   // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
-  if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
+  if (!findings) return withSourceTier({ kind: "not-assessed", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command });
   const emitted = (id: string): boolean => findings.some((f) => (f as { id?: string }).id === id);
   const scopeFalsifier = `${command} 2>&1 >/dev/null | grep -E "^M5 dead code across [1-9][0-9]* scope\\(s\\)"`;
   const scopes = scopesAnalysed(stderr);
@@ -670,7 +717,7 @@ const m5Run = (ctx: RunContext): ProbeResult => {
     // knip analysed no scope this pass. Either it emitted the M5-00 "did not run" disclosure, or it
     // exited 0 with no scope summary at all — both are NotAssessed (nothing examined), and the M5-00
     // shape rides the reason rather than a Finding no channel would deliver (#1137).
-    return emitted("M5-00")
+    return withSourceTier(emitted("M5-00")
       ? {
           kind: "not-assessed",
           reason: "knip did not run on any scope — quality-scan emitted the M5-00 disclosure finding, so no dead code was analysed this pass (M4 duplication still ran) (#223/#350/#1137)",
@@ -682,32 +729,32 @@ const m5Run = (ctx: RunContext): ProbeResult => {
           reason: `quality-scan exited 0 and emitted no M5-00, but reported no knip scope count on stderr — an exit code alone is not evidence dead code was analysed (#350/#1109): ${trimOut(stderr ?? "")}`,
           provenance: "MEASURED",
           falsifier: scopeFalsifier,
-        };
+        });
   }
   const own = ownRows(findings, "M5");
   const analysed = { unitsExamined: scopes, scope: "workspace scopes analysed by knip", findings: outPath ? own : [] } as const;
   if (emitted("M5-00")) {
     // Partial: knip ran on `scopes` workspace(s) but failed on others. The completed findings AND the
     // M5-00 disclosure row (both in `own`) reach the deliverable; the reason names the gap (#505/#1137).
-    return { kind: "examined", detail: command, ...analysed, reason: "knip did not complete on every scope — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage is incomplete for this pass (the scopes that did complete are reported) (#505/#1137)" };
+    return withSourceTier({ kind: "examined", detail: command, ...analysed, reason: "knip did not complete on every scope — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage is incomplete for this pass (the scopes that did complete are reported) (#505/#1137)" });
   }
   if (emitted("M5-98")) {
-    return {
+    return withSourceTier({
       kind: "examined",
       detail: command,
       ...analysed,
       reason: "reduced (no-dependencies) tier — knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points (M5-98, #810). Dead code IS reported; the file-level findings are review-tier, not confirmed. Install the target's dependencies and re-run for confirmed file findings (#1035)",
-    };
+    });
   }
   if (!depsInstalled) {
-    return {
+    return withSourceTier({
       kind: "examined",
       detail: command,
       ...analysed,
       reason: "target has no node_modules — knip completed from source alone against a Harvey-inferred entry graph (#696), so its file-level dead code is review-tier, not confirmed. Run `npm install` in the target and re-run for confirmed file findings (#1035)",
-    };
+    });
   }
-  return { kind: "examined", detail: command, ...analysed };
+  return withSourceTier({ kind: "examined", detail: command, ...analysed });
 };
 // #506: knip is the clearest per-app tier — it needs each app's own node_modules/config, so a
 // monorepo runs it once per enumerated app.
@@ -716,7 +763,7 @@ const m5: ModuleRunner = { module: "M5", typed: true, run: perApp(m5Run) };
 // M6's free indicator layer (src/detectors/handrolled.ts, taxonomy `M6 — Indicator: …`) runs INSIDE
 // detect-static, the same CLI M7/M9 shell out to — same pattern as M8_TAXONOMY_PREFIX below (M8's
 // test-intent findings out of the same mixed detect-static Finding[]).
-const M6_TAXONOMY_PREFIX = "M6 — Indicator: ";
+const M6_TAXONOMY_PREFIX = "M6 — ";
 const handrolledFindings = (findings: Finding[]): Finding[] => findings.filter((f) => f.taxonomy.startsWith(M6_TAXONOMY_PREFIX));
 
 // M6 (#351): `simplify-scan` ASSEMBLES a review packet and exits 0 — it invokes no model and
@@ -750,6 +797,8 @@ const m6: ModuleRunner = {
     const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
     const indicatorRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
     const indicatorScanned = indicatorRun.ok ? productFilesScanned(indicatorRun.output) : undefined;
+    const indicatorReceipt = indicatorRun.ok ? parseSourcePopulationReceipt(indicatorRun.output, "M6") : undefined;
+    const indicatorGap = indicatorReceipt ? populationGap(indicatorReceipt) : undefined;
     const indicatorFindings = indicatorScanned ? handrolledFindings(readCaptured(ctx, indicatorOutPath)) : [];
 
     if (!ctx.env.llm) {
@@ -759,13 +808,13 @@ const m6: ModuleRunner = {
           detail: indicatorCommand,
           unitsExamined: indicatorScanned,
           scope: "product source files",
-          reason: withRejectedPass("free indicator layer ran (M6 — Indicator: … taxonomy, #267); paid LLM tier not in scope, so no triage verdict was recorded — the paid M6 triage decides which indicators are genuine reinventions and names the replacement (#397)", pass.reason),
+          reason: withRejectedPass(["free indicator layer ran (M6 — Indicator: … taxonomy, #267); paid LLM tier not in scope, so no triage verdict was recorded — the paid M6 triage decides which indicators are genuine reinventions and names the replacement (#397)", indicatorGap].filter(Boolean).join(" "), pass.reason),
           findings: indicatorFindings,
         };
       }
       return {
         kind: "not-assessed",
-        reason: withRejectedPass("paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 source files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason),
+        reason: withRejectedPass(["paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 JavaScript/TypeScript product files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No unexamined language population receives clean coverage credit (#420)", indicatorGap].filter(Boolean).join(" "), pass.reason),
         provenance: "MEASURED",
         falsifier: `${indicatorCommand} — a non-zero product-source count on that line makes the indicator half of this reason false`,
       };
@@ -966,7 +1015,7 @@ const m8: ModuleRunner = {
     const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M8-static.json") : undefined;
     const staticCmd = `pnpm detect-static ${ctx.targetDir}`;
     const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
-    const staticScanned = staticRun.ok ? filesScanned(staticRun.output) : undefined;
+    const staticScanned = staticRun.ok ? (identifiedSourceFilesScanned(staticRun.output) ?? filesScanned(staticRun.output)) : undefined;
     const staticFindings = staticScanned ? testIntentFindings(readCaptured(ctx, staticOutPath)) : [];
 
     const outPath = captureOut(ctx, "M8");
@@ -1053,7 +1102,7 @@ const m8: ModuleRunner = {
 // M9-prefix filter: a class matching none of the four still lands in the deliverable via M9, so the
 // double-count is removed without silently dropping an unowned class (the failure mode the issue's
 // option 1 warned about).
-const M9_OWNED_BY_OTHER_PROBE = [M6_TAXONOMY_PREFIX, M7_TAXONOMY_PREFIX, M8_TAXONOMY_PREFIX];
+const M9_OWNED_BY_OTHER_PROBE = ["M5 — ", M6_TAXONOMY_PREFIX, M7_TAXONOMY_PREFIX, M8_TAXONOMY_PREFIX];
 const m9CollectorFindings = (findings: Finding[]): Finding[] =>
   findings.filter((f) => !M9_OWNED_BY_OTHER_PROBE.some((prefix) => f.taxonomy.startsWith(prefix)));
 

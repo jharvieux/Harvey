@@ -27,7 +27,11 @@ import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from "../detectors/bundle-stats.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
-import { CONFIG_FILE, loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { CONFIG_FILE, isTestSourcePath, loadSourceInventory, loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { detectM1ExceptionFlowFindings, detectM5ExceptionFlowFindings } from "../detectors/m5-exception-flow.js";
+import { detectM5HardcodedDeploymentFindings } from "../detectors/m5-hardcoded-deployment.js";
+import { detectM5TypeEscapeFindings } from "../detectors/m5-type-escape.js";
+import { detectM8VacuousAssertionFindings } from "../detectors/m8-vacuous-assertion.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
@@ -38,6 +42,12 @@ import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 import { checkUnreadSourceExtensions } from "../scan/ext-coverage.js";
 import { importGraphNotAssessedRows } from "../scan/import-graph-scope.js";
+import {
+  detectM5PolyglotQualityAndCoverageFindings,
+  detectM6PolyglotCoverageFindings,
+  formatSourcePopulationReceipt,
+  sourcePopulationReceipt,
+} from "../scan/polyglot-quality.js";
 import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
 import { digestObservedPaths, writeCorpusScannerScope } from "../corpus-scanner-scope.js";
 
@@ -57,6 +67,8 @@ const targetDir = resolve(targetArg);
 const { scanDir, cleanup } = resolveScanScope(targetDir);
 try {
   const allSources = loadSources(scanDir);
+  const identifiedSources = loadSourceInventory(scanDir);
+  const productSourceInventory = identifiedSources.filter((file) => !isTestSourcePath(file.path));
   // Product-code detectors skip test/story/fixture files; the M8 test-intent pass reads the
   // full set (test files are its subject; non-test files feed its cross-file resolution).
   const sources = allSources.filter((f) => !NON_PRODUCT.test(f.path));
@@ -67,6 +79,9 @@ try {
   console.log(
     `loaded ${allSources.length} source files (${productSources.length} product source, ${sources.length - productSources.length} config, ${allSources.length - sources.length} test/story) from ${targetDir}`,
   );
+  console.log(`identified ${identifiedSources.length} source files across the polyglot inventory`);
+  console.log(formatSourcePopulationReceipt(sourcePopulationReceipt("M5", productSourceInventory)));
+  console.log(formatSourcePopulationReceipt(sourcePopulationReceipt("M6", productSourceInventory)));
 
   // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
   // M7's client-JS tiers and bundle reader also branch on it (#577).
@@ -115,9 +130,16 @@ try {
     ...detectPerfCodeFindings(sources, framework),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
+    ...detectM1ExceptionFlowFindings(sources),
+    ...detectM5ExceptionFlowFindings(sources),
+    ...detectM5TypeEscapeFindings(sources),
+    ...detectM5HardcodedDeploymentFindings(sources),
+    ...detectM5PolyglotQualityAndCoverageFindings(productSourceInventory),
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
+    ...detectM6PolyglotCoverageFindings(productSourceInventory),
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...detectVitestIntentFindings(allSources), // M8 vitest-specific (#629) — runner-gated
+    ...detectM8VacuousAssertionFindings(identifiedSources),
     // scoped copy = committed files only; `allSources` lets it separate an asset a page serves
     // from one nothing references, which is repo bloat and not page weight (#1480).
     ...scanAssetWeight(scanDir, undefined, allSources),

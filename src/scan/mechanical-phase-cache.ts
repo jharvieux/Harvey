@@ -36,7 +36,7 @@ export interface MechanicalProducerRecord {
   detector: string;
   phase: MechanicalPhase;
   order: number;
-  module: "M1" | "M6";
+  module: "M1" | "M5" | "M6" | "M8";
   unitsExamined: number;
   examinedUnitIdentities: MechanicalExaminedUnitIdentity[];
   examinedUnitDigest?: string;
@@ -204,7 +204,7 @@ function producerRecordProblems(producer: unknown, expectedPhase: MechanicalPhas
   if (typeof row.detector !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(row.detector)) problems.push("producer id is missing or noncanonical");
   if (row.phase !== expectedPhase) problems.push("producer phase does not match its artifact");
   if (!Number.isInteger(row.order) || row.order! < 0) problems.push("producer order is malformed");
-  if (row.module !== "M1" && row.module !== "M6") problems.push("producer module is malformed");
+  if (row.module !== "M1" && row.module !== "M5" && row.module !== "M6" && row.module !== "M8") problems.push("producer module is malformed");
   if (!Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0) problems.push("producer examined count is malformed");
   if (!Number.isInteger(row.findings) || row.findings! < 0) problems.push("producer finding count is malformed");
   if (typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0) problems.push("producer duration is malformed");

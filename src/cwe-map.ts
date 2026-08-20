@@ -71,6 +71,9 @@ const OWASP: Record<string, string> = {
 // taxonomy string → [CWE short id, OWASP short id | null]. `null` = the CWE is not placed under any
 // Top-10-2021 category by OWASP's official mapping (owasp is omitted, never forced to a wrong bucket).
 const SECURITY: Record<string, [string, string | null]> = {
+  "M1 — Swallowed exception at auth/security boundary": ["754", "A04"],
+  "M1 — Swallowed exception at billing/payment boundary": ["754", "A04"],
+  "M1 — Swallowed exception at request boundary": ["754", "A04"],
   // Object-level / tenant authorization (BOLA) — user-controlled key bypasses the ownership check.
   "Authz decision from client-controlled input": ["639", "A01"],
   "Object-level authorization gap: client-supplied id reaches a read-by-id repo function (pg-idor-repo-fn)": ["639", "A01"],

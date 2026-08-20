@@ -1,0 +1,4 @@
+export const deploymentConfig = {
+  serviceUrl: "https://billing.prod.harvey-platform.com/v1",
+  providerId: "provider_prod_billing_72",
+};
