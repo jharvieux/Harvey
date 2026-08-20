@@ -29,6 +29,7 @@ import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-t
 import {
   assertSemgrepFamilyPlan,
   assertSemgrepFamilyVerification,
+  canonicalizeSemgrepOutput,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   mergeSemgrepFamilyOutputs,
@@ -197,10 +198,15 @@ export interface SemgrepOutput {
 }
 
 export interface SemgrepExecutionPlanReceipt {
-  schema: 2;
+  schema: 3;
   strategy: "partitioned-families";
-  families: Array<{ ordinal: number; id: string; configSha256: string }>;
-  argv: string[];
+  families: Array<{
+    ordinal: number;
+    id: string;
+    configSha256: string;
+    argv: string[];
+    verification: "single" | "paired-cold-exact";
+  }>;
 }
 
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
@@ -504,15 +510,62 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     most of the losses left NO trace in errors[], paths.skipped or stderr. Not jitter around a
 //     mean: a silent recall loss. The 5s per-rule-per-file timeout adds a second, load-dependent
 //     loss mode on top (which rules cross 5s varies run to run; those ARE recorded in errors[]).
-//   * Explicit nine-worker parmap produced exact current-pack Carbon findings and diagnostics in
-//     both monolithic and partitioned paths, with stable fragile-taint decisions across cold
-//     repeats. It was materially faster than the exact one-worker alternative.
+//   * Nine-worker parmap remains the measured fast topology for every family except local-injection.
+//     Two separate hosted producer/replay runs later falsified it for that family: each silently
+//     omitted one different harvey-log-injection row from the same exact Carbon bytes while the
+//     Semgrep diagnostics stayed equal. Two local j9 repeats happened to agree, so a j9 replay is
+//     not itself a sufficient guard.
+//   * The local-injection family uses one-worker parmap twice. Exact Carbon cold repeats produced
+//     the same 87 findings, diagnostics, and examined scope both times and retained both hosted-
+//     fragile rows; j9 produced the same lower-recall 83-row set in its two coincident repeats.
+//     The pair must agree before its output can be returned or enter the phase cache.
 //   * `-j 1` without parmap is not the measured alternative and is not a safe fallback: 1 of 3
 //     historical runs dropped a row. Because
 //     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
 //     coverage rather than silently switch to an unproved execution engine.
 // Stability remains a falsifiable corpus property, not something these flags prove by themselves.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
+const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
+const SEMGREP_PAIRED_FAMILY = "local-injection";
+
+function semgrepFamilyPolicy(family: SemgrepFamily): {
+  prefix: readonly string[];
+  verification: "single" | "paired-cold-exact";
+} {
+  return family.id === SEMGREP_PAIRED_FAMILY
+    ? { prefix: SEMGREP_VERIFIED_PREFIX, verification: "paired-cold-exact" }
+    : { prefix: SEMGREP_PINNED_PREFIX, verification: "single" };
+}
+
+function familyRuleIds(configPath: string): string[] {
+  const ids = [...readFileSync(configPath, "utf8").matchAll(/^\s*-\s*id:\s*([\w-]+)\s*$/gm)].map((match) => match[1]!);
+  if (ids.length === 0) throw new Error(`Semgrep family ${configPath} declares no rule ids`);
+  return ids;
+}
+
+function withoutFamily(output: SemgrepOutput, ruleIds: readonly string[]): SemgrepOutput {
+  const belongs = (checkId: string): boolean => ruleIds.some((ruleId) => ruleIdMatches(checkId, ruleId));
+  return {
+    ...output,
+    results: (output.results ?? []).filter((result) => !belongs(result.check_id)),
+    time: { rules: (output.time?.rules ?? []).filter((ruleId) => !belongs(ruleId)) },
+  };
+}
+
+function mergeVerifiedFamily(monolithic: SemgrepOutput, family: SemgrepFamily, verified: SemgrepOutput): SemgrepOutput {
+  const retained = withoutFamily(monolithic, familyRuleIds(family.configPath));
+  const record = (name: string, output: SemgrepOutput): SemgrepFamilyRecord => ({
+    family: name,
+    output,
+    cache: "recomputed",
+    key: "direct-execution",
+    unitsExamined: Math.max(1, new Set(output.paths?.scanned ?? []).size),
+  });
+  return mergeSemgrepFamilyOutputs([
+    record(`monolithic-without-${family.id}`, retained),
+    record(family.id, verified),
+  ]);
+}
 
 export function runSemgrep(dir: string, registryConfigs: readonly string[] = REGISTRY_PACKS): { result: SemgrepOutput; failure?: string } {
   const args = [
@@ -532,7 +585,13 @@ export function runSemgrep(dir: string, registryConfigs: readonly string[] = REG
   ];
   const run = execSemgrep([...SEMGREP_PINNED_PREFIX, ...args]);
   if ("failure" in run) return { result: {}, failure: run.failure };
-  return parseEnvelope(run.out);
+  const parsed = parseEnvelope(run.out);
+  if (parsed.failure) return parsed;
+  const injection = semgrepRuleFamilies(registryConfigs).find((family) => family.id === SEMGREP_PAIRED_FAMILY);
+  if (!injection) return { result: {}, failure: `Semgrep family ${SEMGREP_PAIRED_FAMILY} is missing from the exhaustive plan` };
+  const verified = runSemgrepFamily(dir, injection);
+  if (verified.failure) return { result: {}, failure: verified.failure };
+  return { result: mergeVerifiedFamily(parsed.result, injection, verified.result) };
 }
 
 function semgrepRuleFamilies(registryConfigs: readonly string[]): SemgrepFamily[] {
@@ -559,35 +618,52 @@ const SEMGREP_FAMILY_TAIL = [
 export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepExecutionPlanReceipt {
   const families = semgrepRuleFamilies(registryConfigs);
   return {
-    schema: 2,
+    schema: 3,
     strategy: "partitioned-families",
-    families: families.map((family, ordinal) => ({
-      ordinal,
-      id: family.id,
-      configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
-    })),
-    argv: [...SEMGREP_PINNED_PREFIX, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+    families: families.map((family, ordinal) => {
+      const policy = semgrepFamilyPolicy(family);
+      return {
+        ordinal,
+        id: family.id,
+        configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
+        argv: [...policy.prefix, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
+        verification: policy.verification,
+      };
+    }),
   };
 }
 
 function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
+  const policy = semgrepFamilyPolicy(family);
   const args = [
     "--config", family.configPath,
     ...SEMGREP_FAMILY_TAIL,
     dir,
   ];
-  const run = execSemgrep([...SEMGREP_PINNED_PREFIX, ...args]);
-  if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
-  const parsed = parseEnvelope(run.out);
-  if (parsed.failure) return parsed;
-  parsed.result.results ??= [];
-  parsed.result.errors ??= [];
-  parsed.result.paths ??= {};
-  parsed.result.paths.scanned ??= [];
-  parsed.result.paths.skipped ??= [];
-  parsed.result.time ??= {};
-  parsed.result.time.rules ??= [];
-  return parsed;
+  const once = (): { result: SemgrepOutput; failure?: string } => {
+    const run = execSemgrep([...policy.prefix, ...args]);
+    if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
+    const parsed = parseEnvelope(run.out);
+    if (parsed.failure) return { result: {}, failure: `${family.id}: ${parsed.failure}` };
+    parsed.result.results ??= [];
+    parsed.result.errors ??= [];
+    parsed.result.paths ??= {};
+    parsed.result.paths.scanned ??= [];
+    parsed.result.paths.skipped ??= [];
+    parsed.result.time ??= {};
+    parsed.result.time.rules ??= [];
+    return parsed;
+  };
+  const first = once();
+  if (first.failure || policy.verification === "single") return first;
+  const second = once();
+  if (second.failure) return second;
+  const left = canonicalizeSemgrepOutput(first.result);
+  const right = canonicalizeSemgrepOutput(second.result);
+  if (JSON.stringify(left) !== JSON.stringify(right)) {
+    return { result: {}, failure: `paired cold Semgrep executions for ${family.id} differ in findings, diagnostics, or examined scope` };
+  }
+  return { result: left };
 }
 
 export async function runSemgrepPartitioned(
