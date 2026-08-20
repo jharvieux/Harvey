@@ -22,6 +22,7 @@ import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
 import { mechanicalFinding } from "./common.js";
 import { envConvention, type EnvConvention, type TargetFramework } from "./framework-detect.js";
+import type { PathScopedClass } from "./path-scope.js";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 
@@ -36,6 +37,29 @@ const SCHEMA_PATH = /(^|\/)env\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 const CREATE_ENV = /\bcreateEnv\s*\(/;
 // #902: the Vite-family env schema validates `import.meta.env`, not `process.env`.
 const PARSE_ENV = /\.(parse|safeParse)\s*\(\s*(process\.env|import\.meta\.env)\b/;
+
+/** The production preselector for modules that can declare the target's environment schema. */
+export function envSchemaModuleCandidates(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter(
+    (file) =>
+      SOURCE_EXT.test(file.path) &&
+      !NON_PRODUCT.test(file.path) &&
+      (SCHEMA_PATH.test(file.path) || CREATE_ENV.test(file.text) || PARSE_ENV.test(file.text)),
+  );
+}
+
+export const ENV_SCHEMA_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  {
+    rowId: "M1-PATHSCOPE-ENV-SCHEMA-00",
+    detector: "env-schema",
+    classId: "Environment schema completeness diff",
+    ownerFile: "src/scan/env-schema.ts",
+    selectorSymbol: "envSchemaModuleCandidates",
+    convention: "product schema modules named `env.*`, calling `createEnv(...)`, or parsing the whole runtime env object",
+    select: envSchemaModuleCandidates,
+    classes: "the declared-versus-read environment-variable completeness diff",
+  },
+];
 
 // #902: the framework-native env accesses the process.env/import.meta.env read-diff below cannot
 // see. When present on a target whose framework has one (SvelteKit / Nuxt), the pass discloses that
@@ -178,7 +202,10 @@ export function detectEnvSchemaFindings(files: SourceInput[], framework: TargetF
     disclosure.push(unmodeledEnvConventionFinding(framework, conv));
   }
 
-  const schemaFiles = sources.filter(({ path, sf }) => isSchemaModule({ path, text: sf.getFullText() }, sf, conv.importMetaEnv));
+  const schemaCandidatePaths = new Set(envSchemaModuleCandidates(files).map((file) => file.path));
+  const schemaFiles = sources.filter(
+    ({ path, sf }) => schemaCandidatePaths.has(path) && isSchemaModule({ path, text: sf.getFullText() }, sf, conv.importMetaEnv),
+  );
   if (schemaFiles.length === 0) return disclosure;
 
   const schemaPaths = new Set(schemaFiles.map((f) => f.path));

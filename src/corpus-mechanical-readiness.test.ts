@@ -77,7 +77,14 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           phases: MECHANICAL_PHASES,
           implementation: { semgrep: digest },
           externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
-          semgrep: { schema: 2, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], argv: ["--x-parmap", "-j", "9", "--timeout", "0"] },
+          semgrep: {
+            schema: 3,
+            strategy: "partitioned-families",
+            families: [
+              { ordinal: 0, id: "registry-0", configSha256: digest, argv: ["--x-parmap", "-j", "9", "--timeout", "0"], verification: "single" },
+              { ordinal: 1, id: "local-injection", configSha256: "b".repeat(64), argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "paired-cold-exact" },
+            ],
+          },
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
         semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
@@ -149,7 +156,8 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "partitioned-families"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.reverse().forEach((family, ordinal) => { family.ordinal = ordinal; }); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
-    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.argv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.argv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.verification = "single"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
   });
 

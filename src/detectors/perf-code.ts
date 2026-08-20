@@ -16,6 +16,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
+import type { PathScopedClass } from "../scan/path-scope.js";
 import { entryBasesFor } from "../workspaces.js";
 import { buildImportGraph, collectPathAliases, collectValueImports, importClosure, type PathAlias } from "./app-router.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
@@ -60,6 +61,15 @@ function isRenderOnce(path: string, sf: ts.SourceFile): boolean {
   );
 }
 
+/**
+ * Production population shared by the seven React re-render classes. Email and PDF templates are
+ * intentionally absent: they render once, and email clients require the raw-image shape one of
+ * these classes otherwise reports.
+ */
+export function perfRerenderCandidateFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => SOURCE_FILE.test(file.path) && !isRenderOnce(file.path, parse(file.path, file.text)));
+}
+
 // A JSX tag that renders a component (not a DOM element): capitalized or member access.
 function isComponentTag(tagText: string): boolean {
   return /^[A-Z]/.test(tagText) || tagText.includes(".");
@@ -91,7 +101,7 @@ function forEachJsxElement(sf: ts.SourceFile, cb: (el: ts.JsxOpeningElement | ts
 // — we can't know at scan time what that evaluates to (#249).
 type CompilerFlagValue = { status: "on" | "off"; file?: never; raw?: never } | { status: "unresolvable"; file: string; raw: string; index: number };
 
-function reactCompilerFlag(files: SourceInput[]): CompilerFlagValue {
+function reactCompilerFlag(files: readonly SourceInput[]): CompilerFlagValue {
   for (const f of files) {
     const base = f.path.split("/").pop() ?? "";
     if (/^(\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs))$/.test(base) && f.text.includes("react-compiler")) {
@@ -118,8 +128,12 @@ function reactCompilerFlag(files: SourceInput[]): CompilerFlagValue {
 // external corpus) counted at Perf/Low. A variable/env-derived flag is NOT treated as "on" here —
 // see reactCompilerFlag above and detectUnresolvableCompilerFlag, which surfaces that case
 // (and the suppression it implies) instead of silently assuming false.
-export function reactCompilerEnabled(files: SourceInput[]): boolean {
+export function reactCompilerEnabled(files: readonly SourceInput[]): boolean {
   return reactCompilerFlag(files).status === "on";
+}
+
+function perfReactCompilerClassesApplicable(files: readonly SourceInput[]): boolean {
+  return reactCompilerEnabled(files);
 }
 
 const COMPILER_NOTE =
@@ -181,11 +195,16 @@ function isLocallyDefinedContext(contextName: string, sources: Map<string, ts.So
   return false;
 }
 
-function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+function detectContextValueLiteral(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  compilerOn: boolean,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   if (!compilerOn) return []; // #248: without the compiler this class measured ~0% real — suppressed, not counted
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
       if (!isContextTag(tagText)) return;
@@ -238,11 +257,16 @@ function isTranslationCallArray(expr: ts.Expression): boolean {
   });
 }
 
-function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+function detectInlinePropLiterals(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  compilerOn: boolean,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   if (!compilerOn) return []; // #248: without the compiler this class measured ~0% real — suppressed, not counted
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const hits: { attr: ts.JsxAttribute; tagText: string }[] = [];
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
@@ -435,6 +459,18 @@ export function devToolingModules(files: SourceInput[], sources: Map<string, ts.
   const requestReached = requestReachableModules(files, sources);
   if (requestReached !== undefined) for (const p of requestReached.keys()) tooling.delete(p);
   return tooling;
+}
+
+/**
+ * Production population for cost classes that do not apply to scripts, seeders, test harnesses,
+ * generators, or their import closures. Request-reachable modules are retained even when a path
+ * segment happens to look like tooling; `devToolingModules` owns that reachability subtraction.
+ */
+export function perfApplicationCodeFiles(files: readonly SourceInput[]): SourceInput[] {
+  const sourceFiles = files.filter((file) => SOURCE_FILE.test(file.path));
+  const sources = new Map(sourceFiles.map((file) => [file.path, parse(file.path, file.text)]));
+  const tooling = devToolingModules([...files], sources);
+  return sourceFiles.filter((file) => !tooling.has(file.path));
 }
 
 // Entry points a CLIENT BUNDLE is built from: every `'use client'` module, the Next route files
@@ -648,10 +684,15 @@ function isSvgImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts
   return false;
 }
 
-function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
+function detectRawImgElement(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  isVite: boolean,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     if (sf.text.includes("@next/next/no-img-element")) continue; // the codebase already adjudicated its <img>s via an explicit eslint-disable
     const hits: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
     let svgSkipped = 0;
@@ -727,11 +768,16 @@ function isStaticListSource(sf: ts.SourceFile, source: ts.Expression): boolean {
 // literal-prop classes above the compiler does NOT auto-fix key identity, so when it does emit it
 // keeps its Low severity rather than the Info demotion; the gate is precision-driven (the class
 // measured ~0% real on the corpus without the compiler), not a compiler-covers-it demotion.
-function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+function detectIndexAsKey(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  compilerOn: boolean,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   if (!compilerOn) return [];
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const visit = (node: ts.Node) => {
       if (
         ts.isCallExpression(node) &&
@@ -792,10 +838,14 @@ function isStaticSortReceiver(sf: ts.SourceFile, recv: ts.Expression): boolean {
   return false;
 }
 
-function detectSortInJsx(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectSortInJsx(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const visit = (node: ts.Node) => {
       if (ts.isJsxExpression(node) && node.expression) {
         let hit: ts.CallExpression | undefined;
@@ -858,12 +908,17 @@ const STATE_SPRAWL_THRESHOLD = 8;
 // stays counted, with the batching boundary named rather than implied.
 const AUTOMATIC_BATCHING_MAJOR = 18;
 
-function detectStateSprawl(sources: Map<string, ts.SourceFile>, nextId: NextId, reactMajor: number | undefined): Finding[] {
+function detectStateSprawl(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  reactMajor: number | undefined,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const batched = reactMajor === undefined || reactMajor >= AUTOMATIC_BATCHING_MAJOR;
   const versionSaid = reactMajor === undefined ? "no manifest in the scanned tree declares a react version, so the modern default is assumed" : `this project declares react ${reactMajor}`;
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const checkComponent = (name: string, fn: ts.Node) => {
       let count = 0;
       const countStates = (n: ts.Node) => {
@@ -1035,7 +1090,11 @@ function isSequentialByDesign(body: ts.Node, perItemAwait: ts.AwaitExpression, l
 // user-visible latency — the confidence tier and impact wording reflect that.
 const REQUEST_PATH = /(^|\/)(app|pages)\//;
 
-function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
+function detectAwaitInLoop(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     // #1476: a dev CLI / seeder / CI script / generator makes no request-path latency claim. This
@@ -1045,7 +1104,7 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId, 
     // COUNTED finding, so the client was still being told their seed script has a defect. #1528:
     // request-reachable modules are already subtracted from `tooling`, so a route under a
     // tooling-shaped segment still fires.
-    if (tooling.has(path)) continue;
+    if (!candidatePaths.has(path)) continue;
     const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
@@ -1183,11 +1242,15 @@ function boundedByHelper(chainRoot: ts.CallExpression, helpers: Set<string>): bo
   return found;
 }
 
-function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
+function detectUnboundedSelect(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   const helpers = paginatingHelperNames(sources);
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476/#1528 (request-reachable modules are subtracted in devToolingModules)
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const visit = (node: ts.Node) => {
       // Only inspect the outermost call of a chain so one query flags once.
       if (ts.isCallExpression(node) && !(node.parent && ts.isPropertyAccessExpression(node.parent))) {
@@ -1360,14 +1423,19 @@ function mountDataReads(effectBody: ts.Node): ts.CallExpression[] {
   return reads;
 }
 
-function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
+function detectClientFetchEffect(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  isVite: boolean,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     // On Next the "fix" is a Server Component fetch, so only `'use client'` files are the bug. A
     // Vite SPA has no server-render path — every module is client — so the directive never appears
     // and every useEffect fetch is in scope (#577).
     if (!isVite && leadingDirective(sf) !== "use client") continue;
-    if (isRenderOnce(path, sf)) continue;
     if (importsDataFetchLib(sf)) continue;
     const hits: ts.CallExpression[] = [];
     const visit = (node: ts.Node) => {
@@ -1680,10 +1748,21 @@ function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextI
 
 // --- D2. fetch() in middleware — every-request network hop [PERF] ----------------
 
-function detectMiddlewareFetch(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+const MIDDLEWARE_PATH = /(^|\/)middleware\.[cm]?[jt]sx?$/;
+
+/** Production population for the middleware hot-path class. */
+export function perfMiddlewareFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => SOURCE_FILE.test(file.path) && MIDDLEWARE_PATH.test(file.path));
+}
+
+function detectMiddlewareFetch(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (!/(^|\/)middleware\.[cm]?[jt]sx?$/.test(path)) continue;
+    if (!candidatePaths.has(path)) continue;
     let hit: ts.CallExpression | undefined;
     const visit = (n: ts.Node) => {
       if (hit) return;
@@ -1842,14 +1921,35 @@ function requestReachableModules(files: SourceInput[], sources: Map<string, ts.S
   return reached;
 }
 
-function detectSyncIoInHandler(files: SourceInput[], sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+/**
+ * Exact production population for sync-I/O review: recognized Next handlers, plus non-tooling
+ * modules reachable from a request entry (including Nest controller→provider registration edges).
+ * When a tree has no request entry at all, reachability is unavailable and the pre-existing
+ * fail-loud fallback keeps every non-tooling source candidate.
+ */
+export function perfSyncIoCandidateFiles(files: readonly SourceInput[]): SourceInput[] {
+  const sourceFiles = files.filter((file) => SOURCE_FILE.test(file.path));
+  const sources = new Map(sourceFiles.map((file) => [file.path, parse(file.path, file.text)]));
+  const reachedFrom = requestReachableModules([...files], sources);
+  return sourceFiles.filter((file) => {
+    const onHandlerPath = HANDLER_PATH.test(file.path);
+    if (!onHandlerPath && NON_REQUEST_PATH.test(file.path)) return false;
+    return onHandlerPath || reachedFrom === undefined || reachedFrom.has(file.path);
+  });
+}
+
+function detectSyncIoInHandler(
+  files: SourceInput[],
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   const reachedFrom = requestReachableModules(files, sources);
   for (const [path, sf] of sources) {
+    if (!candidatePaths.has(path)) continue;
     const onHandlerPath = HANDLER_PATH.test(path);
-    if (!onHandlerPath && NON_REQUEST_PATH.test(path)) continue;
     const entry = reachedFrom?.get(path);
-    if (!onHandlerPath && reachedFrom !== undefined && entry === undefined) continue;
     // Only flag calls inside a function body — module-scope sync reads run once at cold
     // start (an accepted pattern), not per request.
     const visit = (n: ts.Node, inFunction: boolean, inExportedFn: boolean) => {
@@ -2043,10 +2143,14 @@ function declaredWithin(scope: ts.Node, name: string): boolean {
   return found;
 }
 
-function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId, tooling: Set<string>): Finding[] {
+function detectNestedLoopJoin(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  candidatePaths: ReadonlySet<string>,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (tooling.has(path)) continue; // #1476/#1528 (request-reachable modules are subtracted in devToolingModules)
+    if (!candidatePaths.has(path)) continue; // exact shared production population
     const hits: ts.CallExpression[] = [];
 
     const inspectLoop = (itemNames: Set<string>, declScope: ts.Node, body: ts.Node) => {
@@ -2279,6 +2383,124 @@ function detectUnsplitRouteComponents(sources: Map<string, ts.SourceFile>, nextI
   return findings;
 }
 
+const perfPathClass = (
+  rowId: string,
+  classId: string,
+  selectorSymbol: string,
+  select: PathScopedClass["select"],
+  convention: string,
+  classes: string,
+  applicable?: PathScopedClass["applicable"],
+): PathScopedClass => ({
+  rowId,
+  detector: "perf-code",
+  classId,
+  ownerFile: "src/detectors/perf-code.ts",
+  selectorSymbol,
+  convention,
+  select,
+  ...(applicable === undefined ? {} : { applicable }),
+  classes,
+});
+
+const rerenderPathClass = (
+  rowId: string,
+  classId: string,
+  classes: string,
+  compilerOnly = false,
+): PathScopedClass =>
+  perfPathClass(
+    rowId,
+    classId,
+    "perfRerenderCandidateFiles",
+    perfRerenderCandidateFiles,
+    "parseable product source excluding one-shot email/PDF modules (`emails/**`, `@react-email`, and `@react-pdf`)",
+    classes,
+    compilerOnly ? perfReactCompilerClassesApplicable : undefined,
+  );
+
+const applicationCodePathClass = (rowId: string, classId: string, classes: string): PathScopedClass =>
+  perfPathClass(
+    rowId,
+    classId,
+    "perfApplicationCodeFiles",
+    perfApplicationCodeFiles,
+    "parseable application modules outside tooling/test/seed/config paths and script-reachable tooling closures, retaining request-reachable path collisions",
+    classes,
+  );
+
+export const PERF_CODE_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-CONTEXT-VALUE-00",
+    "M7 — Context value recreated every render",
+    "a locally-owned React Context provider recreating a literal value on each render",
+    true,
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-INLINE-LITERAL-PROP-00",
+    "M7 — Inline literal prop",
+    "a component receiving a fresh object or array prop on every render",
+    true,
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-RAW-IMG-00",
+    "M7 — Raw <img> optimization",
+    "a raw raster image missing the framework's optimization and layout-reservation path",
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-INDEX-KEY-00",
+    "M7 — Index used as list key",
+    "a dynamic React list keyed by item position",
+    true,
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-SORT-RENDER-00",
+    "M7 — Sort in render body",
+    "a data-dependent list sorted directly inside JSX",
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-STATE-SPRAWL-00",
+    "M7 — State sprawl",
+    "a React component owning at least eight independent state slices",
+  ),
+  rerenderPathClass(
+    "M1-PATHSCOPE-M7-CLIENT-FETCH-EFFECT-00",
+    "M7 — Client fetch in useEffect",
+    "a client-rendered component starting an uncached data fetch only after mount",
+  ),
+  applicationCodePathClass(
+    "M1-PATHSCOPE-M7-AWAIT-LOOP-00",
+    "M7 — Await in loop (N+1)",
+    "independent per-item async work serialized inside a loop",
+  ),
+  applicationCodePathClass(
+    "M1-PATHSCOPE-M7-UNBOUNDED-SELECT-00",
+    "M7 — Unbounded select",
+    "a whole-table or whole-partition select without a result bound",
+  ),
+  applicationCodePathClass(
+    "M1-PATHSCOPE-M7-NESTED-LOOP-JOIN-00",
+    "M7 — Nested-loop join",
+    "a repeatedly scanned outer collection producing quadratic join work",
+  ),
+  perfPathClass(
+    "M1-PATHSCOPE-M7-MIDDLEWARE-FETCH-00",
+    "M7 — Fetch in middleware hot path",
+    "perfMiddlewareFiles",
+    perfMiddlewareFiles,
+    "parseable `middleware.*` modules",
+    "a network round-trip on every request matched by middleware",
+  ),
+  perfPathClass(
+    "M1-PATHSCOPE-M7-SYNC-IO-00",
+    "M7 — Blocking sync I/O in request handler",
+    "perfSyncIoCandidateFiles",
+    perfSyncIoCandidateFiles,
+    "recognized Next handlers plus non-tooling modules reachable from route/controller/handler/middleware entries, including `.module.*` Nest provider edges",
+    "a synchronous filesystem, process, crypto, or compression call on a request path",
+  ),
+];
+
 // --- Orchestrator --------------------------------------------------------------------
 
 /**
@@ -2302,33 +2524,37 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
     // #1065: the loader's own filter, imported so the two can never drift apart.
     files.filter((f) => SOURCE_FILE.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]),
   );
+  const rerenderCandidatePaths = new Set(perfRerenderCandidateFiles(files).map((file) => file.path));
+  const applicationCodePaths = new Set(perfApplicationCodeFiles(files).map((file) => file.path));
+  const middlewarePaths = new Set(perfMiddlewareFiles(files).map((file) => file.path));
+  const syncIoCandidatePaths = new Set(perfSyncIoCandidateFiles(files).map((file) => file.path));
   let n = 0;
   const nextId: NextId = () => `M7C-${String(++n).padStart(2, "0")}`;
   // #1476/#1479: computed once and shared — three classes asked "is this application code a
   // request/bundle can reach?" and each answered it with its own path blocklist.
-  const tooling = devToolingModules(files, sources);
+  const tooling = new Set([...sources.keys()].filter((path) => !applicationCodePaths.has(path)));
   const serverOnly = serverOnlyModules(files, sources, tooling);
 
   return [
     ...detectUnresolvableCompilerFlag(files, nextId),
-    ...detectContextValueLiteral(sources, nextId, compilerOn),
-    ...detectInlinePropLiterals(sources, nextId, compilerOn),
-    ...detectRawImgElement(sources, nextId, isVite),
-    ...detectIndexAsKey(sources, nextId, compilerOn),
-    ...detectSortInJsx(sources, nextId),
-    ...detectStateSprawl(sources, nextId, reactMajorVersion(files)),
-    ...detectAwaitInLoop(sources, nextId, tooling),
-    ...detectUnboundedSelect(sources, nextId, tooling),
-    ...detectClientFetchEffect(sources, nextId, isVite),
+    ...detectContextValueLiteral(sources, nextId, compilerOn, rerenderCandidatePaths),
+    ...detectInlinePropLiterals(sources, nextId, compilerOn, rerenderCandidatePaths),
+    ...detectRawImgElement(sources, nextId, isVite, rerenderCandidatePaths),
+    ...detectIndexAsKey(sources, nextId, compilerOn, rerenderCandidatePaths),
+    ...detectSortInJsx(sources, nextId, rerenderCandidatePaths),
+    ...detectStateSprawl(sources, nextId, reactMajorVersion(files), rerenderCandidatePaths),
+    ...detectAwaitInLoop(sources, nextId, applicationCodePaths),
+    ...detectUnboundedSelect(sources, nextId, applicationCodePaths),
+    ...detectClientFetchEffect(sources, nextId, isVite, rerenderCandidatePaths),
     ...detectWholeLibraryImport(sources, nextId, serverOnly),
     ...detectHeavyClientImport(sources, nextId, isVite, serverOnly),
     ...detectUnoptimizedBarrelImports(files, sources, nextId),
     ...detectManualFontLink(sources, nextId, isVite),
     ...detectImportMetaGlobEager(sources, nextId, isVite),
     ...detectUnsplitRouteComponents(sources, nextId, isVite),
-    ...detectMiddlewareFetch(sources, nextId),
-    ...detectSyncIoInHandler(files, sources, nextId),
+    ...detectMiddlewareFetch(sources, nextId, middlewarePaths),
+    ...detectSyncIoInHandler(files, sources, nextId, syncIoCandidatePaths),
     ...detectJsonDeepClone(sources, nextId),
-    ...detectNestedLoopJoin(sources, nextId, tooling),
+    ...detectNestedLoopJoin(sources, nextId, applicationCodePaths),
   ];
 }

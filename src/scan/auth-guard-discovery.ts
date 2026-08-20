@@ -38,6 +38,8 @@
 
 import ts from "typescript";
 import { parse, type SourceInput } from "../detectors/common.js";
+import { NON_PRODUCT } from "../detectors/load-sources.js";
+import type { PathScopedClass } from "./path-scope.js";
 
 // Session/identity acquisition. A guard has to LOOK UP who the caller is before it can reject them.
 const IDENTITY_CALL =
@@ -102,12 +104,29 @@ const ENTRY_POINT_NAME =
 const ROUTE_FILE =
   /(^|\/)(pages\/api\/|pages\/|app\/.*\/(route|page|layout|template|default)\.[cm]?[jt]sx?$|middleware\.[cm]?[jt]sx?$|route\.[cm]?[jt]sx?$)/;
 
+/** Shared helpers are discovered only outside framework route/page/middleware modules. */
+export function authGuardDiscoveryFiles(sources: readonly SourceInput[]): SourceInput[] {
+  return sources.filter((file) => !NON_PRODUCT.test(file.path) && !ROUTE_FILE.test(file.path));
+}
+
+export const AUTH_GUARD_DISCOVERY_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  {
+    rowId: "M1-PATHSCOPE-AUTH-GUARD-DISCOVERY-00",
+    detector: "auth-guard-discovery",
+    classId: "Project-aware shared authorization guard discovery",
+    ownerFile: "src/scan/auth-guard-discovery.ts",
+    selectorSymbol: "authGuardDiscoveryFiles",
+    convention: "product source outside route, page, layout, template, default, and middleware modules",
+    select: authGuardDiscoveryFiles,
+    classes: "a shared project-specific authorization guard whose name should clear route-auth false positives",
+  },
+];
+
 // Function names in the TARGET's own source that behave like authorization guards. Returned as bare
 // identifiers; src/scan/semgrep.ts folds them into the guard-token test for that scan only.
 export function discoverAuthGuards(sources: readonly SourceInput[]): string[] {
   const names = new Set<string>();
-  for (const file of sources) {
-    if (ROUTE_FILE.test(file.path)) continue;
+  for (const file of authGuardDiscoveryFiles(sources)) {
     if (!/\b(session|auth|token|user|permission|role|guard|owner|member|tenant|forbidden|401|403)\b/i.test(file.text)) {
       continue; // cheap pre-filter: a file with no auth vocabulary at all holds no guard
     }

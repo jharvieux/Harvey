@@ -36,6 +36,13 @@ export const BASELINE_STATUSES = ["new", "persistent", "resolved"] as const;
 // the least urgent one.
 export const REACHABILITY_STATUSES = ["imported", "declared-not-imported", "transitive-only", "not-assessed"] as const;
 
+// #1910: finding-producing code can emit a client defect, a coverage disclosure, or a typed
+// not-assessed row. Effectiveness metrics must keep those populations separate: counting a scope
+// row as a detected defect inflates recall, while dropping it erases an assessment gap. This is the
+// shared classifier used by the versioned producer inventory; individual mixed producers may
+// override a family explicitly when an id/taxonomy pattern carries both shapes (M10-VS is one).
+export const FINDING_FAMILY_KINDS = ["finding", "coverage-disclosure", "not-assessed"] as const;
+
 export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
 export type PrecisionTier = (typeof PRECISION_TIERS)[number];
@@ -43,6 +50,20 @@ export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
 export type SubStatus = (typeof SUB_STATUSES)[number];
 export type BaselineStatus = (typeof BASELINE_STATUSES)[number];
 export type ReachabilityStatus = (typeof REACHABILITY_STATUSES)[number];
+export type FindingFamilyKind = (typeof FINDING_FAMILY_KINDS)[number];
+
+export function findingFamilyKind(input: { id: string; taxonomy: string }): FindingFamilyKind {
+  const text = `${input.id} ${input.taxonomy}`.toLowerCase();
+  const taxonomy = input.taxonomy.toLowerCase();
+  if (/not[- ]assessed|not applicable|not-applicable|\bn\/a\b/.test(text)) return "not-assessed";
+  // "tenant scope" and "authorization scope" are ordinary defect language. Only explicit
+  // coverage/scope-row wording denotes a disclosure; a bare occurrence of "scope" must not turn
+  // BOLA, cache-key, or background-job findings into coverage rows.
+  if (
+    /\bcoverage\b|\bscope disclosure\b|(?:^|\s)[—:-]\s*scope(?:\b|$)|\bunavailable\b|did not run|not collected|not-collected/.test(taxonomy)
+  ) return "coverage-disclosure";
+  return "finding";
+}
 
 export interface DependencyReachability {
   status: ReachabilityStatus;

@@ -51,9 +51,31 @@ import {
   rootIdentifier,
 } from "../detectors/owner-id.js";
 import { mechanicalFinding } from "./common.js";
+import type { PathScopedClass } from "./path-scope.js";
 
 const HANDLER_FILE = /(^|\/)(pages\/api\/.+|app\/.*route)\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+
+function isBolaCrossFileHandlerPath(path: string): boolean {
+  return SOURCE_EXT.test(path) && HANDLER_FILE.test(path);
+}
+
+export function bolaCrossFileHandlerFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => isBolaCrossFileHandlerPath(file.path));
+}
+
+export const BOLA_CROSS_FILE_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  {
+    rowId: "M1-PATHSCOPE-BOLA-CROSS-FILE-00",
+    detector: "bola-cross-file",
+    classId: "Object-level authorization gap across a module boundary",
+    ownerFile: "src/scan/bola-cross-file.ts",
+    selectorSymbol: "bolaCrossFileHandlerFiles",
+    convention: "Pages Router API modules and App Router `route.*` handlers",
+    select: bolaCrossFileHandlerFiles,
+    classes: "an authenticated route passing a request-rooted owner id into an imported service-role query",
+  },
+];
 
 type Fn = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration;
 
@@ -236,6 +258,6 @@ export function detectBolaCrossFileFindings(files: SourceInput[]): Finding[] {
   const allPaths = new Set(sources.keys());
   const aliases = collectPathAliases(files);
   return [...sources]
-    .filter(([path]) => HANDLER_FILE.test(path))
+    .filter(([path]) => isBolaCrossFileHandlerPath(path))
     .flatMap(([path, sf]) => detectFile(path, sf, sources, allPaths, aliases));
 }

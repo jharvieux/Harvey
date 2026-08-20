@@ -17,6 +17,7 @@
 
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { DataClassMap } from "./data-class-escalation.js";
+import type { ProductionProducerBinding } from "./effectiveness-schema.js";
 import type { Finding, TestQuality } from "./findings.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 
@@ -246,6 +247,12 @@ export interface RunContext {
 
 export interface ModuleRunner {
   module: AuditModule;
+  /**
+   * #1910: production producer identities delivered through this runner. Binding inventory rows
+   * here couples their lifecycle to the live delivery route. Mechanical producers remain owned by
+   * their own phase registries and are joined by the inventory exporter rather than duplicated.
+   */
+  producers: readonly ProductionProducerBinding[];
   // #506: a per-app/per-DB probe returns ONE outcome per instance (an array). A single-instance
   // probe returns one outcome. runAudit records one ledger row per returned outcome — so a fan-out
   // that enumerated N instances produces N rows, and an empty array is treated as a crash (a
