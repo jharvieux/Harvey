@@ -1,6 +1,5 @@
 name = "acceptance-verifier"
-description = "Independently verifies that a PR meets the acceptance criteria of every issue it closes. Read-only; use for each PR carrying an intentional closing keyword."
-model_reasoning_effort = "high"
+description = "Independently verifies that a PR meets the acceptance criteria of every issue it closes. Read-only; the supervisor selects effort per close-set complexity and uses lower-cost scoped reruns when appropriate."
 sandbox_mode = "read-only"
 developer_instructions = """
 You are an independent **acceptance verifier**. You did NOT write the code you are reviewing.

@@ -47,8 +47,8 @@ concurrency:
 
 jobs:
   # Tier router: inspect the change set and decide which jobs are needed.
-  # Prose-doc-only PRs (README.md, SESSION.md, docs/**.md) run only the cheap claim
-  # ratchet. Workflow-only PRs need actionlint, not the full JS verify
+  # Operating-policy/docs-only PRs (root guidance Markdown, docs/**.md and Codex agent profiles)
+  # run only the cheap policy/docs ratchet. Workflow-only PRs need actionlint, not the full JS verify
   # (tsc/eslint/vitest/knip never read workflow YAML). Everything else — code,
   # config, briefs/**, targets/** — runs the full verify. A non-PR event runs every
   # tier as a post-merge or scheduled safety net.
@@ -83,11 +83,15 @@ jobs:
             [ -z "$f" ] && continue
             case "$f" in
               .github/workflows/*) workflows=true ;;
-              # Root README.md is a neutral cheap-route control; SESSION.md and every
-              # Markdown file under docs/ are live claim venues. Functional/tool-input
+              # Root operating guidance, Codex agent profiles, and every Markdown file under
+              # docs/ are policy/claim venues. Functional/tool-input
               # docs under briefs/, targets/, src/, and project READMEs outside docs/ all
               # fall through to the code catch-all below. Keep this whitelist exact (#1763).
-              README.md|SESSION.md|docs/*.md) docs=true ;;
+              AGENTS.md|CLAUDE.md|MODULES.md|README.md|SESSION.md|docs/*.md) docs=true ;;
+              .codex/agents/*.toml)
+                profile=${f#".codex/agents/"}
+                case "$profile" in */*) code=true ;; *) docs=true ;; esac
+                ;;
               *) code=true ;;
             esac
           done <<< "$files"
@@ -113,7 +117,9 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run src/recorded-reasons.test.ts
+      - name: Parse Codex agent profiles
+        run: python3 -c 'import pathlib,tomllib; [tomllib.load(path.open("rb")) for path in pathlib.Path(".codex/agents").glob("*.toml")]'
+      - run: pnpm exec vitest run src/local-verify.test.ts src/recorded-reasons.test.ts src/ci-tier-router.test.ts src/corpus-tier-router.test.ts
 
   build:
     name: build

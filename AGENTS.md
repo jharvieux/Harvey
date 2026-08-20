@@ -4,9 +4,10 @@ Always-on instructions for Codex in this repository. Keep this file concise: Cod
 
 ## Shell commands
 
-Prefix every shell command with `rtk`. In a command chain, prefix every segment. Use raw commands only when debugging an `rtk`-filtered result; use `rtk proxy <command>` when exact output is required.
-
-Examples: `rtk git status`, `rtk read <file>`, `rtk grep <pattern>`, `rtk pnpm verify`, `rtk gh pr view <n>`.
+Use native commands by default. Do not route verification, tests, diffs, GitHub
+queries, or machine-readable output through RTK. If RTK is evaluated
+experimentally, treat it as display-only and independently verify native exit
+status and output; never use it as acceptance evidence.
 
 ## What this repository is
 
@@ -102,13 +103,22 @@ Do not dismiss non-M1 findings as “low-stakes,” “maintainability-only,” 
 
 ## Verification
 
-Run before every push:
+Run the path-sensitive local gate before every push:
 
 ```bash
-pnpm verify
+pnpm verify:changed
 ```
 
-This is the light suite: typecheck, lint, tests, knip, test-only-export ratchet, and precision validation. Heavy child-process tests are intentionally separate:
+It compares the current tree with the merge base of `origin/main` (override with
+`HARVEY_VERIFY_BASE`). Only root operating Markdown, `docs/**/*.md`, and
+`.codex/agents/*.toml` use the focused path: diff hygiene, TOML parsing, the local-gate
+negative controls, recorded-reason validation, and CI-router validation. Any source,
+test, executable input, manifest, workflow, generated artifact, mixed set, empty set, or
+unknown path fails safe to the full `pnpm verify` gate.
+
+`pnpm verify` remains the full light suite: typecheck, lint, tests, knip,
+test-only-export ratchet, and precision validation. Heavy child-process tests are
+intentionally separate:
 
 ```bash
 HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run
