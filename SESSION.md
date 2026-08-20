@@ -1,64 +1,60 @@
-# SESSION — 2026-08-20 issue-sweep merge-train wrap-up
+# SESSION — 2026-08-20 active issue sweep
 
-_Last updated: 2026-08-20. The approved merge train and its missed operating-policy
-wrap-up are complete. No workflow resumes automatically from this checkpoint._
+_Last updated: 2026-08-20. The operator explicitly resumed the issue sweep in the
+current task. This checkpoint records active ownership and exact next actions; it does
+not authorize a later task to resume automatically._
 
-## Outcome
+## Completed in the active sweep
 
-The final four pull requests in this merge train were independently verified, passed
-the protected checks, and merged in dependency order:
+- PR #1951 merged as `588125a23b7c7749fad12631654b7a7649f7eb32`.
+  It closed #1910 only. Issue #1800 remains open because its complete 765-row
+  external-corpus census has not been published for review.
+- The #1951 repair preserved the strict producer/replay comparator and stabilized the
+  known Semgrep `harvey-log-injection` omission class with paired cold exact
+  verification before return or cache write. The verified repair head was
+  `4f6db20df6243cd3ea8b49d209d2b8aaad0d50f3`; all protected checks passed.
+- The unpublished #1800 census is retained locally at
+  `/private/tmp/path-scope-census-1800-final.json` and
+  `/private/tmp/path-scope-census-1800-final.md`. It covers 17 pins × 45 classes =
+  765 rows: 505 applicable/populated, 148 applicable/zero, and 112 explicitly
+  inapplicable. Publishing that full evidence requires informed operator approval.
 
-| PR | Outcome |
-| --- | --- |
-| #1949 | Refreshed external-input provenance and stabilized current-mechanical execution. |
-| #1944 | Delivered scoped idempotency-key validation and closed #1925. |
-| #1948 | Delivered the M5/M6 polyglot and M8 detector work and closed #1926, #1927, #1928, #1929, and #1931. |
-| #1945 | Canonicalized finding identity and workspace containment without closing the broader partial issue #1899. |
+## Active pull request
 
-The merge-train base before this instruction-only checkpoint was
-`7e8f3d3700612820630c4896ac4f14f7a2773127`.
+- PR #1952, `Define bounded M7 capacity contract (#1893)`, is open at exact head
+  `38443256c46f04bdc3f3cf1201efadfe27f1ac77` on base `588125a`.
+- Its close-set is exactly #1893. Independent acceptance verification passed all five
+  live criteria. The base update preserved the exact five-file diff and stable patch
+  identity.
+- The PR-body acceptance evidence was corrected after a metadata-only gate rejected
+  two lines that lacked a concrete backticked source/command reference. Only that
+  failed acceptance run was restarted; the full CI/corpus jobs already in progress
+  were not restarted for the metadata edit.
+- Next action: wait for protected checks, perform two exact-head/close-set readbacks,
+  then squash-merge with `Closes #1893` if every required check is green.
 
-## Issue reconciliation
+## Active source-graph batch
 
-- Verified closed: #1925, #1926, #1927, #1928, #1929, and #1931.
-- Intentionally open: #1787, #1899, and #1930. Their full acceptance criteria were
-  not represented by the merged close-sets.
-- PR #1950 carries this checkpoint with an empty issue close-set.
+All lanes start from merged main `588125a23b7c7749fad12631654b7a7649f7eb32`.
 
-## Instruction updates
+- Integration owner: #1640 on `feature/sweep-source-graph-1640` in
+  `/private/tmp/harvey-sweep-source-graph-1640`. It owns the canonical emitted-family
+  registry/parity validator and final integration; documentation remains parked.
+- Auxiliary writer: #1795 on `feature/sweep-source-graph-1795` in
+  `/private/tmp/harvey-sweep-source-graph-1795`. It owns nested Nest module-import
+  reachability in `src/detectors/perf-code.ts` and must measure all 17 pins before any
+  baseline proposal.
+- Pending lane: #1812, baseUrl-only bare-specifier resolution in
+  `src/detectors/app-router.ts`. Dispatch it when a worker slot is free. It is
+  measurement-first and must preserve resolution precedence and the declared-package
+  near miss.
+- No lane may silently edit a corpus baseline. The integration owner must receive a
+  row-by-row census, integrate local commits, run the owning generated-artifact and
+  conservation gates, and obtain independent exact-head acceptance verification
+  before push.
 
-- `AGENTS.md` now requires native commands for verification, tests, diffs, GitHub
-  queries, and machine-readable evidence. RTK is display-only unless its result is
-  independently verified.
-- `.codex/agents/acceptance-verifier.toml` no longer hard-codes one reasoning effort.
-  The sweep supervisor selects verifier effort from the actual close-set complexity,
-  including scoped lower-cost reruns where the contract permits them.
-- `pnpm verify:changed` is now the local pre-push gate. It uses a focused validation
-  path only for operating Markdown, Markdown under `docs/`, and Codex agent TOML;
-  every executable, generated, manifest, workflow, mixed, empty, or unknown change set
-  fails safe to the full `pnpm verify` suite.
-- Hosted CI uses the same focused classification for those paths: the ordinary CI job
-  runs policy/claim and TOML checks without the full build or heavy CLI matrix, and both
-  corpus routers declare a no-op rather than cloning and scoring external targets. The
-  routers still fail safe to full execution for source, manifests, workflow changes,
-  mixed sets, and unknown paths.
+## Durable workflow rule
 
-The first two changes were produced during the prior sweep session and should have been
-landed as its consolidated operating-policy wrap-up instead of being left in the
-primary checkout. The path-sensitive local and hosted gates were aligned during
-finalization at the operator's direction.
-
-## Local and durable state
-
-- `.pnpm-store/` is generated package-manager storage and is intentionally excluded
-  from source control.
-- `.git/issue-sweep-ledger.json` is retained durable state from the broader sweep. Its
-  projections predate this completed merge train; a future explicit resume must run
-  delta reconciliation before dispatching any remaining batch.
-- No agent completion, CI result, reconnect, or scheduled wakeup resumes the sweep.
-
-## Exact next action
-
-Do nothing automatically. When the operator explicitly resumes the broader issue sweep,
-reconcile the retained ledger against current `main` and GitHub issue/PR state, reuse only
-still-valid readiness receipts, and continue the next approved non-terminal batch.
+The active task continues because the operator explicitly said to continue the issue
+sweep. A future task must not resume from this file, an agent completion, a CI result,
+or a scheduled wakeup unless the operator explicitly asks to resume.
