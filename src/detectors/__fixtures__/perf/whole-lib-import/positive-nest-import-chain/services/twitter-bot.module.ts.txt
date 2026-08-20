@@ -1,0 +1,10 @@
+import { Module } from "@nestjs/common";
+import { TwitterBotService } from "./twitter-bot.service";
+import { WorkflowModule } from "./workflow.module";
+
+// The back-edge proves the module traversal terminates on cycles.
+@Module({
+  imports: [WorkflowModule],
+  providers: [TwitterBotService],
+})
+export class TwitterBotModule {}
