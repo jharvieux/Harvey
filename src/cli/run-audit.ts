@@ -4,6 +4,7 @@
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif]
 //       [--sbom-out sbom.json] [--meta meta.json]
+//       [--readiness-plan-out readiness-plan.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
 //       [--schema <path>]... | [--schema <app-name>=<path>]...
 //
@@ -88,6 +89,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
+import { discoverReadinessPlan, serializeReadinessPlanV1 } from "../audit-readiness.js";
 import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
@@ -105,6 +107,7 @@ import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 import { statSafe } from "../fs-walk.js";
+import { discoverWorkspaceInventory } from "../workspaces.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
 // Deliberately blank (not invented): the coverage ledger and findings are derived; client, health,
@@ -134,6 +137,7 @@ const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const sarifOut = flagValue("--sarif-out");
 const sbomOut = flagValue("--sbom-out");
+const readinessPlanOut = flagValue("--readiness-plan-out");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
 // tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
@@ -169,7 +173,7 @@ supabaseRefsArg.forEach((ref, i) => {
 });
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--sbom-out sbom.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--sbom-out sbom.json] [--readiness-plan-out readiness-plan.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -185,7 +189,11 @@ const targetDir = resolve(targetArg);
 // #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
 // tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
 // enumerates one app and the tiers behave exactly as before (no per-instance rows).
-const appList = discoverTargets(targetDir).apps.map((a) => ({ name: a.name, path: a.path }));
+const workspaceInventory = discoverWorkspaceInventory(targetDir);
+const appList = discoverTargets(targetDir, [], workspaceInventory).apps.map((a) => ({ name: a.name, path: a.path }));
+const readinessPlanJson = readinessPlanOut
+  ? `${serializeReadinessPlanV1(discoverReadinessPlan(targetDir, workspaceInventory))}\n`
+  : undefined;
 
 const env: EngagementEnv = {
   connected: args.includes("--connected"),
@@ -392,6 +400,14 @@ if (sbomOut) {
   if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
 }
 
+// Write readiness only after M1–M10 have finished. The operator may intentionally put this JSON
+// inside the target tree; writing it before runAudit would turn Harvey's own output into scan input
+// and change the findings/coverage of the run that produced it.
+if (readinessPlanOut && readinessPlanJson) {
+  writeFileSync(readinessPlanOut, readinessPlanJson);
+  console.log(`\nAudit readiness plan → ${readinessPlanOut}`);
+}
+
 // #1470: the delivery gate. Everything above proves what was PRODUCED and ASSEMBLED; this is the
 // only check that reads the client's side of the seam. Every export the operator asked for must
 // exist on disk with content — a run that was asked for a deliverable and produced no file may not
@@ -403,6 +419,7 @@ const requestedExports = [
   ...(sarifOut ? [{ flag: "--sarif-out", path: sarifOut }] : []),
   ...(sbomOut ? [{ flag: "--sbom-out", path: sbomOut }] : []),
   ...(outPath ? [{ flag: "--out", path: outPath }] : []),
+  ...(readinessPlanOut ? [{ flag: "--readiness-plan-out", path: readinessPlanOut }] : []),
 ];
 const undelivered = requestedExports.filter((e) => (statSafe(e.path)?.size ?? 0) === 0);
 if (undelivered.length) {

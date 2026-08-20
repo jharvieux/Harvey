@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ReadinessPlanV1 } from "../audit-readiness.js";
 import type { FindingsDocument, ReportMeta } from "../findings.js";
 
 // #1470: a valid meta to mutate one field of, for the refused-export negative control below.
@@ -34,6 +35,8 @@ const CLI = join(REPO_ROOT, "src", "cli", "run-audit.ts");
 let scratch: string;
 let sarifOnly: { runs: { results: unknown[] }[] };
 let engagement: FindingsDocument;
+let readinessEngagement: FindingsDocument;
+let readinessPlan: ReadinessPlanV1;
 let baselineEngagement: FindingsDocument;
 let baselineFindingId: string;
 
@@ -42,11 +45,13 @@ let baselineFindingId: string;
 function buildMonorepo(root: string): void {
   mkdirSync(join(root, "apps", "web", "app"), { recursive: true });
   mkdirSync(join(root, "apps", "api"), { recursive: true });
+  mkdirSync(join(root, "apps", "scratch"), { recursive: true });
   mkdirSync(join(root, "shared"), { recursive: true });
-  writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "apps/*"\n');
+  writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "apps/*"\n  - "!apps/scratch"\n');
   writeFileSync(join(root, "package.json"), '{"name":"mono-root","private":true}\n');
   writeFileSync(join(root, "apps", "web", "package.json"), '{"name":"web","dependencies":{"next":"14.0.0"}}\n');
   writeFileSync(join(root, "apps", "api", "package.json"), '{"name":"api"}\n');
+  writeFileSync(join(root, "apps", "scratch", "package.json"), '{"name":"scratch"}\n');
   writeFileSync(join(root, "apps", "web", "app", "page.tsx"), 'export default function Page() {\n  return <img src="/hero.png" alt="hero" />;\n}\n');
   writeFileSync(join(root, "shared", "Widget.tsx"), 'export function Widget() {\n  return <img src="/w.png" alt="w" />;\n}\n');
 }
@@ -54,9 +59,10 @@ function buildMonorepo(root: string): void {
 // #1120: spawn + await, NOT execFileSync. This was the last unfixed instance of the flake and the
 // only one serializing the heavy files did not cure. execFileSync blocks the vitest worker's event
 // loop, and a blocked worker cannot service the birpc ack for the task update it already sent; that
-// ack has a 60s window vitest hardcodes. The beforeAll below is TWO full ten-module orchestrator
-// runs in a single uninterrupted block — MEASURED 2026-07-26 at 62s on a GitHub ubuntu runner, over
-// the line, so it failed the run with `Timeout calling "onTaskUpdate"` and ZERO failing tests even
+// ack has a 60s window vitest hardcodes. The beforeAll below is FOUR full ten-module orchestrator
+// runs, each awaited independently; the original two-run block was MEASURED 2026-07-26 at 62s on a
+// GitHub ubuntu runner, over the line, so it failed the run with `Timeout calling "onTaskUpdate"`
+// and ZERO failing tests even
 // with nothing else on the machine. Awaiting a spawned child leaves the loop free, so the ack lands.
 //
 // This is the constraint for every heavy CLI test, not just this one: no single blocking window may
@@ -69,14 +75,24 @@ const run = (args: string[]): Promise<void> =>
   });
 
 describe("run-audit CLI export capture", () => {
-  // 300s: two full ten-module runs of the real orchestrator as child processes.
+  // 300s: four full ten-module runs of the real orchestrator as child processes.
   beforeAll(async () => {
     scratch = mkdtempSync(join(tmpdir(), "harvey-run-audit-test-"));
     buildMonorepo(join(scratch, "target"));
     await run([join(scratch, "target"), "--sarif-out", join(scratch, "only.sarif")]);
     await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
+    await run([
+      join(scratch, "target"),
+      "--findings-out", join(scratch, "readiness-engagement.json"),
+      // Keep this inside the target: emitting the optional artifact must not perturb the scan that
+      // is running beside it, even when downstream source discovery accepts JSON files.
+      "--readiness-plan-out", join(scratch, "target", "readiness-plan.json"),
+    ]);
     sarifOnly = JSON.parse(readFileSync(join(scratch, "only.sarif"), "utf8"));
     engagement = JSON.parse(readFileSync(join(scratch, "engagement.json"), "utf8")) as FindingsDocument;
+    readinessEngagement = JSON.parse(readFileSync(join(scratch, "readiness-engagement.json"), "utf8")) as FindingsDocument;
+    readinessPlan = JSON.parse(readFileSync(join(scratch, "target", "readiness-plan.json"), "utf8")) as ReadinessPlanV1;
+    rmSync(join(scratch, "target", "readiness-plan.json"));
     const baselineFinding = engagement.findings.find((finding) => finding.location.includes("shared/Widget.tsx"));
     if (!baselineFinding) throw new Error("fixture produced no shared/Widget.tsx finding");
     baselineFindingId = baselineFinding.id;
@@ -119,6 +135,25 @@ describe("run-audit CLI export capture", () => {
   it("passes the target root into baseline identity matching", () => {
     expect(baselineEngagement.findings.find((finding) => finding.id === baselineFindingId)?.baselineStatus).toBe("persistent");
     expect(baselineEngagement.baseline?.counts.resolved).toBe(0);
+  });
+
+  it("emits readiness from the same app inventory without changing M1-M10 execution", () => {
+    expect(readinessPlan.schemaVersion).toBe(1);
+    expect(readinessPlan.workspaceInventory.applicationWorkspaceIds).toEqual([
+      "workspace:apps/api",
+      "workspace:apps/scratch",
+      "workspace:apps/web",
+    ]);
+    expect(readinessPlan.workspaces.map((workspace) => workspace.id)).not.toContain("workspace:apps/scratch");
+    expect(readinessPlan.workspaceInventory.observations).toContainEqual(expect.objectContaining({
+      kind: "excluded", path: "apps/scratch/package.json", reason: "negative-workspace-glob",
+    }));
+    const auditedApps = [...new Set((readinessEngagement.coverage ?? [])
+      .filter((row) => row.module === "M4" && row.instance)
+      .map((row) => `workspace:${row.instance}`))].sort();
+    expect(auditedApps).toEqual(readinessPlan.workspaceInventory.applicationWorkspaceIds);
+    expect(readinessEngagement.coverage).toEqual(engagement.coverage);
+    expect(readinessEngagement.findings).toEqual(engagement.findings);
   });
 });
 
