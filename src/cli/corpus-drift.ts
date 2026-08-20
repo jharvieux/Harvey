@@ -92,6 +92,7 @@ import {
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
   currentHarnessReceipt,
+  currentGitVersionReceipt,
   currentRuntimeReceipt,
   currentTargetPinsSha256,
   newExecutionId,
@@ -180,7 +181,7 @@ const currentShard = (() => {
 const allCurrentTargets: CurrentMechanicalTargetDefinition[] = EXTERNAL_CORPUS.map(({ slug, repo, commit, vendoredSubtrees }) => ({ slug, repo, commit, vendoredSubtrees }));
 const sharedRegistry = registrySnapshotMode === "reuse" ? validateRestoredSemgrepPackArtifact(registrySnapshotDir!) : undefined;
 const currentExecution: CurrentMechanicalExecutionArtifact | undefined = currentReadiness ? {
-  schema: 2,
+  schema: 3,
   kind: "current-mechanical-execution",
   population: CURRENT_MECHANICAL_POPULATION,
   side: "hosted-producer",
@@ -195,6 +196,7 @@ const currentExecution: CurrentMechanicalExecutionArtifact | undefined = current
   shard: currentShard,
   targets: {},
 } : undefined;
+const currentGitVersion = currentReadiness ? currentGitVersionReceipt() : undefined;
 
 let targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : EXTERNAL_CORPUS;
 if (targets.length === 0) {
@@ -587,6 +589,7 @@ for (const target of targets) {
           checkoutHead: prepared!.checkoutHead,
           checkoutTree: prepared!.checkoutTree,
           preparedTreeSha256: prepared!.preparedTreeSha256,
+          gitVersion: currentGitVersion!,
           emptyGitlinks: prepared!.emptyGitlinks,
           preparation: CURRENT_MECHANICAL_PREPARATION,
           removedVendoredSubtrees: prepared!.removedVendoredSubtrees,

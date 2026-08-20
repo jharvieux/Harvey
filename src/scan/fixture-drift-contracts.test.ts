@@ -64,9 +64,9 @@ describe("checkKnipContract", () => {
 });
 
 describe("checkTruffleHogContract", () => {
-  const rows8 = load<TruffleHogResult[]>("./__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json");
-  const rows10 = load<TruffleHogResult[]>("./__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json");
-  it("passes both committed trufflehog 3.96.0 fixtures", () => {
+  const rows8 = load<TruffleHogResult[]>("./__fixtures__/trufflehog/trufflehog-3.97.0-git-unverified.json");
+  const rows10 = load<TruffleHogResult[]>("./__fixtures__/trufflehog-git-history/trufflehog-3.97.0-git-history.json");
+  it("passes both committed trufflehog 3.97.0 fixtures", () => {
     expect(checkTruffleHogContract(rows8)).toEqual([]);
     expect(checkTruffleHogContract(rows10)).toEqual([]);
   });

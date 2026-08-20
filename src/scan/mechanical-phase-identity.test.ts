@@ -15,6 +15,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
     cpSync(join(process.cwd(), "tools"), join(root, "tools"), { recursive: true });
     cpSync(join(process.cwd(), "package.json"), join(root, "package.json"));
     cpSync(join(process.cwd(), "pnpm-lock.yaml"), join(root, "pnpm-lock.yaml"));
+    writeFileSync(join(root, "registry.yml"), "rules: []\n");
     return root;
   };
   const buildCache = (root: string) => buildMechanicalPhaseCache({
@@ -24,7 +25,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
     targetRevision: "commit",
     targetTree: "tree",
     optionIdentity: "options",
-    registryPackIdentity: { identity: "resolved-registry-packs-v1" },
+    registryPackIdentity: { identity: "resolved-registry-packs-v1", files: [join(root, "registry.yml")] },
   });
   const build = (root: string) => buildCache(root).implementation;
 
@@ -36,6 +37,27 @@ describe("mechanical phase implementation identities (#1864)", () => {
     expect(after.semgrep).not.toBe(before.semgrep);
     expect(after.configuration).toBe(before.configuration);
     expect(after["structural-ast"]).toBe(before["structural-ast"]);
+  });
+
+  it("a pinned Semgrep worker-topology edit or removal invalidates phase and family caches", () => {
+    const root = fixture();
+    const before = buildCache(root);
+    const semgrep = join(root, "src", "scan", "semgrep.ts");
+    const original = readFileSync(semgrep, "utf8");
+    for (const replacement of [
+      '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]',
+      '["--x-ignore-semgrepignore-files", "--x-parmap"]',
+    ]) {
+      const source = original.replace(
+        '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]',
+        replacement,
+      );
+      expect(source).toContain(replacement);
+      writeFileSync(semgrep, source);
+      const after = buildCache(root);
+      expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
+      expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
+    }
   });
 
   it("an auth-guard helper edit invalidates Semgrep without falsely invalidating unrelated phases", () => {

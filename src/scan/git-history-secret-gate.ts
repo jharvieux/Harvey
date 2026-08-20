@@ -87,6 +87,7 @@ type TruffleHogGitRun = { readonly records: TruffleHogGitResult[]; readonly fail
 // OWNER: operator
 // DECISION: #1078 — gate proves history recovery; production's verified-only scope is disclosed via SEC-SCOPE-00 instead
 const TRUFFLEHOG_GIT_ARGS = (dir: string): string[] => [
+  "--no-update",
   "git",
   "--no-verification",
   "--results=unverified",

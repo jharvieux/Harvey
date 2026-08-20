@@ -85,10 +85,11 @@ const CLIENT_RULES = [
 const PENDING_JUDGMENT: Record<string, string> = {};
 
 // #1708: a DIFFERENT judgment from the two maps above. NARROW_BY_DESIGN/PENDING_JUDGMENT decide
-// whether a rule uses the canonical block AT ALL; the three maps below decide, for every rule that
+// whether a rule uses the canonical block AT ALL; the two final maps below decide, for every rule that
 // already does, whether it should ALSO take a client source block — i.e. whether a CLIENT component reading
 // a URL param and reaching this rule's sink is the same bug class as the server-request case. Every
-// rule that consumes `*request_source` is judged into exactly one of the three; leaving one
+// rule that consumes `*request_source` is judged into exactly one of the two final dispositions;
+// leaving one
 // unjudged is what "judges every request-source rule" below exists to catch.
 //
 // IN_CLASS: the sink is a client-reachable call (chiefly supabase-js, which ships in the browser
@@ -104,11 +105,29 @@ const CLIENT_SOURCE_ANCHORS = ["*dom_source", "*client_url_source"];
 const takesClientSource = (rule: Rule | undefined): boolean =>
   CLIENT_SOURCE_ANCHORS.some((anchor) => rule?.sources.includes(anchor) === true);
 
+const CLIENT_URL_PARAM_COMPANIONS: Record<string, { id: string; severity: string; confidence: string; harveySeverity: string }> = {
+  "harvey-code-injection-eval": {
+    id: "harvey-code-injection-eval-client-url",
+    severity: "WARNING",
+    confidence: "MEDIUM",
+    harveySeverity: "Medium",
+  },
+  "harvey-csv-formula-injection": {
+    id: "harvey-csv-formula-injection-client-url",
+    severity: "WARNING",
+    confidence: "MEDIUM",
+    harveySeverity: "Medium",
+  },
+};
+
 const CLIENT_URL_PARAM_IN_CLASS: Record<string, string> = {
   "harvey-path-traversal": "the Supabase Storage sink (storage.from(...).upload/download) is a supabase-js call reachable from a client component — the real instance that opened #1708 (carbon's JobBillOfProcess.tsx, useUrlParams() -> storage upload). Takes *client_url_source: the same rule's fs and res.sendFile sinks are server-only, so the receiver has to be bound",
   "harvey-sql-injection-rpc": "the sink is a supabase-js .rpc(...) call, callable directly from a client component with no server hop. Takes *client_url_source — this rule is ERROR/HIGH, so an unbound receiver lands false positives in the graded free count",
   "harvey-postgrest-filter-injection": "the sink (.or/.filter/.textSearch) is the same supabase-js client object as the two rules above; takes *client_url_source for the same reason",
   "harvey-jsx-prop-spread-injection": "already carries both *dom_source and *request_source since #1237 — its sink spans both sides of the server/client boundary by design",
+  "harvey-code-injection-eval": "eval/new Function exist in the browser, but browser-local execution is Medium/review rather than server RCE; implemented by the distinct harvey-code-injection-eval-client-url companion",
+  "harvey-csv-formula-injection": "PapaParse and SheetJS/XLSX run in browser export flows while csv-stringify, fast-csv and json2csv are Node-only; implemented by the sink-limited harvey-csv-formula-injection-client-url companion",
+  "harvey-dynamic-dispatch": "computed method dispatch is client-reachable and remains at the existing WARNING/MEDIUM/Harvey Medium review band; takes the receiver-bound *client_url_source in-place",
 };
 
 // OUT_OF_CLASS: the sink is a server-only object or a Node-only library with no browser build, so
@@ -128,34 +147,56 @@ const CLIENT_URL_PARAM_OUT_OF_CLASS: Record<string, string> = {
   "harvey-dynamic-require": "sink is require($X) — CommonJS require is not a runtime capability of client-bundled code",
   "harvey-html-template-literal": "sink is res.send() — a server response object, absent from a client component",
   "harvey-crlf-header-injection": "sink is res.setHeader — a server response object; there is no HTTP response to set headers on from a client component",
-};
-
-// AWAITING_DECISION: the sink IS reachable from a client component, but whether this rule's bug
-// class or severity band still applies there is a genuine product call, not a mechanical fact —
-// recorded on #1708 with the exact proposed wording rather than decided here (CLAUDE.md: "a
-// supervised path stops the EDIT, never the CRITERION").
-const CLIENT_URL_PARAM_AWAITING_DECISION: Record<string, string> = {
-  "harvey-code-injection-eval": "eval()/new Function() are real browser APIs and a client component evaluating a URL param is a genuine DOM-based code-injection primitive, but the rule ships ERROR/HIGH confidence (free count, Critical) — whether that severity band is right for a browser-local execution (attacker controls their OWN client, not another tenant's) versus a server RCE is an operator call, not this PR's to make",
-  "harvey-xxe-parse": "the sink includes new DOMParser().parseFromString(...), a native browser API, but the WHATWG DOMParser spec does not resolve external DTD entities the way libxmljs does — whether flagging a client DOMParser call under an XXE taxonomy is still meaningful, or is a false framing this rule should exclude instead, is a judgment call this PR is not positioned to make",
-  "harvey-csv-formula-injection": "two of five serializer sink families (papaparse, SheetJS/XLSX) are commonly bundled and run directly in the browser for a client-side \"export to CSV\" button, unlike the other three (csv-stringify/fast-csv/json2csv, Node-only) — widening only the papaparse/XLSX arms would require splitting one rule's source list by sink family, which is a rule-shape decision",
-  "harvey-dynamic-dispatch": "obj[key]() dispatch is equally reachable and equally dangerous client- or server-side, but review-tier severity assumes a server-side blast radius (any property on a server object) that does not automatically carry over to a client component dispatching among its own local handlers — worth widening, but the severity read is a product call",
+  "harvey-xxe-parse": "browser-native DOMParser.parseFromString does not fetch or expand external DTD entities, so a client URL value is outside this XXE threat model; server-side DOMParser polyfills and libxmljs request flows remain covered",
 };
 
 interface Rule {
   file: string;
   id: string;
   taint: boolean;
-  sources: string;
+  sources: string[];
+  sinks: unknown[];
+  sanitizers: unknown[];
+  severity: string;
+  confidence: string;
+  harveySeverity: string;
+  message: string;
 }
 
 function parseRules(file: string): Rule[] {
-  const text = readFileSync(join(RULES_DIR, file), "utf8");
-  const chunks = text.split(/^ {2}- id: /m).slice(1);
-  return chunks.map((chunk) => {
-    const id = chunk.split("\n")[0]!.trim();
-    const sourcesMatch = /^ {4}pattern-sources:\n((?: {6}.*\n|\n)*)/m.exec(chunk);
-    return { file, id, taint: /^ {4}mode: taint$/m.test(chunk), sources: sourcesMatch?.[1] ?? "" };
+  const doc = parse(readFileSync(join(RULES_DIR, file), "utf8")) as Record<string, unknown>;
+  const rules = Array.isArray(doc.rules) ? doc.rules : [];
+  const sourceAnchors = [
+    ["*request_source", doc["x-request-source"]],
+    ["*dom_source", doc["x-dom-source"]],
+    ["*client_url_source", doc["x-client-url-source"]],
+  ] as const;
+
+  return rules.flatMap((candidate): Rule[] => {
+    if (candidate === null || typeof candidate !== "object") return [];
+    const rule = candidate as Record<string, unknown>;
+    if (typeof rule.id !== "string") return [];
+    const sourceEntries = Array.isArray(rule["pattern-sources"]) ? rule["pattern-sources"] : [];
+    const metadata = rule.metadata !== null && typeof rule.metadata === "object" ? (rule.metadata as Record<string, unknown>) : {};
+    return [{
+      file,
+      id: rule.id,
+      taint: rule.mode === "taint",
+      sources: sourceAnchors.filter(([, value]) => value !== undefined && sourceEntries.some((entry) => entry === value)).map(([name]) => name),
+      sinks: Array.isArray(rule["pattern-sinks"]) ? rule["pattern-sinks"] : [],
+      sanitizers: Array.isArray(rule["pattern-sanitizers"]) ? rule["pattern-sanitizers"] : [],
+      severity: typeof rule.severity === "string" ? rule.severity : "",
+      confidence: typeof metadata.confidence === "string" ? metadata.confidence : "",
+      harveySeverity: typeof metadata.harveySeverity === "string" ? metadata.harveySeverity : "",
+      message: typeof rule.message === "string" ? rule.message : "",
+    }];
   });
+}
+
+function patternStrings(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(patternStrings);
+  if (value === null || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, child]) => key === "pattern" && typeof child === "string" ? [child] : patternStrings(child));
 }
 
 function ruleFiles(): string[] {
@@ -372,7 +413,7 @@ describe("canonical request-taint source block (#1221)", () => {
   // #1708: injection.yml's client-URL-param source is a NARROWING of xss.yml's x-dom-source, not a
   // copy of it, and this is the property that makes it one. xss.yml can afford a receiver-agnostic
   // `$SP.get(...)` / `$RT.query.$K` because its sinks exist only in a browser; injection.yml's
-  // three widened sinks (supabase-js storage / .rpc / .or) run on both sides, so the bare arms fire
+  // original three widened sinks (supabase-js storage / .rpc / .or) run on both sides, so the bare arms fire
   // on every server-side `.get()` and every `.query.` access. MEASURED 2026-08-01, semgrep 1.164.0,
   // over targets/calibration/src/client-url-source: bare arms 5 findings (two at ERROR, i.e. the
   // graded free count), bound arms 1 (the directory's scope control). The four negatives there are
@@ -381,15 +422,26 @@ describe("canonical request-taint source block (#1221)", () => {
   it("binds the receiver on injection.yml's client URL param source (#1708)", () => {
     const block = anchorBlock("injection.yml", "x-client-url-source: &client_url_source");
     expect(block, "injection.yml no longer declares x-client-url-source").toBeDefined();
+    const doc = parse(readFileSync(join(RULES_DIR, "injection.yml"), "utf8")) as Record<string, unknown>;
+    const source = doc["x-client-url-source"] as Record<string, unknown>;
+    const sourceArms = Array.isArray(source["pattern-either"]) ? source["pattern-either"] : [];
     for (const arm of ["$SP.get(...)", "$RT.query.$K"]) {
-      const armIndex = block!.indexOf(arm);
-      expect(armIndex, `x-client-url-source lost the ${arm} arm`).toBeGreaterThan(-1);
+      const matchingArms = sourceArms.filter((candidate) => patternStrings(candidate).includes(arm));
+      expect(matchingArms, `x-client-url-source must carry exactly one ${arm} arm`).toHaveLength(1);
       expect(
-        block!.slice(armIndex),
+        matchingArms[0],
         `${arm} is unbound in x-client-url-source — a receiver-agnostic arm fires on every ` +
           "server-side Map/Headers/config .get() and on Drizzle's db.query.<table>, reaching the " +
           "ERROR/HIGH graded free count through harvey-sql-injection-rpc",
-      ).toContain("metavariable-regex");
+      ).toHaveProperty("patterns");
+      expect(JSON.stringify(matchingArms[0])).toContain("metavariable-regex");
+    }
+    for (const requestBodyShape of ["formData()", "FormData", "$REQ.formData"]) {
+      expect(
+        block,
+        `x-client-url-source contains ${requestBodyShape}; request.formData()/FormData.get() are ` +
+          "the separate request-body source class owned by #1814, not a client URL source",
+      ).not.toContain(requestBodyShape);
     }
   });
 
@@ -409,9 +461,10 @@ describe("canonical request-taint source block (#1221)", () => {
     expect(adopted, "these rules now use the canonical block — drop them from PENDING_JUDGMENT").toEqual([]);
   });
 
-  // #1708: every rule that consumes *request_source must be judged in or out of class for client
+  // #1708: every rule that consumes *request_source must have a FINAL in/out judgment for client
   // URL params — silently leaving one out is exactly the "unstated limitation reads as a clean bill
-  // of health" failure the rest of this repo's disclosure families exist to prevent.
+  // of health" failure the rest of this repo's disclosure families exist to prevent. parseRules()
+  // obtains this inventory from the YAML parser and resolved alias identities, not a regex census.
   it("judges every request-source rule in or out of class for client URL params (#1708)", () => {
     const requestSourceRuleIds = ruleFiles()
       .flatMap(parseRules)
@@ -420,28 +473,93 @@ describe("canonical request-taint source block (#1221)", () => {
     const judged = new Set([
       ...Object.keys(CLIENT_URL_PARAM_IN_CLASS),
       ...Object.keys(CLIENT_URL_PARAM_OUT_OF_CLASS),
-      ...Object.keys(CLIENT_URL_PARAM_AWAITING_DECISION),
     ]);
     const unjudged = [...new Set(requestSourceRuleIds)].filter((id) => !judged.has(id));
     expect(
       unjudged,
       "these request-source rules have no #1708 client-URL-param judgment recorded — add each to " +
-        "CLIENT_URL_PARAM_IN_CLASS, CLIENT_URL_PARAM_OUT_OF_CLASS or CLIENT_URL_PARAM_AWAITING_DECISION",
+        "CLIENT_URL_PARAM_IN_CLASS or CLIENT_URL_PARAM_OUT_OF_CLASS",
     ).toEqual([]);
   });
 
-  it("gives every #1708 IN_CLASS rule a client source block alongside the request source", () => {
+  it("gives every #1708 IN_CLASS rule a direct client source or its recorded companion", () => {
     const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
-    const missing = Object.keys(CLIENT_URL_PARAM_IN_CLASS).filter((id) => !takesClientSource(byId.get(id)));
-    expect(missing, `these rules are recorded IN_CLASS but take neither ${CLIENT_SOURCE_ANCHORS.join(" nor ")} — the judgment and the rule have drifted apart`).toEqual([]);
+    const missing = Object.keys(CLIENT_URL_PARAM_IN_CLASS).filter((id) => {
+      const companion = CLIENT_URL_PARAM_COMPANIONS[id];
+      return !takesClientSource(byId.get(id)) && (companion === undefined || !takesClientSource(byId.get(companion.id)));
+    });
+    expect(
+      missing,
+      `these rules are recorded IN_CLASS but neither they nor their recorded companion take ${CLIENT_SOURCE_ANCHORS.join(" or ")} — the judgment and rule inventory have drifted apart`,
+    ).toEqual([]);
   });
 
   it("does not carry a client source block on a request-source rule with no #1708 IN_CLASS judgment", () => {
     // The mirror-image check: a rule quietly gaining a client source without the judgment being
     // recorded, which is exactly as silent a drift as the missing case above.
     const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
-    const undeclared = Object.keys({ ...CLIENT_URL_PARAM_OUT_OF_CLASS, ...CLIENT_URL_PARAM_AWAITING_DECISION }).filter((id) => takesClientSource(byId.get(id)));
-    expect(undeclared, `these rules take a client source block (${CLIENT_SOURCE_ANCHORS.join("/")}) but are recorded OUT_OF_CLASS or AWAITING_DECISION — move them to CLIENT_URL_PARAM_IN_CLASS or drop the pattern`).toEqual([]);
+    const undeclared = Object.keys(CLIENT_URL_PARAM_OUT_OF_CLASS).filter((id) => takesClientSource(byId.get(id)));
+    expect(undeclared, `these rules take a client source block (${CLIENT_SOURCE_ANCHORS.join("/")}) but are recorded OUT_OF_CLASS — move them to CLIENT_URL_PARAM_IN_CLASS or drop the pattern`).toEqual([]);
+  });
+
+  it("keeps eval's server Critical rule separate from its Medium/review client companion", () => {
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const server = byId.get("harvey-code-injection-eval")!;
+    const companionSpec = CLIENT_URL_PARAM_COMPANIONS[server.id]!;
+    const companion = byId.get(companionSpec.id)!;
+
+    expect(server.sources).toEqual(["*request_source"]);
+    expect({ severity: server.severity, confidence: server.confidence, harveySeverity: server.harveySeverity }).toEqual({
+      severity: "ERROR", confidence: "HIGH", harveySeverity: "Critical",
+    });
+    expect(companion.sources).toEqual(["*client_url_source"]);
+    expect({ severity: companion.severity, confidence: companion.confidence, harveySeverity: companion.harveySeverity }).toEqual({
+      severity: companionSpec.severity,
+      confidence: companionSpec.confidence,
+      harveySeverity: companionSpec.harveySeverity,
+    });
+    expect(companion.sinks, "the client companion must use the exact eval/new Function sink inventory").toEqual(server.sinks);
+    expect(companion.sanitizers, "the client companion must preserve the server rule's precision guards").toEqual(server.sanitizers);
+  });
+
+  it("limits the CSV client companion to PapaParse and SheetJS while retaining all server families", () => {
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const server = byId.get("harvey-csv-formula-injection")!;
+    const companionSpec = CLIENT_URL_PARAM_COMPANIONS[server.id]!;
+    const companion = byId.get(companionSpec.id)!;
+    const serverPatterns = patternStrings(server.sinks);
+    const clientPatterns = patternStrings(companion.sinks);
+
+    expect(server.sources).toEqual(["*request_source"]);
+    expect(companion.sources).toEqual(["*client_url_source"]);
+    expect({ severity: companion.severity, confidence: companion.confidence, harveySeverity: companion.harveySeverity }).toEqual({
+      severity: companionSpec.severity,
+      confidence: companionSpec.confidence,
+      harveySeverity: companionSpec.harveySeverity,
+    });
+    for (const pattern of [
+      "stringify($X, ...)", "writeToString($X, ...)", "$P.unparse($X, ...)",
+      "$P.json_to_sheet($X, ...)", "$P.aoa_to_sheet($X, ...)", "new $P($OPTS).parse($X, ...)",
+    ]) {
+      expect(serverPatterns, `the request-source CSV rule lost server sink ${pattern}`).toContain(pattern);
+    }
+    expect(clientPatterns.sort()).toEqual([
+      "$P.aoa_to_sheet($X, ...)", "$P.json_to_sheet($X, ...)", "$P.unparse($X, ...)",
+    ].sort());
+  });
+
+  it("keeps XXE client URL input excluded and dynamic dispatch at its existing review band", () => {
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const xxe = byId.get("harvey-xxe-parse")!;
+    const dispatch = byId.get("harvey-dynamic-dispatch")!;
+
+    expect(xxe.sources).toEqual(["*request_source"]);
+    expect(CLIENT_URL_PARAM_OUT_OF_CLASS[xxe.id]).toContain("browser-native DOMParser");
+    expect(xxe.message).toContain("Browser-native DOMParser");
+    expect(dispatch.sources).toEqual(["*request_source", "*client_url_source"]);
+    expect({ severity: dispatch.severity, confidence: dispatch.confidence, harveySeverity: dispatch.harveySeverity }).toEqual({
+      severity: "WARNING", confidence: "MEDIUM", harveySeverity: "Medium",
+    });
   });
 
   it("has no stale #1708 client-URL-param judgments", () => {
@@ -449,8 +567,10 @@ describe("canonical request-taint source block (#1221)", () => {
     const stale = [
       ...Object.keys(CLIENT_URL_PARAM_IN_CLASS),
       ...Object.keys(CLIENT_URL_PARAM_OUT_OF_CLASS),
-      ...Object.keys(CLIENT_URL_PARAM_AWAITING_DECISION),
     ].filter((id) => !taintIds.has(id));
     expect(stale, "these rules no longer exist or are no longer taint rules — drop their #1708 judgment").toEqual([]);
+
+    const missingCompanions = Object.values(CLIENT_URL_PARAM_COMPANIONS).filter(({ id }) => !taintIds.has(id)).map(({ id }) => id);
+    expect(missingCompanions, "these recorded #1708 client companions no longer exist or are no longer taint rules").toEqual([]);
   });
 });
