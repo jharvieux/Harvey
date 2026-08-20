@@ -255,6 +255,12 @@ function candidatePaths(base: string): string[] {
 // the same import-resolution logic instead of re-implementing it — "one implementation so the
 // surfaces can't drift apart", same rationale as src/detectors/owner-id.ts.
 export interface PathAlias {
+  /**
+   * Resolution provenance. A baseUrl root is deliberately not represented as an empty-prefix
+   * paths alias: a matching `paths` pattern whose target is absent must stop resolution rather
+   * than silently probing baseUrl, and workspace-package ordering remains a separate phase.
+   */
+  kind: "paths" | "base-url" | "workspace" | "fallback";
   prefix: string;
   baseDir: string;
   // #1461: the directory of the tsconfig that declared this alias ("" = repo root). A MONOREPO
@@ -277,11 +283,12 @@ export interface PathAlias {
   fallback?: true;
 }
 
-// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
-// workspace member package (#1353). ts.parseConfigFileTextToJson tolerates the comments/trailing
-// commas tsconfig commonly carries. With no config paths in the set, fall back to Next.js's own
-// `@/*`→root default rather than giving up — the vast majority of otherwise-unresolved specifiers
-// are exactly that scaffolding default.
+// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380) and configuration-scoped
+// `baseUrl` roots (#1812), plus one alias pair per workspace member package (#1353).
+// ts.parseConfigFileTextToJson tolerates the comments/trailing commas tsconfig commonly carries.
+// With no config paths in the set, preserve Next.js's own `@/*`→root fallback rather than giving
+// up — baseUrl support is an additional resolution phase, not permission to remove an existing
+// edge family.
 //
 // Three independent monorepo failures were fixed here on 2026-07-28. They compose — one decides
 // WHICH FILENAMES are read, one HOW MANY of them, one what a NON-tsconfig specifier resolves to.
@@ -310,24 +317,35 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
     .filter((f) => /(^|\/)(tsconfig|jsconfig)(\.[\w.-]+)?\.json$/.test(f.path))
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
   const aliases: PathAlias[] = [];
+  let declaredPathAlias = false;
   for (const cfg of configs) {
     const { config } = ts.parseConfigFileTextToJson(cfg.path, cfg.text);
     const opts = config?.compilerOptions;
-    if (!opts?.paths) continue;
     const cfgDir = cfg.path.includes("/") ? cfg.path.slice(0, cfg.path.lastIndexOf("/")) : "";
-    const baseUrl = typeof opts.baseUrl === "string" ? opts.baseUrl : "";
+    const declaredBaseUrl = typeof opts?.baseUrl === "string" ? opts.baseUrl : undefined;
+    const baseUrl = declaredBaseUrl ?? "";
+    if (declaredBaseUrl !== undefined) {
+      aliases.push({ kind: "base-url", prefix: "", baseDir: normalizeRepoPath(`${cfgDir}/${declaredBaseUrl}`), scope: cfgDir });
+    }
+    if (!opts?.paths) continue;
     for (const [key, targets] of Object.entries(opts.paths)) {
       const target = Array.isArray(targets) ? targets[0] : undefined;
       if (!key.endsWith("/*") || typeof target !== "string" || !target.endsWith("/*")) continue;
-      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scope: cfgDir });
+      aliases.push({
+        kind: "paths",
+        prefix: key.slice(0, -1),
+        baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`),
+        scope: cfgDir,
+      });
+      declaredPathAlias = true;
     }
   }
-  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "", fallback: true });
+  if (!declaredPathAlias) aliases.push({ kind: "fallback", prefix: "@/", baseDir: "", scope: "", fallback: true });
   // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
   // tree, so it must not out-rank an enclosing package's own tsconfig alias.
   for (const pkg of workspacePackages(files)) {
-    for (const sub of pkg.subpaths) aliases.push({ ...sub, scope: "" });
-    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
+    for (const sub of pkg.subpaths) aliases.push({ kind: "workspace", ...sub, scope: "" });
+    aliases.push({ kind: "workspace", prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
   }
   return aliases;
 }
@@ -347,25 +365,61 @@ function resolveRelativeImport(fromPath: string, specifier: string, allPaths: Se
 // first; an alias from some other workspace is only a last resort. Keeping that fallback is
 // deliberate — before this change one arbitrary package's aliases were applied repo-wide, so
 // dropping it outright would un-resolve specifiers that resolve today.
-function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+interface AliasResolution {
+  path?: string;
+  /** An applicable tsconfig `paths` pattern matched, even if none of its candidates existed. */
+  matchedPathsPattern: boolean;
+}
+
+function scopeRank(fromPath: string, alias: PathAlias): number {
+  return alias.scope === "" || fromPath.startsWith(`${alias.scope}/`) ? alias.scope.length + 1 : 0;
+}
+
+function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): AliasResolution {
   // 0 = declared by some other workspace; higher = a deeper enclosing package, which wins.
-  const rank = (a: PathAlias) => (a.scope === "" || fromPath.startsWith(`${a.scope}/`) ? a.scope.length + 1 : 0);
-  const ordered = [...aliases].sort((a, b) => rank(b) - rank(a));
-  for (const { prefix, baseDir, entryBases } of ordered) {
+  const ordered = aliases.filter((a) => a.kind !== "base-url").sort((a, b) => scopeRank(fromPath, b) - scopeRank(fromPath, a));
+  let matchedPathsPattern = false;
+  for (const alias of ordered) {
+    const { prefix, baseDir, entryBases } = alias;
     if (entryBases) {
       // #1353: a workspace package named EXACTLY, with no subpath — resolve to its own entry module.
       if (specifier !== prefix) continue;
       const hit = entryBases.flatMap(candidatePaths).find((c) => allPaths.has(c));
-      if (hit) return hit;
+      if (hit) return { path: hit, matchedPathsPattern };
       continue;
     }
     if (!specifier.startsWith(prefix)) continue;
+    if (alias.kind === "paths" && scopeRank(fromPath, alias) > 0) matchedPathsPattern = true;
     const rest = specifier.slice(prefix.length);
     const base = normalizeRepoPath(baseDir ? `${baseDir}/${rest}` : rest);
     const hit = candidatePaths(base).find((c) => allPaths.has(c));
+    if (hit) return { path: hit, matchedPathsPattern };
+  }
+  return { matchedPathsPattern };
+}
+
+function resolveBaseUrlImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return undefined;
+  const roots = aliases
+    .filter((alias) => alias.kind === "base-url" && scopeRank(fromPath, alias) > 0)
+    .sort((a, b) => scopeRank(fromPath, b) - scopeRank(fromPath, a));
+  for (const { baseDir } of roots) {
+    const base = normalizeRepoPath(baseDir ? `${baseDir}/${specifier}` : specifier);
+    const hit = candidatePaths(base).find((candidate) => allPaths.has(candidate));
     if (hit) return hit;
   }
   return undefined;
+}
+
+function resolveImportAttempt(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  if (specifier.startsWith(".")) return resolveRelativeImport(fromPath, specifier, allPaths);
+  const aliased = resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  if (aliased.path !== undefined) return aliased.path;
+  // TypeScript does not fall through to baseUrl after an applicable `paths` pattern matched but
+  // produced no candidate. Keeping the distinction is what prevents a repo-root guess from
+  // manufacturing edges for misspelled/missing alias targets.
+  if (aliased.matchedPathsPattern) return undefined;
+  return resolveBaseUrlImport(fromPath, specifier, allPaths, aliases);
 }
 
 // #1659: the ESM-TS convention writes `from "./helpers.js"` for a sibling `helpers.ts`, and
@@ -397,10 +451,10 @@ function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set
 const ESM_JS_SUFFIX = /\.(m|c)?js$/;
 
 export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  const verbatim = resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  const verbatim = resolveImportAttempt(fromPath, specifier, allPaths, aliases);
   if (verbatim !== undefined || !ESM_JS_SUFFIX.test(specifier)) return verbatim;
   const stripped = specifier.replace(ESM_JS_SUFFIX, "");
-  return resolveRelativeImport(fromPath, stripped, allPaths) ?? resolveAliasedImport(fromPath, stripped, allPaths, aliases);
+  return resolveImportAttempt(fromPath, stripped, allPaths, aliases);
 }
 
 // An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
