@@ -129,7 +129,7 @@ function canonicalWindowsPath(path: string, options: FindingIdentityOptions): st
   const rel = win32.relative(rootPath, candidate).replace(/\\/g, "/") || ".";
   const caseSensitive = options.caseSensitive ?? false;
   const canonical = caseSensitive ? rel : rel.toLowerCase();
-  return isOutside(rel) ? `external:${canonical}` : canonical;
+  return isOutside(rel) || win32.isAbsolute(rel) ? `external:${canonical}` : canonical;
 }
 
 function canonicalPosixPath(path: string, options: FindingIdentityOptions): string {

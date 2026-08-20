@@ -34,6 +34,8 @@ const CLI = join(REPO_ROOT, "src", "cli", "run-audit.ts");
 let scratch: string;
 let sarifOnly: { runs: { results: unknown[] }[] };
 let engagement: FindingsDocument;
+let baselineEngagement: FindingsDocument;
+let baselineFindingId: string;
 
 // A two-workspace monorepo with one M7-detectable `<img>` INSIDE an enumerated app and one OUTSIDE
 // any of them. Deliberately tiny: the point is the capture wiring, not detector breadth.
@@ -75,6 +77,19 @@ describe("run-audit CLI export capture", () => {
     await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
     sarifOnly = JSON.parse(readFileSync(join(scratch, "only.sarif"), "utf8"));
     engagement = JSON.parse(readFileSync(join(scratch, "engagement.json"), "utf8")) as FindingsDocument;
+    const baselineFinding = engagement.findings.find((finding) => finding.location.includes("shared/Widget.tsx"));
+    if (!baselineFinding) throw new Error("fixture produced no shared/Widget.tsx finding");
+    baselineFindingId = baselineFinding.id;
+    writeFileSync(
+      join(scratch, "baseline.json"),
+      JSON.stringify({ ...engagement, findings: [{ ...baselineFinding, location: join(scratch, "target", baselineFinding.location) }] }),
+    );
+    await run([
+      join(scratch, "target"),
+      "--findings-out", join(scratch, "baseline-engagement.json"),
+      "--baseline", join(scratch, "baseline.json"),
+    ]);
+    baselineEngagement = JSON.parse(readFileSync(join(scratch, "baseline-engagement.json"), "utf8")) as FindingsDocument;
   }, 300000);
 
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -99,6 +114,11 @@ describe("run-audit CLI export capture", () => {
     const m7 = (engagement.coverage ?? []).filter((r) => r.module === "M7");
     expect(m7).not.toHaveLength(0);
     expect(m7.some((r) => /detect-static \(code tier\)/.test(r.detail ?? ""))).toBe(true);
+  });
+
+  it("passes the target root into baseline identity matching", () => {
+    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFindingId)?.baselineStatus).toBe("persistent");
+    expect(baselineEngagement.baseline?.counts.resolved).toBe(0);
   });
 });
 

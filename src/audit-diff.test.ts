@@ -84,6 +84,12 @@ describe("finding identity (#457)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("classifies a Windows path on another drive as external", () => {
+    expect(normalizeLocation("D:\\outside\\src\\a.ts", { root: "C:\\repo", caseSensitive: false })).toBe(
+      "external:d:/outside/src/a.ts",
+    );
+  });
 });
 
 describe("baseline diff buckets (#457)", () => {

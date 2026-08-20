@@ -324,7 +324,7 @@ if (findingsOut || sarifOut) {
     // unmeasured. Ledger it too — a bug that drops a NEW finding while tagging must fail loud, not
     // ship a report short one row behind a clean coverage pass.
     const beforeBaseline = doc.findings;
-    doc = applyBaseline(doc, prior.findings, priorLabel);
+    doc = applyBaseline(doc, prior.findings, priorLabel, { root: targetDir });
     const bLedger = baselineLedger(beforeBaseline, doc.findings, findingsByModule);
     console.log(`\n${formatBaselineLedger(bLedger)}`);
     if (!bLedger.ok) {
