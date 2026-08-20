@@ -27,6 +27,7 @@ import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { detectBolaOwnerFindings } from "./bola-owner.js";
 import { detectCounterRaceFindings } from "./counter-race.js";
+import { detectIdempotencyFindings } from "./idempotency.js";
 import { walkSourceFiles } from "./common.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
@@ -853,7 +854,12 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
     "pages/api/preview/enable-safe.js",
   ].map(read);
   const mechanicalFixtures = walkSourceFiles(CAL);
-  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...detectCounterRaceFindings(mechanicalFixtures), ...detectBolaOwnerFindings(mechanicalFixtures)];
+  const findings = [
+    ...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)),
+    ...detectCounterRaceFindings(mechanicalFixtures),
+    ...detectIdempotencyFindings(mechanicalFixtures),
+    ...detectBolaOwnerFindings(mechanicalFixtures),
+  ];
 
   const graduated = [
     ...b17RaceUnscopedEntries,
