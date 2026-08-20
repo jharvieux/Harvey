@@ -1,0 +1,9 @@
+import { Module } from "@nestjs/common";
+import { OrdersController } from "./controllers/orders.controller";
+import { WorkflowModule } from "./services/workflow.module";
+
+@Module({
+  controllers: [OrdersController],
+  imports: [WorkflowModule],
+})
+export class OrdersModule {}
