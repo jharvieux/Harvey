@@ -3,7 +3,7 @@
 // stops firing on a re-run. Proven against the REAL planted calibration class (M5 unused-param,
 // same fixture discipline as detector-rerun.test.ts), not a stub.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,33 @@ describe("runGate — a fix is not closed until the re-audit stops detecting it"
     const report = await runGate([finding()], dir, { engagement: "acme-q3" });
     expect(report.results[0]?.marker).toBe(findingMarker(finding(), "acme-q3"));
     expect(report.engagement).toBe("acme-q3");
+  });
+
+  it("reuses history and marker identity across root, separator, dot, and symlink spellings without folding case", async () => {
+    const dir = scratch("src/a.ts", "export {}\n");
+    symlinkSync("src/a.ts", join(dir, "alias.ts"));
+    const priorFinding = finding({ location: "./src//a.ts:7" });
+    const prior = await runGate([priorFinding], dir, {
+      rerun: () => cleanRun(), sources: [], caseSensitive: true,
+    });
+    const equivalent = ["src\\.\\a.ts:19", join(dir, "src", "a.ts") + ":23", "alias.ts#L42"];
+    for (const location of equivalent) {
+      const next = await runGate([finding({ id: "F-new", location })], dir, {
+        prior, rerun: () => firedRun(), sources: [], caseSensitive: true,
+      });
+      expect(next.results[0]?.status).toBe("regressed");
+      expect(next.results[0]?.identity).toBe(prior.results[0]?.identity);
+      expect(next.results[0]?.marker).toBe(prior.results[0]?.marker);
+    }
+
+    const distinctCase = await runGate([finding({ location: "src/A.ts" })], dir, {
+      prior: await runGate([finding({ location: "src/a.ts" })], dir, {
+        rerun: () => cleanRun(), sources: [], caseSensitive: true,
+      }),
+      rerun: () => firedRun(), sources: [], caseSensitive: true,
+    });
+    expect(distinctCase.results[0]?.status).toBe("persistent");
+    expect(distinctCase.results[0]?.previousStatus).toBeUndefined();
   });
 });
 

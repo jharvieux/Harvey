@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CoverageRow, Finding } from "./findings.js";
 import { parseLocation, toSarif } from "./sarif.js";
@@ -45,6 +48,29 @@ describe("result mapping", () => {
     const a = run(toSarif([finding({ location: "src/lib/client.ts:12" })], { coverage: RAN }));
     const b = run(toSarif([finding({ location: "src/lib/client.ts:97" })], { coverage: RAN }));
     expect(a.results[0].partialFingerprints).toEqual(b.results[0].partialFingerprints);
+  });
+
+  it("fingerprints root, separator, dot, and symlink aliases equally while preserving case policy", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-sarif-identity-"));
+    try {
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src", "a.ts"), "export {}\n");
+      symlinkSync("src/a.ts", join(root, "alias.ts"));
+      const fingerprint = (location: string, caseSensitive = true) => run(toSarif(
+        [finding({ location })],
+        { coverage: RAN },
+        { baseUri: root, caseSensitive },
+      )).results[0].partialFingerprints;
+      const equivalent = [
+        "src/a.ts:7", "./src//a.ts:19", "src\\.\\a.ts#L42",
+        join(root, "src", "a.ts") + ":88", "alias.ts:3",
+      ];
+      expect(new Set(equivalent.map((location) => JSON.stringify(fingerprint(location)))).size).toBe(1);
+      expect(fingerprint("src/Foo.ts", true)).not.toEqual(fingerprint("src/foo.ts", true));
+      expect(fingerprint("src/Foo.ts", false)).toEqual(fingerprint("src/foo.ts", false));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("ranks alerts for code scanning by carrying security-severity per rule", () => {

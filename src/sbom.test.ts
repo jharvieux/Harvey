@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -214,6 +214,38 @@ describe("licenseScope (#1213)", () => {
     writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2" } } }));
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { axios: "^1.7.2" }, optionalDependencies: { fsevents: "2.3.3" } }));
     expect(licenseScope(dir).candidates).toContainEqual({ name: "fsevents", direct: true });
+  });
+
+  it("keeps escaped workspace manifests out of the exact declared license population", () => {
+    const outside = mkdtempSync(join(tmpdir(), "sbom-workspace-outside-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({
+        name: "root",
+        workspaces: ["./packages//*", "../sbom-workspace-outside-*", "linked"],
+        dependencies: { rootdep: "1.0.0" },
+      }));
+      mkdirSync(join(dir, "packages", "zeta"), { recursive: true });
+      mkdirSync(join(dir, "packages", "alpha"), { recursive: true });
+      writeFileSync(join(dir, "packages", "zeta", "package.json"), JSON.stringify({ dependencies: { zetadep: "1.0.0" } }));
+      writeFileSync(join(dir, "packages", "alpha", "package.json"), JSON.stringify({ dependencies: { alphadep: "1.0.0" } }));
+      writeFileSync(join(outside, "package.json"), JSON.stringify({ dependencies: { escapeddep: "1.0.0" } }));
+      symlinkSync(outside, join(dir, "linked"), "dir");
+
+      const scope = licenseScope(dir);
+      expect(scope.candidates).toEqual([
+        { name: "rootdep", version: "1.0.0", direct: true },
+        { name: "alphadep", direct: true },
+        { name: "zetadep", direct: true },
+      ]);
+      expect(scope.declaredFrom).toEqual({
+        manifests: 3,
+        source: "package.json#workspaces",
+        unresolvedGlobs: ["../sbom-workspace-outside-*", "linked"],
+        unreadable: [],
+      });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

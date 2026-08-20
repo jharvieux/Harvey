@@ -13,8 +13,8 @@
 // it is moved rather than reimplemented so M2 target discovery and the supply-chain scope can never
 // disagree about what a workspace member is.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 
 interface WorkspaceManifest {
@@ -217,10 +217,35 @@ export function parseWorkspaceGlobs(repoRoot: string): { globs: string[]; source
 // wander into node_modules and enumerate every dependency as a "workspace".
 const GLOB_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", ".vercel"]);
 
-function childDirs(dir: string): string[] {
+function physicalPathWithin(root: string, candidate: string): string | undefined {
+  try {
+    const physical = realpathSync(candidate);
+    const rel = relative(root, physical);
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) ? physical : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function globSegments(glob: string): string[] | undefined {
+  // Workspace declarations are repository-relative on every host. Treat both platform separators
+  // as separators, but fail closed on rooted paths or any parent segment rather than normalizing an
+  // attacker-controlled escape back into (or beyond) the target.
+  const normalized = glob.replaceAll("\\", "/");
+  if (posix.isAbsolute(normalized) || win32.isAbsolute(glob)) return undefined;
+  const segments = normalized.split("/").filter((segment) => segment !== "" && segment !== ".");
+  return segments.includes("..") ? undefined : segments;
+}
+
+function childDirs(dir: string, physicalRoot: string): string[] {
   try {
     return readEntriesSafe(dir).entries
       .filter((e) => e.isDirectory && !GLOB_SKIP_DIRS.has(e.name))
+      // readEntriesSafe deliberately follows resolvable directory symlinks. A workspace walk has
+      // the stronger constraint that their physical targets remain inside this repository.
+      .filter((e) => physicalPathWithin(physicalRoot, e.path) !== undefined)
+      // Declared glob order is semantic; the filesystem's encounter order within one glob is not.
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
       .map((e) => join(dir, e.name));
   } catch {
     return [];
@@ -232,27 +257,41 @@ function childDirs(dir: string): string[] {
 // dir), and `**` matches zero or more segments (recursive). This is what lets `packages/**` reach a
 // nested workspace like packages/features/auth — the single-level `/*`-only expansion dropped every
 // `**` glob (#548), silently under-enumerating both M5-knip workspaces and M2 pentest targets.
-// Callers filter the candidates to those carrying a package.json, so a generous match is safe.
+// Callers filter the candidates to those carrying a package.json. Lexical parent/root escapes and
+// physical symlink escapes are rejected here before a candidate directory is enumerated.
 export function expandGlob(repoRoot: string, glob: string): string[] {
-  const segments = glob.split("/").filter((s) => s !== "" && s !== ".");
-  if (segments.length === 0) return existsSync(repoRoot) ? [repoRoot] : [];
+  const logicalRoot = resolve(repoRoot);
+  const segments = globSegments(glob);
+  if (!segments) return [];
+  let physicalRoot: string;
+  try {
+    physicalRoot = realpathSync(logicalRoot);
+  } catch {
+    return [];
+  }
+  if (segments.length === 0) return existsSync(logicalRoot) ? [logicalRoot] : [];
   const out = new Set<string>();
-  const walk = (dir: string, segs: string[]): void => {
+  const walk = (dir: string, segs: string[], ancestors: ReadonlySet<string>): void => {
+    const physical = physicalPathWithin(physicalRoot, dir);
+    if (!physical) return;
+    const state = `${physical}\0${segs.join("/")}`;
+    if (ancestors.has(state)) return;
+    const nextAncestors = new Set(ancestors).add(state);
     if (segs.length === 0) {
       if (existsSync(dir)) out.add(dir);
       return;
     }
     const [head, ...rest] = segs;
     if (head === "**") {
-      walk(dir, rest); // ** matches zero segments here
-      for (const child of childDirs(dir)) walk(child, segs); // …or one-plus, keeping ** for depth
+      walk(dir, rest, nextAncestors); // ** matches zero segments here
+      for (const child of childDirs(dir, physicalRoot)) walk(child, segs, nextAncestors); // …or one-plus, keeping ** for depth
     } else if (head === "*") {
-      for (const child of childDirs(dir)) walk(child, rest);
+      for (const child of childDirs(dir, physicalRoot)) walk(child, rest, nextAncestors);
     } else {
-      walk(join(dir, head!), rest);
+      walk(join(dir, head!), rest, nextAncestors);
     }
   };
-  walk(repoRoot, segments);
+  walk(logicalRoot, segments, new Set());
   return [...out];
 }
 
@@ -260,8 +299,9 @@ export function expandGlob(repoRoot: string, glob: string): string[] {
 // a `!examples/**` entry would otherwise be walked as a literal directory named "!examples" — a
 // no-op that silently keeps the excluded members in scope.
 export function collectWorkspaceManifests(repoRoot: string): WorkspaceScope {
-  const { globs, source } = parseWorkspaceGlobs(repoRoot);
-  const excluded = new Set(globs.filter((g) => g.startsWith("!")).flatMap((g) => expandGlob(repoRoot, g.slice(1))));
+  const logicalRoot = resolve(repoRoot);
+  const { globs, source } = parseWorkspaceGlobs(logicalRoot);
+  const excluded = new Set(globs.filter((g) => g.startsWith("!")).flatMap((g) => expandGlob(logicalRoot, g.slice(1))));
   const manifests: WorkspaceManifest[] = [];
   const unresolvedGlobs: string[] = [];
   const unreadable: string[] = [];
@@ -271,7 +311,7 @@ export function collectWorkspaceManifests(repoRoot: string): WorkspaceScope {
     if (seen.has(dir)) return;
     seen.add(dir);
     const path = join(dir, "package.json");
-    const label = relative(repoRoot, path) || "package.json";
+    const label = (relative(logicalRoot, path) || "package.json").split(sep).join("/");
     try {
       manifests.push({ ...(JSON.parse(readFileSync(path, "utf8")) as WorkspaceManifest), label });
     } catch {
@@ -279,10 +319,10 @@ export function collectWorkspaceManifests(repoRoot: string): WorkspaceScope {
     }
   };
 
-  if (existsSync(join(repoRoot, "package.json"))) read(repoRoot);
+  if (existsSync(join(logicalRoot, "package.json"))) read(logicalRoot);
   for (const glob of globs) {
     if (glob.startsWith("!")) continue;
-    const matched = expandGlob(repoRoot, glob).filter((d) => !excluded.has(d) && existsSync(join(d, "package.json")));
+    const matched = expandGlob(logicalRoot, glob).filter((d) => !excluded.has(d) && existsSync(join(d, "package.json")));
     if (matched.length === 0) unresolvedGlobs.push(glob);
     for (const dir of matched) read(dir);
   }
