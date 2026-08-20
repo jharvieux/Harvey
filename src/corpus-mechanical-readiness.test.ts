@@ -19,6 +19,7 @@ import {
   type CurrentMechanicalExecutionArtifact,
 } from "./corpus-mechanical-readiness.js";
 import { digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest } from "./scan/mechanical-phase-cache.js";
+import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 const digest = "a".repeat(64);
@@ -26,6 +27,15 @@ const packBody = Buffer.from("x");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
 const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
+const mixedRun = JSON.parse(readFileSync(new URL("./__fixtures__/current-mechanical-run-32334325227.json", import.meta.url), "utf8")) as {
+  runId: number;
+  commonRuntime: CurrentMechanicalExecutionArtifact["runtime"];
+  producerShards: Array<{ index: number; gitVersion: string; targets: string[] }>;
+  carbonCrossGit: {
+    producer: { gitVersion: string; preparationSha256: string; executionPlanSha256: string; findingsSha256: string; normalizedProducersSha256: string; semgrepDiagnosticsSha256: string; findingCount: number; semgrepFindingCount: number };
+    replay: { gitVersion: string; preparationSha256: string; executionPlanSha256: string; findingsSha256: string; normalizedProducersSha256: string; semgrepDiagnosticsSha256: string; findingCount: number; semgrepFindingCount: number; uniqueFinding: string };
+  };
+};
 const target = { slug: "target", repo: "https://example.invalid/target.git", commit: "b".repeat(40), vendoredSubtrees: ["vendor/reference"] };
 const finding: Finding = { id: "ROW-1", title: "row", severity: "Low", confidence: "Likely", category: "test", taxonomy: "test", location: "a.ts:1", status: "Open", evidence: "evidence", impact: "impact", fix: "fix", value: 1, ease: 1, safety: 1, mechanical: true };
 
@@ -37,7 +47,7 @@ function stableFixture(value: unknown): string {
 
 function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMechanicalExecutionArtifact {
   return {
-    schema: 2,
+    schema: 3,
     kind: "current-mechanical-execution",
     population: CURRENT_MECHANICAL_POPULATION,
     side,
@@ -49,12 +59,12 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
     targetPinsSha256: currentTargetPinsSha256([target]),
     allTargets: [target],
     semgrepRegistry: { schema: 1, aggregateSha256: packAggregate, files: Array.from({ length: 6 }, (_, ordinal) => ({ ordinal, name: `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`, bytes: 1, sha256: packDigest, bodyBase64: packBody.toString("base64") })) },
-    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1", git: "1" },
+    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1" },
     shard: { index: 1, count: 1 },
     targets: {
       target: {
         slug: "target", repo: target.repo, pin: target.commit, checkoutHead: target.commit, checkoutTree: digest,
-        preparedTreeSha256: digest, preparation: CURRENT_MECHANICAL_PREPARATION, removedVendoredSubtrees: ["vendor/reference"],
+        preparedTreeSha256: digest, gitVersion: "git version 2.54.0", preparation: CURRENT_MECHANICAL_PREPARATION, removedVendoredSubtrees: ["vendor/reference"],
         emptyGitlinks: [{ path: "apps/web/app/(marketing)", object: "f".repeat(40), representation: "empty-directory" }],
         captureBeforeInstall: true, installMutationAtCapture: false, skipBundleScan: true,
         bundleDigest: digestParts(["bundle-pinned-off-v1"]),
@@ -67,7 +77,7 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           phases: MECHANICAL_PHASES,
           implementation: { semgrep: digest },
           externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
-          semgrep: { schema: 1, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], primaryArgv: ["--x-parmap"], fallbackArgv: ["-j", "1"] },
+          semgrep: { schema: 2, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], argv: ["--x-parmap", "-j", "1", "--timeout", "0"] },
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
         semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
@@ -84,6 +94,18 @@ function expectDifference(mutate: (value: CurrentMechanicalExecutionArtifact) =>
 }
 
 describe("fresh current mechanical producer ↔ replay readiness", () => {
+  it("requires schema 3 target-bound Git provenance and rejects legacy aggregate-only receipts", () => {
+    const legacy = artifact("hosted-producer") as unknown as { schema: number; runtime: Record<string, string>; targets: Record<string, { gitVersion?: string }> };
+    legacy.schema = 2;
+    legacy.runtime.git = legacy.targets.target!.gitVersion!;
+    delete legacy.targets.target!.gitVersion;
+    expect(() => mergeCurrentMechanicalShards([legacy as unknown as CurrentMechanicalExecutionArtifact], "legacy producer")).toThrow(/not a current mechanical execution artifact/);
+
+    const missing = artifact("hosted-producer");
+    delete (missing.targets.target! as { gitVersion?: string }).gitVersion;
+    expect(() => mergeCurrentMechanicalShards([missing], "missing provenance")).toThrow(/Git materialization provenance is missing/);
+  });
+
   it("wires the required aggregate to shared bytes and two fresh sides without claiming historical proof", () => {
     const workflow = readFileSync(new URL("../.github/workflows/corpus-drift.yml", import.meta.url), "utf8");
     const producer = readFileSync(new URL("./cli/corpus-drift.ts", import.meta.url), "utf8");
@@ -109,6 +131,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
   it("accepts two distinct exact-head executions and ignores duration/cache status only", () => {
     const producer = artifact("hosted-producer");
     const replay = artifact("independent-replay");
+    replay.targets.target!.gitVersion = "git version 2.55.0";
     replay.targets.target!.producers[0]!.durationMs = 99;
     replay.targets.target!.producers[0]!.status = "cached";
     expect(() => compareCurrentMechanicalExecutions(producer, replay)).not.toThrow();
@@ -126,7 +149,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "partitioned-families"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.reverse().forEach((family, ordinal) => { family.ordinal = ordinal; }); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
-    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.primaryArgv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.argv.push("--changed-flag"); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
   });
 
@@ -206,6 +229,76 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/mixed/);
     second.headCommit = left.headCommit;
     expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/index population/);
+  });
+
+  it("merges shards across hosted Git patch-level drift without weakening engine invariants", () => {
+    const first = artifact("hosted-producer");
+    const second = structuredClone(first);
+    const otherTarget = { ...target, slug: "other", repo: "https://example.invalid/other.git", commit: "d".repeat(40) };
+    const targetReceipts = {
+      target: first.targets.target!,
+      other: { ...structuredClone(first.targets.target!), slug: otherTarget.slug, repo: otherTarget.repo, pin: otherTarget.commit, checkoutHead: otherTarget.commit },
+    };
+    for (const [index, value] of [first, second].entries()) {
+      value.allTargets = [target, otherTarget];
+      value.targetPinsSha256 = currentTargetPinsSha256(value.allTargets);
+      value.shard = { index: index + 1, count: 2 };
+      value.executionId = `hosted-producer:${index + 1}/2:fixture`;
+      value.targets = Object.fromEntries(
+        shardTargets(value.allTargets.map((entry) => entry.slug), index + 1, 2)
+          .map((slug) => [slug, targetReceipts[slug as keyof typeof targetReceipts]]),
+      );
+    }
+    for (const receipt of Object.values(first.targets)) receipt.gitVersion = mixedRun.producerShards[0]!.gitVersion;
+    for (const receipt of Object.values(second.targets)) receipt.gitVersion = mixedRun.producerShards[1]!.gitVersion;
+
+    const merged = mergeCurrentMechanicalShards([first, second], "hosted receipts from run 32334325227");
+    expect(Object.fromEntries(Object.entries(merged.targets).map(([slug, receipt]) => [slug, receipt.gitVersion]))).toEqual({
+      other: "git version 2.54.0",
+      target: "git version 2.55.0",
+    });
+    expect(Object.keys(merged.targets).sort()).toEqual(["other", "target"]);
+
+    second.runtime.semgrep = "different-semgrep";
+    expect(() => mergeCurrentMechanicalShards([first, second], "producer")).toThrow(/mixed engine\/input\/runtime/);
+  });
+
+  it("keeps exact mixed-run output drift fatal after accepting target-bound Git provenance", () => {
+    const { producer: observedProducer, replay: observedReplay } = mixedRun.carbonCrossGit;
+    expect(mixedRun.runId).toBe(32334325227);
+    expect(mixedRun.commonRuntime).toEqual({
+      node: "v24.19.0",
+      platform: "linux",
+      arch: "x64",
+      semgrep: "1.164.0",
+      gitleaks: "gitleaks version 8.30.1",
+    });
+    expect(mixedRun.producerShards.map(({ index, gitVersion }) => ({ index, gitVersion }))).toEqual([
+      { index: 1, gitVersion: "git version 2.54.0" },
+      { index: 2, gitVersion: "git version 2.55.0" },
+      { index: 3, gitVersion: "git version 2.54.0" },
+    ]);
+    expect(mixedRun.producerShards.flatMap(({ targets }) => targets)).toEqual([
+      "carbon",
+      "proposit", "subscription-payments", "boxyhq", "launch-mvp", "saas-lite", "tanstack-com", "cravab", "flori-web",
+      "multi-tenant-starter", "mvp-boilerplate", "ghostfolio", "rallly", "inbox-zero", "documenso", "supabase-security-labs", "effective",
+    ]);
+    expect(observedProducer.preparationSha256).toBe(observedReplay.preparationSha256);
+    expect(observedProducer.executionPlanSha256).toBe(observedReplay.executionPlanSha256);
+    expect(observedProducer.semgrepDiagnosticsSha256).toBe(observedReplay.semgrepDiagnosticsSha256);
+    expect(observedProducer.findingsSha256).not.toBe(observedReplay.findingsSha256);
+    expect(observedProducer.normalizedProducersSha256).not.toBe(observedReplay.normalizedProducersSha256);
+    expect(observedReplay.findingCount - observedProducer.findingCount).toBe(1);
+    expect(observedReplay.semgrepFindingCount - observedProducer.semgrepFindingCount).toBe(1);
+    expect(observedReplay.uniqueFinding).toContain("harvey-log-injection@packages/database/supabase/functions/post-shipment/index.ts:1114");
+
+    const producer = artifact("hosted-producer");
+    const replay = artifact("independent-replay");
+    producer.targets.target!.gitVersion = observedProducer.gitVersion;
+    replay.targets.target!.gitVersion = observedReplay.gitVersion;
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).not.toThrow();
+    replay.targets.target!.findings.push({ ...finding, id: "SEM-EXTRA", location: "packages/database/supabase/functions/post-shipment/index.ts:1114" });
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).toThrow(/ordered raw mechanical finding/);
   });
 
   it("refuses dirty tracked or untracked harness inputs before producing an artifact", () => {
