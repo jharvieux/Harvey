@@ -20,7 +20,7 @@ vi.mock("./fs-walk.js", async (importOriginal) => {
   };
 });
 
-import { collectWorkspaceManifests, workspacePackages } from "./workspaces.js";
+import { collectWorkspaceManifests, discoverWorkspaceInventory, workspacePackages } from "./workspaces.js";
 
 describe("collectWorkspaceManifests", () => {
   let dir: string;
@@ -186,6 +186,68 @@ describe("collectWorkspaceManifests", () => {
           ["package.json", "monorepo"],
           ["apps/A/package.json", "lower"],
         ]);
+  });
+});
+
+describe("discoverWorkspaceInventoryV1", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-workspace-inventory-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const manifest = (rel: string, body: object | string): void => {
+    mkdirSync(join(dir, rel), { recursive: true });
+    writeFileSync(join(dir, rel, "package.json"), typeof body === "string" ? body : JSON.stringify(body));
+  };
+
+  it("records the root once, deduplicates overlapping members, and retains stable script evidence", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["apps/*", "apps/**"] }));
+    manifest("apps/web", { name: "web", scripts: { test: "vitest --run", e2e: "playwright test && echo $TOKEN" } });
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.schemaVersion).toBe(1);
+    expect(inventory.packages.map(({ id, dir: workspaceDir }) => ({ id, dir: workspaceDir }))).toEqual([
+      { id: "workspace:root", dir: "." },
+      { id: "workspace:apps/web", dir: "apps/web" },
+    ]);
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:apps/web"]);
+    expect(inventory.packages[1]?.discoveredBy.map((source) => source.glob)).toEqual(["apps/*", "apps/**"]);
+    expect(inventory.packages[1]?.scripts).toEqual([
+      { name: "e2e", body: "playwright test && echo $TOKEN", source: { path: "apps/web/package.json", pointer: "/scripts/e2e" } },
+      { name: "test", body: "vitest --run", source: { path: "apps/web/package.json", pointer: "/scripts/test" } },
+    ]);
+  });
+
+  it("retains negative, unresolved, invalid, and unreadable observations in stable order", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      name: "root",
+      workspaces: ["packages/*", "services/*", "../escape", "!packages/generated"],
+    }));
+    manifest("packages/app", { name: "app" });
+    manifest("packages/generated", { name: "generated" });
+    manifest("packages/broken", "{not json");
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
+    expect(inventory.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "packages/generated/package.json", glob: "!packages/generated" }),
+      expect.objectContaining({ kind: "unreadable-manifest", path: "packages/broken/package.json" }),
+      expect.objectContaining({ kind: "unresolved-glob", glob: "services/*" }),
+      expect.objectContaining({ kind: "invalid-glob", glob: "../escape" }),
+    ]));
+    expect(discoverWorkspaceInventory(dir)).toEqual(inventory);
+  });
+
+  it("uses the physical in-repository path as identity so a symlink alias cannot duplicate a member", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*", "aliases/*"] }));
+    manifest("packages/app", { name: "app" });
+    mkdirSync(join(dir, "aliases"), { recursive: true });
+    symlinkSync(join(dir, "packages", "app"), join(dir, "aliases", "app"), "dir");
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
+    expect(inventory.packages[1]?.discoveredBy.map((source) => source.glob)).toEqual(["aliases/*", "packages/*"]);
   });
 });
 

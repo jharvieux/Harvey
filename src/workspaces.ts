@@ -17,7 +17,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { readEntriesSafe } from "./fs-walk.js";
 
-interface WorkspaceManifest {
+export interface WorkspaceManifest {
   /** Path relative to the target root — "package.json" for the root manifest. */
   label: string;
   /** The package's own name — how sibling members depend on it (#1344). */
@@ -29,7 +29,7 @@ interface WorkspaceManifest {
   scripts?: Record<string, string>;
 }
 
-interface WorkspaceScope {
+export interface WorkspaceScope {
   /** Root manifest first, then members in glob order. */
   manifests: WorkspaceManifest[];
   /** Where the globs came from, for the disclosure row. */
@@ -55,6 +55,72 @@ interface WorkspacePackage {
    * package dir finds nothing at all.
    */
   subpaths: { prefix: string; baseDir: string }[];
+}
+
+/** Stable, repository-relative identity shared by readiness and downstream discovery. */
+export type WorkspaceId = `workspace:${string}`;
+
+export interface WorkspaceDiscoveryEvidence {
+  kind: "root-manifest" | "workspace-glob";
+  /** Repository-relative POSIX path. */
+  sourcePath: string;
+  /** The declaration surface within sourcePath; deliberately independent of array order. */
+  sourceField: "root" | "packages" | "workspaces" | "workspaces.packages";
+  glob?: string;
+}
+
+export interface WorkspaceScriptEvidence {
+  name: string;
+  /** Retained only as provenance. Consumers must not parse or execute this shell body. */
+  body: string;
+  source: { path: string; pointer: string };
+}
+
+export interface WorkspaceInventoryPackage {
+  id: WorkspaceId;
+  /** Repository-relative POSIX directory; "." is the repository root. */
+  dir: string;
+  /** Repository-relative POSIX manifest path. */
+  manifestPath: string;
+  name?: string;
+  scripts: WorkspaceScriptEvidence[];
+  discoveredBy: WorkspaceDiscoveryEvidence[];
+}
+
+export type WorkspaceInventoryObservation =
+  | {
+      kind: "excluded";
+      path: string;
+      glob: string;
+      sourcePath: string;
+      reason: "negative-workspace-glob";
+    }
+  | {
+      kind: "unresolved-glob" | "invalid-glob";
+      glob: string;
+      sourcePath: string;
+      reason: string;
+    }
+  | {
+      kind: "unreadable-manifest";
+      path: string;
+      reason: string;
+    };
+
+/**
+ * The single evidence-bearing workspace census.
+ *
+ * `packages` includes a readable root manifest exactly once plus every declared member.
+ * `applicationWorkspaceIds` preserves the existing audit-app view: it contains packages reached
+ * by positive workspace globs (the root only for a single-package repo or an explicit `.` glob).
+ */
+export interface WorkspaceInventoryV1 {
+  schemaVersion: 1;
+  repoRootId: "workspace:root";
+  declarationSource: string;
+  packages: WorkspaceInventoryPackage[];
+  applicationWorkspaceIds: WorkspaceId[];
+  observations: WorkspaceInventoryObservation[];
 }
 
 // #1353: the import-graph side of the same question collectWorkspaceManifests answers from disk.
@@ -298,33 +364,171 @@ export function expandGlob(repoRoot: string, glob: string): string[] {
 // pnpm and npm both let a workspace subtract with a leading "!". expandGlob has no notion of one, so
 // a `!examples/**` entry would otherwise be walked as a literal directory named "!examples" — a
 // no-op that silently keeps the excluded members in scope.
-export function collectWorkspaceManifests(repoRoot: string): WorkspaceScope {
+interface WorkspaceRecord extends WorkspaceInventoryPackage {
+  manifest: WorkspaceManifest;
+}
+
+function workspaceSourceDetails(source: string): Pick<WorkspaceDiscoveryEvidence, "sourcePath" | "sourceField"> {
+  if (source === "pnpm-workspace.yaml") return { sourcePath: source, sourceField: "packages" };
+  if (source === "package.json#workspaces") return { sourcePath: "package.json", sourceField: "workspaces" };
+  return { sourcePath: "package.json", sourceField: "root" };
+}
+
+function canonicalWorkspaceDir(logicalRoot: string, candidate: string): string | undefined {
+  let physicalRoot: string;
+  try {
+    physicalRoot = realpathSync(logicalRoot);
+  } catch {
+    return undefined;
+  }
+  const physical = physicalPathWithin(physicalRoot, candidate);
+  if (!physical) return undefined;
+  const rel = relative(physicalRoot, physical).split(sep).join("/");
+  return rel || ".";
+}
+
+export function workspaceIdForDir(dir: string): WorkspaceId {
+  return `workspace:${dir === "." ? "root" : dir}`;
+}
+
+function scriptEvidence(manifestPath: string, scripts: WorkspaceManifest["scripts"]): WorkspaceScriptEvidence[] {
+  if (!scripts || typeof scripts !== "object" || Array.isArray(scripts)) return [];
+  return Object.entries(scripts)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, body]) => ({
+      name,
+      body,
+      source: { path: manifestPath, pointer: `/scripts/${name.replaceAll("~", "~0").replaceAll("/", "~1")}` },
+    }));
+}
+
+function discoverWorkspaceRecords(repoRoot: string): {
+  inventory: WorkspaceInventoryV1;
+  records: WorkspaceRecord[];
+  unresolvedGlobs: string[];
+  unreadable: string[];
+} {
   const logicalRoot = resolve(repoRoot);
   const { globs, source } = parseWorkspaceGlobs(logicalRoot);
-  const excluded = new Set(globs.filter((g) => g.startsWith("!")).flatMap((g) => expandGlob(logicalRoot, g.slice(1))));
-  const manifests: WorkspaceManifest[] = [];
+  const sourceDetails = workspaceSourceDetails(source);
+  const observations: WorkspaceInventoryObservation[] = [];
+  const excluded = new Map<string, { glob: string; path: string }>();
+  for (const declared of globs.filter((glob) => glob.startsWith("!"))) {
+    const glob = declared.slice(1);
+    if (!globSegments(glob)) {
+      observations.push({ kind: "invalid-glob", glob: declared, sourcePath: sourceDetails.sourcePath, reason: "workspace glob is rooted or escapes through a parent segment" });
+      continue;
+    }
+    for (const candidate of expandGlob(logicalRoot, glob)) {
+      if (!existsSync(join(candidate, "package.json"))) continue;
+      const dir = canonicalWorkspaceDir(logicalRoot, candidate);
+      if (dir && !excluded.has(dir)) excluded.set(dir, { glob: declared, path: dir === "." ? "package.json" : `${dir}/package.json` });
+    }
+  }
+  const records: WorkspaceRecord[] = [];
   const unresolvedGlobs: string[] = [];
   const unreadable: string[] = [];
-  const seen = new Set<string>();
+  const byId = new Map<WorkspaceId, WorkspaceRecord>();
+  const applicationWorkspaceIds = new Set<WorkspaceId>();
+  const observedUnreadable = new Set<string>();
 
-  const read = (dir: string): void => {
-    if (seen.has(dir)) return;
-    seen.add(dir);
-    const path = join(dir, "package.json");
-    const label = (relative(logicalRoot, path) || "package.json").split(sep).join("/");
+  const read = (candidate: string, discoveredBy: WorkspaceDiscoveryEvidence, application: boolean): boolean => {
+    const dir = canonicalWorkspaceDir(logicalRoot, candidate);
+    if (!dir) return false;
+    const id = workspaceIdForDir(dir);
+    const manifestPath = dir === "." ? "package.json" : `${dir}/package.json`;
+    const existing = byId.get(id);
+    if (existing) {
+      if (!existing.discoveredBy.some((entry) => JSON.stringify(entry) === JSON.stringify(discoveredBy))) existing.discoveredBy.push(discoveredBy);
+      if (application) applicationWorkspaceIds.add(id);
+      return true;
+    }
     try {
-      manifests.push({ ...(JSON.parse(readFileSync(path, "utf8")) as WorkspaceManifest), label });
+      const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8")) as WorkspaceManifest;
+      const record: WorkspaceRecord = {
+        id,
+        dir,
+        manifestPath,
+        ...(typeof manifest.name === "string" ? { name: manifest.name } : {}),
+        scripts: scriptEvidence(manifestPath, manifest.scripts),
+        discoveredBy: [discoveredBy],
+        manifest: { ...manifest, label: manifestPath },
+      };
+      records.push(record);
+      byId.set(id, record);
+      if (application) applicationWorkspaceIds.add(id);
+      return true;
     } catch {
-      unreadable.push(label);
+      if (!observedUnreadable.has(manifestPath)) {
+        observedUnreadable.add(manifestPath);
+        unreadable.push(manifestPath);
+        observations.push({ kind: "unreadable-manifest", path: manifestPath, reason: "manifest could not be read as JSON" });
+      }
+      return true;
     }
   };
 
-  if (existsSync(join(logicalRoot, "package.json"))) read(logicalRoot);
+  if (existsSync(join(logicalRoot, "package.json"))) {
+    read(logicalRoot, { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }, false);
+  } else {
+    observations.push({ kind: "unreadable-manifest", path: "package.json", reason: "root manifest is missing" });
+  }
   for (const glob of globs) {
     if (glob.startsWith("!")) continue;
-    const matched = expandGlob(logicalRoot, glob).filter((d) => !excluded.has(d) && existsSync(join(d, "package.json")));
-    if (matched.length === 0) unresolvedGlobs.push(glob);
-    for (const dir of matched) read(dir);
+    if (!globSegments(glob)) {
+      observations.push({ kind: "invalid-glob", glob, sourcePath: sourceDetails.sourcePath, reason: "workspace glob is rooted or escapes through a parent segment" });
+      unresolvedGlobs.push(glob);
+      continue;
+    }
+    let matched = 0;
+    for (const candidate of expandGlob(logicalRoot, glob)) {
+      if (!existsSync(join(candidate, "package.json"))) continue;
+      const dir = canonicalWorkspaceDir(logicalRoot, candidate);
+      if (!dir) continue;
+      const exclusion = excluded.get(dir);
+      if (exclusion) {
+        if (!observations.some((row) => row.kind === "excluded" && row.path === exclusion.path && row.glob === exclusion.glob)) {
+          observations.push({ kind: "excluded", path: exclusion.path, glob: exclusion.glob, sourcePath: sourceDetails.sourcePath, reason: "negative-workspace-glob" });
+        }
+        continue;
+      }
+      matched += 1;
+      read(candidate, { kind: "workspace-glob", ...sourceDetails, glob }, true);
+    }
+    if (matched === 0) {
+      unresolvedGlobs.push(glob);
+      observations.push({ kind: "unresolved-glob", glob, sourcePath: sourceDetails.sourcePath, reason: "glob matched no included directory containing package.json" });
+    }
   }
-  return { manifests, source, unresolvedGlobs, unreadable };
+  const packages = records.map((entry) => ({
+    id: entry.id,
+    dir: entry.dir,
+    manifestPath: entry.manifestPath,
+    ...(entry.name ? { name: entry.name } : {}),
+    scripts: entry.scripts,
+    discoveredBy: [...entry.discoveredBy].sort((a, b) => `${a.sourcePath}\0${a.sourceField}\0${a.glob ?? ""}`.localeCompare(`${b.sourcePath}\0${b.sourceField}\0${b.glob ?? ""}`)),
+  }));
+  return {
+    inventory: {
+      schemaVersion: 1,
+      repoRootId: "workspace:root",
+      declarationSource: source,
+      packages,
+      applicationWorkspaceIds: [...applicationWorkspaceIds].sort(),
+      observations: observations.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    },
+    records,
+    unresolvedGlobs,
+    unreadable,
+  };
+}
+
+export function discoverWorkspaceInventory(repoRoot: string): WorkspaceInventoryV1 {
+  return discoverWorkspaceRecords(repoRoot).inventory;
+}
+
+export function collectWorkspaceManifests(repoRoot: string): WorkspaceScope {
+  const { inventory, records, unresolvedGlobs, unreadable } = discoverWorkspaceRecords(repoRoot);
+  return { manifests: records.map((record) => record.manifest), source: inventory.declarationSource, unresolvedGlobs, unreadable };
 }
