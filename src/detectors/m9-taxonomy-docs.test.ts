@@ -21,8 +21,14 @@ afterEach(() => {
 
 function withUndocumentedTaxonomy(sources: readonly SourceText[]): SourceText[] {
   return sources.map((source) =>
-    source.path === "src/detectors/app-router.ts"
-      ? { ...source, text: `${source.text}\nconst m9DocParitySeed = { taxonomy: "M9 — Seeded undocumented family" };\n` }
+    source.path === "src/detectors/remix-adapter.ts"
+      ? {
+          ...source,
+          text: source.text.replace(
+            'taxonomy: "M9 — Server→client data leak"',
+            'taxonomy: "M9 — Seeded undocumented family"',
+          ),
+        }
       : source,
   );
 }
@@ -98,15 +104,21 @@ describe("#1640 — source-derived M9 taxonomy/document parity", () => {
 
   it("returns non-zero/non-zero/zero for emitted-only, header-only, then restored inputs", () => {
     const root = fixtureRoot(SOURCES, DOC);
-    const appRouter = join(root, "src", "detectors", "app-router.ts");
+    const remixAdapter = join(root, "src", "detectors", "remix-adapter.ts");
     const doc = join(root, "docs", "m9-app-router.md");
-    const originalSource = readFileSync(appRouter, "utf8");
+    const originalSource = readFileSync(remixAdapter, "utf8");
 
-    writeFileSync(appRouter, `${originalSource}\nconst m9DocParitySeed = { taxonomy: "M9 — Seeded undocumented family" };\n`);
+    writeFileSync(
+      remixAdapter,
+      originalSource.replace(
+        'taxonomy: "M9 — Server→client data leak"',
+        'taxonomy: "M9 — Seeded undocumented family"',
+      ),
+    );
     const emittedOnly = runCli(root);
     expect(emittedOnly.status, `${emittedOnly.stdout}\n${emittedOnly.stderr}`).toBe(1);
 
-    writeFileSync(appRouter, originalSource);
+    writeFileSync(remixAdapter, originalSource);
     writeFileSync(doc, withStaleHeader(DOC));
     const headerOnly = runCli(root);
     expect(headerOnly.status, `${headerOnly.stdout}\n${headerOnly.stderr}`).toBe(1);

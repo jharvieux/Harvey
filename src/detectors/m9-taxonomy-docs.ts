@@ -48,14 +48,28 @@ const ENTRY = "src/detectors/app-router.ts";
 const TAXONOMY_PREFIX = /^M(?:1|9) — /;
 const TAXONOMY_CODE = /`(M(?:1|9) — [^`]+)`/g;
 
+const DOCUMENTED_TAXONOMY_ALIASES = new Map<string, string>([
+  ["M9 — route action missing input validation", "M9 — Server Action missing input validation"],
+  ["M9 — server function missing input validation", "M9 — Server Action missing input validation"],
+  ["M1 — route action missing authorization check", "M1 — Server Action missing authorization check"],
+  ["M1 — server function missing authorization check", "M1 — Server Action missing authorization check"],
+]);
+
+const EXCLUDED_TAXONOMY_LITERALS = new Map<string, TaxonomyExclusion["kind"]>([
+  ["M1 — Client-supplied owner id — scope", "scope"],
+  ["M9 — Cross-user cache bleed — not assessed", "not-assessed"],
+  ["M9 — Data-fetching waterfall — scope", "scope"],
+  ["M9 — Not applicable (non-Next SPA)", "not-applicable"],
+  ["M9 — Not assessed (framework unsupported)", "not-assessed"],
+  ["M9 — Uncapped retry/fan-out — scope", "scope"],
+]);
+
 /**
  * Adapter-specific nouns are one emitted check family, not three documentation families. The
  * operator-facing doc names the original Next spelling; Remix/RR7 and TanStack reuse that check.
  */
 function canonicalDocumentedTaxonomy(taxonomy: string): string {
-  if (/^M9 — .+ missing input validation$/.test(taxonomy)) return "M9 — Server Action missing input validation";
-  if (/^M1 — .+ missing authorization check$/.test(taxonomy)) return "M1 — Server Action missing authorization check";
-  return taxonomy;
+  return DOCUMENTED_TAXONOMY_ALIASES.get(taxonomy) ?? taxonomy;
 }
 
 function propertyName(node: ts.PropertyName): string | undefined {
@@ -101,25 +115,20 @@ function detectorClosure(all: ReadonlyMap<string, SourceText>, entry = ENTRY): s
   return [...reached].sort();
 }
 
-function exclusionKind(taxonomy: string): TaxonomyExclusion["kind"] | undefined {
-  if (taxonomy.endsWith(" — scope")) return "scope";
-  if (taxonomy.includes(" — not assessed")) return "not-assessed";
-  if (taxonomy.startsWith("M9 — Not assessed")) return "not-assessed";
-  if (taxonomy.startsWith("M9 — Not applicable")) return "not-applicable";
-  return undefined;
-}
-
 function addLiteral(
   taxonomy: string,
   at: TaxonomySite,
   emittedM9: Set<string>,
   routed: Set<string>,
   exclusions: TaxonomyExclusion[],
+  unreadTaxonomySites: TaxonomySite[],
 ): void {
   if (!TAXONOMY_PREFIX.test(taxonomy)) return;
-  const kind = exclusionKind(taxonomy);
+  const kind = EXCLUDED_TAXONOMY_LITERALS.get(taxonomy);
   if (kind) {
     exclusions.push({ ...at, kind, expression: JSON.stringify(taxonomy) });
+  } else if (/ — scope$| — not assessed(?:\b| \()|^M9 — Not applicable\b/.test(taxonomy)) {
+    unreadTaxonomySites.push({ ...at, expression: JSON.stringify(taxonomy) });
   } else if (taxonomy.startsWith("M9 — ")) {
     emittedM9.add(taxonomy);
   } else {
@@ -233,7 +242,7 @@ function buildM9TaxonomyRegistry(sources: readonly SourceText[]): M9TaxonomyRegi
         const at = site(path, sf, node.initializer);
         const literals = literalValues(node.initializer);
         if (literals) {
-          for (const value of literals) addLiteral(value, at, emittedM9, routed, exclusions);
+          for (const value of literals) addLiteral(value, at, emittedM9, routed, exclusions, unreadTaxonomySites);
         } else if (!ts.isTemplateExpression(node.initializer) || !dynamicTaxonomy(path, sf, node.initializer, [...mutationNouns], emittedM9, routed, exclusions)) {
           unreadTaxonomySites.push(at);
         }
