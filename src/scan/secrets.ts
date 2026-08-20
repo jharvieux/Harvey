@@ -388,7 +388,7 @@ function runTruffleHogJson(args: string[]): { results: TruffleHogResult[]; failu
 }
 
 function runTruffleHogFilesystem(dir: string): { results: TruffleHogResult[]; failure?: string } {
-  return runTruffleHogJson(["filesystem", "--only-verified", "--json", dir]);
+  return runTruffleHogJson(["--no-update", "filesystem", "--only-verified", "--json", dir]);
 }
 
 // trufflehog's git pass clones the target as a repo, so it only works when the scan target is a
@@ -412,7 +412,7 @@ export function isGitRepoRoot(dir: string): boolean {
 }
 
 function runTruffleHogGitHistory(repoDir: string): { results: TruffleHogResult[]; failure?: string } {
-  return runTruffleHogJson(["git", "--only-verified", "--json", `file://${repoDir}`]);
+  return runTruffleHogJson(["--no-update", "git", "--only-verified", "--json", `file://${repoDir}`]);
 }
 
 // Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00: a visible not-assessed row, never a silent

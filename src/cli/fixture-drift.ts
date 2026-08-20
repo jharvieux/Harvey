@@ -223,8 +223,8 @@ async function trufflehogDrift(): Promise<never> {
     pinnedVersion: TRUFFLEHOG_PINNED_VERSION,
     installedVersion: version,
     fixturePaths: [
-      "src/scan/__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json",
-      "src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json",
+      "src/scan/__fixtures__/trufflehog/trufflehog-3.97.0-git-unverified.json",
+      "src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.97.0-git-history.json",
     ],
     parse: (raw) => JSON.parse(raw) as TruffleHogResult[],
     contract: checkTruffleHogContract,
