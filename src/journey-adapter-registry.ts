@@ -145,6 +145,12 @@ export function validateJourneyAdapterRegistry(
     if (!entry.implementation.file.startsWith("src/journey-adapters/") || !entry.implementation.file.endsWith(".ts")) problems.push(`${entry.id}: implementation path is outside src/journey-adapters`);
     if (!entry.implementation.exportName.endsWith("JourneyAdapter")) problems.push(`${entry.id}: implementation export must end with JourneyAdapter`);
     if (entry.configFamilies.length === 0) problems.push(`${entry.id}: adapter has no registered config family`);
+    if (entry.dependencyNames.length === 0 || entry.dependencyNames.some((name) => name.trim() === "") || new Set(entry.dependencyNames).size !== entry.dependencyNames.length) {
+      problems.push(`${entry.id}: dependency evidence names must be non-empty and unique`);
+    }
+    if (entry.configFamilies.filter((family) => family.id === `${entry.id}:script-only`).length !== 1) {
+      problems.push(`${entry.id}: adapter must register exactly one script-only family`);
+    }
     for (const family of entry.configFamilies) {
       if (!family.id.startsWith(`${entry.id}:`)) problems.push(`${entry.id}: config family ${family.id} is not namespaced to its adapter`);
       const previous = familyOwners.get(family.id);

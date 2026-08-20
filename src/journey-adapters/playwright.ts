@@ -5,7 +5,13 @@ export const playwrightJourneyAdapter = Object.freeze({
   order: 100,
   framework: "Playwright",
   implementation: { file: "src/journey-adapters/playwright.ts", exportName: "playwrightJourneyAdapter" },
+  dependencyNames: ["@playwright/test", "playwright", "playwright-core"],
   configFamilies: [
+    {
+      id: "playwright:script-only",
+      pathPattern: "(?!)",
+      shape: "playwright",
+    },
     {
       id: "playwright:component-config",
       pathPattern: "(^|/)playwright-ct(?:\\.[A-Za-z0-9_-]+)?\\.config\\.[cm]?[jt]s$",

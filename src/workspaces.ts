@@ -93,7 +93,7 @@ export type WorkspaceInventoryObservation =
       path: string;
       glob: string;
       sourcePath: string;
-      reason: "negative-workspace-glob";
+      reason: "implicit-directory-policy" | "negative-workspace-glob";
     }
   | {
       kind: "unresolved-glob" | "invalid-glob";
@@ -293,8 +293,8 @@ function parseWorkspaceGlobs(repoRoot: string): {
 // wander into node_modules and enumerate every dependency as a "workspace".
 const GLOB_SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", ".vercel",
-  "generated", "vendor", "fixtures", "fixture", "examples",
 ]);
+const IMPLICIT_WORKSPACE_EXCLUDE_DIRS = new Set(["generated", "vendor", "fixtures", "fixture", "examples"]);
 
 function physicalPathWithin(root: string, candidate: string): string | undefined {
   try {
@@ -372,6 +372,15 @@ function expandGlob(repoRoot: string, glob: string): string[] {
   };
   walk(logicalRoot, segments, new Set());
   return [...out];
+}
+
+function implicitlyExcludedWorkspace(dir: string, glob: string): boolean {
+  const pathSegments = dir.split("/");
+  const patternSegments = globSegments(glob) ?? [];
+  const firstWildcard = patternSegments.findIndex((segment) => segment.includes("*") || segment.includes("?") || segment.includes("[") || segment.includes("{"));
+  const literalPrefix = firstWildcard < 0 ? patternSegments : patternSegments.slice(0, firstWildcard);
+  return pathSegments.some((segment, index) => IMPLICIT_WORKSPACE_EXCLUDE_DIRS.has(segment)
+    && (index >= literalPrefix.length || literalPrefix[index] !== segment));
 }
 
 // pnpm and npm both let a workspace subtract with a leading "!". expandGlob has no notion of one, so
@@ -526,8 +535,17 @@ function discoverWorkspaceRecords(repoRoot: string): {
       if (!existsSync(join(candidate, "package.json"))) continue;
       const dir = canonicalWorkspaceDir(logicalRoot, candidate);
       if (!dir) continue;
-      if (excluded.has(dir)) continue;
       matched += 1;
+      if (implicitlyExcludedWorkspace(dir, glob)) {
+        const path = dir === "." ? "package.json" : `${dir}/package.json`;
+        if (!observations.some((row) => row.kind === "excluded" && row.path === path && row.glob === glob)) {
+          observations.push({ kind: "excluded", path, glob, sourcePath: sourceDetails.sourcePath, reason: "implicit-directory-policy" });
+        }
+        continue;
+      }
+      const id = workspaceIdForDir(dir);
+      applicationWorkspaceIds.add(id);
+      if (excluded.has(dir)) continue;
       const discoveredBy: WorkspaceDiscoveryEvidence = source === "no workspace globs declared"
         ? { kind: "root-manifest", sourcePath: "package.json", sourceField: "root" }
         : { kind: "workspace-glob", ...sourceDetails, glob };

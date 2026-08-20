@@ -266,7 +266,14 @@ describe("discoverWorkspaceInventoryV1", () => {
     manifest("generated/sdk", { name: "sdk" });
     manifest("vendor/tool", { name: "tool" });
     manifest("fixtures/case", { name: "fixture" });
-    expect(discoverWorkspaceInventory(dir).packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:apps/web"]);
+    const broad = discoverWorkspaceInventory(dir);
+    expect(broad.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:apps/web"]);
+    expect(broad.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "fixtures/case/package.json", glob: "**", reason: "implicit-directory-policy" }),
+      expect.objectContaining({ kind: "excluded", path: "generated/sdk/package.json", glob: "**", reason: "implicit-directory-policy" }),
+      expect.objectContaining({ kind: "excluded", path: "vendor/tool/package.json", glob: "**", reason: "implicit-directory-policy" }),
+    ]));
+    expect(broad.observations.filter((row) => row.kind === "excluded")).toHaveLength(3);
 
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["fixtures/*"] }));
     expect(discoverWorkspaceInventory(dir).packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:fixtures/case"]);

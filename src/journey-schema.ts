@@ -46,6 +46,8 @@ export interface JourneyAdapterDefinition {
   order: number;
   framework: "Cypress" | "Playwright" | "Vitest Browser" | "WebdriverIO";
   implementation: { file: string; exportName: string };
+  /** Exact manifest dependency names that can evidence a configless suite. */
+  dependencyNames: readonly string[];
   configFamilies: readonly JourneyConfigFamilyDefinition[];
   testPathPatterns: readonly string[];
   suiteCalls: readonly string[];

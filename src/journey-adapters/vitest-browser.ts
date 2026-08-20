@@ -5,7 +5,13 @@ export const vitestBrowserJourneyAdapter = Object.freeze({
   order: 400,
   framework: "Vitest Browser",
   implementation: { file: "src/journey-adapters/vitest-browser.ts", exportName: "vitestBrowserJourneyAdapter" },
+  dependencyNames: ["@vitest/browser", "@vitest/browser-playwright", "@vitest/browser-webdriverio"],
   configFamilies: [
+    {
+      id: "vitest-browser:script-only",
+      pathPattern: "(?!)",
+      shape: "vitest-browser",
+    },
     {
       id: "vitest-browser:config",
       pathPattern: "(^|/)vitest(?:\\.[A-Za-z0-9_-]+)?\\.config\\.[cm]?[jt]s$",

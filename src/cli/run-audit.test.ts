@@ -45,11 +45,13 @@ let baselineFindingId: string;
 function buildMonorepo(root: string): void {
   mkdirSync(join(root, "apps", "web", "app"), { recursive: true });
   mkdirSync(join(root, "apps", "api"), { recursive: true });
+  mkdirSync(join(root, "apps", "scratch"), { recursive: true });
   mkdirSync(join(root, "shared"), { recursive: true });
-  writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "apps/*"\n');
+  writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "apps/*"\n  - "!apps/scratch"\n');
   writeFileSync(join(root, "package.json"), '{"name":"mono-root","private":true}\n');
   writeFileSync(join(root, "apps", "web", "package.json"), '{"name":"web","dependencies":{"next":"14.0.0"}}\n');
   writeFileSync(join(root, "apps", "api", "package.json"), '{"name":"api"}\n');
+  writeFileSync(join(root, "apps", "scratch", "package.json"), '{"name":"scratch"}\n');
   writeFileSync(join(root, "apps", "web", "app", "page.tsx"), 'export default function Page() {\n  return <img src="/hero.png" alt="hero" />;\n}\n');
   writeFileSync(join(root, "shared", "Widget.tsx"), 'export function Widget() {\n  return <img src="/w.png" alt="w" />;\n}\n');
 }
@@ -139,8 +141,13 @@ describe("run-audit CLI export capture", () => {
     expect(readinessPlan.schemaVersion).toBe(1);
     expect(readinessPlan.workspaceInventory.applicationWorkspaceIds).toEqual([
       "workspace:apps/api",
+      "workspace:apps/scratch",
       "workspace:apps/web",
     ]);
+    expect(readinessPlan.workspaces.map((workspace) => workspace.id)).not.toContain("workspace:apps/scratch");
+    expect(readinessPlan.workspaceInventory.observations).toContainEqual(expect.objectContaining({
+      kind: "excluded", path: "apps/scratch/package.json", reason: "negative-workspace-glob",
+    }));
     const auditedApps = [...new Set((readinessEngagement.coverage ?? [])
       .filter((row) => row.module === "M4" && row.instance)
       .map((row) => `workspace:${row.instance}`))].sort();

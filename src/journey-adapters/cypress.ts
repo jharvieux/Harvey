@@ -5,7 +5,13 @@ export const cypressJourneyAdapter = Object.freeze({
   order: 200,
   framework: "Cypress",
   implementation: { file: "src/journey-adapters/cypress.ts", exportName: "cypressJourneyAdapter" },
+  dependencyNames: ["cypress"],
   configFamilies: [
+    {
+      id: "cypress:script-only",
+      pathPattern: "(?!)",
+      shape: "cypress",
+    },
     {
       id: "cypress:config",
       pathPattern: "(^|/)cypress\\.config\\.[cm]?[jt]s$",

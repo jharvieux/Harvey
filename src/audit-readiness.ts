@@ -663,9 +663,7 @@ function validateWorkspaceInventory(value: unknown): { ids: Set<string>; package
     packages.set(candidate.id, candidate as unknown as WorkspaceInventoryPackage);
   }
   if (!ids.has("workspace:root")) throw new Error("workspaceInventory must contain the readable repository root exactly once");
-  if (new Set(value.applicationWorkspaceIds).size !== value.applicationWorkspaceIds.length || value.applicationWorkspaceIds.some((id) => !ids.has(id))) {
-    throw new Error("workspaceInventory applicationWorkspaceIds must be unique package ids");
-  }
+  const negativelyExcludedIds = new Set<string>();
   for (const [index, observation] of value.observations.entries()) {
     if (!record(observation) || typeof observation.kind !== "string" || typeof observation.reason !== "string") {
       throw new Error(`workspaceInventory.observations[${index}] is invalid`);
@@ -673,9 +671,12 @@ function validateWorkspaceInventory(value: unknown): { ids: Set<string>; package
     if (observation.reason === "") throw new Error(`workspaceInventory.observations[${index}] lacks a reason`);
     if (observation.kind === "excluded") {
       assertExactKeys(observation, ["kind", "path", "glob", "sourcePath", "reason"], `workspaceInventory.observations[${index}]`);
-      if (!canonicalRelativePath(observation.path) || typeof observation.glob !== "string" || observation.glob === "" || typeof observation.sourcePath !== "string" || observation.sourcePath === "" || observation.reason !== "negative-workspace-glob") {
+      const observationPath = typeof observation.path === "string" ? observation.path : undefined;
+      const excludedDir = observationPath === "package.json" ? "." : observationPath?.endsWith("/package.json") ? observationPath.slice(0, -"/package.json".length) : undefined;
+      if (!observationPath || !excludedDir || !canonicalRelativePath(observationPath) || typeof observation.glob !== "string" || observation.glob === "" || typeof observation.sourcePath !== "string" || observation.sourcePath === "" || !["implicit-directory-policy", "negative-workspace-glob"].includes(observation.reason)) {
         throw new Error(`workspaceInventory.observations[${index}] has malformed exclusion evidence`);
       }
+      if (observation.reason === "negative-workspace-glob") negativelyExcludedIds.add(workspaceIdForDir(excludedDir));
     } else if (observation.kind === "unresolved-glob" || observation.kind === "invalid-glob") {
       assertExactKeys(observation, ["kind", "glob", "sourcePath", "reason"], `workspaceInventory.observations[${index}]`);
       if (typeof observation.glob !== "string" || observation.glob === "" || typeof observation.sourcePath !== "string" || observation.sourcePath === "") {
@@ -687,6 +688,10 @@ function validateWorkspaceInventory(value: unknown): { ids: Set<string>; package
     } else {
       throw new Error(`workspaceInventory.observations[${index}] has an unknown kind`);
     }
+  }
+  if (new Set(value.applicationWorkspaceIds).size !== value.applicationWorkspaceIds.length
+    || value.applicationWorkspaceIds.some((id) => !ids.has(id) && !negativelyExcludedIds.has(id))) {
+    throw new Error("workspaceInventory applicationWorkspaceIds must be unique package ids or evidenced negative-glob app ids");
   }
   return { ids, packages };
 }

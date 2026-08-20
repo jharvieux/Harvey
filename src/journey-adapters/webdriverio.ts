@@ -5,7 +5,13 @@ export const webdriverioJourneyAdapter = Object.freeze({
   order: 300,
   framework: "WebdriverIO",
   implementation: { file: "src/journey-adapters/webdriverio.ts", exportName: "webdriverioJourneyAdapter" },
+  dependencyNames: ["@wdio/cli", "webdriverio"],
   configFamilies: [
+    {
+      id: "webdriverio:script-only",
+      pathPattern: "(?!)",
+      shape: "webdriverio",
+    },
     {
       id: "webdriverio:config",
       pathPattern: "(^|/)wdio(?:\\.[A-Za-z0-9_-]+)?\\.conf\\.[cm]?[jt]s$|(^|/)[A-Za-z0-9_-]+\\.wdio\\.conf\\.[cm]?[jt]s$",

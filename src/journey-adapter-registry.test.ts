@@ -31,10 +31,10 @@ describe("journey adapter registry completeness", () => {
   it("matches every production adapter and config family discovered from source", () => {
     expect(validateJourneyAdapterRegistry(REPO_ROOT)).toEqual([]);
     expect(discoverJourneyAdapterImplementations(REPO_ROOT).map(({ id, configFamilyIds }) => ({ id, configFamilyIds }))).toEqual([
-      { id: "cypress", configFamilyIds: ["cypress:config", "cypress:legacy-json"] },
-      { id: "playwright", configFamilyIds: ["playwright:component-config", "playwright:config"] },
-      { id: "vitest-browser", configFamilyIds: ["vitest-browser:config", "vitest-browser:projects", "vitest-browser:vite-config"] },
-      { id: "webdriverio", configFamilyIds: ["webdriverio:config"] },
+      { id: "cypress", configFamilyIds: ["cypress:config", "cypress:legacy-json", "cypress:script-only"] },
+      { id: "playwright", configFamilyIds: ["playwright:component-config", "playwright:config", "playwright:script-only"] },
+      { id: "vitest-browser", configFamilyIds: ["vitest-browser:config", "vitest-browser:projects", "vitest-browser:script-only", "vitest-browser:vite-config"] },
+      { id: "webdriverio", configFamilyIds: ["webdriverio:config", "webdriverio:script-only"] },
     ]);
   });
 

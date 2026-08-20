@@ -21,10 +21,10 @@ function target(): string {
   writeFileSync(join(root, "package.json"), JSON.stringify({
     name: "cli-target",
     packageManager: "pnpm@11.1.3",
+    devDependencies: { "@playwright/test": "1.55.0" },
     scripts: { "verify:e2e": "playwright test && echo $CLI_SCRIPT_SECRET" },
   }));
   writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  writeFileSync(join(root, "playwright.config.ts"), "export default { testDir: './e2e', projects: [{ name: 'chromium' }] };\n");
   mkdirSync(join(root, "e2e"));
   writeFileSync(join(root, "e2e", "login.spec.ts"), "test('user logs in', async ({ page }) => { await page.goto('/login?token=CLI_ROUTE_SECRET'); });\n");
   return root;
@@ -38,6 +38,7 @@ describe("discover-journeys CLI", () => {
     const serialized = readFileSync(output, "utf8");
     const inventory = parseJourneyInventoryV1(serialized);
     expect(inventory.schemaVersion).toBe(1);
+    expect(inventory.suites).toEqual([expect.objectContaining({ adapterId: "playwright", configFamilyId: "playwright:script-only" })]);
     expect(inventory.tests.map((test) => test.title)).toEqual(["user logs in"]);
     expect(inventory.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ scope: "full", bin: "pnpm", args: ["run", "verify:e2e"] }),

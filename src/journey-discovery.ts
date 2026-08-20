@@ -64,8 +64,14 @@ interface StaticConfigResult {
   value?: StaticValue;
 }
 
+interface ConfigProjectShape {
+  name: string;
+  testRoots: string[];
+  testPatterns: string[];
+}
+
 interface ConfigShape {
-  projectNames: string[];
+  projects: ConfigProjectShape[];
   testRoots: string[];
   testPatterns: string[];
 }
@@ -161,6 +167,35 @@ function workspaceEvidence(workspace: WorkspaceInventoryPackage): JourneyEvidenc
     sourceEvidence("workspace-manifest", workspace.manifestPath),
     ...workspace.discoveredBy.map(declarationEvidence),
   ]);
+}
+
+const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
+
+function pointerToken(value: string): string {
+  return value.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+function adapterDependencyEvidence(
+  repoRoot: string,
+  workspace: WorkspaceInventoryPackage,
+  adapter: JourneyAdapterDefinition,
+): JourneyEvidence[] {
+  let manifest: Record<string, unknown>;
+  try { manifest = JSON.parse(readFileSync(resolve(repoRoot, ...workspace.manifestPath.split("/")), "utf8")) as Record<string, unknown>; }
+  catch { return []; }
+  const names = new Set(adapter.dependencyNames);
+  const evidence: JourneyEvidence[] = [];
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) continue;
+    for (const name of Object.keys(dependencies).filter((candidate) => names.has(candidate)).sort()) {
+      evidence.push({
+        kind: "workspace-manifest", path: workspace.manifestPath,
+        pointer: `/${field}/${pointerToken(name)}`, adapterId: adapter.id,
+      });
+    }
+  }
+  return evidence;
 }
 
 function workspaceObservationRows(observations: readonly WorkspaceInventoryObservation[]): JourneyObservation[] {
@@ -342,24 +377,26 @@ function globRoot(pattern: string): string | undefined {
 }
 
 function configShape(shape: JourneyConfigFamilyDefinition["shape"], value: StaticValue | undefined): ConfigShape {
-  const projects: string[] = [];
+  const projects: ConfigProjectShape[] = [];
   const testRoots: string[] = [];
   const testPatterns: string[] = [];
   if (shape === "playwright") {
     for (const project of array(at(value, "projects"))) {
       const projectRecord = record(project);
       const name = projectRecord?.name;
-      if (typeof name === "string") projects.push(name);
-      testRoots.push(...strings(projectRecord?.testDir));
-      testPatterns.push(...strings(projectRecord?.testMatch));
+      if (typeof name === "string") projects.push({
+        name,
+        testRoots: sorted(strings(projectRecord?.testDir)),
+        testPatterns: sorted(strings(projectRecord?.testMatch)),
+      });
     }
     testRoots.push(...strings(at(value, "testDir")));
     testPatterns.push(...strings(at(value, "testMatch")));
   } else if (shape === "cypress") {
     const object = record(value);
-    if (record(object?.e2e)) projects.push("e2e");
-    if (record(object?.component)) projects.push("component");
-    if (projects.length === 0) projects.push("e2e");
+    if (record(object?.e2e)) projects.push({ name: "e2e", testRoots: [], testPatterns: [] });
+    if (record(object?.component)) projects.push({ name: "component", testRoots: [], testPatterns: [] });
+    if (projects.length === 0) projects.push({ name: "e2e", testRoots: [], testPatterns: [] });
     testPatterns.push(...strings(at(value, "e2e", "specPattern")), ...strings(object?.testFiles));
     testRoots.push(...strings(object?.integrationFolder));
     for (const pattern of testPatterns) {
@@ -369,13 +406,13 @@ function configShape(shape: JourneyConfigFamilyDefinition["shape"], value: Stati
   } else if (shape === "webdriverio") {
     const suites = record(at(value, "suites"));
     if (suites) {
-      projects.push(...Object.keys(suites));
+      projects.push(...Object.keys(suites).map((name) => ({ name, testRoots: [], testPatterns: [] })));
       for (const patterns of Object.values(suites)) testPatterns.push(...strings(patterns));
     }
     for (const capability of array(at(value, "capabilities"))) {
       const capabilityRecord = record(capability);
       const name = capabilityRecord?.browserName ?? capabilityRecord?.name;
-      if (typeof name === "string") projects.push(name);
+      if (typeof name === "string") projects.push({ name, testRoots: [], testPatterns: [] });
     }
     testPatterns.push(...strings(at(value, "specs")));
   } else {
@@ -383,17 +420,19 @@ function configShape(shape: JourneyConfigFamilyDefinition["shape"], value: Stati
     for (const instance of array(at(browser, "instances"))) {
       const instanceRecord = record(instance);
       const name = instanceRecord?.name ?? instanceRecord?.browser;
-      if (typeof name === "string") projects.push(name);
+      if (typeof name === "string") projects.push({ name, testRoots: [], testPatterns: [] });
     }
     const browserRecord = record(browser);
     if (projects.length === 0 && browserRecord) {
       const name = browserRecord.name ?? browserRecord.provider;
-      projects.push(typeof name === "string" ? name : "browser");
+      projects.push({ name: typeof name === "string" ? name : "browser", testRoots: [], testPatterns: [] });
     }
     testPatterns.push(...strings(at(value, "test", "include")), ...strings(at(value, "include")));
   }
-  if (projects.length === 0) projects.push("default");
-  return { projectNames: sorted(projects), testRoots: sorted(testRoots), testPatterns: sorted(testPatterns) };
+  if (projects.length === 0) projects.push({ name: "default", testRoots: [], testPatterns: [] });
+  const uniqueProjects = [...new Map(projects.map((project) => [project.name, project])).values()]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { projects: uniqueProjects, testRoots: sorted(testRoots), testPatterns: sorted(testPatterns) };
 }
 
 function hasStaticVitestBrowser(value: StaticValue | undefined): boolean {
@@ -412,29 +451,53 @@ function joinRepo(base: string, child: string): string {
 function globPattern(pattern: string): RegExp | undefined {
   if (pattern.startsWith("!")) return undefined;
   const escaped = pattern.replace(/^\.\//, "").replace(/[.+^$()|\\]/g, "\\$&")
-    .replace(/\*\*/g, "__HARVEY_DOUBLE_STAR__").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replaceAll("__HARVEY_DOUBLE_STAR__", ".*");
+    .replace(/\*\*\//g, "__HARVEY_DOUBLE_STAR_SLASH__").replace(/\*\*/g, "__HARVEY_DOUBLE_STAR__")
+    .replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]")
+    .replaceAll("__HARVEY_DOUBLE_STAR_SLASH__", "(?:.*/)?").replaceAll("__HARVEY_DOUBLE_STAR__", ".*");
   try { return new RegExp(`^${escaped}$`, "i"); }
   catch { return undefined; }
 }
 
-function isTestFile(
+function isTestFileForScope(
+  path: string,
+  workspace: WorkspaceInventoryPackage,
+  adapter: JourneyAdapterDefinition,
+  configDirectory: string,
+  testRoots: readonly string[],
+  testPatterns: readonly string[],
+): boolean {
+  if (!SOURCE_PATH.test(path)) return false;
+  const relWorkspace = relativeToWorkspace(path, workspace);
+  const relConfig = configDirectory === "." ? path : path.startsWith(`${configDirectory}/`) ? path.slice(configDirectory.length + 1) : path;
+  const explicitPatterns = testPatterns.map(globPattern).filter((pattern): pattern is RegExp => pattern !== undefined);
+  const patternMatches = explicitPatterns.some((pattern) => pattern.test(relConfig) || pattern.test(relWorkspace));
+  if (explicitPatterns.length > 0 && testRoots.length === 0) return patternMatches;
+  const roots = testRoots.length > 0 ? testRoots : adapter.defaultTestRoots;
+  const inRoot = roots.some((root) => {
+    const repoRoot = joinRepo(configDirectory, root).replace(/\/$/, "");
+    return path === repoRoot || path.startsWith(`${repoRoot}/`) || relWorkspace.startsWith(`${root.replace(/^\.\//, "").replace(/\/$/, "")}/`);
+  });
+  if (explicitPatterns.length > 0) return patternMatches && inRoot;
+  return inRoot && adapter.testPathPatterns.some((pattern) => new RegExp(pattern, "i").test(path));
+}
+
+function matchingProjectNames(
   path: string,
   workspace: WorkspaceInventoryPackage,
   adapter: JourneyAdapterDefinition,
   configDirectory: string,
   shape: ConfigShape,
-): boolean {
-  if (!SOURCE_PATH.test(path)) return false;
-  const relWorkspace = relativeToWorkspace(path, workspace);
-  const relConfig = configDirectory === "." ? path : path.startsWith(`${configDirectory}/`) ? path.slice(configDirectory.length + 1) : path;
-  const explicitPatterns = shape.testPatterns.map(globPattern).filter((pattern): pattern is RegExp => pattern !== undefined);
-  if (explicitPatterns.some((pattern) => pattern.test(relConfig) || pattern.test(relWorkspace))) return true;
-  const roots = shape.testRoots.length > 0 ? shape.testRoots : adapter.defaultTestRoots;
-  const inRoot = roots.some((root) => {
-    const repoRoot = joinRepo(configDirectory, root).replace(/\/$/, "");
-    return path === repoRoot || path.startsWith(`${repoRoot}/`) || relWorkspace.startsWith(`${root.replace(/^\.\//, "").replace(/\/$/, "")}/`);
-  });
-  return inRoot && adapter.testPathPatterns.some((pattern) => new RegExp(pattern, "i").test(path));
+): string[] {
+  return shape.projects
+    .filter((project) => isTestFileForScope(
+      path,
+      workspace,
+      adapter,
+      configDirectory,
+      project.testRoots.length > 0 ? project.testRoots : shape.testRoots,
+      project.testPatterns.length > 0 ? project.testPatterns : shape.testPatterns,
+    ))
+    .map((project) => project.name);
 }
 
 function literalText(expression: ts.Expression | undefined): string | undefined {
@@ -633,6 +696,35 @@ function packageCommands(
   }
 }
 
+function literalCiArguments(line: string, start: number): string[] {
+  const input = line.slice(start);
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    while (/\s/.test(input[index] ?? "")) index += 1;
+    if (index >= input.length || input[index] === "#" || /[;&|<>]/.test(input[index] ?? "")) break;
+    let token = "";
+    const quote = input[index] === "\"" || input[index] === "'" ? input[index++] : undefined;
+    while (index < input.length) {
+      const character = input[index]!;
+      if (quote) {
+        if (character === quote) { index += 1; break; }
+        if (character === "\\" && quote === "\"" && index + 1 < input.length) token += input[++index]!;
+        else token += character;
+        index += 1;
+        continue;
+      }
+      if (/\s/.test(character) || character === "#" || /[;&|<>]/.test(character)) break;
+      token += character;
+      index += 1;
+    }
+    if (!token || token.includes("$") || token.includes("`") || /[\r\n\0]/.test(token)) break;
+    tokens.push(token);
+    if (!quote && index < input.length && (input[index] === "#" || /[;&|<>]/.test(input[index]!))) break;
+  }
+  return tokens;
+}
+
 function ciCommands(
   files: readonly TreeFile[],
   packages: readonly WorkspaceInventoryPackage[],
@@ -657,7 +749,8 @@ function ciCommands(
         const name = match[3]!;
         if (manager === "npm" && !verb) continue;
         if (["install", "add", "exec", "dlx"].includes(name)) continue;
-        matches.push({ manager, args: verb ? [verb, name] : [name], scriptOrTool: name });
+        const end = (match.index ?? 0) + match[0].length;
+        matches.push({ manager, args: [...(verb ? [verb, name] : [name]), ...literalCiArguments(line, end)], scriptOrTool: name });
       }
       for (const match of line.matchAll(/\b(npx|pnpm|npm|yarn)\s+(exec\s+|dlx\s+)?(?:--\s+)?(playwright|cypress|wdio|vitest)\b(?:\s+(test|run))?/g)) {
         if (match[1] !== "npx" && !match[2]) continue;
@@ -666,6 +759,7 @@ function ciCommands(
         const action = match[4];
         const args = manager === "npm" ? ["exec", "--", tool] : [match[2]?.trim() ?? "exec", tool];
         if (action) args.push(action);
+        args.push(...literalCiArguments(line, (match.index ?? 0) + match[0].length));
         matches.push({ manager, args, scriptOrTool: tool });
       }
       for (const match of matches) {
@@ -729,6 +823,54 @@ export function discoverJourneyInventory(repoRoot: string): JourneyInventoryV1 {
   const fixtureMap = new Map<string, JourneyFixture>();
   const pageObjectMap = new Map<string, JourneyPageObject>();
   const suitePopulation = new Set<string>();
+
+  const populateSuite = (
+    suite: JourneySuite,
+    workspace: WorkspaceInventoryPackage,
+    adapter: JourneyAdapterDefinition,
+    family: JourneyConfigFamilyDefinition,
+    shape: ConfigShape,
+    configDirectory: string,
+    evidence: JourneyEvidence[],
+  ): void => {
+    const projectIdsByName = new Map<string, JourneyProject["id"]>();
+    for (const projectShape of shape.projects) {
+      const projectId = journeyProjectId(suite.id, projectShape.name);
+      projectIdsByName.set(projectShape.name, projectId);
+      projects.push({
+        id: projectId, suiteId: suite.id, name: projectShape.name, location: suite.location,
+        testIds: [], criticality: "unconfirmed", evidence,
+      });
+    }
+    for (const candidate of files) {
+      const matchingNames = matchingProjectNames(candidate.path, workspace, adapter, configDirectory, shape);
+      if (matchingNames.length === 0) continue;
+      let source: string;
+      try { source = readFileSync(candidate.absolute, "utf8"); }
+      catch { continue; }
+      const projectIds = matchingNames.map((name) => projectIdsByName.get(name)!).sort();
+      for (const parsedTest of parseTestFile(candidate.path, source, adapter)) {
+        const testId = journeyTestId(suite.id, candidate.path, parsedTest.titlePath);
+        tests.push({
+          id: testId, suiteId: suite.id, projectIds, title: parsedTest.title, titlePath: parsedTest.titlePath,
+          location: parsedTest.location, routes: parsedTest.routes, fixtures: parsedTest.fixtures,
+          personas: parsedTest.personas, roles: parsedTest.roles, commandIds: [], criticality: "unconfirmed",
+          evidence: [sourceEvidence("test-source", candidate.path, adapter.id, family.id, { line: parsedTest.location.line, column: parsedTest.location.column })],
+        });
+      }
+    }
+    const suiteTests = tests.filter((test) => test.suiteId === suite.id);
+    if (suiteTests.length === 0) observations.push({
+      status: "not-assessed", subject: "tests", workspaceId: workspace.id, adapterId: adapter.id, configFamilyId: family.id,
+      reason: "zero-tests", populationCount: 1, unitsExamined: 0, scope: suite.configPath, provenance: evidence,
+      falsifier: "Add one literal-title test under the declared or conventional test population, then rerun discovery.",
+    });
+    else observations.push({
+      status: "examined", subject: "tests", workspaceId: workspace.id, adapterId: adapter.id, configFamilyId: family.id,
+      unitsExamined: suiteTests.length, scope: suite.configPath,
+      provenance: sortedEvidence(suiteTests.flatMap((test) => test.evidence)),
+    });
+  };
 
   observations.push(...workspaceObservationRows(workspaceInventory.observations));
 
@@ -810,40 +952,37 @@ export function discoverJourneyInventory(repoRoot: string): JourneyInventoryV1 {
         configFamilyId: family.id, unitsExamined: 1, scope: file.path, provenance: evidence,
       });
       const parsedShape = configShape(family.shape, parsed.value);
-      for (const name of parsedShape.projectNames) {
-        const projectId = journeyProjectId(id, name);
-        projects.push({
-          id: projectId, suiteId: id, name, location: { path: file.path, line: 1, column: 1 },
-          testIds: [], criticality: "unconfirmed", evidence,
-        });
-      }
-      const projectIds = projects.filter((project) => project.suiteId === id).map((project) => project.id).sort();
       const configDirectory = dirname(file.path) === "." ? "." : dirname(file.path);
-      for (const candidate of files.filter((entry) => isTestFile(entry.path, workspace, adapter, configDirectory, parsedShape))) {
-        let source: string;
-        try { source = readFileSync(candidate.absolute, "utf8"); }
-        catch { continue; }
-        for (const parsedTest of parseTestFile(candidate.path, source, adapter)) {
-          const testId = journeyTestId(id, candidate.path, parsedTest.titlePath);
-          tests.push({
-            id: testId, suiteId: id, projectIds, title: parsedTest.title, titlePath: parsedTest.titlePath,
-            location: parsedTest.location, routes: parsedTest.routes, fixtures: parsedTest.fixtures,
-            personas: parsedTest.personas, roles: parsedTest.roles, commandIds: [], criticality: "unconfirmed",
-            evidence: [sourceEvidence("test-source", candidate.path, adapter.id, family.id, { line: parsedTest.location.line, column: parsedTest.location.column })],
-          });
-        }
-      }
-      const suiteTests = tests.filter((test) => test.suiteId === id);
-      if (suiteTests.length === 0) observations.push({
-        status: "not-assessed", subject: "tests", workspaceId: workspace.id, adapterId: adapter.id, configFamilyId: family.id,
-        reason: "zero-tests", populationCount: 1, unitsExamined: 0, scope: file.path, provenance: evidence,
-        falsifier: "Add one literal-title test under the declared or conventional test population, then rerun discovery.",
-      });
-      else observations.push({
-        status: "examined", subject: "tests", workspaceId: workspace.id, adapterId: adapter.id, configFamilyId: family.id,
-        unitsExamined: suiteTests.length, scope: file.path,
-        provenance: sortedEvidence(suiteTests.flatMap((test) => test.evidence)),
-      });
+      populateSuite(suite, workspace, adapter, family, parsedShape, configDirectory, evidence);
+    }
+  }
+
+  for (const workspace of packages) {
+    for (const adapter of JOURNEY_ADAPTER_REGISTRY) {
+      if (suitePopulation.has(`${workspace.id}\0${adapter.id}`)) continue;
+      const dependencyEvidence = adapterDependencyEvidence(root, workspace, adapter);
+      const scripts = workspace.scripts.filter((script) => new RegExp(adapter.scriptNamePattern, "i").test(script.name));
+      if (dependencyEvidence.length === 0 || scripts.length === 0) continue;
+      const family = adapter.configFamilies.find((candidate) => candidate.id === `${adapter.id}:script-only`);
+      if (!family) continue;
+      const evidence = sortedEvidence([
+        ...dependencyEvidence,
+        ...scripts.map((script): JourneyEvidence => ({
+          kind: "package-script", path: script.source.path, pointer: script.source.pointer,
+          adapterId: adapter.id, configFamilyId: family.id,
+        })),
+      ]);
+      const id = journeySuiteId(workspace.id, adapter.id, family.id, workspace.manifestPath);
+      const suite: JourneySuite = {
+        id, workspaceId: workspace.id, adapterId: adapter.id, framework: adapter.framework,
+        configFamilyId: family.id, configPath: workspace.manifestPath,
+        title: `${adapter.framework} — script-only`, location: { path: workspace.manifestPath, line: 1, column: 1 },
+        projectIds: [], testIds: [], fixtureIds: [], pageObjectIds: [], commandIds: [],
+        criticality: "unconfirmed", evidence,
+      };
+      suites.push(suite);
+      suitePopulation.add(`${workspace.id}\0${adapter.id}`);
+      populateSuite(suite, workspace, adapter, family, configShape(family.shape, undefined), workspace.dir, evidence);
     }
   }
 

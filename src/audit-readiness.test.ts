@@ -312,4 +312,24 @@ describe("validateReadinessPlanV1", () => {
     unknown.generatedAt = new Date().toISOString();
     expect(() => validateReadinessPlanV1(unknown)).toThrow(/unknown field/);
   });
+
+  it("accepts an app-only negative exclusion but rejects an unevidenced or policy-only missing package id", () => {
+    const evidenced = validPlan();
+    evidenced.workspaceInventory.applicationWorkspaceIds.push("workspace:apps/scratch");
+    evidenced.workspaceInventory.observations.push({
+      kind: "excluded", path: "apps/scratch/package.json", glob: "!apps/scratch",
+      sourcePath: "package.json", reason: "negative-workspace-glob",
+    });
+    expect(validateReadinessPlanV1(evidenced)).toBe(evidenced);
+
+    const policyOnly = structuredClone(evidenced);
+    const exclusion = policyOnly.workspaceInventory.observations.at(-1);
+    if (!exclusion || exclusion.kind !== "excluded") throw new Error("fixture lacks exclusion");
+    exclusion.reason = "implicit-directory-policy";
+    expect(() => validateReadinessPlanV1(policyOnly)).toThrow(/evidenced negative-glob app ids/);
+
+    const unevidenced = validPlan();
+    unevidenced.workspaceInventory.applicationWorkspaceIds.push("workspace:apps/ghost");
+    expect(() => validateReadinessPlanV1(unevidenced)).toThrow(/evidenced negative-glob app ids/);
+  });
 });

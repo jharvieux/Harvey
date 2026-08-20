@@ -96,7 +96,7 @@ describe("candidate journey discovery", () => {
             - run: pnpm run ci:e2e
               env:
                 CLIENT_TOKEN: CI_SECRET_VALUE
-            - run: pnpm exec playwright test
+            - run: pnpm exec playwright test --project chromium e2e/admin.spec.ts && echo $CI_DYNAMIC_SECRET
     `);
 
     const inventory = discoverJourneyInventory(root);
@@ -124,7 +124,7 @@ describe("candidate journey discovery", () => {
       expect.objectContaining({ kind: "package-script", scope: "full", bin: "pnpm", args: ["run", "qa:e2e"] }),
       expect.objectContaining({ kind: "package-script", scope: "focused", cwd: "apps/web", bin: "pnpm", args: ["run", "qa:e2e", "--", "e2e/admin.spec.ts"] }),
       expect.objectContaining({ kind: "ci-literal", scope: "ci", bin: "pnpm", args: ["run", "ci:e2e"] }),
-      expect.objectContaining({ kind: "ci-literal", scope: "ci", bin: "pnpm", args: ["exec", "playwright", "test"] }),
+      expect.objectContaining({ kind: "ci-literal", scope: "ci", bin: "pnpm", args: ["exec", "playwright", "test", "--project", "chromium", "e2e/admin.spec.ts"] }),
     ]));
     expect(inventory.commands.some((command) => command.args.includes("unit"))).toBe(false);
     const serialized = serializeJourneyInventoryV1(inventory);
@@ -134,10 +134,77 @@ describe("candidate journey discovery", () => {
     expect(serialized).not.toContain("TARGET_CONFIG_MUST_NOT_EXECUTE");
     expect(serialized).not.toContain("ROUTE_SECRET");
     expect(serialized).not.toContain("CI_SECRET_VALUE");
+    expect(serialized).not.toContain("CI_DYNAMIC_SECRET");
     expect(validateJourneyInventoryV1(JSON.parse(serialized))).toEqual([]);
 
     directoryOrder.reverse = true;
     expect(discoverJourneyInventory(root)).toEqual(inventory);
+  });
+
+  it("discovers configless dependency-backed script-only suites for every registered family", () => {
+    manifest(".", {
+      name: "script-only",
+      packageManager: "pnpm@11.1.3",
+      devDependencies: {
+        "@playwright/test": "1.55.0",
+        cypress: "15.0.0",
+        "@wdio/cli": "9.0.0",
+        "@vitest/browser": "3.2.0",
+      },
+      scripts: {
+        e2e: "opaque body must not select an adapter",
+        "test:cypress": "opaque cypress body",
+        "test:wdio": "opaque wdio body",
+        "test:browser": "opaque browser body",
+      },
+    });
+    write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    write("tests/home.playwright.ts", "test('home', () => {});\n");
+    write("cypress/e2e/login.cy.ts", "it('login', () => {});\n");
+    write("spec/smoke.e2e.ts", "it('smoke', () => {});\n");
+    write("browser/settings.browser.test.ts", "it('settings', () => {});\n");
+
+    const inventory = discoverJourneyInventory(root);
+    expect(inventory.suites.map((suite) => [suite.adapterId, suite.configFamilyId]).sort((a, b) => a[0]!.localeCompare(b[0]!))).toEqual([
+      ["cypress", "cypress:script-only"],
+      ["playwright", "playwright:script-only"],
+      ["vitest-browser", "vitest-browser:script-only"],
+      ["webdriverio", "webdriverio:script-only"],
+    ]);
+    expect(inventory.tests.map((test) => test.title).sort()).toEqual(["home", "login", "settings", "smoke"]);
+    expect(serializeJourneyInventoryV1(inventory)).not.toContain("opaque body");
+
+    manifest(".", {
+      name: "script-names-without-dependencies",
+      packageManager: "pnpm@11.1.3",
+      scripts: { e2e: "playwright test", "test:cypress": "cypress run" },
+    });
+    const withoutDependencies = discoverJourneyInventory(root);
+    expect(withoutDependencies.suites).toEqual([]);
+  });
+
+  it("links Playwright tests only to projects whose static testMatch includes the file", () => {
+    manifest(".", { name: "project-match", packageManager: "npm@11.5.1", scripts: { e2e: "playwright test" } });
+    write("package-lock.json", "{}\n");
+    write("playwright.config.ts", `export default defineConfig({ projects: [
+      { name: "chromium", testMatch: "**/*.chromium.spec.ts" },
+      { name: "firefox", testMatch: "**/*.firefox.spec.ts" },
+    ] });`);
+    write("e2e/cart.chromium.spec.ts", "test('chromium cart', () => {});\n");
+    write("e2e/cart.firefox.spec.ts", "test('firefox cart', () => {});\n");
+
+    const inventory = discoverJourneyInventory(root);
+    const projectById = new Map(inventory.projects.map((project) => [project.id, project.name]));
+    expect(inventory.tests.map((test) => [test.title, test.projectIds.map((id) => projectById.get(id))])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      ["chromium cart", ["chromium"]],
+      ["firefox cart", ["firefox"]],
+    ]);
+    expect(inventory.projects.map((project) => [project.name, project.testIds.length])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+      ["chromium", 1],
+      ["firefox", 1],
+    ]);
   });
 
   it("counts generated, malformed, dynamic, unreadable, unsupported, missing-script, and zero-test states", () => {
