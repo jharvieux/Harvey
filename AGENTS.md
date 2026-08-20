@@ -103,13 +103,22 @@ Do not dismiss non-M1 findings as “low-stakes,” “maintainability-only,” 
 
 ## Verification
 
-Run before every push:
+Run the path-sensitive local gate before every push:
 
 ```bash
-pnpm verify
+pnpm verify:changed
 ```
 
-This is the light suite: typecheck, lint, tests, knip, test-only-export ratchet, and precision validation. Heavy child-process tests are intentionally separate:
+It compares the current tree with the merge base of `origin/main` (override with
+`HARVEY_VERIFY_BASE`). Only root operating Markdown, `docs/**/*.md`, and
+`.codex/agents/*.toml` use the focused path: diff hygiene, TOML parsing, the local-gate
+negative controls, recorded-reason validation, and CI-router validation. Any source,
+test, executable input, manifest, workflow, generated artifact, mixed set, empty set, or
+unknown path fails safe to the full `pnpm verify` gate.
+
+`pnpm verify` remains the full light suite: typecheck, lint, tests, knip,
+test-only-export ratchet, and precision validation. Heavy child-process tests are
+intentionally separate:
 
 ```bash
 HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run

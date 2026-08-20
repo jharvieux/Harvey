@@ -26,6 +26,7 @@
     "validate:semantic": "tsx src/cli/validate-semantic.ts",
     "validate:semantic-freshness": "tsx src/cli/validate-semantic-freshness.ts",
     "validate:free-recall": "tsx src/cli/validate-free-recall.ts",
+    "verify:changed": "tsx src/local-verify.ts",
     "osv-fixture-drift": "tsx src/cli/osv-fixture-drift.ts",
     "jscpd-fixture-drift": "tsx src/cli/fixture-drift.ts --tool jscpd",
     "knip-fixture-drift": "tsx src/cli/fixture-drift.ts --tool knip",

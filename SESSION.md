@@ -33,10 +33,15 @@ The merge-train base before this instruction-only checkpoint was
 - `.codex/agents/acceptance-verifier.toml` no longer hard-codes one reasoning effort.
   The sweep supervisor selects verifier effort from the actual close-set complexity,
   including scoped lower-cost reruns where the contract permits them.
+- `pnpm verify:changed` is now the local pre-push gate. It uses a focused validation
+  path only for operating Markdown, Markdown under `docs/`, and Codex agent TOML;
+  every executable, generated, manifest, workflow, mixed, empty, or unknown change set
+  fails safe to the full `pnpm verify` suite.
 
-These changes were produced during the prior sweep session and should have been landed
-as its consolidated instruction-only wrap-up instead of being left in the primary
-checkout.
+The first two changes were produced during the prior sweep session and should have been
+landed as its consolidated instruction-only wrap-up instead of being left in the
+primary checkout. The path-sensitive local gate was added during finalization at the
+operator's direction.
 
 ## Local and durable state
 
