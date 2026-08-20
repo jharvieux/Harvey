@@ -1,0 +1,7 @@
+import { expect, test } from "vitest";
+import { computeScore } from "./score.js";
+
+test("contains only behavior-bearing assertions", () => {
+  expect(computeScore()).toBe(7);
+  expect(computeScore()).toBeGreaterThan(0);
+});

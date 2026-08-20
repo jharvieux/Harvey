@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
+import { detectM1ExceptionFlowFindings, detectM5ExceptionFlowFindings, m5ExceptionFlowSources } from "../detectors/m5-exception-flow.js";
+import { detectM5HardcodedDeploymentFindings, isM5HardcodedDeploymentSource, M5_HARDCODED_DEPLOYMENT_METADATA } from "../detectors/m5-hardcoded-deployment.js";
+import { detectM5TypeEscapeFindings, m5TypeEscapeSources } from "../detectors/m5-type-escape.js";
+import { detectM8VacuousAssertionFindings, M8_VACUOUS_ASSERTION_TAXONOMY, vacuousAssertionSourceFiles } from "../detectors/m8-vacuous-assertion.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import { detectAuditLogTenantFindings } from "./audit-log-tenant.js";
 import { detectBolaCrossFileFindings } from "./bola-cross-file.js";
@@ -32,6 +36,13 @@ import {
 import { detectPgIdorFindings } from "./pg-idor.js";
 import { detectPgResponseExposureFindings } from "./pg-response-exposure.js";
 import { pathScopeNotAssessedRows } from "./path-scope.js";
+import {
+  detectM5PolyglotQualityAndCoverageFindings,
+  detectM6PolyglotCoverageFindings,
+  M5_GO_LIBRARY_PANIC_TAXONOMY,
+  M5_PYTHON_EMPTY_HANDLER_TAXONOMY,
+  M5_RUST_STUB_TAXONOMY,
+} from "./polyglot-quality.js";
 import { detectPrismaTenantScopeFindings } from "./prisma-tenant-scope.js";
 import { detectPropOvershareFindings } from "./prop-overshare.js";
 import { detectRawBodyNoLimitFindings } from "./raw-body-limit.js";
@@ -45,7 +56,7 @@ import { detectTenantGucScopeFindings } from "./tenant-guc-scope.js";
 import { detectWebhookSignatureFindings } from "./webhook-signature.js";
 import type { SourceInput } from "../detectors/common.js";
 
-export type MechanicalDetectorModule = "M1" | "M6";
+export type MechanicalDetectorModule = "M1" | "M5" | "M6" | "M8";
 type EvidenceStatus = "covered" | "structured-exception";
 
 export interface DetectorEvidenceLink {
@@ -151,7 +162,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     examinedUnitIdentities: (context, selected) => targetPathExaminedUnits("migration-column-drift", [...selected.map((file) => file.path), ...context.schemas.orderedMigrations.map((migration) => migration.file)]),
     invoke: (context, selected) => detectMigrationColumnDriftFindings([...selected], droppedColumns([...context.schemas.orderedMigrations])),
   }),
-  detector({ id: "idempotency", order: 160, module: "M1", implementation: { file: "src/scan/idempotency.ts", exportName: "detectIdempotencyFindings" }, findingIds: ["RETRY-*"], taxonomies: ["Batch send stamped after dispatch instead of claimed before", "Idempotency row written before the dispatched handler", "External send without a deterministic idempotency key", "Webhook state applied without an ordering guard"], invoke: (_context, selected) => detectIdempotencyFindings([...selected]) }),
+  detector({ id: "idempotency", order: 160, module: "M1", implementation: { file: "src/scan/idempotency.ts", exportName: "detectIdempotencyFindings" }, findingIds: ["RETRY-*"], taxonomies: ["Batch send stamped after dispatch instead of claimed before", "Idempotency row written before the dispatched handler", "External send without a deterministic idempotency key", "Idempotency key does not identify a stable scoped operation", "Webhook state applied without an ordering guard"], invoke: (_context, selected) => detectIdempotencyFindings([...selected]) }),
   detector({ id: "stale-quota-read", order: 170, module: "M1", implementation: { file: "src/scan/stale-quota-read.ts", exportName: "detectStaleQuotaReadFindings" }, findingIds: ["RACE-stale-quota-read-*"], taxonomies: ["Quota gate consumed across a loop without re-reading"], invoke: (_context, selected) => detectStaleQuotaReadFindings([...selected]) }),
   detector({
     id: "service-role-literal", order: 180, module: "M1", implementation: { file: "src/scan/service-role-literal.ts", exportName: "detectServiceRoleLiteralFindings" }, findingIds: ["SEC-SRL-*"], taxonomies: ["Supabase service_role key hardcoded as a JWT literal (service-role-literal)"], prerequisites: ["shared import graph", "shared path-alias inventory"],
@@ -230,6 +241,66 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     positiveFixture: registryEvidence("src/detectors/handrolled.test.ts", "handrolled-indicators: the indicator suite carries positive controls."),
     benignTwin: registryEvidence("src/detectors/handrolled.test.ts", "handrolled-indicators: the indicator suite carries benign controls."),
     invoke: (_context, selected) => detectHandrolledFindings([...selected]),
+  }),
+  detector({
+    id: "m1-exception-flow", order: 320, module: "M1",
+    implementation: { file: "src/detectors/m5-exception-flow.ts", exportName: "detectM1ExceptionFlowFindings" },
+    findingIds: ["M1EXC-*"],
+    taxonomies: ["M1 — Swallowed exception at auth/security boundary", "M1 — Swallowed exception at billing/payment boundary", "M1 — Swallowed exception at request boundary"],
+    applicableFiles: { description: "product JavaScript/TypeScript files accepted by the exception-flow classifier", select: (context) => m5ExceptionFlowSources(context.loadedSources.filter((file) => !NON_PRODUCT.test(file.path))) },
+    invoke: (_context, selected) => detectM1ExceptionFlowFindings([...selected]),
+  }),
+  detector({
+    id: "m5-exception-flow", order: 330, module: "M5",
+    implementation: { file: "src/detectors/m5-exception-flow.ts", exportName: "detectM5ExceptionFlowFindings" },
+    findingIds: ["M5EXC-*"],
+    taxonomies: ["M5 — Empty catch", "M5 — Log-only catch", "M5 — Ambiguous exception success"],
+    applicableFiles: { description: "product JavaScript/TypeScript files accepted by the exception-flow classifier", select: (context) => m5ExceptionFlowSources(context.loadedSources.filter((file) => !NON_PRODUCT.test(file.path))) },
+    invoke: (_context, selected) => detectM5ExceptionFlowFindings([...selected]),
+  }),
+  detector({
+    id: "m5-type-escape", order: 340, module: "M5",
+    implementation: { file: "src/detectors/m5-type-escape.ts", exportName: "detectM5TypeEscapeFindings" },
+    findingIds: ["M5TYPE-*"],
+    taxonomies: ["M5 — Type escape (`as any`)", "M5 — Type escape (double assertion)", "M5 — Unexplained @ts-ignore"],
+    applicableFiles: { description: "product JavaScript/TypeScript files accepted by the type-escape classifier", select: (context) => m5TypeEscapeSources(context.loadedSources.filter((file) => !NON_PRODUCT.test(file.path))) },
+    invoke: (_context, selected) => detectM5TypeEscapeFindings([...selected]),
+  }),
+  detector({
+    id: "m5-hardcoded-deployment", order: 350, module: "M5",
+    implementation: M5_HARDCODED_DEPLOYMENT_METADATA.implementation,
+    findingIds: M5_HARDCODED_DEPLOYMENT_METADATA.findingIds,
+    taxonomies: M5_HARDCODED_DEPLOYMENT_METADATA.taxonomies,
+    applicableFiles: { description: M5_HARDCODED_DEPLOYMENT_METADATA.applicableFiles, select: (context) => context.loadedSources.filter(isM5HardcodedDeploymentSource) },
+    prerequisites: M5_HARDCODED_DEPLOYMENT_METADATA.prerequisites,
+    fallback: M5_HARDCODED_DEPLOYMENT_METADATA.fallback,
+    invoke: (_context, selected) => detectM5HardcodedDeploymentFindings(selected),
+  }),
+  detector({
+    id: "m5-polyglot-quality", order: 360, module: "M5",
+    implementation: { file: "src/scan/polyglot-quality.ts", exportName: "detectM5PolyglotQualityAndCoverageFindings" },
+    findingIds: ["M5-PY-*", "M5-GO-*", "M5-RUST-*", "M5-SOURCE-COVERAGE-*"],
+    taxonomies: [M5_PYTHON_EMPTY_HANDLER_TAXONOMY, M5_GO_LIBRARY_PANIC_TAXONOMY, M5_RUST_STUB_TAXONOMY, "M5 — Source coverage *"],
+    applicableFiles: { description: "every identified product source path, including populations without a calibrated classifier", select: (context) => context.productSourceFiles },
+    fallback: "Every non-empty unsupported language population emits an exact-count NotAssessed disclosure with provenance and a falsifier.",
+    invoke: (_context, selected) => detectM5PolyglotQualityAndCoverageFindings(selected),
+  }),
+  detector({
+    id: "m6-polyglot-coverage", order: 370, module: "M6",
+    implementation: { file: "src/scan/polyglot-quality.ts", exportName: "detectM6PolyglotCoverageFindings" },
+    findingIds: ["M6-SOURCE-COVERAGE-*"],
+    taxonomies: ["M6 — Source coverage *"],
+    applicableFiles: { description: "every identified product source path, including non-JavaScript populations that the M6 classifier cannot inspect", select: (context) => context.productSourceFiles },
+    fallback: "Every non-empty unsupported language population emits an exact-count NotAssessed disclosure with provenance and a falsifier.",
+    invoke: (_context, selected) => detectM6PolyglotCoverageFindings(selected),
+  }),
+  detector({
+    id: "m8-vacuous-assertion", order: 380, module: "M8",
+    implementation: { file: "src/detectors/m8-vacuous-assertion.ts", exportName: "detectM8VacuousAssertionFindings" },
+    findingIds: ["M8VAC-*"],
+    taxonomies: [M8_VACUOUS_ASSERTION_TAXONOMY],
+    applicableFiles: { description: "JavaScript/TypeScript and Python test files accepted by the vacuous-assertion classifier", select: (context) => vacuousAssertionSourceFiles(context.identifiedSourceFiles) },
+    invoke: (_context, selected) => detectM8VacuousAssertionFindings(selected),
   }),
 ]);
 

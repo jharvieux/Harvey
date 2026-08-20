@@ -1,0 +1,9 @@
+def test_fixed_python_assertions():
+    assert True
+    assert 1 == 1
+
+
+class TestPlaceholders:
+    def test_unittest_forms(self):
+        self.assertTrue(True)
+        self.assertEqual(2, 2)

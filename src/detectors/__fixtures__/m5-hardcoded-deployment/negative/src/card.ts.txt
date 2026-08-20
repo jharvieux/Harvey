@@ -1,0 +1,4 @@
+export const serviceCard = {
+  label: "https://orders.prod.harvey-platform.com",
+  description: "The production orders service",
+};

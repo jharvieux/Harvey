@@ -8,6 +8,7 @@ import {
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
   currentHarnessReceipt,
+  currentGitVersionReceipt,
   currentRuntimeReceipt,
   currentTargetPinsSha256,
   newExecutionId,
@@ -40,7 +41,7 @@ const registry = validateRestoredSemgrepPackArtifact(registryDir);
 const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
 const harness = currentHarnessReceipt(repoRoot);
 const artifact: CurrentMechanicalExecutionArtifact = {
-  schema: 2,
+  schema: 3,
   kind: "current-mechanical-execution",
   population: CURRENT_MECHANICAL_POPULATION,
   side: "independent-replay",
@@ -55,6 +56,7 @@ const artifact: CurrentMechanicalExecutionArtifact = {
   shard,
   targets: {},
 };
+const gitVersion = currentGitVersionReceipt();
 
 for (const target of allTargets.filter((candidate) => mine.has(candidate.slug))) {
   const root = mkdtempSync(join(tmpdir(), `harvey-current-replay-${target.slug}-`));
@@ -96,6 +98,7 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       checkoutHead: prepared.checkoutHead,
       checkoutTree: prepared.checkoutTree,
       preparedTreeSha256: prepared.preparedTreeSha256,
+      gitVersion,
       emptyGitlinks: prepared.emptyGitlinks,
       preparation: CURRENT_MECHANICAL_PREPARATION,
       removedVendoredSubtrees: prepared.removedVendoredSubtrees,

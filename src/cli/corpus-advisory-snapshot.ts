@@ -1,14 +1,21 @@
 import "./sync-stdio.js";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { binaryVersion } from "../scan/mechanical-phase-cache.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { runOsvScanner } from "../scan/dependencies.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
-import { CORPUS_ADVISORY_SNAPSHOT_DIR, canonicalizeCorpusOsvInput, type CorpusAdvisorySnapshotManifest } from "../corpus-advisory-snapshot.js";
+import {
+  CORPUS_ADVISORY_SNAPSHOT_DIR,
+  canonicalizeCorpusOsvInput,
+  mergeCorpusAdvisorySnapshotEntries,
+  migrateCorpusAdvisorySnapshotManifest,
+  type CorpusAdvisorySnapshotEntry,
+  type CorpusAdvisorySnapshotManifest,
+} from "../corpus-advisory-snapshot.js";
 
 const args = process.argv.slice(2);
 const outAt = args.indexOf("--out");
@@ -29,18 +36,13 @@ if (targets.length === 0) {
 
 mkdirSync(outDir, { recursive: true });
 const priorPath = join(outDir, "manifest.json");
-const prior = targetAt >= 0 ? (() => {
-  try { return JSON.parse(readFileSync(priorPath, "utf8")) as CorpusAdvisorySnapshotManifest; } catch { return undefined; }
-})() : undefined;
+const prior = targetAt >= 0 && existsSync(priorPath)
+  ? migrateCorpusAdvisorySnapshotManifest(JSON.parse(readFileSync(priorPath, "utf8")))
+  : undefined;
 const capturedAt = new Date();
 const expiresAt = new Date(capturedAt.getTime() + 7 * 24 * 60 * 60 * 1_000);
-const manifest: CorpusAdvisorySnapshotManifest = {
-  schema: 1,
-  capturedAt: capturedAt.toISOString(),
-  expiresAt: expiresAt.toISOString(),
-  osvScannerVersion: binaryVersion("osv-scanner"),
-  targets: { ...(prior?.targets ?? {}) },
-};
+const osvScannerVersion = binaryVersion("osv-scanner");
+const refreshed: Record<string, CorpusAdvisorySnapshotEntry> = {};
 
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-advisory-${target.slug}-`));
@@ -51,11 +53,19 @@ for (const target of targets) {
     const bytes = gzipSync(`${JSON.stringify(canonicalizeCorpusOsvInput(run.result))}\n`, { level: 9 });
     const file = `${target.slug}.osv.json.gz`;
     writeFileSync(join(outDir, file), bytes);
-    manifest.targets[target.slug] = { file, sha256: createHash("sha256").update(bytes).digest("hex"), targetCommit: target.commit };
+    refreshed[target.slug] = {
+      file,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      targetCommit: target.commit,
+      capturedAt: capturedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      osvScannerVersion,
+    };
     console.error(`${target.slug}: captured ${bytes.length} compressed byte(s)`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+const manifest: CorpusAdvisorySnapshotManifest = mergeCorpusAdvisorySnapshotEntries(prior, refreshed);
 writeFileSync(priorPath, `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`CORPUS ADVISORY SNAPSHOT: ${Object.keys(manifest.targets).length} target(s), osv=${manifest.osvScannerVersion}, captured=${manifest.capturedAt}, expires=${manifest.expiresAt}`);
+console.log(`CORPUS ADVISORY SNAPSHOT: ${Object.keys(manifest.targets).length} target(s), refreshed=${Object.keys(refreshed).length}, osv=${osvScannerVersion}, captured=${capturedAt.toISOString()}, expires=${expiresAt.toISOString()}`);

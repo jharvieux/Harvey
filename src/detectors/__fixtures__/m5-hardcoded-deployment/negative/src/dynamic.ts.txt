@@ -1,0 +1,2 @@
+const endpoint = resolveEndpoint(runtime.region);
+export const client = new OrdersClient({ endpoint, projectId: runtime.projectId });

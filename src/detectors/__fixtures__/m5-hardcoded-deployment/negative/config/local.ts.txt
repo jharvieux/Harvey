@@ -1,0 +1,4 @@
+export const localConfig = {
+  endpoint: "http://127.0.0.1:8787",
+  serviceUrl: "https://orders.dev.harvey-platform.com",
+};

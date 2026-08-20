@@ -18,6 +18,12 @@ function fixture(): string {
   writeFileSync(join(root, "src", "repo.ts"), "export const findUserById = (id: string) => ({ id });\n");
   writeFileSync(join(root, "src", "route.ts"), "import { findUserById } from './repo';\nexport const route = (id: string) => findUserById(id);\n");
   writeFileSync(join(root, "src", "runner.mts"), "export const configured = process.env.RUN_CONFIGURED;\n");
+  writeFileSync(join(root, "src", "worker.py"), "def run():\n    pass\n");
+  writeFileSync(join(root, "src", "worker.go"), "package worker\n");
+  writeFileSync(join(root, "src", "worker.rs"), "pub fn run() {}\n");
+  writeFileSync(join(root, "src", "worker.cs"), "public class Worker {}\n");
+  writeFileSync(join(root, "src", "worker.c"), "int run(void) { return 0; }\n");
+  writeFileSync(join(root, "src", "worker.cpp"), "int run() { return 0; }\n");
   writeFileSync(join(root, "supabase", "migrations", "001.sql"), "create table users (id uuid primary key, tenant_id uuid);\n");
   return root;
 }
@@ -32,6 +38,11 @@ describe("#1851 immutable one-scan context", () => {
     const first = new MechanicalScanContext(root);
     expect(first.sourceFiles.map((file) => file.path)).toEqual(["src/repo.ts", "src/route.ts"]);
     expect(first.envSourceFiles.map((file) => file.path)).toEqual(["src/repo.ts", "src/route.ts", "src/runner.mts"]);
+    expect(first.identifiedSourceFiles.map((file) => file.path)).toEqual([
+      "src/repo.ts", "src/route.ts", "src/runner.mts", "src/worker.c", "src/worker.cpp", "src/worker.cs", "src/worker.go", "src/worker.py", "src/worker.rs",
+    ]);
+    expect(first.productSourceFiles).toEqual(first.identifiedSourceFiles);
+    expect(Object.isFrozen(first.identifiedSourceFiles)).toBe(true);
     expect(first.workspace.manifests.map((manifest) => manifest.label)).toEqual(["package.json"]);
     expect(first.schemas.orderedMigrations.map((migration) => migration.file)).toEqual(["supabase/migrations/001.sql"]);
     expect(first.identity.lifetime).toBe("one-mechanical-scan");

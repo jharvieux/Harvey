@@ -27,6 +27,7 @@ import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { detectBolaOwnerFindings } from "./bola-owner.js";
 import { detectCounterRaceFindings } from "./counter-race.js";
+import { detectIdempotencyFindings } from "./idempotency.js";
 import { walkSourceFiles } from "./common.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
@@ -653,6 +654,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     warning("harvey-cron-no-secret", "pages/api/cron/rollup.js"),
     warning("harvey-dynamic-require", "pages/api/plugin.js"),
     warning("harvey-dynamic-dispatch", "pages/api/dispatch.js"),
+    warning("harvey-dynamic-dispatch", "client-url-source/dynamic-dispatch-client.ts"),
     warning("harvey-template-autoescape-off", "lib/render-template.js"),
     warning("harvey-html-template-literal", "pages/api/greet.js"),
     warning("harvey-incomplete-sanitize", "lib/sanitize-bad.js"),
@@ -776,8 +778,8 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     // 8 before #1425; +2 for the protect-then-unprotect plant and its scope control.
     expect(m.positivesCaughtHigh).toBe(10);
     // 12 before #1323; +7 for the root-schema probes of the six checks readMigrations feeds
-    // (checkMigrationStorageBuckets contributes two, one per half).
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(19);
+    // (checkMigrationStorageBuckets contributes two, one per half); +1 for #1708 client dispatch.
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(20);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
@@ -852,7 +854,12 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
     "pages/api/preview/enable-safe.js",
   ].map(read);
   const mechanicalFixtures = walkSourceFiles(CAL);
-  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...detectCounterRaceFindings(mechanicalFixtures), ...detectBolaOwnerFindings(mechanicalFixtures)];
+  const findings = [
+    ...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)),
+    ...detectCounterRaceFindings(mechanicalFixtures),
+    ...detectIdempotencyFindings(mechanicalFixtures),
+    ...detectBolaOwnerFindings(mechanicalFixtures),
+  ];
 
   const graduated = [
     ...b17RaceUnscopedEntries,
