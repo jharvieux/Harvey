@@ -28,7 +28,21 @@ const cleanOutput = (argv: string[]): string => {
   const cmd = argv.join(" ");
   if (cmd.includes("quality-scan")) return "[]"; // Finding[] with no M5-00 → knip ran clean
   if (cmd.includes("mutation-scan")) return JSON.stringify({ summary: { overall: {} }, reportRows: [] });
-  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\n\n3 findings across 2 classes:";
+  if (cmd.includes("detect-static")) {
+    const population = (module: "M5" | "M6") => JSON.stringify({
+      schema: 1,
+      module,
+      populations: [{
+        language: "javascript/typescript",
+        identified: { count: 30, pathsDigest: "a".repeat(64) },
+        examined: { count: 30, pathsDigest: "a".repeat(64) },
+        status: "examined",
+        provenance: "clean-run fixture",
+        falsifier: "remove the clean-run detector",
+      }],
+    });
+    return `loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\nidentified 40 source files across the polyglot inventory\nHARVEY_SOURCE_POPULATION M5 ${population("M5")}\nHARVEY_SOURCE_POPULATION M6 ${population("M6")}\n\n3 findings across 2 classes:`;
+  }
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
   if (cmd.includes("pentest.ts")) return JSON.stringify({ findings: [] });
   // #1109: the unit counts a clean run prints — quick-scan's codebase-size line and pii-classify's
@@ -204,8 +218,9 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     });
     const { recorded } = runAudit(AUDIT_RUNNERS, noScope);
     const m5 = recorded.find((r) => r.module === "M5");
-    expect(m5?.status).toBe("requires-live-run");
+    expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/knip did not run on any scope/);
+    expect(m5?.detail).toMatch(/source tier/);
     const cov = assembleEngagementDocument(recorded, noScope.env, [], m5137Meta).coverage?.find((c) => c.module === "M5");
     expect(cov?.reason).toMatch(/knip did not run on any scope/);
     expect(cov?.reason).toMatch(/\[MEASURED; falsifier:/);
@@ -780,7 +795,7 @@ describe("a probe that examined nothing is not-assessed, not a clean row (#1096/
 
   it("M8 — the test-intent tier's file count is the unit on every rung of the verdict ladder", () => {
     const m8 = status(AUDIT_RUNNERS, {}, "M8");
-    expect(m8?.detail).toContain("examined 42 source files (test-intent tier, tests included)");
+    expect(m8?.detail).toContain("examined 40 source files (test-intent tier, tests included)");
   });
 });
 

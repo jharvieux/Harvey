@@ -1,0 +1,1 @@
+export const ordersProxy = router.proxy("/orders", "https://orders-router.prod.harvey-platform.com");

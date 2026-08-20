@@ -1,0 +1,10 @@
+import { assert, expect } from "chai";
+
+describe("fixed Chai assertions", () => {
+  it("does not observe production", () => {
+    expect(1).to.equal(1);
+    assert.equal(true, true);
+    (1).should.equal(1);
+    expect(true).to.be.true;
+  });
+});

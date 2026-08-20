@@ -1,0 +1,12 @@
+import { z } from "zod";
+
+const schema = z.object({
+  ORDERS_BASE_URL: z.string().url(),
+  CLOUD_PROJECT_ID: z.string().min(1),
+});
+const env = schema.parse(process.env);
+
+export const deploymentConfig = {
+  baseURL: env.ORDERS_BASE_URL,
+  projectId: env.CLOUD_PROJECT_ID,
+};

@@ -17,7 +17,9 @@ import {
 import {
   CONFIG_FILE,
   EXCLUDED_DIR,
+  IDENTIFIED_SOURCE_FILE,
   isGeneratedSource,
+  isTestSourcePath,
   SOURCE_FILE,
 } from "../detectors/load-sources.js";
 import { readRecursiveSafe, statSafe } from "../fs-walk.js";
@@ -140,6 +142,10 @@ export class MechanicalScanContext {
   /** Full load-sources extension surface for detectors whose legacy walker included .mts/.cts. */
   readonly envSourceFiles: readonly SourceInput[];
   readonly loadedSources: readonly SourceInput[];
+  /** Exact polyglot population identified before detector-specific applicability filters. */
+  readonly identifiedSourceFiles: readonly SourceInput[];
+  /** Product-only subset of identifiedSourceFiles used by M5/M6 source consumers. */
+  readonly productSourceFiles: readonly SourceInput[];
   readonly sourceAndRootManifest: readonly SourceInput[];
   readonly serviceRoleSources: readonly SourceInput[];
   readonly workspace: ReturnType<typeof collectWorkspaceManifests>;
@@ -167,7 +173,7 @@ export class MechanicalScanContext {
       if (!statSafe(join(root, path))?.isFile()) continue;
       const name = basename(path);
       if (CONTEXT_IDENTITY_FILE.test(path)) identityInputs.push(frozenSource(path, readFileSync(join(root, path), "utf8")));
-      if (!WALK_SOURCE.test(name) && !SOURCE_FILE.test(name) && !CONFIG_FILE.test(name) && !SQL_FILE.test(name) && !PRISMA_SCHEMA.test(path)) continue;
+      if (!WALK_SOURCE.test(name) && !SOURCE_FILE.test(name) && !IDENTIFIED_SOURCE_FILE.test(name) && !CONFIG_FILE.test(name) && !SQL_FILE.test(name) && !PRISMA_SCHEMA.test(path)) continue;
       inventory.push(frozenSource(path, readFileSync(join(root, path), "utf8")));
     }
     Object.freeze(inventory);
@@ -178,6 +184,12 @@ export class MechanicalScanContext {
       if (hasExcludedSegment(file.path) || (!SOURCE_FILE.test(name) && !CONFIG_FILE.test(name))) return false;
       return CONFIG_FILE.test(name) || !isGeneratedSource(name, file.text);
     }));
+    this.identifiedSourceFiles = Object.freeze(inventory.filter((file) => {
+      const name = basename(file.path);
+      if (hasExcludedSegment(file.path) || !IDENTIFIED_SOURCE_FILE.test(name)) return false;
+      return !SOURCE_FILE.test(name) || !isGeneratedSource(name, file.text);
+    }));
+    this.productSourceFiles = Object.freeze(this.identifiedSourceFiles.filter((file) => !isTestSourcePath(file.path)));
     const rootManifest = inventory.find((file) => file.path === "package.json");
     this.sourceAndRootManifest = Object.freeze(rootManifest ? [...this.sourceFiles, rootManifest] : [...this.sourceFiles]);
     this.serviceRoleSources = Object.freeze(inventory.filter((file) => WALK_SOURCE.test(basename(file.path)) || /^(tsconfig|jsconfig)\.json$/.test(basename(file.path))));

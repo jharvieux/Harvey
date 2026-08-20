@@ -15,7 +15,7 @@ import { SEMGREP_ENGINES } from "./mechanical-semgrep-registry.js";
 export interface MechanicalRegistryEntry {
   id: string;
   order: number;
-  module: "M1" | "M6";
+  module: "M1" | "M5" | "M6" | "M8";
   phase: "secrets-history" | "dependency-advisory" | "semgrep" | "configuration" | "structural-ast" | "normalization";
   implementations: readonly { file: string; exportName: string }[];
   taxonomies: readonly string[];
@@ -680,7 +680,7 @@ export function validateMechanicalEngineRegistry(
   return problems;
 }
 
-export function operatorMechanicalScopeRows(): readonly { id: string; module: "M1" | "M6"; phase: MechanicalRegistryEntry["phase"]; taxonomies: readonly string[]; selector: string; examinedUnits: string; prerequisites: readonly string[]; fallback: string; positiveFixture: MechanicalRegistryEntry["positiveFixture"]; benignTwin: MechanicalRegistryEntry["benignTwin"]; conservation: MechanicalRegistryEntry["conservation"]; corpus: MechanicalRegistryEntry["corpus"]; cadence: MechanicalRegistryEntry["cadence"] }[] {
+export function operatorMechanicalScopeRows(): readonly { id: string; module: "M1" | "M5" | "M6" | "M8"; phase: MechanicalRegistryEntry["phase"]; taxonomies: readonly string[]; selector: string; examinedUnits: string; prerequisites: readonly string[]; fallback: string; positiveFixture: MechanicalRegistryEntry["positiveFixture"]; benignTwin: MechanicalRegistryEntry["benignTwin"]; conservation: MechanicalRegistryEntry["conservation"]; corpus: MechanicalRegistryEntry["corpus"]; cadence: MechanicalRegistryEntry["cadence"] }[] {
   return Object.freeze(MECHANICAL_REGISTRY.map((entry) => Object.freeze({
     id: entry.id, module: entry.module, phase: entry.phase, taxonomies: entry.taxonomies,
     selector: entry.applicableFiles, examinedUnits: entry.examinedUnits, prerequisites: entry.prerequisites,

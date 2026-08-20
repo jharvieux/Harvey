@@ -110,6 +110,47 @@ describe("external corpus manifest", () => {
     }
   });
 
+  it("#1948: records every hosted corpus movement from the new M5/M8 detector families", () => {
+    const movements = [
+      { slug: "proposit", module: "M5-slop", before: [24, 34], after: [145, 155], added: 121, classes: ["4 ambiguous exception success", "6 empty catch", "11 log-only catch", "98 `as any`", "2 double assertions"] },
+      { slug: "subscription-payments", module: "M5-slop", before: [14, 16], after: [17, 19], added: 3, classes: ["2 empty catch", "1 unexplained `@ts-ignore`"] },
+      { slug: "boxyhq", module: "M5-slop", before: [97, 98], after: [110, 111], added: 13, classes: ["1 empty catch", "7 log-only catch", "3 `as any`", "2 double assertions"] },
+      { slug: "launch-mvp", module: "M5-slop", before: [6, 8], after: [20, 22], added: 14, classes: ["5 log-only catch", "9 unexplained `@ts-ignore`"] },
+      { slug: "saas-lite", module: "M5-slop", before: [68, 71], after: [70, 73], added: 2, classes: ["1 ambiguous exception success", "1 empty catch"] },
+      { slug: "tanstack-com", module: "M5-slop", before: [454, 514], after: [706, 766], added: 252, classes: ["42 ambiguous exception success", "19 empty catch", "17 log-only catch", "167 `as any`", "7 double assertions"] },
+      { slug: "cravab", module: "M5-slop", before: [476, 575], after: [736, 835], added: 260, classes: ["14 ambiguous exception success", "22 empty catch", "31 log-only catch", "183 `as any`", "10 double assertions"] },
+      { slug: "flori-web", module: "M5-slop", before: [95, 108], after: [135, 148], added: 40, classes: ["15 ambiguous exception success", "17 empty catch", "7 log-only catch", "1 double assertion"] },
+      { slug: "multi-tenant-starter", module: "M5-slop", before: [1, 1], after: [6, 6], added: 5, classes: ["3 `as any`", "2 double assertions"] },
+      { slug: "mvp-boilerplate", module: "M5-slop", before: [24, 29], after: [31, 36], added: 7, classes: ["4 empty catch", "1 log-only catch", "2 double assertions"] },
+      { slug: "ghostfolio", module: "M5-slop", before: [51, 52], after: [104, 105], added: 53, classes: ["5 ambiguous exception success", "11 empty catch", "7 log-only catch", "6 `as any`", "23 double assertions", "1 unexplained `@ts-ignore`"] },
+      { slug: "rallly", module: "M5-slop", before: [113, 167], after: [137, 191], added: 24, classes: ["10 ambiguous exception success", "4 empty catch", "6 log-only catch", "2 `as any`", "2 double assertions"] },
+      { slug: "inbox-zero", module: "M5-slop", before: [1098, 1123], after: [1398, 1423], added: 300, classes: ["93 ambiguous exception success", "21 empty catch", "135 log-only catch", "25 `as any`", "22 double assertions", "4 unexplained `@ts-ignore`"] },
+      { slug: "documenso", module: "M5-slop", before: [233, 238], after: [315, 320], added: 82, classes: ["26 ambiguous exception success", "7 empty catch", "14 log-only catch", "10 `as any`", "25 double assertions"] },
+      { slug: "effective", module: "M5-slop", before: [12, 12], after: [18, 18], added: 6, classes: ["2 ambiguous exception success", "4 empty catch"] },
+      { slug: "carbon", module: "M5-slop", before: [841, 979], after: [1719, 1857], added: 878, classes: ["64 ambiguous exception success", "45 empty catch", "48 log-only catch", "489 `as any`", "142 double assertions", "90 unexplained `@ts-ignore`"] },
+      { slug: "carbon", module: "M8-intent", before: [3, 3], after: [5, 5], added: 2, classes: ["packages/checks/src/smoke.test.ts:5", "packages/harness/src/smoke.test.ts:5"] },
+    ] as const;
+
+    expect(movements).toHaveLength(17);
+    for (const movement of movements) {
+      const baseline = target(movement.slug).modules[movement.module];
+      if (!baseline) throw new Error(`missing ${movement.slug}/${movement.module} baseline`);
+      expect(isNotRun(baseline), `${movement.slug}/${movement.module}`).toBe(false);
+      if (isNotRun(baseline)) continue;
+
+      expect(movement.after[0] - movement.before[0], `${movement.slug}/${movement.module} counted delta`).toBe(movement.added);
+      expect(movement.after[1] - movement.before[1], `${movement.slug}/${movement.module} total delta`).toBe(movement.added);
+      expect([baseline.counted, baseline.total], `${movement.slug}/${movement.module}`).toEqual(movement.after);
+      expect(baseline.note, `${movement.slug}/${movement.module} provenance`).toContain("#1948 HOSTED REPLAY run 32345629796");
+      expect(baseline.note, `${movement.slug}/${movement.module} arithmetic`).toContain(
+        `at ${movement.after[0]}/${movement.after[1]} (was ${movement.before[0]}/${movement.before[1]}), +${movement.added}`,
+      );
+      for (const findingClass of movement.classes) {
+        expect(baseline.note, `${movement.slug}/${movement.module} ${findingClass}`).toContain(findingClass);
+      }
+    }
+  });
+
   it("#483: M6-indicator is scored on every target (detect-static needs no npm install, same as M5-slop)", () => {
     for (const t of EXTERNAL_CORPUS) {
       expect(isNotRun(t.modules["M6-indicator"]!), t.slug).toBe(false);
@@ -325,7 +366,7 @@ describe("scoreExternalBaseline", () => {
     ];
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
     expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 10, actual: 1, pass: false });
-    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 14, actual: 2, pass: false });
+    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 17, actual: 2, pass: false });
   });
 });
 

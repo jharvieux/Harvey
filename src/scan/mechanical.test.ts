@@ -102,7 +102,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(warm.detectors.map((detector) => [detector.detector, detector.unitsExamined])).toEqual(
         cold.detectors.map((detector) => [detector.detector, detector.unitsExamined]),
       );
-      expect(cold.detectors).toHaveLength(65);
+      expect(cold.detectors).toHaveLength(72);
       expect(new Set(cold.detectors.map((detector) => detector.phase))).toEqual(new Set(phases));
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.length === detector.unitsExamined)).toBe(true);
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.every((unit) => unit.producer === detector.detector))).toBe(true);

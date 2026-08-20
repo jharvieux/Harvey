@@ -1,0 +1,1 @@
+export const github = new ApiClient({ endpoint: "https://api.github.com" });
