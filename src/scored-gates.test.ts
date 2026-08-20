@@ -8,6 +8,7 @@ function inputs(over: Partial<GateInputs> = {}): GateInputs {
     discovered: ["validate-x"],
     scripts: { "validate:x": "tsx src/cli/validate-x.ts", verify: "pnpm typecheck && pnpm validate:x" },
     workflows: { ".github/workflows/ci.yml": "run: pnpm exec tsx src/cli/validate-x.ts" },
+    lightTests: ["src/detectors/m9-taxonomy-docs.test.ts"],
     ...over,
   };
 }
@@ -69,6 +70,12 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
   it("fails on a stale registry row whose CLI has been deleted", () => {
     const v = checkScoredGates(inputs({ discovered: [] }), gate());
     expect(v.join("\n")).toContain("stale row");
+  });
+
+  it("fails when a structural gate's standing test leaves light-suite discovery", () => {
+    const structural = [{ id: "validate-x", why: "structural", verificationTest: "src/x.test.ts" }];
+    const v = checkScoredGates(inputs({ lightTests: [] }), [], structural, []);
+    expect(v.join("\n")).toContain("src/x.test.ts as its pnpm verify cadence, but that file is absent from light-suite discovery");
   });
 
   it("requires a gate with no cadence to name the issue tracking it", () => {
