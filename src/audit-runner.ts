@@ -248,9 +248,10 @@ export interface RunContext {
 export interface ModuleRunner {
   module: AuditModule;
   /**
-   * #1910: production producer identities delivered through this runner. Binding inventory rows
-   * here couples their lifecycle to the live delivery route. Mechanical producers remain owned by
-   * their own phase registries and are joined by the inventory exporter rather than duplicated.
+   * #1910: production producer identities delivered through this runner. Schema-v2 bindings name
+   * stable declarations and their dispatch kind; the effectiveness graph derives live routes from
+   * those declarations. Mechanical producers remain owned by their phase registries and are joined
+   * by the exporter rather than copied into this runner table.
    */
   producers: readonly ProductionProducerBinding[];
   // #506: a per-app/per-DB probe returns ONE outcome per instance (an array). A single-instance

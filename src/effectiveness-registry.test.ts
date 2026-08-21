@@ -6,12 +6,12 @@ import { CALIBRATION_PLANTS } from "./audit-conservation.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import {
   buildEffectivenessInventory,
-  discoverProductionProducerCalls,
   EFFECTIVENESS_INVENTORY,
   EFFECTIVENESS_INVENTORY_JSON,
   serializeEffectivenessInventory,
   validateEffectivenessInventory,
 } from "./effectiveness-registry.js";
+import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
 import type { EffectivenessInventory, EffectivenessProducer } from "./effectiveness-schema.js";
 import { SCORED_GATES } from "./scored-gates.js";
 import { MECHANICAL_DETECTORS } from "./scan/mechanical-detector-registry.js";
@@ -87,6 +87,17 @@ describe("effectiveness producer inventory (#1910)", () => {
       .filter((row) => row.kind === "finding");
     expect(summary.findingFamilies).toBe(trueFindingFamilies.length);
     expect(allFindingShapedFamilies.length).toBeGreaterThan(summary.findingFamilies);
+    for (const row of inventory.producers) {
+      expect(row.routeIds.length, `${row.id} has no live route`).toBeGreaterThan(0);
+      for (const family of row.findingFamilies) {
+        expect((family.venueIds.length > 0) !== (family.exemptionId !== undefined), family.id).toBe(true);
+      }
+      for (const implementation of row.implementations) {
+        expect(inventory.receipt.routes.some((route) =>
+          route.producerId === row.id
+          && route.implementationId === `${implementation.file}#${implementation.symbol}`)).toBe(true);
+      }
+    }
   });
 
   it("derives deterministic JSON even when every live registry input is reversed", () => {
@@ -101,6 +112,10 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(serializeEffectivenessInventory(reversed)).toBe(EFFECTIVENESS_INVENTORY_JSON);
     expect(JSON.parse(EFFECTIVENESS_INVENTORY_JSON)).toEqual(EFFECTIVENESS_INVENTORY);
     expect(Object.isFrozen(EFFECTIVENESS_INVENTORY)).toBe(true);
+    expect(EFFECTIVENESS_INVENTORY_JSON).not.toContain(process.cwd());
+    expect(new Set(EFFECTIVENESS_INVENTORY.receipt.calls.map((receipt) => receipt.kind))).toEqual(
+      new Set(["call", "registry", "command", "artifact"]),
+    );
   });
 
   it("retains one handrolled, one SFC, and one M5 hardcoded producer across their multiple consumers", () => {
@@ -116,15 +131,10 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(owners("detectM5HardcodedDeploymentFindings").map((row) => row.id)).toEqual([
       "mechanical:structural-ast:m5-hardcoded-deployment",
     ]);
-    expect(inventory.receipt.composedCalls.filter((row) => row.symbol === "detectHandrolledFindings")).toHaveLength(1);
-    expect(inventory.receipt.composedCalls.filter((row) => row.symbol === "detectM5HardcodedDeploymentFindings")).toHaveLength(1);
-    expect(producer(inventory, "mechanical:structural-ast:handrolled-indicators").consumerPath)
-      .toEqual(expect.arrayContaining([expect.objectContaining({ file: "src/cli/static-detect.ts" })]));
-    expect(producer(inventory, "mechanical:structural-ast:m5-hardcoded-deployment").consumerPath)
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ file: "src/cli/static-detect.ts" }),
-        expect.objectContaining({ file: "src/audit-runners.ts" }),
-      ]));
+    expect(inventory.receipt.routes.filter((row) => row.producerId === "mechanical:structural-ast:handrolled-indicators").length).toBeGreaterThan(0);
+    expect(producer(inventory, "mechanical:structural-ast:handrolled-indicators").routeIds.length).toBeGreaterThan(0);
+    expect(inventory.receipt.routes.filter((row) => row.producerId === "mechanical:structural-ast:m5-hardcoded-deployment").length).toBeGreaterThan(0);
+    expect(producer(inventory, "mechanical:structural-ast:m5-hardcoded-deployment").routeIds.length).toBeGreaterThan(0);
   });
 
   it("expands App Router into M1/M9 finding, disclosure, and not-assessed families", () => {
@@ -215,35 +225,35 @@ describe("effectiveness producer inventory (#1910)", () => {
     });
   });
 
-  it("discovers an unregistered finding call and fails until the receipt is restored", () => {
+  it("discovers a neutral-name producer through aliases and fails when its real call is deleted", () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-discovery-"));
     try {
       mkdirSync(join(root, "src", "cli"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { audit: "tsx src/cli/run-audit.ts" } }));
       writeFileSync(
         join(root, "src", "cli", "static-detect.ts"),
-        'import { detectGhostFindings } from "../ghost.js";\nexport const findings = detectGhostFindings();\n',
+        'export { ordinary as aliased } from "../ghost.js";\n',
       );
       writeFileSync(
         join(root, "src", "ghost.ts"),
-        "export function detectGhostFindings(): unknown[] { return []; }\n",
+        'export interface Row { id: string; taxonomy: string; severity: string; location: string }\nexport function ordinary(): Row[] { return []; }\n',
       );
-      const discovered = discoverProductionProducerCalls(root, new Set(), ["src/cli/static-detect.ts"]);
-      expect(discovered).toEqual([{ file: "src/ghost.ts", symbol: "detectGhostFindings" }]);
+      const liveEntry = 'import { aliased as renamed } from "./static-detect.js";\nconst registry = { produce: renamed };\nconst apply = (callback: typeof renamed) => callback();\nexport const findings = apply(registry.produce);\n';
+      writeFileSync(join(root, "src", "cli", "run-audit.ts"), liveEntry);
+      const implementation = { producerId: "neutral", file: "src/ghost.ts", symbol: "ordinary", kind: "function" as const };
+      const live = discoverEffectivenessRouteGraph(root, [implementation]);
+      expect(live.routes.map((route) => route.producerId)).toContain("neutral");
+      expect(live.unresolvedFindingDispatches).toEqual([]);
 
-      const baseline = freshInventory();
-      const composedCalls = [...baseline.receipt.composedCalls, ...discovered]
-        .sort((a, b) => `${a.file}#${a.symbol}`.localeCompare(`${b.file}#${b.symbol}`));
-      const planted: EffectivenessInventory = {
-        ...baseline,
-        receipt: {
-          ...baseline.receipt,
-          composedCalls,
-          discoveredComposedCalls: composedCalls.length,
-        },
-      };
-      expect(validateEffectivenessInventory(planted)).toContain(
-        "src/ghost.ts#detectGhostFindings: discovered production producer call is unregistered",
-      );
+      const unregistered = discoverEffectivenessRouteGraph(root, []);
+      expect(unregistered.unresolvedFindingDispatches.length).toBeGreaterThan(0);
+      expect(unregistered.unresolvedFindingDispatches.every((problem) => problem.includes("finding-bearing call target"))).toBe(true);
+
+      writeFileSync(join(root, "src", "cli", "run-audit.ts"), 'import { aliased as renamed } from "./static-detect.js";\nexport const retainedText = "ordinary";\nvoid renamed;\n');
+      const deleted = discoverEffectivenessRouteGraph(root, [implementation]);
+      expect(deleted.routes).toEqual([]);
+      writeFileSync(join(root, "src", "cli", "run-audit.ts"), liveEntry);
+      expect(discoverEffectivenessRouteGraph(root, [implementation])).toEqual(live);
       expectRestoredBaseline();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -256,9 +266,8 @@ describe("effectiveness producer inventory (#1910)", () => {
       ...baseline,
       venues: baseline.venues.filter((row) => row.id !== "validate-calibration"),
     };
-    expect(validateEffectivenessInventory(planted)).toContain(
-      "mechanical:structural-ast:handrolled-indicators: scored venue validate-calibration no longer exists",
-    );
+    expect(validateEffectivenessInventory(planted).some((problem) =>
+      problem.includes("scored venue validate-calibration no longer exists"))).toBe(true);
     expectRestoredBaseline();
   });
 
@@ -297,22 +306,20 @@ describe("effectiveness producer inventory (#1910)", () => {
         : item),
     }));
     expect(validateEffectivenessInventory(planted)).toContain(
-      `${id}: orphaned implementation symbol src/detectors/app-router.ts#removedAppRouterProducer`,
+      `${id}: orphaned implementation identity src/detectors/app-router.ts#removedAppRouterProducer has no live route`,
     );
     expectRestoredBaseline();
   });
 
-  it("fails a broken real-consumer proof and passes when it is restored", () => {
+  it("fails a deleted semantic route receipt and passes when it is restored", () => {
     const baseline = freshInventory();
     const id = "detector:app-router";
     const planted = withProducer(baseline, id, (row) => ({
       ...row,
-      consumerPath: row.consumerPath.map((hop, index) => index === 0
-        ? { ...hop, contains: "removedAppRouterConsumer" }
-        : hop),
+      routeIds: row.routeIds.slice(1),
     }));
     expect(validateEffectivenessInventory(planted)).toContain(
-      `${id}: consumer proof src/cli/static-detect.ts no longer contains "removedAppRouterConsumer"`,
+      `${id}: producer route ids do not close on the semantic route graph`,
     );
     expectRestoredBaseline();
   });
@@ -324,10 +331,39 @@ describe("effectiveness producer inventory (#1910)", () => {
     const planted = withProducer(baseline, id, (row) => ({
       ...row,
       venueIds: ["validate-precision"],
+      findingFamilies: row.findingFamilies.map((family, index) => index === 0
+        ? { ...family, venueIds: ["validate-precision"] }
+        : family),
     }));
+    const family = producer(baseline, id).findingFamilies[0]!;
     expect(validateEffectivenessInventory(planted)).toContain(
-      `${id}: stale exemption ${producer(baseline, id).exemptionId} remains after a scored venue was assigned`,
+      `${family.id}: stale exemption ${family.exemptionId} remains after a scored venue was assigned`,
     );
+    expectRestoredBaseline();
+  });
+
+  it("fails scored-family and exemption pair loss in either receipt direction", () => {
+    const baseline = freshInventory();
+    const venue = baseline.venues.find((row) => row.coveredFamilyIds.length > 0)!;
+    const scoredFamily = venue.coveredFamilyIds[0]!;
+    const missingVenuePair: EffectivenessInventory = {
+      ...baseline,
+      venues: baseline.venues.map((row) => row.id === venue.id
+        ? { ...row, coveredFamilyIds: row.coveredFamilyIds.slice(1) }
+        : row),
+    };
+    expect(validateEffectivenessInventory(missingVenuePair)).toContain("scored family/venue pair sets do not conserve exactly");
+
+    const exemption = baseline.exemptions.find((row) => row.applicableFamilyIds.length > 0)!;
+    const exemptFamily = exemption.applicableFamilyIds[0]!;
+    const missingExemptionPair: EffectivenessInventory = {
+      ...baseline,
+      exemptions: baseline.exemptions.map((row) => row.id === exemption.id
+        ? { ...row, applicableFamilyIds: row.applicableFamilyIds.filter((id) => id !== exemptFamily) }
+        : row),
+    };
+    expect(validateEffectivenessInventory(missingExemptionPair)).toContain("exempt family pair sets do not conserve exactly");
+    expect(scoredFamily).not.toBe(exemptFamily);
     expectRestoredBaseline();
   });
 

@@ -18,12 +18,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildEffectivenessInventory,
-  discoverProductionProducerCalls,
   EFFECTIVENESS_INVENTORY,
   EFFECTIVENESS_INVENTORY_JSON,
   serializeEffectivenessInventory,
   validateEffectivenessInventory,
 } from "../effectiveness-registry.js";
+import { discoverEffectivenessRouteGraph } from "../effectiveness-route-graph.js";
 import type { EffectivenessInventory } from "../effectiveness-schema.js";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 import {
@@ -39,10 +39,15 @@ function effectivenessJson(): string {
   const problems = validateEffectivenessInventory(inventory, { root: ROOT });
   if (problems.length > 0) throw new Error(`effectiveness inventory invalid:\n${problems.join("\n")}`);
 
-  const registered = new Set(inventory.producers.flatMap((producer) =>
-    producer.implementations.map((item) => `${item.file}#${item.symbol}`)));
-  const discovered = discoverProductionProducerCalls(ROOT, registered);
-  if (JSON.stringify(discovered) !== JSON.stringify(inventory.receipt.composedCalls)) {
+  const implementations = inventory.producers.flatMap((producer) =>
+    producer.implementations.map((item) => ({
+      ...item,
+      producerId: producer.id,
+      deliveryKind: producer.deliveryKind,
+      endpoint: producer.deliveryKind === "conservation" ? "conservation" as const : producer.populationClass === "true-finding-producer" ? "client-finding-delivery" as const : "coverage-disclosure" as const,
+    })));
+  const discovered = discoverEffectivenessRouteGraph(ROOT, implementations);
+  if (JSON.stringify(discovered.routes) !== JSON.stringify(inventory.receipt.routes)) {
     throw new Error("effectiveness discovery receipt drifted from the live production call graph");
   }
 
