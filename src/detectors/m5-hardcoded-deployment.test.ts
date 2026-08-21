@@ -2,17 +2,25 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { digestObservedPaths } from "../corpus-scanner-scope.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "./common.js";
 import {
+  detectM1HardcodedTenantFindings,
   detectM5HardcodedDeploymentFindings,
+  m5HardcodedSourceNotAssessed,
+  M1_HARDCODED_TENANT_METADATA,
+  M1_HARDCODED_TENANT_TAXONOMY,
   M5_HARDCODED_DEPLOYMENT_METADATA,
   M5_HARDCODED_ENDPOINT_TAXONOMY,
   M5_HARDCODED_IDENTIFIER_TAXONOMY,
+  M5_HARDCODED_SOURCE_COVERAGE_ID,
+  M5_HARDCODED_SOURCE_COVERAGE_TAXONOMY,
 } from "./m5-hardcoded-deployment.js";
 
 const FIXTURES = fileURLToPath(new URL("./__fixtures__/m5-hardcoded-deployment/", import.meta.url));
 const CALIBRATION = fileURLToPath(new URL("../../targets/calibration/src/m5-hardcoded-deployment/", import.meta.url));
+const M1_CALIBRATION = fileURLToPath(new URL("../../targets/calibration/src/m1-hardcoded-tenant/", import.meta.url));
 
 function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES, relDir);
@@ -87,7 +95,7 @@ describe("M5 hardcoded deployment classifier (#1929)", () => {
     },
   );
 
-  it("leaves credentials, tokens, signing material, and tenant-sensitive exposure to M1", () => {
+  it("partitions credentials from hardcoded tenant exposure and gives the tenant row only to M1", () => {
     const files: SourceInput[] = [{
       path: "src/server/auth.ts",
       text: `
@@ -96,20 +104,61 @@ describe("M5 hardcoded deployment classifier (#1929)", () => {
           signingSecret: "example-signing-value",
         });
         await fetch("https://tenant.prod.harvey-platform.com/v1", {
-          headers: { Authorization: "Bearer example-token", "X-Tenant-ID": "example-tenant-id" },
+          headers: { Authorization: "Bearer example-token", "X-Tenant-ID": "tenant_example-4821" },
         });
       `,
     }];
-    const findings = detectM5HardcodedDeploymentFindings(files);
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.taxonomy).toBe(M5_HARDCODED_ENDPOINT_TAXONOMY);
-    expect(findings[0]?.evidence).not.toMatch(/example-api-key|example-signing-value|example-token|example-tenant-id/);
+    const m5 = detectM5HardcodedDeploymentFindings(files);
+    const m1 = detectM1HardcodedTenantFindings(files);
+    expect(m5).toHaveLength(1);
+    expect(m5[0]?.taxonomy).toBe(M5_HARDCODED_ENDPOINT_TAXONOMY);
+    expect(m5[0]?.evidence).not.toMatch(/example-api-key|example-signing-value|example-token|tenant_example-4821/);
+    expect(m1).toHaveLength(1);
+    expect(m1[0]).toMatchObject({
+      id: expect.stringMatching(/^M1-HARDCODED-TENANT-/),
+      taxonomy: M1_HARDCODED_TENANT_TAXONOMY,
+      severity: "High",
+      confidence: "Review",
+      precisionTier: "review",
+    });
+    expect(m1[0]?.evidence).toContain("authenticated/session context");
+    expect(m1[0]?.fix).toContain("authenticated principal/session");
+    expect(m1[0]?.fix).not.toMatch(/env(?:ironment)?(?: variable)?/i);
 
     const clientExposure: SourceInput = {
       path: "src/components/tenant-client.tsx",
-      text: `"use client"; export const tenant = new TenantClient({ tenantId: "example-tenant-id" });`,
+      text: `"use client"; export const tenant = new TenantClient({ tenantId: "tenant_example-4821" });`,
     };
     expect(detectM5HardcodedDeploymentFindings([clientExposure])).toEqual([]);
+    expect(detectM1HardcodedTenantFindings([clientExposure])).toHaveLength(1);
+  });
+
+  it("keeps dynamic/session-derived tenant identity and server configuration outside the M1 boundary owner", () => {
+    const files: SourceInput[] = [
+      {
+        path: "src/components/tenant-client.tsx",
+        text: `"use client"; export const tenant = (session: { tenantId: string }) => new TenantClient({ tenantId: session.tenantId });`,
+      },
+      {
+        path: "src/config/deployment.ts",
+        text: `export const deploymentConfig = { tenantId: "tenant_example-4821" };`,
+      },
+    ];
+    expect(detectM1HardcodedTenantFindings(files)).toEqual([]);
+    expect(detectM5HardcodedDeploymentFindings(files).map((finding) => finding.taxonomy)).toEqual([
+      M5_HARDCODED_IDENTIFIER_TAXONOMY,
+    ]);
+  });
+
+  it.each(["request", "client"])("exercises the exact M1 %s positive/negative calibration pair", (shape) => {
+    const extension = shape === "client" ? "tsx" : "ts";
+    const source = (suffix: "positive" | "negative"): SourceInput => ({
+      path: `m1-hardcoded-tenant/${shape}-${suffix}.${extension}`,
+      text: readFileSync(join(M1_CALIBRATION, `${shape}-${suffix}.${extension}`), "utf8"),
+    });
+    expect(detectM1HardcodedTenantFindings([source("positive")])).toHaveLength(1);
+    expect(detectM1HardcodedTenantFindings([source("negative")])).toEqual([]);
+    expect(detectM5HardcodedDeploymentFindings([source("positive")])).toEqual([]);
   });
 
   it("keeps the credential negative control excluded by M1 ownership, not fixture-path filtering", () => {
@@ -139,9 +188,63 @@ describe("M5 hardcoded deployment classifier (#1929)", () => {
     const files = loadFixtureDir("positive");
     expect(detectM5HardcodedDeploymentFindings(files)).toHaveLength(10);
     expect(detectM5HardcodedDeploymentFindings(files, { enabled: false })).toHaveLength(0);
+    const tenant: SourceInput[] = [{
+      path: "src/components/tenant.tsx",
+      text: `"use client"; export const tenant = new TenantClient({ tenantId: "tenant_example-4821" });`,
+    }];
+    expect(detectM1HardcodedTenantFindings(tenant)).toHaveLength(1);
+    expect(detectM1HardcodedTenantFindings(tenant, { enabled: false })).toEqual([]);
+  });
+
+  it("emits one stable typed NotAssessed row only for a non-empty broad inventory with zero admitted files", () => {
+    const broad: SourceInput[] = [
+      { path: "src/service.py", text: "def run():\n    pass\n" },
+      { path: "src/worker.go", text: "package worker\n" },
+    ];
+    const receipt = m5HardcodedSourceNotAssessed(broad, []);
+    expect(receipt).toEqual({
+      reason: expect.stringContaining("No source admitted by the exact M5 hardcoded-deployment JavaScript/TypeScript selector was examined"),
+      provenance: expect.stringMatching(/loadSourceInventory.*isM5HardcodedDeploymentSource/),
+      falsifier: "Add or identify an admitted JavaScript/TypeScript source, or extend the selector, then rerun.",
+      inventory: {
+        broadUnits: 2,
+        selectedUnits: 0,
+        pathSetDigest: digestObservedPaths(broad.map((file) => file.path)),
+        scope: expect.stringContaining("tracked non-test product-source paths"),
+      },
+    });
+    const findings = detectM5HardcodedDeploymentFindings([], { productSourceInventory: broad });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      id: M5_HARDCODED_SOURCE_COVERAGE_ID,
+      taxonomy: M5_HARDCODED_SOURCE_COVERAGE_TAXONOMY,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+    });
+    expect(findings[0]?.evidence).toContain("Broad product-source inventory: 2 path(s)");
+    expect(findings[0]?.evidence).toContain("exact JavaScript/TypeScript selector: 0 admitted");
+    expect(findings[0]?.evidence).toContain(receipt?.inventory.pathSetDigest);
+    expect(findings[0]?.evidence).toContain("Provenance:");
+    expect(findings[0]?.evidence).toContain("Falsifier:");
+    expect(detectM5HardcodedDeploymentFindings([], { productSourceInventory: [...broad].reverse() })).toEqual(findings);
+  });
+
+  it("keeps true-empty targets silent and stops disclosing once the exact selector admits a source", () => {
+    expect(m5HardcodedSourceNotAssessed([], [])).toBeUndefined();
+    expect(detectM5HardcodedDeploymentFindings([], { productSourceInventory: [] })).toEqual([]);
+    const admitted: SourceInput = { path: "src/index.ts", text: "export const value = 1;\n" };
+    expect(m5HardcodedSourceNotAssessed([admitted], [admitted])).toBeUndefined();
+    expect(detectM5HardcodedDeploymentFindings([admitted], { productSourceInventory: [admitted] })).toEqual([]);
   });
 
   it("exports bounded source-only applicability and fallback metadata for registry integration", () => {
+    expect(M1_HARDCODED_TENANT_METADATA).toMatchObject({
+      id: "m1-hardcoded-tenant",
+      module: "M1",
+      precisionTier: "review",
+    });
+    expect(M1_HARDCODED_TENANT_METADATA.ownershipExclusions).toContain("M5-owned");
     expect(M5_HARDCODED_DEPLOYMENT_METADATA).toMatchObject({
       id: "m5-hardcoded-deployment",
       module: "M5",
@@ -152,5 +255,6 @@ describe("M5 hardcoded deployment classifier (#1929)", () => {
     expect(M5_HARDCODED_DEPLOYMENT_METADATA.examinedUnit).toContain("source path");
     expect(M5_HARDCODED_DEPLOYMENT_METADATA.ownershipExclusions).toContain("M1-owned");
     expect(M5_HARDCODED_DEPLOYMENT_METADATA.fallback).toContain("Dynamic/computed values");
+    expect(M5_HARDCODED_DEPLOYMENT_METADATA.findingIds).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
   });
 });

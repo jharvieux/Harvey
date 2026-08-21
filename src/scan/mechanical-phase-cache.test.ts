@@ -17,6 +17,7 @@ import {
   type MechanicalPhaseCacheOptions,
   type MechanicalPhaseRecord,
   type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerNotAssessed,
   type MechanicalProducerRecord,
 } from "./mechanical-phase-cache.js";
 import { semgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
@@ -80,6 +81,34 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     };
   };
 
+  const notAssessedReceipt = (): MechanicalProducerNotAssessed => ({
+    reason: "No source admitted by the exact JavaScript/TypeScript selector was examined.",
+    provenance: "Broad inventory fixture plus exact JavaScript/TypeScript selector fixture.",
+    falsifier: "Add an admitted JavaScript/TypeScript source and rerun the fixture.",
+    inventory: {
+      broadUnits: 2,
+      selectedUnits: 0,
+      pathSetDigest: "b".repeat(64),
+      scope: "two tracked product-source paths before the exact selector",
+    },
+  });
+
+  const notAssessedValue = () => ({
+    findings: [finding("M5-HARDCODED-SOURCE-COVERAGE-00")],
+    scope: { unitsExamined: 2, description: "broad source inventory retained by the structural phase" },
+    producers: [createMechanicalProducerRecord({
+      detector: "m5-hardcoded-deployment",
+      phase: "structural-ast",
+      order: 350,
+      module: "M5",
+      examinedUnitIdentities: [],
+      findings: 1,
+      durationMs: 4.25,
+      status: "not-assessed",
+      notAssessed: notAssessedReceipt(),
+    })],
+  });
+
   it("returns byte-equivalent normalized findings and examined scope on a real cold then warm large-fixture path", async () => {
     const cache = options();
     const cold = await run("structural-ast", cache);
@@ -129,6 +158,63 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(warm.producers).toEqual([
       expect.objectContaining({ detector: "owned-producer", durationMs: 0, status: "cached", examinedUnitIdentities }),
     ]);
+  });
+
+  it("persists and restores a typed zero-unit NotAssessed receipt without laundering it into cached or not-applicable", async () => {
+    const cache = options();
+    const value = notAssessedValue();
+    const cold = await executeMechanicalPhase("structural-ast", cache, () => value);
+    const artifact = join(cache.dir, "structural-ast", `${cold.key}.json`);
+    expect(JSON.parse(readFileSync(artifact, "utf8"))).toMatchObject({
+      schema: 4,
+      producers: [{
+        detector: "m5-hardcoded-deployment",
+        unitsExamined: 0,
+        findings: 1,
+        durationMs: 0,
+        status: "not-assessed",
+        notAssessed: notAssessedReceipt(),
+      }],
+    });
+
+    const execute = vi.fn(() => notAssessedValue());
+    const warm = await executeMechanicalPhase("structural-ast", cache, execute);
+    expect(execute).not.toHaveBeenCalled();
+    expect(warm.cache).toBe("hit");
+    expect(warm.producers).toEqual([
+      expect.objectContaining({
+        detector: "m5-hardcoded-deployment",
+        unitsExamined: 0,
+        findings: 1,
+        status: "not-assessed",
+        notAssessed: notAssessedReceipt(),
+      }),
+    ]);
+  });
+
+  it("rejects checksum-valid cache artifacts that erase or corrupt the typed NotAssessed reason contract", async () => {
+    const corruptions: readonly [string, (producer: Partial<MechanicalProducerRecord>) => void, RegExp][] = [
+      ["missing", (producer) => { delete producer.notAssessed; }, /missing its typed reason receipt/],
+      ["empty broad population", (producer) => { producer.notAssessed!.inventory.broadUnits = 0; }, /broad inventory must be non-empty/],
+      ["selected work claimed", (producer) => { (producer.notAssessed!.inventory as { selectedUnits: number }).selectedUnits = 1; }, /selected inventory must be exactly zero/],
+      ["local path instead of digest", (producer) => { producer.notAssessed!.inventory.pathSetDigest = "/private/tmp/checkout"; }, /path-set digest is malformed/],
+    ];
+    for (const [name, mutate, reason] of corruptions) {
+      const events: string[] = [];
+      const cache = options({ onEvent: (message) => events.push(message) });
+      const cold = await executeMechanicalPhase("structural-ast", cache, notAssessedValue);
+      const artifactPath = join(cache.dir, "structural-ast", `${cold.key}.json`);
+      const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as MutableReceiptArtifact;
+      mutate(artifact.producers[0]!);
+      artifact.payloadDigest = mechanicalPhasePayloadDigest({
+        findings: artifact.findings,
+        scope: artifact.scope,
+        producers: artifact.producers as MechanicalProducerRecord[],
+      });
+      writeFileSync(artifactPath, JSON.stringify(artifact));
+      expect((await executeMechanicalPhase("structural-ast", cache, notAssessedValue)).cache, name).toBe("miss");
+      expect(events.some((event) => reason.test(event)), name).toBe(true);
+    }
   });
 
   it("rejects missing, duplicate, noncanonical, count-inconsistent, wrong-producer, and wrong-order cached receipts", async () => {

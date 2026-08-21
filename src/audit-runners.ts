@@ -23,6 +23,7 @@ import type {
   ProductionProducerBinding,
 } from "./effectiveness-schema.js";
 import type { Finding } from "./findings.js";
+import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./scan/framework-detect.js";
 import { parseSourcePopulationReceipt, type SourcePopulationReceipt } from "./scan/polyglot-quality.js";
@@ -1019,15 +1020,21 @@ const m5Run = (ctx: RunContext): ProbeResult => {
   const staticFindings = staticReceipt ? readCaptured(ctx, staticOutPath).filter((finding) => finding.taxonomy.startsWith("M5 — ")) : [];
   const identified = staticReceipt?.populations.reduce((sum, row) => sum + row.identified.count, 0) ?? 0;
   const sourceExamined = staticReceipt?.populations.reduce((sum, row) => sum + row.examined.count, 0) ?? 0;
-  const sourceGap = staticReceipt ? populationGap(staticReceipt) : `M5 source tier did not produce a population receipt: ${trimOut(staticRun.output)}`;
+  const hardcodedSourceGap = staticFindings.find((finding) => finding.id === M5_HARDCODED_SOURCE_COVERAGE_ID);
+  const sourceGap = [
+    staticReceipt ? populationGap(staticReceipt) : `M5 source tier did not produce a population receipt: ${trimOut(staticRun.output)}`,
+    hardcodedSourceGap ? `Hardcoded-deployment source coverage: ${hardcodedSourceGap.evidence}` : undefined,
+  ].filter((value): value is string => !!value).join(" ") || undefined;
   const withSourceTier = (base: ProbeResult): ProbeResult => {
     if (!staticReceipt || identified === 0 || sourceExamined === 0) {
-      if (base.kind === "not-assessed") return base;
+      if (base.kind === "not-assessed") {
+        return sourceGap ? { ...base, reason: `${base.reason} ${sourceGap}` } : base;
+      }
       return {
         ...base,
         detail: `${base.detail}; ${staticCommand} (source tier)`,
         findings: [...(base.findings ?? []), ...staticFindings],
-        reason: [base.reason, sourceGap].filter(Boolean).join(" "),
+        reason: [base.reason, sourceGap].filter(Boolean).join(" ") || undefined,
       };
     }
     if (base.kind === "not-assessed") {

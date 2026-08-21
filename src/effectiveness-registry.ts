@@ -100,10 +100,14 @@ function mechanicalDelivery(entry: MechanicalRegistryEntry): ProducerConsumerHop
     "structural-ast": "runRegisteredMechanicalDetectors",
     normalization: "runRegisteredNormalizationEngines",
   };
-  const additionalConsumers = entry.implementations.some((item) => ["detectHandrolledFindings", "checkUnassessedSfcFiles"].includes(item.exportName))
+  const additionalConsumers = entry.implementations.some((item) => [
+    "detectHandrolledFindings",
+    "checkUnassessedSfcFiles",
+    "detectM5HardcodedDeploymentFindings",
+  ].includes(item.exportName))
     ? [
         { file: "src/cli/static-detect.ts", contains: entry.implementations[0]!.exportName, description: "the static detector is an additional production consumer of this same producer identity" },
-        { file: "src/audit-runners.ts", contains: "pnpm detect-static", description: "the M9 runner captures the additional static-detector output" },
+        { file: "src/audit-runners.ts", contains: "pnpm detect-static", description: "the owning audit probe captures the additional static-detector output" },
       ]
     : [];
   return [

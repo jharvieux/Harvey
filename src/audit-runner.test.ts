@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,6 +12,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
+import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -203,6 +205,70 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
+  });
+
+  it("M5 delivers the exact zero-selector NotAssessed reason and finding instead of reading a nonempty broad inventory as clean", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "harvey-m5-static-shipping-"));
+    try {
+      const targetDir = join(fixtureRoot, "target");
+      const captureDir = join(fixtureRoot, "capture");
+      const staticOutPath = join(captureDir, "M5-static.json");
+      mkdirSync(join(targetDir, "src"), { recursive: true });
+      mkdirSync(captureDir);
+      writeFileSync(join(targetDir, "package.json"), `${JSON.stringify({ name: "python-service", private: true }, null, 2)}\n`);
+      writeFileSync(join(targetDir, "src", "service.py"), "def run():\n    return 1\n");
+
+      const repoRoot = join(import.meta.dirname, "..");
+      const staticRun = await new Promise<{ ok: true; output: string; stderr: string }>((resolve, reject) => {
+        const child = spawn(
+          join(repoRoot, "node_modules", ".bin", "tsx"),
+          [join(repoRoot, "src", "cli", "static-detect.ts"), targetDir, "--out", staticOutPath],
+          { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        let output = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => (output += chunk));
+        child.stderr.on("data", (chunk: string) => (stderr += chunk));
+        child.on("error", reject);
+        child.on("close", (code) => {
+          if (code === 0) resolve({ ok: true, output, stderr });
+          else reject(new Error(`static-detect exited ${code}: ${stderr || output}`));
+        });
+      });
+
+      const staticFindings = JSON.parse(readFileSync(staticOutPath, "utf8")) as Finding[];
+      expect(staticFindings.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+      const run = ctx({
+        targetDir,
+        captureDir,
+        readFindings: (path) => path === staticOutPath
+          ? JSON.parse(readFileSync(path, "utf8")) as Finding[]
+          : [],
+        exec: (_command, argv) => argv.includes("detect-static") && argv.includes(staticOutPath)
+          ? staticRun
+          : cleanRun(argv),
+      });
+      const result = runAudit(AUDIT_RUNNERS, run);
+      const m5 = result.recorded.find((row) => row.module === "M5");
+      expect(m5?.status).toBe("partial");
+      expect(m5?.reason).toContain("Hardcoded-deployment source coverage");
+      expect(m5?.reason).toContain("Broad product-source inventory: 1 path(s)");
+      expect(m5?.reason).toContain("exact JavaScript/TypeScript selector: 0 admitted");
+      expect(m5?.reason).toContain("Provenance:");
+      expect(m5?.reason).toContain("Falsifier:");
+      expect(result.findingsByModule.M5?.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+
+      const doc = assembleEngagementDocument(result.recorded, run.env, result.findings, m5137Meta);
+      expect(doc.findings.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+      expect(conservationLedger(result.findings, doc.findings, result.findingsByModule)).toMatchObject({
+        unaccounted: 0,
+        ok: true,
+      });
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   // #1137: knip's M5-00 disclosure has two shapes and the probe must not collapse them. When knip

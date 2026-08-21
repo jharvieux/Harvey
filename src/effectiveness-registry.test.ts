@@ -47,12 +47,12 @@ describe("effectiveness producer inventory (#1910)", () => {
     const inventory = freshInventory();
     expect(validateEffectivenessInventory(inventory)).toEqual([]);
     expect(inventory.receipt).toMatchObject({
-      mechanicalDefinitions: 72,
+      mechanicalDefinitions: 73,
       localSemgrepFamilies: 10,
       localSemgrepRuleIds: 118,
       registrySemgrepPacks: 6,
     });
-    expect(inventory.receipt.mechanicalProducerIds).toHaveLength(72);
+    expect(inventory.receipt.mechanicalProducerIds).toHaveLength(73);
     expect(inventory.receipt.localSemgrepFamilyIds).toHaveLength(10);
     expect(inventory.receipt.localSemgrepRules).toHaveLength(118);
     expect(inventory.receipt.registrySemgrepPackIds).toEqual([
@@ -103,7 +103,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(Object.isFrozen(EFFECTIVENESS_INVENTORY)).toBe(true);
   });
 
-  it("retains one handrolled and one SFC producer across their multiple consumers", () => {
+  it("retains one handrolled, one SFC, and one M5 hardcoded producer across their multiple consumers", () => {
     const inventory = freshInventory();
     const owners = (symbol: string): EffectivenessProducer[] => inventory.producers.filter((row) =>
       row.implementations.some((item) => item.symbol === symbol));
@@ -113,9 +113,18 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(owners("checkUnassessedSfcFiles").map((row) => row.id)).toEqual([
       "mechanical:configuration:sfc-coverage",
     ]);
+    expect(owners("detectM5HardcodedDeploymentFindings").map((row) => row.id)).toEqual([
+      "mechanical:structural-ast:m5-hardcoded-deployment",
+    ]);
     expect(inventory.receipt.composedCalls.filter((row) => row.symbol === "detectHandrolledFindings")).toHaveLength(1);
+    expect(inventory.receipt.composedCalls.filter((row) => row.symbol === "detectM5HardcodedDeploymentFindings")).toHaveLength(1);
     expect(producer(inventory, "mechanical:structural-ast:handrolled-indicators").consumerPath)
       .toEqual(expect.arrayContaining([expect.objectContaining({ file: "src/cli/static-detect.ts" })]));
+    expect(producer(inventory, "mechanical:structural-ast:m5-hardcoded-deployment").consumerPath)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ file: "src/cli/static-detect.ts" }),
+        expect.objectContaining({ file: "src/audit-runners.ts" }),
+      ]));
   });
 
   it("expands App Router into M1/M9 finding, disclosure, and not-assessed families", () => {
@@ -149,11 +158,31 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(new Set(m5Polyglot.findingFamilies.map((row) => row.kind))).toEqual(
       new Set(["finding", "coverage-disclosure"]),
     );
+    expect(new Set(producer(inventory, "mechanical:structural-ast:m5-hardcoded-deployment").findingFamilies.map((row) => row.kind))).toEqual(
+      new Set(["finding", "not-assessed"]),
+    );
     expect(producer(inventory, "mechanical:structural-ast:m6-polyglot-coverage")).toMatchObject({
       populationClass: "disclosure-only",
       venueIds: [],
       exemptionId: "exemption:not-a-producer:disclosure-only",
     });
+  });
+
+  it("assigns the new M1 hardcoded-tenant owner to the live scored calibration venue", () => {
+    const m1 = producer(freshInventory(), "mechanical:structural-ast:m1-hardcoded-tenant");
+    expect(m1).toMatchObject({
+      modules: ["M1"],
+      populationClass: "true-finding-producer",
+      venueIds: ["validate-calibration"],
+    });
+    expect(m1.exemptionId).toBeUndefined();
+    expect(m1.findingFamilies).toEqual([
+      expect.objectContaining({
+        module: "M1",
+        kind: "finding",
+        taxonomyPattern: "M1 — Hardcoded tenant identifier at client/request boundary",
+      }),
+    ]);
   });
 
   it("gives the current M2 true population one empirical no-cadence exemption", () => {
