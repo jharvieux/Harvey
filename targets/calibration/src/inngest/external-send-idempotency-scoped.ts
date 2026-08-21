@@ -47,6 +47,19 @@ export function createTwoIndependentPayments(stripe: Stripe, tenantId: string, b
   );
 }
 
+export function createSequentialContractVariants(stripe: Stripe, tenantId: string, bookingId: string) {
+  stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["sequential-authorize-charge", tenantId, bookingId, "v1"]) },
+  );
+  return stripe.paymentIntents.create(
+    { amount: 200, metadata: { bookingId } },
+    {
+      idempotencyKey: `sequential-capture-charge:${encodeURIComponent(tenantId)}:${encodeURIComponent(bookingId)}:v1`,
+    },
+  );
+}
+
 export function reserveInvoice(stripe: Stripe, tenantId: string, bookingId: string) {
   return stripe.paymentIntents.create(
     { amount: 100, metadata: { bookingId } },

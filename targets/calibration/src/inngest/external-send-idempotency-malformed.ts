@@ -105,3 +105,41 @@ export function chargeWithNumericBookingId(stripe: Stripe, tenantId: string, boo
     { idempotencyKey: JSON.stringify(["numeric-charge", tenantId, bookingId, "v1"]) },
   );
 }
+
+export function branchFramingPayment(
+  stripe: Stripe,
+  tenantId: string,
+  bookingId: string,
+  useJson: boolean,
+) {
+  if (useJson) {
+    return stripe.paymentIntents.create(
+      { amount: 100, metadata: { bookingId } },
+      { idempotencyKey: JSON.stringify(["branch-framing-charge", tenantId, bookingId, "v1"]) },
+    );
+  } else {
+    return stripe.paymentIntents.create(
+      { amount: 100, metadata: { bookingId } },
+      {
+        idempotencyKey: `branch-framing-charge:${encodeURIComponent(tenantId)}:${encodeURIComponent(bookingId)}:v1`,
+      },
+    );
+  }
+}
+
+export function branchDiscriminatorPayment(
+  stripe: Stripe,
+  tenantId: string,
+  bookingId: string,
+  retry: boolean,
+) {
+  return retry
+    ? stripe.paymentIntents.create(
+        { amount: 100, metadata: { bookingId } },
+        { idempotencyKey: JSON.stringify(["retry-branch-discriminator-charge", tenantId, bookingId, "v1"]) },
+      )
+    : stripe.paymentIntents.create(
+        { amount: 100, metadata: { bookingId } },
+        { idempotencyKey: JSON.stringify(["branch-discriminator-charge", tenantId, bookingId, "v1"]) },
+      );
+}
