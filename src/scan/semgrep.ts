@@ -535,9 +535,10 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 // the current paired-cold topology: each complete local-injection run retained 87 findings, 4,152
 // scanned paths, 30 top-level rules, 32 skips, 26 raw/canonical errors, and six fixpoint timeouts on
 // six paths. All six timeout paths were timeout-only (absent from errors[] and paths.skipped). The
-// client-visible PartialParsing record in TraceabilityGraph.tsx remains at line 74 on the
-// `import("./utils").IssueContainment` token. Both complete semantic projections must agree before
-// output can be returned or cached; no subpartition is substituted for either cold run.
+// 1.173.0 PartialParsing record in TraceabilityGraph.tsx is 79:1–79:2 on the unexpected `}`; the
+// older line-74 `import("./utils").IssueContainment` record is not accepted. Both complete semantic
+// projections must agree before output can be returned or cached; no subpartition is substituted
+// for either cold run.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
 const SEMGREP_PAIRED_FAMILY = "local-injection";

@@ -510,6 +510,39 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
+  it("fails paired-cold delivery when the second run substitutes the old line-74 parser diagnostic", () => {
+    const path = "/some/target/apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx";
+    const diagnostic = (line: 74 | 79): SemgrepOutput => {
+      const old = line === 74;
+      const start = { line, col: old ? 18 : 1, offset: 0 };
+      const end = { line, col: old ? 53 : 2, offset: old ? 35 : 1 };
+      const token = old ? 'import("./utils").IssueContainment' : "}";
+      return {
+        version: "1.173.0",
+        results: [],
+        errors: [{
+          code: 3,
+          level: "warn",
+          type: ["PartialParsing", [{ path, start, end }]],
+          message: `Syntax error at line ${path}:${line}:\n \`${token}\` was unexpected`,
+          path,
+          spans: [{ file: path, start, end }],
+        }],
+        paths: { scanned: [path], skipped: [{ path, reason: "analysis_failed_parser_or_internal_error" }] },
+        time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"], fixpoint_timeouts: [] },
+      };
+    };
+    const line79 = diagnostic(79);
+    semgrepMock.outputs.push(JSON.stringify(line79), JSON.stringify(line79), JSON.stringify(diagnostic(74)));
+    try {
+      const run = runSemgrep("/some/target");
+      expect(run.result).toEqual({});
+      expect(run.failure).toMatch(/paired cold.*local-injection.*differ/i);
+    } finally {
+      semgrepMock.outputs.length = 0;
+    }
+  });
+
   it("executes the production partitioned injection seam twice at j1 and every other family once at j9", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-policy-"));
     try {
@@ -923,29 +956,30 @@ describe("semgrepErrorFinding (#1077)", () => {
   // #1954, measured with the current paired-cold production topology over carbon@92e19c0. Each
   // Semgrep 1.173.0 run keeps 87 findings / 4,152 scanned paths / 30 top-level rules, 32 skips,
   // 26 raw→26 canonical errors, and six timeout-only records on six paths. The client-visible
-  // PartialParsing span is line 74. The client disclosure names that line while the separate raw
+  // PartialParsing span is 79:1–79:2. The client disclosure names that line while the separate raw
   // diagnostic receipt remains intact for strict producer↔replay comparison.
-  it("preserves the current paired-cold Semgrep 1.173.0 line-74 PartialParsing evidence in SEM-ERR-00", () => {
+  it("preserves the current paired-cold Semgrep 1.173.0 line-79 PartialParsing evidence in SEM-ERR-00", () => {
     const path = "/target/apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx";
-    const point = { line: 74, col: 18, offset: 0 };
+    const point = { line: 79, col: 1, offset: 0 };
     const [finding] = semgrepErrorFinding("/target", {
       version: "1.173.0",
       errors: [
         {
           code: 3,
           level: "warn",
-          type: ["PartialParsing", [{ path, start: point, end: { line: 74, col: 53, offset: 35 } }]],
-          message: `Syntax error at line ${path}:74:\n \`import("./utils").IssueContainment\` was unexpected`,
+          type: ["PartialParsing", [{ path, start: point, end: { line: 79, col: 2, offset: 1 } }]],
+          message: `Syntax error at line ${path}:79:\n \`}\` was unexpected`,
           path,
-          spans: [{ file: path, start: point, end: { line: 74, col: 53, offset: 35 } }],
+          spans: [{ file: path, start: point, end: { line: 79, col: 2, offset: 1 } }],
         },
       ],
       paths: { scanned: [path], skipped: [{ path, reason: "analysis_failed_parser_or_internal_error" }] },
     });
     expect(finding).toMatchObject({ id: "SEM-ERR-00", title: "2 analysis records semgrep could not fully evaluate" });
-    expect(finding?.evidence).toContain("TraceabilityGraph.tsx:74");
-    expect(finding?.evidence).toContain('"line":74');
-    expect(finding?.evidence).not.toContain(":79");
+    expect(finding?.evidence).toContain("TraceabilityGraph.tsx:79");
+    expect(finding?.evidence).toContain('"line":79');
+    expect(finding?.evidence).not.toContain("IssueContainment");
+    expect(finding?.evidence).not.toContain(":74");
   });
 
   it("names a file semgrep chose to skip (paths.skipped, only populated at --verbose) alongside any errors", () => {
