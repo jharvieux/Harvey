@@ -11952,15 +11952,15 @@
   },
   {
     "id": "SEM-369",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-unanchored-guard-braceless.js:10",
+    "location": "pages/api/cookie-report.js:10",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -11981,7 +11981,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/cookie-report.js:10",
+    "location": "pages/api/search.js:11",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12000,15 +12000,15 @@
   },
   {
     "id": "SEM-371",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/cookie-report.js:10",
+    "location": "pages/api/sqli-denylist-guard-throw.js:11",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12029,7 +12029,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/search.js:11",
+    "location": "pages/api/multihop-sql.js:11",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12048,15 +12048,15 @@
   },
   {
     "id": "SEM-373",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/search.js:11",
+    "location": "pages/api/sqli-unanchored-guard-throw.js:11",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12077,7 +12077,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard-throw.js:11",
+    "location": "pages/api/sqli-mflag-guard-throw.js:11",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12096,15 +12096,15 @@
   },
   {
     "id": "SEM-375",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard-throw.js:11",
+    "location": "pages/api/sqli-mflag-guard-braceless.js:11",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12125,7 +12125,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/multihop-sql.js:11",
+    "location": "pages/api/sqli-denylist-guard-braceless.js:12",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12144,15 +12144,15 @@
   },
   {
     "id": "SEM-377",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/multihop-sql.js:11",
+    "location": "pages/api/sqli-guard-no-return.js:13",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12173,7 +12173,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-unanchored-guard-throw.js:11",
+    "location": "pages/api/sqli-unanchored-guard.js:14",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12192,15 +12192,15 @@
   },
   {
     "id": "SEM-379",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-unanchored-guard-throw.js:11",
+    "location": "pages/api/sqli-const-denylist-guard.js:14",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12221,7 +12221,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard-throw.js:11",
+    "location": "pages/api/sqli-guard-braceless-no-return.js:14",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12240,15 +12240,15 @@
   },
   {
     "id": "SEM-381",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard-throw.js:11",
+    "location": "pages/api/sqli-const-unanchored-guard.js:14",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12269,7 +12269,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard-braceless.js:11",
+    "location": "pages/api/sqli-denylist-guard.js:15",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12288,15 +12288,15 @@
   },
   {
     "id": "SEM-383",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard-braceless.js:11",
+    "location": "pages/api/sqli-mflag-guard.js:15",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12317,7 +12317,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard-braceless.js:12",
+    "location": "pages/api/sqli-regex-guard-throw-swallowed.js:16",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12336,15 +12336,15 @@
   },
   {
     "id": "SEM-385",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard-braceless.js:12",
+    "location": "pages/api/sqli-reassigned-guard.js:17",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12365,7 +12365,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-guard-no-return.js:13",
+    "location": "pages/api/sqli-const-guard-throw-swallowed.js:17",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12384,15 +12384,15 @@
   },
   {
     "id": "SEM-387",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-guard-no-return.js:13",
+    "location": "pages/api/destructure-sql.js:9",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12413,7 +12413,7 @@
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-unanchored-guard.js:14",
+    "location": "pages/api/sqli-enum-guard-throw-finally.js:15",
     "status": "Open",
     "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
@@ -12432,15 +12432,15 @@
   },
   {
     "id": "SEM-389",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
+    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-unanchored-guard.js:14",
+    "location": "lib/header-gateway-tenant.js:9",
     "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
+    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
+    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 5,
     "ease": 3,
@@ -12456,534 +12456,6 @@
   },
   {
     "id": "SEM-390",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-denylist-guard.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-391",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-denylist-guard.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-392",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-guard-braceless-no-return.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-393",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-guard-braceless-no-return.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-394",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-unanchored-guard.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-395",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-unanchored-guard.js:14",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-396",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-397",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-denylist-guard.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-398",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-399",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-mflag-guard.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-400",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-regex-guard-throw-swallowed.js:16",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-401",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-regex-guard-throw-swallowed.js:16",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-402",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-reassigned-guard.js:17",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-403",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-reassigned-guard.js:17",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-404",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-guard-throw-swallowed.js:17",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-405",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-const-guard-throw-swallowed.js:17",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-406",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/destructure-sql.js:9",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-407",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/destructure-sql.js:9",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-408",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-enum-guard-throw-finally.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-409",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "pages/api/sqli-enum-guard-throw-finally.js:15",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (imp placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-410",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (//  placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "lib/header-gateway-tenant.js:9",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (//  placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries (//  placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-411",
-    "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-sql-injection-template",
-    "location": "lib/header-gateway-tenant.js:9",
-    "status": "Open",
-    "evidence": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "impact": "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-412",
     "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -13007,7 +12479,7 @@
     ]
   },
   {
-    "id": "SEM-413",
+    "id": "SEM-391",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13031,7 +12503,7 @@
     ]
   },
   {
-    "id": "SEM-414",
+    "id": "SEM-392",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13055,7 +12527,7 @@
     ]
   },
   {
-    "id": "SEM-415",
+    "id": "SEM-393",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13079,7 +12551,7 @@
     ]
   },
   {
-    "id": "SEM-416",
+    "id": "SEM-394",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13103,7 +12575,7 @@
     ]
   },
   {
-    "id": "SEM-417",
+    "id": "SEM-395",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13127,7 +12599,7 @@
     ]
   },
   {
-    "id": "SEM-418",
+    "id": "SEM-396",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13151,7 +12623,7 @@
     ]
   },
   {
-    "id": "SEM-419",
+    "id": "SEM-397",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13175,7 +12647,7 @@
     ]
   },
   {
-    "id": "SEM-420",
+    "id": "SEM-398",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it follows the value within this file only, and the fetch itself is recognised either as a direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL reaching the network through a differently-named helper, or through a host allowlist applied in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends on the deploy network (which internal ranges and metadata endpoints are reachable), which no source scan can determine. A host allowlist that rejects by THROWING is recognised (#1248) only when no `try` follows the `new URL(...)` projection in the same scope, so a correct guard whose URL parse is itself wrapped in try/catch is reported here rather than cleared.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13199,7 +12671,7 @@
     ]
   },
   {
-    "id": "SEM-421",
+    "id": "SEM-399",
     "title": "src.scan.rules.semgrep.harvey-static-iv: The IV passed to createCipheriv/createDecipheriv is a hardcoded literal, not freshly random per encryption. Reusing an IV with the same key breaks CBC/CTR/GCM's security guarantees (CBC leaks identical plaintext blocks; CTR/GCM can be fully broken). Generate it with crypto.randomBytes() for every call. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it matches an IV written as a literal at the call site. An IV built at runtime — read from config, imported from a constants module, or derived from a key — is not assessed here, so an IV that is not freshly random per call but never appears as a literal will not be reported.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13220,7 +12692,7 @@
     ]
   },
   {
-    "id": "SEM-422",
+    "id": "SEM-400",
     "title": "src.scan.rules.semgrep.harvey-template-autoescape-off: A template is compiled with HTML autoescaping disabled (noEscape / escape:false) — every interpolation renders raw, so any user data through it is an XSS sink. Leave autoescaping on and mark only known-safe values as raw. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the compile-time setting. Whether user data actually flows through this template is not traced here, so a template that only ever renders trusted content will appear too.",
     "severity": "High",
     "confidence": "Review",
@@ -13244,7 +12716,7 @@
     ]
   },
   {
-    "id": "SEM-423",
+    "id": "SEM-401",
     "title": "src.scan.rules.semgrep.harvey-template-injection: Request input is compiled/rendered as a server-side template (ejs/handlebars/pug/nunjucks/ lodash) — SSTI, which escalates to RCE on most engines. Treat user input as data, never as template source. SCOPE OF THIS CHECK (#1273): the engines named above, matched by their conventional module binding (`ejs.`, `pug.`, `nunjucks.`, `Handlebars.`/`handlebars.`/`hbs.`, `_.`/`lodash.`). A template engine reached through any other binding — a re-export, a renderer wrapper, a `require` assigned to an unconventional name — is not matched, so this rule's silence is not evidence that no template is user-controlled.",
     "severity": "High",
     "confidence": "Review",
@@ -13268,7 +12740,7 @@
     ]
   },
   {
-    "id": "SEM-424",
+    "id": "SEM-402",
     "title": "src.scan.rules.semgrep.harvey-template-injection: Request input is compiled/rendered as a server-side template (ejs/handlebars/pug/nunjucks/ lodash) — SSTI, which escalates to RCE on most engines. Treat user input as data, never as template source. SCOPE OF THIS CHECK (#1273): the engines named above, matched by their conventional module binding (`ejs.`, `pug.`, `nunjucks.`, `Handlebars.`/`handlebars.`/`hbs.`, `_.`/`lodash.`). A template engine reached through any other binding — a re-export, a renderer wrapper, a `require` assigned to an unconventional name — is not matched, so this rule's silence is not evidence that no template is user-controlled.",
     "severity": "High",
     "confidence": "Review",
@@ -13292,7 +12764,7 @@
     ]
   },
   {
-    "id": "SEM-425",
+    "id": "SEM-403",
     "title": "src.scan.rules.semgrep.harvey-tls-verify-disabled: TLS certificate verification is explicitly disabled (rejectUnauthorized: false, or NODE_TLS_REJECT_UNAUTHORIZED=0). Any man-in-the-middle can present an arbitrary certificate and this client will trust it silently — fix the underlying certificate problem instead.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -13316,7 +12788,7 @@
     ]
   },
   {
-    "id": "SEM-426",
+    "id": "SEM-404",
     "title": "src.scan.rules.semgrep.harvey-token-in-webstorage: An auth/session token is written to Web Storage (localStorage/sessionStorage), which is readable by any injected script — an XSS can steal the session. Keep session tokens in an HttpOnly cookie instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13340,7 +12812,7 @@
     ]
   },
   {
-    "id": "SEM-427",
+    "id": "SEM-405",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13361,7 +12833,7 @@
     ]
   },
   {
-    "id": "SEM-428",
+    "id": "SEM-406",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13382,7 +12854,7 @@
     ]
   },
   {
-    "id": "SEM-429",
+    "id": "SEM-407",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13403,7 +12875,7 @@
     ]
   },
   {
-    "id": "SEM-430",
+    "id": "SEM-408",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13424,7 +12896,7 @@
     ]
   },
   {
-    "id": "SEM-431",
+    "id": "SEM-409",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13445,7 +12917,7 @@
     ]
   },
   {
-    "id": "SEM-432",
+    "id": "SEM-410",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13466,7 +12938,7 @@
     ]
   },
   {
-    "id": "SEM-433",
+    "id": "SEM-411",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13487,7 +12959,7 @@
     ]
   },
   {
-    "id": "SEM-434",
+    "id": "SEM-412",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13508,7 +12980,7 @@
     ]
   },
   {
-    "id": "SEM-435",
+    "id": "SEM-413",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13529,7 +13001,7 @@
     ]
   },
   {
-    "id": "SEM-436",
+    "id": "SEM-414",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13550,7 +13022,7 @@
     ]
   },
   {
-    "id": "SEM-437",
+    "id": "SEM-415",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13571,7 +13043,7 @@
     ]
   },
   {
-    "id": "SEM-438",
+    "id": "SEM-416",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13592,7 +13064,7 @@
     ]
   },
   {
-    "id": "SEM-439",
+    "id": "SEM-417",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13613,7 +13085,7 @@
     ]
   },
   {
-    "id": "SEM-440",
+    "id": "SEM-418",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13634,7 +13106,7 @@
     ]
   },
   {
-    "id": "SEM-441",
+    "id": "SEM-419",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13655,7 +13127,7 @@
     ]
   },
   {
-    "id": "SEM-442",
+    "id": "SEM-420",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13676,7 +13148,7 @@
     ]
   },
   {
-    "id": "SEM-443",
+    "id": "SEM-421",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13697,7 +13169,7 @@
     ]
   },
   {
-    "id": "SEM-444",
+    "id": "SEM-422",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13718,7 +13190,7 @@
     ]
   },
   {
-    "id": "SEM-445",
+    "id": "SEM-423",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13739,7 +13211,7 @@
     ]
   },
   {
-    "id": "SEM-446",
+    "id": "SEM-424",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13760,7 +13232,7 @@
     ]
   },
   {
-    "id": "SEM-447",
+    "id": "SEM-425",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13781,7 +13253,7 @@
     ]
   },
   {
-    "id": "SEM-448",
+    "id": "SEM-426",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13802,7 +13274,7 @@
     ]
   },
   {
-    "id": "SEM-449",
+    "id": "SEM-427",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13823,7 +13295,7 @@
     ]
   },
   {
-    "id": "SEM-450",
+    "id": "SEM-428",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13844,7 +13316,7 @@
     ]
   },
   {
-    "id": "SEM-451",
+    "id": "SEM-429",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13865,7 +13337,7 @@
     ]
   },
   {
-    "id": "SEM-452",
+    "id": "SEM-430",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13886,7 +13358,7 @@
     ]
   },
   {
-    "id": "SEM-453",
+    "id": "SEM-431",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13907,7 +13379,7 @@
     ]
   },
   {
-    "id": "SEM-454",
+    "id": "SEM-432",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13928,7 +13400,7 @@
     ]
   },
   {
-    "id": "SEM-455",
+    "id": "SEM-433",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13949,7 +13421,7 @@
     ]
   },
   {
-    "id": "SEM-456",
+    "id": "SEM-434",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13970,7 +13442,7 @@
     ]
   },
   {
-    "id": "SEM-457",
+    "id": "SEM-435",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -13991,7 +13463,7 @@
     ]
   },
   {
-    "id": "SEM-458",
+    "id": "SEM-436",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14012,7 +13484,7 @@
     ]
   },
   {
-    "id": "SEM-459",
+    "id": "SEM-437",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14033,7 +13505,7 @@
     ]
   },
   {
-    "id": "SEM-460",
+    "id": "SEM-438",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14054,7 +13526,7 @@
     ]
   },
   {
-    "id": "SEM-461",
+    "id": "SEM-439",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14075,7 +13547,7 @@
     ]
   },
   {
-    "id": "SEM-462",
+    "id": "SEM-440",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14096,7 +13568,7 @@
     ]
   },
   {
-    "id": "SEM-463",
+    "id": "SEM-441",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14117,7 +13589,7 @@
     ]
   },
   {
-    "id": "SEM-464",
+    "id": "SEM-442",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14138,7 +13610,7 @@
     ]
   },
   {
-    "id": "SEM-465",
+    "id": "SEM-443",
     "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14159,7 +13631,7 @@
     ]
   },
   {
-    "id": "SEM-466",
+    "id": "SEM-444",
     "title": "src.scan.rules.semgrep.harvey-unsafe-deserialization: Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded function bodies) — remote code execution. Use JSON.parse and validate the shape. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the request value reaching an unserialize() call. Whether that is exploitable depends on the deserialization library actually in use being one that executes embedded function bodies, which this rule does not resolve.",
     "severity": "High",
     "confidence": "Review",
@@ -14183,7 +13655,7 @@
     ]
   },
   {
-    "id": "SEM-467",
+    "id": "SEM-445",
     "title": "src.scan.rules.semgrep.harvey-unsafe-deserialization: Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded function bodies) — remote code execution. Use JSON.parse and validate the shape. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the request value reaching an unserialize() call. Whether that is exploitable depends on the deserialization library actually in use being one that executes embedded function bodies, which this rule does not resolve.",
     "severity": "High",
     "confidence": "Review",
@@ -14207,7 +13679,7 @@
     ]
   },
   {
-    "id": "SEM-468",
+    "id": "SEM-446",
     "title": "src.scan.rules.semgrep.harvey-verbose-error: A caught error's .stack or .message is echoed directly into the JSON response — this leaks stack traces, file paths, and library versions to the client. Log the detail server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -14231,7 +13703,7 @@
     ]
   },
   {
-    "id": "SEM-469",
+    "id": "SEM-447",
     "title": "src.scan.rules.semgrep.harvey-verbose-error: A caught error's .stack or .message is echoed directly into the JSON response — this leaks stack traces, file paths, and library versions to the client. Log the detail server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -14255,7 +13727,7 @@
     ]
   },
   {
-    "id": "SEM-470",
+    "id": "SEM-448",
     "title": "src.scan.rules.semgrep.harvey-vite-service-role-in-client: A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to a server-side function and keep only the anon/publishable key in the client. SCOPE OF THIS CHECK: it fires on a VITE_-prefixed variable whose NAME reads as a service-role key. A privileged key inlined under a name this rule does not recognise is not assessed.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -14279,7 +13751,7 @@
     ]
   },
   {
-    "id": "SEM-471",
+    "id": "SEM-449",
     "title": "src.scan.rules.semgrep.harvey-vm-unsafe-sandbox: vm.runInNewContext/runInThisContext evaluates a dynamically-built script. Node's own documentation is explicit that the vm module is NOT a security sandbox — treat any value reaching it as capable of reaching the host realm. Do not use vm to run untrusted or dynamically-assembled code.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -14300,7 +13772,7 @@
     ]
   },
   {
-    "id": "SEM-472",
+    "id": "SEM-450",
     "title": "src.scan.rules.semgrep.harvey-void-async: Fire-and-forget `void asyncFn(...)` in a serverless request handler. The function host can freeze or terminate the process as soon as the response is sent, so this work may never complete. Await it, or move it to a queue/background job that owns its own lifetime.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14321,7 +13793,7 @@
     ]
   },
   {
-    "id": "SEM-473",
+    "id": "SEM-451",
     "title": "src.scan.rules.semgrep.harvey-weak-cipher: A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -14345,7 +13817,7 @@
     ]
   },
   {
-    "id": "SEM-474",
+    "id": "SEM-452",
     "title": "src.scan.rules.semgrep.harvey-weak-cipher: A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -14369,7 +13841,7 @@
     ]
   },
   {
-    "id": "SEM-475",
+    "id": "SEM-453",
     "title": "src.scan.rules.semgrep.harvey-weak-hash-security: MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -14393,7 +13865,7 @@
     ]
   },
   {
-    "id": "SEM-476",
+    "id": "SEM-454",
     "title": "src.scan.rules.semgrep.harvey-weak-hash-security: MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -14417,7 +13889,7 @@
     ]
   },
   {
-    "id": "SEM-477",
+    "id": "SEM-455",
     "title": "src.scan.rules.semgrep.harvey-xpath-injection: Request input reaches an XPath expression unparameterized — XPath injection. An attacker rewrites the predicate (`' or '1'='1`) to select nodes the query was never meant to return, and against an XML-backed credential store that is an authentication bypass. Bind the value as an XPath variable (xpath.useNamespaces / a variable resolver) instead of concatenating it. SCOPE OF THIS CHECK: it matches the EXPRESSION argument of the `xpath` package and of the DOM `evaluate`/`selectNodes`/`selectSingleNode` methods. A tainted value reaching the expression through a helper in another file, or an XPath engine bound to some other name, is not matched.",
     "severity": "High",
     "confidence": "Review",
@@ -14441,7 +13913,7 @@
     ]
   },
   {
-    "id": "SEM-478",
+    "id": "SEM-456",
     "title": "src.scan.rules.semgrep.harvey-xxe-parse: Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser). If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the parse of request-controlled XML, NOT proof that external-entity resolution is enabled. Whether it is depends on parser options that may be set in config this rule does not read, so exploitability has to be confirmed against the parser's actual settings. Two XML parsers are DELIBERATELY not matched (#1273) and their absence is not a gap: `sax` resolves no DTD entities at all (its README: \"It's possible to define additional entities in XML by putting them in the DTD. This parser doesn't do anything with that\"), and `node-expat` exposes no external-entity handler, so neither reaches an external entity. Feed either one XML you do not trust and you still own a resource-exhaustion question, which is a different weakness from this one and is not what this rule reports. Browser-native DOMParser fed from a client URL parameter is ALSO deliberately excluded (#1708): current stable browser engines do not fetch or expand an external DTD through DOMParser.parseFromString, so that client-local parse is outside this XXE threat model. Server-side DOMParser polyfills and libxmljs remain in scope when fed from a request source.",
     "severity": "High",
     "confidence": "Review",
@@ -14465,7 +13937,7 @@
     ]
   },
   {
-    "id": "SEM-479",
+    "id": "SEM-457",
     "title": "src.scan.rules.semgrep.harvey-xxe-parse: Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser). If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it reports the parse of request-controlled XML, NOT proof that external-entity resolution is enabled. Whether it is depends on parser options that may be set in config this rule does not read, so exploitability has to be confirmed against the parser's actual settings. Two XML parsers are DELIBERATELY not matched (#1273) and their absence is not a gap: `sax` resolves no DTD entities at all (its README: \"It's possible to define additional entities in XML by putting them in the DTD. This parser doesn't do anything with that\"), and `node-expat` exposes no external-entity handler, so neither reaches an external entity. Feed either one XML you do not trust and you still own a resource-exhaustion question, which is a different weakness from this one and is not what this rule reports. Browser-native DOMParser fed from a client URL parameter is ALSO deliberately excluded (#1708): current stable browser engines do not fetch or expand an external DTD through DOMParser.parseFromString, so that client-local parse is outside this XXE threat model. Server-side DOMParser polyfills and libxmljs remain in scope when fed from a request source.",
     "severity": "High",
     "confidence": "Review",
@@ -14489,7 +13961,7 @@
     ]
   },
   {
-    "id": "SEM-480",
+    "id": "SEM-458",
     "title": "src.scan.rules.semgrep.harvey-xxe: An XML parser is configured to resolve external entities (noent/resolveEntities true) — XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution when parsing untrusted XML.",
     "severity": "High",
     "confidence": "Review",
@@ -14513,7 +13985,7 @@
     ]
   },
   {
-    "id": "SEM-481",
+    "id": "SEM-459",
     "title": "src.scan.rules.semgrep.harvey-zero-row-update: Compare-and-swap update guarded on a literal state value with no .select() on the chain. Supabase JS returns { error: null } whether the update matched one row or none, so a lost race is indistinguishable from success. Chain .select(\"id\") and assert the returned array has the row count you expected before treating the write as done. SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health: it matches the update chain itself. Whether the caller establishes the affected-row count some other way — a follow-up read, a database trigger, an RPC that returns it — is not assessed, so a write already verified elsewhere will appear here too.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14534,7 +14006,7 @@
     ]
   },
   {
-    "id": "SEM-482",
+    "id": "SEM-460",
     "title": "src.scan.rules.semgrep.harvey-zip-slip: An archive entry name is joined into a write path with no containment check — zip-slip (a ../ entry writes outside the extraction dir). Resolve and verify the path stays under it.",
     "severity": "High",
     "confidence": "Review",
@@ -14558,7 +14030,7 @@
     ]
   },
   {
-    "id": "SEM-483",
+    "id": "SEM-461",
     "title": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml: Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14587,7 +14059,7 @@
     ]
   },
   {
-    "id": "SEM-484",
+    "id": "SEM-462",
     "title": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml: Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14616,7 +14088,7 @@
     ]
   },
   {
-    "id": "SEM-485",
+    "id": "SEM-463",
     "title": "yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag: GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling supply-chain attacks — as seen in the trivy-action and kics-github-action compromises. Pin the reference to a full 40-character commit SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608`.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14645,7 +14117,7 @@
     ]
   },
   {
-    "id": "SEM-486",
+    "id": "SEM-464",
     "title": "yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag: GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling supply-chain attacks — as seen in the trivy-action and kics-github-action compromises. Pin the reference to a full 40-character commit SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608`.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14674,7 +14146,7 @@
     ]
   },
   {
-    "id": "SEM-487",
+    "id": "SEM-465",
     "title": "yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag: GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling supply-chain attacks — as seen in the trivy-action and kics-github-action compromises. Pin the reference to a full 40-character commit SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608`.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14703,7 +14175,7 @@
     ]
   },
   {
-    "id": "SEM-488",
+    "id": "SEM-466",
     "title": "yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag: GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling supply-chain attacks — as seen in the trivy-action and kics-github-action compromises. Pin the reference to a full 40-character commit SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608`.",
     "severity": "Medium",
     "confidence": "Review",
@@ -14732,7 +14204,7 @@
     ]
   },
   {
-    "id": "SEM-489",
+    "id": "SEM-467",
     "title": "yaml.github-actions.security.pull-request-target-code-checkout.pull-request-target-code-checkout: This GitHub Actions workflow file uses `pull_request_target` and checks out code from the incoming pull request. When using `pull_request_target`, the Action runs in the context of the target repository, which includes access to all repository secrets. Normally, this is safe because the Action only runs code from the target repository, not the incoming PR. However, by checking out the incoming PR code, you're now using the incoming code for the rest of the action. You may be inadvertently executing arbitrary code from the incoming PR with access to repository secrets, which would let an attacker steal repository secrets. This normally happens by running build scripts (e.g., `npm build` and `make`) or dependency installation scripts (e.g., `python setup.py install`). Audit your workflow file to make sure no code from the incoming PR is executed. Please see https://securitylab.github.com/research/github-actions-preventing-pwn-requests/ for additional mitigations.",
     "severity": "High",
     "confidence": "Confirmed",

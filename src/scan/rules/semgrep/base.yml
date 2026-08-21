@@ -51,7 +51,9 @@ x-request-source: &request_source
             - pattern: $REQ.header(...)
         - metavariable-regex:
             metavariable: $REQ
-            regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
+            # Keep the alternation noncapturing: Semgrep 1.173 expands unnamed capture `$1` in
+            # rule messages, including the literal SQL-parameter example below.
+            regex: ^_?(?:req|request|nextReq|nextRequest|httpReq|incoming)$
     # #1221: the App Router query string. `$U.searchParams` subsumes `req.nextUrl.searchParams`
     # AND the split `const u = new URL(req.url); u.searchParams.get(…)` form, so neither needs its
     # own pattern; the `.get(...)` arm carries the inline `new URL(req.url).searchParams.get(…)`

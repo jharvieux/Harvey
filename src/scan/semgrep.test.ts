@@ -125,6 +125,165 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const CALIBRATION_ROOT = join(REPO_ROOT, "targets/calibration");
+const SEMGREP_RULE_ROOT = join(REPO_ROOT, "src/scan/rules/semgrep");
+const SQL_TEMPLATE_TAXONOMY = "src.scan.rules.semgrep.harvey-sql-injection-template";
+const SQL_TEMPLATE_LITERAL = "$1 placeholders";
+const SQL_TEMPLATE_MESSAGE =
+  "Untrusted request input is interpolated into a raw SQL string reaching .query(). Use " +
+  "parameterized queries ($1 placeholders with a params array), never string interpolation.";
+
+// The base artifact had two result identities at each location because Semgrep 1.173 expanded
+// the request-source regex's unnamed capture in the rule message. The stale member of each pair
+// is removed; the survivor is the same raw match with the literal SQL placeholder intact.
+const SQL_TEMPLATE_DUPLICATE_LINEAGE = {
+  schema: 1,
+  taxonomy: SQL_TEMPLATE_TAXONOMY,
+  reason: "Semgrep 1.173 unnamed-capture message expansion; retain the literal-message identity",
+  evidenceSha256: "a99574f1c232c46eb904310f6d03fac0bf28bee0adb1ecf59ab8d9d1c1c4c09b",
+  rows: [
+    ["lib/header-gateway-tenant.js:9", ["SEM-410", "SEM-411"], "SEM-389"],
+    ["pages/api/cookie-report.js:10", ["SEM-370", "SEM-371"], "SEM-369"],
+    ["pages/api/destructure-sql.js:9", ["SEM-406", "SEM-407"], "SEM-387"],
+    ["pages/api/multihop-sql.js:11", ["SEM-376", "SEM-377"], "SEM-372"],
+    ["pages/api/search.js:11", ["SEM-372", "SEM-373"], "SEM-370"],
+    ["pages/api/sqli-const-denylist-guard.js:14", ["SEM-390", "SEM-391"], "SEM-379"],
+    ["pages/api/sqli-const-guard-throw-swallowed.js:17", ["SEM-404", "SEM-405"], "SEM-386"],
+    ["pages/api/sqli-const-unanchored-guard.js:14", ["SEM-394", "SEM-395"], "SEM-381"],
+    ["pages/api/sqli-denylist-guard-braceless.js:12", ["SEM-384", "SEM-385"], "SEM-376"],
+    ["pages/api/sqli-denylist-guard-throw.js:11", ["SEM-374", "SEM-375"], "SEM-371"],
+    ["pages/api/sqli-denylist-guard.js:15", ["SEM-396", "SEM-397"], "SEM-382"],
+    ["pages/api/sqli-enum-guard-throw-finally.js:15", ["SEM-408", "SEM-409"], "SEM-388"],
+    ["pages/api/sqli-guard-braceless-no-return.js:14", ["SEM-392", "SEM-393"], "SEM-380"],
+    ["pages/api/sqli-guard-no-return.js:13", ["SEM-386", "SEM-387"], "SEM-377"],
+    ["pages/api/sqli-mflag-guard-braceless.js:11", ["SEM-382", "SEM-383"], "SEM-375"],
+    ["pages/api/sqli-mflag-guard-throw.js:11", ["SEM-380", "SEM-381"], "SEM-374"],
+    ["pages/api/sqli-mflag-guard.js:15", ["SEM-398", "SEM-399"], "SEM-383"],
+    ["pages/api/sqli-reassigned-guard.js:17", ["SEM-402", "SEM-403"], "SEM-385"],
+    ["pages/api/sqli-regex-guard-throw-swallowed.js:16", ["SEM-400", "SEM-401"], "SEM-384"],
+    ["pages/api/sqli-unanchored-guard-braceless.js:10", ["SEM-368", "SEM-369"], "SEM-368"],
+    ["pages/api/sqli-unanchored-guard-throw.js:11", ["SEM-378", "SEM-379"], "SEM-373"],
+    ["pages/api/sqli-unanchored-guard.js:14", ["SEM-388", "SEM-389"], "SEM-378"],
+  ],
+} as const;
+const SQL_TEMPLATE_DUPLICATE_LINEAGE_SHA256 = "d88ce40e6b5d2996f718b70d647b33bb1c849b91aaed4b67a701145f6bce1028";
+
+function sqlTemplateLocation(result: SemgrepResult): string {
+  const normalized = result.path.replaceAll("\\", "/");
+  const marker = "targets/calibration/";
+  const index = normalized.lastIndexOf(marker);
+  const path = index >= 0 ? normalized.slice(index + marker.length) : normalized;
+  return `${path}:${result.start?.line ?? 0}`;
+}
+
+function sqlTemplateResults(output: SemgrepOutput): SemgrepResult[] {
+  return (output.results ?? []).filter((result) => result.check_id.endsWith("harvey-sql-injection-template"));
+}
+
+function assertSqlTemplateMessages(output: SemgrepOutput, raw: string, label: string): void {
+  const results = sqlTemplateResults(output);
+  const locations = results.map(sqlTemplateLocation).sort();
+  const expectedLocations = [
+    "app/api/ar-src-sql/route.ts:8",
+    ...SQL_TEMPLATE_DUPLICATE_LINEAGE.rows.map(([location]) => location),
+  ].sort();
+  const substitutions = results.filter((result) => result.extra?.message !== `${SQL_TEMPLATE_MESSAGE}\n`);
+  if (results.length !== 23 || new Set(locations).size !== 23 || JSON.stringify(locations) !== JSON.stringify(expectedLocations)) {
+    throw new Error(`${label}: expected exactly 23 SQL-template findings at 23 frozen locations; received ${results.length}/${new Set(locations).size}`);
+  }
+  if (substitutions.length > 0) {
+    throw new Error(`${label}: ${substitutions.length} SQL-template message substitutions`);
+  }
+  expect(raw.match(/\$1 placeholders/g)).toHaveLength(23);
+  expect(raw).not.toContain("imp placeholders");
+  expect(raw).not.toContain("// placeholders");
+
+  const findings = parseSemgrepFindings({ ...output, results });
+  for (const finding of findings) {
+    expect(finding.title).toContain(SQL_TEMPLATE_LITERAL);
+    expect(finding.evidence).toContain(SQL_TEMPLATE_LITERAL);
+    expect(finding.impact).toContain(SQL_TEMPLATE_LITERAL);
+    expect(JSON.stringify(finding)).not.toContain("imp placeholders");
+    expect(JSON.stringify(finding)).not.toContain("// placeholders");
+  }
+}
+
+function runSemgrep173(config: string): { raw: string; output: SemgrepOutput } {
+  const binary = execFileSync("/usr/bin/env", ["sh", "-c", "command -v semgrep"], { encoding: "utf8" }).trim();
+  expect(execFileSync(binary, ["--version"], { encoding: "utf8" }).trim()).toBe("1.173.0");
+  const raw = execFileSync(binary, [
+    "scan", "--json", "--metrics=off", "--disable-version-check", "--timeout", "0", "--jobs", "1",
+    "--no-git-ignore", "--config", config, CALIBRATION_ROOT,
+  ], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return { raw, output: JSON.parse(raw) as SemgrepOutput };
+}
+
+describe("Semgrep 1.173 SQL-template message identity (#1954)", () => {
+  it("freezes the exact 22-location stale-duplicate lineage receipt", () => {
+    expect(SQL_TEMPLATE_DUPLICATE_LINEAGE.rows).toHaveLength(22);
+    expect(new Set(SQL_TEMPLATE_DUPLICATE_LINEAGE.rows.map(([location]) => location)).size).toBe(22);
+    expect(createHash("sha256").update(JSON.stringify(SQL_TEMPLATE_DUPLICATE_LINEAGE)).digest("hex"))
+      .toBe(SQL_TEMPLATE_DUPLICATE_LINEAGE_SHA256);
+  });
+
+  it("keeps generated finding and report messages literal at all 23 locations", () => {
+    const findings = JSON.parse(readFileSync(join(REPO_ROOT, "dry-run/findings.json"), "utf8")) as Array<Record<string, unknown>>;
+    const report = JSON.parse(readFileSync(join(REPO_ROOT, "dry-run/findings-report.json"), "utf8")) as { findings: Array<Record<string, unknown>> };
+    const assertArtifact = (rows: Array<Record<string, unknown>>, label: string): void => {
+      const sqlRows = rows.filter((row) => row.taxonomy === SQL_TEMPLATE_TAXONOMY);
+      expect(sqlRows, label).toHaveLength(23);
+      expect(new Set(sqlRows.map((row) => row.location)), label).toEqual(new Set([
+        "app/api/ar-src-sql/route.ts:8",
+        ...SQL_TEMPLATE_DUPLICATE_LINEAGE.rows.map(([location]) => location),
+      ]));
+      for (const row of sqlRows) {
+        expect(JSON.stringify(row), label).toContain(SQL_TEMPLATE_LITERAL);
+        expect(JSON.stringify(row), label).not.toContain("imp placeholders");
+        expect(JSON.stringify(row), label).not.toContain("// placeholders");
+      }
+    };
+    assertArtifact(findings, "findings");
+    assertArtifact(report.findings, "report");
+    expect(report.findings).toEqual(findings);
+  });
+
+  describe.runIf(process.env.HARVEY_SEMGREP_LIVE_TESTS === "1")("live binary controls", () => {
+    it("preserves the literal message in the base family and all-local monolith", () => {
+      for (const [label, config] of [["base family", join(SEMGREP_RULE_ROOT, "base.yml")], ["all-local monolith", SEMGREP_RULE_ROOT]] as const) {
+        const { raw, output } = runSemgrep173(config);
+        assertSqlTemplateMessages(output, raw, label);
+      }
+    });
+
+    it("fails exactly 22 rows when the request-source capture is physically restored", () => {
+      const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-sql-message-red-"));
+      try {
+        const source = readFileSync(join(SEMGREP_RULE_ROOT, "base.yml"), "utf8");
+        const reverted = source.replace(
+          "regex: ^_?(?:req|request|nextReq|nextRequest|httpReq|incoming)$",
+          "regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$",
+        );
+        expect(reverted).not.toBe(source);
+        const config = join(dir, "base.yml");
+        writeFileSync(config, reverted);
+        const { raw, output } = runSemgrep173(config);
+        expect(() => assertSqlTemplateMessages(output, raw, "physical unescaped reversion"))
+          .toThrow("physical unescaped reversion: 22 SQL-template message substitutions");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails closed when one surviving SQL-template result is deleted", () => {
+      const { raw, output } = runSemgrep173(join(SEMGREP_RULE_ROOT, "base.yml"));
+      const deleted = { ...output, results: (output.results ?? []).filter((result) => result !== sqlTemplateResults(output)[0]) };
+      expect(() => assertSqlTemplateMessages(deleted, raw, "physical survivor deletion"))
+        .toThrow("physical survivor deletion: expected exactly 23 SQL-template findings at 23 frozen locations; received 22/22");
+    });
+  });
+});
+
 // Every case below feeds parseSemgrepFindings a REAL captured record (see CORPUS above), except the
 // two labelled synthetic negative-controls whose shapes no real rule emits (PROVENANCE.md).
 describe("parseSemgrepFindings", () => {
