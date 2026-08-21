@@ -269,7 +269,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 
   // #1137: knip's M5-00 disclosure has two shapes and the probe must not collapse them. When knip
   // ran on NO scope (no "M5 dead code across N scope(s)" line), the pass is NotAssessed — but the
