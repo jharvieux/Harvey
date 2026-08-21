@@ -137,6 +137,70 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(producer(inventory, "mechanical:structural-ast:m5-hardcoded-deployment").routeIds.length).toBeGreaterThan(0);
   });
 
+  it("admits only executable production routes, never registry evidence or falsifier paths", () => {
+    const inventory = freshInventory();
+    const isTestFile = (path: string): boolean => /\.test\.[cm]?[jt]sx?$/.test(path);
+    expect(inventory.receipt.calls.filter((receipt) =>
+      isTestFile(receipt.consumerFile) || isTestFile(receipt.targetFile))).toEqual([]);
+    expect(inventory.receipt.routes.filter((route) =>
+      isTestFile(route.rootId)
+      || isTestFile(route.implementationId.split("#")[0]!)
+      || route.callReceiptIds.some((id) => /\.test\.[cm]?[jt]sx?(?:->|$)/.test(id)))).toEqual([]);
+
+    expect(inventory.receipt.calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "command", consumerFile: "src/audit-runners.ts", targetFile: "src/cli/quick-scan.ts" }),
+      expect.objectContaining({ kind: "command", consumerFile: "src/audit-runners.ts", targetFile: "src/cli/static-detect.ts" }),
+      expect.objectContaining({ kind: "command", consumerFile: "src/audit-runners.ts", targetFile: "tools/pii-classify.mjs" }),
+    ]));
+    const appRouterRoutes = inventory.receipt.routes.filter((route) => route.producerId === "detector:app-router");
+    expect(new Set(appRouterRoutes.flatMap((route) => route.callReceiptIds))).toEqual(new Set([
+      "command:src/audit-runners.ts->src/cli/quick-scan.ts",
+      "command:src/audit-runners.ts->src/cli/static-detect.ts",
+      "call:src/cli/static-detect.ts->src/detectors/app-router.ts#detectAppRouterFindings",
+      "call:src/health-scorecard.ts->src/detectors/app-router.ts#detectAppRouterFindings",
+    ]));
+  });
+
+  it("fails when the sole registry invoke is deleted even if its evidence names a real test caller", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-effectiveness-registry-route-"));
+    try {
+      mkdirSync(join(root, "src", "cli"), { recursive: true });
+      mkdirSync(join(root, "src", "scan"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({ packageManager: "pnpm@10", scripts: { audit: "tsx src/cli/run-audit.ts" } }));
+      writeFileSync(join(root, "src", "scan", "bola-owner.ts"), [
+        "export interface Finding { id: string; taxonomy: string; severity: string; location: string }",
+        "export function detectBolaOwnerFindings(): Finding[] { return []; }",
+        "",
+      ].join("\n"));
+      writeFileSync(join(root, "src", "scan", "path-scope.test.ts"), [
+        'import { detectBolaOwnerFindings } from "./bola-owner.js";',
+        "export const testOnly = detectBolaOwnerFindings();",
+        "",
+      ].join("\n"));
+      const registry = (invoke: string): string => [
+        'import { detectBolaOwnerFindings } from "./bola-owner.js";',
+        "const evidence = (_path: string): void => {};",
+        'evidence("src/scan/path-scope.test.ts");',
+        `export const detector = { invoke: ${invoke} };`,
+        "",
+      ].join("\n");
+      writeFileSync(join(root, "src", "scan", "mechanical-detector-registry.ts"), registry("() => detectBolaOwnerFindings()"));
+      writeFileSync(join(root, "src", "cli", "run-audit.ts"), 'import { detector } from "../scan/mechanical-detector-registry.js";\nexport const findings = detector.invoke();\n');
+      const implementation = { producerId: "bola-owner", file: "src/scan/bola-owner.ts", symbol: "detectBolaOwnerFindings", kind: "function" as const };
+      const live = discoverEffectivenessRouteGraph(root, [implementation]);
+      expect(live.routes).toHaveLength(1);
+      expect(live.calls.some((receipt) => receipt.consumerFile.endsWith(".test.ts") || receipt.targetFile.endsWith(".test.ts"))).toBe(false);
+
+      writeFileSync(join(root, "src", "scan", "mechanical-detector-registry.ts"), registry("() => []"));
+      expect(discoverEffectivenessRouteGraph(root, [implementation]).routes).toEqual([]);
+      writeFileSync(join(root, "src", "scan", "mechanical-detector-registry.ts"), registry("() => detectBolaOwnerFindings()"));
+      expect(discoverEffectivenessRouteGraph(root, [implementation])).toEqual(live);
+      expectRestoredBaseline();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("expands App Router into M1/M9 finding, disclosure, and not-assessed families", () => {
     const appRouter = producer(freshInventory(), "detector:app-router");
     expect(appRouter.modules).toEqual(["M1", "M9"]);

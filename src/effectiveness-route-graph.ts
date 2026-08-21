@@ -28,26 +28,40 @@ function resolveLocalModule(root: string, sourceFile: string, specifier: string)
   return sourceCandidates(base).find((candidate) => existsSync(candidate));
 }
 
-function productionRoots(root: string): string[] {
+function productionRoots(root: string, implementations: readonly ProducerImplementation[]): string[] {
   const roots = new Set<string>();
-  const packagePath = join(root, "package.json");
-  const runnerPath = join(root, "src", "audit-runners.ts");
-  const runnerText = existsSync(runnerPath) ? readFileSync(runnerPath, "utf8") : "";
-  if (existsSync(packagePath)) {
-    const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as { scripts?: Record<string, string> };
-    for (const [script, command] of Object.entries(pkg.scripts ?? {})) {
-      if (runnerText && !runnerText.includes(script) && !command.includes("tools/pii-classify.mjs")) continue;
-      for (const match of command.matchAll(/(?:^|\s)((?:src|tools)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs))(?=\s|$)/g)) {
-        const path = match[1] && join(root, match[1]);
-        if (path && existsSync(path)) roots.add(path);
-      }
-    }
-  }
   const auditRoot = join(root, "src", "cli", "run-audit.ts");
   if (existsSync(auditRoot)) roots.add(auditRoot);
-  for (const match of runnerText.matchAll(/src\/cli\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs)/g)) {
-    const path = join(root, match[0]);
-    if (existsSync(path)) roots.add(path);
+  const packagePath = join(root, "package.json");
+  if (existsSync(packagePath)) {
+    const manifest = JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest;
+    const manager = manifest.packageManager?.split("@")[0];
+    const auditClosure = existsSync(auditRoot)
+      ? reachableSources(root, [auditRoot]).files
+      : new Set<string>();
+    const implementationIds = new Set(implementations
+      .filter((item) => !auditClosure.has(join(root, item.file)))
+      .map((item) => `${item.file}#${item.symbol}`));
+    if (manager) {
+      const targets = [...new Set(Object.keys(manifest.scripts ?? {})
+        .map((script) => invocationTarget(root, manifest, manager, [script]))
+        .filter((target): target is string => !!target))];
+      const program = programForSources(targets);
+      const checker = program.getTypeChecker();
+      for (const target of targets) {
+        const source = program.getSourceFile(target);
+        let callsImplementation = false;
+        const visit = (node: ts.Node): void => {
+          if (ts.isCallExpression(node)) {
+            const identity = symbolIdentity(root, checker, expressionSymbol(checker, node.expression));
+            if (identity && implementationIds.has(`${identity.file}#${identity.symbol}`)) callsImplementation = true;
+          }
+          ts.forEachChild(node, visit);
+        };
+        if (source) visit(source);
+        if (callsImplementation) roots.add(target);
+      }
+    }
   }
   return [...roots].sort(byText);
 }
@@ -58,18 +72,154 @@ interface ReachableSources {
   readonly commandReceiptsByFile: ReadonlyMap<string, readonly EffectivenessCallReceipt[]>;
 }
 
-function commandTargets(root: string, source: ts.SourceFile): string[] {
+interface PackageManifest {
+  readonly packageManager?: string;
+  readonly scripts?: Readonly<Record<string, string>>;
+}
+
+function importedExecutionSymbols(program: ts.Program, checker: ts.TypeChecker): Set<ts.Symbol> {
+  const result = new Set<ts.Symbol>();
+  for (const source of program.getSourceFiles()) {
+    if (source.isDeclarationFile) continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)
+        && ts.isStringLiteral(node.moduleSpecifier)
+        && node.moduleSpecifier.text === "node:child_process") {
+        const bindings = node.importClause?.namedBindings;
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const binding of bindings.elements) {
+            const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(binding.name));
+            if (symbol) result.add(symbol);
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const source of program.getSourceFiles()) {
+      if (source.isDeclarationFile) continue;
+      const visit = (node: ts.Node): void => {
+        if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+          const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
+          const declared = canonicalSymbol(checker, checker.getSymbolAtLocation(node.name));
+          if (initializer && result.has(initializer) && declared && !result.has(declared)) {
+            result.add(declared);
+            changed = true;
+          }
+        }
+        if (ts.isPropertyAssignment(node)) {
+          const initializer = canonicalSymbol(checker, expressionSymbol(checker, node.initializer));
+          if (initializer && result.has(initializer)) {
+            const own = canonicalSymbol(checker, checker.getSymbolAtLocation(node.name));
+            const contextual = checker.getContextualType(node.parent)?.getProperty(node.name.getText(source));
+            for (const symbol of [own, canonicalSymbol(checker, contextual)]) {
+              if (symbol && !result.has(symbol)) {
+                result.add(symbol);
+                changed = true;
+              }
+            }
+          }
+        }
+        if (ts.isCallExpression(node)) {
+          const called = canonicalSymbol(checker, expressionSymbol(checker, node.expression));
+          if (called && result.has(called)) {
+            let owner: ts.Node | undefined = node.parent;
+            while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
+            if (owner) {
+              const declaration = owner as ts.FunctionLikeDeclaration;
+              const named = declaration.name && (ts.isIdentifier(declaration.name) || ts.isStringLiteralLike(declaration.name))
+                ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.name))
+                : ts.isVariableDeclaration(declaration.parent) && ts.isIdentifier(declaration.parent.name)
+                  ? canonicalSymbol(checker, checker.getSymbolAtLocation(declaration.parent.name))
+                  : undefined;
+              if (named && !result.has(named)) {
+                result.add(named);
+                changed = true;
+              }
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+    }
+  }
+  return result;
+}
+
+function literalString(checker: ts.TypeChecker, expression: ts.Expression): string | undefined {
+  if (ts.isStringLiteralLike(expression)) return expression.text;
+  if (ts.isIdentifier(expression)) {
+    const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+    const declaration = symbol?.declarations?.find(ts.isVariableDeclaration);
+    return declaration?.initializer ? literalString(checker, declaration.initializer) : undefined;
+  }
+  return undefined;
+}
+
+function literalArray(checker: ts.TypeChecker, expression: ts.Expression): string[] | undefined {
+  if (ts.isIdentifier(expression)) {
+    const symbol = canonicalSymbol(checker, checker.getSymbolAtLocation(expression));
+    const declaration = symbol?.declarations?.find(ts.isVariableDeclaration);
+    return declaration?.initializer ? literalArray(checker, declaration.initializer) : undefined;
+  }
+  if (!ts.isArrayLiteralExpression(expression)) return undefined;
+  const result: string[] = [];
+  for (const element of expression.elements) {
+    if (ts.isSpreadElement(element)) {
+      const spread = literalArray(checker, element.expression);
+      if (!spread) break;
+      result.push(...spread);
+      continue;
+    }
+    const value = literalString(checker, element);
+    if (value === undefined) break;
+    result.push(value);
+  }
+  return result;
+}
+
+function invocationTarget(root: string, manifest: PackageManifest, bin: string, args: readonly string[], seen = new Set<string>()): string | undefined {
+  const manager = manifest.packageManager?.split("@")[0];
+  const executable = slash(bin).split("/").at(-1);
+  if (manager && executable === manager) {
+    if (args[0] === "exec") return args[1] ? invocationTarget(root, manifest, args[1], args.slice(2), seen) : undefined;
+    const script = args[0] === "run" ? args[1] : args[0];
+    if (!script || seen.has(script)) return undefined;
+    const command = manifest.scripts?.[script];
+    if (!command) return undefined;
+    const tokens = command.trim().split(/\s+/);
+    if (tokens.some((token) => /^(?:&&|\|\||[|;])$/.test(token))) return undefined;
+    return tokens[0] ? invocationTarget(root, manifest, tokens[0], tokens.slice(1), new Set([...seen, script])) : undefined;
+  }
+  if (executable !== "tsx" && executable !== "node") return undefined;
+  const entry = args.find((argument) => !argument.startsWith("-"));
+  if (!entry || !SOURCE_EXTENSIONS.includes(extname(entry) as typeof SOURCE_EXTENSIONS[number])) return undefined;
+  const target = resolve(root, entry);
+  return repoRelative(root, target) && existsSync(target) ? target : undefined;
+}
+
+function commandTargets(
+  root: string,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+  executionSymbols: ReadonlySet<ts.Symbol>,
+  manifest: PackageManifest,
+): string[] {
   const result = new Set<string>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      for (const argument of node.arguments) {
-        const values = ts.isArrayLiteralExpression(argument) ? argument.elements : [argument];
-        for (const value of values) {
-          if (!ts.isStringLiteralLike(value)) continue;
-          if (!/^(?:src|tools)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|cjs)$/.test(value.text)) continue;
-          const target = join(root, value.text);
-          if (existsSync(target)) result.add(target);
-        }
+      const called = canonicalSymbol(checker, expressionSymbol(checker, node.expression));
+      if (called && executionSymbols.has(called) && node.arguments[0] && node.arguments[1]) {
+        const bin = literalString(checker, node.arguments[0]);
+        const args = literalArray(checker, node.arguments[1]);
+        const target = bin && args ? invocationTarget(root, manifest, bin, args) : undefined;
+        if (target) result.add(target);
       }
     }
     ts.forEachChild(node, visit);
@@ -79,9 +229,24 @@ function commandTargets(root: string, source: ts.SourceFile): string[] {
 }
 
 function reachableSources(root: string, roots: readonly string[]): ReachableSources {
+  const packagePath = join(root, "package.json");
+  const manifest = existsSync(packagePath)
+    ? JSON.parse(readFileSync(packagePath, "utf8")) as PackageManifest
+    : {};
+  let program = programForSources(roots);
+  while (true) {
+    const result = reachableSourcesWithProgram(root, roots, program, manifest);
+    if ([...result.files].every((file) => program.getSourceFile(file))) return result;
+    program = programForSources([...result.files]);
+  }
+}
+
+function reachableSourcesWithProgram(root: string, roots: readonly string[], program: ts.Program, manifest: PackageManifest): ReachableSources {
   const reached = new Set<string>();
   const rootsByFile = new Map<string, Set<string>>();
   const commandReceiptsByFile = new Map<string, readonly EffectivenessCallReceipt[]>();
+  const checker = program.getTypeChecker();
+  const executionSymbols = importedExecutionSymbols(program, checker);
   const pending = roots.map((file) => ({ file, root: file, commands: [] as readonly EffectivenessCallReceipt[] }));
   while (pending.length > 0) {
     const { file, root: routeRoot, commands } = pending.shift()!;
@@ -93,8 +258,8 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
     if (reached.has(file)) continue;
     reached.add(file);
     commandReceiptsByFile.set(file, commands);
-    const text = readFileSync(file, "utf8");
-    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, [".js", ".mjs", ".cjs"].includes(extname(file)) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+    const source = program.getSourceFile(file);
+    if (!source) continue;
     for (const statement of source.statements) {
       const specifier = (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
         ? statement.moduleSpecifier.text
@@ -103,7 +268,7 @@ function reachableSources(root: string, roots: readonly string[]): ReachableSour
       const resolved = resolveLocalModule(root, repoRelative(root, file) ?? file, specifier);
       if (resolved) pending.push({ file: resolved, root: routeRoot, commands });
     }
-    for (const target of commandTargets(root, source)) {
+    for (const target of commandTargets(root, source, checker, executionSymbols, manifest)) {
       const consumerFile = repoRelative(root, file);
       const targetFile = repoRelative(root, target);
       if (!consumerFile || !targetFile) continue;
@@ -227,7 +392,7 @@ export function discoverEffectivenessRouteGraph(
   requestedRoots?: readonly string[],
   options: { readonly detectUnknown?: boolean } = {},
 ): EffectivenessRouteGraph {
-  const roots = (requestedRoots ?? productionRoots(root)).map((file) => resolve(root, file));
+  const roots = (requestedRoots ?? productionRoots(root, implementations)).map((file) => resolve(root, file));
   const reachability = reachableSources(root, roots);
   const reachable = reachability.files;
   const program = programForSources([...reachable]);
