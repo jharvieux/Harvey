@@ -11,6 +11,11 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
+import {
+  detectM5HardcodedDeploymentFindings,
+  M5_HARDCODED_SOURCE_COVERAGE_ID,
+} from "./detectors/m5-hardcoded-deployment.js";
+import { formatSourcePopulationReceipt, sourcePopulationReceipt } from "./scan/polyglot-quality.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -203,6 +208,40 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
+  });
+
+  it("M5 delivers the exact zero-selector NotAssessed reason and finding instead of reading a nonempty broad inventory as clean", () => {
+    const broad = [{ path: "src/service.py", text: "def run():\n    return 1\n" }];
+    const disclosure = detectM5HardcodedDeploymentFindings([], { productSourceInventory: broad })[0]!;
+    expect(disclosure.id).toBe(M5_HARDCODED_SOURCE_COVERAGE_ID);
+    const receiptLine = formatSourcePopulationReceipt(sourcePopulationReceipt("M5", broad));
+    const run = ctx({
+      captureDir: "/capture",
+      readFindings: (path) => path.endsWith("M5-static.json") ? [disclosure] : [],
+      exec: (_command, argv) => argv.includes("detect-static")
+        ? {
+            ok: true,
+            output: `loaded 1 source files (0 product source, 1 config, 0 test/story) from /target\nidentified 1 source files across the polyglot inventory\n${receiptLine}`,
+            stderr: "",
+          }
+        : cleanRun(argv),
+    });
+    const result = runAudit(AUDIT_RUNNERS, run);
+    const m5 = result.recorded.find((row) => row.module === "M5");
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toContain("Hardcoded-deployment source coverage");
+    expect(m5?.reason).toContain("Broad product-source inventory: 1 path(s)");
+    expect(m5?.reason).toContain("exact JavaScript/TypeScript selector: 0 admitted");
+    expect(m5?.reason).toContain("Provenance:");
+    expect(m5?.reason).toContain("Falsifier:");
+    expect(result.findingsByModule.M5?.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+
+    const doc = assembleEngagementDocument(result.recorded, run.env, result.findings, m5137Meta);
+    expect(doc.findings.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+    expect(conservationLedger(result.findings, doc.findings, result.findingsByModule)).toMatchObject({
+      unaccounted: 0,
+      ok: true,
+    });
   });
 
   // #1137: knip's M5-00 disclosure has two shapes and the probe must not collapse them. When knip

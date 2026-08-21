@@ -32,6 +32,18 @@ export interface MechanicalExaminedUnitIdentity {
   identity: string;
 }
 
+export interface MechanicalProducerNotAssessed {
+  reason: string;
+  provenance: string;
+  falsifier: string;
+  inventory: {
+    broadUnits: number;
+    selectedUnits: 0;
+    pathSetDigest: string;
+    scope: string;
+  };
+}
+
 export interface MechanicalProducerRecord {
   detector: string;
   phase: MechanicalPhase;
@@ -42,7 +54,8 @@ export interface MechanicalProducerRecord {
   examinedUnitDigest?: string;
   findings: number;
   durationMs: number;
-  status: "ran" | "not-applicable" | "cached";
+  status: "ran" | "not-assessed" | "not-applicable" | "cached";
+  notAssessed?: MechanicalProducerNotAssessed;
 }
 
 export interface MechanicalPhaseValue {
@@ -82,7 +95,7 @@ interface MechanicalPhaseIdentityComponents {
 }
 
 interface CacheArtifact {
-  schema: 3;
+  schema: 4;
   phase: MechanicalPhase;
   key: string;
   targetRevision: string;
@@ -208,12 +221,34 @@ function producerRecordProblems(producer: unknown, expectedPhase: MechanicalPhas
   if (!Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0) problems.push("producer examined count is malformed");
   if (!Number.isInteger(row.findings) || row.findings! < 0) problems.push("producer finding count is malformed");
   if (typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0) problems.push("producer duration is malformed");
-  if (row.status !== "ran" && row.status !== "not-applicable" && row.status !== "cached") problems.push("producer status is malformed");
+  if (row.status !== "ran" && row.status !== "not-assessed" && row.status !== "not-applicable" && row.status !== "cached") problems.push("producer status is malformed");
   const unitProblems = examinedUnitProblems(row.detector ?? "", row.examinedUnitIdentities);
   problems.push(...unitProblems);
   if (Array.isArray(row.examinedUnitIdentities) && row.unitsExamined !== row.examinedUnitIdentities.length) problems.push("producer examined count differs from its exact identity population");
   if (requireDigest && typeof row.examinedUnitDigest !== "string") problems.push("producer examined-unit digest is missing");
   if (Array.isArray(row.examinedUnitIdentities) && row.examinedUnitDigest !== undefined && row.examinedUnitDigest !== mechanicalExaminedUnitDigest(row.examinedUnitIdentities)) problems.push("producer examined-unit digest does not match its raw identity population");
+  const receipt = row.notAssessed;
+  if (row.status === "not-assessed") {
+    if (row.unitsExamined !== 0) problems.push("not-assessed producer must examine zero selected units");
+    if (!Number.isInteger(row.findings) || row.findings! <= 0) problems.push("not-assessed producer must emit a client-visible disclosure finding");
+    if (!receipt || typeof receipt !== "object") {
+      problems.push("not-assessed producer is missing its typed reason receipt");
+    } else {
+      if (typeof receipt.reason !== "string" || receipt.reason.trim().length < 20) problems.push("not-assessed reason is incomplete");
+      if (typeof receipt.provenance !== "string" || receipt.provenance.trim().length < 20) problems.push("not-assessed provenance is incomplete");
+      if (typeof receipt.falsifier !== "string" || receipt.falsifier.trim().length < 20) problems.push("not-assessed falsifier is incomplete");
+      if (!receipt.inventory || typeof receipt.inventory !== "object") {
+        problems.push("not-assessed inventory is missing");
+      } else {
+        if (!Number.isInteger(receipt.inventory.broadUnits) || receipt.inventory.broadUnits <= 0) problems.push("not-assessed broad inventory must be non-empty");
+        if (receipt.inventory.selectedUnits !== 0) problems.push("not-assessed selected inventory must be exactly zero");
+        if (!/^[a-f0-9]{64}$/.test(receipt.inventory.pathSetDigest ?? "")) problems.push("not-assessed path-set digest is malformed");
+        if (typeof receipt.inventory.scope !== "string" || receipt.inventory.scope.trim().length < 20) problems.push("not-assessed scope is incomplete");
+      }
+    }
+  } else if (receipt !== undefined) {
+    problems.push("typed not-assessed receipt is attached to a producer with a different status");
+  }
   return problems;
 }
 
@@ -328,7 +363,7 @@ export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): strin
 
 function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
   const value = JSON.parse(text) as Partial<CacheArtifact>;
-  if (value.schema !== 3 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
+  if (value.schema !== 4 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
   }
   if (!Array.isArray(value.findings)) throw new Error("artifact findings are incomplete or malformed");
@@ -372,7 +407,7 @@ function closestPriorIdentity(dir: string, phase: MechanicalPhase, current: Mech
   for (const name of readEntriesSafe(phaseDir).entries.filter((candidate) => !candidate.isDirectory && candidate.name.endsWith(".json")).map((candidate) => candidate.name)) {
     try {
       const value = JSON.parse(readFileSync(join(phaseDir, name), "utf8")) as Partial<CacheArtifact>;
-      if (value.schema !== 3 || value.phase !== phase || !value.identity) continue;
+      if (value.schema !== 4 || value.phase !== phase || !value.identity) continue;
       const previous = new Map(componentEntries(value.identity));
       const names = [...new Set([...currentEntries.keys(), ...previous.keys()])].sort();
       const changed = names.filter((component) => currentEntries.get(component) !== previous.get(component));
@@ -418,7 +453,7 @@ export async function executeMechanicalPhase(
   };
   const key = digestParts([stable({ phase, identity })]);
   const path = join(cache.dir, phase, `${key}.json`);
-  const expected = { schema: 3 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const expected = { schema: 4 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
@@ -431,7 +466,7 @@ export async function executeMechanicalPhase(
   const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
-    return { phase, findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
+    return { phase, findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" || producer.status === "not-assessed" ? producer.status : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = withProducerDigests(await execute());
   assertPhaseValue(phase, value, true);

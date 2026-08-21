@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import ts from "typescript";
+import { digestObservedPaths } from "../corpus-scanner-scope.js";
 import { parse, parseFresh, readonlySourceFile, type AstMembraneMetrics } from "../detectors/common.js";
+import {
+  M1_HARDCODED_TENANT_TAXONOMY,
+  M5_HARDCODED_SOURCE_COVERAGE_ID,
+} from "../detectors/m5-hardcoded-deployment.js";
 import { MechanicalScanContext } from "./mechanical-context.js";
 import { MECHANICAL_DETECTORS, runRegisteredMechanicalDetectors } from "./mechanical-detector-registry.js";
 
@@ -180,6 +185,76 @@ describe("#1851 immutable one-scan context", () => {
     expect(JSON.stringify(firstReceipts)).not.toContain(tmpdir());
     first.dispose();
     second.dispose();
+  });
+
+  it("routes a tenant-sensitive client literal exclusively through the live M1 registry owner", () => {
+    const root = fixture();
+    mkdirSync(join(root, "src", "components"));
+    writeFileSync(
+      join(root, "src", "components", "tenant-client.tsx"),
+      `"use client"; export const tenant = new TenantClient({ tenantId: "tenant_example-4821" });\n`,
+    );
+    const context = new MechanicalScanContext(root);
+    const execution = runRegisteredMechanicalDetectors(context);
+    const tenant = execution.findings.filter((finding) => finding.taxonomy === M1_HARDCODED_TENANT_TAXONOMY);
+    expect(tenant).toHaveLength(1);
+    expect(tenant[0]?.id).toMatch(/^M1-HARDCODED-TENANT-/);
+    expect(execution.findings.filter((finding) => finding.id.startsWith("M5-HARDCODED-IDENTIFIER-") && finding.location.includes("tenant-client"))).toEqual([]);
+    expect(execution.records.find((record) => record.detector === "m1-hardcoded-tenant")).toMatchObject({
+      module: "M1",
+      status: "ran",
+      findings: 1,
+    });
+    context.dispose();
+  });
+
+  it("records and emits typed M5 NotAssessed when broad product source is nonempty but the exact selector admits zero files", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m5-zero-selector-"));
+    roots.push(root);
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "polyglot-only" }));
+    writeFileSync(join(root, "src", "worker.py"), "def run():\n    return 1\n");
+    const context = new MechanicalScanContext(root);
+    expect(context.productSourceFiles.map((file) => file.path)).toEqual(["src/worker.py"]);
+    const execution = runRegisteredMechanicalDetectors(context);
+    const record = execution.records.find((candidate) => candidate.detector === "m5-hardcoded-deployment");
+    expect(record).toMatchObject({
+      module: "M5",
+      unitsExamined: 0,
+      findings: 1,
+      status: "not-assessed",
+      notAssessed: {
+        reason: expect.stringContaining("No source admitted by the exact M5 hardcoded-deployment JavaScript/TypeScript selector was examined"),
+        provenance: expect.stringMatching(/loadSourceInventory.*isM5HardcodedDeploymentSource/),
+        falsifier: "Add or identify an admitted JavaScript/TypeScript source, or extend the selector, then rerun.",
+        inventory: {
+          broadUnits: 1,
+          selectedUnits: 0,
+          pathSetDigest: digestObservedPaths(["src/worker.py"]),
+          scope: expect.stringContaining("tracked non-test product-source paths"),
+        },
+      },
+    });
+    const disclosure = execution.findings.find((finding) => finding.id === M5_HARDCODED_SOURCE_COVERAGE_ID);
+    expect(disclosure?.evidence).toContain(record?.notAssessed?.inventory.pathSetDigest);
+    expect(disclosure?.evidence).toContain("Broad product-source inventory: 1 path(s)");
+    context.dispose();
+  });
+
+  it("keeps a truly empty product-source target silent and records the M5 selector as not applicable", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m5-empty-target-"));
+    roots.push(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "empty" }));
+    const context = new MechanicalScanContext(root);
+    expect(context.productSourceFiles).toEqual([]);
+    const execution = runRegisteredMechanicalDetectors(context);
+    expect(execution.findings.some((finding) => finding.id === M5_HARDCODED_SOURCE_COVERAGE_ID)).toBe(false);
+    expect(execution.records.find((record) => record.detector === "m5-hardcoded-deployment")).toMatchObject({
+      unitsExamined: 0,
+      findings: 0,
+      status: "not-applicable",
+    });
+    context.dispose();
   });
 
   it("never exposes mutable AST nodes through callbacks, iterators, methods, or nested arrays", () => {
