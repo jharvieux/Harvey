@@ -532,12 +532,12 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     coverage rather than silently switch to an unproved execution engine.
 // Stability remains a falsifiable corpus property, not something these flags prove by themselves.
 // #1954: RE-VALIDATED 2026-08-20 with Semgrep 1.173.0 over the identical pinned Carbon tree and
-// this exact source-derived 22-part plan: 87 findings, 4,152 scanned paths, 30 rules, 26 errors and
-// 52 skips. Finding population/scope/rules stayed exact. One client-visible PartialParsing record
-// moved within apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx: Semgrep 1.164.0
-// identified line 74 (`import("./utils").IssueContainment`), while 1.173.0 identifies line 79 (`}`).
-// That version-bound diagnostic is preserved in errors[]/SEM-ERR-00 and changes the diagnostic
-// evidence hash; it is not normalized away or used to relax producer↔replay comparison.
+// the current paired-cold topology: each complete local-injection run retained 87 findings, 4,152
+// scanned paths, 30 top-level rules, 32 skips, 26 raw/canonical errors, and six fixpoint timeouts on
+// six paths. All six timeout paths were timeout-only (absent from errors[] and paths.skipped). The
+// client-visible PartialParsing record in TraceabilityGraph.tsx remains at line 74 on the
+// `import("./utils").IssueContainment` token. Both complete semantic projections must agree before
+// output can be returned or cached; no subpartition is substituted for either cold run.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
 const SEMGREP_PAIRED_FAMILY = "local-injection";

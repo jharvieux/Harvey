@@ -483,6 +483,33 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
+  it.each([
+    ["finding", (output: SemgrepOutput) => { output.results!.push({ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line: 20 } }); }],
+    ["scanned path", (output: SemgrepOutput) => { output.paths!.scanned!.push("/some/target/b.ts"); }],
+    ["skipped path", (output: SemgrepOutput) => { output.paths!.skipped!.push({ path: "/some/target/b.ts", reason: "analysis_failed_parser_or_internal_error" }); }],
+    ["error", (output: SemgrepOutput) => { output.errors!.push({ type: "Syntax error", path: "/some/target/b.ts", message: "unexpected token" }); }],
+    ["executed rule", (output: SemgrepOutput) => { (output.time!.rules ??= []).push("src.scan.rules.semgrep.harvey-log-injection-second"); }],
+    ["fixpoint timeout", (output: SemgrepOutput) => { (output.time!.fixpoint_timeouts ??= []).push({ error_type: "Fixpoint timeout", location: { path: "/some/target/b.ts", start: { line: 1 }, end: { line: 1 } } }); }],
+  ] as const)("fails paired-cold delivery when only the second run changes its semantic %s population", (_name, mutate) => {
+    const base: SemgrepOutput = {
+      version: "1.173.0",
+      results: [{ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line: 10 } }],
+      errors: [],
+      paths: { scanned: ["/some/target/a.ts"], skipped: [] },
+      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"], fixpoint_timeouts: [] },
+    };
+    const changed = structuredClone(base);
+    mutate(changed);
+    semgrepMock.outputs.push(JSON.stringify(base), JSON.stringify(base), JSON.stringify(changed));
+    try {
+      const run = runSemgrep("/some/target");
+      expect(run.result).toEqual({});
+      expect(run.failure).toMatch(/paired cold.*local-injection.*differ/i);
+    } finally {
+      semgrepMock.outputs.length = 0;
+    }
+  });
+
   it("executes the production partitioned injection seam twice at j1 and every other family once at j9", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-policy-"));
     try {
@@ -505,6 +532,8 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       });
       expect(run.failure).toBeUndefined();
       expect(run.executionPlan).toEqual(plan);
+      expect(run.executionPlan?.schema).toBe(3);
+      expect(plan.families.some((family) => "subpartitions" in family)).toBe(false);
       const calls = semgrepArgvs();
       const injection = calls.filter((argv) => argv.some((arg) => arg.endsWith("/injection.yml")));
       expect(injection).toHaveLength(2);
@@ -891,33 +920,32 @@ describe("semgrepErrorFinding (#1077)", () => {
     expect(findings[0]?.evidence).not.toContain("[object Object]");
   });
 
-  // #1954, measured with the exact 22-part production plan over carbon@92e19c0. Semgrep 1.173.0
-  // keeps all 87 findings / 4,152 scanned paths / 30 rules and the 26-error population, but moves
-  // this one parser span from 1.164.0's line-74 `import("./utils").IssueContainment` token to the
-  // line-79 closing brace. SEM-ERR-00 retains the moved line in client evidence; the raw diagnostic
-  // (including the `}` text) remains intact for strict producer/replay evidence comparison.
-  it("preserves the one version-bound Semgrep 1.173.0 PartialParsing movement in SEM-ERR-00", () => {
+  // #1954, measured with the current paired-cold production topology over carbon@92e19c0. Each
+  // Semgrep 1.173.0 run keeps 87 findings / 4,152 scanned paths / 30 top-level rules, 32 skips,
+  // 26 raw→26 canonical errors, and six timeout-only records on six paths. The client-visible
+  // PartialParsing span is line 74. The client disclosure names that line while the separate raw
+  // diagnostic receipt remains intact for strict producer↔replay comparison.
+  it("preserves the current paired-cold Semgrep 1.173.0 line-74 PartialParsing evidence in SEM-ERR-00", () => {
     const path = "/target/apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx";
-    const point = { line: 79, col: 1, offset: 0 };
+    const point = { line: 74, col: 18, offset: 0 };
     const [finding] = semgrepErrorFinding("/target", {
       version: "1.173.0",
       errors: [
         {
           code: 3,
           level: "warn",
-          type: ["PartialParsing", [{ path, start: point, end: { line: 79, col: 2, offset: 1 } }]],
-          message: `Syntax error at line ${path}:79:\n \`}\` was unexpected`,
+          type: ["PartialParsing", [{ path, start: point, end: { line: 74, col: 53, offset: 35 } }]],
+          message: `Syntax error at line ${path}:74:\n \`import("./utils").IssueContainment\` was unexpected`,
           path,
-          spans: [{ file: path, start: point, end: { line: 79, col: 2, offset: 1 } }],
+          spans: [{ file: path, start: point, end: { line: 74, col: 53, offset: 35 } }],
         },
       ],
       paths: { scanned: [path], skipped: [{ path, reason: "analysis_failed_parser_or_internal_error" }] },
     });
     expect(finding).toMatchObject({ id: "SEM-ERR-00", title: "2 analysis records semgrep could not fully evaluate" });
-    expect(finding?.evidence).toContain("TraceabilityGraph.tsx:79");
-    expect(finding?.evidence).toContain('"line":79');
-    expect(finding?.evidence).not.toContain("IssueContainment");
-    expect(finding?.evidence).not.toContain(":74");
+    expect(finding?.evidence).toContain("TraceabilityGraph.tsx:74");
+    expect(finding?.evidence).toContain('"line":74');
+    expect(finding?.evidence).not.toContain(":79");
   });
 
   it("names a file semgrep chose to skip (paths.skipped, only populated at --verbose) alongside any errors", () => {

@@ -135,6 +135,11 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
       scope: { unitsExamined: 1, description: "one Semgrep target" },
       evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: fixpointTimeouts } }, tmpdir()) },
     };
+    const withoutTimeouts = {
+      ...value,
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } }, tmpdir()) },
+    };
+    expect(mechanicalPhasePayloadDigest(value)).not.toBe(mechanicalPhasePayloadDigest(withoutTimeouts));
     const cold = await executeMechanicalPhase("semgrep", cache, () => value);
     const warm = await executeMechanicalPhase("semgrep", cache, () => ({ ...value, findings: [finding("must-not-run")] }));
     expect(cold.evidence?.semgrepDiagnostics.errors).toEqual(errors);

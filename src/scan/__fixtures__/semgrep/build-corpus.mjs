@@ -4,8 +4,8 @@
 // repo tree) — then runs the same pinned binary, rule/config surface, and output/scope flags as
 // `runSemgrep` and prints the real JSON to stdout after the tracked canonicalizer removes run
 // telemetry and normalizes ordering/paths. This deliberately small parser corpus does not recreate
-// the production Carbon family partition, whose separate 22-part revalidation is recorded at its
-// production seam.
+// the production Carbon local-injection validation, whose two complete paired-cold j1 runs are
+// recorded at its production seam.
 // Finding fields and diagnostics are never hand-edited or dropped. Re-capture:
 // node src/scan/__fixtures__/semgrep/build-corpus.mjs > /tmp/semgrep-1.173.0-corpus.json
 import { execFileSync } from "node:child_process";

@@ -153,6 +153,18 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
   });
 
   it("strictly compares the partition strategy, family order/membership, flags, and config bytes", () => {
+    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep as { schema: number }).schema = 4; }, /execution-plan|preparation/);
+    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep.families[1]! as unknown as { subpartitions: string[] }).subpartitions = ["invented-shard"]; }, /execution-plan|preparation/);
+    expectDifference((value) => {
+      const family = value.targets.target!.executionPlan.semgrep.families[0]!;
+      value.targets.target!.executionPlan.semgrep.families = Array.from({ length: 22 }, (_, ordinal) => ({
+        ...family,
+        ordinal,
+        id: `historical-subscan-${ordinal}`,
+        familyId: `historical-subscan-${ordinal}`,
+        sourceId: `historical-${ordinal}.yml`,
+      }));
+    }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "partitioned-families"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.reverse().forEach((family, ordinal) => { family.ordinal = ordinal; }); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
