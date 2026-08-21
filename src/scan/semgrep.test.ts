@@ -73,13 +73,13 @@ describe("Semgrep registry snapshot reuse (#1864)", () => {
   });
 });
 
-// Real `semgrep 1.164.0` output, captured from a purpose-built corpus — NOT hand-written. See
-// __fixtures__/semgrep/PROVENANCE.md for the exact command, the builder, and the fields dropped.
+// Real `semgrep 1.173.0` output, captured from a purpose-built corpus — NOT hand-written. See
+// __fixtures__/semgrep/PROVENANCE.md for the exact command, builder, and tracked canonicalization.
 // The old inline `SemgrepOutput` literals fed to parseSemgrepFindings were the #1063 fiction class in
 // Harvey's core detector; two invented shapes (a no-cwe harvey rule, a fabricated bare-string-cwe
 // rule) were corrected against this capture (#1156, closes #1150 row 7).
 const CORPUS: SemgrepOutput = JSON.parse(
-  readFileSync(new URL("./__fixtures__/semgrep/semgrep-1.164.0-corpus.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./__fixtures__/semgrep/semgrep-1.173.0-corpus.json", import.meta.url), "utf8"),
 ) as SemgrepOutput;
 
 // The captured record whose rule id ends with `suffix` — throws (never silently skips) if the
@@ -432,7 +432,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
 
   it("replaces monolithic injection output only after two exact cold one-worker executions", () => {
     const output = (results: SemgrepResult[]): string => JSON.stringify({
-      version: "1.164.0", results, errors: [],
+      version: "1.173.0", results, errors: [],
       paths: { scanned: ["/some/target/a.ts"], skipped: [] },
       time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
     });
@@ -463,7 +463,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
 
   it("fails monolithic delivery when the paired cold injection outputs differ", () => {
     const output = (lines: number[]): string => JSON.stringify({
-      version: "1.164.0",
+      version: "1.173.0",
       results: lines.map((line) => ({ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line } })),
       errors: [], paths: { scanned: ["/some/target/a.ts"], skipped: [] },
       time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
@@ -487,13 +487,13 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       const registry = seedRegistrySnapshot(dir).files;
       const plan = semgrepExecutionPlanReceipt(registry);
       const output = JSON.stringify({
-        version: "1.164.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ["fixture-rule"] },
+        version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ["fixture-rule"] },
       });
       semgrepMock.outputs.push(...Array.from({ length: plan.families.length + 1 }, () => output));
       vi.mocked(execFileSync).mockClear();
       const run = await runSemgrepPartitioned(target, registry, {
         dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
-        implementation: "implementation", externalInputs: { semgrep: "1.164.0" },
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
       });
       expect(run.failure).toBeUndefined();
       const calls = semgrepArgvs();
@@ -519,7 +519,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       const registry = seedRegistrySnapshot(dir).files;
       const plan = semgrepExecutionPlanReceipt(registry);
       const output = (rule: string, lines: number[]): string => JSON.stringify({
-        version: "1.164.0",
+        version: "1.173.0",
         results: lines.map((line) => ({ check_id: rule, path: join(target, "a.ts"), start: { line } })),
         errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: [rule] },
       });
@@ -535,7 +535,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       }
       const run = await runSemgrepPartitioned(target, registry, {
         dir: cache, mode: "read-write", targetRevision: "revision", targetTree: "tree",
-        implementation: "implementation", externalInputs: { semgrep: "1.164.0" },
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
       });
       expect(run.result).toEqual({});
       expect(run.failure).toMatch(/paired cold.*local-injection.*differ/i);
@@ -830,6 +830,35 @@ describe("semgrepErrorFinding (#1077)", () => {
     });
     expect(findings[0]?.evidence).toContain("PartialParsing");
     expect(findings[0]?.evidence).not.toContain("[object Object]");
+  });
+
+  // #1954, measured with the exact 22-part production plan over carbon@92e19c0. Semgrep 1.173.0
+  // keeps all 87 findings / 4,152 scanned paths / 30 rules and the 26-error population, but moves
+  // this one parser span from 1.164.0's line-74 `import("./utils").IssueContainment` token to the
+  // line-79 closing brace. SEM-ERR-00 retains the moved line in client evidence; the raw diagnostic
+  // (including the `}` text) remains intact for strict producer/replay evidence comparison.
+  it("preserves the one version-bound Semgrep 1.173.0 PartialParsing movement in SEM-ERR-00", () => {
+    const path = "/target/apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx";
+    const point = { line: 79, col: 1, offset: 0 };
+    const [finding] = semgrepErrorFinding("/target", {
+      version: "1.173.0",
+      errors: [
+        {
+          code: 3,
+          level: "warn",
+          type: ["PartialParsing", [{ path, start: point, end: { line: 79, col: 2, offset: 1 } }]],
+          message: `Syntax error at line ${path}:79:\n \`}\` was unexpected`,
+          path,
+          spans: [{ file: path, start: point, end: { line: 79, col: 2, offset: 1 } }],
+        },
+      ],
+      paths: { scanned: [path], skipped: [{ path, reason: "analysis_failed_parser_or_internal_error" }] },
+    });
+    expect(finding).toMatchObject({ id: "SEM-ERR-00", title: "2 files semgrep could not fully evaluate (parse error or skip)" });
+    expect(finding?.evidence).toContain("TraceabilityGraph.tsx:79");
+    expect(finding?.evidence).toContain('"line":79');
+    expect(finding?.evidence).not.toContain("IssueContainment");
+    expect(finding?.evidence).not.toContain(":74");
   });
 
   it("names a file semgrep chose to skip (paths.skipped, only populated at --verbose) alongside any errors", () => {

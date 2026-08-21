@@ -10,7 +10,9 @@
 // fixture was captured from; (2) re-checks the COMMITTED fixture against its own contract (so a
 // hand-edit is caught here too); (3) re-runs the pinned tool against a reproducible seed and asserts
 // the FRESH output still satisfies the contract the parser depends on (the fields it reads exist with
-// the right SHAPE — the #1063 invariant). A byte diff is not usable: tool CONTENT churns run-to-run.
+// the right SHAPE — the #1063 invariant). Most tools stop at shape because their content churns
+// run-to-run. Semgrep's purpose-built corpus is deterministic after its tracked narrow
+// canonicalization, so its complete canonical findings/diagnostics/scope are compared too.
 //
 // Like osv-fixture-drift / dry-run-drift, this needs the mechanical binaries so it is NOT part of
 // `pnpm verify`; the contract logic and its negative controls are. Wired into the conservation.yml
@@ -53,6 +55,8 @@ import {
   checkStrykerContract,
   checkLighthouseContract,
   checkSemgrepFixtureContract,
+  canonicalizeSemgrepFixtureOutput,
+  compareSemgrepFixtureOutput,
   checkGitleaksFixtureContract,
   VITALS_DRIFT_CONTRACT,
   type GitScopeSanity,
@@ -82,6 +86,10 @@ interface DriftOptions<T> {
   parse: (raw: string) => T;
   contract: (parsed: T) => string[];
   rerun: () => Promise<{ parsed: T; summary: string }>;
+  // Optional exact semantic comparison after both the committed fixture and fresh run satisfy
+  // their shape contract. Semgrep uses this to fail on changed findings/diagnostics/scope while
+  // still ignoring only the canonicalizer's documented telemetry/order/path volatility.
+  compare?: (committed: readonly T[], fresh: T) => string[];
   // Checked ONLY against the fresh rerun, before the standard contract check. A returned reason
   // means a KNOWN, detectable non-drift failure mode (#1206) — reported as NOT RUN (exit 0) instead
   // of the generic contract-violation FAIL, so a disclosed flake doesn't get misread as a schema
@@ -101,18 +109,24 @@ async function runDrift<T>(o: DriftOptions<T>): Promise<never> {
 
   const overridden = arg("--fixture");
   const fixturePaths = overridden ? [overridden] : o.fixturePaths.map((p) => join(repoRoot, p));
+  const committedFixtures: T[] = [];
   for (const fp of fixturePaths) {
     const committed = o.parse(readFileSync(fp, "utf8"));
     const violations = o.contract(committed);
     if (violations.length > 0) {
       fail(o.tool, `the COMMITTED fixture ${relative(repoRoot, fp)} violates its own schema contract (a hand-edit?):\n  - ${violations.join("\n  - ")}`);
     }
+    committedFixtures.push(committed);
   }
 
   const { parsed, summary } = await o.rerun();
   // `o` whole, not `o.contract, o.notRunIf` spread out: dropping the classifier from the call is
   // then a change to the OPTIONS OBJECT, which VITALS_DRIFT_CONTRACT's test sees (#1416.4).
-  const verdict = classifyFreshRun(o, parsed);
+  let verdict = classifyFreshRun(o, parsed);
+  if (verdict.kind === "ok" && o.compare) {
+    const violations = o.compare(committedFixtures, parsed);
+    if (violations.length > 0) verdict = { kind: "drift", violations };
+  }
   // The verdict → message/exit mapping is `renderDriftVerdict` (#1727) — a pure function tested in
   // fixture-drift-contracts.test.ts. Only the print/exit below stays unguarded here.
   const outcome = renderDriftVerdict(o.tool, o.installedVersion, verdict, summary);
@@ -390,13 +404,17 @@ async function semgrepDrift(): Promise<never> {
     tool: "semgrep",
     pinnedVersion: SEMGREP_PINNED_VERSION,
     installedVersion: version,
-    fixturePaths: ["src/scan/__fixtures__/semgrep/semgrep-1.164.0-corpus.json"],
-    parse: (raw) => JSON.parse(raw) as SemgrepContractOutput,
+    fixturePaths: ["src/scan/__fixtures__/semgrep/semgrep-1.173.0-corpus.json"],
+    parse: (raw) => canonicalizeSemgrepFixtureOutput(JSON.parse(raw) as SemgrepContractOutput),
     contract: checkSemgrepFixtureContract,
+    compare: (committed, fresh) => {
+      if (committed.length !== 1 || !committed[0]) return [`expected exactly one committed Semgrep fixture, found ${committed.length}`];
+      return compareSemgrepFixtureOutput(committed[0], fresh);
+    },
     rerun: async () => {
       const out = execFileSync("node", [builder], { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
-      const parsed = JSON.parse(out) as SemgrepContractOutput;
-      return { parsed, summary: `semgrep ${version} over a rebuilt per-rule seed — ${parsed.results?.length ?? 0} result(s)` };
+      const parsed = canonicalizeSemgrepFixtureOutput(JSON.parse(out) as SemgrepContractOutput);
+      return { parsed, summary: `semgrep ${version} over a rebuilt per-rule seed — ${parsed.results?.length ?? 0} result(s), exact canonical fixture match` };
     },
   });
 }

@@ -13,6 +13,8 @@ import {
   checkStrykerContract,
   checkLighthouseContract,
   checkSemgrepFixtureContract,
+  canonicalizeSemgrepFixtureOutput,
+  compareSemgrepFixtureOutput,
   checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
   churnOnlySwallowDiagnosis,
@@ -342,8 +344,8 @@ describe("checkLighthouseContract", () => {
 // semgrep and gitleaks, which #1165 recaptured 24 minutes before #1170 landed the drift-check
 // family and neither was registered in it. These two contracts close that gap.
 describe("checkSemgrepFixtureContract", () => {
-  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.164.0-corpus.json");
-  it("passes the committed semgrep 1.164.0 fixture", () => {
+  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.173.0-corpus.json");
+  it("passes the committed semgrep 1.173.0 fixture", () => {
     expect(checkSemgrepFixtureContract(fixture)).toEqual([]);
   });
   it("fires when the free-count rule (harvey-service-role-in-client) no longer fires", () => {
@@ -366,6 +368,116 @@ describe("checkSemgrepFixtureContract", () => {
   });
   it("fires when results is empty", () => {
     expect(checkSemgrepFixtureContract({ ...fixture, results: [] }).join("\n")).toContain("results is empty");
+  });
+  it("fires when the committed fixture claims a different Semgrep authority", () => {
+    expect(checkSemgrepFixtureContract({ ...fixture, version: "1.173.1" }).join("\n")).toContain(
+      "not the pinned fixture authority 1.173.0",
+    );
+  });
+});
+
+// #1954: shape-only checking would accept a renamed rule, changed remediation message, or moved
+// PartialParsing span. The tracked canonicalizer is shared with build-corpus.mjs, and the live
+// drift CLI compares its output exactly after removing only documented run volatility.
+describe("canonical Semgrep fixture comparison (#1954)", () => {
+  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.173.0-corpus.json");
+
+  it("is idempotent", () => {
+    const once = canonicalizeSemgrepFixtureOutput(fixture);
+    expect(canonicalizeSemgrepFixtureOutput(once)).toEqual(once);
+  });
+
+  it("accepts only documented telemetry, ordering, and throwaway-root path volatility", () => {
+    const root = "/tmp/harvey-semgrep-corpus-authority";
+    const expected = structuredClone(fixture);
+    expected.errors = [
+      {
+        code: 3,
+        type: "Syntax error",
+        message: "Syntax error at line app/a.ts:2",
+        path: "app/a.ts",
+        spans: [{ file: "app/a.ts", start: { line: 2 }, end: { line: 2 } }],
+      },
+      {
+        code: 3,
+        type: "Syntax error",
+        message: "Syntax error at line app/b.ts:3",
+        path: "app/b.ts",
+        spans: [{ file: "app/b.ts", start: { line: 3 }, end: { line: 3 } }],
+      },
+    ];
+    expected.paths = {
+      ...expected.paths,
+      skipped: [
+        { path: "app/a.ts", reason: "analysis_failed_parser_or_internal_error" },
+        { path: "app/b.ts", reason: "too_big" },
+      ],
+    };
+    const fresh = structuredClone(expected);
+    fresh.time = { total_bytes: 999, profiling_times: { run: 123.456 } };
+    fresh.profiling_results = [{ volatile: true }];
+    fresh.results = [...(fresh.results ?? [])].reverse().map((result) => ({ ...result, path: `${root}/${result.path}` }));
+    fresh.errors = [...(fresh.errors ?? [])].reverse().map((error) => {
+      const record = error as { path?: string; message?: string; spans?: Array<{ file?: string }> };
+      return {
+        ...record,
+        path: record.path ? `${root}/${record.path}` : record.path,
+        message: record.message?.replace("line app/", `line ${root}/app/`),
+        spans: record.spans?.map((span) => ({ ...span, file: span.file ? `${root}/${span.file}` : span.file })),
+      };
+    });
+    fresh.paths = {
+      ...fresh.paths,
+      scanned: [...(fresh.paths?.scanned ?? [])].reverse().map((path) => `${root}/${path}`),
+      skipped: [...(fresh.paths?.skipped ?? [])].reverse().map((skip) => ({ ...skip, path: skip.path ? `${root}/${skip.path}` : skip.path })),
+    };
+    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toEqual([]);
+  });
+
+  it("fails when a finding field changes", () => {
+    const fresh = structuredClone(fixture);
+    fresh.results![0]!.extra = { ...fresh.results![0]!.extra, message: `${fresh.results![0]!.extra?.message ?? ""}semantic drift` };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical results changed — finding fields, population, or semantic identity drifted",
+    );
+  });
+
+  it("fails when the fixture version changes even if the semantic populations do not", () => {
+    const fresh = { ...fixture, version: "1.173.1" };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toEqual([
+      'version changed from "1.173.0" to "1.173.1"',
+    ]);
+  });
+
+  it("fails when Semgrep omits a rule instead of executing the committed rule scope", () => {
+    const fresh = { ...fixture, skipped_rules: [{ rule_id: "harvey-log-injection", reason: "unsupported" }] };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical envelope changed outside version/results/errors/paths",
+    );
+  });
+
+  it("fails when the requested execution engine changes", () => {
+    const fresh = { ...fixture, engine_requested: "PRO" };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical envelope changed outside version/results/errors/paths",
+    );
+  });
+
+  it("fails when a client-facing diagnostic changes", () => {
+    const fresh = structuredClone(fixture);
+    fresh.errors = [
+      ...(fresh.errors ?? []),
+      {
+        code: 3,
+        level: "warn",
+        type: ["PartialParsing", [{ path: "app/partial.ts", start: { line: 79 }, end: { line: 79 } }]],
+        message: "Syntax error at line app/partial.ts:79:\n `}` was unexpected",
+        path: "app/partial.ts",
+      },
+    ];
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical errors changed — a client-facing Semgrep diagnostic moved or changed",
+    );
   });
 });
 

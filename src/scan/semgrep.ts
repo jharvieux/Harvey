@@ -176,6 +176,7 @@ export interface SemgrepResult {
 }
 
 export interface SemgrepOutput {
+  version?: string;
   results?: SemgrepResult[];
   // Per-path problems semgrep reports WITHOUT failing the run (a syntax error in one file, an
   // unreadable scanning root). Empty results next to an error on the scanned path means the rules
@@ -183,7 +184,20 @@ export interface SemgrepOutput {
   // read "no match" off a file semgrep could not parse. #1077: `type` is a bare string for a
   // whole-file syntax error (MEASURED 2026-07-25) but semgrep also emits it as an array (e.g.
   // ["PartialParsing", [...]]) for a partial-parse warning — typed to admit both rather than assume.
-  errors?: { type?: string | unknown[]; message?: string; path?: string }[];
+  errors?: Array<{
+    code?: number;
+    level?: string;
+    type?: string | unknown[];
+    message?: string;
+    path?: string;
+    spans?: Array<{
+      file?: string;
+      start?: { line?: number; col?: number; offset?: number };
+      end?: { line?: number; col?: number; offset?: number };
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  }>;
   // Absolute paths semgrep actually analysed. #1021 — the single-file re-run narrows a rooted scan
   // with --include, and a narrowing that matched nothing is indistinguishable from a clean file
   // unless this is read. #1077: `skipped` (files semgrep chose not to analyse — size limit,
@@ -524,6 +538,13 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
 //     coverage rather than silently switch to an unproved execution engine.
 // Stability remains a falsifiable corpus property, not something these flags prove by themselves.
+// #1954: RE-VALIDATED 2026-08-20 with Semgrep 1.173.0 over the identical pinned Carbon tree and
+// this exact source-derived 22-part plan: 87 findings, 4,152 scanned paths, 30 rules, 26 errors and
+// 52 skips. Finding population/scope/rules stayed exact. One client-visible PartialParsing record
+// moved within apps/erp/app/modules/inventory/ui/Traceability/TraceabilityGraph.tsx: Semgrep 1.164.0
+// identified line 74 (`import("./utils").IssueContainment`), while 1.173.0 identifies line 79 (`}`).
+// That version-bound diagnostic is preserved in errors[]/SEM-ERR-00 and changes the diagnostic
+// evidence hash; it is not normalized away or used to relax producer↔replay comparison.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
 const SEMGREP_PAIRED_FAMILY = "local-injection";

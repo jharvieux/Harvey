@@ -1,14 +1,23 @@
-// Reproducible builder for `semgrep-corpus.json` (#1156, #1150 row 7). Writes a purpose-built
+// Reproducible builder for `semgrep-1.173.0-corpus.json` (#1156, #1150 row 7). Writes a purpose-built
 // corpus to a throwaway temp dir — one source file per `parseSemgrepFindings` test scenario, plus
 // an inert `.github/workflows/` file for the CI-routing case (created only in temp, never in the
-// repo tree) — then runs the SAME pinned invocation `runSemgrep` uses and prints the real JSON to
-// stdout. The committed fixture is this output with unrelated records dropped (see PROVENANCE.md);
-// field VALUES are never hand-edited. Re-capture:  node src/scan/__fixtures__/semgrep/build-corpus.mjs > /tmp/cap.json
+// repo tree) — then runs the same pinned binary, rule/config surface, and output/scope flags as
+// `runSemgrep` and prints the real JSON to stdout after the tracked canonicalizer removes run
+// telemetry and normalizes ordering/paths. This deliberately small parser corpus does not recreate
+// the production Carbon family partition, whose separate 22-part revalidation is recorded at its
+// production seam.
+// Finding fields and diagnostics are never hand-edited or dropped. Re-capture:
+// node src/scan/__fixtures__/semgrep/build-corpus.mjs > /tmp/semgrep-1.173.0-corpus.json
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+
+// This file stays directly runnable by `node`, while the one production canonicalizer lives in
+// TypeScript beside the fixture contract and is also consumed by fixture-drift.ts.
+await import("tsx/esm");
+const { canonicalizeSemgrepFixtureOutput, SEMGREP_PINNED_VERSION } = await import("../../fixture-drift-contracts.ts");
 
 // Each entry: relative path in the corpus → source that makes a real semgrep rule fire. The trigger
 // snippets mirror the calibration fixtures that already exercise these rules (targets/calibration).
@@ -60,8 +69,8 @@ for (const [rel, content] of Object.entries(FILES)) {
 const REPO_RULES = fileURLToPath(new URL("../../rules/semgrep/", import.meta.url));
 cpSync(REPO_RULES, join(dir, "src/scan/rules/semgrep"), { recursive: true });
 
-// The exact argv runSemgrep() builds (src/scan/semgrep.ts), minus the temp dir root so emitted
-// paths come out relative and stable across machines.
+// The rule/config and output/scope argv shared with runSemgrep() (src/scan/semgrep.ts), with the
+// individual corpus roots named so emitted paths stay relative and stable across machines.
 const args = [
   "--config", "p/typescript",
   "--config", "p/react",
@@ -77,9 +86,18 @@ const args = [
   // The corpus roots only — not the copied rules tree, so semgrep does not scan its own YAML.
   "app", "lib", "components", ".npmrc", ".github",
 ];
-const out = execFileSync("semgrep", ["--x-ignore-semgrepignore-files", ...args], {
-  cwd: dir,
-  encoding: "utf8",
-  maxBuffer: 1024 * 1024 * 128,
-});
-process.stdout.write(out);
+try {
+  const out = execFileSync("semgrep", ["--x-ignore-semgrepignore-files", ...args], {
+    cwd: dir,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 128,
+  });
+  const parsed = JSON.parse(out);
+  if (parsed.version !== SEMGREP_PINNED_VERSION) {
+    throw new Error(`Semgrep corpus builder expected ${SEMGREP_PINNED_VERSION}, received ${JSON.stringify(parsed.version)}`);
+  }
+  const canonical = canonicalizeSemgrepFixtureOutput(parsed, dir);
+  process.stdout.write(`${JSON.stringify(canonical, null, 2)}\n`);
+} finally {
+  rmSync(dir, { recursive: true, force: true });
+}
