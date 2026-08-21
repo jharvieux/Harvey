@@ -414,7 +414,7 @@ describe("canonical Semgrep fixture comparison (#1954)", () => {
       ],
     };
     const fresh = structuredClone(expected);
-    fresh.time = { total_bytes: 999, profiling_times: { run: 123.456 } };
+    fresh.time = { ...(fresh.time as Record<string, unknown>), total_bytes: 999, profiling_times: { run: 123.456 } };
     fresh.profiling_results = [{ volatile: true }];
     fresh.results = [...(fresh.results ?? [])].reverse().map((result) => ({ ...result, path: `${root}/${result.path}` }));
     fresh.errors = [...(fresh.errors ?? [])].reverse().map((error) => {
@@ -478,6 +478,47 @@ describe("canonical Semgrep fixture comparison (#1954)", () => {
     expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
       "canonical errors changed — a client-facing Semgrep diagnostic moved or changed",
     );
+  });
+
+  it("retains sorted executed rules and the complete normalized fixpoint timeout population", () => {
+    const root = "/tmp/harvey-semgrep-time-root";
+    const expected = structuredClone(fixture);
+    expected.time = {
+      rules: ["rule-b", "rule-a", "rule-a"],
+      fixpoint_timeouts: [{
+        error_type: "Fixpoint timeout", severity: "warn",
+        message: "Fixpoint timeout at app/route.ts:1:0",
+        location: { path: "app/route.ts", start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
+      }],
+    };
+    const fresh = structuredClone(expected);
+    fresh.time = {
+      ...(fresh.time as Record<string, unknown>),
+      rules: ["rule-a", "rule-b"],
+      fixpoint_timeouts: [{
+        error_type: "Fixpoint timeout", severity: "warn",
+        message: `Fixpoint timeout at ${root}/app/route.ts:1:0`,
+        location: { path: `${root}/app/route.ts`, start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
+      }],
+      scanning_time: { total_time: 99 },
+    };
+    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toEqual([]);
+  });
+
+  it("fails when executed rules or fixpoint timeout evidence changes", () => {
+    const rules = structuredClone(fixture);
+    (rules.time as { rules: string[] }).rules.pop();
+    expect(compareSemgrepFixtureOutput(fixture, rules)).toContain("canonical envelope changed outside version/results/errors/paths");
+
+    const timeout = structuredClone(fixture);
+    (timeout.time as { fixpoint_timeouts: unknown[] }).fixpoint_timeouts.push({ error_type: "Fixpoint timeout", location: { path: "app/new.ts" } });
+    expect(compareSemgrepFixtureOutput(fixture, timeout)).toContain("canonical envelope changed outside version/results/errors/paths");
+  });
+
+  it("fails closed on a new unclassified time child", () => {
+    const fresh = structuredClone(fixture);
+    fresh.time = { ...(fresh.time as Record<string, unknown>), future_semantic_population: [] };
+    expect(() => compareSemgrepFixtureOutput(fixture, fresh)).toThrow(/unclassified child evidence.*future_semantic_population/);
   });
 });
 

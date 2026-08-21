@@ -20,7 +20,7 @@ const output = (id: string, path = "src/route.ts"): SemgrepOutput => ({
   results: [{ check_id: id, path, start: { line: 1 }, extra: { message: id, severity: "WARNING" } }],
   errors: [],
   paths: { scanned: [path], skipped: [] },
-  time: { rules: [id] },
+  time: { rules: [id], fixpoint_timeouts: [] },
 });
 
 describe("Semgrep family cache and reassembly (#1869)", () => {
@@ -46,7 +46,7 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
         targetRevision: "commit-a",
         targetTree: "tree-a",
         implementation: "semgrep-wrapper-v1",
-        externalInputs: { semgrep: "1.164.0", node: "v24.18.0", toolchain: "lock", options: "pinned" },
+        externalInputs: { semgrep: "1.173.0", node: "v24.18.0", toolchain: "lock", options: "pinned" },
       },
     };
   };
@@ -85,7 +85,7 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
 
   it("caches a complete zero-applicable-rule family and continues the exhaustive plan", async () => {
     const { families, options } = fixture();
-    const empty: SemgrepOutput = { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [] } };
+    const empty: SemgrepOutput = { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } };
     const cold = await executeSemgrepFamily(families[0]!, options, () => empty);
     const warm = await executeSemgrepFamily(families[0]!, options, () => output("must-not-run"));
     expect(cold).toMatchObject({ cache: "miss", unitsExamined: 1, output: empty });
@@ -136,12 +136,48 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     const duplicate = output("tmp.cache-a.registry-packs.digest.javascript.react.same").results![0]!;
     const sameRegistryRule = { ...duplicate, check_id: "tmp.cache-b.registry-packs.digest.javascript.react.same" };
     const merged = mergeSemgrepFamilyOutputs([
-      { family: "b", output: { ...output("b"), results: [duplicate, output("b").results![0]!], time: { rules: ["same", "b"] } }, cache: "hit", key: "b", unitsExamined: 1 },
-      { family: "a", output: { ...output("a"), results: [sameRegistryRule, output("a").results![0]!], time: { rules: ["same", "a"] } }, cache: "hit", key: "a", unitsExamined: 1 },
+      { family: "b", output: { ...output("b"), results: [duplicate, output("b").results![0]!], time: { rules: ["same", "b"], fixpoint_timeouts: [] } }, cache: "hit", key: "b", unitsExamined: 1 },
+      { family: "a", output: { ...output("a"), results: [sameRegistryRule, output("a").results![0]!], time: { rules: ["same", "a"], fixpoint_timeouts: [] } }, cache: "hit", key: "a", unitsExamined: 1 },
     ]);
     expect(merged.results?.map((result) => result.check_id)).toEqual(["a", "b", "javascript.react.same"]);
     expect(merged.paths?.scanned).toEqual(["src/route.ts"]);
     expect(merged.time?.rules).toEqual(["a", "b", "same"]);
+  });
+
+  it("conserves, deduplicates, and root-materializes fixpoint timeout evidence", async () => {
+    const { root, families, options } = fixture();
+    const rootA = join(root, "checkout-a");
+    const rootB = join(root, "checkout-b");
+    mkdirSync(rootA);
+    mkdirSync(rootB);
+    const timeout = (pathRoot: string) => ({
+      error_type: "Fixpoint timeout", severity: "warn",
+      message: `Fixpoint timeout at ${join(pathRoot, "src/route.ts")}:1:0`,
+      location: { path: join(pathRoot, "src/route.ts"), start: { line: 1 }, end: { line: 1 } },
+    });
+    const cold = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootA }, () => ({
+      ...output("auth", join(rootA, "src/route.ts")),
+      time: { rules: ["auth"], fixpoint_timeouts: [timeout(rootA)] },
+    }));
+    const warm = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB }, () => output("must-not-run"));
+    expect(cold.output.time?.fixpoint_timeouts).toHaveLength(1);
+    expect(warm.output.time?.fixpoint_timeouts).toEqual([timeout(rootB)]);
+
+    const merged = mergeSemgrepFamilyOutputs([
+      { ...cold, output: { ...cold.output, time: { rules: ["auth"], fixpoint_timeouts: [timeout(rootA)] } } },
+      { family: "duplicate", output: { ...cold.output, time: { rules: ["other"], fixpoint_timeouts: [timeout(rootA)] } }, cache: "miss", key: "duplicate", unitsExamined: 1 },
+    ]);
+    expect(merged.time?.fixpoint_timeouts).toEqual([timeout(rootA)]);
+  });
+
+  it("rejects legacy or unknown time evidence before cache storage", async () => {
+    const { families, options } = fixture();
+    await expect(executeSemgrepFamily(families[0]!, options, () => ({
+      ...output("auth"), time: { rules: ["auth"] },
+    }))).rejects.toThrow(/fixpoint_timeouts population is missing/);
+    await expect(executeSemgrepFamily(families[0]!, options, () => ({
+      ...output("auth"), time: { rules: ["auth"], fixpoint_timeouts: [], future: [] },
+    }))).rejects.toThrow(/unclassified child evidence.*future/);
   });
 
   it("conserves distinct same-path errors and removes only exact cross-family duplicates", () => {

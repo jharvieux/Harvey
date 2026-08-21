@@ -26,7 +26,7 @@ const digest = "a".repeat(64);
 const packBody = Buffer.from("x");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
-const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
+const diagnosticDigest = createHash("sha256").update('{"errors":[],"fixpointTimeouts":[],"skipped":[]}').digest("hex");
 const mixedRun = JSON.parse(readFileSync(new URL("./__fixtures__/current-mechanical-run-32334325227.json", import.meta.url), "utf8")) as {
   runId: number;
   commonRuntime: CurrentMechanicalExecutionArtifact["runtime"];
@@ -81,13 +81,13 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
             schema: 3,
             strategy: "partitioned-families",
             families: [
-              { ordinal: 0, id: "registry-0", configSha256: digest, argv: ["--x-parmap", "-j", "9", "--timeout", "0"], verification: "single" },
-              { ordinal: 1, id: "local-injection", configSha256: "b".repeat(64), argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "paired-cold-exact" },
+              { ordinal: 0, id: "registry-0", familyId: "registry-0", sourceKind: "registry-pack", sourceId: "p/typescript", configSha256: digest, ruleIds: ["registry-rule"], argv: ["--x-parmap", "-j", "9", "--timeout", "0"], verification: "single" },
+              { ordinal: 1, id: "local-injection", familyId: "local-injection", sourceKind: "local-config", sourceId: "injection.yml", configSha256: "b".repeat(64), ruleIds: ["harvey-log-injection"], argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "paired-cold-exact" },
             ],
           },
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
-        semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
+        semgrepDiagnostics: { schema: 2, errors: [], skipped: [], fixpointTimeouts: [], sha256: diagnosticDigest },
       },
     },
   };
@@ -161,13 +161,14 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
   });
 
-  it("strictly compares complete ordered Semgrep errors and skipped paths, not their counts", () => {
-    const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>): void => {
-      const payload = { errors, skipped };
-      value.targets.target!.semgrepDiagnostics = { schema: 1, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
+  it("strictly compares complete ordered Semgrep errors, skipped paths, and fixpoint timeouts, not their counts", () => {
+    const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>, fixpointTimeouts: Array<{ path: string; ruleId: string; fingerprint: string }> = []): void => {
+      const payload = { errors, skipped, fixpointTimeouts };
+      value.targets.target!.semgrepDiagnostics = { schema: 2, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
     };
     expectDifference((value) => { setDiagnostics(value, [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", message: "substituted" }], []); }, /ordered Semgrep/);
     expectDifference((value) => { setDiagnostics(value, [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", reason: "too large" }]); }, /ordered Semgrep/);
+    expectDifference((value) => { setDiagnostics(value, [], [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", ruleId: "harvey-timeout", fingerprint: "one" }]); }, /ordered Semgrep/);
     const producer = artifact("hosted-producer");
     const replay = artifact("independent-replay");
     setDiagnostics(producer, [{ path: "a", message: "one" }, { path: "b", message: "two" }], []);

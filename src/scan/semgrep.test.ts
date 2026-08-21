@@ -32,7 +32,10 @@ import {
 const CACHE_REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
 
 function seedRegistrySnapshot(cacheDir: string): { identity: string; files: string[] } {
-  const bodies = CACHE_REGISTRY_PACKS.map((pack) => ({ pack, body: `rules: [] # ${pack}\n` }));
+  const bodies = CACHE_REGISTRY_PACKS.map((pack, index) => ({
+    pack,
+    body: `rules:\n  - id: fixture-registry-${index}-${pack.replaceAll("/", "-")}\n    message: fixture\n    severity: WARNING\n    languages: [typescript]\n    pattern: $X\n`,
+  }));
   const hash = createHash("sha256");
   for (const { pack, body } of bodies) hash.update(pack).update("\0").update(body);
   const identity = hash.digest("hex");
@@ -422,6 +425,8 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(injection?.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
       expect(injection?.argv.join(" ")).toContain("--timeout 0");
       expect(injection?.verification).toBe("paired-cold-exact");
+      expect(injection).toMatchObject({ familyId: "local-injection", sourceKind: "local-config", sourceId: "injection.yml" });
+      expect(injection?.ruleIds).toContain("harvey-log-injection");
       expect(receipt.families.filter((family) => family.id !== "local-injection").every((family) =>
         family.verification === "single" && family.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
@@ -434,7 +439,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     const output = (results: SemgrepResult[]): string => JSON.stringify({
       version: "1.173.0", results, errors: [],
       paths: { scanned: ["/some/target/a.ts"], skipped: [] },
-      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
+      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"], fixpoint_timeouts: [] },
     });
     const row = (line: number): SemgrepResult => ({
       check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line },
@@ -466,7 +471,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       version: "1.173.0",
       results: lines.map((line) => ({ check_id: "src.scan.rules.semgrep.harvey-log-injection", path: "/some/target/a.ts", start: { line } })),
       errors: [], paths: { scanned: ["/some/target/a.ts"], skipped: [] },
-      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"] },
+      time: { rules: ["src.scan.rules.semgrep.harvey-log-injection"], fixpoint_timeouts: [] },
     });
     semgrepMock.outputs.push(output([10]), output([10]), output([10, 20]));
     try {
@@ -486,16 +491,20 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       writeFileSync(join(target, "a.ts"), "export {};\n");
       const registry = seedRegistrySnapshot(dir).files;
       const plan = semgrepExecutionPlanReceipt(registry);
-      const output = JSON.stringify({
-        version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ["fixture-rule"] },
+      const output = (ruleIds: string[]): string => JSON.stringify({
+        version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
       });
-      semgrepMock.outputs.push(...Array.from({ length: plan.families.length + 1 }, () => output));
+      for (const family of plan.families) {
+        const envelope = output(family.ruleIds);
+        semgrepMock.outputs.push(envelope, ...(family.verification === "paired-cold-exact" ? [envelope] : []));
+      }
       vi.mocked(execFileSync).mockClear();
       const run = await runSemgrepPartitioned(target, registry, {
         dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
         implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
       });
       expect(run.failure).toBeUndefined();
+      expect(run.executionPlan).toEqual(plan);
       const calls = semgrepArgvs();
       const injection = calls.filter((argv) => argv.some((arg) => arg.endsWith("/injection.yml")));
       expect(injection).toHaveLength(2);
@@ -503,6 +512,56 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(calls.filter((argv) => !argv.some((arg) => arg.endsWith("/injection.yml"))).every((argv) =>
         argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
+    } finally {
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an executed rule that is absent from the bound family config receipt", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-unknown-rule-"));
+    try {
+      const target = join(dir, "target");
+      mkdirSync(target);
+      writeFileSync(join(target, "a.ts"), "export {};\n");
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry);
+      const output = (ruleIds: string[]): string => JSON.stringify({
+        version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
+      });
+      for (const [ordinal, family] of plan.families.entries()) {
+        const rules = ordinal === 0 ? [...family.ruleIds, "unregistered-runtime-rule"] : family.ruleIds;
+        const envelope = output(rules);
+        semgrepMock.outputs.push(envelope, ...(family.verification === "paired-cold-exact" ? [envelope] : []));
+      }
+      const run = await runSemgrepPartitioned(target, registry, {
+        dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
+      });
+      expect(plan.families).not.toHaveLength(0);
+      expect(run.executionPlan).toBeUndefined();
+      expect(run.failure).toMatch(/executed rule.*absent from the bound config receipt.*unregistered-runtime-rule/i);
+    } finally {
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a metadata-planned family whose runtime command never completes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-missing-family-"));
+    try {
+      const target = join(dir, "target");
+      mkdirSync(target);
+      writeFileSync(join(target, "a.ts"), "export {};\n");
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry);
+      const run = await runSemgrepPartitioned(target, registry, {
+        dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
+      });
+      expect(plan.families[0]!.ruleIds).not.toHaveLength(0);
+      expect(run.executionPlan).toBeUndefined();
+      expect(run.failure).toMatch(/partitioned Semgrep did not complete.*registry-0.*(?:unavailable|not found)/i);
     } finally {
       semgrepMock.outputs.length = 0;
       rmSync(dir, { recursive: true, force: true });
@@ -518,10 +577,10 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       writeFileSync(join(target, "a.ts"), "export {};\n");
       const registry = seedRegistrySnapshot(dir).files;
       const plan = semgrepExecutionPlanReceipt(registry);
-      const output = (rule: string, lines: number[]): string => JSON.stringify({
+      const output = (rule: string, lines: number[], ruleIds: readonly string[] = [rule]): string => JSON.stringify({
         version: "1.173.0",
         results: lines.map((line) => ({ check_id: rule, path: join(target, "a.ts"), start: { line } })),
-        errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: [rule] },
+        errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
         if (family.id === "local-injection") {
@@ -530,7 +589,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
             output("src.scan.rules.semgrep.harvey-log-injection", [10, 20]),
           );
         } else {
-          semgrepMock.outputs.push(output(`fixture-${family.id}`, []));
+          semgrepMock.outputs.push(output(family.ruleIds[0]!, [], family.ruleIds));
         }
       }
       const run = await runSemgrepPartitioned(target, registry, {
@@ -854,7 +913,7 @@ describe("semgrepErrorFinding (#1077)", () => {
       ],
       paths: { scanned: [path], skipped: [{ path, reason: "analysis_failed_parser_or_internal_error" }] },
     });
-    expect(finding).toMatchObject({ id: "SEM-ERR-00", title: "2 files semgrep could not fully evaluate (parse error or skip)" });
+    expect(finding).toMatchObject({ id: "SEM-ERR-00", title: "2 analysis records semgrep could not fully evaluate" });
     expect(finding?.evidence).toContain("TraceabilityGraph.tsx:79");
     expect(finding?.evidence).toContain('"line":79');
     expect(finding?.evidence).not.toContain("IssueContainment");
@@ -867,6 +926,21 @@ describe("semgrepErrorFinding (#1077)", () => {
     });
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toContain("vendor/huge.js (skipped: too_big)");
+  });
+
+  it("discloses timeout-only paths through SEM-ERR-00", () => {
+    const path = "/target/app/timeout-only.ts";
+    const findings = semgrepErrorFinding("/target", {
+      errors: [], paths: { scanned: [path], skipped: [] },
+      time: { rules: ["harvey-taint"], fixpoint_timeouts: [{
+        error_type: "Fixpoint timeout", severity: "warn",
+        message: `Fixpoint timeout while performing taint analysis at ${path}:1:0`,
+        location: { path, start: { line: 1 }, end: { line: 1 } },
+      }] },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain("1 fixpoint timeout(s)");
+    expect(findings[0]?.evidence).toContain("app/timeout-only.ts");
   });
 
   it("stays silent when there are no errors and nothing was skipped", () => {

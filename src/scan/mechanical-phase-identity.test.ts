@@ -59,6 +59,16 @@ describe("mechanical phase implementation identities (#1864)", () => {
     }
   });
 
+  it("a shared Semgrep semantic-time policy edit invalidates phase and family caches", () => {
+    const root = fixture();
+    const before = buildCache(root);
+    const policy = join(root, "src", "scan", "semgrep-time.ts");
+    writeFileSync(policy, `${readFileSync(policy, "utf8")}\n// semantic-time identity control\n`);
+    const after = buildCache(root);
+    expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
+    expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
+  });
+
   it("an auth-guard helper edit invalidates every consuming phase but not configuration", () => {
     const root = fixture();
     const before = build(root);

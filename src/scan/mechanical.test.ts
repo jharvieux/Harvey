@@ -19,7 +19,9 @@ const scanSecrets = vi.fn(() => []);
 // on a string rather than proving the wiring, since parseSemgrepFindings below is ALSO mocked to
 // ignore its argument. Kept a well-formed no-failure result so the two describe blocks lower down
 // (which override this per-test to exercise the failure branch) have an honest baseline to diff.
-const runSemgrep = vi.fn(() => ({ result: {} }) as { result: object; failure?: string });
+const runSemgrep = vi.fn(() => ({
+  result: { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } },
+}) as { result: object; failure?: string });
 
 vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
@@ -445,6 +447,7 @@ describe("runMechanicalScan surfaces semgrep parse errors and skipped files (#10
       result: {
         errors: [{ type: "Syntax error", message: "Syntax error at line 1", path: join(dir, "broken.tsx") }],
         paths: { scanned: [join(dir, "broken.tsx")], skipped: [{ path: join(dir, "vendor", "huge.js"), reason: "too_big" }] },
+        time: { rules: [], fixpoint_timeouts: [] },
       },
     });
   });

@@ -18,6 +18,7 @@ import {
   partitionMarkerSuppressed,
   runSemgrep,
   runSemgrepPartitioned,
+  type SemgrepExecutionPlanReceipt,
   semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
@@ -50,7 +51,7 @@ interface SemgrepEngineDefinition {
   conservation: MechanicalEngineEvidence;
   corpus: MechanicalEngineEvidence;
   cadence: MechanicalEngineEvidence;
-  invoke: (input: SemgrepInput) => Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence }>;
+  invoke: (input: SemgrepInput) => Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence; executionPlan?: SemgrepExecutionPlanReceipt }>;
   select: (input: SemgrepInput) => readonly unknown[];
   countExaminedUnits: (input: SemgrepInput, selected: readonly unknown[]) => number;
 }
@@ -85,7 +86,7 @@ export const SEMGREP_ENGINES: readonly SemgrepEngineDefinition[] = Object.freeze
   invoke: runSemgrepEngine,
 })]);
 
-async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: SemgrepInput): Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence }> {
+async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: SemgrepInput): Promise<{ findings: Finding[]; diagnostics: SemgrepDiagnosticEvidence; executionPlan?: SemgrepExecutionPlanReceipt }> {
   const findings: Finding[] = [];
   const registryConfigs = phaseCache?.materializedInputs?.semgrep;
   const semgrep = phaseCache?.semgrepFamilies && registryConfigs
@@ -133,9 +134,15 @@ async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: Se
   findings.push(...checkMissingCsp(scanDir));
   findings.push(...checkHostingConfigHeaders(scanDir));
   findings.push(...checkPublicDirSensitive(scanDir));
-  const diagnostics = semgrepDiagnosticEvidence(semgrep.result, scanDir);
-  context.recordToolResult("semgrep", { failure: semgrep.failure, findings: findings.length, diagnostics });
-  return { findings, diagnostics };
+  const diagnostics = semgrepDiagnosticEvidence(semgrep.failure
+    ? { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } }
+    : semgrep.result, scanDir);
+  const executionPlan = "executionPlan" in semgrep ? semgrep.executionPlan as SemgrepExecutionPlanReceipt | undefined : undefined;
+  if (phaseCache?.semgrepFamilies && registryConfigs && !semgrep.failure && !executionPlan) {
+    throw new Error("partitioned Semgrep completed without an actual runtime family execution-plan receipt");
+  }
+  context.recordToolResult("semgrep", { failure: semgrep.failure, findings: findings.length, diagnostics, executionPlan });
+  return { findings, diagnostics, ...(executionPlan ? { executionPlan } : {}) };
 }
 
 function targetPathExaminedUnits(producer: string, paths: readonly string[]): MechanicalExaminedUnitIdentity[] {
@@ -146,10 +153,11 @@ function receiptRecord(input: Omit<MechanicalProducerRecord, "unitsExamined">): 
   return { ...input, unitsExamined: input.examinedUnitIdentities.length };
 }
 
-export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<{ findings: Finding[]; records: MechanicalProducerRecord[]; diagnostics: SemgrepDiagnosticEvidence }> {
+export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<{ findings: Finding[]; records: MechanicalProducerRecord[]; diagnostics: SemgrepDiagnosticEvidence; executionPlan?: SemgrepExecutionPlanReceipt }> {
   const findings: Finding[] = [];
   const records: MechanicalProducerRecord[] = [];
   let diagnostics: SemgrepDiagnosticEvidence | undefined;
+  let executionPlan: SemgrepExecutionPlanReceipt | undefined;
   for (const engine of SEMGREP_ENGINES) {
     const selected = engine.select(input);
     const examinedUnitIdentities = targetPathExaminedUnits(engine.id, selected.map((unit) => {
@@ -163,8 +171,9 @@ export async function runRegisteredSemgrepEngines(input: SemgrepInput): Promise<
     assertProducerTaxonomyOwnership(engine, emitted.findings);
     findings.push(...emitted.findings);
     diagnostics = emitted.diagnostics;
+    executionPlan = emitted.executionPlan;
     records.push(receiptRecord({ detector: engine.id, phase: engine.phase, order: engine.order, module: engine.module, examinedUnitIdentities, findings: emitted.findings.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
   }
   if (!diagnostics) throw new Error("Semgrep registry produced no diagnostic evidence");
-  return { findings, records, diagnostics };
+  return { findings, records, diagnostics, ...(executionPlan ? { executionPlan } : {}) };
 }

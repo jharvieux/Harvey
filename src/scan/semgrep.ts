@@ -37,8 +37,11 @@ import {
   rejectUnregisteredSemgrepFamilyArtifacts,
   type SemgrepFamily,
   type SemgrepFamilyCacheOptions,
+  type SemgrepExecutionPlanReceipt,
+  type SemgrepFamilyExecutionReceipt,
   type SemgrepFamilyRecord,
 } from "./semgrep-family-cache.js";
+import { canonicalizeSemgrepTime, type SemgrepFixpointTimeout, type SemgrepSemanticTime } from "./semgrep-time.js";
 
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
@@ -208,20 +211,10 @@ export interface SemgrepOutput {
   // scan, present regardless of match. This is the only offline-unavailable way to tell "a registry
   // rule id that was evaluated and found nothing" from "not a rule id this scan ever ran at all" —
   // registry packs carry no local file a re-run can read the id list from the way harvey-* rules do.
-  time?: { rules?: string[] };
+  time?: Partial<SemgrepSemanticTime> & Record<string, unknown>;
 }
 
-export interface SemgrepExecutionPlanReceipt {
-  schema: 3;
-  strategy: "partitioned-families";
-  families: Array<{
-    ordinal: number;
-    id: string;
-    configSha256: string;
-    argv: string[];
-    verification: "single" | "paired-cold-exact";
-  }>;
-}
+export type { SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
 
 // #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
 // legacy 3-level one (ERROR/WARNING/INFO) — MEASURED 2026-07-26 (semgrep 1.164.0): a live six-pack
@@ -564,12 +557,20 @@ function familyRuleIds(configPath: string): string[] {
   return ids;
 }
 
+function declaredFamilyRuleIds(configPath: string): string[] {
+  return [...new Set([...readFileSync(configPath, "utf8").matchAll(/^\s*-\s*id:\s*([\w.-]+)\s*$/gm)].map((match) => match[1]!))].sort();
+}
+
 function withoutFamily(output: SemgrepOutput, ruleIds: readonly string[]): SemgrepOutput {
   const belongs = (checkId: string): boolean => ruleIds.some((ruleId) => ruleIdMatches(checkId, ruleId));
+  const time = canonicalizeSemgrepTime(output.time);
   return {
     ...output,
     results: (output.results ?? []).filter((result) => !belongs(result.check_id)),
-    time: { rules: (output.time?.rules ?? []).filter((ruleId) => !belongs(ruleId)) },
+    time: {
+      ...time,
+      rules: time.rules.filter((ruleId) => !belongs(ruleId)),
+    },
   };
 }
 
@@ -597,6 +598,7 @@ export function runSemgrep(dir: string, registryConfigs: readonly string[] = REG
     // #1710: no per-rule-per-file 5s wall-clock kill — a timed-out rule is a silent per-file recall
     // gap that varies with machine load (and at --timeout-threshold 3 starts skipping whole files).
     "--timeout", "0",
+    "--time",
     "--json",
     // #1077: --verbose (not --quiet — the two are mutually exclusive) so paths.skipped is
     // populated; the extra diagnostic text it also prints goes to stderr, which this call never
@@ -646,12 +648,28 @@ export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]):
       return {
         ordinal,
         id: family.id,
+        familyId: family.id,
+        sourceKind: family.id.startsWith("registry-") ? "registry-pack" : "local-config",
+        sourceId: family.id.startsWith("registry-")
+          ? REGISTRY_PACKS[ordinal]!
+          : relative(CUSTOM_RULES, family.configPath).replaceAll("\\", "/"),
         configSha256: createHash("sha256").update(readFileSync(family.configPath)).digest("hex"),
+        ruleIds: declaredFamilyRuleIds(family.configPath),
         argv: [...policy.prefix, "--config", "<family-config>", ...SEMGREP_FAMILY_TAIL, "<target-root>"],
         verification: policy.verification,
       };
     }),
   };
+}
+
+function executedFamilyReceipt(family: SemgrepFamilyExecutionReceipt, output: SemgrepOutput): SemgrepFamilyExecutionReceipt {
+  const actual = canonicalizeSemgrepTime(output.time).rules;
+  const matched = actual.map((checkId) => ({ checkId, declared: family.ruleIds.filter((ruleId) => ruleIdMatches(checkId, ruleId)) }));
+  const unknown = matched.filter(({ declared }) => declared.length === 0).map(({ checkId }) => checkId);
+  if (unknown.length > 0) throw new Error(`${family.familyId}: Semgrep executed rule(s) absent from the bound config receipt: ${unknown.join(", ")}`);
+  const ambiguous = matched.filter(({ declared }) => declared.length > 1);
+  if (ambiguous.length > 0) throw new Error(`${family.familyId}: Semgrep executed rule identity matched multiple config declarations: ${ambiguous.map(({ checkId }) => checkId).join(", ")}`);
+  return { ...family, ruleIds: [...new Set(matched.map(({ declared }) => declared[0]!))].sort() };
 }
 
 function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: SemgrepOutput; failure?: string } {
@@ -671,8 +689,11 @@ function runSemgrepFamily(dir: string, family: SemgrepFamily): { result: Semgrep
     parsed.result.paths ??= {};
     parsed.result.paths.scanned ??= [];
     parsed.result.paths.skipped ??= [];
-    parsed.result.time ??= {};
-    parsed.result.time.rules ??= [];
+    try {
+      parsed.result.time = canonicalizeSemgrepTime(parsed.result.time);
+    } catch (error) {
+      return { result: {}, failure: `${family.id}: ${error instanceof Error ? error.message : String(error)}` };
+    }
     return parsed;
   };
   const first = once();
@@ -691,12 +712,13 @@ export async function runSemgrepPartitioned(
   dir: string,
   registryConfigs: readonly string[],
   cache: SemgrepFamilyCacheOptions,
-): Promise<{ result: SemgrepOutput; records: SemgrepFamilyRecord[]; failure?: string }> {
+): Promise<{ result: SemgrepOutput; records: SemgrepFamilyRecord[]; executionPlan?: SemgrepExecutionPlanReceipt; failure?: string }> {
   const families = semgrepRuleFamilies(registryConfigs);
+  const planned = semgrepExecutionPlanReceipt(registryConfigs);
   const portableCache = { ...cache, pathRoot: dir };
   rejectUnregisteredSemgrepFamilyArtifacts(portableCache, new Set(families.map((family) => family.id)));
   const records: SemgrepFamilyRecord[] = [];
-  for (const family of families) {
+  for (const [ordinal, family] of families.entries()) {
     let failure: string | undefined;
     const record = await executeSemgrepFamily(family, portableCache, () => {
       const run = runSemgrepFamily(dir, family);
@@ -708,10 +730,22 @@ export async function runSemgrepPartitioned(
       return undefined;
     });
     if (!record) return { result: {}, records, failure: `partitioned Semgrep did not complete: ${failure}` };
-    records.push(record);
+    const declared = planned.families[ordinal]!;
+    let execution: SemgrepFamilyExecutionReceipt;
+    try {
+      execution = executedFamilyReceipt(declared, record.output);
+    } catch (error) {
+      return { result: {}, records, failure: `partitioned Semgrep did not complete: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    records.push({ ...record, execution });
   }
   assertSemgrepFamilyVerification(records, families, cache.mode);
-  return { result: mergeSemgrepFamilyOutputs(records), records };
+  const executionPlan: SemgrepExecutionPlanReceipt = {
+    schema: 3,
+    strategy: "partitioned-families",
+    families: records.map((record) => record.execution!),
+  };
+  return { result: mergeSemgrepFamilyOutputs(records), records, executionPlan };
 }
 
 // A bare rule id (e.g. "harvey-route-noauth") matched against a JSON check_id, which carries a
@@ -990,27 +1024,34 @@ function describeErrorType(type: string | unknown[] | undefined): string {
 export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding[] {
   const errors = output.errors ?? [];
   const skipped = (output.paths?.skipped ?? []).filter((s) => s.path);
-  if (errors.length === 0 && skipped.length === 0) return [];
+  const timeouts = (output.time?.fixpoint_timeouts ?? []) as SemgrepFixpointTimeout[];
+  if (errors.length === 0 && skipped.length === 0 && timeouts.length === 0) return [];
   const errorLines = errors.map((e) => {
     const rel = e.path ? relative(dir, e.path) : "(unknown path)";
     const detail = e.message?.trim().split("\n")[0];
     return `${rel} (${describeErrorType(e.type)}${detail ? `: ${detail}` : ""})`;
   });
   const skippedLines = skipped.map((s) => `${relative(dir, s.path!)} (skipped: ${s.reason ?? "unspecified reason"})`);
-  const all = [...errorLines, ...skippedLines];
+  const timeoutLines = timeouts.map((timeout) => {
+    const path = timeout.location?.path;
+    const rel = path ? relative(dir, path) : "(unknown path)";
+    const detail = timeout.message?.trim().split("\n")[0];
+    return `${rel} (${timeout.error_type ?? "fixpoint timeout"}${detail ? `: ${detail}` : ""})`;
+  });
+  const all = [...errorLines, ...skippedLines, ...timeoutLines];
   const shown = all.slice(0, 25);
   return [
     {
       id: "SEM-ERR-00",
-      title: `${all.length} file${all.length === 1 ? "" : "s"} semgrep could not fully evaluate (parse error or skip)`,
+      title: `${all.length} analysis record${all.length === 1 ? "" : "s"} semgrep could not fully evaluate`,
       severity: "Info",
       confidence: "N/A",
       category: "Coverage",
       taxonomy: "Coverage — files semgrep errored on or skipped",
       location: "(repo-wide)",
       status: "Open",
-      evidence: `Semgrep reported ${errors.length} per-file error(s) and ${skipped.length} skipped file(s) — these still count as "scanned" (an errored file even appears in paths.scanned) and would otherwise read as clean: ${shown.join("; ")}${all.length > shown.length ? `, and ${all.length - shown.length} more` : ""}.`,
-      impact: "A file semgrep could not parse, or chose not to analyse (size limit, ignore rule, minified), contributes zero findings — the absence of footgun findings there means nothing was looked for, not that nothing is present.",
+      evidence: `Semgrep reported ${errors.length} per-file error(s), ${skipped.length} skipped file(s), and ${timeouts.length} fixpoint timeout(s) — these paths can still count as scanned while one or more rules did not finish and would otherwise read as clean: ${shown.join("; ")}${all.length > shown.length ? `, and ${all.length - shown.length} more` : ""}.`,
+      impact: "A file semgrep could not parse, chose not to analyse, or timed out while reaching a taint fixpoint can contribute incomplete findings — absence there does not prove the covered footguns are absent.",
       fix: "Fix the syntax error (or reduce the file below semgrep's size/timeout limits) so semgrep can parse and analyse the file, then re-run the scan.",
       value: 1,
       ease: 4,

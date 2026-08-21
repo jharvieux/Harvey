@@ -126,16 +126,22 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
       { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first" },
       { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second" },
     ];
+    const fixpointTimeouts = [
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", ruleId: "harvey-first", fingerprint: "first" },
+      { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", ruleId: "harvey-second", fingerprint: "second" },
+    ];
     const value = {
       findings: [finding("SEM-ERR-00")],
       scope: { unitsExamined: 1, description: "one Semgrep target" },
-      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] } }, tmpdir()) },
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: fixpointTimeouts } }, tmpdir()) },
     };
     const cold = await executeMechanicalPhase("semgrep", cache, () => value);
     const warm = await executeMechanicalPhase("semgrep", cache, () => ({ ...value, findings: [finding("must-not-run")] }));
     expect(cold.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(cold.evidence?.semgrepDiagnostics.fixpointTimeouts).toEqual(fixpointTimeouts);
     expect(warm.cache).toBe("hit");
     expect(warm.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(warm.evidence?.semgrepDiagnostics.fixpointTimeouts).toEqual(fixpointTimeouts);
   });
 
   it("persists the producer census deterministically and restores cache-hit status", async () => {

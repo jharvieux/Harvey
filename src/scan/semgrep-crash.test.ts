@@ -39,7 +39,7 @@ const { runSemgrep, runSemgrepOnFile } = await import("./semgrep.js");
 // The real exit-7 envelope shape (`semgrep --config /dev/null`, captured 2026-07-31): valid JSON,
 // zero results, errors[] at level "error" — exactly what the old swallow accepted as a clean scan.
 const EXIT7_ENVELOPE = JSON.stringify({
-  version: "1.164.0",
+  version: "1.173.0",
   results: [],
   errors: [
     { code: 2, level: "error", type: "SemgrepError", message: "config location `/dev/null` is not a file or folder!" },
@@ -70,7 +70,7 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
 
   it("a signal-killed run is a failure naming the signal, even with partial JSON on stdout", () => {
     semgrepBehavior = () => {
-      throw execError({ signal: "SIGBUS", stdout: JSON.stringify({ version: "1.164.0", results: [], errors: [], paths: { scanned: [] } }) });
+      throw execError({ signal: "SIGBUS", stdout: JSON.stringify({ version: "1.173.0", results: [], errors: [], paths: { scanned: [] }, time: { rules: [], fixpoint_timeouts: [] } }) });
     };
     const { failure } = runSemgrep("/some/target");
     expect(failure).toBeDefined();
@@ -87,7 +87,7 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
   });
 
   it("a completed run (exit 0) still parses and reports no failure", () => {
-    semgrepBehavior = () => JSON.stringify({ version: "1.164.0", results: [], errors: [], paths: { scanned: ["/some/target/a.ts"] } });
+    semgrepBehavior = () => JSON.stringify({ version: "1.173.0", results: [], errors: [], paths: { scanned: ["/some/target/a.ts"] }, time: { rules: [], fixpoint_timeouts: [] } });
     const { result, failure } = runSemgrep("/some/target");
     expect(failure).toBeUndefined();
     expect(result.paths?.scanned).toEqual(["/some/target/a.ts"]);

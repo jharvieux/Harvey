@@ -81,6 +81,8 @@ const args = [
   "--config", "src/scan/rules/semgrep/",
   "--exclude", "node_modules",
   "--disable-nosem",
+  "--timeout", "0",
+  "--time",
   "--json",
   "--verbose",
   // The corpus roots only — not the copied rules tree, so semgrep does not scan its own YAML.
@@ -93,6 +95,9 @@ try {
     maxBuffer: 1024 * 1024 * 128,
   });
   const parsed = JSON.parse(out);
+  if (process.env.HARVEY_SEMGREP_RAW_OUTPUT) {
+    writeFileSync(process.env.HARVEY_SEMGREP_RAW_OUTPUT, `${JSON.stringify(parsed, null, 2)}\n`);
+  }
   if (parsed.version !== SEMGREP_PINNED_VERSION) {
     throw new Error(`Semgrep corpus builder expected ${SEMGREP_PINNED_VERSION}, received ${JSON.stringify(parsed.version)}`);
   }

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, 
 import { dirname, extname, join } from "node:path";
 import { readRecursiveSafe } from "../fs-walk.js";
 import type { SemgrepOutput } from "./semgrep.js";
+import { canonicalizeSemgrepTime, type SemgrepFixpointTimeout } from "./semgrep-time.js";
 import type { MechanicalCacheMode } from "./mechanical-phase-cache.js";
 
 export interface SemgrepFamily {
@@ -27,12 +28,32 @@ export interface SemgrepFamilyRecord {
   cache: "hit" | "miss" | "recomputed";
   key: string;
   unitsExamined: number;
+  execution?: SemgrepFamilyExecutionReceipt;
+}
+
+export interface SemgrepFamilyExecutionReceipt {
+  ordinal: number;
+  id: string;
+  familyId: string;
+  sourceKind: "registry-pack" | "local-config";
+  sourceId: string;
+  configSha256: string;
+  ruleIds: string[];
+  argv: string[];
+  verification: "single" | "paired-cold-exact";
+}
+
+export interface SemgrepExecutionPlanReceipt {
+  schema: 3;
+  strategy: "partitioned-families";
+  families: SemgrepFamilyExecutionReceipt[];
 }
 
 export interface SemgrepDiagnosticEvidence {
-  schema: 1;
+  schema: 2;
   errors: NonNullable<SemgrepOutput["errors"]>;
   skipped: NonNullable<NonNullable<SemgrepOutput["paths"]>["skipped"]>;
+  fixpointTimeouts: SemgrepFixpointTimeout[];
   sha256: string;
 }
 
@@ -115,7 +136,7 @@ function validateOutput(output: unknown): asserts output is SemgrepOutput {
   if (value.results !== undefined && !Array.isArray(value.results)) throw new Error("artifact results are malformed");
   if (value.errors !== undefined && !Array.isArray(value.errors)) throw new Error("artifact errors are malformed");
   if (!value.paths || !Array.isArray(value.paths.scanned) || !Array.isArray(value.paths.skipped)) throw new Error("artifact examined-path scope is incomplete");
-  if (!value.time || !Array.isArray(value.time.rules)) throw new Error("artifact executed-rule scope is incomplete");
+  canonicalizeSemgrepTime(value.time);
 }
 
 function parseArtifact(value: unknown, expected: Pick<FamilyArtifact, "family" | "key" | "identity">): FamilyArtifact {
@@ -263,7 +284,10 @@ export function mergeSemgrepFamilyOutputs(records: readonly SemgrepFamilyRecord[
       scanned: [...scanned].sort(),
       skipped: [],
     },
-    time: { rules: [...new Set(records.flatMap((record) => record.output.time?.rules ?? []))].sort() },
+    time: {
+      rules: records.flatMap((record) => canonicalizeSemgrepTime(record.output.time).rules),
+      fixpoint_timeouts: records.flatMap((record) => canonicalizeSemgrepTime(record.output.time).fixpoint_timeouts),
+    },
   });
   return { ...canonical, errors, paths: { ...canonical.paths, skipped } };
 }
@@ -272,7 +296,8 @@ export function mergeSemgrepFamilyOutputs(records: readonly SemgrepFamilyRecord[
 export function semgrepDiagnosticEvidence(output: SemgrepOutput, pathRoot: string): SemgrepDiagnosticEvidence {
   const errors = canonicalizeRoot(output.errors ?? [], pathRoot, TARGET_ROOT_TOKEN);
   const skipped = canonicalizeRoot(output.paths?.skipped ?? [], pathRoot, TARGET_ROOT_TOKEN);
-  return { schema: 1, errors, skipped, sha256: digest({ errors, skipped }) };
+  const fixpointTimeouts = canonicalizeRoot(canonicalizeSemgrepTime(output.time).fixpoint_timeouts, pathRoot, TARGET_ROOT_TOKEN);
+  return { schema: 2, errors, skipped, fixpointTimeouts, sha256: digest({ errors, skipped, fixpointTimeouts }) };
 }
 
 export function canonicalizeSemgrepOutput(output: SemgrepOutput): SemgrepOutput {
@@ -287,6 +312,6 @@ export function canonicalizeSemgrepOutput(output: SemgrepOutput): SemgrepOutput 
       scanned: [...new Set(output.paths?.scanned ?? [])].sort(),
       skipped: uniqueSorted(output.paths?.skipped ?? []),
     },
-    time: { rules: [...new Set(output.time?.rules ?? [])].sort() },
+    time: canonicalizeSemgrepTime(output.time),
   };
 }

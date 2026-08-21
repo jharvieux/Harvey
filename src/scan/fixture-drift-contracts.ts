@@ -20,6 +20,7 @@ import type { TruffleHogResult } from "./secrets.js";
 import type { VitalsReport } from "../hotspot-scan.js";
 import type { StrykerReport } from "../mutation-scan.js";
 import type { LighthouseResult } from "../lighthouse.js";
+import { canonicalizeSemgrepTime } from "./semgrep-time.js";
 
 // The tool versions each committed fixture was captured from (its PROVENANCE.md) and each parser's
 // field-reads were verified against. A drift check run against a different version cannot vouch for
@@ -459,6 +460,7 @@ export interface SemgrepContractOutput {
   paths?: { scanned?: string[]; skipped?: Array<{ path?: string; reason?: string; [key: string]: unknown }>; [key: string]: unknown };
   skipped_rules?: unknown[];
   engine_requested?: string;
+  time?: unknown;
   [key: string]: unknown;
 }
 
@@ -474,7 +476,7 @@ export interface SemgrepContractOutput {
  * comparison. Keeping one tracked implementation replaces the untracked `process.py` from the
  * previous capture and makes re-capture deterministic and reproducible.
  */
-const SEMGREP_RAW_TELEMETRY_KEYS = new Set(["time", "profiling_results"]);
+const SEMGREP_RAW_TELEMETRY_KEYS = new Set(["profiling_results"]);
 
 function stableSemgrepValue(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableSemgrepValue).join(",")}]`;
@@ -534,6 +536,7 @@ export function canonicalizeSemgrepFixtureOutput(output: SemgrepContractOutput, 
   const normalized = normalizeSemgrepValue(output, pathRoot) as SemgrepContractOutput;
   const retained = { ...normalized };
   for (const key of SEMGREP_RAW_TELEMETRY_KEYS) delete retained[key];
+  retained.time = canonicalizeSemgrepTime(normalized.time);
 
   if (Array.isArray(normalized.results)) {
     retained.results = sortSemgrepPopulation(normalized.results, (result) => [
@@ -628,6 +631,11 @@ export function checkSemgrepFixtureContract(output: SemgrepContractOutput): stri
   if (!Array.isArray(output.errors)) v.push("errors is not an array — semgrepErrorFinding consumes its per-path diagnostics");
   if (!Array.isArray(output.paths?.scanned) || !Array.isArray(output.paths?.skipped)) {
     v.push("paths.scanned/paths.skipped are not both arrays — scope and skip disclosures consume them");
+  }
+  try {
+    canonicalizeSemgrepTime(output.time);
+  } catch (error) {
+    v.push(error instanceof Error ? error.message : String(error));
   }
   if (!Array.isArray(output.results) || output.results.length === 0) {
     v.push("results is empty or not an array — the seed corpus should produce matches (corpus or semgrep drift?)");

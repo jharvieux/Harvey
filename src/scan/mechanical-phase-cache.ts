@@ -257,9 +257,10 @@ function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue,
   if (value.evidence !== undefined) {
     const diagnostic = value.evidence.semgrepDiagnostics;
     if (phase !== "semgrep") problems.push("Semgrep diagnostic evidence is attached to a non-Semgrep phase");
-    if (diagnostic?.schema !== 1 || !Array.isArray(diagnostic.errors) || !Array.isArray(diagnostic.skipped) || !/^[a-f0-9]{64}$/.test(diagnostic.sha256 ?? "")) {
+    if (diagnostic?.schema !== 2 || !Array.isArray(diagnostic.errors) || !Array.isArray(diagnostic.skipped)
+      || !Array.isArray(diagnostic.fixpointTimeouts) || !/^[a-f0-9]{64}$/.test(diagnostic.sha256 ?? "")) {
       problems.push("Semgrep diagnostic evidence is incomplete or malformed");
-    } else if (diagnostic.sha256 !== createHash("sha256").update(stable({ errors: diagnostic.errors, skipped: diagnostic.skipped })).digest("hex")) {
+    } else if (diagnostic.sha256 !== createHash("sha256").update(stable({ errors: diagnostic.errors, skipped: diagnostic.skipped, fixpointTimeouts: diagnostic.fixpointTimeouts })).digest("hex")) {
       problems.push("Semgrep diagnostic evidence digest differs from its complete raw content");
     }
   }
