@@ -8,6 +8,7 @@ import {
   attributeClaim,
   claimCounts,
   claimDrift,
+  claimScopeMetrics,
   claimTotal,
   collectReasons,
   censusScope,
@@ -50,6 +51,9 @@ function one(lines: string[], prefix?: string): ParsedReason {
 }
 
 const statuses = (rows: { status: string }[]) => rows.map((r) => r.status);
+const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
+const NEGATIVE_REGISTER = ["un", "verified"].join("");
+const IMPOSSIBILITY_REGISTER = ["can", "not"].join(" ");
 
 describe("parseRecordedReasons", () => {
   it("reads a block out of a TS comment, a Markdown quote and an HTML comment alike", () => {
@@ -393,6 +397,54 @@ describe("untriagedClaims — the claims outside every block, counted rather tha
 
   it("skips fenced code — a sample command is not a claim about the world", () => {
     expect(untriagedClaims(source("```\ngrep -q 'cannot' x\n```\n"), [])).toEqual([]);
+  });
+
+  it("adds the exact case-insensitive positive-register phrase without broadening to bare or near variants (#1410)", () => {
+    const text = [
+      `${POSITIVE_REGISTER} against the retained fixture.`,
+      `${POSITIVE_REGISTER.toUpperCase()} against the second fixture.`,
+      "verified against the fixture",
+      "verified-live against the fixture",
+      "verified  live against the fixture",
+      "verified lively against the fixture",
+      `${NEGATIVE_REGISTER} live against the fixture`,
+      "reverified live against the fixture",
+    ].join("\n");
+    const metrics = claimScopeMetrics(source(text), []);
+
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map((row) => row.line)).toEqual([1, 2, 7]);
+  });
+
+  it("reaches the real #1304 source claim through the production source walk", () => {
+    const sources = collectSources(["src/detectors/bundle-stats.ts"], REPO_ROOT);
+    const reasons = sources.flatMap(({ file, text }) => parseRecordedReasons(text, file));
+    const metrics = claimScopeMetrics(sources, reasons);
+
+    expect(metrics.acceptedVerifiedLive).toBeGreaterThan(0);
+    expect(metrics.accepted.filter((row) => row.text.includes("#1304"))).toEqual([
+      expect.objectContaining({ file: "src/detectors/bundle-stats.ts", line: 23 }),
+    ]);
+  });
+
+  it("reports the source boundary and rejected code-line population from the same traversal", () => {
+    const sources = [
+      { file: "docs/x.md", text: `${POSITIVE_REGISTER} in prose.` },
+      { file: "src/x.ts", text: `// ${POSITIVE_REGISTER} in a comment.\nthrow new Error("${POSITIVE_REGISTER} in code");` },
+      { file: "src/unstructured-claims-baseline.ts", text: `// ${POSITIVE_REGISTER} but generated.` },
+    ];
+    const metrics = claimScopeMetrics(sources, []);
+
+    expect(metrics.sourcesByScope).toEqual({ prose: 1, comments: 1, none: 1 });
+    expect(metrics.excludedByCommentScope).toBe(1);
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map((row) => `${row.file}:${row.line}`)).toEqual(["docs/x.md:1", "src/x.ts:1"]);
+  });
+
+  it("keeps untriagedClaims as an exact delegation to the shared accepted population", () => {
+    const sources = [{ file: "doc.md", text: `${POSITIVE_REGISTER} here.\nThis ${IMPOSSIBILITY_REGISTER} run there.` }];
+    const reasons: ParsedReason[] = [];
+    expect(untriagedClaims(sources, reasons)).toEqual(claimScopeMetrics(sources, reasons).accepted);
   });
 });
 

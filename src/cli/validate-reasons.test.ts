@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = "src/cli/validate-reasons.ts";
+const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
 
 function plant(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "harvey-reasons-"));
@@ -232,6 +233,31 @@ describe("validate-reasons CLI", () => {
     expect(code).toBe(0);
     expect(out).toContain("loader.ts:1  // Harvey cannot analyse Elixir today.");
     expect(out).not.toContain("loader.ts:2");
+  });
+
+  it("derives every disclosed census metric from each shipping CLI population (#1410)", async () => {
+    const populationA = plant({
+      "a.md": `${POSITIVE_REGISTER} against fixture A.\n`,
+      "a.ts": `// ${POSITIVE_REGISTER} in a source comment.\nthrow new Error("${POSITIVE_REGISTER} in code");\n`,
+    });
+    const populationB = plant({
+      "b.md": `${POSITIVE_REGISTER} against fixture B.\n${POSITIVE_REGISTER} against fixture C.\n`,
+      "b.ts": `// ${POSITIVE_REGISTER} in another source comment.\nthrow new Error("${POSITIVE_REGISTER} in code");\nthrow new Error("${POSITIVE_REGISTER} in more code");\n`,
+    });
+
+    const [a, b] = await Promise.all([gate(populationA, ["--census"]), gate(populationB, ["--census"])]);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(a.out).toContain("Untriaged claim-shaped lines (advisory, LOWER BOUND — a fixed vocabulary): 2");
+    expect(b.out).toContain("Untriaged claim-shaped lines (advisory, LOWER BOUND — a fixed vocabulary): 3");
+    expect(a.out).toContain("CENSUSED WHOLE: 1 prose surface(s)");
+    expect(b.out).toContain("CENSUSED WHOLE: 1 prose surface(s)");
+    expect(a.out).toContain("CENSUSED COMMENTS ONLY: 1 .ts/.yml/.sql surface(s)");
+    expect(b.out).toContain("CENSUSED COMMENTS ONLY: 1 .ts/.yml/.sql surface(s)");
+    expect(a.out).toContain("1 matching code line(s) were excluded");
+    expect(b.out).toContain("2 matching code line(s) were excluded");
+    expect(a.out).toContain("2 accepted row(s) use that phrase");
+    expect(b.out).toContain("3 accepted row(s) use that phrase");
   });
 });
 

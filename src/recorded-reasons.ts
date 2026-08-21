@@ -196,9 +196,16 @@ const IMPOSSIBILITY_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|n
 // an ASSUMED provenance would punish exactly the phrasing the doctrine asks for. So it is censused
 // (a standing claim nothing re-tests) but kept OUT of the impossibility-register check below.
 const UNVERIFIED_VOCABULARY = /\b(unverified|not (?:independently )?(?:re-)?verified|never (?:been )?verified)\b/i;
-const CLAIM_VOCABULARY = new RegExp(`${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}`, "i");
+// #1410 — the positive register needs the same decay census as impossibility and the honest-negative
+// register. Keep this arm exact: widening it to the bare verb reaches ordinary evidence prose,
+// while punctuation/spacing variants do not make the same claim as the two-word status label.
+const VERIFIED_LIVE_VOCABULARY = /\bverified live\b/i;
+const CLAIM_VOCABULARY = new RegExp(
+  `${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}|${VERIFIED_LIVE_VOCABULARY.source}`,
+  "i",
+);
 
-interface UntriagedClaim {
+export interface UntriagedClaim {
   file: string;
   line: number;
   text: string;
@@ -238,7 +245,7 @@ export function issueSources(issues: FetchedIssue[]): SourceText[] {
  * claim VERBATIM, so censusing it would match every claim in the repo against itself — 275 lines
  * measured, growing by one for every claim anyone writes anywhere.
  */
-type CensusScope = "prose" | "comments" | "none";
+export type CensusScope = "prose" | "comments" | "none";
 
 const CENSUS_EXCLUDED = new Set(["src/unstructured-claims-baseline.ts"]);
 const COMMENT_LINE: Record<string, RegExp> = {
@@ -252,29 +259,55 @@ export function censusScope(file: string): CensusScope {
   return COMMENT_LINE[file.split(".").pop() ?? ""] ? "comments" : "prose";
 }
 
+export interface ClaimScopeMetrics {
+  /** Claim-shaped lines accepted by the declared prose/comment boundary and outside reason blocks. */
+  accepted: UntriagedClaim[];
+  /** Matching code lines rejected because source files are deliberately comment-only. */
+  excludedByCommentScope: number;
+  /** Accepted rows carrying the exact positive-register phrase. */
+  acceptedVerifiedLive: number;
+  /** Every input surface, including explicitly excluded generated surfaces. */
+  sourcesByScope: Record<CensusScope, number>;
+}
+
 /**
  * Claim-shaped lines outside any reason block. Prose surfaces (`.md`, `.txt`, issue bodies) are read
  * whole; code surfaces are read comment-lines-only — see `censusScope`. A trailing comment on a line
  * of code (`foo(); // cannot X`) is not read, which keeps this the lower bound it has always been.
  */
-export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
-  return sources.flatMap(({ file, text }) => {
+export function claimScopeMetrics(sources: SourceText[], reasons: ParsedReason[]): ClaimScopeMetrics {
+  const accepted: UntriagedClaim[] = [];
+  let excludedByCommentScope = 0;
+  let acceptedVerifiedLive = 0;
+  const sourcesByScope: Record<CensusScope, number> = { prose: 0, comments: 0, none: 0 };
+
+  for (const { file, text } of sources) {
     const scope = censusScope(file);
-    if (scope === "none") return [];
+    sourcesByScope[scope] += 1;
+    if (scope === "none") continue;
     const comment = scope === "comments" ? COMMENT_LINE[file.split(".").pop() ?? ""] : undefined;
     const triaged = reasons.filter((r) => r.file === file);
-    const out: UntriagedClaim[] = [];
     let inFence = false;
     text.split("\n").forEach((raw, i) => {
       if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
       if (inFence || !CLAIM_VOCABULARY.test(raw)) return;
-      if (comment && !comment.test(raw)) return;
+      if (comment && !comment.test(raw)) {
+        excludedByCommentScope += 1;
+        return;
+      }
       const line = i + 1;
       if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
-      out.push({ file, line, text: raw.trim() });
+      accepted.push({ file, line, text: raw.trim() });
+      if (VERIFIED_LIVE_VOCABULARY.test(raw)) acceptedVerifiedLive += 1;
     });
-    return out;
-  });
+  }
+
+  return { accepted, excludedByCommentScope, acceptedVerifiedLive, sourcesByScope };
+}
+
+/** Compatibility surface for existing ratchet consumers; the shared traversal owns the population. */
+export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
+  return claimScopeMetrics(sources, reasons).accepted;
 }
 
 // #1318 (Gate 6 of #1320) — the census above is advisory, and an advisory number that nobody has to
