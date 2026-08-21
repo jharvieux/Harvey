@@ -911,6 +911,35 @@ describe("external-send idempotency key (item 24)", () => {
     expect(finding.evidence).toContain("mechanically-unproven-key-origin-type");
   });
 
+  it("reviews JSON tuples with unconstrained number identities because non-finite values serialize identically", () => {
+    const finding = expectSingleReview(`
+      function charge(stripe: Stripe, tenantId: string, bookingId: number) {
+        stripe.paymentIntents.create(
+          { amount: 100, metadata: { bookingId } },
+          { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+        );
+      }
+    `);
+    expect(finding.evidence).toContain("non-injective-json-number-serialization");
+    expect(finding.evidence).toContain("NaN");
+    expect(finding.evidence).toContain("Infinity");
+    expect(finding.evidence).toContain("null");
+  });
+
+  it("accepts a JSON tuple when the numeric identity is constrained to distinct finite literals", () => {
+    expect(
+      scan(`
+        type BookingId = 1001 | 1002;
+        function charge(stripe: Stripe, tenantId: string, bookingId: BookingId) {
+          stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }
+      `),
+    ).toEqual([]);
+  });
+
   it.each([
     ["one-sided raw delimiters", "`charge:${encodeURIComponent(tenantId)}:${bookingId}`"],
     ["whole-tuple encoding", "encodeURIComponent(`charge:${tenantId}:${bookingId}`)"],
@@ -1033,6 +1062,46 @@ describe("external-send idempotency key (item 24)", () => {
     expect(out[0]!.evidence).toContain("inconsistent-logical-operation-key-contract");
   });
 
+  it("groups one logical operation independently of its discriminator and compares every provider-domain pair deterministically", () => {
+    const files = [
+      {
+        path: "src/jobs/charge.ts",
+        text: `function charge(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/jobs/refund.ts",
+        text: `function refund(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.refunds.create(
+            { payment_intent: bookingId },
+            { idempotencyKey: JSON.stringify(["charge", tenantId, bookingId]) },
+          );
+        }`,
+      },
+      {
+        path: "src/workers/retry-charge.ts",
+        text: `function retryCharge(stripe: Stripe, tenantId: string, bookingId: string) {
+          return stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["collect", tenantId, bookingId]) },
+          );
+        }`,
+      },
+    ];
+
+    const forward = detectIdempotencyFindings(files);
+    const reversed = detectIdempotencyFindings([...files].reverse());
+    expect(forward.map((finding) => finding.evidence.match(/classified this as ([a-z-]+)/)?.[1])).toEqual([
+      "cross-operation-key-collision",
+      "inconsistent-logical-operation-key-contract",
+    ]);
+    expect(reversed).toEqual(forward);
+  });
+
   it("preserves the order of multiple same-role identities in the project-wide contract", () => {
     const out = detectIdempotencyFindings([
       {
@@ -1090,6 +1159,41 @@ describe("external-send idempotency key (item 24)", () => {
     `);
     expect(out).toHaveLength(1);
     expect(out[0]!.evidence).toContain("cross-operation-key-collision");
+  });
+
+  it("reviews duplicate same-method call sites in one enclosing operation that share a key contract", () => {
+    const out = scan(`
+      function chargeTwice(stripe: Stripe, tenantId: string, bookingId: string) {
+        stripe.paymentIntents.create(
+          { amount: 100, metadata: { bookingId } },
+          { idempotencyKey: JSON.stringify(["dual-charge", tenantId, bookingId]) },
+        );
+        stripe.paymentIntents.create(
+          { amount: 200, metadata: { bookingId } },
+          { idempotencyKey: JSON.stringify(["dual-charge", tenantId, bookingId]) },
+        );
+      }
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain("duplicate-provider-call-key-collision");
+    expect(out[0]!.evidence).toContain("two distinct call sites");
+  });
+
+  it("accepts same-method call sites in one enclosing operation when their stable discriminators differ", () => {
+    expect(
+      scan(`
+        function chargeTwice(stripe: Stripe, tenantId: string, bookingId: string) {
+          stripe.paymentIntents.create(
+            { amount: 100, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["authorize-charge", tenantId, bookingId]) },
+          );
+          stripe.paymentIntents.create(
+            { amount: 200, metadata: { bookingId } },
+            { idempotencyKey: JSON.stringify(["capture-charge", tenantId, bookingId]) },
+          );
+        }
+      `),
+    ).toEqual([]);
   });
 
   it("accepts distinct operation fingerprints for distinct provider call sites", () => {
