@@ -21,7 +21,9 @@
 // privilege token setup and exit). Script alias: `pnpm file-findings`.
 
 import "./sync-stdio.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { isDirectorySafe } from "../fs-walk.js";
 import { GitHubTracker } from "../trackers/github.js";
 import { JiraTracker } from "../trackers/jira.js";
 import { AzureDevOpsTracker } from "../trackers/azure-devops.js";
@@ -126,8 +128,31 @@ async function main(): Promise<void> {
     return;
   }
 
-  const path = args.find((a) => !a.startsWith("--"));
-  if (!path) throw new Error("usage: file-findings <findings.json> --tracker github|jira|azure [--grouping flat|grouped] [--engagement <label>] [--category <name>] [--connected] [--update] [--interval <ms>] [--max-retries <n>] [--config <file>] [--confirm]  |  file-findings --auth-intake <tracker>");
+  const valueFlags = new Set([
+    "--target", "--tracker", "--grouping", "--engagement", "--category", "--interval",
+    "--max-retries", "--config", "--auth-intake",
+  ]);
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (valueFlags.has(arg)) i++;
+    else if (!arg.startsWith("--")) positional.push(arg);
+  }
+
+  const [path] = positional;
+  const targetArg = flag(args, "--target");
+  if (!path || !targetArg) {
+    throw new Error("usage: file-findings <findings.json> --target <repo-root> --tracker github|jira|azure [--grouping flat|grouped] [--engagement <label>] [--category <name>] [--connected] [--update] [--interval <ms>] [--max-retries <n>] [--config <file>] [--confirm]  |  file-findings --auth-intake <tracker>");
+  }
+
+  const resolvedTarget = resolve(targetArg);
+  let targetDir: string;
+  try {
+    if (!isDirectorySafe(resolvedTarget)) throw new Error("not a directory");
+    targetDir = realpathSync.native(resolvedTarget);
+  } catch {
+    throw new Error(`--target must name an existing directory: ${resolvedTarget}`);
+  }
 
   const cfg = loadConfig(flag(args, "--config"));
   const grouping = (flag(args, "--grouping") ?? cfg.grouping ?? "grouped") as Grouping;
@@ -140,7 +165,7 @@ async function main(): Promise<void> {
   const maxRetries = flag(args, "--max-retries") !== undefined ? Number(flag(args, "--max-retries")) : cfg.maxRetries;
   const pacer = makePacer({ minIntervalMs: intervalMs, ...(maxRetries !== undefined ? { maxRetries } : {}) });
 
-  const opts: FileOptions = { grouping, engagement: flag(args, "--engagement") ?? cfg.engagement, paid, update, pacer };
+  const opts: FileOptions = { grouping, engagement: flag(args, "--engagement") ?? cfg.engagement, paid, update, pacer, root: targetDir };
 
   // #747: --category filters the findings set to the named categories before planning.
   const categories = [...flags(args, "--category"), ...(cfg.categories ?? [])];
