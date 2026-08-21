@@ -82,18 +82,20 @@ interface ValueOrigin {
   primitiveType?: JsonPrimitiveType;
   role: IdentityRole;
   semanticName: string;
+  unconstrainedNumber: boolean;
 }
 
 interface ProvenOperationKeyContract {
   framing: "canonical-json-tuple" | "encoded-terms";
   operationDiscriminator: string;
   originKeys: Set<string>;
+  scopeOriginKeys: Set<string>;
   signature: string;
 }
 
 type LogicalOperationContext =
-  | { kind: "named"; display: string; fingerprint: string }
-  | { kind: "unknown"; detail: string };
+  | { kind: "named"; display: string; fingerprint: string; scopeStart: number }
+  | { kind: "unknown"; detail: string; scopeStart: number };
 
 interface ExternalOperationRecord {
   analysis: KeyAnalysis;
@@ -901,7 +903,14 @@ function enclosingFunction(node: ts.Node): ts.SignatureDeclarationBase | undefin
 
 function logicalOperationContext(node: ts.Node): LogicalOperationContext {
   const fn = enclosingFunction(node);
-  if (!fn) return { kind: "unknown", detail: "the provider call has no enclosing named operation" };
+  if (!fn) {
+    return {
+      kind: "unknown",
+      detail: "the provider call has no enclosing named operation",
+      scopeStart: node.getSourceFile().getStart(),
+    };
+  }
+  const scopeStart = fn.getStart(fn.getSourceFile());
 
   const directName = declarationPropertyName((fn as ts.SignatureDeclarationBase & { name?: ts.PropertyName }).name);
   const parentName =
@@ -911,7 +920,7 @@ function logicalOperationContext(node: ts.Node): LogicalOperationContext {
         ? declarationPropertyName(fn.parent.name)
         : undefined;
   const display = directName ?? parentName;
-  if (!display) return { kind: "unknown", detail: "the provider call's enclosing function has no static name" };
+  if (!display) return { kind: "unknown", detail: "the provider call's enclosing function has no static name", scopeStart };
 
   const terms = display
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -924,8 +933,10 @@ function logicalOperationContext(node: ts.Node): LogicalOperationContext {
   while (terms.length > 1 && wrapperSuffixes.has(terms.at(-1)!)) terms.pop();
   const implementationQualifier = terms.findIndex((term) => ["by", "from", "using", "via", "with"].includes(term));
   if (implementationQualifier > 0) terms.splice(implementationQualifier);
-  if (terms.length === 0) return { kind: "unknown", detail: `the enclosing function \`${display}\` has no operation-bearing name` };
-  return { kind: "named", display, fingerprint: terms.join("-") };
+  if (terms.length === 0) {
+    return { kind: "unknown", detail: `the enclosing function \`${display}\` has no operation-bearing name`, scopeStart };
+  }
+  return { kind: "named", display, fingerprint: terms.join("-"), scopeStart };
 }
 
 function declarationPropertyName(name: ts.PropertyName | undefined): string | undefined {
@@ -1044,6 +1055,26 @@ function primitiveType(type: ts.TypeNode | undefined, sf: ts.SourceFile, seen = 
   return undefined;
 }
 
+function isUnconstrainedNumberType(type: ts.TypeNode | undefined, sf: ts.SourceFile, seen = new Set<string>()): boolean {
+  if (!type) return false;
+  if (ts.isParenthesizedTypeNode(type)) return isUnconstrainedNumberType(type.type, sf, seen);
+  if (type.kind === ts.SyntaxKind.NumberKeyword) return true;
+  if (ts.isLiteralTypeNode(type)) return false;
+  if (ts.isUnionTypeNode(type)) {
+    return type.types.some((member) => isUnconstrainedNumberType(member, sf, new Set(seen)));
+  }
+  if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+    const name = type.typeName.text;
+    if (seen.has(name)) return false;
+    const declaration = localTypeDeclaration(sf, name);
+    if (!declaration || ts.isInterfaceDeclaration(declaration)) return false;
+    const nextSeen = new Set(seen);
+    nextSeen.add(name);
+    return isUnconstrainedNumberType(declaration.type, sf, nextSeen);
+  }
+  return false;
+}
+
 function primitiveTypeAt(parameter: ts.ParameterDeclaration, path: string[], sf: ts.SourceFile): JsonPrimitiveType | undefined {
   let type = parameter.type;
   if (path.length === 0) return primitiveType(type, sf);
@@ -1054,6 +1085,18 @@ function primitiveTypeAt(parameter: ts.ParameterDeclaration, path: string[], sf:
     type = resolved.type;
   }
   return primitiveType(type, sf);
+}
+
+function hasUnconstrainedNumberAt(parameter: ts.ParameterDeclaration, path: string[], sf: ts.SourceFile): boolean {
+  let type = parameter.type;
+  if (path.length === 0) return isUnconstrainedNumberType(type, sf);
+  for (const segment of path) {
+    if (!type) return false;
+    const resolved = propertyType(type, segment, sf);
+    if (!resolved || resolved.optional) return false;
+    type = resolved.type;
+  }
+  return isUnconstrainedNumberType(type, sf);
 }
 
 function parameterOrigin(
@@ -1071,6 +1114,7 @@ function parameterOrigin(
     primitiveType: primitiveTypeAt(parameter, path, sf),
     role: identityRole(semanticName),
     semanticName,
+    unconstrainedNumber: hasUnconstrainedNumberAt(parameter, path, sf),
   };
 }
 
@@ -1651,6 +1695,20 @@ function analyzeKey(
     };
   }
 
+  const nonInjectiveJsonNumber =
+    composition.framing === "json-tuple"
+      ? dynamicParts.find((part) => part.origin.unconstrainedNumber)
+      : undefined;
+  if (nonInjectiveJsonNumber) {
+    return {
+      safe: false,
+      classification: "non-injective-json-number-serialization",
+      detail: `\`${nonInjectiveJsonNumber.origin.display}\` has an unconstrained \`number\` type, and JSON.stringify serializes NaN, Infinity, and -Infinity as the same \`null\` tuple element`,
+      falsifier:
+        "use a stable string identity or constrain the admitted values to distinct finite numeric literals, then show every admitted value has a distinct JSON serialization",
+    };
+  }
+
   const framing: ProvenOperationKeyContract["framing"] | undefined =
     composition.framing === "json-tuple"
       ? "canonical-json-tuple"
@@ -1684,7 +1742,17 @@ function analyzeKey(
     classification: "stable-scoped-operation-key",
     detail: `\`${text}\` proves disjoint tenant/entity provenance, ${framing}, and a stable discriminator for ${target.logicalOperation}`,
     falsifier: "change any required tenant/entity or provider effect and observe a collision, or retry unchanged inputs and observe a different key",
-    contract: { framing, operationDiscriminator, originKeys: new Set(origins.keys()), signature },
+    contract: {
+      framing,
+      operationDiscriminator,
+      originKeys: new Set(origins.keys()),
+      scopeOriginKeys: new Set(
+        [...origins.values()]
+          .filter((origin) => origin.role === "tenant" || origin.role === "entity")
+          .map((origin) => origin.key),
+      ),
+      signature,
+    },
   };
 }
 
@@ -1764,92 +1832,202 @@ function externalOperationRecords(
 
 function projectWideOperationContractFindings(records: ExternalOperationRecord[]): Finding[] {
   const findings: Finding[] = [];
+  type DecisionArm =
+    | { arm: "else" | "then"; decision: ts.IfStatement; kind: "if" }
+    | { arm: "false" | "true"; decision: ts.ConditionalExpression; kind: "conditional expression" }
+    | { arm: ts.CaseOrDefaultClause; decision: ts.SwitchStatement; kind: "switch" };
+
+  const decisionArms = (node: ts.Node): DecisionArm[] => {
+    const arms: DecisionArm[] = [];
+    const scope = enclosingFunction(node);
+    let current: ts.Node | undefined = node;
+    while (current?.parent && current !== scope) {
+      const parent: ts.Node = current.parent;
+      if (ts.isIfStatement(parent)) {
+        if (current === parent.thenStatement) arms.push({ arm: "then", decision: parent, kind: "if" });
+        else if (current === parent.elseStatement) arms.push({ arm: "else", decision: parent, kind: "if" });
+      } else if (ts.isConditionalExpression(parent)) {
+        if (current === parent.whenTrue) arms.push({ arm: "true", decision: parent, kind: "conditional expression" });
+        else if (current === parent.whenFalse) arms.push({ arm: "false", decision: parent, kind: "conditional expression" });
+      } else if (
+        (ts.isCaseClause(current) || ts.isDefaultClause(current)) &&
+        ts.isCaseBlock(parent) &&
+        ts.isSwitchStatement(parent.parent)
+      ) {
+        arms.push({ arm: current, decision: parent.parent, kind: "switch" });
+      }
+      current = parent;
+    }
+    return arms;
+  };
+
+  const switchArmStopsAfterCall = (call: ts.CallExpression, clause: ts.CaseOrDefaultClause): boolean => {
+    let current: ts.Node | undefined = call.parent;
+    while (current && current !== clause) {
+      if (ts.isReturnStatement(current) || ts.isThrowStatement(current)) return true;
+      current = current.parent;
+    }
+
+    current = call;
+    while (current.parent && current.parent !== clause) current = current.parent;
+    if (current.parent !== clause || !ts.isStatement(current)) return false;
+    const statementIndex = clause.statements.indexOf(current);
+    return clause.statements.slice(statementIndex + 1).some(
+      (statement) =>
+        ts.isReturnStatement(statement) ||
+        ts.isThrowStatement(statement) ||
+        (ts.isBreakStatement(statement) && statement.label === undefined),
+    );
+  };
+
+  const mutuallyExclusiveDecision = (
+    left: ExternalOperationRecord,
+    right: ExternalOperationRecord,
+  ): DecisionArm["kind"] | undefined => {
+    for (const leftArm of decisionArms(left.target.call)) {
+      for (const rightArm of decisionArms(right.target.call)) {
+        if (leftArm.kind !== rightArm.kind || leftArm.decision !== rightArm.decision) continue;
+        if (leftArm.kind === "if" && rightArm.kind === "if" && leftArm.arm !== rightArm.arm) return leftArm.kind;
+        if (
+          leftArm.kind === "conditional expression" &&
+          rightArm.kind === "conditional expression" &&
+          leftArm.arm !== rightArm.arm
+        ) {
+          return leftArm.kind;
+        }
+        if (leftArm.kind !== "switch" || rightArm.kind !== "switch" || leftArm.arm === rightArm.arm) continue;
+        const clauses = leftArm.decision.caseBlock.clauses;
+        const leftIndex = clauses.indexOf(leftArm.arm);
+        const rightIndex = clauses.indexOf(rightArm.arm);
+        const earlier =
+          leftIndex < rightIndex
+            ? { arm: leftArm.arm, call: left.target.call }
+            : { arm: rightArm.arm, call: right.target.call };
+        if (switchArmStopsAfterCall(earlier.call, earlier.arm)) return leftArm.kind;
+      }
+    }
+    return undefined;
+  };
+
+  const sameSet = (left: ReadonlySet<string>, right: ReadonlySet<string>): boolean =>
+    left.size === right.size && [...left].every((value) => right.has(value));
   const contextsProveSameOperation = (
     left: LogicalOperationContext,
     right: LogicalOperationContext,
-    operationDiscriminator: string,
+    sharedDiscriminator?: string,
   ): boolean => {
     if (left.kind === "unknown" || right.kind === "unknown") return false;
     if (left.fingerprint === right.fingerprint) return true;
-    const discriminatorTerms = operationDiscriminator.split(/[^a-z0-9]+/).filter(Boolean);
+    if (!sharedDiscriminator) return false;
+    const discriminatorTerms = sharedDiscriminator.split(/[^a-z0-9]+/).filter(Boolean);
     const namesDiscriminator = (context: Extract<LogicalOperationContext, { kind: "named" }>): boolean => {
       const nameTerms = new Set(context.fingerprint.split("-"));
       return discriminatorTerms.length > 0 && discriminatorTerms.every((term) => nameTerms.has(term));
     };
     return namesDiscriminator(left) && namesDiscriminator(right);
   };
-  const domains = new Map<
-    string,
-    { byOperation: Map<string, ExternalOperationRecord>; bySignature: Map<string, ExternalOperationRecord> }
-  >();
+  const sameEnclosingOperation = (left: ExternalOperationRecord, right: ExternalOperationRecord): boolean =>
+    left.path === right.path && left.operationContext.scopeStart === right.operationContext.scopeStart;
+  const compareText = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
+  const compareRecords = (left: ExternalOperationRecord, right: ExternalOperationRecord): number =>
+    compareText(left.path, right.path) ||
+    left.target.call.getStart(left.sf) - right.target.call.getStart(right.sf) ||
+    compareText(left.target.logicalOperation, right.target.logicalOperation) ||
+    compareText(left.analysis.contract?.signature ?? "", right.analysis.contract?.signature ?? "");
+  const domains = new Map<string, ExternalOperationRecord[]>();
   for (const record of records) {
-    const contract = record.analysis.contract;
-    if (!contract) continue;
-    const operationIdentity = `${record.target.logicalOperation}::${contract.operationDiscriminator}`;
-    const domain = domains.get(record.target.providerDomain) ?? {
-      byOperation: new Map<string, ExternalOperationRecord>(),
-      bySignature: new Map<string, ExternalOperationRecord>(),
-    };
+    if (!record.analysis.contract) continue;
+    const domain = domains.get(record.target.providerDomain) ?? [];
+    domain.push(record);
     domains.set(record.target.providerDomain, domain);
-    const sameOperation = domain.byOperation.get(operationIdentity);
-    const sameSignature = domain.bySignature.get(contract.signature);
-    let classification:
-      | "cross-operation-key-collision"
-      | "inconsistent-logical-operation-key-contract"
-      | "mechanically-unproven-logical-operation-collision"
-      | undefined;
-    let prior: ExternalOperationRecord | undefined;
-    if (sameSignature && sameSignature.target.logicalOperation !== record.target.logicalOperation) {
-      classification = "cross-operation-key-collision";
-      prior = sameSignature;
-    } else if (
-      sameSignature &&
-      !contextsProveSameOperation(
-        sameSignature.operationContext,
-        record.operationContext,
-        contract.operationDiscriminator,
-      )
-    ) {
-      classification = "mechanically-unproven-logical-operation-collision";
-      prior = sameSignature;
-    } else if (sameOperation?.analysis.contract?.signature !== undefined && sameOperation.analysis.contract.signature !== contract.signature) {
-      classification = "inconsistent-logical-operation-key-contract";
-      prior = sameOperation;
-    }
-    if (classification && prior && record.target.key.kind === "present") {
-      const collision = classification !== "inconsistent-logical-operation-key-contract";
-      const contextEvidence = (candidate: ExternalOperationRecord): string =>
-        candidate.operationContext.kind === "named"
-          ? `enclosing operation \`${candidate.operationContext.display}\``
-          : candidate.operationContext.detail;
-      findings.push(
-        mechanicalFinding({
-          id: `RETRY-project-idempotency-contract-${record.path.replace(/[^a-zA-Z0-9]+/g, "-")}-${record.target.key.expression.getStart(record.sf)}`,
-          title:
-            classification === "mechanically-unproven-logical-operation-collision"
-              ? `${record.path} — distinct logical-operation contexts share one idempotency-key contract`
+  }
+  for (const providerDomain of [...domains.keys()].sort(compareText)) {
+    const domainRecords = [...domains.get(providerDomain)!].sort(compareRecords);
+    for (let leftIndex = 0; leftIndex < domainRecords.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < domainRecords.length; rightIndex += 1) {
+        const prior = domainRecords[leftIndex]!;
+        const record = domainRecords[rightIndex]!;
+        const priorContract = prior.analysis.contract!;
+        const contract = record.analysis.contract!;
+        const sameSignature = priorContract.signature === contract.signature;
+        const sameProviderOperation = prior.target.logicalOperation === record.target.logicalOperation;
+        const sameContext = sameEnclosingOperation(prior, record);
+        const exclusiveDecision = sameContext ? mutuallyExclusiveDecision(prior, record) : undefined;
+        const equivalentScopeProvenance = sameSet(priorContract.scopeOriginKeys, contract.scopeOriginKeys);
+        const branchLocalInconsistency =
+          !sameSignature &&
+          sameProviderOperation &&
+          exclusiveDecision !== undefined &&
+          equivalentScopeProvenance;
+        const sharedDiscriminator =
+          priorContract.operationDiscriminator === contract.operationDiscriminator
+            ? contract.operationDiscriminator
+            : undefined;
+        const sameLogicalOperation =
+          sameProviderOperation &&
+          contextsProveSameOperation(prior.operationContext, record.operationContext, sharedDiscriminator);
+        let classification:
+          | "cross-operation-key-collision"
+          | "duplicate-provider-call-key-collision"
+          | "inconsistent-logical-operation-key-contract"
+          | "mechanically-unproven-logical-operation-collision"
+          | undefined;
+        if (sameSignature && sameProviderOperation && sameContext) {
+          classification = "duplicate-provider-call-key-collision";
+        } else if (sameSignature && !sameProviderOperation) {
+          classification = "cross-operation-key-collision";
+        } else if (sameSignature && !sameLogicalOperation) {
+          classification = "mechanically-unproven-logical-operation-collision";
+        } else if (
+          !sameSignature &&
+          ((sameLogicalOperation && !sameContext) || branchLocalInconsistency)
+        ) {
+          classification = "inconsistent-logical-operation-key-contract";
+        }
+        if (!classification || record.target.key.kind !== "present" || prior.target.key.kind !== "present") continue;
+
+        const collision = classification !== "inconsistent-logical-operation-key-contract";
+        const contextEvidence = (candidate: ExternalOperationRecord): string =>
+          candidate.operationContext.kind === "named"
+            ? `enclosing operation \`${candidate.operationContext.display}\``
+            : candidate.operationContext.detail;
+        const priorKeyStart = prior.target.key.expression.getStart(prior.sf);
+        const recordKeyStart = record.target.key.expression.getStart(record.sf);
+        const pairIdentity = `${prior.path}-${priorKeyStart}-${record.path}-${recordKeyStart}`.replace(/[^a-zA-Z0-9]+/g, "-");
+        const duplicate = classification === "duplicate-provider-call-key-collision";
+        findings.push(
+          mechanicalFinding({
+            id: `RETRY-project-idempotency-contract-${pairIdentity}`,
+            title:
+              duplicate
+                ? `${record.path} — two provider call sites share one idempotency-key contract`
+                : classification === "mechanically-unproven-logical-operation-collision"
+                  ? `${record.path} — distinct logical-operation contexts share one idempotency-key contract`
+                  : collision
+                    ? `${record.path} — different provider effects share one idempotency-key contract`
+                    : `${record.path} — one provider effect uses inconsistent idempotency-key contracts`,
+            severity: "Medium",
+            category: "Business logic",
+            taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
+            location: loc(record.path, record.sf, record.target.key.expression),
+            evidence: duplicate
+              ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: two distinct call sites for ${record.target.logicalOperation} in \`${record.path}\` (${contextEvidence(record)}) map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the call sites are mutually exclusive retries of one logical effect, or give distinct effects disjoint stable operation discriminators and show their keys differ for one shared tenant/entity tuple.`
               : collision
-                ? `${record.path} — different provider effects share one idempotency-key contract`
-                : `${record.path} — one provider effect uses inconsistent idempotency-key contracts`,
-          severity: "Medium",
-          category: "Business logic",
-          taxonomy: IDEMPOTENCY_KEY_TAXONOMY,
-          location: loc(record.path, record.sf, record.target.key.expression),
-          evidence: collision
-            ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` (${contextEvidence(record)}) and ${prior.target.logicalOperation} in \`${prior.path}\` (${contextEvidence(prior)}) map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the named call-site operations are retry entry points for the same logical effect, or give distinct effects disjoint stable operation discriminators and show their keys differ for one shared tenant/entity tuple.`
-            : `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} uses a different proven encoding in \`${record.path}\` than in \`${prior.path}\` inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: show both call sites implement different provider effects, or make every site for this logical operation use one stable decodable contract.`,
-          impact: collision
-            ? "A provider may suppress one distinct external effect as a retry of another because both effects occupy the same key namespace."
-            : "Retries routed through different call sites can produce different keys for the same provider effect, defeating deduplication.",
-          fix: collision
-            ? "Give each provider effect a disjoint stable operation discriminator while preserving required tenant/entity provenance."
-            : "Use one canonical typed or per-term-encoded contract for this logical provider operation at every call site.",
-          precisionTier: "review",
-        }),
-      );
+                ? `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` (${contextEvidence(record)}) and ${prior.target.logicalOperation} in \`${prior.path}\` (${contextEvidence(prior)}) map to the same proven contract inside provider collision domain \`${record.target.providerDomain}\`. SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: prove the named call-site operations are retry entry points for the same logical effect, or give distinct effects disjoint stable operation discriminators and show their keys differ for one shared tenant/entity tuple.`
+                : `Heuristic "external-send-idempotency-key" classified this as ${classification}: ${record.target.logicalOperation} in \`${record.path}\` (${contextEvidence(record)}, discriminator \`${contract.operationDiscriminator}\`, framing \`${contract.framing}\`) uses a different proven key contract than in \`${prior.path}\` (${contextEvidence(prior)}, discriminator \`${priorContract.operationDiscriminator}\`, framing \`${priorContract.framing}\`) inside provider collision domain \`${record.target.providerDomain}\`.${exclusiveDecision ? ` The call sites occupy mutually exclusive arms of the same ${exclusiveDecision} decision and share equivalent tenant/entity provenance.` : ""} SCOPE OF THIS CHECK: ALL ADMITTED PROJECT FILES, partitioned by provider collision domain. FALSIFIER: show both call sites implement different provider effects, or make every site for this logical operation use one stable decodable contract.`,
+            impact: collision
+              ? "A provider may suppress one distinct external effect as a retry of another because both effects occupy the same key namespace."
+              : "Retries routed through different call sites can produce different keys for the same provider effect, defeating deduplication.",
+            fix: collision
+              ? duplicate
+                ? "Give the two provider effects disjoint stable operation discriminators, or collapse mutually exclusive retry paths to one call site."
+                : "Give each provider effect a disjoint stable operation discriminator while preserving required tenant/entity provenance."
+              : "Use one canonical typed or per-term-encoded contract for this logical provider operation at every call site.",
+            precisionTier: "review",
+          }),
+        );
+      }
     }
-    if (!sameOperation) domain.byOperation.set(operationIdentity, record);
-    if (!sameSignature) domain.bySignature.set(contract.signature, record);
   }
   return findings;
 }
