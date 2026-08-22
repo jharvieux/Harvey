@@ -1,7 +1,7 @@
 /**
  * Semgrep's `--time` envelope mixes semantic coverage evidence with volatile profiling data.
- * Keep the two semantic populations and name every profiling child we intentionally discard so a
- * future Semgrep field cannot silently disappear behind a catch-all telemetry deletion.
+ * Keep the two semantic populations and enumerate profiling children rather than using a
+ * catch-all telemetry deletion.
  */
 const PROFILING_TIME_CHILDREN = new Set([
   "rules_parse_time",

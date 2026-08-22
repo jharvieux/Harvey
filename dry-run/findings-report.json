@@ -2,7 +2,7 @@
   "meta": {
     "client": "Calibration target (internal dry run — issue #34)",
     "subtitle": "PARTIAL — mechanical scan + M1 detect-deeper only; no live DB/Docker in this pass",
-    "date": "2026-08-21",
+    "date": "2026-08-22",
     "commit": "dry-run scratch snapshot (git-initialized copy of targets/calibration, see docs/runbooks/dry-run-calibration.md)",
     "auditor": "Harvey dry-run harness (src/cli/dry-run.ts)",
     "confidential": false,
