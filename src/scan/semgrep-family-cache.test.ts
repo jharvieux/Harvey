@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   assertSemgrepFamilyPlan,
   assertSemgrepFamilyVerification,
+  buildSemgrepCommandSemanticReceipt,
+  canonicalizeOwnedSemgrepOutput,
+  canonicalizeSemgrepOutput,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   mergeSemgrepFamilyOutputs,
@@ -36,6 +39,7 @@ function executed(family: SemgrepFamily, value: SemgrepOutput): { output: Semgre
   const loadedRuleIds = [...new Set((value.time?.rules ?? []) as string[])].sort();
   const semantic = {
     argv: ["semgrep", "--config", family.configPath], loadedRuleIds,
+    resultCount: value.results?.length ?? 0,
     resultsSha256: createHash("sha256").update(stableFixture(value.results ?? [])).digest("hex"),
     scanned: value.paths?.scanned ?? [], skipped: value.paths?.skipped ?? [], skippedRules: value.skipped_rules ?? [],
     errors: value.errors ?? [], fixpointTimeouts: value.time?.fixpoint_timeouts ?? [],
@@ -45,7 +49,8 @@ function executed(family: SemgrepFamily, value: SemgrepOutput): { output: Semgre
   return { output: value, execution: {
     ordinal: 0, id: family.id, familyId: family.id, sourceKind: "local-config", sourceId: family.id,
     configSha256, sourceConfigSha256: configSha256, ruleIds: loadedRuleIds, ownedRuleIds: loadedRuleIds,
-    loadedRuleIds, excludedRuleIds: [], argv: semantic.argv, verification: "single", status: "succeeded", attempts: [attempt],
+    loadedRuleIds, excludedRuleIds: [], argv: semantic.argv, topology: "single-command-v1",
+    mergeAlgorithm: "single-command-v1", partitions: [], verification: "single", status: "succeeded", attempts: [attempt],
   } };
 }
 
@@ -161,7 +166,7 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
   it("rejects legacy, failed, and self-checksummed semantic-receipt tampering before reuse", async () => {
     type MutableArtifact = { schema: number; output: unknown; unitsExamined: number; payloadDigest: string; execution: { status: string; attempts: SemgrepCommandSemanticReceipt[] } };
     const cases: Array<[string, (artifact: MutableArtifact) => void, RegExp]> = [
-      ["legacy schema", (artifact) => { artifact.schema = 3; }, /identity\/schema mismatch/],
+      ["legacy schema", (artifact) => { artifact.schema = 4; }, /identity\/schema mismatch/],
       ["failed execution", (artifact) => { artifact.execution.status = "failed"; }, /successful semantic execution receipt/],
       ["swapped scanned population", (artifact) => {
         artifact.execution.attempts[0]!.scanned = ["different.ts"];
@@ -195,6 +200,50 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     expect(merged.results?.map((result) => result.check_id)).toEqual(["a", "b", "javascript.react.same"]);
     expect(merged.paths?.scanned).toEqual(["src/route.ts"]);
     expect(merged.time?.rules).toEqual(["a", "b", "same"]);
+  });
+
+  it("canonicalizes generated partition rule namespaces across cache roots", () => {
+    const generated = (cache: string): SemgrepOutput => ({
+      results: [{
+        check_id: `${cache}.semgrep-owned-configs.harvey-log-injection`, path: "src/route.ts",
+        start: { line: 1 }, extra: { message: "match", severity: "WARNING" },
+      }],
+      errors: [{ message: `first: ${cache}.semgrep-owned-configs.harvey-log-injection` }],
+      paths: { scanned: ["src/route.ts"], skipped: [] },
+      time: {
+        rules: [`${cache}.semgrep-owned-configs.harvey-log-injection`],
+        fixpoint_timeouts: [{ message: `first: ${cache}.semgrep-owned-configs.harvey-log-injection` }],
+      },
+    });
+    const first = canonicalizeSemgrepOutput(generated("private.tmp.cache-one"));
+    const second = canonicalizeSemgrepOutput(generated("private.tmp.cache-two"));
+    expect(first).toEqual(second);
+    expect(first.results?.[0]?.check_id).toBe("src.scan.rules.semgrep.harvey-log-injection");
+    expect(first.time?.rules).toEqual(["src.scan.rules.semgrep.harvey-log-injection"]);
+    expect(JSON.stringify(first)).not.toContain("semgrep-owned-configs");
+
+    const firstReceipt = buildSemgrepCommandSemanticReceipt(generated("private.tmp.cache-one"), "/target", ["semgrep"], 1);
+    const renamedReceipt = buildSemgrepCommandSemanticReceipt(generated("private.tmp.cache-two"), "/target", ["semgrep"], 1);
+    expect(firstReceipt).toEqual(renamedReceipt);
+
+    const unknown = generated("private.tmp.cache-one");
+    unknown.results![0]!.check_id = "private.tmp.unknown.harvey-log-injection";
+    unknown.time!.rules = ["private.tmp.unknown.harvey-log-injection"];
+    const unknownReceipt = buildSemgrepCommandSemanticReceipt(unknown, "/target", ["semgrep"], 1);
+    expect(unknownReceipt.semanticSha256).not.toBe(firstReceipt.semanticSha256);
+
+    const semanticMutation = generated("private.tmp.cache-one");
+    semanticMutation.results![0]!.check_id = "private.tmp.cache-one.semgrep-owned-configs.harvey-path-traversal";
+    semanticMutation.time!.rules = ["private.tmp.cache-one.semgrep-owned-configs.harvey-path-traversal"];
+    const mutatedReceipt = buildSemgrepCommandSemanticReceipt(semanticMutation, "/target", ["semgrep"], 1);
+    expect(mutatedReceipt.semanticSha256).not.toBe(firstReceipt.semanticSha256);
+
+    const arbitraryFirst = JSON.parse(JSON.stringify(generated("private.tmp.harvey-semgrep-monolithic-owned-a1b2")).replaceAll(".semgrep-owned-configs", "")) as SemgrepOutput;
+    const arbitrarySecond = JSON.parse(JSON.stringify(generated("private.tmp.harvey-semgrep-monolithic-owned-c3d4")).replaceAll(".semgrep-owned-configs", "")) as SemgrepOutput;
+    expect(canonicalizeOwnedSemgrepOutput(arbitraryFirst, ["harvey-log-injection"]))
+      .toEqual(canonicalizeOwnedSemgrepOutput(arbitrarySecond, ["harvey-log-injection"]));
+    expect(canonicalizeOwnedSemgrepOutput(arbitraryFirst, ["harvey-path-traversal"]))
+      .not.toEqual(canonicalizeOwnedSemgrepOutput(arbitrarySecond, ["harvey-path-traversal"]));
   });
 
   it("conserves, deduplicates, and root-materializes fixpoint timeout evidence", async () => {

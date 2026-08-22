@@ -36,13 +36,30 @@ export interface SemgrepCommandSemanticReceipt {
   attempt: number;
   argv: string[];
   loadedRuleIds: string[];
+  resultCount: number;
   resultsSha256: string;
   scanned: string[];
   skipped: NonNullable<NonNullable<SemgrepOutput["paths"]>["skipped"]>;
   skippedRules: unknown[];
   errors: NonNullable<SemgrepOutput["errors"]>;
   fixpointTimeouts: SemgrepFixpointTimeout[];
+  components?: SemgrepPartitionSemanticReceipt[];
   semanticSha256: string;
+}
+
+export interface SemgrepPartitionPlanReceipt {
+  ordinal: number;
+  id: "log" | "complement";
+  configSha256: string;
+  ownedRuleIds: string[];
+  argv: string[];
+}
+
+export interface SemgrepPartitionSemanticReceipt extends Omit<SemgrepCommandSemanticReceipt, "attempt" | "components"> {
+  ordinal: number;
+  id: "log" | "complement";
+  configSha256: string;
+  ownedRuleIds: string[];
 }
 
 export interface SemgrepFamilyExecutionReceipt {
@@ -59,7 +76,10 @@ export interface SemgrepFamilyExecutionReceipt {
   sourceConfigSha256: string;
   semanticObjectSha256?: string;
   argv: string[];
-  verification: "single" | "paired-cold-exact";
+  topology: "single-command-v1" | "whole-root-rule-partition-v1";
+  mergeAlgorithm: "single-command-v1" | "canonical-semgrep-family-output-v1";
+  partitions: SemgrepPartitionPlanReceipt[];
+  verification: "single" | "paired-cold-exact" | "paired-topology-exact";
   status: "succeeded";
   attempts: SemgrepCommandSemanticReceipt[];
 }
@@ -67,14 +87,14 @@ export interface SemgrepFamilyExecutionReceipt {
 export type SemgrepPlannedFamilyReceipt = Omit<SemgrepFamilyExecutionReceipt, "loadedRuleIds" | "status" | "attempts">;
 
 export interface SemgrepPlannedExecutionReceipt {
-  schema: 4;
+  schema: 5;
   strategy: "globally-owned-partitioned-families";
   ownershipSha256: string;
   families: SemgrepPlannedFamilyReceipt[];
 }
 
 export interface SemgrepExecutionPlanReceipt {
-  schema: 4;
+  schema: 5;
   status: "succeeded";
   strategy: "globally-owned-partitioned-families";
   ownershipSha256: string;
@@ -83,7 +103,7 @@ export interface SemgrepExecutionPlanReceipt {
 
 export function assertSuccessfulSemgrepExecutionReceipt(value: unknown): asserts value is SemgrepExecutionPlanReceipt {
   const receipt = value as Partial<SemgrepExecutionPlanReceipt>;
-  if (!receipt || receipt.schema !== 4 || receipt.status !== "succeeded"
+  if (!receipt || receipt.schema !== 5 || receipt.status !== "succeeded"
     || receipt.strategy !== "globally-owned-partitioned-families" || !/^[a-f0-9]{64}$/.test(receipt.ownershipSha256 ?? "")
     || !Array.isArray(receipt.families) || receipt.families.length === 0) {
     throw new Error("successful Semgrep semantic execution receipt is missing, failed, or malformed");
@@ -95,7 +115,7 @@ export function assertSuccessfulSemgrepExecutionReceipt(value: unknown): asserts
   const owned = receipt.families.flatMap((family) => family.ownedRuleIds);
   const duplicates = owned.filter((id, index) => owned.indexOf(id) !== index);
   if (duplicates.length > 0) throw new Error(`Semgrep semantic execution receipt has duplicate global ownership: ${[...new Set(duplicates)].join(", ")}`);
-  const ownership = receipt.families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, verification }));
+  const ownership = receipt.families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }));
   if (receipt.ownershipSha256 !== digest(ownership)) throw new Error("Semgrep semantic execution receipt ownership digest is invalid");
 }
 
@@ -116,7 +136,7 @@ interface FamilyIdentity {
 }
 
 interface FamilyArtifact {
-  schema: 4;
+  schema: 5;
   family: string;
   key: string;
   identity: FamilyIdentity;
@@ -124,6 +144,30 @@ interface FamilyArtifact {
   unitsExamined: number;
   output: SemgrepOutput;
   execution: SemgrepFamilyExecutionReceipt;
+}
+
+export interface SemgrepFamilyExecutionFailure {
+  schema: 5;
+  status: "failed";
+  reusable: false;
+  family: string;
+  reason: string;
+  mismatchFields: string[];
+  attempts: Array<{
+    attempt: number;
+    components: Array<{ plan: SemgrepPartitionPlanReceipt; output: SemgrepOutput; receipt: SemgrepPartitionSemanticReceipt }>;
+    merged: { output: SemgrepOutput; receipt: SemgrepCommandSemanticReceipt };
+  }>;
+}
+
+interface FamilyFailureArtifact {
+  schema: 5;
+  reusable: false;
+  family: string;
+  key: string;
+  identity: FamilyIdentity;
+  failure: SemgrepFamilyExecutionFailure;
+  payloadDigest: string;
 }
 
 const TARGET_ROOT_TOKEN = "<SEMGREP_TARGET_ROOT>";
@@ -158,7 +202,9 @@ function mapStrings<T>(value: T, map: (text: string) => string): T {
 
 function canonicalizeRoot<T>(value: T, pathRoot: string | undefined, token: string): T {
   if (!pathRoot) return value;
-  const roots = [...new Set([pathRoot, realpathSync(pathRoot)])].sort((a, b) => b.length - a.length);
+  let real: string | undefined;
+  try { real = realpathSync(pathRoot); } catch { real = undefined; }
+  const roots = [...new Set([pathRoot, ...(real ? [real] : [])])].sort((a, b) => b.length - a.length);
   return mapStrings(value, (text) => roots.reduce((current, root) => current.replaceAll(root, token), text));
 }
 
@@ -190,7 +236,33 @@ function validateOutput(output: unknown): asserts output is SemgrepOutput {
   canonicalizeSemgrepTime(value.time);
 }
 
-export function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: string): asserts value is SemgrepFamilyExecutionReceipt {
+function semanticReceiptPayload(receipt: Omit<SemgrepCommandSemanticReceipt, "status" | "attempt" | "semanticSha256">): unknown {
+  return {
+    argv: receipt.argv,
+    loadedRuleIds: receipt.loadedRuleIds,
+    resultCount: receipt.resultCount,
+    resultsSha256: receipt.resultsSha256,
+    scanned: receipt.scanned,
+    skipped: receipt.skipped,
+    skippedRules: receipt.skippedRules,
+    errors: receipt.errors,
+    fixpointTimeouts: receipt.fixpointTimeouts,
+    ...(receipt.components === undefined ? {} : { components: receipt.components }),
+  };
+}
+
+function assertSemanticReceipt(receipt: Partial<SemgrepCommandSemanticReceipt>, expectedAttempt?: number): void {
+  if (receipt.status !== "succeeded" || (expectedAttempt !== undefined && receipt.attempt !== expectedAttempt)
+    || !Array.isArray(receipt.argv) || !Array.isArray(receipt.loadedRuleIds) || !Array.isArray(receipt.scanned)
+    || !Array.isArray(receipt.skipped) || !Array.isArray(receipt.skippedRules) || !Array.isArray(receipt.errors)
+    || !Array.isArray(receipt.fixpointTimeouts) || !Number.isInteger(receipt.resultCount) || receipt.resultCount! < 0 || !/^[a-f0-9]{64}$/.test(receipt.resultsSha256 ?? "")
+    || !/^[a-f0-9]{64}$/.test(receipt.semanticSha256 ?? "")
+    || receipt.semanticSha256 !== digest(semanticReceiptPayload(receipt as SemgrepCommandSemanticReceipt))) {
+    throw new Error("artifact successful semantic execution receipt is missing, failed, or malformed");
+  }
+}
+
+function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: string): asserts value is SemgrepFamilyExecutionReceipt {
   const receipt = value as Partial<SemgrepFamilyExecutionReceipt>;
   if (!receipt || receipt.status !== "succeeded" || receipt.familyId !== family || receipt.id !== family
     || !Number.isInteger(receipt.ordinal) || receipt.ordinal! < 0
@@ -199,28 +271,52 @@ export function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, fa
     || !/^[a-f0-9]{64}$/.test(receipt.configSha256 ?? "") || !/^[a-f0-9]{64}$/.test(receipt.sourceConfigSha256 ?? "")
     || (receipt.semanticObjectSha256 !== undefined && !/^[a-f0-9]{64}$/.test(receipt.semanticObjectSha256))
     || !Array.isArray(receipt.argv) || receipt.argv.length === 0
-    || (receipt.verification !== "single" && receipt.verification !== "paired-cold-exact")
+    || (receipt.topology !== "single-command-v1" && receipt.topology !== "whole-root-rule-partition-v1")
+    || (receipt.mergeAlgorithm !== "single-command-v1" && receipt.mergeAlgorithm !== "canonical-semgrep-family-output-v1")
+    || !Array.isArray(receipt.partitions)
+    || (receipt.verification !== "single" && receipt.verification !== "paired-cold-exact" && receipt.verification !== "paired-topology-exact")
     || !Array.isArray(receipt.ruleIds) || !Array.isArray(receipt.ownedRuleIds) || !Array.isArray(receipt.loadedRuleIds) || !Array.isArray(receipt.excludedRuleIds)
     || [...receipt.ruleIds, ...receipt.ownedRuleIds, ...receipt.loadedRuleIds, ...receipt.excludedRuleIds].some((id) => typeof id !== "string" || id.length === 0)
     || new Set(receipt.ownedRuleIds).size !== receipt.ownedRuleIds.length || new Set(receipt.loadedRuleIds).size !== receipt.loadedRuleIds.length
     || receipt.loadedRuleIds.some((id) => !receipt.ownedRuleIds!.includes(id))
-    || !Array.isArray(receipt.attempts) || receipt.attempts.length !== (receipt.verification === "paired-cold-exact" ? 2 : 1)
-    || receipt.attempts.some((attempt, ordinal) => attempt.status !== "succeeded" || attempt.attempt !== ordinal + 1
-      || !Array.isArray(attempt.argv) || !Array.isArray(attempt.loadedRuleIds) || !Array.isArray(attempt.scanned)
-      || !Array.isArray(attempt.skipped) || !Array.isArray(attempt.skippedRules) || !Array.isArray(attempt.errors)
-      || !Array.isArray(attempt.fixpointTimeouts) || !/^[a-f0-9]{64}$/.test(attempt.resultsSha256 ?? "")
-      || !/^[a-f0-9]{64}$/.test(attempt.semanticSha256 ?? "")
-      || attempt.semanticSha256 !== digest({
-        argv: attempt.argv,
-        loadedRuleIds: attempt.loadedRuleIds,
-        resultsSha256: attempt.resultsSha256,
-        scanned: attempt.scanned,
-        skipped: attempt.skipped,
-        skippedRules: attempt.skippedRules,
-        errors: attempt.errors,
-        fixpointTimeouts: attempt.fixpointTimeouts,
-      }))) {
+    || !Array.isArray(receipt.attempts) || receipt.attempts.length !== (receipt.verification === "single" ? 1 : 2)) {
     throw new Error("artifact successful semantic execution receipt is missing, failed, or malformed");
+  }
+  receipt.attempts.forEach((attempt, ordinal) => assertSemanticReceipt(attempt, ordinal + 1));
+  if (receipt.topology === "single-command-v1") {
+    if (receipt.mergeAlgorithm !== "single-command-v1" || receipt.partitions.length !== 0
+      || receipt.verification === "paired-topology-exact" || receipt.attempts.some((attempt) => attempt.components !== undefined)) {
+      throw new Error("artifact single-command topology is malformed");
+    }
+  } else {
+    if (receipt.familyId !== "local-injection" || receipt.verification !== "paired-topology-exact"
+      || receipt.mergeAlgorithm !== "canonical-semgrep-family-output-v1" || receipt.partitions.length !== 2) {
+      throw new Error("artifact partitioned topology is malformed");
+    }
+    const [log, complement] = receipt.partitions;
+    if (log?.ordinal !== 0 || log.id !== "log" || stable(log.ownedRuleIds) !== stable(["harvey-log-injection"])
+      || complement?.ordinal !== 1 || complement.id !== "complement" || complement.ownedRuleIds.length !== 29
+      || complement.ownedRuleIds.includes("harvey-log-injection")
+      || [...receipt.partitions].some((partition) => !/^[a-f0-9]{64}$/.test(partition.configSha256) || !Array.isArray(partition.argv))) {
+      throw new Error("artifact partition ownership/topology is incomplete or malformed");
+    }
+    const partitionOwned = receipt.partitions.flatMap((partition) => partition.ownedRuleIds);
+    if (new Set(partitionOwned).size !== partitionOwned.length || stable([...partitionOwned].sort()) !== stable([...receipt.ownedRuleIds].sort())) {
+      throw new Error("artifact partition ownership is incomplete or non-disjoint");
+    }
+    for (const attempt of receipt.attempts) {
+      if (!Array.isArray(attempt.components) || attempt.components.length !== 2) throw new Error("artifact partition component receipts are incomplete");
+      for (const [ordinal, component] of attempt.components.entries()) {
+        const plan = receipt.partitions[ordinal]!;
+        assertSemanticReceipt({ ...component, attempt: attempt.attempt });
+        if (component.ordinal !== ordinal || component.id !== plan.id || component.configSha256 !== plan.configSha256
+          || stable(component.ownedRuleIds) !== stable(plan.ownedRuleIds) || stable(component.argv) !== stable(plan.argv)) {
+          throw new Error("artifact partition component receipt differs from its bound topology");
+        }
+      }
+      const componentLoaded = [...new Set(attempt.components.flatMap((component) => component.loadedRuleIds))].sort();
+      if (stable(componentLoaded) !== stable(attempt.loadedRuleIds)) throw new Error("artifact merged loaded-rule population differs from its components");
+    }
   }
   if (stable(receipt.ruleIds) !== stable(receipt.ownedRuleIds)
     || stable(receipt.loadedRuleIds) !== stable(receipt.attempts[0]!.loadedRuleIds)
@@ -229,7 +325,7 @@ export function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, fa
       || stable(attempt.argv) !== stable(receipt.argv))) {
     throw new Error("artifact semantic execution receipt population differs from its actual attempts");
   }
-  if (receipt.verification === "paired-cold-exact") {
+  if (receipt.verification !== "single") {
     const comparable = receipt.attempts.map((attempt) => Object.fromEntries(Object.entries(attempt).filter(([key]) => key !== "attempt")));
     if (stable(comparable[0]) !== stable(comparable[1])) throw new Error("artifact paired-cold semantic execution attempts differ");
   }
@@ -244,6 +340,7 @@ function assertExecutionMatchesOutput(execution: SemgrepFamilyExecutionReceipt, 
   });
   const expected = {
     loadedRuleIds: [...new Set(mappedLoaded)].sort(),
+    resultCount: canonical.results?.length ?? 0,
     resultsSha256: digest([...(canonical.results ?? [])].map((result) => ({ ...result, check_id: stableRuleId(result.check_id) })).sort((left, right) => stable(left).localeCompare(stable(right)))),
     scanned: canonical.paths?.scanned ?? [],
     skipped: canonical.paths?.skipped ?? [],
@@ -256,6 +353,7 @@ function assertExecutionMatchesOutput(execution: SemgrepFamilyExecutionReceipt, 
   for (const attempt of execution.attempts) {
     const actual = {
       loadedRuleIds: attempt.loadedRuleIds,
+      resultCount: attempt.resultCount,
       resultsSha256: attempt.resultsSha256,
       scanned: attempt.scanned,
       skipped: attempt.skipped,
@@ -278,12 +376,14 @@ function rehashExecutionReceipt(receipt: SemgrepFamilyExecutionReceipt, output?:
       const semantic = {
         argv: attempt.argv,
         loadedRuleIds: attempt.loadedRuleIds,
+        resultCount: canonical ? canonical.results?.length ?? 0 : attempt.resultCount,
         resultsSha256: canonical ? digest(canonical.results ?? []) : attempt.resultsSha256,
         scanned: canonical?.paths?.scanned ?? attempt.scanned,
         skipped: canonical?.paths?.skipped ?? attempt.skipped,
         skippedRules: canonical?.skipped_rules ?? attempt.skippedRules,
         errors: canonical?.errors ?? attempt.errors,
         fixpointTimeouts: canonical ? canonicalizeSemgrepTime(canonical.time).fixpoint_timeouts : attempt.fixpointTimeouts,
+        ...(attempt.components === undefined ? {} : { components: attempt.components }),
       };
       return { ...attempt, ...semantic, semanticSha256: digest(semantic) };
     }),
@@ -292,7 +392,7 @@ function rehashExecutionReceipt(receipt: SemgrepFamilyExecutionReceipt, output?:
 
 function parseArtifact(value: unknown, expected: Pick<FamilyArtifact, "family" | "key" | "identity"> & { configSha256: string }): FamilyArtifact {
   const artifact = value as Partial<FamilyArtifact>;
-  if (artifact.schema !== 4 || artifact.family !== expected.family || artifact.key !== expected.key || stable(artifact.identity) !== stable(expected.identity)) {
+  if (artifact.schema !== 5 || artifact.family !== expected.family || artifact.key !== expected.key || stable(artifact.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
   }
   validateOutput(artifact.output);
@@ -337,7 +437,7 @@ export function rejectUnregisteredSemgrepFamilyArtifacts(options: SemgrepFamilyC
 export async function executeSemgrepFamily(
   family: SemgrepFamily,
   options: SemgrepFamilyCacheOptions,
-  execute: () => { output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt } | Promise<{ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt }>,
+  execute: () => ({ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt } | { failure: SemgrepFamilyExecutionFailure }) | Promise<{ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt } | { failure: SemgrepFamilyExecutionFailure }>,
 ): Promise<SemgrepFamilyRecord> {
   mkdirSync(options.dir, { recursive: true });
   const identity: FamilyIdentity = {
@@ -366,6 +466,18 @@ export async function executeSemgrepFamily(
     return { family: family.id, output, cache: "hit", key, unitsExamined: hit.unitsExamined, execution: hit.execution };
   }
   const executed = await execute();
+  if ("failure" in executed) {
+    const failure = canonicalizeRoot(canonicalizeRoot(executed.failure, options.pathRoot, TARGET_ROOT_TOKEN), options.dir, CACHE_ROOT_TOKEN);
+    const payloadDigest = digest(failure);
+    const artifact: FamilyFailureArtifact = { schema: 5, reusable: false, family: family.id, key, identity, failure, payloadDigest };
+    const failurePath = join(options.dir, "semgrep-family-failures", familyDirectory(family.id), key, `${payloadDigest}.json`);
+    mkdirSync(dirname(failurePath), { recursive: true });
+    const temp = `${failurePath}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(artifact, null, 2)}\n`);
+    renameSync(temp, failurePath);
+    options.onEvent?.(`SEMGREP FAMILY FAILURE EVIDENCE ${family.id} ${key.slice(0, 12)} ${payloadDigest.slice(0, 12)} reusable:false`);
+    throw new Error(executed.failure.reason);
+  }
   const { output, execution } = executed;
   validateOutput(output);
   assertSuccessfulSemgrepFamilyExecutionReceipt(execution, family.id);
@@ -394,7 +506,7 @@ export async function executeSemgrepFamily(
   assertSuccessfulSemgrepFamilyExecutionReceipt(canonicalExecution, family.id);
   if (canonicalExecution.configSha256 !== configSha256) throw new Error(`Semgrep family ${family.id}: execution config hash differs from the content-addressed config`);
   assertExecutionMatchesOutput(canonicalExecution, canonicalOutput);
-  const artifact: FamilyArtifact = { schema: 4, family: family.id, key, identity, payloadDigest: digest({ output: canonicalOutput, unitsExamined, execution: canonicalExecution }), unitsExamined, output: canonicalOutput, execution: canonicalExecution };
+  const artifact: FamilyArtifact = { schema: 5, family: family.id, key, identity, payloadDigest: digest({ output: canonicalOutput, unitsExamined, execution: canonicalExecution }), unitsExamined, output: canonicalOutput, execution: canonicalExecution };
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, `${JSON.stringify(artifact, null, 2)}\n`);
@@ -434,6 +546,8 @@ function uniqueAcrossFamilies<T>(records: readonly SemgrepFamilyRecord[], select
 }
 
 function stableRuleId(checkId: string): string {
+  const owned = checkId.replace(/^.*?\.semgrep-owned-configs\./, "");
+  if (owned !== checkId) return owned.startsWith("harvey-") ? `src.scan.rules.semgrep.${owned}` : owned;
   const registry = checkId.replace(/^.*?\.registry-packs\.[^.]+\./, "");
   if (registry !== checkId) return registry;
   const local = checkId.replace(/^.*?src\.scan\.rules\.semgrep\./, "");
@@ -441,6 +555,13 @@ function stableRuleId(checkId: string): string {
   // Single-file family loads return the same ids bare. Rebuild the established monolithic
   // namespace for stable client taxonomy and corpus pairing.
   return local.startsWith("harvey-") ? `src.scan.rules.semgrep.${local}` : local;
+}
+
+function stableOwnedRuleReferences<T>(value: T): T {
+  return mapStrings(value, (text) => text.replace(
+    /(?:[A-Za-z0-9_-]+\.)+semgrep-owned-configs\.(harvey-[A-Za-z0-9_.-]+)/g,
+    (_match, ruleId: string) => `src.scan.rules.semgrep.${ruleId}`,
+  ));
 }
 
 export function mergeSemgrepFamilyOutputs(records: readonly SemgrepFamilyRecord[]): SemgrepOutput {
@@ -479,18 +600,70 @@ export function semgrepDiagnosticEvidence(output: SemgrepOutput, pathRoot: strin
 
 export function canonicalizeSemgrepOutput(output: SemgrepOutput): SemgrepOutput {
   const sortedWithMultiplicity = <T>(items: readonly T[]): T[] => [...items].sort((a, b) => stable(a).localeCompare(stable(b)));
+  const time = stableOwnedRuleReferences(canonicalizeSemgrepTime(output.time));
   return {
     // Registry packs overlap. Separate invocations give the same logical rule a different
     // config-path namespace, while a monolithic invocation loads it once. Remove only Harvey's
     // generated materialization/local-directory prefix so the family merge deduplicates the same
     // logical match the same way as Semgrep's monolithic loader.
     results: sortedWithMultiplicity((output.results ?? []).map((result) => ({ ...result, check_id: stableRuleId(result.check_id) }))),
-    skipped_rules: sortedWithMultiplicity(output.skipped_rules ?? []),
-    errors: sortedWithMultiplicity(output.errors ?? []),
+    skipped_rules: sortedWithMultiplicity(stableOwnedRuleReferences(output.skipped_rules ?? [])),
+    errors: sortedWithMultiplicity(stableOwnedRuleReferences(output.errors ?? [])),
     paths: {
       scanned: [...new Set(output.paths?.scanned ?? [])].sort(),
       skipped: sortedWithMultiplicity(output.paths?.skipped ?? []),
     },
-    time: canonicalizeSemgrepTime(output.time),
+    time: {
+      ...time,
+      rules: time.rules.map(stableRuleId).sort(),
+    },
   };
+}
+
+/** Remove Semgrep's config-path namespace only when it resolves to one bound owned rule. */
+export function canonicalizeOwnedSemgrepOutput(output: SemgrepOutput, ownedRuleIds: readonly string[]): SemgrepOutput {
+  const mappings = canonicalizeSemgrepTime(output.time).rules.flatMap((checkId) => {
+    const matches = ownedRuleIds.filter((ruleId) => checkId === ruleId || checkId.endsWith(`.${ruleId}`));
+    return matches.length === 1 ? [{ checkId, stableId: stableRuleId(matches[0]!) }] : [];
+  }).sort((left, right) => right.checkId.length - left.checkId.length);
+  const normalized = mapStrings(output, (text) => mappings.reduce(
+    (current, { checkId, stableId }) => current.replaceAll(checkId, stableId),
+    text,
+  ));
+  return canonicalizeSemgrepOutput(normalized);
+}
+
+/** Build the schema-5 semantic receipt from the same canonical value stored in family artifacts. */
+export function buildSemgrepCommandSemanticReceipt(
+  output: SemgrepOutput,
+  pathRoot: string,
+  argv: string[],
+  attempt: number,
+  loadedRuleIds?: string[],
+  components?: SemgrepPartitionSemanticReceipt[],
+): SemgrepCommandSemanticReceipt {
+  const semanticOutput = loadedRuleIds
+    ? canonicalizeOwnedSemgrepOutput(output, loadedRuleIds)
+    : canonicalizeSemgrepOutput(output);
+  const canonical = canonicalizeRoot({
+    results: semanticOutput.results ?? [],
+    scanned: semanticOutput.paths?.scanned ?? [],
+    skipped: semanticOutput.paths?.skipped ?? [],
+    skippedRules: semanticOutput.skipped_rules ?? [],
+    errors: semanticOutput.errors ?? [],
+    fixpointTimeouts: canonicalizeSemgrepTime(semanticOutput.time).fixpoint_timeouts,
+  }, pathRoot, TARGET_ROOT_TOKEN);
+  const receipt = {
+    argv,
+    loadedRuleIds: loadedRuleIds ?? canonicalizeSemgrepTime(semanticOutput.time).rules,
+    resultCount: canonical.results.length,
+    resultsSha256: digest(canonical.results),
+    scanned: canonical.scanned,
+    skipped: canonical.skipped,
+    skippedRules: canonical.skippedRules,
+    errors: canonical.errors,
+    fixpointTimeouts: canonical.fixpointTimeouts,
+    ...(components === undefined ? {} : { components }),
+  };
+  return { status: "succeeded", attempt, ...receipt, semanticSha256: digest(receipt) };
 }

@@ -47,20 +47,31 @@ function stableFixture(value: unknown): string {
 }
 
 function semgrepExecutionFixture() {
-  const family = (input: { ordinal: number; id: string; sourceKind: "registry-pack" | "local-config"; sourceId: string; configSha256: string; ruleIds: string[]; argv: string[]; verification: "single" | "paired-cold-exact" }) => {
-    const semantic = { argv: input.argv, loadedRuleIds: input.ruleIds, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [] };
-    const attempts = Array.from({ length: input.verification === "paired-cold-exact" ? 2 : 1 }, (_, attempt) => ({
-      status: "succeeded" as const, attempt: attempt + 1, ...semantic,
-      semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex"),
-    }));
-    return { ...input, familyId: input.id, sourceConfigSha256: input.configSha256, ownedRuleIds: input.ruleIds, loadedRuleIds: input.ruleIds, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, status: "succeeded" as const, attempts };
+  const family = (input: { ordinal: number; id: string; sourceKind: "registry-pack" | "local-config"; sourceId: string; configSha256: string; ruleIds: string[]; argv: string[] }) => {
+    const semantic = { argv: input.argv, loadedRuleIds: input.ruleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [] };
+    const attempts = [{ status: "succeeded" as const, attempt: 1, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") }];
+    return { ...input, familyId: input.id, sourceConfigSha256: input.configSha256, ownedRuleIds: input.ruleIds, loadedRuleIds: input.ruleIds, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, topology: "single-command-v1" as const, mergeAlgorithm: "single-command-v1" as const, partitions: [], verification: "single" as const, status: "succeeded" as const, attempts };
   };
-  const families = [
-    family({ ordinal: 0, id: "registry-0", sourceKind: "registry-pack", sourceId: "p/typescript", configSha256: digest, ruleIds: ["registry-rule"], argv: ["--x-parmap", "-j", "9", "--timeout", "0"], verification: "single" }),
-    family({ ordinal: 1, id: "local-injection", sourceKind: "local-config", sourceId: "injection.yml", configSha256: "b".repeat(64), ruleIds: ["harvey-log-injection"], argv: ["--x-parmap", "-j", "1", "--timeout", "0"], verification: "paired-cold-exact" }),
+  const injectionRuleIds = ["harvey-log-injection", ...Array.from({ length: 29 }, (_, index) => `harvey-injection-${index}`)].sort();
+  const partitions = [
+    { ordinal: 0, id: "log" as const, configSha256: "c".repeat(64), ownedRuleIds: ["harvey-log-injection"], argv: ["--x-parmap", "-j", "1", "--config", "log", "--timeout", "0"] },
+    { ordinal: 1, id: "complement" as const, configSha256: "d".repeat(64), ownedRuleIds: injectionRuleIds.filter((id) => id !== "harvey-log-injection"), argv: ["--x-parmap", "-j", "1", "--config", "complement", "--timeout", "0"] },
   ];
-  const ownership = families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, verification }));
-  return { schema: 4 as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stableFixture(ownership)).digest("hex"), families };
+  const injectionAttempts = [1, 2].map((attempt) => {
+    const components = partitions.map((partition) => {
+      const semantic = { argv: partition.argv, loadedRuleIds: partition.ownedRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [] };
+      return { status: "succeeded" as const, ordinal: partition.ordinal, id: partition.id, configSha256: partition.configSha256, ownedRuleIds: partition.ownedRuleIds, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+    });
+    const semantic = { argv: ["<SEMGREP_PARTITION_SEQUENCE:log,complement>", "<SEMGREP_MERGE:canonical-semgrep-family-output-v1>"], loadedRuleIds: injectionRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [], components };
+    return { status: "succeeded" as const, attempt, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+  });
+  const injection = { ordinal: 1, id: "local-injection", familyId: "local-injection", sourceKind: "local-config" as const, sourceId: "injection.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ruleIds: injectionRuleIds, ownedRuleIds: injectionRuleIds, loadedRuleIds: injectionRuleIds, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, argv: ["<SEMGREP_PARTITION_SEQUENCE:log,complement>", "<SEMGREP_MERGE:canonical-semgrep-family-output-v1>"], topology: "whole-root-rule-partition-v1" as const, mergeAlgorithm: "canonical-semgrep-family-output-v1" as const, partitions, verification: "paired-topology-exact" as const, status: "succeeded" as const, attempts: injectionAttempts };
+  const families = [
+    family({ ordinal: 0, id: "registry-0", sourceKind: "registry-pack", sourceId: "p/typescript", configSha256: digest, ruleIds: ["registry-rule"], argv: ["--x-parmap", "-j", "9", "--timeout", "0"] }),
+    injection,
+  ];
+  const ownership = families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }));
+  return { schema: 5 as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stableFixture(ownership)).digest("hex"), families };
 }
 
 function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMechanicalExecutionArtifact {
@@ -169,7 +180,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
   });
 
   it("strictly compares the partition strategy, family order/membership, flags, and config bytes", () => {
-    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep as { schema: number }).schema = 5; }, /execution-plan|preparation/);
+    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep as { schema: number }).schema = 4; }, /execution-plan|preparation/);
     expectDifference((value) => { (value.targets.target!.executionPlan.semgrep.families[1]! as unknown as { subpartitions: string[] }).subpartitions = ["invented-shard"]; }, /execution-plan|preparation/);
     expectDifference((value) => {
       const family = value.targets.target!.executionPlan.semgrep.families[0]!;
@@ -187,6 +198,12 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.argv.push("--changed-flag"); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.verification = "single"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.topology = "single-command-v1"; }, /topology|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.mergeAlgorithm = "single-command-v1"; }, /topology|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions[0]!.argv.push("--mutated"); }, /component|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions.pop(); }, /partition|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions[1]!.ownedRuleIds.push("harvey-log-injection"); }, /partition|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.attempts[0]!.components![0]!.resultsSha256 = "e".repeat(64); }, /semantic|execution-plan|preparation/);
   });
 
   it("requires actual successful semantics rather than a planned, failed, or population-swapped receipt", () => {
