@@ -505,9 +505,8 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
       throw new Error(`${source}: ${slug} cache policy/namespace does not preserve producer/replay isolation`);
     }
     const diagnostics = target.semgrepDiagnostics;
-    if (diagnostics?.schema !== 2 || !Array.isArray(diagnostics.errors) || !Array.isArray(diagnostics.skipped)
-      || !Array.isArray(diagnostics.fixpointTimeouts)
-      || diagnostics.sha256 !== sha256(stable({ errors: diagnostics.errors, skipped: diagnostics.skipped, fixpointTimeouts: diagnostics.fixpointTimeouts }))) {
+    if (diagnostics?.schema !== 4 || !Array.isArray(diagnostics.errors) || !Array.isArray(diagnostics.skipped)
+      || diagnostics.sha256 !== sha256(stable({ errors: diagnostics.errors, skipped: diagnostics.skipped }))) {
       throw new Error(`${source}: ${slug} complete Semgrep diagnostic evidence is missing or corrupt`);
     }
     for (const [value, label] of [[target.preparedTreeSha256, "prepared tree"], [target.advisorySha256, "advisory"], [target.secretCandidateIdentity, "secret candidates"]] as const) assertSha(value, `${source}: ${slug} ${label}`);

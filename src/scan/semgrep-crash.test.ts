@@ -4,7 +4,10 @@
 // 2026-07-31 against semgrep 1.164.0 (see execSemgrep's comment in semgrep.ts), not an invented
 // one. Separate file from semgrep.test.ts because that file's module mock hard-codes ENOENT.
 
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 
 // Each test assigns the semgrep behaviour it needs; non-semgrep binaries pass through untouched.
@@ -35,6 +38,17 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { runSemgrep, runSemgrepOnFile } = await import("./semgrep.js");
+const registryRoot = mkdtempSync(join(tmpdir(), "harvey-semgrep-crash-registry-"));
+mkdirSync(registryRoot, { recursive: true });
+const registryConfigs = Array.from({ length: 6 }, (_, index) => {
+  const path = join(registryRoot, `${index}.yml`);
+  writeFileSync(path, "rules: []\n");
+  return path;
+});
+const targetRoot = join(registryRoot, "target");
+mkdirSync(targetRoot);
+writeFileSync(join(targetRoot, "a.ts"), "export {};\n");
+afterAll(() => rmSync(registryRoot, { recursive: true, force: true }));
 
 // The real exit-7 envelope shape (`semgrep --config /dev/null`, captured 2026-07-31): valid JSON,
 // zero results, errors[] at level "error" — exactly what the old swallow accepted as a clean scan.
@@ -61,7 +75,7 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
     semgrepBehavior = () => {
       throw execError({ status: 7, stdout: EXIT7_ENVELOPE });
     };
-    const { result, failure } = runSemgrep("/some/target");
+    const { result, failure } = runSemgrep(targetRoot, registryConfigs);
     expect(failure).toBeDefined();
     expect(failure).toContain("exited with code 7");
     expect(failure).toContain("invalid configuration file found");
@@ -72,7 +86,7 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
     semgrepBehavior = () => {
       throw execError({ signal: "SIGBUS", stdout: JSON.stringify({ version: "1.173.0", results: [], errors: [], paths: { scanned: [] }, time: { rules: [], fixpoint_timeouts: [] } }) });
     };
-    const { failure } = runSemgrep("/some/target");
+    const { failure } = runSemgrep(targetRoot, registryConfigs);
     expect(failure).toBeDefined();
     expect(failure).toContain("killed by signal SIGBUS");
   });
@@ -81,16 +95,16 @@ describe("runSemgrep refuses an incomplete run (#1664)", () => {
     semgrepBehavior = () => {
       throw execError({ status: 2, stdout: "<ERROR: missing output>" });
     };
-    const { failure } = runSemgrep("/some/target");
+    const { failure } = runSemgrep(targetRoot, registryConfigs);
     expect(failure).toBeDefined();
     expect(failure).toContain("exited with code 2");
   });
 
   it("a completed run (exit 0) still parses and reports no failure", () => {
-    semgrepBehavior = () => JSON.stringify({ version: "1.173.0", results: [], errors: [], paths: { scanned: ["/some/target/a.ts"] }, time: { rules: [], fixpoint_timeouts: [] } });
-    const { result, failure } = runSemgrep("/some/target");
+    semgrepBehavior = () => JSON.stringify({ version: "1.173.0", results: [], errors: [], paths: { scanned: [join(targetRoot, "a.ts")] }, time: { rules: [], fixpoint_timeouts: [] } });
+    const { result, failure } = runSemgrep(targetRoot, registryConfigs);
     expect(failure).toBeUndefined();
-    expect(result.paths?.scanned).toEqual(["/some/target/a.ts"]);
+    expect(result.paths?.scanned).toEqual([join(targetRoot, "a.ts")]);
   });
 
   it("the single-file re-run refuses an incomplete run the same way — its partial output must not feed the paths.scanned check", async () => {

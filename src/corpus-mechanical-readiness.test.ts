@@ -27,7 +27,7 @@ const digest = "a".repeat(64);
 const packBody = Buffer.from("x");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
-const diagnosticDigest = createHash("sha256").update('{"errors":[],"fixpointTimeouts":[],"skipped":[]}').digest("hex");
+const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
 const mixedRun = JSON.parse(readFileSync(new URL("./__fixtures__/current-mechanical-run-32334325227.json", import.meta.url), "utf8")) as {
   runId: number;
   commonRuntime: CurrentMechanicalExecutionArtifact["runtime"];
@@ -48,30 +48,49 @@ function stableFixture(value: unknown): string {
 
 function semgrepExecutionFixture() {
   const family = (input: { ordinal: number; id: string; sourceKind: "registry-pack" | "local-config"; sourceId: string; configSha256: string; ruleIds: string[]; argv: string[] }) => {
-    const semantic = { argv: input.argv, loadedRuleIds: input.ruleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [] };
+    const semantic = { argv: input.argv, loadedRuleIds: input.ruleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const };
     const attempts = [{ status: "succeeded" as const, attempt: 1, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") }];
-    return { ...input, familyId: input.id, sourceConfigSha256: input.configSha256, ownedRuleIds: input.ruleIds, loadedRuleIds: input.ruleIds, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, topology: "single-command-v1" as const, mergeAlgorithm: "single-command-v1" as const, partitions: [], verification: "single" as const, status: "succeeded" as const, attempts };
+    return { ...input, familyId: input.id, sourceConfigSha256: input.configSha256, ownedRuleIds: input.ruleIds, ownedTaintRuleIds: [], loadedRuleIds: input.ruleIds, loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, topology: "single-command-v1" as const, mergeAlgorithm: "single-command-v1" as const, partitions: [], verification: "single" as const, status: "succeeded" as const, attempts };
   };
   const injectionRuleIds = ["harvey-log-injection", ...Array.from({ length: 29 }, (_, index) => `harvey-injection-${index}`)].sort();
+  const selector = { extensions: ["js", "jsx", "ts", "tsx"] as ["js", "jsx", "ts", "tsx"], lowerExclusiveBytes: 81920 as const, upperExclusiveBytes: 1000000 as const, excludedDirectories: [".git", "node_modules"] as [".git", "node_modules"], order: "posix-relative-path" as const };
+  const routingManifest = { entries: [], sha256: createHash("sha256").update(stableFixture({ selector, entries: [] })).digest("hex") };
   const partitions = [
-    { ordinal: 0, id: "log" as const, configSha256: "c".repeat(64), ownedRuleIds: ["harvey-log-injection"], argv: ["--x-parmap", "-j", "1", "--config", "log", "--timeout", "0"] },
-    { ordinal: 1, id: "complement" as const, configSha256: "d".repeat(64), ownedRuleIds: injectionRuleIds.filter((id) => id !== "harvey-log-injection"), argv: ["--x-parmap", "-j", "1", "--config", "complement", "--timeout", "0"] },
+    { ordinal: 0, id: "log-remainder", component: "log-remainder" as const, target: "<SEMGREP_ROUTING_VIEW:remainder>" as const, configSha256: "c".repeat(64), ownedRuleIds: ["harvey-log-injection"], ownedTaintRuleIds: ["harvey-log-injection"], argv: ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1", "--config", "log", "--timeout", "0"] },
+    { ordinal: 1, id: "complement", component: "complement" as const, target: "<SEMGREP_TARGET_ROOT>" as const, configSha256: "d".repeat(64), ownedRuleIds: injectionRuleIds.filter((id) => id !== "harvey-log-injection"), ownedTaintRuleIds: [], argv: ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1", "--config", "complement", "--timeout", "0"] },
   ];
   const injectionAttempts = [1, 2].map((attempt) => {
     const components = partitions.map((partition) => {
-      const semantic = { argv: partition.argv, loadedRuleIds: partition.ownedRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [] };
-      return { status: "succeeded" as const, ordinal: partition.ordinal, id: partition.id, configSha256: partition.configSha256, ownedRuleIds: partition.ownedRuleIds, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+      const semantic = { argv: partition.argv, loadedRuleIds: partition.ownedRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [] };
+      return { status: "succeeded" as const, ordinal: partition.ordinal, id: partition.id, component: partition.component, target: partition.target, configSha256: partition.configSha256, ownedRuleIds: partition.ownedRuleIds, ownedTaintRuleIds: partition.ownedTaintRuleIds, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
     });
-    const semantic = { argv: ["<SEMGREP_PARTITION_SEQUENCE:log,complement>", "<SEMGREP_MERGE:canonical-semgrep-family-output-v1>"], loadedRuleIds: injectionRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], fixpointTimeouts: [], components };
+    const semantic = { argv: ["<SEMGREP_ROUTED_SEQUENCE:log-remainder,complement>", "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"], loadedRuleIds: injectionRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], loadedTaintRuleIds: ["harvey-log-injection"], taintCoverage: "no-timeout-observed" as const, components };
     return { status: "succeeded" as const, attempt, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
   });
-  const injection = { ordinal: 1, id: "local-injection", familyId: "local-injection", sourceKind: "local-config" as const, sourceId: "injection.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ruleIds: injectionRuleIds, ownedRuleIds: injectionRuleIds, loadedRuleIds: injectionRuleIds, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, argv: ["<SEMGREP_PARTITION_SEQUENCE:log,complement>", "<SEMGREP_MERGE:canonical-semgrep-family-output-v1>"], topology: "whole-root-rule-partition-v1" as const, mergeAlgorithm: "canonical-semgrep-family-output-v1" as const, partitions, verification: "paired-topology-exact" as const, status: "succeeded" as const, attempts: injectionAttempts };
+  const injection = { ordinal: 1, id: "local-injection", familyId: "local-injection", sourceKind: "local-config" as const, sourceId: "injection.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ruleIds: injectionRuleIds, ownedRuleIds: injectionRuleIds, ownedTaintRuleIds: ["harvey-log-injection"], loadedRuleIds: injectionRuleIds, loadedTaintRuleIds: ["harvey-log-injection"], taintCoverage: "no-timeout-observed" as const, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, selector, routingManifest, argv: ["<SEMGREP_ROUTED_SEQUENCE:log-remainder,complement>", "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"], topology: "rule-and-size-routed-file-isolation-v1" as const, mergeAlgorithm: "canonical-routed-semgrep-family-output-v1" as const, partitions, verification: "paired-topology-exact" as const, status: "succeeded" as const, attempts: injectionAttempts };
   const families = [
     family({ ordinal: 0, id: "registry-0", sourceKind: "registry-pack", sourceId: "p/typescript", configSha256: digest, ruleIds: ["registry-rule"], argv: ["--x-parmap", "-j", "9", "--timeout", "0"] }),
     injection,
   ];
-  const ownership = families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }));
-  return { schema: 5 as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stableFixture(ownership)).digest("hex"), families };
+  const ownership = families.map((entry) => ({
+    ordinal: entry.ordinal,
+    id: entry.id,
+    sourceKind: entry.sourceKind,
+    sourceId: entry.sourceId,
+    sourceConfigSha256: entry.sourceConfigSha256,
+    configSha256: entry.configSha256,
+    ownedRuleIds: entry.ownedRuleIds,
+    ownedTaintRuleIds: entry.ownedTaintRuleIds,
+    excludedRuleIds: entry.excludedRuleIds,
+    semanticObjectSha256: entry.semanticObjectSha256,
+    selector: "selector" in entry ? entry.selector : undefined,
+    routingManifest: "routingManifest" in entry ? entry.routingManifest : undefined,
+    topology: entry.topology,
+    mergeAlgorithm: entry.mergeAlgorithm,
+    partitions: entry.partitions,
+    verification: entry.verification,
+  }));
+  return { schema: 8 as const, timeoutPolicy: "fixpoint-family-not-assessed-v1" as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stableFixture(ownership)).digest("hex"), families };
 }
 
 function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMechanicalExecutionArtifact {
@@ -109,7 +128,7 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           semgrep: semgrepExecutionFixture(),
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
-        semgrepDiagnostics: { schema: 2, errors: [], skipped: [], fixpointTimeouts: [], sha256: diagnosticDigest },
+        semgrepDiagnostics: { schema: 4, errors: [], skipped: [], sha256: diagnosticDigest },
       },
     },
   };
@@ -249,14 +268,13 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     }, /execution-plan/);
   });
 
-  it("strictly compares complete ordered Semgrep errors, skipped paths, and fixpoint timeouts, not their counts", () => {
-    const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>, fixpointTimeouts: Array<{ path: string; ruleId: string; fingerprint: string }> = []): void => {
-      const payload = { errors, skipped, fixpointTimeouts };
-      value.targets.target!.semgrepDiagnostics = { schema: 2, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
+  it("strictly compares complete ordered Semgrep errors and skipped paths", () => {
+    const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>): void => {
+      const payload = { errors, skipped };
+      value.targets.target!.semgrepDiagnostics = { schema: 4, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
     };
     expectDifference((value) => { setDiagnostics(value, [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", message: "substituted" }], []); }, /ordered Semgrep/);
     expectDifference((value) => { setDiagnostics(value, [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", reason: "too large" }]); }, /ordered Semgrep/);
-    expectDifference((value) => { setDiagnostics(value, [], [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", ruleId: "harvey-timeout", fingerprint: "one" }]); }, /ordered Semgrep/);
     const producer = artifact("hosted-producer");
     const replay = artifact("independent-replay");
     setDiagnostics(producer, [{ path: "a", message: "one" }, { path: "b", message: "two" }], []);

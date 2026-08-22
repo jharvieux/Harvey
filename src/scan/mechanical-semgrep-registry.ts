@@ -22,6 +22,7 @@ import {
   semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
+  semgrepTaintNotAssessedFindings,
   semgrepUnavailableFinding,
 } from "./semgrep.js";
 import { producerAssurance, type MechanicalEngineEvidence } from "./mechanical-registry-assurance.js";
@@ -70,6 +71,7 @@ export const SEMGREP_ENGINES: readonly SemgrepEngineDefinition[] = Object.freeze
     { file: "src/scan/semgrep.ts", exportName: "semgrepSuppressionFinding" },
     { file: "src/scan/semgrep.ts", exportName: "semgrepScopeFinding" },
     { file: "src/scan/semgrep.ts", exportName: "semgrepErrorFinding" },
+    { file: "src/scan/semgrep.ts", exportName: "semgrepTaintNotAssessedFindings" },
     { file: "src/scan/semgrep.ts", exportName: "semgrepUnavailableFinding" },
     { file: "src/scan/semgrep.ts", exportName: "checkMissingCsp" },
     { file: "src/scan/hosting-headers.ts", exportName: "checkHostingConfigHeaders" },
@@ -100,7 +102,10 @@ async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: Se
       ...(authGuards ?? []),
     ];
     const findingsFor = (raw: typeof semgrep.result): Finding[] => {
-      const output = canonicalizeSemgrepOutput(raw);
+      // runSemgrep/runSemgrepPartitioned already crossed the strict raw binary boundary and
+      // intentionally removed raw timeout telemetry. Treat their returned value as canonical;
+      // parsing it as raw again rejects the deliberately absent fixpoint_timeouts field.
+      const output = canonicalizeSemgrepOutput(raw, "canonical");
       const { reported: guardCleared } = partitionGuardTokenSuppressed(output, projectGuards);
       const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
       return [
@@ -110,25 +115,32 @@ async function runSemgrepEngine({ scanDir, context, phaseCache, authGuards }: Se
         ...semgrepErrorFinding(scanDir, output),
       ];
     };
-    const partitionedFindings = findingsFor(semgrep.result);
+    const partitionedFindings = [
+      ...findingsFor(semgrep.result),
+      ...(semgrep.executionPlan ? semgrepTaintNotAssessedFindings(semgrep.executionPlan) : []),
+    ];
     findings.push(...partitionedFindings);
     if (phaseCache?.semgrepFamilies?.mode === "verify") {
       const monolithic = runSemgrep(scanDir, registryConfigs);
       if (monolithic.failure) throw new Error(`Semgrep monolithic parity control did not complete: ${monolithic.failure}`);
+      // Family-level timeout assessment is topology-specific one-way telemetry. The strict parity
+      // control compares finding/error/scope semantics; the partitioned production plan alone
+      // supplies its conservatively attributed NotAssessed rows.
       const monolithicFindings = findingsFor(monolithic.result);
+      const strictPartitionedFindings = findingsFor(semgrep.result);
       const canonicalRoot = realpathSync(scanDir);
       const scanRoots = [...new Set([scanDir, canonicalRoot])].sort((a, b) => b.length - a.length);
       const canonicalRows = (rows: Finding[]): Finding[] => JSON.parse(scanRoots.reduce((text, root) => text.replaceAll(root, "<SEMGREP_SCAN_ROOT>"), JSON.stringify(rows))) as Finding[];
       const canonicalMonolithic = canonicalRows(monolithicFindings);
-      const canonicalPartitioned = canonicalRows(partitionedFindings);
+      const canonicalPartitioned = canonicalRows(strictPartitionedFindings);
       if (JSON.stringify(canonicalMonolithic) !== JSON.stringify(canonicalPartitioned)) {
         const monolithicRows = new Set(canonicalMonolithic.map((finding) => JSON.stringify(finding)));
         const partitionedRows = new Set(canonicalPartitioned.map((finding) => JSON.stringify(finding)));
         const added = canonicalPartitioned.filter((finding) => !monolithicRows.has(JSON.stringify(finding))).map((finding) => `${finding.id}@${finding.location}`).slice(0, 10);
         const missing = canonicalMonolithic.filter((finding) => !partitionedRows.has(JSON.stringify(finding))).map((finding) => `${finding.id}@${finding.location}`).slice(0, 10);
-        throw new Error(`partitioned Semgrep result differs from the monolithic cold control: partitioned=${partitionedFindings.length}, monolithic=${monolithicFindings.length}; partition-only [${added.join(", ")}]; monolithic-only [${missing.join(", ")}]`);
+        throw new Error(`partitioned Semgrep result differs from the monolithic cold control: partitioned=${strictPartitionedFindings.length}, monolithic=${monolithicFindings.length}; partition-only [${added.join(", ")}]; monolithic-only [${missing.join(", ")}]`);
       }
-      phaseCache.onEvent?.(`SEMGREP MONOLITHIC PARITY PASS: ${partitionedFindings.length} normalized finding(s) from ${(semgrep as { records?: unknown[] }).records?.length ?? 0} exhaustive family artifact(s)`);
+      phaseCache.onEvent?.(`SEMGREP MONOLITHIC PARITY PASS: ${strictPartitionedFindings.length} normalized finding(s) from ${(semgrep as { records?: unknown[] }).records?.length ?? 0} exhaustive family artifact(s)`);
     }
   }
   findings.push(...checkMissingCsp(scanDir));

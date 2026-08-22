@@ -20,11 +20,11 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, extname, join, relative } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
+import { readEntriesLstatSafe, readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { PLATFORM_HEADER_IMPACT_SUFFIX, platformHeaderTrusted } from "./header-trust.js";
@@ -47,11 +47,15 @@ import {
   type SemgrepCommandSemanticReceipt,
   type SemgrepPartitionPlanReceipt,
   type SemgrepPartitionSemanticReceipt,
+  type SemgrepRoutingManifestEntry,
+  type SemgrepRoutingManifestReceipt,
+  type SemgrepRoutingSelectorReceipt,
   type SemgrepFamilyExecutionFailure,
   type SemgrepFamilyExecutionReceipt,
   type SemgrepFamilyRecord,
+  type SemgrepFamilyTimeoutTelemetry,
 } from "./semgrep-family-cache.js";
-import { canonicalizeSemgrepTime, type SemgrepFixpointTimeout, type SemgrepSemanticTime } from "./semgrep-time.js";
+import { canonicalizeSemgrepTime, SEMGREP_TIMEOUT_POLICY, SemgrepTimeoutTelemetryError } from "./semgrep-time.js";
 
 
 // The whole custom-rule directory is loaded as one --config; each security batch adds its own
@@ -222,7 +226,7 @@ export interface SemgrepOutput {
   // scan, present regardless of match. This is the only offline-unavailable way to tell "a registry
   // rule id that was evaluated and found nothing" from "not a rule id this scan ever ran at all" —
   // registry packs carry no local file a re-run can read the id list from the way harvey-* rules do.
-  time?: Partial<SemgrepSemanticTime> & Record<string, unknown>;
+  time?: { rules?: string[]; fixpoint_timeouts?: unknown[]; [key: string]: unknown };
 }
 
 export type { SemgrepExecutionPlanReceipt, SemgrepPlannedExecutionReceipt } from "./semgrep-family-cache.js";
@@ -528,32 +532,46 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     most of the losses left NO trace in errors[], paths.skipped or stderr. Not jitter around a
 //     mean: a silent recall loss. The 5s per-rule-per-file timeout adds a second, load-dependent
 //     loss mode on top (which rules cross 5s varies run to run; those ARE recorded in errors[]).
-//   * Nine-worker parmap remains the measured fast topology for every family except local-injection.
+//   * Nine-worker parmap remains the measured fast topology for every family except local-injection
+//     and local-xss.
 //     Two separate hosted producer/replay runs later falsified it for that family: each silently
 //     omitted one different harvey-log-injection row from the same exact Carbon bytes while the
 //     Semgrep diagnostics stayed equal. Two local j9 repeats happened to agree, so a j9 replay is
 //     not itself a sufficient guard.
-//   * The local-injection family uses two whole-root one-worker partitions: harvey-log-injection,
-//     then the other 29 rules. Each complete attempt runs both in that order and merges exact
-//     content; two attempts must agree component-by-component and after merge before admission.
+//   * The local-injection family uses the routed topology: harvey-log-injection over a
+//     byte-faithful remainder view, then once per sorted 81,920 < bytes < 1,000,000 JS/TS file,
+//     then the other 29 rules over the whole root. Each complete attempt runs every component in
+//     that order and must agree component-by-component and after merge before admission.
 //   * `-j 1` without parmap is not the measured alternative and is not a safe fallback: 1 of 3
 //     historical runs dropped a row. Because
 //     --x-parmap is internal, a future Semgrep that rejects it must disclose SEM-00/incomplete
 //     coverage rather than silently switch to an unproved execution engine.
 // Stability remains a falsifiable corpus property, not something these flags prove by themselves.
 // #1954: RE-VALIDATED 2026-08-20 with Semgrep 1.173.0 over the identical pinned Carbon tree and
-// the partitioned paired-cold topology: each merged local-injection attempt retained 87 findings,
+// the routed paired-cold topology: each merged local-injection attempt retained 87 findings,
 // 4,152 scanned paths, 30 top-level rules, 32 skips, 26 unique errors, and ten distinct content-
-// bearing fixpoint timeout records. The log partition contributes 78 findings/1 error/4 timeouts;
-// the 29-rule complement contributes 9 findings/26 errors/6 timeouts. The
+// bearing fixpoint timeout records. Those timeout measurements are historical producer evidence,
+// not stable semantic identity. The remainder contributed 52 findings/1 error/2 timeouts; the
+// 20 isolated files aggregate to 26 findings/0 errors/2 timeouts; the 29-rule complement contributes
+// 9 findings/26 errors/6 timeouts. The
 // 1.173.0 PartialParsing record in TraceabilityGraph.tsx is 79:1–79:2 on the unexpected `}`; the
-// older line-74 `import("./utils").IssueContainment` record is not accepted. Both complete semantic
-// component and merged projections must agree before output can be returned or cached. A mismatch
+// older line-74 `import("./utils").IssueContainment` record is not accepted. Both complete strict
+// component and merged projections must agree before output can be returned or cached. Schema 8
+// reduces raw timeout rows only to a family-level present/absent assessment: both nonempty attempts
+// may differ in row text, span, order, or multiplicity, while empty/nonempty remains a hard failure.
+// Exact raw rows survive only in non-reusable content-addressed telemetry sidecars. A strict mismatch
 // is retained only as non-reusable diagnostic evidence outside the cache-hit namespace.
+//   * A fixed 42-invocation Semgrep 1.173.0 isolation census traced a later hosted 9-vs-8 fixpoint-
+//     timeout mismatch to local-xss's j9 single-run policy. All 12 singleton triples, the 11-rule
+//     complement triple, and the unchanged 12-rule whole-family j1 triple were exact. Therefore
+//     local-xss runs exactly two cold whole-family j1 commands and requires exact strict semantic
+//     equality plus equal timeout presence; it is deliberately not partitioned, retried, unioned,
+//     timeout-normalized, or suppressed.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
-const SEMGREP_PAIRED_FAMILIES = new Set(["local-injection", "registry-singleton-direct-response-write"]);
 const LOCAL_INJECTION_FAMILY = "local-injection";
+const LOCAL_XSS_FAMILY = "local-xss";
+const SEMGREP_PAIRED_FAMILIES = new Set([LOCAL_XSS_FAMILY, "registry-singleton-direct-response-write"]);
 const LOG_INJECTION_RULE = "harvey-log-injection";
 const DIRECT_RESPONSE_WRITE_RULE = "javascript.express.security.audit.xss.direct-response-write.direct-response-write";
 const DIRECT_RESPONSE_WRITE_SEMANTIC_SHA256 = "2720a80865498f7a782b59d616a91789fee17aaa852102bc1430316a25c9f49f";
@@ -564,9 +582,12 @@ interface OwnedSemgrepFamily extends SemgrepFamily {
   sourceConfigSha256: string;
   configSha256: string;
   ownedRuleIds: string[];
+  ownedTaintRuleIds: string[];
   excludedRuleIds: string[];
   semanticObjectSha256?: string;
   partitions?: Array<SemgrepPartitionPlanReceipt & { configPath: string }>;
+  selector?: SemgrepRoutingSelectorReceipt;
+  routingManifest?: SemgrepRoutingManifestReceipt;
 }
 
 function semgrepFamilyPolicy(family: SemgrepFamily): {
@@ -583,6 +604,17 @@ function declaredFamilyRuleIds(configPath: string): string[] {
   return [...new Set([...readFileSync(configPath, "utf8").matchAll(/^\s*-\s*id:\s*([\w.-]+)\s*$/gm)].map((match) => match[1]!))].sort();
 }
 
+function declaredFamilyTaintRuleIds(configPath: string): string[] {
+  const document = parseYaml(readFileSync(configPath, "utf8")) as { rules?: unknown };
+  if (!Array.isArray(document.rules) || document.rules.some((rule) => !rule || typeof rule !== "object" || typeof (rule as { id?: unknown }).id !== "string")) {
+    throw new Error(`Semgrep config ${configPath} has no valid rules population`);
+  }
+  return document.rules
+    .filter((rule) => (rule as { mode?: unknown }).mode === "taint")
+    .map((rule) => (rule as { id: string }).id)
+    .sort();
+}
+
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -591,6 +623,66 @@ function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(",")}}`;
   return JSON.stringify(value) ?? "undefined";
+}
+
+const LOCAL_INJECTION_SELECTOR: SemgrepRoutingSelectorReceipt = {
+  extensions: ["js", "jsx", "ts", "tsx"],
+  lowerExclusiveBytes: 81_920,
+  upperExclusiveBytes: 1_000_000,
+  excludedDirectories: [".git", "node_modules"],
+  order: "posix-relative-path",
+};
+
+function regularFilesOutsideRoutingExclusions(root: string): Array<{ path: string; relative: string; bytes: number }> {
+  const files: Array<{ path: string; relative: string; bytes: number }> = [];
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of readEntriesLstatSafe(dir)) {
+      if (LOCAL_INJECTION_SELECTOR.excludedDirectories.includes(entry.name as ".git" | "node_modules")) continue;
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory) walk(entry.path, relativePath);
+      else if (entry.isFile) files.push({ path: entry.path, relative: relativePath, bytes: entry.size });
+    }
+  };
+  walk(root, "");
+  return files.sort((left, right) => left.relative.localeCompare(right.relative));
+}
+
+function localInjectionRoutingManifest(root: string): SemgrepRoutingManifestReceipt {
+  const entries: SemgrepRoutingManifestEntry[] = regularFilesOutsideRoutingExclusions(root)
+    .filter((file) => {
+      const type = extname(file.relative).slice(1).toLowerCase();
+      return LOCAL_INJECTION_SELECTOR.extensions.includes(type as "js" | "jsx" | "ts" | "tsx")
+        && file.bytes > LOCAL_INJECTION_SELECTOR.lowerExclusiveBytes
+        && file.bytes < LOCAL_INJECTION_SELECTOR.upperExclusiveBytes;
+    })
+    .map((file, ordinal) => ({
+      ordinal,
+      path: file.relative,
+      type: extname(file.relative).slice(1).toLowerCase() as SemgrepRoutingManifestEntry["type"],
+      bytes: file.bytes,
+      contentSha256: sha256(readFileSync(file.path)),
+      component: `log-file-${String(ordinal + 1).padStart(3, "0")}`,
+    }));
+  return { entries, sha256: sha256(stable({ selector: LOCAL_INJECTION_SELECTOR, entries })) };
+}
+
+function materializeLocalInjectionRemainderView(root: string, manifest: SemgrepRoutingManifestReceipt): string {
+  const view = mkdtempSync(join(tmpdir(), "harvey-semgrep-injection-remainder-"));
+  const selected = new Set(manifest.entries.map((entry) => entry.path));
+  for (const file of regularFilesOutsideRoutingExclusions(root)) {
+    if (selected.has(file.relative)) continue;
+    const destination = join(view, file.relative);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(file.path, destination);
+  }
+  return view;
+}
+
+function replaceRoot<T>(value: T, from: string, to: string): T {
+  if (typeof value === "string") return value.replaceAll(from, to) as T;
+  if (Array.isArray(value)) return value.map((item) => replaceRoot(item, from, to)) as T;
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, replaceRoot(item, from, to)])) as T;
+  return value;
 }
 
 function writeOwnedConfig(root: string, name: string, document: Record<string, unknown>, rules: Record<string, unknown>[]): { path: string; sha256: string } {
@@ -602,7 +694,7 @@ function writeOwnedConfig(root: string, name: string, document: Record<string, u
   return { path, sha256: identity };
 }
 
-function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derivedRoot: string): OwnedSemgrepFamily[] {
+function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derivedRoot: string, targetRoot: string): OwnedSemgrepFamily[] {
   if (registryConfigs.length !== REGISTRY_PACKS.length || registryConfigs.some((path) => !existsSync(path))) {
     throw new Error(`Semgrep global ownership requires ${REGISTRY_PACKS.length} pinned materialized registry files`);
   }
@@ -646,6 +738,7 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
       sourceConfigSha256: sha256(pack.body),
       configSha256: derived.sha256,
       ownedRuleIds: owned.map((rule) => rule.id).sort(),
+      ownedTaintRuleIds: owned.filter((rule) => rule.mode === "taint").map((rule) => rule.id).sort(),
       excludedRuleIds: excluded,
     };
   });
@@ -659,6 +752,7 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
       sourceConfigSha256: sha256(parsed[special[0]!.ordinal]!.body),
       configSha256: derived.sha256,
       ownedRuleIds: [DIRECT_RESPONSE_WRITE_RULE],
+      ownedTaintRuleIds: special[0]!.rule.mode === "taint" ? [DIRECT_RESPONSE_WRITE_RULE] : [],
       excludedRuleIds: [],
       semanticObjectSha256: DIRECT_RESPONSE_WRITE_SEMANTIC_SHA256,
     }];
@@ -668,6 +762,8 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
   const local = discoveredLocal.map((family): OwnedSemgrepFamily => {
     const configSha256 = sha256(readFileSync(family.configPath));
     let partitions: OwnedSemgrepFamily["partitions"];
+    let selector: SemgrepRoutingSelectorReceipt | undefined;
+    let routingManifest: SemgrepRoutingManifestReceipt | undefined;
     if (family.id === LOCAL_INJECTION_FAMILY) {
       const document = parseYaml(readFileSync(family.configPath, "utf8")) as Record<string, unknown>;
       const rules = document.rules;
@@ -680,20 +776,37 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
       if (log.length !== 1 || complement.length !== 29 || new Set(typed.map((rule) => rule.id)).size !== 30) {
         throw new Error(`local-injection topology ownership is incomplete or non-disjoint: log=${log.length}, complement=${complement.length}, total=${typed.length}`);
       }
-      partitions = [
-        { id: "log", rules: log },
-        { id: "complement", rules: complement },
-      ].map(({ id, rules: owned }, ordinal) => {
-        const derived = writeOwnedConfig(derivedRoot, `local-injection-${id}`, document, owned);
-        return {
-          ordinal,
-          id: id as "log" | "complement",
-          configPath: derived.path,
-          configSha256: derived.sha256,
-          ownedRuleIds: owned.map((rule) => rule.id).sort(),
-          argv: [...SEMGREP_VERIFIED_PREFIX, "--config", `<SEMGREP_CONFIG_SHA256:${derived.sha256}>`, ...SEMGREP_FAMILY_TAIL, "<SEMGREP_TARGET_ROOT>"],
-        };
+      selector = LOCAL_INJECTION_SELECTOR;
+      routingManifest = localInjectionRoutingManifest(targetRoot);
+      const logConfig = writeOwnedConfig(derivedRoot, "local-injection-log", document, log);
+      const complementConfig = writeOwnedConfig(derivedRoot, "local-injection-complement", document, complement);
+      const component = (input: Omit<SemgrepPartitionPlanReceipt, "ordinal" | "argv"> & { configPath: string }, ordinal: number): NonNullable<OwnedSemgrepFamily["partitions"]>[number] => ({
+        ...input,
+        ordinal,
+        argv: [...SEMGREP_VERIFIED_PREFIX, "--config", `<SEMGREP_CONFIG_SHA256:${input.configSha256}>`, ...SEMGREP_ROUTED_FAMILY_TAIL, input.target],
       });
+      partitions = [
+        component({ id: "log-remainder", component: "log-remainder", target: "<SEMGREP_ROUTING_VIEW:remainder>", configPath: logConfig.path, configSha256: logConfig.sha256, ownedRuleIds: [LOG_INJECTION_RULE], ownedTaintRuleIds: log.filter((rule) => rule.mode === "taint").map((rule) => rule.id) }, 0),
+        ...routingManifest.entries.map((route, index) => component({
+          id: route.component,
+          component: "log-isolated-file",
+          target: `<SEMGREP_TARGET_ROOT>/${route.path}`,
+          configPath: logConfig.path,
+          configSha256: logConfig.sha256,
+          ownedRuleIds: [LOG_INJECTION_RULE],
+          ownedTaintRuleIds: log.filter((rule) => rule.mode === "taint").map((rule) => rule.id),
+          route,
+        }, index + 1)),
+        component({
+          id: "complement",
+          component: "complement",
+          target: "<SEMGREP_TARGET_ROOT>",
+          configPath: complementConfig.path,
+          configSha256: complementConfig.sha256,
+          ownedRuleIds: complement.map((rule) => rule.id).sort(),
+          ownedTaintRuleIds: complement.filter((rule) => rule.mode === "taint").map((rule) => rule.id).sort(),
+        }, routingManifest.entries.length + 1),
+      ];
     }
     return {
       ...family,
@@ -701,9 +814,13 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
       sourceId: relative(CUSTOM_RULES, family.configPath).replaceAll("\\", "/"),
       sourceConfigSha256: configSha256,
       configSha256,
+      ...(routingManifest ? { cacheIdentity: routingManifest.sha256 } : {}),
       ownedRuleIds: declaredFamilyRuleIds(family.configPath),
+      ownedTaintRuleIds: declaredFamilyTaintRuleIds(family.configPath),
       excludedRuleIds: [],
       ...(partitions ? { partitions } : {}),
+      ...(selector ? { selector } : {}),
+      ...(routingManifest ? { routingManifest } : {}),
     };
   });
   const families = [...registry, ...singleton, ...local];
@@ -730,25 +847,28 @@ function plannedFamilyReceipt(family: OwnedSemgrepFamily, ordinal: number): Semg
     configSha256: family.configSha256,
     ruleIds: family.ownedRuleIds,
     ownedRuleIds: family.ownedRuleIds,
+    ownedTaintRuleIds: family.ownedTaintRuleIds,
     excludedRuleIds: family.excludedRuleIds,
     ...(family.semanticObjectSha256 ? { semanticObjectSha256: family.semanticObjectSha256 } : {}),
+    ...(family.selector ? { selector: family.selector } : {}),
+    ...(family.routingManifest ? { routingManifest: family.routingManifest } : {}),
     argv: family.partitions
-      ? ["<SEMGREP_PARTITION_SEQUENCE:log,complement>", "<SEMGREP_MERGE:canonical-semgrep-family-output-v1>"]
+      ? [`<SEMGREP_ROUTED_SEQUENCE:${family.partitions.map((partition) => partition.id).join(",")}>`, "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"]
       : [...policy.prefix, "--config", `<SEMGREP_CONFIG_SHA256:${family.configSha256}>`, ...SEMGREP_FAMILY_TAIL, "<SEMGREP_TARGET_ROOT>"],
-    topology: family.partitions ? "whole-root-rule-partition-v1" : "single-command-v1",
-    mergeAlgorithm: family.partitions ? "canonical-semgrep-family-output-v1" : "single-command-v1",
-    partitions: (family.partitions ?? []).map(({ ordinal: partitionOrdinal, id, configSha256, ownedRuleIds, argv }) => ({ ordinal: partitionOrdinal, id, configSha256, ownedRuleIds, argv })),
+    topology: family.partitions ? "rule-and-size-routed-file-isolation-v1" : "single-command-v1",
+    mergeAlgorithm: family.partitions ? "canonical-routed-semgrep-family-output-v1" : "single-command-v1",
+    partitions: (family.partitions ?? []).map(({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, route }) => ({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, ...(route ? { route } : {}) })),
     verification: policy.verification,
   };
 }
 
 function ownershipDigest(families: readonly SemgrepPlannedFamilyReceipt[]): string {
-  return sha256(stable(families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, excludedRuleIds, semanticObjectSha256, topology, mergeAlgorithm, partitions, verification }))));
+  return sha256(stable(families.map(({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, ownedTaintRuleIds, excludedRuleIds, semanticObjectSha256, selector, routingManifest, topology, mergeAlgorithm, partitions, verification }) => ({ ordinal, id, sourceKind, sourceId, sourceConfigSha256, configSha256, ownedRuleIds, ownedTaintRuleIds, excludedRuleIds, semanticObjectSha256, selector, routingManifest, topology, mergeAlgorithm, partitions, verification }))));
 }
 
 function plannedExecutionReceipt(families: readonly OwnedSemgrepFamily[]): SemgrepPlannedExecutionReceipt {
   const rows = families.map(plannedFamilyReceipt);
-  return { schema: 5, strategy: "globally-owned-partitioned-families", ownershipSha256: ownershipDigest(rows), families: rows };
+  return { schema: 8, timeoutPolicy: SEMGREP_TIMEOUT_POLICY, strategy: "globally-owned-partitioned-families", ownershipSha256: ownershipDigest(rows), families: rows };
 }
 
 export function runSemgrep(dir: string, registryConfigs?: readonly string[]): { result: SemgrepOutput; executionPlan?: SemgrepExecutionPlanReceipt; failure?: string } {
@@ -760,7 +880,7 @@ export function runSemgrep(dir: string, registryConfigs?: readonly string[]): { 
       if (materialized.failure || !materialized.files) throw new Error(materialized.failure ?? "Semgrep registry materialization returned no files");
       return materialized.files;
     })();
-    const families = prepareOwnedSemgrepFamilies(resolved, ownedRoot);
+    const families = prepareOwnedSemgrepFamilies(resolved, ownedRoot, dir);
     const single = families.filter((family) => semgrepFamilyPolicy(family).verification === "single");
     const verified = families.filter((family) => semgrepFamilyPolicy(family).verification !== "single");
     const args = [
@@ -804,13 +924,16 @@ export function runSemgrep(dir: string, registryConfigs?: readonly string[]): { 
       if (semgrepFamilyPolicy(family).verification !== "single") continue;
       const plan = planned.families[ordinal]!;
       const ownedLoaded = plan.ownedRuleIds.filter((ruleId) => [...loaded].some((id) => ruleIdMatches(id, ruleId))).sort();
-      const attempt = semanticAttemptReceipt(parsed.result, dir, monolithicArgv, 1, ownedLoaded);
-      executions.push({ ...plan, argv: monolithicArgv, status: "succeeded", loadedRuleIds: attempt.loadedRuleIds, attempts: [attempt] });
+      const monolithicCoverage = canonicalizeSemgrepTime(parsed.result.time).fixpoint_timeouts.length > 0 && plan.ownedTaintRuleIds.some((id) => ownedLoaded.includes(id))
+        ? "not-assessed"
+        : "no-timeout-observed";
+      const attempt = semanticAttemptReceipt(parsed.result, dir, monolithicArgv, 1, ownedLoaded, plan.ownedTaintRuleIds, monolithicCoverage);
+      executions.push({ ...plan, argv: monolithicArgv, status: "succeeded", loadedRuleIds: attempt.loadedRuleIds, loadedTaintRuleIds: attempt.loadedTaintRuleIds, taintCoverage: attempt.taintCoverage, attempts: [attempt] });
     }
     executions.sort((a, b) => a.ordinal - b.ordinal);
     return {
       result: mergeSemgrepFamilyOutputs(records),
-      executionPlan: { schema: 5, status: "succeeded", strategy: planned.strategy, ownershipSha256: planned.ownershipSha256, families: executions },
+      executionPlan: { schema: 8, timeoutPolicy: SEMGREP_TIMEOUT_POLICY, status: "succeeded", strategy: planned.strategy, ownershipSha256: planned.ownershipSha256, families: executions },
     };
   } catch (error) {
     return { result: {}, failure: error instanceof Error ? error.message : String(error) };
@@ -829,11 +952,21 @@ const SEMGREP_FAMILY_TAIL = [
   "--time",
 ] as const;
 
+// The routed topology omits large files by construction from its byte-faithful remainder view.
+// No `--exclude` is admitted: it would manufacture paths.skipped rows rather than route ownership.
+const SEMGREP_ROUTED_FAMILY_TAIL = [
+  "--disable-nosem",
+  "--timeout", "0",
+  "--json",
+  "--verbose",
+  "--time",
+] as const;
+
 /** Semantic plan receipt built from the same constants and family registry execution consumes. */
-export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[]): SemgrepPlannedExecutionReceipt {
+export function semgrepExecutionPlanReceipt(registryConfigs: readonly string[], targetRoot = process.cwd()): SemgrepPlannedExecutionReceipt {
   const root = mkdtempSync(join(tmpdir(), "harvey-semgrep-plan-"));
   try {
-    return plannedExecutionReceipt(prepareOwnedSemgrepFamilies(registryConfigs, root));
+    return plannedExecutionReceipt(prepareOwnedSemgrepFamilies(registryConfigs, root, targetRoot));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -849,76 +982,128 @@ function executedRuleIds(family: SemgrepPlannedFamilyReceipt, output: SemgrepOut
   return [...new Set(matched.map(({ declared }) => declared[0]!))].sort();
 }
 
-function semanticAttemptReceipt(output: SemgrepOutput, dir: string, argv: string[], attempt: number, loadedRuleIds?: string[]): SemgrepCommandSemanticReceipt {
-  return buildSemgrepCommandSemanticReceipt(output, dir, argv, attempt, loadedRuleIds);
+function semanticAttemptReceipt(
+  output: SemgrepOutput,
+  dir: string,
+  argv: string[],
+  attempt: number,
+  loadedRuleIds: string[] | undefined,
+  ownedTaintRuleIds: readonly string[],
+  taintCoverageOverride?: "not-assessed" | "no-timeout-observed",
+): SemgrepCommandSemanticReceipt {
+  return buildSemgrepCommandSemanticReceipt(output, dir, argv, attempt, loadedRuleIds, undefined, "raw", ownedTaintRuleIds, taintCoverageOverride);
 }
 
-type FamilyRun = { result: SemgrepOutput; execution?: SemgrepFamilyExecutionReceipt; failure?: string; failedExecution?: SemgrepFamilyExecutionFailure };
+type FamilyRun = { result: SemgrepOutput; execution?: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; failure?: string; failedExecution?: SemgrepFamilyExecutionFailure };
 
-function runPartitionedLocalInjection(
+function timeoutTelemetryFailure(family: string, error: unknown): SemgrepFamilyExecutionFailure | undefined {
+  if (!(error instanceof SemgrepTimeoutTelemetryError)) return undefined;
+  const reason = `${family}: ${error.message}`;
+  return {
+    schema: 8,
+    status: "failed",
+    reusable: false,
+    family,
+    reason,
+    mismatchFields: ["rawFixpointTimeoutTelemetry"],
+    rawEvidence: error.rawEvidence,
+    attempts: [],
+  };
+}
+
+function runRoutedLocalInjection(
   dir: string,
   family: OwnedSemgrepFamily,
   planned: SemgrepPlannedFamilyReceipt,
 ): FamilyRun {
-  if (!family.partitions || family.partitions.length !== 2 || planned.topology !== "whole-root-rule-partition-v1") {
-    return { result: {}, failure: `${family.id}: partition topology is missing` };
+  if (!family.partitions || !family.selector || !family.routingManifest
+    || family.partitions.length !== family.routingManifest.entries.length + 2
+    || planned.topology !== "rule-and-size-routed-file-isolation-v1") {
+    return { result: {}, failure: `${family.id}: routed topology is missing` };
   }
+  const routingManifest = family.routingManifest;
   type AttemptEvidence = SemgrepFamilyExecutionFailure["attempts"][number];
-  const once = (attempt: number): AttemptEvidence | { failure: string } => {
+  type RoutedAttempt = AttemptEvidence & { telemetry: SemgrepFamilyTimeoutTelemetry };
+  const once = (attempt: number): RoutedAttempt | { failure: string; failedExecution?: SemgrepFamilyExecutionFailure } => {
     const components: AttemptEvidence["components"] = [];
     const records: SemgrepFamilyRecord[] = [];
-    for (const [ordinal, partition] of family.partitions!.entries()) {
-      const plan = planned.partitions[ordinal]!;
-      const args = ["--config", partition.configPath, ...SEMGREP_FAMILY_TAIL, dir];
-      const run = execSemgrep([...SEMGREP_VERIFIED_PREFIX, ...args]);
-      if ("failure" in run) return { failure: `${family.id}/${partition.id}: ${run.failure}` };
-      const parsed = parseEnvelope(run.out);
-      if (parsed.failure) return { failure: `${family.id}/${partition.id}: ${parsed.failure}` };
-      parsed.result.results ??= [];
-      parsed.result.errors ??= [];
-      parsed.result.paths ??= {};
-      parsed.result.paths.scanned ??= [];
-      parsed.result.paths.skipped ??= [];
-      try {
-        const scopedPlan = { ...planned, familyId: `${family.id}/${partition.id}`, ownedRuleIds: plan.ownedRuleIds };
-        const loadedRuleIds = executedRuleIds(scopedPlan, parsed.result);
-        const base = semanticAttemptReceipt(parsed.result, dir, plan.argv, attempt, loadedRuleIds);
-        const receipt: SemgrepPartitionSemanticReceipt = {
-          ordinal,
-          id: partition.id,
-          configSha256: partition.configSha256,
-          ownedRuleIds: partition.ownedRuleIds,
-          status: base.status,
-          argv: base.argv,
-          loadedRuleIds: base.loadedRuleIds,
-          resultCount: base.resultCount,
-          resultsSha256: base.resultsSha256,
-          scanned: base.scanned,
-          skipped: base.skipped,
-          skippedRules: base.skippedRules,
-          errors: base.errors,
-          fixpointTimeouts: base.fixpointTimeouts,
-          semanticSha256: base.semanticSha256,
-        };
-        const output = canonicalizeOwnedSemgrepOutput(parsed.result, plan.ownedRuleIds);
-        components.push({ plan, output, receipt });
-        records.push({ family: `${family.id}-${partition.id}`, output, cache: "recomputed", key: `attempt-${attempt}`, unitsExamined: Math.max(1, output.paths?.scanned?.length ?? 0) });
-      } catch (error) {
-        return { failure: `${family.id}/${partition.id}: ${error instanceof Error ? error.message : String(error)}` };
+    const telemetry: SemgrepFamilyTimeoutTelemetry = { attempt, components: [] };
+    let remainderView: string | undefined;
+    try {
+      const currentManifest = localInjectionRoutingManifest(dir);
+      if (stable(currentManifest) !== stable(routingManifest)) return { failure: `${family.id}: routed manifest changed before attempt ${attempt}` };
+      remainderView = materializeLocalInjectionRemainderView(dir, routingManifest);
+      for (const [ordinal, partition] of family.partitions!.entries()) {
+        const plan = planned.partitions[ordinal]!;
+        const target = partition.component === "log-remainder"
+          ? remainderView
+          : partition.component === "log-isolated-file"
+            ? join(dir, partition.route!.path)
+            : dir;
+        const args = ["--config", partition.configPath, ...SEMGREP_ROUTED_FAMILY_TAIL, target];
+        const run = execSemgrep([...SEMGREP_VERIFIED_PREFIX, ...args]);
+        if ("failure" in run) return { failure: `${family.id}/${partition.id}: ${run.failure}` };
+        const parsed = parseEnvelope(run.out);
+        if (parsed.failure) return { failure: `${family.id}/${partition.id}: ${parsed.failure}` };
+        const routed = partition.component === "log-remainder" ? replaceRoot(parsed.result, remainderView, dir) : parsed.result;
+        routed.results ??= [];
+        routed.errors ??= [];
+        routed.paths ??= {};
+        routed.paths.scanned ??= [];
+        routed.paths.skipped ??= [];
+        try {
+          const rawTimeouts = canonicalizeSemgrepTime(routed.time).fixpoint_timeouts;
+          telemetry.components.push({ id: partition.id, fixpointTimeouts: rawTimeouts });
+          const scopedPlan = { ...planned, familyId: `${family.id}/${partition.id}`, ownedRuleIds: plan.ownedRuleIds };
+          const loadedRuleIds = executedRuleIds(scopedPlan, routed);
+          const base = semanticAttemptReceipt(routed, dir, plan.argv, attempt, loadedRuleIds, plan.ownedTaintRuleIds);
+          const partitionSemantic = {
+            argv: base.argv,
+            loadedRuleIds: base.loadedRuleIds,
+            resultCount: base.resultCount,
+            resultsSha256: base.resultsSha256,
+            scanned: base.scanned,
+            skipped: base.skipped,
+            skippedRules: base.skippedRules,
+            errors: base.errors,
+          };
+          const receipt: SemgrepPartitionSemanticReceipt = {
+            ordinal,
+            id: partition.id,
+            component: partition.component,
+            target: partition.target,
+            configSha256: partition.configSha256,
+            ownedRuleIds: partition.ownedRuleIds,
+            ownedTaintRuleIds: partition.ownedTaintRuleIds,
+            ...(partition.route ? { route: partition.route } : {}),
+            status: base.status,
+            ...partitionSemantic,
+            semanticSha256: sha256(stable(partitionSemantic)),
+          };
+          const output = canonicalizeOwnedSemgrepOutput(routed, plan.ownedRuleIds);
+          components.push({ plan, output, receipt });
+          records.push({ family: `${family.id}-${partition.id}`, output, cache: "recomputed", key: `attempt-${attempt}`, unitsExamined: Math.max(1, output.paths?.scanned?.length ?? 0) });
+        } catch (error) {
+          const failedExecution = timeoutTelemetryFailure(family.id, error);
+          return { failure: `${family.id}/${partition.id}: ${error instanceof Error ? error.message : String(error)}`, ...(failedExecution ? { failedExecution } : {}) };
+        }
       }
+    } finally {
+      if (remainderView) rmSync(remainderView, { recursive: true, force: true });
     }
     const output = mergeSemgrepFamilyOutputs(records);
     const loadedRuleIds = [...new Set(components.flatMap((component) => component.receipt.loadedRuleIds))].sort();
-    const receipt = buildSemgrepCommandSemanticReceipt(output, dir, planned.argv, attempt, loadedRuleIds, components.map((component) => component.receipt));
-    return { attempt, components, merged: { output, receipt } };
+    const coverage = telemetry.components.some((component) => component.fixpointTimeouts.length > 0) ? "not-assessed" : "no-timeout-observed";
+    const receipt = buildSemgrepCommandSemanticReceipt(output, dir, planned.argv, attempt, loadedRuleIds, components.map((component) => component.receipt), "canonical", planned.ownedTaintRuleIds, coverage);
+    return { attempt, components, merged: { output, receipt }, telemetry };
   };
   const first = once(1);
-  if ("failure" in first) return { result: {}, failure: first.failure };
+  if ("failure" in first) return { result: {}, failure: first.failure, ...(first.failedExecution ? { failedExecution: first.failedExecution } : {}) };
   const second = once(2);
-  if ("failure" in second) return { result: {}, failure: second.failure };
+  if ("failure" in second) return { result: {}, failure: second.failure, ...(second.failedExecution ? { failedExecution: second.failedExecution } : {}) };
   const comparable = (receipt: SemgrepCommandSemanticReceipt | SemgrepPartitionSemanticReceipt): unknown => Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== "attempt"));
   const mismatchFields: string[] = [];
-  for (const ordinal of [0, 1]) {
+  for (const ordinal of family.partitions.keys()) {
     const left = comparable(first.components[ordinal]!.receipt) as Record<string, unknown>;
     const right = comparable(second.components[ordinal]!.receipt) as Record<string, unknown>;
     for (const field of Object.keys(left)) if (stable(left[field]) !== stable(right[field])) mismatchFields.push(`${first.components[ordinal]!.plan.id}.${field}`);
@@ -927,28 +1112,29 @@ function runPartitionedLocalInjection(
   const right = comparable(second.merged.receipt) as Record<string, unknown>;
   for (const field of Object.keys(left)) if (stable(left[field]) !== stable(right[field])) mismatchFields.push(`merged.${field}`);
   if (mismatchFields.length > 0) {
-    const reason = `paired partitioned Semgrep executions for ${family.id} differ: ${mismatchFields.join(", ")}`;
+    const reason = `paired routed Semgrep executions for ${family.id} differ: ${mismatchFields.join(", ")}`;
     return {
       result: {},
       failure: reason,
-      failedExecution: { schema: 5, status: "failed", reusable: false, family: family.id, reason, mismatchFields, attempts: [first, second] },
+      failedExecution: { schema: 8, status: "failed", reusable: false, family: family.id, reason, mismatchFields, timeoutTelemetry: [first.telemetry, second.telemetry], attempts: [first, second] },
     };
   }
   return {
     result: first.merged.output,
-    execution: { ...planned, status: "succeeded", loadedRuleIds: first.merged.receipt.loadedRuleIds, attempts: [first.merged.receipt, second.merged.receipt] },
+    execution: { ...planned, status: "succeeded", loadedRuleIds: first.merged.receipt.loadedRuleIds, loadedTaintRuleIds: first.merged.receipt.loadedTaintRuleIds, taintCoverage: first.merged.receipt.taintCoverage, attempts: [first.merged.receipt, second.merged.receipt] },
+    telemetry: [first.telemetry, second.telemetry],
   };
 }
 
 function runSemgrepFamily(dir: string, family: OwnedSemgrepFamily, planned: SemgrepPlannedFamilyReceipt): FamilyRun {
-  if (family.id === LOCAL_INJECTION_FAMILY) return runPartitionedLocalInjection(dir, family, planned);
+  if (family.id === LOCAL_INJECTION_FAMILY) return runRoutedLocalInjection(dir, family, planned);
   const policy = semgrepFamilyPolicy(family);
   const args = [
     "--config", family.configPath,
     ...SEMGREP_FAMILY_TAIL,
     dir,
   ];
-  const once = (attempt: number): { result: SemgrepOutput; receipt?: SemgrepCommandSemanticReceipt; failure?: string } => {
+  const once = (attempt: number): { result: SemgrepOutput; receipt?: SemgrepCommandSemanticReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry; failure?: string; failedExecution?: SemgrepFamilyExecutionFailure } => {
     const run = execSemgrep([...policy.prefix, ...args]);
     if ("failure" in run) return { result: {}, failure: `${family.id}: ${run.failure}` };
     const parsed = parseEnvelope(run.out);
@@ -959,28 +1145,55 @@ function runSemgrepFamily(dir: string, family: OwnedSemgrepFamily, planned: Semg
     parsed.result.paths.scanned ??= [];
     parsed.result.paths.skipped ??= [];
     try {
+      const rawTimeouts = canonicalizeSemgrepTime(parsed.result.time).fixpoint_timeouts;
       const loadedRuleIds = executedRuleIds(planned, parsed.result);
-      const receipt = semanticAttemptReceipt(parsed.result, dir, planned.argv, attempt, loadedRuleIds);
+      const receipt = semanticAttemptReceipt(parsed.result, dir, planned.argv, attempt, loadedRuleIds, planned.ownedTaintRuleIds);
       const result = canonicalizeOwnedSemgrepOutput(parsed.result, planned.ownedRuleIds);
-      return { result, receipt };
+      return { result, receipt, telemetry: { attempt, components: [{ id: family.id, fixpointTimeouts: rawTimeouts }] } };
     } catch (error) {
-      return { result: {}, failure: `${family.id}: ${error instanceof Error ? error.message : String(error)}` };
+      const failedExecution = timeoutTelemetryFailure(family.id, error);
+      return { result: {}, failure: `${family.id}: ${error instanceof Error ? error.message : String(error)}`, ...(failedExecution ? { failedExecution } : {}) };
     }
   };
   const first = once(1);
-  if (first.failure || !first.receipt) return first;
-  if (policy.verification === "single") return { result: first.result, execution: { ...planned, status: "succeeded", loadedRuleIds: first.receipt.loadedRuleIds, attempts: [first.receipt] } };
+  if (first.failure || !first.receipt) return { result: first.result, failure: first.failure, ...(first.failedExecution ? { failedExecution: first.failedExecution } : {}) };
+  if (policy.verification === "single") return {
+    result: first.result,
+    execution: { ...planned, status: "succeeded", loadedRuleIds: first.receipt.loadedRuleIds, loadedTaintRuleIds: first.receipt.loadedTaintRuleIds, taintCoverage: first.receipt.taintCoverage, attempts: [first.receipt] },
+    telemetry: first.telemetry ? [first.telemetry] : [],
+  };
   const second = once(2);
-  if (second.failure) return second;
+  if (second.failure) return { result: second.result, failure: second.failure, ...(second.failedExecution ? { failedExecution: second.failedExecution } : {}) };
   if (!second.receipt) return { result: {}, failure: `${family.id}: second successful semantic execution receipt is missing` };
   const comparable = (receipt: SemgrepCommandSemanticReceipt): unknown => Object.fromEntries(Object.entries(receipt).filter(([key]) => key !== "attempt"));
   const firstComparable = comparable(first.receipt) as Record<string, unknown>;
   const secondComparable = comparable(second.receipt) as Record<string, unknown>;
   if (stable(firstComparable) !== stable(secondComparable)) {
-    const fields = Object.keys(firstComparable).filter((field) => stable(firstComparable[field]) !== stable(secondComparable[field]));
-    return { result: {}, failure: `paired cold Semgrep executions for ${family.id} differ in findings, diagnostics, or examined scope: ${fields.join(", ")}` };
+    const mismatchFields = Object.keys(firstComparable).filter((field) => stable(firstComparable[field]) !== stable(secondComparable[field]));
+    const reason = `paired cold Semgrep executions for ${family.id} differ in findings, diagnostics, or examined scope: ${mismatchFields.join(", ")}`;
+    return {
+      result: {},
+      failure: reason,
+      failedExecution: {
+        schema: 8,
+        status: "failed",
+        reusable: false,
+        family: family.id,
+        reason,
+        mismatchFields,
+        timeoutTelemetry: [first.telemetry!, second.telemetry!],
+        attempts: [
+          { attempt: 1, components: [], merged: { output: first.result, receipt: first.receipt } },
+          { attempt: 2, components: [], merged: { output: second.result, receipt: second.receipt } },
+        ],
+      },
+    };
   }
-  return { result: canonicalizeSemgrepOutput(first.result), execution: { ...planned, status: "succeeded", loadedRuleIds: first.receipt.loadedRuleIds, attempts: [first.receipt, second.receipt] } };
+  return {
+    result: canonicalizeSemgrepOutput(first.result, "canonical"),
+    execution: { ...planned, status: "succeeded", loadedRuleIds: first.receipt.loadedRuleIds, loadedTaintRuleIds: first.receipt.loadedTaintRuleIds, taintCoverage: first.receipt.taintCoverage, attempts: [first.receipt, second.receipt] },
+    telemetry: [first.telemetry!, second.telemetry!],
+  };
 }
 
 export async function runSemgrepPartitioned(
@@ -988,7 +1201,7 @@ export async function runSemgrepPartitioned(
   registryConfigs: readonly string[],
   cache: SemgrepFamilyCacheOptions,
 ): Promise<{ result: SemgrepOutput; records: SemgrepFamilyRecord[]; executionPlan?: SemgrepExecutionPlanReceipt; failure?: string }> {
-  const families = prepareOwnedSemgrepFamilies(registryConfigs, join(cache.dir, "semgrep-owned-configs"));
+  const families = prepareOwnedSemgrepFamilies(registryConfigs, join(cache.dir, "semgrep-owned-configs"), dir);
   const planned = plannedExecutionReceipt(families);
   const portableCache = { ...cache, pathRoot: dir };
   rejectUnregisteredSemgrepFamilyArtifacts(portableCache, new Set(families.map((family) => family.id)));
@@ -1000,7 +1213,7 @@ export async function runSemgrepPartitioned(
       failure = run.failure;
       if (run.failedExecution) return { failure: run.failedExecution };
       if (!run.execution) throw new Error(run.failure ?? `${family.id}: successful semantic execution receipt is missing`);
-      return { output: run.result, execution: run.execution };
+      return { output: run.result, execution: run.execution, telemetry: run.telemetry, outputMode: "canonical" as const };
     }).catch((error) => {
       failure ??= error instanceof Error ? error.message : String(error);
       cache.onEvent?.(`SEMGREP FAMILY VERIFY FAIL ${family.id}: ${failure}`);
@@ -1012,7 +1225,8 @@ export async function runSemgrepPartitioned(
   }
   assertSemgrepFamilyVerification(records, families, cache.mode);
   const executionPlan: SemgrepExecutionPlanReceipt = {
-    schema: 5,
+    schema: 8,
+    timeoutPolicy: SEMGREP_TIMEOUT_POLICY,
     status: "succeeded",
     strategy: "globally-owned-partitioned-families",
     ownershipSha256: planned.ownershipSha256,
@@ -1297,34 +1511,28 @@ function describeErrorType(type: string | unknown[] | undefined): string {
 export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding[] {
   const errors = output.errors ?? [];
   const skipped = (output.paths?.skipped ?? []).filter((s) => s.path);
-  const timeouts = (output.time?.fixpoint_timeouts ?? []) as SemgrepFixpointTimeout[];
-  if (errors.length === 0 && skipped.length === 0 && timeouts.length === 0) return [];
+  if (errors.length === 0 && skipped.length === 0) return [];
   const errorLines = errors.map((e) => {
     const rel = e.path ? relative(dir, e.path) : "(unknown path)";
     const detail = e.message?.trim().split("\n")[0];
     return `${rel} (${describeErrorType(e.type)}${detail ? `: ${detail}` : ""})`;
   });
   const skippedLines = skipped.map((s) => `${relative(dir, s.path!)} (skipped: ${s.reason ?? "unspecified reason"})`);
-  const timeoutLines = timeouts.map((timeout) => {
-    const path = timeout.location?.path;
-    const rel = path ? relative(dir, path) : "(unknown path)";
-    const detail = timeout.message?.trim().split("\n")[0];
-    return `${rel} (${timeout.error_type ?? "fixpoint timeout"}${detail ? `: ${detail}` : ""})`;
-  });
-  const all = [...errorLines, ...skippedLines, ...timeoutLines];
+  const all = [...errorLines, ...skippedLines];
+  const totalRecords = errors.length + skipped.length;
   const shown = all.slice(0, 25);
   return [
     {
       id: "SEM-ERR-00",
-      title: `${all.length} analysis record${all.length === 1 ? "" : "s"} semgrep could not fully evaluate`,
+      title: `${totalRecords} analysis record${totalRecords === 1 ? "" : "s"} semgrep could not fully evaluate`,
       severity: "Info",
       confidence: "N/A",
       category: "Coverage",
       taxonomy: "Coverage — files semgrep errored on or skipped",
       location: "(repo-wide)",
       status: "Open",
-      evidence: `Semgrep reported ${errors.length} per-file error(s), ${skipped.length} skipped file(s), and ${timeouts.length} fixpoint timeout(s) — these paths can still count as scanned while one or more rules did not finish and would otherwise read as clean: ${shown.join("; ")}${all.length > shown.length ? `, and ${all.length - shown.length} more` : ""}.`,
-      impact: "A file semgrep could not parse, chose not to analyse, or timed out while reaching a taint fixpoint can contribute incomplete findings — absence there does not prove the covered footguns are absent.",
+      evidence: `Semgrep reported ${errors.length} per-file error(s) and ${skipped.length} skipped file(s) — these paths can still count as scanned while analysis did not complete and would otherwise read as clean: ${shown.join("; ")}${all.length > shown.length ? `, and ${all.length - shown.length} more identities` : ""}.`,
+      impact: "A file semgrep could not parse or chose not to analyse can contribute incomplete findings — absence there does not prove the covered footguns are absent.",
       fix: "Fix the syntax error (or reduce the file below semgrep's size/timeout limits) so semgrep can parse and analyse the file, then re-run the scan.",
       value: 1,
       ease: 4,
@@ -1332,6 +1540,36 @@ export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding
       mechanical: true,
     },
   ];
+}
+
+/** Convert one-way fixpoint telemetry into stable, family-level client disclosure. */
+export function semgrepTaintNotAssessedFindings(execution: SemgrepExecutionPlanReceipt): Finding[] {
+  return execution.families
+    .filter((family) => family.taintCoverage === "not-assessed")
+    .map((family) => {
+      if (family.loadedTaintRuleIds.length === 0) throw new Error(`${family.id}: taint NotAssessed receipt has no loaded taint-mode candidates`);
+      const scanned = family.attempts[0]!.scanned;
+      const scopeSha256 = sha256(stable(scanned));
+      return {
+        id: `SEM-TAINT-NA-${family.id}`,
+        title: `Semgrep taint coverage was not fully assessed for ${family.id}`,
+        severity: "Info",
+        confidence: "N/A",
+        category: "Coverage",
+        taxonomy: "Next.js/web footgun — coverage not assessed",
+        location: "(repo-wide)",
+        status: "Open",
+        evidence: `Semgrep reported one or more experimental fixpoint timeout events while running family ${family.id}. One or more taint rules in this family did not complete. Bound candidate taint rule IDs (not assertions that each timed out): ${family.loadedTaintRuleIds.join(", ")}. Examined scope: ${scanned.length} scanned path(s), exact scope SHA-256 ${scopeSha256}. Emitted findings remain valid; absence of additional taint matches is not clearance.`,
+        impact: "Taint-mode analysis was incomplete for at least one bound rule in this family, so this run cannot clear the family merely because no additional matches were emitted.",
+        fix: `Re-run the same pinned family until it reports no fixpoint timeout telemetry; then confirm the strict finding, diagnostic, path, rule, argv, and topology receipts still match.`,
+        okWhen: `A same-input run of family ${family.id} reports no fixpoint timeout telemetry and all strict semantic receipts remain valid.`,
+        notOkWhen: "Any fixpoint timeout telemetry remains, or a strict semantic receipt changes.",
+        value: 1,
+        ease: 4,
+        safety: 5,
+        mechanical: true,
+      } satisfies Finding;
+    });
 }
 
 // #1012 — the fix pipeline's detector re-run replays ONE finding's rule against ONE fixed file

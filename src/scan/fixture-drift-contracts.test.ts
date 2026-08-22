@@ -480,14 +480,14 @@ describe("canonical Semgrep fixture comparison (#1954)", () => {
     );
   });
 
-  it("retains sorted executed rules and the complete normalized fixpoint timeout population", () => {
+  it("keeps fixture raw timeout rows byte-exact while allowing only documented profiling/root volatility", () => {
     const root = "/tmp/harvey-semgrep-time-root";
     const expected = structuredClone(fixture);
     expected.time = {
       rules: ["rule-b", "rule-a", "rule-a"],
       fixpoint_timeouts: [{
         error_type: "Fixpoint timeout", severity: "warn",
-        message: "Fixpoint timeout at app/route.ts:1:0",
+        message: "Fixpoint timeout while performing taint analysis at app/route.ts:1:0 [rules: 1, first: rule-a]",
         location: { path: "app/route.ts", start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
       }],
     };
@@ -497,12 +497,12 @@ describe("canonical Semgrep fixture comparison (#1954)", () => {
       rules: ["rule-a", "rule-b"],
       fixpoint_timeouts: [{
         error_type: "Fixpoint timeout", severity: "warn",
-        message: `Fixpoint timeout at ${root}/app/route.ts:1:0`,
+        message: `Fixpoint timeout while performing taint analysis at ${root}/app/route.ts:1:0 [rules: 2, first: rule-b]`,
         location: { path: `${root}/app/route.ts`, start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
       }],
       scanning_time: { total_time: 99 },
     };
-    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toEqual([]);
+    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toContain("canonical envelope changed outside version/results/errors/paths");
   });
 
   it("fails when executed rules or fixpoint timeout evidence changes", () => {
@@ -511,7 +511,12 @@ describe("canonical Semgrep fixture comparison (#1954)", () => {
     expect(compareSemgrepFixtureOutput(fixture, rules)).toContain("canonical envelope changed outside version/results/errors/paths");
 
     const timeout = structuredClone(fixture);
-    (timeout.time as { fixpoint_timeouts: unknown[] }).fixpoint_timeouts.push({ error_type: "Fixpoint timeout", location: { path: "app/new.ts" } });
+    const rule = (timeout.time as { rules: string[] }).rules[0]!;
+    (timeout.time as { fixpoint_timeouts: unknown[] }).fixpoint_timeouts.push({
+      error_type: "Fixpoint timeout", severity: "warn",
+      message: `Fixpoint timeout while performing taint analysis at app/new.ts:1:0 [rules: 1, first: ${rule}]`,
+      location: { path: "app/new.ts", start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } },
+    });
     expect(compareSemgrepFixtureOutput(fixture, timeout)).toContain("canonical envelope changed outside version/results/errors/paths");
   });
 
