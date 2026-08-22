@@ -84,7 +84,7 @@ import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
 import { prepareCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
-import { shardTargets } from "../scan/corpus-shards.js";
+import { corpusCacheNamespaceForTarget, shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
   assertPreparedTargetUnchanged,
@@ -287,14 +287,14 @@ function installTargetDeps(dir: string, flags: readonly string[], identity?: {
   targetRevision: string;
   targetTree: string;
   sourceRoot: string;
-}): DependencyPreparationResult | undefined {
+}, cacheDir = phaseCacheDir): DependencyPreparationResult | undefined {
   const pm = detectPackageManager(dir);
   if (pm === "pnpm") disableGlobalVirtualStoreIfSet(dir);
-  if (phaseCacheDir && identity) {
+  if (cacheDir && identity) {
     return prepareCorpusDependencies({
       targetDir: dir,
       sourceRoot: identity.sourceRoot,
-      cacheDir: phaseCacheDir,
+      cacheDir,
       targetRevision: identity.targetRevision,
       targetTree: identity.targetTree,
       installFlags: npmOnlyFlags(pm, flags),
@@ -395,6 +395,7 @@ async function runScanner(options: ScannerInvocation & {
   targetConfig: string;
   records: CorpusScannerRecord[];
   dependencyPreparation?: DependencyPreparationResult;
+  cacheDir?: string;
 }): Promise<Finding[]> {
   const common = {
     repoRoot,
@@ -403,8 +404,8 @@ async function runScanner(options: ScannerInvocation & {
     targetConfig: options.targetConfig,
     onEvent: (message: string) => console.error(`  ${phaseTarget}: ${message}`),
   };
-  const cache = phaseCacheDir ? {
-    dir: phaseCacheDir,
+  const cache = options.cacheDir ? {
+    dir: options.cacheDir,
     mode: forceColdCache ? "verify" as const : "read-write" as const,
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
@@ -510,6 +511,9 @@ for (const target of targets) {
   const startedAt = Date.now();
   phaseTarget = target.slug;
   phaseSeconds[target.slug] = {};
+  const targetPhaseCacheDir = phaseCacheDir
+    ? join(phaseCacheDir, `shard${corpusCacheNamespaceForTarget(EXTERNAL_CORPUS.map((entry) => entry.slug), target.slug)}`)
+    : undefined;
   try {
     // One authoritative preparation boundary for hosted scoring and the independent replay: exact
     // pin, remove declared reference subtrees, then capture before dependency installation can
@@ -537,7 +541,7 @@ for (const target of targets) {
     const currentPlan = currentExecution && deterministicSnapshot && secretCandidateIdentity ? buildCurrentMechanicalPhasePlan({
       side: "hosted-producer",
       repoRoot,
-      cacheDir: phaseCacheDir!,
+      cacheDir: targetPhaseCacheDir!,
       targetRevision: target.commit,
       targetTree: targetTreeIdentity,
       advisoryDigest: deterministicSnapshot.digest,
@@ -554,9 +558,9 @@ for (const target of targets) {
       advisorySnapshot: deterministicSnapshot,
       advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
       secretCandidateIdentity,
-      phaseCache: currentPlan?.phaseCache ?? (phaseCacheDir ? buildMechanicalPhaseCache({
+      phaseCache: currentPlan?.phaseCache ?? (targetPhaseCacheDir ? buildMechanicalPhaseCache({
         repoRoot,
-        cacheDir: phaseCacheDir,
+        cacheDir: targetPhaseCacheDir,
         mode: forceColdCache ? "verify" : "read-write",
         targetRevision: target.commit,
         targetTree: targetTreeIdentity,
@@ -582,6 +586,7 @@ for (const target of targets) {
       }
       if (currentExecution) {
         if (!deterministicSnapshot || !secretCandidateIdentity) throw new Error(`${target.slug}: current readiness requires deterministic external-state receipts`);
+        if (!mechanicalRun.semgrepExecution) throw new Error(`${target.slug}: current readiness requires an actual successful Semgrep semantic execution receipt`);
         currentExecution.targets[target.slug] = {
           slug: target.slug,
           repo: target.repo,
@@ -603,7 +608,7 @@ for (const target of targets) {
           findings: mechanicalRun.findings,
           producers: mechanicalRun.detectors,
           context: mechanicalRun.context,
-          executionPlan: currentPlan!.executionPlan,
+          executionPlan: { ...currentPlan!.executionPlan, semgrep: mechanicalRun.semgrepExecution },
           cachePolicy: currentPlan!.cachePolicy,
           semgrepDiagnostics: mechanicalRun.semgrepDiagnostics,
         };
@@ -619,7 +624,7 @@ for (const target of targets) {
         targetRevision: target.commit,
         targetTree: targetTreeIdentity,
         sourceRoot: ".",
-      }))
+      }, targetPhaseCacheDir))
       : undefined;
     const scannerRecords: CorpusScannerRecord[] = [];
 
@@ -662,9 +667,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords })),
-      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, dependencyPreparation })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords })),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
+      ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
@@ -683,9 +688,9 @@ for (const target of targets) {
           targetRevision: target.commit,
           targetTree: targetTreeIdentity,
           sourceRoot: m5Root,
-        }))
+        }, targetPhaseCacheDir))
         : undefined;
-      const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
+      const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
     assertCorpusScannerCacheVerification(scannerRecords, forceColdCache ? "verify" : "read-write");

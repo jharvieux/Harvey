@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,15 @@ import {
   type MechanicalProducerRecord,
 } from "./mechanical-phase-cache.js";
 import { semgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
+
+const semanticExecution = () => {
+  const argv = ["--x-parmap", "-j", "9"];
+  const semantic = { argv, loadedRuleIds: ["fixture-rule"], resultCount: 0, resultsSha256: "a".repeat(64), scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const };
+  const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(",")}}` : JSON.stringify(value);
+  const family = { ordinal: 0, id: "fixture", familyId: "fixture", sourceKind: "local-config" as const, sourceId: "fixture.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ruleIds: ["fixture-rule"], ownedRuleIds: ["fixture-rule"], ownedTaintRuleIds: [], loadedRuleIds: ["fixture-rule"], loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const, excludedRuleIds: [], argv, topology: "single-command-v1" as const, mergeAlgorithm: "single-command-v1" as const, partitions: [], verification: "single" as const, status: "succeeded" as const, attempts: [{ status: "succeeded" as const, attempt: 1, ...semantic, semanticSha256: createHash("sha256").update(stable(semantic)).digest("hex") }] };
+  const ownership = [{ ordinal: 0, id: "fixture", sourceKind: "local-config", sourceId: "fixture.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ownedRuleIds: ["fixture-rule"], ownedTaintRuleIds: [], excludedRuleIds: [], semanticObjectSha256: undefined, selector: undefined, routingManifest: undefined, topology: "single-command-v1", mergeAlgorithm: "single-command-v1", partitions: [], verification: "single" }];
+  return { schema: 8 as const, timeoutPolicy: "fixpoint-family-not-assessed-v1" as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stable(ownership)).digest("hex"), families: [family] };
+};
 
 const finding = (id: string): Finding => ({
   id,
@@ -70,7 +80,7 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
   };
 
   const run = (phase: MechanicalPhase, cache: MechanicalPhaseCacheOptions, id: string = phase) =>
-    executeMechanicalPhase(phase, cache, () => ({ findings: [finding(id)], scope: { unitsExamined: 1_000, description: "faithful large source fixture" } }));
+    executeMechanicalPhase(phase, cache, () => ({ findings: [finding(id)], scope: { unitsExamined: 1_000, description: "faithful large source fixture" }, ...(phase === "semgrep" ? { evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } }, tmpdir()), semgrepExecution: semanticExecution() } } : {}) }));
 
   const producerValue = (paths: readonly string[] = ["src/a.ts", "src/b.ts", "src/c.ts"]) => {
     const examinedUnitIdentities = targetPathExaminedUnits("owned-producer", paths);
@@ -120,22 +130,35 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect({ findings: warm.findings, scope: warm.scope }).toEqual({ findings: cold.findings, scope: cold.scope });
   });
 
-  it("conserves complete same-path Semgrep diagnostics through phase store and reread", async () => {
+  it("conserves errors/skips but excludes raw timeout telemetry from the reusable phase store", async () => {
     const cache = options();
     const errors = [
       { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first" },
       { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second" },
     ];
+    const fixpointTimeouts = [
+      { error_type: "Fixpoint timeout", severity: "warn", message: "Fixpoint timeout while performing taint analysis" as const,
+        location: { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", start: { line: 42, col: 1, offset: 0 }, end: { line: 42, col: 2, offset: 1 } } },
+      { error_type: "Fixpoint timeout", severity: "warn", message: "Fixpoint timeout while performing taint analysis" as const,
+        location: { path: "<SEMGREP_TARGET_ROOT>/src/broken.ts", start: { line: 47, col: 1, offset: 0 }, end: { line: 47, col: 2, offset: 1 } } },
+    ];
     const value = {
       findings: [finding("SEM-ERR-00")],
       scope: { unitsExamined: 1, description: "one Semgrep target" },
-      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] } }, tmpdir()) },
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: fixpointTimeouts } }, tmpdir()), semgrepExecution: semanticExecution() },
     };
+    const withoutTimeouts = {
+      ...value,
+      evidence: { semgrepDiagnostics: semgrepDiagnosticEvidence({ errors, paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } }, tmpdir()), semgrepExecution: semanticExecution() },
+    };
+    expect(mechanicalPhasePayloadDigest(value)).toBe(mechanicalPhasePayloadDigest(withoutTimeouts));
     const cold = await executeMechanicalPhase("semgrep", cache, () => value);
     const warm = await executeMechanicalPhase("semgrep", cache, () => ({ ...value, findings: [finding("must-not-run")] }));
     expect(cold.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(cold.evidence?.semgrepDiagnostics).not.toHaveProperty("fixpointTimeouts");
     expect(warm.cache).toBe("hit");
     expect(warm.evidence?.semgrepDiagnostics.errors).toEqual(errors);
+    expect(warm.evidence?.semgrepDiagnostics).not.toHaveProperty("fixpointTimeouts");
   });
 
   it("persists the producer census deterministically and restores cache-hit status", async () => {
@@ -166,7 +189,7 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     const cold = await executeMechanicalPhase("structural-ast", cache, () => value);
     const artifact = join(cache.dir, "structural-ast", `${cold.key}.json`);
     expect(JSON.parse(readFileSync(artifact, "utf8"))).toMatchObject({
-      schema: 4,
+      schema: 5,
       producers: [{
         detector: "m5-hardcoded-deployment",
         unitsExamined: 0,
@@ -280,6 +303,28 @@ describe("content-addressed mechanical phase cache (#1864)", () => {
     expect(recomputed.findings[0]?.id).toBe("fresh");
     expect(events.some((event) => event.includes("CACHE REJECT semgrep") && event.includes("recomputing"))).toBe(true);
     expect(JSON.parse(readFileSync(artifact, "utf8"))).toMatchObject({ targetRevision: "commit-a", targetTree: "tree-a" });
+  });
+
+  it("rejects a checksum-valid current-readiness Semgrep phase artifact with only legacy diagnostics", async () => {
+    const events: string[] = [];
+    const cache = options({ onEvent: (message) => events.push(message) });
+    cache.semgrepFamilies = {
+      dir: cache.dir, mode: cache.mode, targetRevision: cache.targetRevision, targetTree: cache.targetTree,
+      implementation: "family-implementation", externalInputs: { runtime: "fixture" },
+    };
+    const cold = await run("semgrep", cache);
+    const artifactPath = join(cache.dir, "semgrep", `${cold.key}.json`);
+    const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as {
+      findings: Finding[];
+      scope: { unitsExamined: number; description: string };
+      evidence: { semgrepDiagnostics: ReturnType<typeof semgrepDiagnosticEvidence>; semgrepExecution?: ReturnType<typeof semanticExecution> };
+      payloadDigest: string;
+    };
+    delete artifact.evidence.semgrepExecution;
+    artifact.payloadDigest = mechanicalPhasePayloadDigest({ findings: artifact.findings, scope: artifact.scope, evidence: artifact.evidence });
+    writeFileSync(artifactPath, JSON.stringify(artifact));
+    expect((await run("semgrep", cache, "fresh-after-legacy-receipt")).cache).toBe("miss");
+    expect(events.some((event) => event.includes("successful Semgrep semantic execution receipt is missing"))).toBe(true);
   });
 
   it("rejects a well-shaped artifact whose finding payload was tampered with", async () => {

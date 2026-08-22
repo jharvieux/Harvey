@@ -90,6 +90,7 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       secretCandidateIdentity,
       phaseCache: plan.phaseCache,
     });
+    if (!result.semgrepExecution) throw new Error(`${target.slug}: independent replay requires an actual successful Semgrep semantic execution receipt`);
     assertPreparedTargetUnchanged(prepared);
     artifact.targets[target.slug] = {
       slug: target.slug,
@@ -112,7 +113,7 @@ for (const target of allTargets.filter((candidate) => mine.has(candidate.slug)))
       findings: result.findings,
       producers: result.detectors,
       context: result.context,
-      executionPlan: plan.executionPlan,
+      executionPlan: { ...plan.executionPlan, semgrep: result.semgrepExecution },
       cachePolicy: plan.cachePolicy,
       semgrepDiagnostics: result.semgrepDiagnostics,
     };
