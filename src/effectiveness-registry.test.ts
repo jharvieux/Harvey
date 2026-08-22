@@ -17,6 +17,7 @@ import { SCORED_GATES } from "./scored-gates.js";
 import { MECHANICAL_DETECTORS } from "./scan/mechanical-detector-registry.js";
 import { MECHANICAL_REGISTRY } from "./scan/mechanical-engine-registry.js";
 import { REGISTRY_PACKS } from "./scan/semgrep.js";
+import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const freshInventory = (): EffectivenessInventory =>
   JSON.parse(EFFECTIVENESS_INVENTORY_JSON) as EffectivenessInventory;
@@ -43,6 +44,34 @@ const expectRestoredBaseline = (): void => {
 };
 
 describe("effectiveness producer inventory (#1910)", () => {
+  it("binds actual runtime receipts to their exact producer and rejects unknown or forged ownership", () => {
+    const receipt = createProducerExecutionReceipt({
+      executionId: "conservation:M7",
+      producerId: "plant:M7",
+      implementationId: "src/audit-conservation.ts#CALIBRATION_PLANTS",
+      module: "M7",
+      tier: "free",
+      findingFamilyIds: ["@conservation-plant:M7"],
+      findingIds: ["M7-plant"],
+      edges: [{ kind: "conservation-consume", from: "plant:M7", to: "conservation:M7" }],
+    });
+    const rule = "javascript.express.security.audit.xss.direct-response-write.direct-response-write";
+    const directResponseReceipt = createProducerExecutionReceipt({
+      executionId: "semgrep:direct-response",
+      producerId: `semgrep:registry:${rule}`,
+      implementationId: `src/scan/semgrep.ts#${rule}`,
+      module: "M1",
+      tier: "free",
+      findingFamilyIds: [rule],
+      findingIds: [],
+      edges: [{ kind: "semgrep-family", from: "semgrep-family:registry-singleton-direct-response-write", to: `producer:semgrep:registry:${rule}` }],
+    });
+    const inventory = buildEffectivenessInventory({ producerExecutionReceipts: [receipt, directResponseReceipt] });
+    expect(producer(inventory, "plant:M7").executionReceiptIds).toEqual(["conservation:M7"]);
+    expect(producer(inventory, `semgrep:registry:${rule}`).executionReceiptIds).toEqual(["semgrep:direct-response"]);
+    expect(validateEffectivenessInventory(inventory)).toEqual([]);
+    expect(() => buildEffectivenessInventory({ producerExecutionReceipts: [{ ...receipt, producerId: "unknown" }] })).toThrow(/digest|unknown producer/);
+  });
   it("closes the production registries and preserves the current exact populations", () => {
     const inventory = freshInventory();
     expect(validateEffectivenessInventory(inventory)).toEqual([]);
@@ -88,14 +117,9 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(summary.findingFamilies).toBe(trueFindingFamilies.length);
     expect(allFindingShapedFamilies.length).toBeGreaterThan(summary.findingFamilies);
     for (const row of inventory.producers) {
-      expect(row.routeIds.length, `${row.id} has no live route`).toBeGreaterThan(0);
+      expect(row.executionReceiptIds, `${row.id} runtime evidence must be explicit`).toEqual([]);
       for (const family of row.findingFamilies) {
         expect((family.venueIds.length > 0) !== (family.exemptionId !== undefined), family.id).toBe(true);
-      }
-      for (const implementation of row.implementations) {
-        expect(inventory.receipt.routes.some((route) =>
-          route.producerId === row.id
-          && route.implementationId === `${implementation.file}#${implementation.symbol}`)).toBe(true);
       }
     }
   });
@@ -113,9 +137,8 @@ describe("effectiveness producer inventory (#1910)", () => {
     expect(JSON.parse(EFFECTIVENESS_INVENTORY_JSON)).toEqual(EFFECTIVENESS_INVENTORY);
     expect(Object.isFrozen(EFFECTIVENESS_INVENTORY)).toBe(true);
     expect(EFFECTIVENESS_INVENTORY_JSON).not.toContain(process.cwd());
-    expect(new Set(EFFECTIVENESS_INVENTORY.receipt.calls.map((receipt) => receipt.kind))).toEqual(
-      new Set(["call", "registry", "command", "artifact"]),
-    );
+    expect(new Set(EFFECTIVENESS_INVENTORY.receipt.calls.map((receipt) => receipt.kind))).toEqual(new Set(["call", "command"]));
+    expect(EFFECTIVENESS_INVENTORY.receipt.producerExecutions).toEqual([]);
   });
 
   it("retains one handrolled, one SFC, and one M5 hardcoded producer across their multiple consumers", () => {
@@ -242,14 +265,14 @@ describe("effectiveness producer inventory (#1910)", () => {
     });
   });
 
-  it("assigns the new M1 hardcoded-tenant owner to the live scored calibration venue", () => {
+  it("does not infer hardcoded-tenant runtime liveness from scored-corpus registration", () => {
     const m1 = producer(freshInventory(), "mechanical:structural-ast:m1-hardcoded-tenant");
     expect(m1).toMatchObject({
       modules: ["M1"],
       populationClass: "true-finding-producer",
-      venueIds: ["validate-calibration"],
+      venueIds: [],
     });
-    expect(m1.exemptionId).toBeUndefined();
+    expect(m1.exemptionId).toBeDefined();
     expect(m1.findingFamilies).toEqual([
       expect.objectContaining({
         module: "M1",
@@ -360,7 +383,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     expectRestoredBaseline();
   });
 
-  it("fails an orphaned implementation identity and passes when it is restored", () => {
+  it("does not treat a renamed implementation declaration as runtime evidence", () => {
     const baseline = freshInventory();
     const id = "detector:app-router";
     const planted = withProducer(baseline, id, (row) => ({
@@ -369,9 +392,8 @@ describe("effectiveness producer inventory (#1910)", () => {
         ? { ...item, symbol: "removedAppRouterProducer" }
         : item),
     }));
-    expect(validateEffectivenessInventory(planted)).toContain(
-      `${id}: orphaned implementation identity src/detectors/app-router.ts#removedAppRouterProducer has no live route`,
-    );
+    expect(validateEffectivenessInventory(planted).some((problem) => problem.includes("removedAppRouterProducer") && problem.includes("live route"))).toBe(false);
+    expect(producer(planted, id).executionReceiptIds).toEqual([]);
     expectRestoredBaseline();
   });
 

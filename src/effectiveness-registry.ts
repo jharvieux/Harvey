@@ -17,6 +17,7 @@ import {
   EFFECTIVENESS_INVENTORY_SCHEMA,
   PRODUCER_POPULATION_CLASSES,
   PRODUCER_TIERS,
+  REQUIRED_RUNTIME_EDGE,
   type EffectivenessExemption,
   type EffectivenessConservationReceipt,
   type EffectivenessFamilyCoverageReceipt,
@@ -47,9 +48,16 @@ import {
 } from "./scan/mechanical-engine-registry.js";
 import { discoverLocalSemgrepFamilies } from "./scan/semgrep-family-cache.js";
 import { REGISTRY_PACKS } from "./scan/semgrep.js";
+import {
+  assertProducerExecutionReceipt,
+  assertUniqueProducerExecutionReceipts,
+  receiptHasRoute,
+  type ProducerExecutionReceipt,
+} from "./producer-execution-receipt.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_SEMGREP_ROOT = join("src", "scan", "rules", "semgrep");
+const DIRECT_RESPONSE_WRITE_RULE = "javascript.express.security.audit.xss.direct-response-write.direct-response-write";
 
 interface LocalSemgrepRule {
   readonly familyId: string;
@@ -68,6 +76,7 @@ interface RegistryInputs {
   readonly registryPacks?: readonly string[];
   /** Optional exact ids from a materialized registry snapshot; the six pack identities remain stable. */
   readonly registryPackRuleIds?: Readonly<Record<string, readonly string[]>>;
+  readonly producerExecutionReceipts?: readonly ProducerExecutionReceipt[];
 }
 
 const nonEmpty = (value: string): boolean => value.trim().length > 0;
@@ -266,6 +275,13 @@ function expandSemgrepAggregate(
       deliveryKind: "registry-dispatch",
     });
   }
+  result.push({
+    id: `semgrep:registry:${DIRECT_RESPONSE_WRITE_RULE}`,
+    modules: ["M1"], tiers: ["free"], populationClass: "true-finding-producer",
+    implementations: [implementation("src/scan/semgrep.ts", DIRECT_RESPONSE_WRITE_RULE, "rule")],
+    findingFamilies: [family("M1", DIRECT_RESPONSE_WRITE_RULE, DIRECT_RESPONSE_WRITE_RULE)],
+    deliveryKind: "registry-dispatch",
+  });
   return result;
 }
 
@@ -468,6 +484,7 @@ function normalizeProducer(
   routes: readonly string[],
   venuesByFamily: ReadonlyMap<string, readonly string[]>,
   exemptionByFamily: ReadonlyMap<string, string>,
+  executionReceiptIds: readonly string[],
 ): EffectivenessProducer {
   const findingFamilies = binding.findingFamilies.map((entry) => {
     const id = familyIdentity(binding.id, entry);
@@ -482,6 +499,7 @@ function normalizeProducer(
     findingFamilies,
     routeIds: [...routes].sort(byText),
     venueIds,
+    executionReceiptIds: [...executionReceiptIds].sort(byText),
     ...(exemptions.length === 1 ? { exemptionId: exemptions[0] } : {}),
   };
 }
@@ -496,7 +514,12 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const packs = inputs.registryPacks ?? REGISTRY_PACKS;
   const gateProblems = checkScoredGates(loadGateInputs(root), scoredGates);
   if (gateProblems.length > 0) throw new Error(`scored venue registry is invalid:\n${gateProblems.join("\n")}`);
-  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, inputs.registryPackRuleIds ?? {});
+  const producerExecutions = [...(inputs.producerExecutionReceipts ?? [])];
+  assertUniqueProducerExecutionReceipts(producerExecutions);
+  const runtimePackRuleIds = Object.fromEntries(producerExecutions
+    .filter((receipt) => receipt.producerId.startsWith("semgrep:registry:"))
+    .map((receipt) => [receipt.producerId.slice("semgrep:registry:".length), receipt.findingFamilyIds]));
+  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds });
   const routeImplementations: RouteGraphImplementation[] = population.bindings.flatMap((binding) => binding.implementations.map((item) => ({
     ...item,
     producerId: binding.id,
@@ -538,7 +561,13 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const exemptions = buildExemptions(population.bindings, venuesByFamily);
   const exemptionByFamily = new Map(exemptions.flatMap((exemption) => exemption.applicableFamilyIds.map((id) => [id, exemption.id] as const)));
   const routesByProducer = new Map(population.bindings.map((binding) => [binding.id, routeGraph.routes.filter((route) => route.producerId === binding.id).map((route) => route.id)]));
-  const producers = population.bindings.map((binding) => normalizeProducer(binding, routesByProducer.get(binding.id) ?? [], venuesByFamily, exemptionByFamily)).sort((a, b) => a.id.localeCompare(b.id));
+  const producers = population.bindings.map((binding) => normalizeProducer(
+    binding,
+    routesByProducer.get(binding.id) ?? [],
+    venuesByFamily,
+    exemptionByFamily,
+    producerExecutions.filter((receipt) => receipt.producerId === binding.id).map((receipt) => receipt.executionId),
+  )).sort((a, b) => a.id.localeCompare(b.id));
   const coveredFamilyIds = new Map(semanticVenues.map((venue) => [venue.gate.id, producers.flatMap((producer) => producer.findingFamilies.filter((entry) => entry.venueIds.includes(venue.gate.id)).map((entry) => entry.id)).sort(byText)]));
   const venues = buildVenues(semanticVenues, coveredFamilyIds);
   const semanticVenueById = new Map(semanticVenues.map((venue) => [venue.gate.id, venue]));
@@ -560,7 +589,7 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const conservation: EffectivenessConservationReceipt[] = producers.filter((producer) => producer.populationClass === "conservation-plant").map((producer) => ({
     id: `conservation:${producer.id}`,
     producerId: producer.id,
-    routeIds: [...producer.routeIds],
+    executionReceiptIds: [...producer.executionReceiptIds],
   })).sort((a, b) => a.id.localeCompare(b.id));
   const inventory: EffectivenessInventory = {
     schema: EFFECTIVENESS_INVENTORY_SCHEMA,
@@ -586,6 +615,7 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
       familyCoverage,
       conservation,
       unresolvedFindingDispatches: routeGraph.unresolvedFindingDispatches,
+      producerExecutions: producerExecutions.sort((a, b) => a.executionId.localeCompare(b.executionId)),
     },
   };
   const problems = validateEffectivenessInventory(inventory, { root, scoredGates });
@@ -625,7 +655,8 @@ export function validateEffectivenessInventory(
         problems.push(`${producer.id}: orphaned implementation file ${item.file}`);
       }
     }
-    if (producer.routeIds.length === 0) problems.push(`${producer.id}: no live semantic, registry, command, artifact, or conservation route`);
+    // routeIds describe static candidates only. Runtime liveness is established exclusively by
+    // producerExecutionReceipts and therefore an empty candidate list is not manufactured here.
     if (producer.implementations.some((item) => item.kind === "synthesizer") && producer.populationClass !== "synthesizer") {
       problems.push(`${producer.id}: synthesizer implementation is wrongly classified as ${producer.populationClass}`);
     }
@@ -666,6 +697,37 @@ export function validateEffectivenessInventory(
         if (producer.populationClass !== "true-finding-producer" && exemption.kind !== "not-a-producer") problems.push(`${producer.id}: ${producer.populationClass} must use a not-a-producer exemption`);
       }
     }
+  }
+
+  const executionIds = inventory.receipt.producerExecutions.map((receipt) => receipt.executionId);
+  if (unique(executionIds).length !== executionIds.length) problems.push("producer execution receipt ids are duplicated");
+  for (const receipt of inventory.receipt.producerExecutions) {
+    try { assertProducerExecutionReceipt(receipt); } catch (error) {
+      problems.push(`producer execution ${receipt.executionId ?? "<unknown>"}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const producer = producerById.get(receipt.producerId);
+    if (!producer) {
+      problems.push(`${receipt.executionId}: unknown producer ${receipt.producerId}`);
+      continue;
+    }
+    if (!producer.executionReceiptIds.includes(receipt.executionId)) problems.push(`${receipt.executionId}: producer does not point back to this execution`);
+    if (producer.modules.length !== 1 && !producer.modules.includes(receipt.module)) problems.push(`${receipt.executionId}: receipt module is outside producer ownership`);
+    else if (!producer.modules.includes(receipt.module)) problems.push(`${receipt.executionId}: receipt module is outside producer ownership`);
+    if (!producer.tiers.includes(receipt.tier)) problems.push(`${receipt.executionId}: receipt tier is outside producer ownership`);
+    if (!producer.implementations.some((implementation) => `${implementation.file}#${implementation.symbol}` === receipt.implementationId)) {
+      problems.push(`${receipt.executionId}: receipt implementation is not owned by ${producer.id}`);
+    }
+    const requiredEdge = producer.id.startsWith("semgrep:") ? "semgrep-family" : REQUIRED_RUNTIME_EDGE[producer.deliveryKind];
+    if (!receiptHasRoute(receipt, [requiredEdge])) {
+      problems.push(`${receipt.executionId}: missing required ${requiredEdge} runtime edge`);
+    }
+    const knownFamilies = new Set(producer.findingFamilies.flatMap((family) => [family.id, family.idPattern]));
+    for (const familyId of receipt.findingFamilyIds) if (!knownFamilies.has(familyId)) problems.push(`${receipt.executionId}: unknown finding family ${familyId}`);
+  }
+  for (const producer of inventory.producers) {
+    const expected = inventory.receipt.producerExecutions.filter((receipt) => receipt.producerId === producer.id).map((receipt) => receipt.executionId).sort(byText);
+    if (JSON.stringify(expected) !== JSON.stringify([...producer.executionReceiptIds].sort(byText))) problems.push(`${producer.id}: execution receipt backlink drift`);
   }
 
   for (const venue of inventory.venues) {
@@ -772,8 +834,6 @@ export function validateEffectivenessInventory(
   compareIdentityPopulation("consumer", inventory.receipt.consumers.map((consumer) => consumer.id), inventory.receipt.consumers.map((consumer) => consumer.id));
   const callById = new Map(inventory.receipt.calls.map((call) => [call.id, call]));
   const consumerById = new Map(inventory.receipt.consumers.map((consumer) => [consumer.id, consumer]));
-  const routeImplementationIds = unique(inventory.receipt.routes.map((route) => route.implementationId)).sort(byText);
-  compareIdentityPopulation("route implementation", routeImplementationIds, [...implementationOwners].sort(byText));
   for (const consumer of inventory.receipt.consumers) {
     if (!producerById.has(consumer.producerId)) problems.push(`${consumer.id}: consumer names unknown producer ${consumer.producerId}`);
     if (!implementationOwners.has(consumer.implementationId)) problems.push(`${consumer.id}: consumer names unregistered implementation ${consumer.implementationId}`);
@@ -801,12 +861,6 @@ export function validateEffectivenessInventory(
   for (const producer of inventory.producers) {
     const expected = inventory.receipt.routes.filter((route) => route.producerId === producer.id).map((route) => route.id).sort(byText);
     if (JSON.stringify(producer.routeIds) !== JSON.stringify(expected)) problems.push(`${producer.id}: producer route ids do not close on the semantic route graph`);
-    for (const item of producer.implementations) {
-      const identity = `${item.file}#${item.symbol}`;
-      if (!inventory.receipt.routes.some((route) => route.producerId === producer.id && route.implementationId === identity)) {
-        problems.push(`${producer.id}: orphaned implementation identity ${identity} has no live route`);
-      }
-    }
   }
   const venuePairs = inventory.venues.flatMap((venue) => venue.coveredFamilyIds.map((familyId) => `${familyId}=>${venue.id}`)).sort(byText);
   const familyVenuePairs = inventory.producers.flatMap((producer) => producer.findingFamilies.flatMap((family) => family.venueIds.map((venueId) => `${family.id}=>${venueId}`))).sort(byText);
@@ -852,14 +906,68 @@ export function validateEffectivenessInventory(
   for (const receipt of inventory.receipt.conservation) {
     const producer = producerById.get(receipt.producerId);
     if (!producer) continue;
-    if (JSON.stringify(receipt.routeIds) !== JSON.stringify(producer.routeIds)) problems.push(`${receipt.id}: conservation routes do not close on ${producer.id}`);
-    if (receipt.routeIds.some((id) => inventory.receipt.routes.find((route) => route.id === id)?.endpoint !== "conservation")) problems.push(`${receipt.id}: conservation route does not terminate at conservation endpoint`);
+    if (JSON.stringify(receipt.executionReceiptIds) !== JSON.stringify(producer.executionReceiptIds)) problems.push(`${receipt.id}: conservation executions do not close on ${producer.id}`);
+    if (receipt.executionReceiptIds.some((id) => !inventory.receipt.producerExecutions.some((execution) => execution.executionId === id && receiptHasRoute(execution, ["conservation-consume"])))) problems.push(`${receipt.id}: conservation execution does not contain a consume edge`);
   }
   for (const module of AUDIT_MODULES) if (!inventory.producers.some((producer) => producer.modules.includes(module))) problems.push(`${module}: no producer population is registered`);
   const summary = populationSummary(inventory.producers);
   if (JSON.stringify(summary) !== JSON.stringify(inventory.summary)) problems.push("population summary does not match the disjoint producer/family population");
   if (!inventory.summary.denominatorConserved) problems.push("producer denominator is not conserved across disjoint population classes");
   return problems;
+}
+
+interface EffectivenessDeliveryObservation {
+  readonly findingId: string;
+  readonly producerId: string;
+  readonly familyId: string;
+  readonly venueId: string;
+}
+
+/**
+ * Validate the final W4 boundary. Venue calls and family declarations are intentionally ignored:
+ * every delivered finding must be conserved by one producer-specific runtime route ending at the
+ * exact venue, and every claimed runtime delivery must name a finding actually in the client set.
+ */
+export function validateEffectivenessDelivery(
+  inventory: EffectivenessInventory,
+  delivered: readonly EffectivenessDeliveryObservation[],
+): string[] {
+  const problems = validateEffectivenessInventory(inventory);
+  const producerById = new Map(inventory.producers.map((producer) => [producer.id, producer]));
+  const receiptByExecution = new Map(inventory.receipt.producerExecutions.map((receipt) => [receipt.executionId, receipt]));
+  const observedKeys: string[] = [];
+  for (const observation of delivered) {
+    const producer = producerById.get(observation.producerId);
+    if (!producer) {
+      problems.push(`${observation.findingId}: delivery names unknown producer ${observation.producerId}`);
+      continue;
+    }
+    const family = producer.findingFamilies.find((candidate) => candidate.id === observation.familyId || candidate.idPattern === observation.familyId);
+    if (!family) {
+      problems.push(`${observation.findingId}: delivery names unknown family ${observation.familyId}`);
+      continue;
+    }
+    if (observation.venueId !== "run-audit" && !family.venueIds.includes(observation.venueId)) problems.push(`${observation.findingId}: family ${family.id} is not bound to venue ${observation.venueId}`);
+    const candidates = producer.executionReceiptIds.map((id) => receiptByExecution.get(id)).filter((receipt): receipt is ProducerExecutionReceipt => !!receipt)
+      .filter((receipt) => receipt.findingIds.includes(observation.findingId)
+        && receipt.findingFamilyIds.some((id) => id === family.id || id === family.idPattern)
+        && receipt.edges.some((edge) => edge.kind === "client-delivery" && edge.to === `venue:${observation.venueId}`));
+    if (candidates.length !== 1) problems.push(`${observation.findingId}: expected one exact producer-to-client delivery receipt, found ${candidates.length}`);
+    observedKeys.push(`${observation.producerId}:${observation.familyId}:${observation.venueId}:${observation.findingId}`);
+  }
+  if (unique(observedKeys).length !== observedKeys.length) problems.push("client delivery observations contain duplicates");
+  for (const receipt of inventory.receipt.producerExecutions) {
+    for (const edge of receipt.edges.filter((candidate) => candidate.kind === "client-delivery")) {
+      const venueId = edge.to.startsWith("venue:") ? edge.to.slice("venue:".length) : "";
+      if (venueId !== "run-audit" && !inventory.venues.some((venue) => venue.id === venueId)) problems.push(`${receipt.executionId}: client delivery names unknown venue ${edge.to}`);
+      for (const findingId of receipt.findingIds) {
+        if (!delivered.some((observation) => observation.findingId === findingId && observation.producerId === receipt.producerId && observation.venueId === venueId)) {
+          problems.push(`${receipt.executionId}: runtime receipt claims undelivered finding ${findingId}`);
+        }
+      }
+    }
+  }
+  return unique(problems);
 }
 
 export function serializeEffectivenessInventory(inventory: EffectivenessInventory): string {

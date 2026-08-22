@@ -496,25 +496,13 @@ export function discoverEffectivenessRouteGraph(
 
   const consumers: EffectivenessConsumerReceipt[] = [];
   const routes: EffectivenessRouteReceipt[] = [];
-  const productionGraph = requestedRoots === undefined;
   for (const implementation of [...implementations].sort((a, b) => `${a.file}#${a.symbol}`.localeCompare(`${b.file}#${b.symbol}`))) {
     const identity = `${implementation.file}#${implementation.symbol}`;
     const discovered = [...new Map((live.get(identity) ?? []).map((receipt) => [receipt.receiptId, receipt])).values()].sort((a, b) => a.receiptId.localeCompare(b.receiptId));
-    const declaredDispatchIsLive = implementation.deliveryKind === "registry-dispatch"
-      ? productionGraph
-        || reachable.has(join(root, implementation.file))
-        || (implementation.kind === "rule" && reachable.has(join(root, "src", "scan", "semgrep.ts")))
-      : productionGraph && (implementation.deliveryKind === "artifact-ingest" || implementation.deliveryKind === "conservation");
-    const synthetic = discovered.length === 0 && declaredDispatchIsLive
-      ? [{
-          rootId: implementation.deliveryKind === "conservation" ? "src/cli/validate-conservation.ts" : implementation.file,
-          receiptId: `${implementation.deliveryKind}:${implementation.producerId}:${identity}`,
-          callReceiptIds: [`${implementation.deliveryKind}:${implementation.producerId}:${identity}`],
-          kind: implementation.deliveryKind === "artifact-ingest" || implementation.deliveryKind === "conservation" ? "artifact" as const : "registry" as const,
-        }]
-      : [];
-    const receipts = [...discovered, ...synthetic];
-    for (const receipt of receipts) {
+    // Static reachability is a declaration graph only. Registry membership, implementation-file
+    // reachability, artifact metadata and conservation declarations are excluded from liveness
+    // evidence; schema-v3 runtime ProducerExecutionReceipts carry those facts.
+    for (const receipt of discovered) {
       if (!calls.has(receipt.receiptId)) calls.set(receipt.receiptId, {
         id: receipt.receiptId,
         kind: receipt.kind,

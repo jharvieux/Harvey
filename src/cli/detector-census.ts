@@ -25,6 +25,7 @@ import {
 } from "../effectiveness-registry.js";
 import { discoverEffectivenessRouteGraph } from "../effectiveness-route-graph.js";
 import type { EffectivenessInventory } from "../effectiveness-schema.js";
+import { assertUniqueProducerExecutionReceipts, semgrepProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 import {
   MECHANICAL_REGISTRY,
@@ -35,7 +36,21 @@ import {
 const ROOT = new URL("../..", import.meta.url).pathname;
 
 function effectivenessJson(): string {
-  const inventory: EffectivenessInventory = buildEffectivenessInventory({ root: ROOT });
+  const receiptFlag = process.argv.indexOf("--execution-receipts");
+  let producerExecutionReceipts: ProducerExecutionReceipt[] = [];
+  if (receiptFlag >= 0) {
+    const path = process.argv[receiptFlag + 1];
+    if (!path) throw new Error("--execution-receipts needs a JSON file");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (Array.isArray(parsed)) {
+      assertUniqueProducerExecutionReceipts(parsed);
+      producerExecutionReceipts = parsed;
+    } else {
+      producerExecutionReceipts = semgrepProducerExecutionReceipts(parsed);
+      assertUniqueProducerExecutionReceipts(producerExecutionReceipts);
+    }
+  }
+  const inventory: EffectivenessInventory = buildEffectivenessInventory({ root: ROOT, producerExecutionReceipts });
   const problems = validateEffectivenessInventory(inventory, { root: ROOT });
   if (problems.length > 0) throw new Error(`effectiveness inventory invalid:\n${problems.join("\n")}`);
 
@@ -52,7 +67,7 @@ function effectivenessJson(): string {
   }
 
   const serialized = serializeEffectivenessInventory(inventory);
-  if (serialized !== EFFECTIVENESS_INVENTORY_JSON || JSON.stringify(inventory) !== JSON.stringify(EFFECTIVENESS_INVENTORY)) {
+  if (producerExecutionReceipts.length === 0 && (serialized !== EFFECTIVENESS_INVENTORY_JSON || JSON.stringify(inventory) !== JSON.stringify(EFFECTIVENESS_INVENTORY))) {
     throw new Error("effectiveness inventory drifted from its deterministic module export");
   }
   return serialized;

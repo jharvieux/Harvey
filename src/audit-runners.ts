@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
@@ -411,7 +411,10 @@ const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
     // app, so repeating it per instance would multiply one recorded finding across every row.
     // #1522: the slot accumulates, so fold EVERY fresh pass it holds — a superseded tier's findings
     // are evidence in the same way the newest tier's are, and used to be deleted at the write side.
-    const first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    let first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    if (pass.fresh && pass.artifact.producerExecutionReceipts?.length && "kind" in first && first.kind === "examined") {
+      first = { ...first, producerExecutionReceipts: ingestPassArtifactReceipts(pass.artifact, `audit-runner:${runner.module}`) };
+    }
     return [first, ...outcomes.slice(1)];
   },
 });

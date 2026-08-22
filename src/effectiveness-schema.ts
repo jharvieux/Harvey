@@ -1,8 +1,9 @@
 import type { AuditModule } from "./audit-coverage.js";
 import type { FindingFamilyKind } from "./findings.js";
+import type { ProducerExecutionReceipt, ProducerRouteEdgeKind } from "./producer-execution-receipt.js";
 
 /** Version of the deterministic producer-inventory contract consumed by downstream metrics. */
-export const EFFECTIVENESS_INVENTORY_SCHEMA = 2 as const;
+export const EFFECTIVENESS_INVENTORY_SCHEMA = 3 as const;
 
 export const PRODUCER_POPULATION_CLASSES = [
   "true-finding-producer",
@@ -47,6 +48,14 @@ export interface ProductionProducerBinding {
   readonly deliveryKind: "semantic-call" | "registry-dispatch" | "artifact-ingest" | "conservation";
 }
 
+/** Required runtime observation for a declaration's dispatch style. It is not itself evidence. */
+export const REQUIRED_RUNTIME_EDGE: Readonly<Record<ProductionProducerBinding["deliveryKind"], ProducerRouteEdgeKind>> = Object.freeze({
+  "semantic-call": "semantic-call",
+  "registry-dispatch": "registry-iteration",
+  "artifact-ingest": "artifact-ingest",
+  conservation: "conservation-consume",
+});
+
 export interface EffectivenessCallReceipt {
   readonly id: string;
   readonly kind: "call" | "registry" | "command" | "artifact";
@@ -90,7 +99,7 @@ export interface EffectivenessFamilyCoverageReceipt {
 export interface EffectivenessConservationReceipt {
   readonly id: string;
   readonly producerId: string;
-  readonly routeIds: readonly string[];
+  readonly executionReceiptIds: readonly string[];
 }
 
 export interface EffectivenessVenue {
@@ -136,6 +145,8 @@ export interface EffectivenessProducer extends Omit<ProductionProducerBinding, "
   readonly routeIds: readonly string[];
   readonly venueIds: readonly string[];
   readonly exemptionId?: string;
+  /** Exact successful runtime receipts supplied to this inventory build; empty means not witnessed. */
+  readonly executionReceiptIds: readonly string[];
 }
 
 export interface EffectivenessPopulationSummary {
@@ -171,6 +182,7 @@ export interface EffectivenessDiscoveryReceipt {
   readonly familyCoverage: readonly EffectivenessFamilyCoverageReceipt[];
   readonly conservation: readonly EffectivenessConservationReceipt[];
   readonly unresolvedFindingDispatches: readonly string[];
+  readonly producerExecutions: readonly ProducerExecutionReceipt[];
 }
 
 export interface EffectivenessInventory {
