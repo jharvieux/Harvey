@@ -17,6 +17,7 @@ import { parseRecordedReasons, validateRecordedReason } from "../recorded-reason
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
+  GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE,
   driftExplanationLines,
   explainDrift,
   FLOOR_CLAIM_TRIAGE,
@@ -45,6 +46,34 @@ function finding(taxonomy: string, severity: Severity = "Perf", location = "app/
     location, status: "Open", evidence: "", impact: "", fix: "",
     value: 3, ease: 3, safety: 3, mechanical: true,
   };
+}
+
+function ghostfolioWholeLibraryFinding(location: string, supported: boolean): Finding {
+  return {
+    ...finding("M7 — Whole-library import", "Low", location),
+    impact: supported
+      ? "Server-side only: resident memory and cold-start parse for a library one function is used from."
+      : "Tens to hundreds of KB of dead code in the bundle that imports it.",
+    evidence: supported
+      ? "A request entry point in this tree imports this module and no client entry point does."
+      : "Whether this module reaches a client chunk was not established.",
+  };
+}
+
+function ghostfolioM7Findings(mode: "current" | "before" | "wrong-row" = "current"): Finding[] {
+  const baseline = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
+  const twitterSupported = mode === "current";
+  const otherSupported = mode === "wrong-row" ? 24 : 23;
+  const otherUnsupported = mode === "wrong-row" ? 34 : 35;
+  return [
+    ghostfolioWholeLibraryFinding(baseline.recoveredLocation, twitterSupported),
+    ...Array.from({ length: otherSupported }, (_, index) =>
+      ghostfolioWholeLibraryFinding(`apps/api/src/services/supported-${index}.service.ts:1`, true)),
+    ...Array.from({ length: otherUnsupported }, (_, index) =>
+      ghostfolioWholeLibraryFinding(`libs/unsupported-${index}.ts:1`, false)),
+    ...Array.from({ length: 19 }, (_, index) =>
+      finding("M7 — Nested-loop join", "Perf", `apps/api/src/other-m7-${index}.ts:1`)),
+  ];
 }
 
 const target = (slug: string): ExternalTarget => {
@@ -241,6 +270,47 @@ describe("scoreExternalBaseline", () => {
       finding("M9 — Accidental dynamic rendering"),
     ]);
     expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: true, actual: 2, drift: 0 });
+  });
+
+  it("#1795: pins Ghostfolio's count-neutral 24 supported / 35 unsupported whole-library split", () => {
+    const measurement = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
+    const ghostfolio = target("ghostfolio");
+    const m7 = ghostfolio.modules.M7;
+    if (!m7 || isNotRun(m7)) throw new Error("ghostfolio M7 baseline must be measured");
+
+    expect(ghostfolio.commit).toBe(measurement.targetCommit);
+    expect([m7.counted, m7.total]).toEqual([measurement.m7.counted, measurement.m7.total]);
+    expect(measurement.wholeLibrary.before).toEqual({ serverSideSupported: 23, reachabilityUnsupported: 36 });
+    expect(measurement.wholeLibrary.after).toEqual({ serverSideSupported: 24, reachabilityUnsupported: 35 });
+    expect(measurement.wholeLibrary.after.serverSideSupported + measurement.wholeLibrary.after.reachabilityUnsupported)
+      .toBe(measurement.wholeLibrary.total);
+    expect(m7.note).toContain("M7 is conserved at 78/78");
+    expect(m7.note).toContain("23 server-side-supported / 36 reachability-unsupported to 24/35");
+    expect(m7.note).toContain(measurement.recoveredLocation);
+
+    const row = scoreExternalBaseline(ghostfolio, ghostfolioM7Findings()).find((candidate) => candidate.module === "M7");
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: true });
+    expect(row?.detail).toContain("59 = 24 server-side supported + 35 reachability unsupported");
+    expect(row?.detail).toContain("recovered imports-chain-only provider");
+  });
+
+  it("#1795: FAILS on the reproduced pre-fix 23/36 split even though M7 stays 78/78", () => {
+    const row = scoreExternalBaseline(target("ghostfolio"), ghostfolioM7Findings("before"))
+      .find((candidate) => candidate.module === "M7");
+
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: false });
+    expect(row?.detail).toContain("SEMANTIC DRIFT");
+    expect(row?.detail).toContain("59 = 23 server-side supported + 36 reachability unsupported");
+    expect(row?.detail).toContain("recovered twitter-bot supported=false");
+  });
+
+  it("#1795: FAILS if another row masks twitter-bot's regression at the same aggregate 24/35 split", () => {
+    const row = scoreExternalBaseline(target("ghostfolio"), ghostfolioM7Findings("wrong-row"))
+      .find((candidate) => candidate.module === "M7");
+
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: false });
+    expect(row?.detail).toContain("59 = 24 server-side supported + 35 reachability unsupported");
+    expect(row?.detail).toContain("recovered twitter-bot supported=false");
   });
 
   it("FAILS on a new over-match — the regression this corpus exists to catch", () => {
