@@ -74,6 +74,41 @@ describe("import-graph coverage disclosure (#1503)", () => {
     expect(row.title).toBe("Cross-file import graph partially resolved: 2 dropped edges of 3");
   });
 
+  it("counts baseUrl-local edges while leaving a declared package with no local candidate external", () => {
+    const baseUrl: SourceInput[] = [
+      { path: "package.json", text: JSON.stringify({ name: "app", dependencies: { react: "^19", zod: "^4" } }) },
+      { path: "tsconfig.json", text: JSON.stringify({ compilerOptions: { baseUrl: "." } }) },
+      { path: "hooks/useTeam.ts", text: "export const useTeam = () => ({});" },
+      { path: "react.ts", text: "export default {};" },
+      {
+        path: "app/page.tsx",
+        text: 'import { useTeam } from "hooks/useTeam";\nimport React from "react";\nimport { z } from "zod";\n',
+      },
+    ];
+    const c = importGraphCensus(baseUrl);
+    expect({ roots: c.baseUrlRoots, resolved: c.edgesResolved, dropped: c.unresolvedAliased, external: c.externalSpecifiers }).toEqual({
+      roots: 1,
+      resolved: 2,
+      dropped: 0,
+      external: 1,
+    });
+    expect(ids(baseUrl)).toEqual([]);
+  });
+
+  it("retains a dropped edge when a paths pattern matches but its target is missing", () => {
+    const matchedMiss: SourceInput[] = [
+      {
+        path: "tsconfig.json",
+        text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "hooks/*": ["./generated/*"] } } }),
+      },
+      { path: "hooks/useTeam.ts", text: "export const useTeam = () => ({});" },
+      { path: "app/page.tsx", text: 'import { useTeam } from "hooks/useTeam";\n' },
+    ];
+    const c = importGraphCensus(matchedMiss);
+    expect({ roots: c.baseUrlRoots, resolved: c.edgesResolved, dropped: c.unresolvedAliased }).toEqual({ roots: 1, resolved: 0, dropped: 1 });
+    expect(ids(matchedMiss)).toEqual(["M1-IMPORTGRAPH-00"]);
+  });
+
   // The classifier's OWN failing direction, and #1503's defect reproduced one level in. Asking the
   // alias table "does this specifier look aliased?" is circular: when the table degrades, an
   // `@ghostfolio/common` specifier stops looking aliased and reads as a third-party package, so the

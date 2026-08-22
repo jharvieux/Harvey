@@ -1,0 +1,4 @@
+{
+  "name": "baseurl-server-only-positive",
+  "private": true
+}

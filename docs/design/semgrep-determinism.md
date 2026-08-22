@@ -1,13 +1,14 @@
-# Semgrep determinism: the measurement, the cause, and the pinned invocation (#1710)
+# Semgrep determinism: the historical 1.164 measurement and the current 1.173 contract (#1710/#1954)
 
-**MEASURED 2026-07-31, semgrep 1.164.0** (the exact version `.github/actions/mechanical-binaries`
-pins for CI), on a 10-core darwin machine, against all 17 pinned corpus repos
-(`src/scan/external-corpus.ts`) cloned at their pins. Invocation under test: the exact argv
-`runSemgrep` (src/scan/semgrep.ts) passes — 6 registry packs + `src/scan/rules/semgrep/`,
-`--disable-nosem --x-ignore-semgrepignore-files --json --verbose`. Raw per-run rows: the
-measurement harness wrote one JSONL row per run (finding count, sha of the sorted
-`(check_id, path, line)` list, `errors[]` timeout entries, wall seconds); the tables below
-summarize them. Runs were serialized, never parallel with each other.
+**HISTORICAL MEASUREMENT — 2026-07-31, semgrep 1.164.0** (the CI-pinned version at the
+time; the current pin is 1.173.0), on a 10-core darwin machine, against all 17 pinned corpus repos
+(`src/scan/external-corpus.ts`) cloned at their pins. The invocation under test was the exact argv
+`runSemgrep` (`src/scan/semgrep.ts`) then passed — 6 registry packs +
+`src/scan/rules/semgrep/`, `--disable-nosem --x-ignore-semgrepignore-files --json --verbose`.
+Raw per-run rows recorded finding count, a hash of the sorted `(check_id, path, line)` population,
+`errors[]` timeout entries, and wall seconds. Runs were serialized, never parallel with each other.
+Sections 1–3 retain that 1.164.0 evidence because it established the two loss mechanisms; section 4
+states the current 1.173.0 production contract and its newer Carbon evidence.
 
 ## 1. Population and amplitude (17 repos × 5 runs, default flags)
 
@@ -82,56 +83,124 @@ Worst-case runtime check (`effective`, the repo with 12-60 timeouts/run at defau
 `--x-parmap --timeout 0` ran 78-80s — FASTER than its own default runs (102-314s), same result
 set. The feared `--timeout 0` blowup did not materialize on any measured repo.
 
-## 4. The decision (what `runSemgrep` now pins, and why)
+## 4. The current production contract
 
-**Pinned: `--x-parmap --timeout 0`** (process-based parallelism at default job count, no
-per-rule timeout), with a fallback of **`-j 1 --timeout 0`** if a future semgrep drops the
-internal `--x-parmap` flag (same fallback pattern the `--x-ignore-semgrepignore-files` flag
-already uses; the fallback must degrade to "slower, near-deterministic", never to the silently
-lossy threaded default).
+The 1.164.0 study established two durable requirements: use process isolation and disable the
+per-rule wall-clock timeout. The original `--x-parmap --timeout 0` decision was therefore sound, but
+later hosted replays showed that nine-worker parmap could still omit different
+`harvey-log-injection` rows while diagnostics remained equal. A coincident pair of j9 results is not
+sufficient evidence of recall.
 
-- Determinism: 7/7 identical carbon result sets across `--x-parmap` variants (3 with default
-  timeout, 4 with `--timeout 0`); 6/6 on documenso; identical on effective/launch-mvp probes.
-  Process isolation removes mechanism B; `--timeout 0` removes mechanism A.
-- Recall: 528 of the 530-finding `-j 1` reference on carbon. The 2 rows it deterministically
-  misses (`harvey-log-injection` at `packages/database/supabase/functions/post-shipment/index.ts`
-  1114 and 1691 — Low-severity review-tier) are a **disclosed, stable bound**, against the
-  default mode's 17-29-per-run silent random loss. One of those two lines (1691) is the same row
-  a `-j 1 --timeout 0` run dropped once in six runs — the file is fragile under every parallel
-  AND threaded mode; no measured mode is simultaneously full-recall and fully deterministic on it.
-- Runtime: at or below the default mode's cost everywhere measured (carbon ~125s vs 73-253s
-  default; documenso 39s vs 50s; effective 79s vs 102-314s) — so this does NOT conflict with
-  #1586/#1574's corpus-drift runtime work; it measured cheaper than the mode it replaces on the
-  heavy repos, and `-j 1 --timeout 0` (3-4× slower on carbon) was rejected FOR that cost plus
-  its own measured 1-in-6 single-row dropout.
+**Current at Semgrep 1.173.0, schema 8:** every planned family uses process isolation and
+`--timeout 0`. The schema-6 execution topology is retained: `local-injection` uses
+`rule-and-size-routed-file-isolation-v1`, with `harvey-log-injection` split into the deterministic
+whole-root remainder and 20 evidence-derived single-file scans, followed by the 29-rule whole-root
+complement. Every component runs with `--x-parmap -j 1`; the ordered 22-component attempt is
+repeated exactly once and must agree on every strict semantic field. `local-xss` and the derived
+`direct-response-write` singleton remain paired cold at `--x-parmap -j 1`. Other families retain
+their measured single process-isolated execution. There is no retry-until-green, union of attempts,
+tolerance band, or fallback to threaded execution.
 
-**What corpus-drift does about it: nothing beyond inheriting the pin — no tolerance band.**
-The required gate's semgrep-derived rows (the free-tier invariant, `FREE_TIER_EXPECTATIONS`)
-are threshold checks (grade ≠ F, Critical/High present, non-Info indicator present,
-doc-context creds reported-not-graded), not exact counts, and every measured mover was a
-review-tier row, a tier none of those thresholds read (MEASURED: all six targets' rows pass
-under the pin, grades matching their recorded baselines exactly — A 92, A 97, B 89, C 77,
-C 74, F 51). With the pinned invocation the underlying finding sets
-are byte-stable, so count-exact semgrep baselines become possible for the first time — any
-future one should cite this doc rather than re-earning the pin. A tolerance band was
-considered and REJECTED: the measured residual under the pin is zero distinct result sets in
-7 runs, so a band would absorb real one-finding regressions and protect against nothing.
+Schema 8 separates authoritative scan semantics from Semgrep's experimental fixpoint profiling.
+Findings and their hashes/counts, errors, scanned and skipped paths, skipped rules, actual loaded
+rules, config and ownership hashes, argv, topology, component boundaries, and merge receipts remain
+exact and cache/readiness-significant. `time.fixpoint_timeouts` rows are not semantic equality rows:
+retained identical-input runs moved their message summaries and row populations without moving any
+of those strict fields. A non-empty timeout population instead deterministically marks the owning
+family's complete loaded taint-rule subset **NotAssessed**. Harvey derives that candidate subset
+from the pinned rule objects and actual loaded-rule receipt; it never attributes coverage from the
+volatile message's count or first-rule summary. If paired attempts disagree on whether that family
+is NotAssessed, the pair fails closed.
 
-## 5. Bounds of this measurement
+Every cold attempt retains its complete known-root-normalized raw timeout array, including path,
+span, type, message, order, and multiplicity, in a content-addressed `reusable: false` telemetry
+sidecar outside `semgrep-families/`. Timeout-only row drift can create different sidecars without
+changing the semantic receipt when both attempts derive the same conservative family assessment.
+Successful cache lookup neither reads nor depends on those sidecars: a warm hit replays the stable
+schema-8 assessment and client disclosure from the reusable family artifact. A strict paired
+mismatch still writes the complete attempts as a content-addressed `reusable: false` failure
+artifact, and a same-key rerun executes again.
 
-- One machine (10-core darwin), one semgrep version (1.164.0, = CI's pin). CI amplitude was not
-  measured directly; the mechanism (thread-shared state, wall-clock timeouts) transfers, and the
-  pinned mode removes both inputs. Cross-machine identity of the parmap result set is NOT
-  claimed — worker count differs (`-j` defaults to cores) and the 2-row carbon bound could
-  shift with it. The corpus gate compares CI runs to CI-measured baselines, so this does not
-  affect the gate; it affects quoting a local count against a CI count.
+Fixpoint telemetry is no longer folded into `SEM-ERR-00`; that finding reports the exact retained
+`errors[]` and `paths.skipped` populations. Each affected family instead emits one stable repo-wide
+`SEM-TAINT-NA-<family>` coverage finding whose taxonomy is explicitly `not assessed`. It names the
+family, exact loaded candidate taint-rule IDs, and examined scope, and explains that emitted findings
+remain valid while the absence of additional taint matches is not clearance. This is disclosure,
+not suppression: ordinary findings are preserved and each NotAssessed row is produced and delivered
+through the conservation ledger.
+
+The successful execution-plan and family-cache schema is 8; diagnostic evidence is schema 4 and the
+enclosing phase cache is schema 5. The receipt binds `fixpoint-family-not-assessed-v1`, sorted
+owned/loaded candidate taint-rule populations, the stable family assessment, routed/pairing topology,
+derived-config hashes, actual argv, and every strict semantic population above. Schema-5, schema-6,
+schema-7, planned-only, failed, malformed, or tampered artifacts reject before cache lookup. The pinned
+inventory remains **1,033 rule entries / 846 unique rule IDs / 168 duplicated source IDs**, with
+every registry ID assigned to one owner and the duplicated `direct-response-write` rule retained in
+its paired singleton.
+
+**MEASURED 2026-08-22 at `3fc7ac7d893b3beabae5daad70419a76f6c1ead9` / tree
+`c87d882850313948f1d93e06023afd89c1e4f476`, Semgrep 1.173.0, pinned Carbon tree
+`e00a835aacba7283925330853ee98873cda7c3a4`:** the two predeclared cold runs are
+`/private/tmp/pr1954-schema8-exact-rebind-3fc7ac7/run-1.json` (SHA-256
+`98e096f325f61867cfe0fff365afb829ff7b446bac42f1d3b28d17ea1517fa47`) and sibling
+`run-2.json` (SHA-256
+`bd47a362238f422c12c10c9686722e1be8e557147e1541f286ce14994efaaa90`). Each retained
+**535 results**, **31 errors**, **6,056 scanned paths**, **37 skipped-path records**, **0 skipped
+rules**, and **522 loaded rule IDs**. Their strict output, execution plan, and family-assessment
+projections are identical. Both produce five family-level NotAssessed rows for
+`registry-0-p-typescript`, `local-auth`, `local-base`, `local-injection`, and `local-xss`. Each raw
+telemetry population contains 48 rows, retained only in 20 non-reusable sidecars; all 17 reusable
+family artifacts are raw-timeout-free. The predeclared 6,181-input byte manifest remained exact
+after both runs, artifact regeneration, and the final gate.
+
+The current PartialParsing record for `TraceabilityGraph.tsx` is **79:1–79:2** on the unexpected
+`}`; the older line-74 `import("./utils").IssueContainment` record is historical and a paired run
+that substitutes it is rejected.
+
+**Committed-artifact effect:** schema-8 regeneration at the accepted head preserves the already
+corrected **789** findings: two complete epochs produced 789→789, 0 additions, 0 removals, 0
+reclassifications, and 0 Semgrep NotAssessed rows on the calibration target. `findings.json`,
+`pii-data-map.json`, `scorecard.json`, and `findings-report.json` are byte-identical across both
+epochs and to the tracked files; `findings-report.json.findings` deeply equals the standalone array.
+Across the full PR lineage, the earlier 811→789 movement remains exactly 22 removed duplicate SQL
+placeholder renderings with no logical finding loss.
+
+Interim #1954 notes that treat timeout rows as semantic equality evidence, parse
+`[rules: N, first: ID]` into a stable receipt, include fixpoint rows in `SEM-ERR-00`, make reusable
+cache hits depend on telemetry sidecars, retry or union attempts, quote schema 5/6/7 as current, or
+quote 811 as the current finding count do not describe the accepted schema-8 contract. The older
+1.164.0 population and matrix above remain historical measurements, not current production counts.
+
+## 5. Historical corpus-drift consequence at 1.164.0
+
+At the time of the original 1.164.0 pin, corpus-drift needed no tolerance band. Its semgrep-derived
+rows (the free-tier invariant, `FREE_TIER_EXPECTATIONS`) were threshold checks (grade ≠ F,
+Critical/High present, non-Info indicator present, doc-context credentials reported-not-graded), not
+exact counts, and every measured mover was a review-tier row that none of those thresholds read.
+MEASURED then: all six targets passed under the pin and their grades matched the recorded baselines
+exactly — A 92, A 97, B 89, C 77, C 74, F 51. The pinned 1.164.0 result sets had zero residual
+variation across the cited parmap runs, so a tolerance band would have hidden a real one-finding
+regression without protecting against measured noise. That rationale is historical evidence for
+fail-closed exact comparison; it is not a claim that 1.164.0 counts are current under 1.173.0.
+
+## 6. Bounds of this measurement
+
+- The population/matrix study used one machine (10-core darwin) and semgrep 1.164.0, which was CI's
+  pin at the time, not the current 1.173.0 authority. CI amplitude was not measured directly; the
+  mechanisms (thread-shared state and wall-clock timeouts) transfer, and the current topology still
+  removes both inputs. Cross-machine identity of the historical parmap result set was not claimed.
+  The current schema-8 contract instead retains the schema-6 routed local-injection topology and
+  paired local-xss/direct-response owners, compares strict non-timeout semantics exactly, and treats
+  a fixpoint-timeout population as a family-level taint NotAssessed trigger with exact raw rows
+  retained outside the reusable cache namespace.
 - n=5 per repo for the population table; a 1-in-6-run dropout (the `-j 1 --timeout 0` row)
   is exactly the kind of event n=5 can miss. "STABLE at n=5" is evidence, not proof, for the
   15 stable repos.
 - The 2-row parmap recall bound was measured on carbon only (the only repo with a measured
   `-j 1` reference). Whether other large repos have analogous deterministic parmap misses is
   unmeasured.
-- `--x-parmap` is deprecated/internal upstream. The day it is dropped, `runSemgrep`'s fallback
-  keeps scans deterministic-ish but 3-4× slower on carbon-sized repos, and the
-  `runSemgrep pins the deterministic invocation (#1710)` tests in src/scan/semgrep.test.ts hold
-  the contract either way.
+- `--x-parmap` remains deprecated/internal upstream. A future Semgrep that rejects it does not fall
+  back to an unproved threaded topology: the run fails closed as incomplete (`SEM-00`) and must be
+  re-measured before a replacement execution policy is accepted. The schema-8 topology receipt,
+  strict paired-result controls, stable family-level NotAssessed disclosure, raw `reusable: false`
+  telemetry sidecars, and retained failure artifacts hold that contract.

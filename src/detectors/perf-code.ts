@@ -1832,7 +1832,7 @@ function isExportedFunctionLike(n: ts.Node): boolean {
 // an UNAVAILABLE signal must not read as a negative one — that is the fail-quiet this module's own
 // coverage rows exist to prevent. So the filter applies only when there is something to be reachable
 // FROM; otherwise the tier keeps #1203's behaviour and says in the evidence that it could not check.
-// #1666 — a NestJS provider wired ONLY through `@Module({ providers: [...] })` registration is a
+// #1666/#1795 — a NestJS provider wired ONLY through `@Module({ providers: [...] })` registration is a
 // real request-path dependency (NestJS's DI container instantiates it for whatever in the same
 // module asks for it), but the ordinary import graph has the edge backwards: the MODULE file
 // imports both its controllers and its providers — nothing points FROM a controller TO a sibling
@@ -1841,12 +1841,10 @@ function isExportedFunctionLike(n: ts.Node): boolean {
 // `static-detect` over all seventeen pinned M5-slop targets: this SAME-`@Module` edge recovers
 // `services/data-provider/{eod-historical-data,financial-modeling-prep,yahoo-finance}/*.service.ts`
 // (each co-registered with a controller in its own module) — 3 of the 4 originally-named misses,
-// the ghostfolio M7 note in external-corpus.ts carries the exact split. `services/twitter-bot/
-// twitter-bot.service.ts` is NOT recovered: its owning module declares no `controllers` at all and
-// is wired in through a NESTED `imports: [...]` chain instead — a distinct shape this same-module
-// edge does not reach, filed as #1795 rather than silently left in this fix's scope. Zero effect
-// measured elsewhere in the corpus (sync-I/O tier, dev-tooling subtraction): byte-identical output
-// before/after on all seventeen targets outside these three rows.
+// the ghostfolio M7 note in external-corpus.ts carries the exact split. #1795 extends the same
+// evidence edge across the Nest module graph: a controller registered by module A can reach
+// providers registered by modules pulled in through A's transitive `imports` chain. The traversal
+// is module-scoped and cycle-safe; an unimported module remains unreachable.
 //
 // Anchored to the `.module.ts` path convention (the same style REQUEST_ENTRY_PATH already
 // commits to) AND to the `@Module(...)` decorator identifier specifically — never a bare
@@ -1885,24 +1883,50 @@ function decoratorArrayIdentifiers(obj: ts.ObjectLiteralExpression, propName: st
   return prop.initializer.elements.filter(ts.isIdentifier).map((id) => id.text);
 }
 
-// Every `controller -> provider` edge this file's `@Module({...})` decorators declare, resolved
-// through the SAME identifier -> file mapping (`collectValueImports`) the rest of this graph uses
-// — never a second hand-rolled import reader that could name a different file for the same
-// specifier.
+interface NestModuleMetadata {
+  controllers: string[];
+  providers: string[];
+  imports: string[];
+}
+
+// Every `controller -> provider` edge declared by the complete Nest module graph. Each decorator
+// identifier is resolved through the SAME identifier -> file mapping (`collectValueImports`) the
+// rest of this graph uses — never a second hand-rolled import reader that could name a different
+// file for the same specifier. Starting the walk from each controller-bearing module and retaining
+// a per-root `seen` set makes transitive imports cycle-safe while preserving module boundaries: only
+// modules named by that root's own imports closure contribute providers.
 function nestModuleProviderEdges(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
   const edges = new Map<string, string[]>();
+  const modules = new Map<string, NestModuleMetadata>();
   for (const [path, sf] of sources) {
     if (!NEST_MODULE_PATH.test(path)) continue;
     const decoratorArg = nestModuleDecoratorArgs(sf);
     if (!decoratorArg) continue;
-    const controllerNames = decoratorArrayIdentifiers(decoratorArg, "controllers");
-    const providerNames = decoratorArrayIdentifiers(decoratorArg, "providers");
-    if (controllerNames.length === 0 || providerNames.length === 0) continue;
     const bindings = collectValueImports(sf, path, allPaths, aliases);
     const resolve = (names: string[]) => [...new Set(names.map((n) => bindings.get(n)?.path).filter((p): p is string => !!p))];
-    const controllerPaths = resolve(controllerNames);
-    const providerPaths = resolve(providerNames);
-    for (const c of controllerPaths) edges.set(c, [...(edges.get(c) ?? []), ...providerPaths]);
+    modules.set(path, {
+      controllers: resolve(decoratorArrayIdentifiers(decoratorArg, "controllers")),
+      providers: resolve(decoratorArrayIdentifiers(decoratorArg, "providers")),
+      imports: resolve(decoratorArrayIdentifiers(decoratorArg, "imports")).filter((p) => NEST_MODULE_PATH.test(p)),
+    });
+  }
+  for (const [rootPath, root] of modules) {
+    if (root.controllers.length === 0) continue;
+    const providerPaths = new Set<string>();
+    const seen = new Set<string>();
+    const queue = [rootPath];
+    while (queue.length > 0) {
+      const path = queue.shift();
+      if (path === undefined || seen.has(path)) continue;
+      seen.add(path);
+      const metadata = modules.get(path);
+      if (!metadata) continue;
+      for (const provider of metadata.providers) providerPaths.add(provider);
+      queue.push(...metadata.imports);
+    }
+    for (const controller of root.controllers) {
+      edges.set(controller, [...new Set([...(edges.get(controller) ?? []), ...providerPaths])]);
+    }
   }
   return edges;
 }

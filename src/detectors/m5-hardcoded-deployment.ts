@@ -1,10 +1,14 @@
 import ts from "typescript";
+import { digestObservedPaths } from "../corpus-scanner-scope.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "../scan/common.js";
 import { leadingDirective, loc, parse, type SourceInput } from "./common.js";
 
+export const M1_HARDCODED_TENANT_TAXONOMY = "M1 — Hardcoded tenant identifier at client/request boundary";
 export const M5_HARDCODED_ENDPOINT_TAXONOMY = "M5 — Hardcoded deployment endpoint";
 export const M5_HARDCODED_IDENTIFIER_TAXONOMY = "M5 — Hardcoded provider identifier";
+export const M5_HARDCODED_SOURCE_COVERAGE_ID = "M5-HARDCODED-SOURCE-COVERAGE-00";
+export const M5_HARDCODED_SOURCE_COVERAGE_TAXONOMY = "M5 — Hardcoded deployment source coverage not-assessed";
 
 const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|[jt]sx)$/i;
 const NON_PRODUCT_SEGMENT = /^(?:\.next|__fixtures__|__tests__|build|coverage|dist|docs?|examples?|fixtures?|generated|mocks?|node_modules|out|samples?|test(?:s|data)?|vendor)$/i;
@@ -61,6 +65,35 @@ interface ConsumerContext {
   node: ts.Node;
 }
 
+interface M5HardcodedSourceNotAssessed {
+  reason: string;
+  provenance: string;
+  falsifier: string;
+  inventory: {
+    broadUnits: number;
+    selectedUnits: 0;
+    pathSetDigest: string;
+    scope: string;
+  };
+}
+
+export const M1_HARDCODED_TENANT_METADATA = Object.freeze({
+  id: "m1-hardcoded-tenant",
+  module: "M1" as const,
+  implementation: Object.freeze({
+    file: "src/detectors/m5-hardcoded-deployment.ts",
+    exportName: "detectM1HardcodedTenantFindings",
+  }),
+  findingIds: Object.freeze(["M1-HARDCODED-TENANT-*"]),
+  taxonomies: Object.freeze([M1_HARDCODED_TENANT_TAXONOMY]),
+  precisionTier: "review" as const,
+  applicableFiles: "Tracked JavaScript/TypeScript application source after non-product and generated paths are excluded",
+  examinedUnit: "One applicable source path parsed as a TypeScript AST; only tenant-sensitive identifier literals at client or request boundaries are classified",
+  prerequisites: Object.freeze(["shared source inventory", "shared TypeScript AST cache"]),
+  ownershipExclusions: "Deployment endpoints and non-tenant provider identifiers remain M5-owned; credentials, tokens, and signing material remain with the existing M1 secret families",
+  fallback: "Dynamic/session-derived tenant identity and unsupported or ambiguous consumers make no defect claim; an empty applicable population is recorded by the live registry",
+});
+
 export const M5_HARDCODED_DEPLOYMENT_METADATA = Object.freeze({
   id: "m5-hardcoded-deployment",
   module: "M5" as const,
@@ -68,14 +101,14 @@ export const M5_HARDCODED_DEPLOYMENT_METADATA = Object.freeze({
     file: "src/detectors/m5-hardcoded-deployment.ts",
     exportName: "detectM5HardcodedDeploymentFindings",
   }),
-  findingIds: Object.freeze(["M5-HARDCODED-ENDPOINT-*", "M5-HARDCODED-IDENTIFIER-*"]),
-  taxonomies: Object.freeze([M5_HARDCODED_ENDPOINT_TAXONOMY, M5_HARDCODED_IDENTIFIER_TAXONOMY]),
+  findingIds: Object.freeze(["M5-HARDCODED-ENDPOINT-*", "M5-HARDCODED-IDENTIFIER-*", M5_HARDCODED_SOURCE_COVERAGE_ID]),
+  taxonomies: Object.freeze([M5_HARDCODED_ENDPOINT_TAXONOMY, M5_HARDCODED_IDENTIFIER_TAXONOMY, M5_HARDCODED_SOURCE_COVERAGE_TAXONOMY]),
   precisionTier: "review" as const,
   applicableFiles: "Tracked JavaScript/TypeScript application source after non-product and generated paths are excluded",
   examinedUnit: "One applicable source path parsed as a TypeScript AST; only literal values in configuration, client-construction, request, or routing consumers are classified",
   prerequisites: Object.freeze(["shared source inventory", "shared TypeScript AST cache"]),
   ownershipExclusions: "Credentials, tokens, signing material, and tenant-sensitive client/request exposure are M1-owned and never emitted as M5",
-  fallback: "Dynamic/computed values and unsupported or ambiguous consumers make no defect claim; an empty applicable population must be recorded as NotAssessed by the live registry",
+  fallback: "Dynamic/computed values and unsupported or ambiguous consumers make no defect claim; a non-empty broad product-source inventory with zero files admitted by the exact JavaScript/TypeScript selector emits a typed NotAssessed disclosure",
   providerLifecycle: "source-only; provider credentials, live state, and lifecycle APIs are never consulted",
 });
 
@@ -183,6 +216,20 @@ function isClientSource(path: string, sf: ts.SourceFile): boolean {
   return leadingDirective(sf) === "use client" || CLIENT_SOURCE_PATH.test(normalizedPath(path));
 }
 
+function m1TenantContext(
+  node: ts.StringLiteralLike,
+  path: string,
+  sf: ts.SourceFile,
+): ConsumerContext | undefined {
+  const label = propertyLabel(node);
+  if (!label || !TENANT_SENSITIVE_LABEL.test(label) || SECRET_LABEL.test(label) || !isIdentifier(node.text, label)) return undefined;
+  const call = supportedCall(node, sf);
+  if (call?.kind === "request") return { ...call, label };
+  if (!isClientSource(path, sf)) return undefined;
+  if (call) return { ...call, label };
+  return configContext(node, path, label);
+}
+
 function classifyContext(
   node: ts.StringLiteralLike,
   kind: DeploymentValueKind,
@@ -269,8 +316,84 @@ function findingFor(
   });
 }
 
-interface M5HardcodedDeploymentOptions {
+function m1FindingFor(
+  node: ts.StringLiteralLike,
+  context: ConsumerContext,
+  path: string,
+  sf: ts.SourceFile,
+): Finding {
+  return mechanicalFinding({
+    id: `M1-HARDCODED-TENANT-${path.replace(/[^a-zA-Z0-9]+/g, "-")}-${node.getStart(sf)}`,
+    title: `${path} — tenant identity is fixed at a client/request boundary`,
+    severity: "High",
+    category: "Multi-tenant security",
+    taxonomy: M1_HARDCODED_TENANT_TAXONOMY,
+    location: loc(path, sf, node),
+    evidence: `Tenant identifier literal \`${safeValue(node.text, "identifier")}\` is consumed by ${context.kind} node \`${compactConsumer(context, sf)}\` instead of being derived from authenticated/session context at the trusted server boundary.`,
+    impact: "A fixed or caller-visible tenant identity can bind requests to the wrong tenant and bypass the authenticated principal's authorized tenant scope.",
+    fix: "Derive tenant identity from the authenticated principal/session at the trusted server boundary, authorize membership there, and omit the caller-controlled tenant literal.",
+    precisionTier: "review",
+  });
+}
+
+function sourceCoverageFinding(receipt: M5HardcodedSourceNotAssessed): Finding {
+  return mechanicalFinding({
+    id: M5_HARDCODED_SOURCE_COVERAGE_ID,
+    title: "M5 hardcoded-deployment source classifier examined no admitted JavaScript/TypeScript source",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Coverage",
+    taxonomy: M5_HARDCODED_SOURCE_COVERAGE_TAXONOMY,
+    location: "product source inventory",
+    evidence: `Broad product-source inventory: ${receipt.inventory.broadUnits} path(s); exact JavaScript/TypeScript selector: ${receipt.inventory.selectedUnits} admitted; path-set digest: ${receipt.inventory.pathSetDigest}; scope: ${receipt.inventory.scope}. Reason: ${receipt.reason} Provenance: ${receipt.provenance}. Falsifier: ${receipt.falsifier}.`,
+    impact: "The absence of hardcoded-deployment findings is not evidence that product source was assessed by this classifier.",
+    fix: receipt.falsifier,
+    precisionTier: "review",
+  });
+}
+
+interface HardcodedDeploymentOptions {
   enabled?: boolean;
+  productSourceInventory?: readonly SourceInput[];
+}
+
+export function m5HardcodedSourceNotAssessed(
+  productSourceInventory: readonly SourceInput[],
+  selectedSources: readonly SourceInput[],
+): M5HardcodedSourceNotAssessed | undefined {
+  if (productSourceInventory.length === 0 || selectedSources.length > 0) return undefined;
+  return {
+    reason: `No source admitted by the exact M5 hardcoded-deployment JavaScript/TypeScript selector was examined, although the broad product-source inventory contains ${productSourceInventory.length} path(s).`,
+    provenance: "Broad inventory: src/detectors/load-sources.ts#loadSourceInventory after the product-source filter; exact selector: src/detectors/m5-hardcoded-deployment.ts#isM5HardcodedDeploymentSource.",
+    falsifier: "Add or identify an admitted JavaScript/TypeScript source, or extend the selector, then rerun.",
+    inventory: {
+      broadUnits: productSourceInventory.length,
+      selectedUnits: 0,
+      pathSetDigest: digestObservedPaths(productSourceInventory.map((file) => file.path)),
+      scope: "tracked non-test product-source paths presented before the M5 hardcoded-deployment JavaScript/TypeScript selector",
+    },
+  };
+}
+
+/** M1 owns tenant-sensitive identifier literals at client/request boundaries. */
+export function detectM1HardcodedTenantFindings(
+  files: readonly SourceInput[],
+  options: Pick<HardcodedDeploymentOptions, "enabled"> = {},
+): Finding[] {
+  if (options.enabled === false) return [];
+  const findings: Finding[] = [];
+  for (const file of files.filter(isM5HardcodedDeploymentSource)) {
+    const sf = parse(file.path, file.text);
+    const visit = (node: ts.Node): void => {
+      if (ts.isStringLiteralLike(node)) {
+        const context = m1TenantContext(node, file.path, sf);
+        if (context) findings.push(m1FindingFor(node, context, file.path, sf));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
 }
 
 /**
@@ -279,12 +402,16 @@ interface M5HardcodedDeploymentOptions {
  */
 export function detectM5HardcodedDeploymentFindings(
   files: readonly SourceInput[],
-  options: M5HardcodedDeploymentOptions = {},
+  options: HardcodedDeploymentOptions = {},
 ): Finding[] {
   if (options.enabled === false) return [];
+  const selected = files.filter(isM5HardcodedDeploymentSource);
+  const notAssessed = options.productSourceInventory
+    ? m5HardcodedSourceNotAssessed(options.productSourceInventory, selected)
+    : undefined;
+  if (notAssessed) return [sourceCoverageFinding(notAssessed)];
   const findings: Finding[] = [];
-  for (const file of files) {
-    if (!isM5HardcodedDeploymentSource(file)) continue;
+  for (const file of selected) {
     const sf = parse(file.path, file.text);
     const visit = (node: ts.Node): void => {
       if (ts.isStringLiteralLike(node)) {

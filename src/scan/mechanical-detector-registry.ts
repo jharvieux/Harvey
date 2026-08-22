@@ -7,7 +7,7 @@ import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectM1ExceptionFlowFindings, detectM5ExceptionFlowFindings, m5ExceptionFlowSources } from "../detectors/m5-exception-flow.js";
-import { detectM5HardcodedDeploymentFindings, isM5HardcodedDeploymentSource, M5_HARDCODED_DEPLOYMENT_METADATA } from "../detectors/m5-hardcoded-deployment.js";
+import { detectM1HardcodedTenantFindings, detectM5HardcodedDeploymentFindings, isM5HardcodedDeploymentSource, m5HardcodedSourceNotAssessed, M1_HARDCODED_TENANT_METADATA, M5_HARDCODED_DEPLOYMENT_METADATA } from "../detectors/m5-hardcoded-deployment.js";
 import { detectM5TypeEscapeFindings, m5TypeEscapeSources } from "../detectors/m5-type-escape.js";
 import { detectM8VacuousAssertionFindings, M8_VACUOUS_ASSERTION_TAXONOMY, vacuousAssertionSourceFiles } from "../detectors/m8-vacuous-assertion.js";
 import { readEntriesSafe } from "../fs-walk.js";
@@ -32,6 +32,7 @@ import {
   createMechanicalProducerRecord,
   targetPathExaminedUnits,
   type MechanicalExaminedUnitIdentity,
+  type MechanicalProducerNotAssessed,
   type MechanicalProducerRecord,
 } from "./mechanical-phase-cache.js";
 import { detectPgIdorFindings } from "./pg-idor.js";
@@ -89,6 +90,7 @@ export interface MechanicalDetectorDefinition {
   enabled?: (options: RegisteredDetectorOptions) => boolean;
   examinedUnits: (context: MechanicalScanContext, selected: readonly SourceInput[]) => number;
   examinedUnitIdentities: (context: MechanicalScanContext, selected: readonly SourceInput[]) => MechanicalExaminedUnitIdentity[];
+  notAssessed?: (context: MechanicalScanContext, selected: readonly SourceInput[], emitted: readonly Finding[]) => MechanicalProducerNotAssessed | undefined;
   invoke: (context: MechanicalScanContext, selected: readonly SourceInput[]) => Finding[];
 }
 
@@ -273,6 +275,16 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     invoke: (_context, selected) => detectM5TypeEscapeFindings([...selected]),
   }),
   detector({
+    id: "m1-hardcoded-tenant", order: 345, module: "M1",
+    implementation: M1_HARDCODED_TENANT_METADATA.implementation,
+    findingIds: M1_HARDCODED_TENANT_METADATA.findingIds,
+    taxonomies: M1_HARDCODED_TENANT_METADATA.taxonomies,
+    applicableFiles: { description: M1_HARDCODED_TENANT_METADATA.applicableFiles, select: (context) => context.loadedSources.filter(isM5HardcodedDeploymentSource) },
+    prerequisites: M1_HARDCODED_TENANT_METADATA.prerequisites,
+    fallback: M1_HARDCODED_TENANT_METADATA.fallback,
+    invoke: (_context, selected) => detectM1HardcodedTenantFindings(selected),
+  }),
+  detector({
     id: "m5-hardcoded-deployment", order: 350, module: "M5",
     implementation: M5_HARDCODED_DEPLOYMENT_METADATA.implementation,
     findingIds: M5_HARDCODED_DEPLOYMENT_METADATA.findingIds,
@@ -280,7 +292,8 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     applicableFiles: { description: M5_HARDCODED_DEPLOYMENT_METADATA.applicableFiles, select: (context) => context.loadedSources.filter(isM5HardcodedDeploymentSource) },
     prerequisites: M5_HARDCODED_DEPLOYMENT_METADATA.prerequisites,
     fallback: M5_HARDCODED_DEPLOYMENT_METADATA.fallback,
-    invoke: (_context, selected) => detectM5HardcodedDeploymentFindings(selected),
+    notAssessed: (context, selected) => m5HardcodedSourceNotAssessed(context.productSourceFiles, selected),
+    invoke: (context, selected) => detectM5HardcodedDeploymentFindings(selected, { productSourceInventory: context.productSourceFiles }),
   }),
   detector({
     id: "m5-polyglot-quality", order: 360, module: "M5",
@@ -353,8 +366,19 @@ export function runRegisteredMechanicalDetectors(context: MechanicalScanContext,
       const emitted = definition.invoke(context, selected);
       const durationMs = performance.now() - started;
       validateEmittedOwnership(definition, emitted);
+      const notAssessed = definition.notAssessed?.(context, selected, emitted);
       findings.push(...emitted);
-      records.push(createMechanicalProducerRecord({ detector: definition.id, phase: "structural-ast", order: definition.order, module: definition.module, examinedUnitIdentities, findings: emitted.length, durationMs, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
+      records.push(createMechanicalProducerRecord({
+        detector: definition.id,
+        phase: "structural-ast",
+        order: definition.order,
+        module: definition.module,
+        examinedUnitIdentities,
+        findings: emitted.length,
+        durationMs,
+        status: notAssessed ? "not-assessed" : unitsExamined === 0 ? "not-applicable" : "ran",
+        ...(notAssessed ? { notAssessed } : {}),
+      }));
       context.recordDetectorRun(durationMs, selected.length);
     }
     for (const finding of findings) uniqueFindingOwner(finding, options);

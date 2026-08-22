@@ -16,6 +16,24 @@ const corpusCli = readFileSync(join(root, "src", "cli", "corpus-drift.ts"), "utf
 const replayCli = readFileSync(join(root, "src", "cli", "replay-current-mechanical.ts"), "utf8");
 const temporaryDirectories: string[] = [];
 
+function transportWorkflowErrors(text: string, cli = corpusCli): string[] {
+  const errors: string[] = [];
+  if ((text.match(/Restore content-addressed corpus phase results — owner [1-4]/g) ?? []).length !== 4) errors.push("exact-run restore ownership");
+  if ((text.match(/Restore trusted-main corpus phase results — owner [1-4]/g) ?? []).length !== 4) errors.push("trusted-main restore ownership");
+  if ((text.match(/Save current-run corpus phase results for an exact retry — owner [1-4]/g) ?? []).length !== 4) errors.push("exact-run save ownership");
+  if ((text.match(/Save successful main-shard corpus phase results — owner [1-4]/g) ?? []).length !== 4) errors.push("trusted-main save ownership");
+  for (const namespace of [1, 2, 3, 4]) {
+    if ((text.match(new RegExp(`path: \\.harvey-corpus-phase-cache/shard${namespace}`, "g")) ?? []).length !== 4) errors.push(`owner ${namespace} path`);
+    if (!text.includes(`shard${namespace}-scope\${{ steps.phase-cache-scopes.outputs.scope${namespace} }}`)) errors.push(`owner ${namespace} scope`);
+  }
+  if (text.includes("corpus-phase-run-v5-") || text.includes("corpus-phase-main-v5-")) errors.push("legacy v5 fallback");
+  if ((text.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length < 12) errors.push("schedule four-owner activation");
+  if (!/name: Upload drift scorecard\n\s+if: always\(\)/.test(text)) errors.push("scorecard failure delivery");
+  if (!/name: Gate liveness — did this job actually score anything\?\n\s+if: always\(\)/.test(text)) errors.push("liveness failure delivery");
+  if (!cli.includes("corpusCacheNamespaceForTarget") || (cli.match(/cacheDir: targetPhaseCacheDir/g) ?? []).length !== 6 || (cli.match(/cacheDir: targetPhaseCacheDir!/g) ?? []).length !== 1) errors.push("target owner routing");
+  return errors;
+}
+
 afterEach(() => {
   for (const dir of temporaryDirectories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -64,6 +82,24 @@ function bytesDigest(files: readonly string[]): string {
 }
 
 describe("#1864 corpus phase-cache workflow contract", () => {
+  it("satisfies the complete ownership-bound transport contract", () => {
+    expect(transportWorkflowErrors(workflow)).toEqual([]);
+  });
+
+  it.each([
+    ["v5 key fallback", workflow.replace("corpus-phase-run-v6-", "corpus-phase-run-v5-")],
+    ["missing owner restore", workflow.replace("Restore content-addressed corpus phase results — owner 4", "Restore content-addressed corpus phase results — missing")],
+    ["shared parent path", workflow.replace("path: .harvey-corpus-phase-cache/shard3", "path: .harvey-corpus-phase-cache")],
+    ["scheduled single transport", workflow.replaceAll(" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "")],
+    ["scorecard success-only", workflow.replace("name: Upload drift scorecard\n        if: always()", "name: Upload drift scorecard\n        if: success()")],
+  ] as const)("turns red under the disposable %s workflow reversion", (_name, reverted) => {
+    expect(transportWorkflowErrors(reverted)).not.toEqual([]);
+  });
+
+  it("turns red if target cache writes are routed back to the shared parent", () => {
+    const revertedCli = corpusCli.replaceAll("cacheDir: targetPhaseCacheDir", "cacheDir: phaseCacheDir");
+    expect(transportWorkflowErrors(workflow, revertedCli)).toContain("target owner routing");
+  });
   it("keeps the required context reporting on every PR and failing on any shard result", () => {
     expect(workflow).toMatch(/^\s{2}pull_request:\s*$/m);
     expect(workflow).toContain("fail-fast: false");
@@ -72,22 +108,27 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   });
 
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
-    expect(workflow).toContain("uses: actions/cache/restore@v4");
-    expect(workflow).toContain("uses: actions/cache/save@v4");
-    expect(workflow.match(/path: \.harvey-corpus-phase-cache/g)).toHaveLength(4);
+    expect(workflow.match(/uses: actions\/cache\/restore@v4/g)).toHaveLength(8);
+    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(8);
+    expect(workflow.match(/path: \.harvey-corpus-phase-cache\/shard[1-4]/g)).toHaveLength(16);
+    for (const namespace of [1, 2, 3, 4]) {
+      expect(workflow.match(new RegExp(`path: \\.harvey-corpus-phase-cache/shard${namespace}`, "g"))).toHaveLength(4);
+      expect(workflow).toContain(`shard${namespace}-scope\${{ steps.phase-cache-scopes.outputs.scope${namespace} }}`);
+    }
     expect(workflow).toContain("HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache");
     expect(workflow).not.toMatch(/Restore content-addressed corpus phase results[\s\S]{0,300}continue-on-error/);
-    expect(workflow).toContain("corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
-    expect(workflow).toContain("corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-");
-    expect(workflow).toContain("steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key");
+    expect(workflow).not.toContain("corpus-phase-run-v5-");
+    expect(workflow).not.toContain("corpus-phase-main-v5-");
+    expect(workflow).toContain("src/cli/corpus-cache-transport.ts scopes >> \"$GITHUB_OUTPUT\"");
     expect(workflow).toContain("Validate corpus phase-cache transport provenance");
     expect(workflow).toContain("Record corpus phase-cache transport provenance");
-    expect(workflow).toContain("--matched-key '${{ steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key }}'");
+    expect(workflow).toContain("steps.phase-cache-4.outputs.cache-matched-key || steps.main-phase-cache-4.outputs.cache-matched-key");
+    expect(workflow).toContain('--dir ".harvey-corpus-phase-cache/shard$namespace"');
     expect(workflow).toContain("--head-sha '${{ github.sha }}'");
     expect(workflow).toContain("--platform '${{ runner.os }}'");
     expect(workflow).toContain("--family '${{ github.event_name == 'push' && 'main' || 'run' }}'");
-    expect(workflow).toContain("--namespace '${{ matrix.shard }}'");
-    expect(workflow).toContain("CORPUS CACHE SIZE:");
+    expect(workflow).toContain('--namespace "$namespace"');
+    expect(workflow).toContain("CORPUS CACHE OWNER $namespace SIZE:");
   });
 
   it("seeds the default-branch cache after merge while preserving unconditional PR reporting", () => {
@@ -97,13 +138,32 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--ref '${{ github.ref }}'");
     expect(workflow).toContain("github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'");
     expect(workflow.match(/github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group' \|\| github\.event_name == 'push'/g)).toHaveLength(5);
-    expect(workflow).toContain("Save successful main-shard corpus phase results");
-    expect(workflow).toContain("key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
+    expect(workflow.match(/Save successful main-shard corpus phase results — owner [1-4]/g)).toHaveLength(4);
+    expect(workflow).toContain("key: corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
     expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");
     expect(workflow).not.toContain("Save shard3 main-visible corpus phase results");
     expect(workflow).toContain("success() && steps.score.outcome == 'success'");
     expect(workflow).not.toMatch(/Save successful main-shard corpus phase results[\s\S]{0,250}if: always\(\)/);
-    expect(workflow.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(2);
+    expect(workflow.match(/github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) && matrix\.shard == [1-4]/g)).toHaveLength(4);
+  });
+
+  it("keeps schedule/manual to one scorer while activating all four canonical transports", () => {
+    expect(workflow).toContain("scheduled/manual leg touches all four");
+    expect((workflow.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length).toBeGreaterThanOrEqual(12);
+    expect(workflow).toContain("&& 4 || 1");
+    expect(workflow).toContain('pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT"');
+    expect(workflow).toContain("|| 'corpus-drift-scorecard'");
+    expect(workflow).toContain("mode: save");
+    expect(corpusCli).toContain("corpusCacheNamespaceForTarget");
+    expect(corpusCli).toContain("targetPhaseCacheDir");
+    expect(corpusCli).toContain("cacheDir: targetPhaseCacheDir");
+  });
+
+  it("keeps scorecard and liveness delivery fail-closed after transport failure", () => {
+    expect(workflow).toMatch(/name: Upload drift scorecard\n\s+if: always\(\)/);
+    expect(workflow).toMatch(/name: Gate liveness — did this job actually score anything\?\n\s+if: always\(\)/);
+    expect(workflow).toContain(`if [ "$result" != "success" ]`);
+    expect(workflow).toContain("if-no-files-found: warn");
   });
 
   it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {

@@ -12,34 +12,40 @@
 
 // Per-target scan cost in SECONDS.
 //
-// PROVENANCE: MEASURED from CI run 30584074986 (job `clone pinned commits + score baselines`,
-// 2026-07-30, a full `--install` scoring pass over every target). Derived from the per-target
-// `=== <slug> (<repo> @ <sha>) ===` banners corpus-drift.ts prints: each target's cost is the
-// interval between its banner and the next one, and the last target's is the interval to the
-// scorecard print. Total 1287s, which reconciles with that step's own 1289s runtime.
+// PROVENANCE: re-measured on the pinned 1.173 toolchain from pull-request run 32578027739
+// (2026-08-22), producer jobs 97043194001/97043193929/97043193919. The integer seconds below are
+// the per-target elapsed rows emitted by corpus-drift.ts. Shard 3 hit its unchanged 30-minute hard
+// timeout after starting documenso, so its three omitted rows come from prior complete exact-version
+// run 32576123221, independent replay job 97038691019: conservative ceiling seconds between its
+// exact target boundary timestamps (documenso 493s, supabase-security-labs 65s, effective 70s).
+// These three are deliberately partition hints from the replay surface, not producer wall-time
+// claims, and should be replaced after the next complete four-shard producer run.
 //
 // These are a PARTITIONING HINT, not a claim about any future run — clone times, runner class and
 // upstream tool versions all move them. Nothing is scored against them and no gate reads them; the
 // only consequence of a stale weight is a less even split. `--shard` prints each target's ACTUAL
 // elapsed seconds so a real run always re-measures what this table only estimates.
 //
-// n=1. carbon's dominance is what makes the partition robust to that: at 564s it is 4.7x the next
-// largest target, so it lands alone in a shard under any plausible re-measurement.
+// n=1. Carbon remains indivisible at 1409s. Four shards keep it alone and distribute the remaining
+// 2898 measured seconds without putting another target on that critical path.
 export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
-  carbon: 564,
-  documenso: 119,
-  "inbox-zero": 95,
-  proposit: 86,
-  "saas-lite": 77,
-  ghostfolio: 67,
-  rallly: 56,
-  boxyhq: 54,
-  "tanstack-com": 46,
-  "multi-tenant-starter": 37,
-  "mvp-boilerplate": 35,
-  "launch-mvp": 24,
-  "subscription-payments": 17,
-  "supabase-security-labs": 7,
+  carbon: 1409,
+  documenso: 493,
+  "inbox-zero": 584,
+  "tanstack-com": 265,
+  ghostfolio: 212,
+  rallly: 206,
+  cravab: 171,
+  "flori-web": 167,
+  proposit: 121,
+  boxyhq: 116,
+  "saas-lite": 94,
+  "mvp-boilerplate": 91,
+  "multi-tenant-starter": 86,
+  "launch-mvp": 79,
+  "subscription-payments": 78,
+  effective: 70,
+  "supabase-security-labs": 65,
 };
 
 // A target added to EXTERNAL_CORPUS after the table was measured has no entry. It gets a weight at
@@ -48,7 +54,21 @@ export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
 // wrong is asymmetric, so the default leans to the safe side rather than to the median.
 export const DEFAULT_SCAN_SECONDS = 120;
 
-export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? DEFAULT_SCAN_SECONDS;
+// The scoring topology may be one job (schedule/manual) or four jobs (PR/queue/push), but cache
+// ownership is deliberately invariant. A target always reads and writes the same one of these four
+// roots, and the all-target scorer uses those same four transports.
+export const CORPUS_CACHE_SHARD_COUNT = 4;
+export const CORPUS_CACHE_PARTITION_POLICY = "corpus-lpt-four-owner-v1";
+
+/** POSIX-style byte ordering for identities shared across runners and locales. */
+export const compareUtf8Bytes = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
+
+const weightFrom = (
+  slug: string,
+  weights: Readonly<Record<string, number>>,
+): number => weights[slug] ?? DEFAULT_SCAN_SECONDS;
+
+export const weightOf = (slug: string): number => weightFrom(slug, TARGET_SCAN_SECONDS);
 
 /**
  * Longest-processing-time-first partition: sort by descending cost, then repeatedly assign the next
@@ -59,17 +79,22 @@ export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? D
  * LPT rather than round-robin because the corpus is heavily skewed: round-robin over a list whose
  * largest element is 44% of the total pairs that element with others and wastes the parallelism.
  */
-export function partitionTargets(slugs: readonly string[], shardCount: number): string[][] {
+export function partitionTargets(
+  slugs: readonly string[],
+  shardCount: number,
+  weights: Readonly<Record<string, number>> = TARGET_SCAN_SECONDS,
+): string[][] {
   if (!Number.isInteger(shardCount) || shardCount < 1) {
     throw new Error(`shard count must be a positive integer, got ${shardCount}`);
   }
   const shards = Array.from({ length: shardCount }, () => ({ slugs: [] as string[], load: 0 }));
+  const selectedWeight = weights === TARGET_SCAN_SECONDS ? weightOf : (slug: string): number => weightFrom(slug, weights);
 
-  const ordered = [...slugs].sort((a, b) => weightOf(b) - weightOf(a) || a.localeCompare(b));
+  const ordered = [...slugs].sort((a, b) => selectedWeight(b) - selectedWeight(a) || compareUtf8Bytes(a, b));
   for (const slug of ordered) {
     const lightest = shards.reduce((a, b) => (b.load < a.load ? b : a));
     lightest.slugs.push(slug);
-    lightest.load += weightOf(slug);
+    lightest.load += selectedWeight(slug);
   }
   return shards.map((s) => s.slugs);
 }
@@ -91,6 +116,15 @@ export function shardTargets(slugs: readonly string[], shardIndex: number, shard
   const mine = shards[shardIndex - 1];
   if (!mine) throw new Error(`shard ${shardIndex}/${shardCount} does not exist`);
   return mine;
+}
+
+/** The fixed, event-independent cache owner for one corpus target. */
+export function corpusCacheNamespaceForTarget(slugs: readonly string[], slug: string): number {
+  const shards = partitionTargets(slugs, CORPUS_CACHE_SHARD_COUNT);
+  assertPartitionCoversEveryTarget(slugs, shards);
+  const owner = shards.findIndex((members) => members.includes(slug));
+  if (owner < 0) throw new Error(`corpus cache target ${slug} has no canonical owner`);
+  return owner + 1;
 }
 
 /** Throws unless the shards are a true partition of `slugs` — every target exactly once. */

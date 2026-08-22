@@ -284,6 +284,29 @@ export interface ExternalTarget {
   vendoredSubtrees?: string[];
 }
 
+// #1795: count-only corpus scoring is blind to a semantic reclassification. The production change
+// keeps Ghostfolio's M7 baseline at 78/78 and its whole-library population at 59 while correcting
+// exactly one client-facing claim. Keep the controlled before/after as structured data so the live
+// corpus scorer below can fail if the old 23/36 split returns without moving either count.
+//
+// Raw material is reproducible from the two Harvey heads and the content-addressed target pin/tree:
+// `pnpm exec tsx src/cli/static-detect.ts <ghostfolio-clone> --out findings.json`. The only
+// location+taxonomy key whose impact/evidence changed was `recoveredLocation`.
+export const GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE = {
+  targetCommit: "7bd6ca6d48a2b88d454218dc1497536708e38c57",
+  targetTree: "f394e3b267718197d83a85c351534bc436c9bfa5",
+  beforeHarveyHead: "5d7b69a84d3e039e86c060575c923e3518dba0d3",
+  afterHarveyHead: "aeb38ad1a548eeb610df327cf5896bfc9d1fa462",
+  taxonomy: "M7 — Whole-library import",
+  recoveredLocation: "apps/api/src/services/twitter-bot/twitter-bot.service.ts:13",
+  m7: { counted: 78, total: 78 },
+  wholeLibrary: {
+    total: 59,
+    before: { serverSideSupported: 23, reachabilityUnsupported: 36 },
+    after: { serverSideSupported: 24, reachabilityUnsupported: 35 },
+  },
+} as const;
+
 export function isNotRun(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m is ModuleNotRun {
   return "reason" in m;
 }
@@ -697,7 +720,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       "M5-knip": { counted: 456, total: 457, note: "#894: MEASURED 2026-07-24 after `npm install` in the clone (2196 packages) — 413 'Unused file' (Low) + 21 'Unused security-relevant file' (Medium) + 11 unused-export files + 1 Info (#580 M5-99 'result may be unreliable for one or more scopes'). CAVEAT recorded with the number, not instead of it: 413 unused FILES on an Nx workspace is the shape knip produces when it cannot see Nx's project graph as the entry surface, so treat this as a DRIFT baseline (it must reproduce), not as a claim that ghostfolio has 413 dead files. The M5-99 uncertainty row is part of the baseline and is what says so in the output. #1128: RE-MEASURED 2026-07-26 at 456/457 (was 446/447) — a precision fix from #1094/#1080 (commit 4469338, merged 2026-07-25): knip's six previously-dropped IssueRecords categories now surface. `pnpm corpus-drift --target ghostfolio --install` reproduced 456 counted." },
       "M5-slop": { counted: 104, total: 105, note: "#1948 HOSTED REPLAY run 32345629796: RE-MEASURED 2026-08-20 at 104/105 (was 51/52), +53 graded rows from newly registered exception-flow/type-escape detectors: 5 ambiguous exception success + 11 empty catch + 7 log-only catch + 6 `as any` + 23 double assertions + 1 unexplained `@ts-ignore`. Existing M5 categories were unchanged. Prior note: #894: MEASURED 2026-07-24 — 28 'Else after return' + 6 'Orphan TODO' + 6 'Placeholder stub' + 4 'Redundant boolean ternary' + 5 single-use helpers; 1 narrating-comment Info. #1128: RE-MEASURED 2026-07-26 at 51/52 (was 49/50) — a precision fix from #1088/#1065 (commit c75186a, merged 2026-07-25): the detector's SOURCE_FILE filter widened from ts/tsx/jsx/mjs to also include plain js/cjs/mts/cts, so 2 more genuinely-scanned files surface. `pnpm corpus-drift --target ghostfolio --install` reproduced 51 counted." },
       "M6-indicator": { counted: 5, total: 5, note: "#894: MEASURED 2026-07-24 — 5 hand-rolled-shape indicators. All Info/non-grading (#267); counted === total by construction (see the manifest's M6-indicator note)." },
-      M7: { counted: 78, total: 78, note: "#1666: RE-MEASURED 2026-07-31 at 78/78 — UNCHANGED (a reword, not a new finding), by a CONTROLLED before/after `static-detect` run over all seventeen pinned M5-slop targets (this target plus the other sixteen, every one byte-identical before/after — see this file's other M7 notes, none of which moved). Command, reproducible: `pnpm exec tsx src/cli/static-detect.ts <clone-of-7bd6ca6d> --out f.json`, diffed by finding key against the same run with `nestModuleProviderEdges`'s merge step removed. THE SPLIT, replacing the '20 re-worded / 39 not' this note previously carried: of the 59 whole-library rows, 23 now carry the server-side claim (up from 20) and 36 keep the original visitor-bundle claim (down from 39). The three newly-reworded rows are exactly three of the four this note previously named as missed by cause: `services/data-provider/{eod-historical-data,financial-modeling-prep,yahoo-finance}/*.service.ts` — each is registered in its OWN `@Module({ controllers: [...], providers: [...] })` alongside a controller, so #1666's synthetic controller->provider edge reaches it. RESIDUAL, not closed by this fix: `services/twitter-bot/twitter-bot.service.ts` stays unqualified — its owning `TwitterBotModule` registers NO `controllers` at all (`providers: [TwitterBotService]`, `imports: [...]`, `exports: [TwitterBotService]` only); it is wired into the app by being `imports`-ed into ANOTHER module that itself has controllers, a nested-module-import shape #1666's same-@Module edge does not reach. Filed as #1795 rather than silently left in this fix's stated scope. The other three misses this note has always carried (object.helper.ts:3, models/rule.ts:11, portfolio-calculator.ts:23 — no server runtime of their own, fail `importsServerRuntime`) are unaffected by #1666, unchanged. Zero effect measured elsewhere in the corpus: the sync-I/O tier and the dev-tooling subtraction, which both share `requestReachableModules` with this class, produced byte-identical output before/after on all seventeen targets — the widening's blast radius on this corpus is exactly the three rows named above. Prior note: #1479: RE-MEASURED 2026-07-31 at 78/78 — UNCHANGED, and that is the expected result: #1479 RE-WORDS the whole-library class for a server-only module rather than suppressing it, and a re-worded row is still counted. THE SPLIT, replacing the by-location ESTIMATE the prior note left standing: of the 59 whole-library rows, 20 now carry the server-side claim ('A request entry point in this tree imports this module and no client entry point does … the visitor-bundle cost stated by this class does NOT apply', severity Low) and 39 keep the original visitor-bundle claim with the evidence disclosing that client-reachability 'was not established'. By location the 59 are apps/api 27 (20 re-worded, 7 not), libs 20 (0 re-worded) and apps/client 12 (0 re-worded) — so #1261's 27-under-apps/api figure reproduces exactly, and 20 of those 27 are the population the fix reached. RESIDUAL, measured not assumed: NO file under apps/client or libs imports `@ghostfolio/api/*` (the tsconfig.base.json alias for apps/api/src/*) — 0 hits over 511 .ts files, `grep -ra`, and no TS/JS file under those trees is binary-classified — so all 27 apps/api rows are server-only IN FACT and the guard reaches 20 of them. Prior note: #1261: 78/78 reproduces 2026-07-28; 2 rows drawn into the 40-row seeded sample (seed 1261) and read against source — 1 holds, 1 does not. SAMPLED, NOT CENSUSED: 76 rows untriaged, and this target is the corpus's worst place to generalise from because 59 of its 78 rows are ONE class (whole-library lodash import). The sampled false row is from that class: `import { isEmpty } from 'lodash'` in apps/api/src/services/queues/data-gathering/data-gathering.service.ts:34, a NestJS SERVER module, where the finding's stated impact ('dead code in the bundle … parse/execute cost on every visitor') cannot obtain — server code ships no bundle. By location, 27 of the 59 sit under apps/api and 20 under libs, so the population that may share this defect is large; it is UNMEASURED beyond the one row read, and is filed rather than asserted. Prior note: #894: MEASURED 2026-07-24 and the reason this target is pinned — 5 of the 78 are #761's Prisma `schema.prisma` UNINDEXED-FOREIGN-KEY findings (Account.platformId, AccountBalance.userId, Order.accountUserId, Order.symbolProfileId, SymbolProfile.userId), the first real-code regression baseline the Prisma M7 tier has ever had. The rest: 59 whole-library lodash imports, 8 nested-loop joins, 6 await-in-loop N+1." },
+      M7: { counted: 78, total: 78, note: "#1795: RE-MEASURED 2026-08-21 on ghostfolio/ghostfolio@7bd6ca6d48a2b88d454218dc1497536708e38c57 (tree f394e3b267718197d83a85c351534bc436c9bfa5), by controlled production `static-detect` before/after at Harvey heads 5d7b69a84d3e039e86c060575c923e3518dba0d3 and aeb38ad1a548eeb610df327cf5896bfc9d1fa462. M7 is conserved at 78/78 and all 59 whole-library location+taxonomy keys are conserved. The semantic split moves from 23 server-side-supported / 36 reachability-unsupported to 24/35. The complete imports-chain-only provider delta population at this pin is exactly one row: `apps/api/src/services/twitter-bot/twitter-bot.service.ts:13`; it now carries the server-only claim because a controller reaches TwitterBotService through the transitive, cyclic Nest `imports` graph. All other 58 whole-library rows and all 19 other M7 rows are unchanged. Removing the transitive module-import edge walk restores 23/36 while counts stay 78/78; the semantic corpus scorer below fails that count-neutral direction. Reproduce with `pnpm exec tsx src/cli/static-detect.ts <clone-of-7bd6ca6d> --out findings.json`. PRIOR NOTE (the #1666 twitter-bot residual below is historical and superseded by #1795): #1666: RE-MEASURED 2026-07-31 at 78/78 — UNCHANGED (a reword, not a new finding), by a CONTROLLED before/after `static-detect` run over all seventeen pinned M5-slop targets (this target plus the other sixteen, every one byte-identical before/after — see this file's other M7 notes, none of which moved). Command, reproducible: `pnpm exec tsx src/cli/static-detect.ts <clone-of-7bd6ca6d> --out f.json`, diffed by finding key against the same run with `nestModuleProviderEdges`'s merge step removed. THE SPLIT, replacing the '20 re-worded / 39 not' this note previously carried: of the 59 whole-library rows, 23 now carry the server-side claim (up from 20) and 36 keep the original visitor-bundle claim (down from 39). The three newly-reworded rows are exactly three of the four this note previously named as missed by cause: `services/data-provider/{eod-historical-data,financial-modeling-prep,yahoo-finance}/*.service.ts` — each is registered in its OWN `@Module({ controllers: [...], providers: [...] })` alongside a controller, so #1666's synthetic controller->provider edge reaches it. RESIDUAL, not closed by this fix: `services/twitter-bot/twitter-bot.service.ts` stays unqualified — its owning `TwitterBotModule` registers NO `controllers` at all (`providers: [TwitterBotService]`, `imports: [...]`, `exports: [TwitterBotService]` only); it is wired into the app by being `imports`-ed into ANOTHER module that itself has controllers, a nested-module-import shape #1666's same-@Module edge does not reach. Filed as #1795 rather than silently left in this fix's stated scope. The other three misses this note has always carried (object.helper.ts:3, models/rule.ts:11, portfolio-calculator.ts:23 — no server runtime of their own, fail `importsServerRuntime`) are unaffected by #1666, unchanged. Zero effect measured elsewhere in the corpus: the sync-I/O tier and the dev-tooling subtraction, which both share `requestReachableModules` with this class, produced byte-identical output before/after on all seventeen targets — the widening's blast radius on this corpus is exactly the three rows named above. Prior note: #1479: RE-MEASURED 2026-07-31 at 78/78 — UNCHANGED, and that is the expected result: #1479 RE-WORDS the whole-library class for a server-only module rather than suppressing it, and a re-worded row is still counted. THE SPLIT, replacing the by-location ESTIMATE the prior note left standing: of the 59 whole-library rows, 20 now carry the server-side claim ('A request entry point in this tree imports this module and no client entry point does … the visitor-bundle cost stated by this class does NOT apply', severity Low) and 39 keep the original visitor-bundle claim with the evidence disclosing that client-reachability 'was not established'. By location the 59 are apps/api 27 (20 re-worded, 7 not), libs 20 (0 re-worded) and apps/client 12 (0 re-worded) — so #1261's 27-under-apps/api figure reproduces exactly, and 20 of those 27 are the population the fix reached. RESIDUAL, measured not assumed: NO file under apps/client or libs imports `@ghostfolio/api/*` (the tsconfig.base.json alias for apps/api/src/*) — 0 hits over 511 .ts files, `grep -ra`, and no TS/JS file under those trees is binary-classified — so all 27 apps/api rows are server-only IN FACT and the guard reaches 20 of them. Prior note: #1261: 78/78 reproduces 2026-07-28; 2 rows drawn into the 40-row seeded sample (seed 1261) and read against source — 1 holds, 1 does not. SAMPLED, NOT CENSUSED: 76 rows untriaged, and this target is the corpus's worst place to generalise from because 59 of its 78 rows are ONE class (whole-library lodash import). The sampled false row is from that class: `import { isEmpty } from 'lodash'` in apps/api/src/services/queues/data-gathering/data-gathering.service.ts:34, a NestJS SERVER module, where the finding's stated impact ('dead code in the bundle … parse/execute cost on every visitor') cannot obtain — server code ships no bundle. By location, 27 of the 59 sit under apps/api and 20 under libs, so the population that may share this defect is large; it is UNMEASURED beyond the one row read, and is filed rather than asserted. Prior note: #894: MEASURED 2026-07-24 and the reason this target is pinned — 5 of the 78 are #761's Prisma `schema.prisma` UNINDEXED-FOREIGN-KEY findings (Account.platformId, AccountBalance.userId, Order.accountUserId, Order.symbolProfileId, SymbolProfile.userId), the first real-code regression baseline the Prisma M7 tier has ever had. The rest: 59 whole-library lodash imports, 8 nested-loop joins, 6 await-in-loop N+1." },
       M8: {
         // REASON: ghostfolio is not mutation-scoreable because no M8_CORPUS_CONFIGS entry exists for it — the blocker is our own backlog, not the target
         // KIND: empirical
@@ -1503,6 +1526,49 @@ function countedFor(findings: Finding[], module: string): number {
   return countedFindingsFor(findings, module).length;
 }
 
+function hasSupportedServerSideClaim(finding: Finding): boolean {
+  return finding.impact.startsWith("Server-side only:")
+    && finding.evidence.includes("no client entry point does");
+}
+
+function hasUnsupportedReachabilityClaim(finding: Finding): boolean {
+  return finding.impact.startsWith("Tens to hundreds of KB of dead code in the bundle")
+    && finding.evidence.includes("Whether this module reaches a client chunk was not established");
+}
+
+// #1795: Ghostfolio's recovered Nest provider is a semantic movement at constant count. The
+// ordinary M7 baseline treats 23 supported / 36 unsupported and 24 / 35 identically, so score the
+// real client-facing evidence split and the exact recovered row in the same live corpus consumer.
+function scoreGhostfolioM7NestImportChain(findings: Finding[]): { pass: boolean; detail: string } {
+  const baseline = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
+  const m7 = findings.filter((finding) => moduleMatches(finding.taxonomy, "M7"));
+  const m7Counted = countedFor(findings, "M7");
+  const wholeLibrary = findings.filter((finding) => finding.taxonomy === baseline.taxonomy);
+  const supported = wholeLibrary.filter(hasSupportedServerSideClaim);
+  const unsupported = wholeLibrary.filter(hasUnsupportedReachabilityClaim);
+  const malformed = wholeLibrary.filter(
+    (finding) => !hasSupportedServerSideClaim(finding) && !hasUnsupportedReachabilityClaim(finding),
+  );
+  const recovered = wholeLibrary.filter((finding) => finding.location === baseline.recoveredLocation);
+  const recoveredIsSupported = recovered.length === 1 && hasSupportedServerSideClaim(recovered[0]!);
+  const expected = baseline.wholeLibrary.after;
+  const pass = m7Counted === baseline.m7.counted
+    && m7.length === baseline.m7.total
+    && wholeLibrary.length === baseline.wholeLibrary.total
+    && supported.length === expected.serverSideSupported
+    && unsupported.length === expected.reachabilityUnsupported
+    && malformed.length === 0
+    && recoveredIsSupported;
+  const observed = `M7 ${m7Counted}/${m7.length}; whole-library ${wholeLibrary.length} = ${supported.length} server-side supported + ${unsupported.length} reachability unsupported`;
+
+  return {
+    pass,
+    detail: pass
+      ? `semantic baseline matches (${observed}); ${baseline.recoveredLocation} is the recovered imports-chain-only provider`
+      : `SEMANTIC DRIFT: ${observed}; expected ${baseline.m7.counted}/${baseline.m7.total} and ${baseline.wholeLibrary.total} = ${expected.serverSideSupported} supported + ${expected.reachabilityUnsupported} unsupported; malformed=${malformed.length}; recovered twitter-bot supported=${recoveredIsSupported}`,
+  };
+}
+
 // #321: the coverage guard fails loud on SILENCE (a module omitted with no reason) but is trusting
 // of stated REASONS — and a not-run reason is a claim about the world that decays. saas-lite's
 // M5-knip is blocked by an upstream eslint-patch bug that may resolve on a dependency bump; boxyhq's
@@ -1564,17 +1630,21 @@ export function scoreExternalBaseline(target: ExternalTarget, findings: Finding[
     const drift = actual - baseline.counted;
     const scope = scanScopeOf(target, module);
     const scopeNote = hasRoots ? ` [scanned scope: ${scope}]` : "";
+    const semantic = target.slug === "ghostfolio" && module === "M7"
+      ? scoreGhostfolioM7NestImportChain(findings)
+      : undefined;
     return [{
       slug: target.slug,
       module,
       expected: baseline.counted,
       actual,
       drift,
-      pass: drift === 0,
+      pass: drift === 0 && (semantic?.pass ?? true),
       scope,
       detail: (drift === 0
         ? `matches baseline (${baseline.counted} counted)`
-        : `DRIFT ${drift > 0 ? "+" : ""}${drift}: expected ${baseline.counted} counted, got ${actual} — a precision fix (update the baseline) or a regression (fix the scanner)`) + scopeNote,
+        : `DRIFT ${drift > 0 ? "+" : ""}${drift}: expected ${baseline.counted} counted, got ${actual} — a precision fix (update the baseline) or a regression (fix the scanner)`) + scopeNote
+        + (semantic ? `; ${semantic.detail}` : ""),
     }];
   });
 }
