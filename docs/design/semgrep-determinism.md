@@ -91,39 +91,63 @@ later hosted replays showed that nine-worker parmap could still omit different
 `harvey-log-injection` rows while diagnostics remained equal. A coincident pair of j9 results is not
 sufficient evidence of recall.
 
-**Current at semgrep 1.173.0:** every planned family uses `--x-parmap --timeout 0`. The complete
-`local-injection` family (`injection.yml`) is the exceptional topology: Semgrep executes that whole
-family twice from cold state at `-j 1`, and Harvey compares the complete canonical semantic output —
-findings, errors, scanned paths, skipped paths, executed rule IDs, and fixpoint timeouts. The pair
-must be exactly equal before either output can be returned or enter the family cache. Every other
-family runs once at the measured fast `-j 9` topology. There is no fallback to threaded `-j 1`:
-rejection of internal `--x-parmap`, a malformed semantic envelope, or a divergent pair fails closed
-as an incomplete Semgrep run.
+**Current at semgrep 1.173.0:** every planned family uses `--x-parmap --timeout 0`.
+`local-injection` is the exceptional topology. Each attempt scans the whole target twice in a fixed
+order at `-j 1`: the `log` partition owns only `harvey-log-injection`, and the `complement`
+partition owns the other 29 rules. Harvey canonically merges those two outputs, repeats the same
+ordered pair exactly once, and compares both component receipts and the merged semantic receipt.
+Findings, result hashes, errors, scanned paths, skipped paths, skipped rules, executed rule IDs, and
+fixpoint timeouts must all agree before the output can be returned or enter the reusable family
+cache. There is no retry-until-green and no fallback to threaded execution.
 
-The execution-plan receipt is schema 3 and binds each whole family to its source kind/source id,
-config digest, declared and actually executed rule IDs, argv, ordinal, and verification policy. The
-receipt contains no subpartition substitute for `local-injection`; the production unit is the whole
-family, so a stale description of the contract as "22 subscans" is not authoritative.
+The successful execution-plan and family-cache artifact schema is 5. It binds the ordered partition
+topology, disjoint rule ownership, derived-config content hashes, canonical argv, merge algorithm,
+exact two-attempt policy, component receipts, merged receipts, and actual loaded-rule population. A
+divergent pair is retained as a content-addressed `reusable: false` failure artifact under
+`semgrep-family-failures/local-injection/`; successful cache resolution reads only
+`semgrep-families/`, and a same-key rerun executes again. Schema-4 and malformed or invented schema-5
+receipts are rejected.
 
-**MEASURED 2026-08-20/21, semgrep 1.173.0, pinned Carbon tree:** each complete cold
-`local-injection` run produced exactly **87 findings**, **4,152 scanned paths**, **30 executed rule
-IDs**, **32 skipped-path records**, **26 raw/canonical error records**, and **6 fixpoint timeouts on
-6 timeout-only paths**. Those timeout-only paths were absent from both `errors[]` and
-`paths.skipped`, which is why `time.fixpoint_timeouts` is semantic coverage evidence rather than
-profiling noise. Both cold semantic projections agreed exactly. The current PartialParsing record
-for `TraceabilityGraph.tsx` is **79:1–79:2** on the unexpected `}`; the older line-74
-`import("./utils").IssueContainment` record is historical and a paired run that substitutes it is
-rejected.
+The pinned inventory contains **1,033 rule entries / 846 unique rule IDs / 168 duplicated IDs**:
+915 entries / 728 unique IDs from the six registry packs plus 118 local rules. The content-derived
+ownership plan assigns every registry rule one execution owner while preserving every local rule.
+The duplicated `direct-response-write` registry rule is excluded from both source packs and derived
+once into its own paired `-j 1` family, bound to its semantic object hash. This prevents overlapping
+packs from executing the same rule under different load and then losing source-family provenance
+during merge.
+
+**MEASURED 2026-08-22, semgrep 1.173.0, pinned Carbon tree:** each merged
+`local-injection` attempt produced exactly **87 findings**, **26 errors**, **4,152 scanned paths**,
+**32 skipped-path records**, **30 executed rule IDs**, and **10 distinct fixpoint timeouts**. The
+`log` component produced **78 findings**, **1 error**, and **4 timeouts**; the 29-rule `complement`
+produced **9 findings**, **26 errors**, and **6 timeouts**. Both prescribed fresh cold executions
+produced those exact populations, and both inner attempts agreed component-by-component and after
+merge.
+
+The two cold executions initially stored different semantic hashes only because Semgrep embedded
+each derived config's temporary cache-root namespace in `check_id`, executed-rule, and
+timeout-message strings. The final ownership-bound canonicalizer removes that namespace only when
+it resolves to exactly one declared owned rule. Replaying both retained raw execution artifacts
+through the final production canonicalizer and schema-5 receipt builder makes every corresponding
+component and merged receipt identical across the two runs. A known cache-root rename canonicalizes
+equal; an unknown namespace or semantic rule-id mutation remains unequal. No third Carbon execution
+was made: the post-fix evidence is retained-raw replay through the final code.
+
+The current PartialParsing record for `TraceabilityGraph.tsx` is **79:1–79:2** on the unexpected
+`}`; the older line-74 `import("./utils").IssueContainment` record is historical and a paired run
+that substitutes it is rejected.
 
 **Committed-artifact effect:** regeneration moved `dry-run/findings.json` from **811 to 789**.
 A content comparison excluding renumbered IDs shows **22 removals**, all duplicate Semgrep SQL
-placeholder findings, and **0 additions**. `dry-run/findings-report.json.findings` is deeply equal to
-the standalone findings array after regeneration. The artifact delta is therefore exactly the
-22 duplicate removals, not zero.
+placeholder findings, and **0 additions**. Two fresh post-fix regeneration epochs produced
+byte-identical `findings.json`, `pii-data-map.json`, `scorecard.json`, and `findings-report.json`;
+`findings-report.json.findings` is deeply equal to the standalone findings array. The artifact
+delta is therefore exactly the 22 duplicate removals, not nondeterministic generated-config naming.
 
-Interim #1954 notes that quote **52 skips**, **line 74**, **804 findings**, or **zero artifact delta**
-do not describe the accepted 1.173.0 evidence. The older 1.164.0 population and matrix above remain
-historical measurements, not current production counts.
+Interim #1954 notes that quote **52 skips**, **line 74**, **804 findings**, **6 merged timeouts**,
+**schema 3/4**, a whole-family two-run topology, or **zero artifact delta** do not describe the
+accepted 1.173.0 contract. The older 1.164.0 population and matrix above remain historical
+measurements, not current production counts.
 
 ## 5. Historical corpus-drift consequence at 1.164.0
 
@@ -143,8 +167,9 @@ fail-closed exact comparison; it is not a claim that 1.164.0 counts are current 
   pin at the time, not the current 1.173.0 authority. CI amplitude was not measured directly; the
   mechanisms (thread-shared state and wall-clock timeouts) transfer, and the current topology still
   removes both inputs. Cross-machine identity of the historical parmap result set was not claimed.
-  The current 1.173.0 Carbon evidence instead binds the whole local-injection family to two exact
-  cold j1 semantic projections and fails closed if they disagree.
+  The current 1.173.0 Carbon evidence instead binds local-injection to two ordered whole-root j1
+  rule partitions per attempt, compares both component and merged schema-5 semantic receipts across
+  exactly two attempts, and fails closed if any field disagrees.
 - n=5 per repo for the population table; a 1-in-6-run dropout (the `-j 1 --timeout 0` row)
   is exactly the kind of event n=5 can miss. "STABLE at n=5" is evidence, not proof, for the
   15 stable repos.
@@ -153,5 +178,6 @@ fail-closed exact comparison; it is not a claim that 1.164.0 counts are current 
   unmeasured.
 - `--x-parmap` remains deprecated/internal upstream. A future Semgrep that rejects it does not fall
   back to an unproved threaded topology: the run fails closed as incomplete (`SEM-00`) and must be
-  re-measured before a replacement execution policy is accepted. The schema-3 receipt and
-  paired-cold tests in `src/scan/semgrep.test.ts` hold that contract.
+  re-measured before a replacement execution policy is accepted. The schema-5 topology receipt,
+  non-reusable failure artifacts, retained-raw replay controls, and paired-topology tests in
+  `src/scan/semgrep.test.ts` and `src/scan/semgrep-family-cache.test.ts` hold that contract.
