@@ -582,6 +582,7 @@ for (const target of targets) {
       }
       if (currentExecution) {
         if (!deterministicSnapshot || !secretCandidateIdentity) throw new Error(`${target.slug}: current readiness requires deterministic external-state receipts`);
+        if (!mechanicalRun.semgrepExecution) throw new Error(`${target.slug}: current readiness requires an actual successful Semgrep semantic execution receipt`);
         currentExecution.targets[target.slug] = {
           slug: target.slug,
           repo: target.repo,
@@ -603,7 +604,7 @@ for (const target of targets) {
           findings: mechanicalRun.findings,
           producers: mechanicalRun.detectors,
           context: mechanicalRun.context,
-          executionPlan: currentPlan!.executionPlan,
+          executionPlan: { ...currentPlan!.executionPlan, semgrep: mechanicalRun.semgrepExecution },
           cachePolicy: currentPlan!.cachePolicy,
           semgrepDiagnostics: mechanicalRun.semgrepDiagnostics,
         };

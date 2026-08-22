@@ -10,8 +10,8 @@ import type { MechanicalPhaseCacheOptions, MechanicalProducerRecord } from "./sc
 import { binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
 import { buildMechanicalPhaseCache } from "./scan/mechanical-phase-identity.js";
 import { shardTargets } from "./scan/corpus-shards.js";
-import type { SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
-import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt } from "./scan/semgrep.js";
+import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
+import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt, type SemgrepPlannedExecutionReceipt } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
 export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/shared-pruned-scan-root/copy-before-install/bundle-off-v3" as const;
@@ -137,7 +137,7 @@ export function buildCurrentMechanicalPhasePlan(options: {
   registry: { identity: string; files: string[] };
   producerMode?: "read-write" | "verify";
   onEvent?: (message: string) => void;
-}): { phaseCache: MechanicalPhaseCacheOptions; executionPlan: CurrentMechanicalExecutionPlanReceipt; cachePolicy: CurrentMechanicalCachePolicyReceipt } {
+}): { phaseCache: MechanicalPhaseCacheOptions; executionPlan: Omit<CurrentMechanicalExecutionPlanReceipt, "semgrep">; plannedSemgrep: SemgrepPlannedExecutionReceipt; cachePolicy: CurrentMechanicalCachePolicyReceipt } {
   const cacheDir = resolve(options.cacheDir);
   if (options.side === "independent-replay") {
     if (existsSync(cacheDir) && readRecursiveSafe(cacheDir).length > 0) throw new Error("independent replay cache namespace is not empty; producer artifacts must never enter replay");
@@ -168,8 +168,8 @@ export function buildCurrentMechanicalPhasePlan(options: {
       phases: MECHANICAL_PHASES,
       implementation: phaseCache.implementation,
       externalInputs: phaseCache.externalInputs,
-      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
     },
+    plannedSemgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
     cachePolicy: {
       schema: 1,
       mode: options.side === "independent-replay" ? "independent-cold-off" : "hosted-content-addressed",
@@ -490,19 +490,13 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
       throw new Error(`${source}: ${slug} empty-gitlink receipt is missing or malformed`);
     }
     if (target.executionPlan?.schema !== 1 || stable(target.executionPlan.phases) !== stable(MECHANICAL_PHASES)
-      || target.executionPlan.semgrep?.strategy !== "partitioned-families" || target.executionPlan.semgrep.families.length === 0
-      || new Set(target.executionPlan.semgrep.families.map((family) => family.id)).size !== target.executionPlan.semgrep.families.length
-      || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal
-        || family.familyId !== family.id
-        || (family.sourceKind !== "registry-pack" && family.sourceKind !== "local-config")
-        || typeof family.sourceId !== "string" || family.sourceId.length === 0
-        || !SHA256.test(family.configSha256)
-        || !Array.isArray(family.ruleIds) || family.ruleIds.some((ruleId) => typeof ruleId !== "string" || ruleId.length === 0)
-        || !Array.isArray(family.argv) || family.argv.length === 0
-        || (family.verification !== "single" && family.verification !== "paired-cold-exact"))
-      || target.executionPlan.semgrep.schema !== 3
       || Object.keys(target.executionPlan.implementation).length === 0 || Object.keys(target.executionPlan.externalInputs).length === 0) {
       throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed`);
+    }
+    try {
+      assertSuccessfulSemgrepExecutionReceipt(target.executionPlan.semgrep);
+    } catch (error) {
+      throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const policy = target.cachePolicy;
     if (policy?.schema !== 1 || !SHA256.test(policy.namespaceSha256)

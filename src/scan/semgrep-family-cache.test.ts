@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +14,8 @@ import {
   type SemgrepFamily,
   type SemgrepFamilyCacheOptions,
   type SemgrepFamilyRecord,
+  type SemgrepFamilyExecutionReceipt,
+  type SemgrepCommandSemanticReceipt,
 } from "./semgrep-family-cache.js";
 import type { SemgrepOutput } from "./semgrep.js";
 
@@ -22,6 +25,29 @@ const output = (id: string, path = "src/route.ts"): SemgrepOutput => ({
   paths: { scanned: [path], skipped: [] },
   time: { rules: [id], fixpoint_timeouts: [] },
 });
+
+function stableFixture(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableFixture).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableFixture(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+function executed(family: SemgrepFamily, value: SemgrepOutput): { output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt } {
+  const loadedRuleIds = [...new Set((value.time?.rules ?? []) as string[])].sort();
+  const semantic = {
+    argv: ["semgrep", "--config", family.configPath], loadedRuleIds,
+    resultsSha256: createHash("sha256").update(stableFixture(value.results ?? [])).digest("hex"),
+    scanned: value.paths?.scanned ?? [], skipped: value.paths?.skipped ?? [], skippedRules: value.skipped_rules ?? [],
+    errors: value.errors ?? [], fixpointTimeouts: value.time?.fixpoint_timeouts ?? [],
+  };
+  const attempt = { status: "succeeded" as const, attempt: 1, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+  const configSha256 = createHash("sha256").update(readFileSync(family.configPath)).digest("hex");
+  return { output: value, execution: {
+    ordinal: 0, id: family.id, familyId: family.id, sourceKind: "local-config", sourceId: family.id,
+    configSha256, sourceConfigSha256: configSha256, ruleIds: loadedRuleIds, ownedRuleIds: loadedRuleIds,
+    loadedRuleIds, excludedRuleIds: [], argv: semantic.argv, verification: "single", status: "succeeded", attempts: [attempt],
+  } };
+}
 
 describe("Semgrep family cache and reassembly (#1869)", () => {
   const dirs: string[] = [];
@@ -76,18 +102,18 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
 
   it("changing one local rule invalidates only its family", async () => {
     const { families, options } = fixture();
-    for (const family of families) expect((await executeSemgrepFamily(family, options, () => output(family.id))).cache).toBe("miss");
+    for (const family of families) expect((await executeSemgrepFamily(family, options, () => executed(family, output(family.id)))).cache).toBe("miss");
     writeFileSync(families[0]!.configPath, "rules: [] # auth-v2\n");
     for (const [index, family] of families.entries()) {
-      expect((await executeSemgrepFamily(family, options, () => output(`${family.id}-fresh`))).cache).toBe(index === 0 ? "miss" : "hit");
+      expect((await executeSemgrepFamily(family, options, () => executed(family, output(`${family.id}-fresh`)))).cache).toBe(index === 0 ? "miss" : "hit");
     }
   });
 
   it("caches a complete zero-applicable-rule family and continues the exhaustive plan", async () => {
     const { families, options } = fixture();
     const empty: SemgrepOutput = { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } };
-    const cold = await executeSemgrepFamily(families[0]!, options, () => empty);
-    const warm = await executeSemgrepFamily(families[0]!, options, () => output("must-not-run"));
+    const cold = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, empty));
+    const warm = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output("must-not-run")));
     expect(cold).toMatchObject({ cache: "miss", unitsExamined: 1, output: empty });
     expect(warm).toMatchObject({ cache: "hit", unitsExamined: 1, output: empty });
   });
@@ -98,31 +124,31 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     const rootB = join(root, "checkout-b");
     mkdirSync(rootA);
     mkdirSync(rootB);
-    const cold = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootA }, () => output("auth", join(rootA, "src/route.ts")));
-    const warm = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB }, () => output("must-not-run"));
+    const cold = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootA }, () => executed(families[0]!, output("auth", join(rootA, "src/route.ts"))));
+    const warm = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB }, () => executed(families[0]!, output("must-not-run")));
     expect(cold.cache).toBe("miss");
     expect(warm.cache).toBe("hit");
     expect(warm.output.results?.[0]?.path).toBe(join(rootB, "src/route.ts"));
-    expect((await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB, mode: "verify" }, () => output("auth", join(rootB, "src/route.ts")))).cache).toBe("recomputed");
+    expect((await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB, mode: "verify" }, () => executed(families[0]!, output("auth", join(rootB, "src/route.ts"))))).cache).toBe("recomputed");
   });
 
   it("target and runtime identities invalidate every affected family", async () => {
     const { families, options } = fixture();
-    for (const family of families) await executeSemgrepFamily(family, options, () => output(family.id));
+    for (const family of families) await executeSemgrepFamily(family, options, () => executed(family, output(family.id)));
     const changed = { ...options, targetTree: "tree-b", externalInputs: { ...options.externalInputs, semgrep: "1.165.0" } };
-    for (const family of families) expect((await executeSemgrepFamily(family, changed, () => output(`${family.id}-moved`))).cache).toBe("miss");
+    for (const family of families) expect((await executeSemgrepFamily(family, changed, () => executed(family, output(`${family.id}-moved`)))).cache).toBe("miss");
   });
 
   it("rejects corrupt, incomplete, and unregistered artifacts visibly before recompute", async () => {
     const { families, options } = fixture();
     const events: string[] = [];
     options.onEvent = (message) => events.push(message);
-    const cold = await executeSemgrepFamily(families[0]!, options, () => output("auth"));
+    const cold = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output("auth")));
     const artifact = join(options.dir, "semgrep-families", "auth", `${cold.key}.json`);
     const parsed = JSON.parse(readFileSync(artifact, "utf8")) as { output: { paths: unknown }; payloadDigest: string };
     parsed.output.paths = undefined;
     writeFileSync(artifact, JSON.stringify(parsed));
-    expect((await executeSemgrepFamily(families[0]!, options, () => output("auth-fresh"))).cache).toBe("miss");
+    expect((await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output("auth-fresh")))).cache).toBe("miss");
     expect(events).toContainEqual(expect.stringContaining("examined-path scope is incomplete"));
 
     const unknown = join(options.dir, "semgrep-families", "unknown", "artifact.json");
@@ -130,6 +156,33 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     writeFileSync(unknown, JSON.stringify({ schema: 1, family: "not-registered" }));
     rejectUnregisteredSemgrepFamilyArtifacts(options, new Set(families.map((family) => family.id)));
     expect(events).toContainEqual(expect.stringContaining("artifact is unregistered"));
+  });
+
+  it("rejects legacy, failed, and self-checksummed semantic-receipt tampering before reuse", async () => {
+    type MutableArtifact = { schema: number; output: unknown; unitsExamined: number; payloadDigest: string; execution: { status: string; attempts: SemgrepCommandSemanticReceipt[] } };
+    const cases: Array<[string, (artifact: MutableArtifact) => void, RegExp]> = [
+      ["legacy schema", (artifact) => { artifact.schema = 3; }, /identity\/schema mismatch/],
+      ["failed execution", (artifact) => { artifact.execution.status = "failed"; }, /successful semantic execution receipt/],
+      ["swapped scanned population", (artifact) => {
+        artifact.execution.attempts[0]!.scanned = ["different.ts"];
+        const attempt = artifact.execution.attempts[0]!;
+        const semantic = Object.fromEntries(Object.entries(attempt).filter(([key]) => !["status", "attempt", "semanticSha256"].includes(key)));
+        attempt.semanticSha256 = createHash("sha256").update(stableFixture(semantic)).digest("hex");
+      }, /differs from its stored output/],
+    ];
+    for (const [name, mutate, reason] of cases) {
+      const { families, options } = fixture();
+      const events: string[] = [];
+      options.onEvent = (message) => events.push(message);
+      const cold = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output("auth")));
+      const path = join(options.dir, "semgrep-families", "auth", `${cold.key}.json`);
+      const artifact = JSON.parse(readFileSync(path, "utf8")) as MutableArtifact;
+      mutate(artifact);
+      artifact.payloadDigest = createHash("sha256").update(stableFixture({ output: artifact.output, unitsExamined: artifact.unitsExamined, execution: artifact.execution })).digest("hex");
+      writeFileSync(path, JSON.stringify(artifact));
+      expect((await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output(`fresh-${name}`)))).cache).toBe("miss");
+      expect(events.some((event) => reason.test(event))).toBe(true);
+    }
   });
 
   it("reassembles deterministic monolithic shape with exact deduplication", () => {
@@ -155,11 +208,11 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
       message: `Fixpoint timeout at ${join(pathRoot, "src/route.ts")}:1:0`,
       location: { path: join(pathRoot, "src/route.ts"), start: { line: 1 }, end: { line: 1 } },
     });
-    const cold = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootA }, () => ({
+    const cold = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootA }, () => executed(families[0]!, {
       ...output("auth", join(rootA, "src/route.ts")),
       time: { rules: ["auth"], fixpoint_timeouts: [timeout(rootA)] },
     }));
-    const warm = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB }, () => output("must-not-run"));
+    const warm = await executeSemgrepFamily(families[0]!, { ...options, pathRoot: rootB }, () => executed(families[0]!, output("must-not-run")));
     expect(cold.output.time?.fixpoint_timeouts).toHaveLength(1);
     expect(warm.output.time?.fixpoint_timeouts).toEqual([timeout(rootB)]);
 
@@ -172,10 +225,10 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
 
   it("rejects legacy or unknown time evidence before cache storage", async () => {
     const { families, options } = fixture();
-    await expect(executeSemgrepFamily(families[0]!, options, () => ({
+    await expect(executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, {
       ...output("auth"), time: { rules: ["auth"] },
     }))).rejects.toThrow(/fixpoint_timeouts population is missing/);
-    await expect(executeSemgrepFamily(families[0]!, options, () => ({
+    await expect(executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, {
       ...output("auth"), time: { rules: ["auth"], fixpoint_timeouts: [], future: [] },
     }))).rejects.toThrow(/unclassified child evidence.*future/);
   });
@@ -204,8 +257,8 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     const first = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 42 }]], message: "first partial parse" };
     const second = { path: "/target/src/broken.ts", type: ["PartialParsing", [{ line: 47 }]], message: "second partial parse" };
     const complete: SemgrepOutput = { ...output("auth"), errors: [first, second] };
-    const cold = await executeSemgrepFamily(families[0]!, options, () => complete);
-    const warm = await executeSemgrepFamily(families[0]!, options, () => output("must-not-run"));
+    const cold = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, complete));
+    const warm = await executeSemgrepFamily(families[0]!, options, () => executed(families[0]!, output("must-not-run")));
     expect(cold.output.errors).toEqual([first, second]);
     expect(warm.output.errors).toEqual([first, second]);
   });
@@ -219,15 +272,15 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
 
   it("forced-cold verification passes only when every family re-executed against a hit", async () => {
     const { families, options } = fixture();
-    for (const family of families) await executeSemgrepFamily(family, options, () => output(family.id));
+    for (const family of families) await executeSemgrepFamily(family, options, () => executed(family, output(family.id)));
     const verified: SemgrepFamilyRecord[] = [];
-    for (const family of families) verified.push(await executeSemgrepFamily(family, { ...options, mode: "verify" }, () => output(family.id)));
+    for (const family of families) verified.push(await executeSemgrepFamily(family, { ...options, mode: "verify" }, () => executed(family, output(family.id))));
     expect(() => assertSemgrepFamilyVerification(verified, families, "verify")).not.toThrow();
     expect(verified.every((record) => record.cache === "recomputed")).toBe(true);
 
     const empty = fixture();
     const misses: SemgrepFamilyRecord[] = [];
-    for (const family of empty.families) misses.push(await executeSemgrepFamily(family, { ...empty.options, mode: "verify" }, () => output(family.id)));
+    for (const family of empty.families) misses.push(await executeSemgrepFamily(family, { ...empty.options, mode: "verify" }, () => executed(family, output(family.id))));
     expect(() => assertSemgrepFamilyVerification(misses, empty.families, "verify")).toThrow("forced-cold Semgrep family verification incomplete");
   });
 });

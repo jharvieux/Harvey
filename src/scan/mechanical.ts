@@ -30,7 +30,7 @@ import { DEPENDENCY_DETECTORS, runRegisteredDependencyDetectors } from "./mechan
 import { SEMGREP_ENGINES, runRegisteredSemgrepEngines } from "./mechanical-semgrep-registry.js";
 import { SECRETS_ENGINES, runRegisteredSecretsEngines } from "./mechanical-secrets-registry.js";
 import { NORMALIZATION_ENGINES, runRegisteredNormalizationEngines } from "./mechanical-normalization-registry.js";
-import type { SemgrepDiagnosticEvidence } from "./semgrep-family-cache.js";
+import type { SemgrepDiagnosticEvidence, SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -84,6 +84,7 @@ interface MechanicalScanResult {
   detectors: DetectorExecutionRecord[];
   context: MechanicalContextMetrics;
   semgrepDiagnostics: SemgrepDiagnosticEvidence;
+  semgrepExecution?: SemgrepExecutionPlanReceipt;
 }
 
 export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Promise<MechanicalScanResult> {
@@ -157,7 +158,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       return {
         findings: result.findings,
         producers: result.records,
-        evidence: { semgrepDiagnostics: result.diagnostics },
+        evidence: { semgrepDiagnostics: result.diagnostics, ...(result.executionPlan ? { semgrepExecution: result.executionPlan } : {}) },
         scope: { unitsExamined: allUnits, description: "Semgrep registry/local rules plus CSP, hosting-header, and public-directory configuration checks" },
       };
     });
@@ -248,7 +249,8 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     // #975 — declare each AST detector's CWE (semgrep rows already carry theirs from rule metadata).
     const semgrepDiagnostics = semgrepPhase.evidence?.semgrepDiagnostics;
     if (!semgrepDiagnostics) throw new Error("Semgrep phase did not retain complete diagnostic evidence");
-    return { findings: normalized.findings, phases, detectors: detectorRecords, context: context.metrics(), semgrepDiagnostics };
+    const semgrepExecution = semgrepPhase.evidence?.semgrepExecution;
+    return { findings: normalized.findings, phases, detectors: detectorRecords, context: context.metrics(), semgrepDiagnostics, ...(semgrepExecution ? { semgrepExecution } : {}) };
   } finally {
     ownedContext?.dispose();
     cleanup();

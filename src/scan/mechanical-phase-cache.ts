@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
-import type { SemgrepDiagnosticEvidence, SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
+import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence, type SemgrepExecutionPlanReceipt, type SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
 
 export const MECHANICAL_PHASES = [
   "secrets-history",
@@ -62,7 +62,7 @@ export interface MechanicalPhaseValue {
   findings: Finding[];
   scope: MechanicalPhaseScope;
   producers?: MechanicalProducerRecord[];
-  evidence?: { semgrepDiagnostics: SemgrepDiagnosticEvidence };
+  evidence?: { semgrepDiagnostics: SemgrepDiagnosticEvidence; semgrepExecution?: SemgrepExecutionPlanReceipt };
 }
 
 export interface MechanicalPhaseRecord extends MechanicalPhaseValue {
@@ -263,6 +263,13 @@ function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue,
     } else if (diagnostic.sha256 !== createHash("sha256").update(stable({ errors: diagnostic.errors, skipped: diagnostic.skipped, fixpointTimeouts: diagnostic.fixpointTimeouts })).digest("hex")) {
       problems.push("Semgrep diagnostic evidence digest differs from its complete raw content");
     }
+    if (value.evidence.semgrepExecution !== undefined) {
+      try {
+        assertSuccessfulSemgrepExecutionReceipt(value.evidence.semgrepExecution);
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : String(error));
+      }
+    }
   }
   if (value.producers === undefined) return problems;
   problems.push(...value.producers.flatMap((producer) => producerRecordProblems(producer, phase, requireDigest).map((problem) => `${producer.detector}: ${problem}`)));
@@ -362,7 +369,7 @@ export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): strin
   return digestParts([stable(persistedPhaseValue(value))]);
 }
 
-function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
+function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">, requireSemgrepExecution: boolean): CacheArtifact {
   const value = JSON.parse(text) as Partial<CacheArtifact>;
   if (value.schema !== 4 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
@@ -374,6 +381,7 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
   if (value.producers !== undefined && !Array.isArray(value.producers)) throw new Error("artifact producer execution receipts are malformed");
+  if (requireSemgrepExecution && value.evidence?.semgrepExecution === undefined) throw new Error("artifact successful Semgrep semantic execution receipt is missing");
   const receiptProblems = phaseValueProblems(expected.phase, {
     findings: value.findings,
     scope: value.scope,
@@ -455,10 +463,11 @@ export async function executeMechanicalPhase(
   const key = digestParts([stable({ phase, identity })]);
   const path = join(cache.dir, phase, `${key}.json`);
   const expected = { schema: 4 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const requireSemgrepExecution = phase === "semgrep" && cache.semgrepFamilies !== undefined;
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
-      hit = parseArtifact(readFileSync(path, "utf8"), expected);
+      hit = parseArtifact(readFileSync(path, "utf8"), expected, requireSemgrepExecution);
     } catch (error) {
       cache.onEvent?.(`CACHE REJECT ${phase} ${key.slice(0, 12)}: ${error instanceof Error ? error.message : String(error)}; recomputing`);
       rmSync(path, { force: true });
@@ -471,6 +480,7 @@ export async function executeMechanicalPhase(
   }
   const value = withProducerDigests(await execute());
   assertPhaseValue(phase, value, true);
+  if (requireSemgrepExecution && value.evidence?.semgrepExecution === undefined) throw new Error("semgrep: cacheable current-readiness phase cannot publish without an actual successful semantic execution receipt");
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
   const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
   if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);
@@ -480,7 +490,7 @@ export async function executeMechanicalPhase(
   const payloadDigest = mechanicalPhasePayloadDigest(persisted);
   writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...persisted }, null, 2)}\n`);
   renameSync(temp, path);
-  const reread = parseArtifact(readFileSync(path, "utf8"), expected);
+  const reread = parseArtifact(readFileSync(path, "utf8"), expected, requireSemgrepExecution);
   if (!equivalent(value, { findings: reread.findings, scope: reread.scope, ...(reread.evidence === undefined ? {} : { evidence: reread.evidence }), ...(reread.producers === undefined ? {} : { producers: reread.producers }) })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
   cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`);

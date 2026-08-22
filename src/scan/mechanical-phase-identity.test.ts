@@ -48,7 +48,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
       ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]'],
       ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap"]'],
       ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "2"]'],
-      ['const SEMGREP_PAIRED_FAMILY = "local-injection";', 'const SEMGREP_PAIRED_FAMILY = "local-auth";'],
+      ['const SEMGREP_PAIRED_FAMILIES = new Set(["local-injection", "registry-singleton-direct-response-write"]);', 'const SEMGREP_PAIRED_FAMILIES = new Set(["local-auth", "registry-singleton-direct-response-write"]);'],
     ] as const) {
       const source = original.replace(needle, replacement);
       expect(source).toContain(replacement);
