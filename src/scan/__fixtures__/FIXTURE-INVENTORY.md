@@ -60,7 +60,7 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 
 | # | Tool / pinned version | Location | Status | Live backstop |
 |---|----------------------|----------|--------|---------------|
-| 7 | semgrep 1.164.0 | `src/scan/semgrep.test.ts` — `SemgrepOutput` literals fed to `parseSemgrepFindings` | **CAPTURED** (#1156, closes #1150 row 7) — `__fixtures__/semgrep/semgrep-1.164.0-corpus.json` + `PROVENANCE.md` + `build-corpus.mjs`, real output over a purpose-built per-rule corpus; two invented shapes corrected (see below). | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`, AND (#1266) a dedicated schema-drift check (`fixture-drift.ts --tool semgrep`) re-runs `build-corpus.mjs` and asserts the fresh output still satisfies the parser's contract. |
+| 7 | semgrep 1.173.0 | `src/scan/semgrep.test.ts` — captured `SemgrepOutput` fed to `parseSemgrepFindings` and the drift comparator | **CAPTURED** (#1156/#1954, closes #1150 row 7) — `__fixtures__/semgrep/semgrep-1.173.0-corpus.json` + `PROVENANCE.md` + `build-corpus.mjs`, real output over a purpose-built per-rule corpus; two invented shapes corrected by the original 1.164.0 capture and revalidated at 1.173.0. The builder uses `--timeout 0 --time`; the committed canonical `time` evidence contains 309 executed rule IDs and 0 fixpoint timeouts. | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`, AND (#1266/#1954) a dedicated exact canonical drift check (`fixture-drift.ts --tool semgrep`) re-runs `build-corpus.mjs`. It drops only enumerated profiling telemetry, retains findings, diagnostics, scanned/skipped scope, omitted-rule/engine provenance, executed rule IDs and fixpoint timeouts, and fails closed on an unclassified `time` child. |
 | 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |
 | 9 | gitleaks 8.30.1 | `src/scan/secrets.test.ts` + `src/scan/calibration.test.ts` — `GitleaksResult[]` fed to `parseGitleaksFindings` | **CAPTURED** (#1156, closes #1150 row 9) — `__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json` + `PROVENANCE.md` + `build-corpus.mjs`, real output over a planted-secret corpus under Harvey's custom ruleset; the #1078 allowlist block stays defanged/synthetic by decision (see below). Calibration corpora (`calibration.test.ts`) remain separately self-describing, not this capture. | YES — real `gitleaks` runs in `validate-calibration` / dry-run, AND (#1266) a dedicated schema-drift check (`fixture-drift.ts --tool gitleaks`) re-runs `build-corpus.mjs` and asserts the fresh output still satisfies the parser's contract, including the #210 demo-key co-location. |
 | 10 | TruffleHog 3.96.0 (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **CAPTURED** (#1150) | PARTIAL — as row 8. RE-CAPTURED: `src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json` + `PROVENANCE.md` — the real one-record output of `trufflehog git --no-verification --results=unverified --json` against a `buildGitHistoryFixture`-shaped repo. The benign file's negative control is by necessity synthetic (a real run emits nothing for it); the "false positive" branch's second record stays hand-built and is labelled so. |
@@ -123,8 +123,10 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
   **"Every CAPTURED fixture now has a drift check" was FALSE from #1170 until #1266**: PR #1165 added
   the semgrep and gitleaks corpus fixtures 24 minutes before #1170 landed this drift-check family, and
   neither was registered in `fixture-drift.ts`'s tool list — a gap this sentence asserted didn't
-  exist. **It is true now**: `checkSemgrepFixtureContract`/`checkGitleaksFixtureContract` close it,
-  proven live 2026-07-30 against installed semgrep 1.164.0 / gitleaks 8.30.1. The two live-only
+  exist. **It is true now**: `checkSemgrepFixtureContract`/`checkGitleaksFixtureContract` close it.
+  The first live proof, on 2026-07-30, used the then-pinned semgrep 1.164.0 and remains historical
+  provenance; #1954 moved the current Semgrep fixture and exact canonical drift authority to 1.173.0.
+  Gitleaks remains 8.30.1. The two live-only
   fixtures — trufflehog **VERIFIED** (row 8's REASON block) and **PostgREST/GoTrue** (row 14) — have
   no capture and therefore correctly get NO drift check; they are reason-blocked, not missing.
 - **Row 5 (`lighthouse-report.json`) drift check** re-runs Lighthouse 13.4.0; **Row 6
@@ -169,14 +171,19 @@ restructured to load the committed capture.
 **Split to the #1146 chunk-3 remainder issue (each needs a purpose-built target corpus that
 reproduces the specific per-branch assertions, or a tool this environment does not install):**
 
-- **Row 7 (semgrep) — RE-CAPTURED (#1156, closes #1150 row 7).** Real `semgrep 1.164.0` output over a
-  purpose-built corpus lives at `__fixtures__/semgrep/semgrep-1.164.0-corpus.json` (+ `PROVENANCE.md`,
-  + reproducible `build-corpus.mjs`); `semgrep.test.ts`'s `parseSemgrepFindings` block loads it. Two
-  invented shapes were CORRECTED against the real run: the old `#455` no-cwe literal put no cwe on
-  `harvey-service-role-in-client`, but every harvey rule now ships cwe; the old `#976` bare-string-cwe
-  literal used a fabricated `tainted-sql-string` rule — the real bare-string carrier is
-  `bypass-tls-verification`. Two shapes no rule emits (no-cwe result, bare-string `references`) remain
-  as labelled synthetic negative-controls (REASON in the PROVENANCE).
+- **Row 7 (semgrep) — RE-CAPTURED (#1156, closes #1150 row 7), then migrated to 1.173.0
+  (#1954).** The original real `semgrep 1.164.0` capture established the fixture and corrected two
+  invented test shapes; it is historical evidence, not the current binary authority. The current
+  purpose-built corpus lives at `__fixtures__/semgrep/semgrep-1.173.0-corpus.json` (+
+  `PROVENANCE.md`, + reproducible `build-corpus.mjs`); `semgrep.test.ts`'s
+  `parseSemgrepFindings` block loads it. The builder passes `--timeout 0 --time`. Its canonical
+  `time` envelope proves 309 executed rule IDs and 0 fixpoint timeouts; the shared canonicalizer
+  removes only enumerated profiling telemetry and fails closed on any unclassified `time` child.
+  The two shapes corrected by the original capture remain settled: the old `#455` no-cwe literal
+  omitted cwe from `harvey-service-role-in-client`, although the captured Harvey rules carry cwe;
+  the old `#976` bare-string-cwe literal used a fabricated `tainted-sql-string` rule, while the real
+  bare-string carrier is `bypass-tls-verification`. Two shapes no loaded rule emits (no-cwe result,
+  bare-string `references`) remain labelled synthetic negative controls (REASON in PROVENANCE).
 - **Row 9 (gitleaks 8.30.1) — RE-CAPTURED (#1156, closes #1150 row 9).** Real `gitleaks 8.30.1` output
   over a planted-secret corpus, under Harvey's custom config, lives at
   `__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json` (+ `PROVENANCE.md`, + `build-corpus.mjs`);

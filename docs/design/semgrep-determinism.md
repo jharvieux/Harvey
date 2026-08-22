@@ -1,13 +1,14 @@
-# Semgrep determinism: the measurement, the cause, and the pinned invocation (#1710)
+# Semgrep determinism: the historical 1.164 measurement and the current 1.173 contract (#1710/#1954)
 
-**MEASURED 2026-07-31, semgrep 1.164.0** (the exact version `.github/actions/mechanical-binaries`
-pins for CI), on a 10-core darwin machine, against all 17 pinned corpus repos
-(`src/scan/external-corpus.ts`) cloned at their pins. Invocation under test: the exact argv
-`runSemgrep` (src/scan/semgrep.ts) passes — 6 registry packs + `src/scan/rules/semgrep/`,
-`--disable-nosem --x-ignore-semgrepignore-files --json --verbose`. Raw per-run rows: the
-measurement harness wrote one JSONL row per run (finding count, sha of the sorted
-`(check_id, path, line)` list, `errors[]` timeout entries, wall seconds); the tables below
-summarize them. Runs were serialized, never parallel with each other.
+**HISTORICAL MEASUREMENT — 2026-07-31, semgrep 1.164.0** (the CI-pinned version at the
+time; the current pin is 1.173.0), on a 10-core darwin machine, against all 17 pinned corpus repos
+(`src/scan/external-corpus.ts`) cloned at their pins. The invocation under test was the exact argv
+`runSemgrep` (`src/scan/semgrep.ts`) then passed — 6 registry packs +
+`src/scan/rules/semgrep/`, `--disable-nosem --x-ignore-semgrepignore-files --json --verbose`.
+Raw per-run rows recorded finding count, a hash of the sorted `(check_id, path, line)` population,
+`errors[]` timeout entries, and wall seconds. Runs were serialized, never parallel with each other.
+Sections 1–3 retain that 1.164.0 evidence because it established the two loss mechanisms; section 4
+states the current 1.173.0 production contract and its newer Carbon evidence.
 
 ## 1. Population and amplitude (17 repos × 5 runs, default flags)
 
@@ -82,56 +83,75 @@ Worst-case runtime check (`effective`, the repo with 12-60 timeouts/run at defau
 `--x-parmap --timeout 0` ran 78-80s — FASTER than its own default runs (102-314s), same result
 set. The feared `--timeout 0` blowup did not materialize on any measured repo.
 
-## 4. The decision (what `runSemgrep` now pins, and why)
+## 4. The current production contract
 
-**Pinned: `--x-parmap --timeout 0`** (process-based parallelism at default job count, no
-per-rule timeout), with a fallback of **`-j 1 --timeout 0`** if a future semgrep drops the
-internal `--x-parmap` flag (same fallback pattern the `--x-ignore-semgrepignore-files` flag
-already uses; the fallback must degrade to "slower, near-deterministic", never to the silently
-lossy threaded default).
+The 1.164.0 study established two durable requirements: use process isolation and disable the
+per-rule wall-clock timeout. The original `--x-parmap --timeout 0` decision was therefore sound, but
+later hosted replays showed that nine-worker parmap could still omit different
+`harvey-log-injection` rows while diagnostics remained equal. A coincident pair of j9 results is not
+sufficient evidence of recall.
 
-- Determinism: 7/7 identical carbon result sets across `--x-parmap` variants (3 with default
-  timeout, 4 with `--timeout 0`); 6/6 on documenso; identical on effective/launch-mvp probes.
-  Process isolation removes mechanism B; `--timeout 0` removes mechanism A.
-- Recall: 528 of the 530-finding `-j 1` reference on carbon. The 2 rows it deterministically
-  misses (`harvey-log-injection` at `packages/database/supabase/functions/post-shipment/index.ts`
-  1114 and 1691 — Low-severity review-tier) are a **disclosed, stable bound**, against the
-  default mode's 17-29-per-run silent random loss. One of those two lines (1691) is the same row
-  a `-j 1 --timeout 0` run dropped once in six runs — the file is fragile under every parallel
-  AND threaded mode; no measured mode is simultaneously full-recall and fully deterministic on it.
-- Runtime: at or below the default mode's cost everywhere measured (carbon ~125s vs 73-253s
-  default; documenso 39s vs 50s; effective 79s vs 102-314s) — so this does NOT conflict with
-  #1586/#1574's corpus-drift runtime work; it measured cheaper than the mode it replaces on the
-  heavy repos, and `-j 1 --timeout 0` (3-4× slower on carbon) was rejected FOR that cost plus
-  its own measured 1-in-6 single-row dropout.
+**Current at semgrep 1.173.0:** every planned family uses `--x-parmap --timeout 0`. The complete
+`local-injection` family (`injection.yml`) is the exceptional topology: Semgrep executes that whole
+family twice from cold state at `-j 1`, and Harvey compares the complete canonical semantic output —
+findings, errors, scanned paths, skipped paths, executed rule IDs, and fixpoint timeouts. The pair
+must be exactly equal before either output can be returned or enter the family cache. Every other
+family runs once at the measured fast `-j 9` topology. There is no fallback to threaded `-j 1`:
+rejection of internal `--x-parmap`, a malformed semantic envelope, or a divergent pair fails closed
+as an incomplete Semgrep run.
 
-**What corpus-drift does about it: nothing beyond inheriting the pin — no tolerance band.**
-The required gate's semgrep-derived rows (the free-tier invariant, `FREE_TIER_EXPECTATIONS`)
-are threshold checks (grade ≠ F, Critical/High present, non-Info indicator present,
-doc-context creds reported-not-graded), not exact counts, and every measured mover was a
-review-tier row, a tier none of those thresholds read (MEASURED: all six targets' rows pass
-under the pin, grades matching their recorded baselines exactly — A 92, A 97, B 89, C 77,
-C 74, F 51). With the pinned invocation the underlying finding sets
-are byte-stable, so count-exact semgrep baselines become possible for the first time — any
-future one should cite this doc rather than re-earning the pin. A tolerance band was
-considered and REJECTED: the measured residual under the pin is zero distinct result sets in
-7 runs, so a band would absorb real one-finding regressions and protect against nothing.
+The execution-plan receipt is schema 3 and binds each whole family to its source kind/source id,
+config digest, declared and actually executed rule IDs, argv, ordinal, and verification policy. The
+receipt contains no subpartition substitute for `local-injection`; the production unit is the whole
+family, so a stale description of the contract as "22 subscans" is not authoritative.
 
-## 5. Bounds of this measurement
+**MEASURED 2026-08-20/21, semgrep 1.173.0, pinned Carbon tree:** each complete cold
+`local-injection` run produced exactly **87 findings**, **4,152 scanned paths**, **30 executed rule
+IDs**, **32 skipped-path records**, **26 raw/canonical error records**, and **6 fixpoint timeouts on
+6 timeout-only paths**. Those timeout-only paths were absent from both `errors[]` and
+`paths.skipped`, which is why `time.fixpoint_timeouts` is semantic coverage evidence rather than
+profiling noise. Both cold semantic projections agreed exactly. The current PartialParsing record
+for `TraceabilityGraph.tsx` is **79:1–79:2** on the unexpected `}`; the older line-74
+`import("./utils").IssueContainment` record is historical and a paired run that substitutes it is
+rejected.
 
-- One machine (10-core darwin), one semgrep version (1.164.0, = CI's pin). CI amplitude was not
-  measured directly; the mechanism (thread-shared state, wall-clock timeouts) transfers, and the
-  pinned mode removes both inputs. Cross-machine identity of the parmap result set is NOT
-  claimed — worker count differs (`-j` defaults to cores) and the 2-row carbon bound could
-  shift with it. The corpus gate compares CI runs to CI-measured baselines, so this does not
-  affect the gate; it affects quoting a local count against a CI count.
+**Committed-artifact effect:** regeneration moved `dry-run/findings.json` from **811 to 789**.
+A content comparison excluding renumbered IDs shows **22 removals**, all duplicate Semgrep SQL
+placeholder findings, and **0 additions**. `dry-run/findings-report.json.findings` is deeply equal to
+the standalone findings array after regeneration. The artifact delta is therefore exactly the
+22 duplicate removals, not zero.
+
+Interim #1954 notes that quote **52 skips**, **line 74**, **804 findings**, or **zero artifact delta**
+do not describe the accepted 1.173.0 evidence. The older 1.164.0 population and matrix above remain
+historical measurements, not current production counts.
+
+## 5. Historical corpus-drift consequence at 1.164.0
+
+At the time of the original 1.164.0 pin, corpus-drift needed no tolerance band. Its semgrep-derived
+rows (the free-tier invariant, `FREE_TIER_EXPECTATIONS`) were threshold checks (grade ≠ F,
+Critical/High present, non-Info indicator present, doc-context credentials reported-not-graded), not
+exact counts, and every measured mover was a review-tier row that none of those thresholds read.
+MEASURED then: all six targets passed under the pin and their grades matched the recorded baselines
+exactly — A 92, A 97, B 89, C 77, C 74, F 51. The pinned 1.164.0 result sets had zero residual
+variation across the cited parmap runs, so a tolerance band would have hidden a real one-finding
+regression without protecting against measured noise. That rationale is historical evidence for
+fail-closed exact comparison; it is not a claim that 1.164.0 counts are current under 1.173.0.
+
+## 6. Bounds of this measurement
+
+- The population/matrix study used one machine (10-core darwin) and semgrep 1.164.0, which was CI's
+  pin at the time, not the current 1.173.0 authority. CI amplitude was not measured directly; the
+  mechanisms (thread-shared state and wall-clock timeouts) transfer, and the current topology still
+  removes both inputs. Cross-machine identity of the historical parmap result set was not claimed.
+  The current 1.173.0 Carbon evidence instead binds the whole local-injection family to two exact
+  cold j1 semantic projections and fails closed if they disagree.
 - n=5 per repo for the population table; a 1-in-6-run dropout (the `-j 1 --timeout 0` row)
   is exactly the kind of event n=5 can miss. "STABLE at n=5" is evidence, not proof, for the
   15 stable repos.
 - The 2-row parmap recall bound was measured on carbon only (the only repo with a measured
   `-j 1` reference). Whether other large repos have analogous deterministic parmap misses is
   unmeasured.
-- `--x-parmap` is deprecated/internal upstream. The day it is dropped, `runSemgrep`'s fallback
-  keeps scans deterministic-ish but 3-4× slower on carbon-sized repos, and the
-  `runSemgrep pins the deterministic invocation (#1710)` tests in src/scan/semgrep.test.ts hold
-  the contract either way.
+- `--x-parmap` remains deprecated/internal upstream. A future Semgrep that rejects it does not fall
+  back to an unproved threaded topology: the run fails closed as incomplete (`SEM-00`) and must be
+  re-measured before a replacement execution policy is accepted. The schema-3 receipt and
+  paired-cold tests in `src/scan/semgrep.test.ts` hold that contract.
