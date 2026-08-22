@@ -33,6 +33,20 @@ function withUndocumentedTaxonomy(sources: readonly SourceText[]): SourceText[] 
   );
 }
 
+function withRemixTaxonomy(sources: readonly SourceText[], taxonomy: string): SourceText[] {
+  return sources.map((source) =>
+    source.path === "src/detectors/remix-adapter.ts"
+      ? {
+          ...source,
+          text: source.text.replace(
+            'taxonomy: "M9 — Server→client data leak"',
+            `taxonomy: "${taxonomy}"`,
+          ),
+        }
+      : source,
+  );
+}
+
 function withStaleHeader(doc: string): string {
   return doc.replace(
     "\n## Calibration corpus coverage",
@@ -100,6 +114,20 @@ describe("#1640 — source-derived M9 taxonomy/document parity", () => {
       "`M9 — ${checkLabel} — not assessed (${label})`",
       "`${taxonomy} — not assessed`",
     ]));
+  });
+
+  it("fails loud on unregistered exclusion-like and adapter-like literals", () => {
+    const exclusionLike = "M9 — Seeded disclosure — scope";
+    const exclusionReport = compareM9TaxonomyDocs(withRemixTaxonomy(SOURCES, exclusionLike), DOC);
+    expect(exclusionReport.registry.exclusions.some((row) => row.expression === JSON.stringify(exclusionLike))).toBe(false);
+    expect(exclusionReport.violations.some((violation) =>
+      violation.endsWith(`taxonomy emission expression is not classified: ${JSON.stringify(exclusionLike)}`),
+    )).toBe(true);
+
+    const adapterLike = "M9 — Seeded adapter missing input validation";
+    const adapterReport = compareM9TaxonomyDocs(withRemixTaxonomy(SOURCES, adapterLike), DOC);
+    expect(adapterReport.registry.aliases.some((row) => row.emitted === adapterLike)).toBe(false);
+    expect(adapterReport.violations).toContain(`shipped M9 taxonomy has no Checks header: ${adapterLike}`);
   });
 
   it("returns non-zero/non-zero/zero for emitted-only, header-only, then restored inputs", () => {
