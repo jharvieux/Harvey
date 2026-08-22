@@ -54,6 +54,12 @@ export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
 // wrong is asymmetric, so the default leans to the safe side rather than to the median.
 export const DEFAULT_SCAN_SECONDS = 120;
 
+// The scoring topology may be one job (schedule/manual) or four jobs (PR/queue/push), but cache
+// ownership is deliberately invariant. A target always reads and writes the same one of these four
+// roots, and the all-target scorer uses those same four transports.
+export const CORPUS_CACHE_SHARD_COUNT = 4;
+export const CORPUS_CACHE_PARTITION_POLICY = "corpus-lpt-four-owner-v1";
+
 export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? DEFAULT_SCAN_SECONDS;
 
 /**
@@ -97,6 +103,15 @@ export function shardTargets(slugs: readonly string[], shardIndex: number, shard
   const mine = shards[shardIndex - 1];
   if (!mine) throw new Error(`shard ${shardIndex}/${shardCount} does not exist`);
   return mine;
+}
+
+/** The fixed, event-independent cache owner for one corpus target. */
+export function corpusCacheNamespaceForTarget(slugs: readonly string[], slug: string): number {
+  const shards = partitionTargets(slugs, CORPUS_CACHE_SHARD_COUNT);
+  assertPartitionCoversEveryTarget(slugs, shards);
+  const owner = shards.findIndex((members) => members.includes(slug));
+  if (owner < 0) throw new Error(`corpus cache target ${slug} has no canonical owner`);
+  return owner + 1;
 }
 
 /** Throws unless the shards are a true partition of `slugs` — every target exactly once. */

@@ -4,6 +4,9 @@ import { parse as parseYaml } from "yaml";
 
 import {
   assertPartitionCoversEveryTarget,
+  corpusCacheNamespaceForTarget,
+  CORPUS_CACHE_PARTITION_POLICY,
+  CORPUS_CACHE_SHARD_COUNT,
   DEFAULT_SCAN_SECONDS,
   partitionTargets,
   shardTargets,
@@ -94,6 +97,14 @@ describe("corpus shard partition (#1586)", () => {
 
   it("is deterministic, so shards need no coordination between runners", () => {
     expect(partitionTargets(SLUGS, 4)).toEqual(partitionTargets([...SLUGS].reverse(), 4));
+  });
+
+  it("gives every target one fixed four-way cache owner independent of execution shard count", () => {
+    expect(CORPUS_CACHE_PARTITION_POLICY).toBe("corpus-lpt-four-owner-v1");
+    expect(CORPUS_CACHE_SHARD_COUNT).toBe(4);
+    const owners = FOUR_SHARD_ASSIGNMENT.flatMap((members, index) => members.map((slug) => [slug, index + 1] as const));
+    expect(owners.map(([slug]) => [slug, corpusCacheNamespaceForTarget(SLUGS, slug)])).toEqual(owners);
+    expect(() => corpusCacheNamespaceForTarget(SLUGS, "not-in-corpus")).toThrow("has no canonical owner");
   });
 
   // The point of sharding is wall clock, so this asserts the OUTCOME rather than the mechanism: at
