@@ -24,9 +24,9 @@ case — and runs the pinned binary with the same rule/config and output/scope s
 `p/typescript,p/react,p/nextjs,p/owasp-top-ten,p/secrets,p/security-audit` + the custom
 `src/scan/rules/semgrep/` rules, `--disable-nosem --x-ignore-semgrepignore-files --timeout 0 --time
 --json --verbose`. This deliberately small parser corpus does not reproduce the production Carbon
-paired-cold local-injection measurement; that whole-family evidence is recorded at the production
-seam and in `docs/design/semgrep-determinism.md`. Registry packs are fetched from the Semgrep registry
-over the network on first run (cached after).
+routed and paired measurements; that evidence is recorded at the production seam and in
+`docs/design/semgrep-determinism.md`. Registry packs are fetched from the Semgrep registry over the
+network on first run (cached after).
 
 The `.github/workflows/` file lives ONLY in the temp corpus — it is never written into the repo tree,
 so it is not a Harvey CI definition and GitHub never executes it. Captured 2026-08-21.
@@ -65,6 +65,12 @@ populations for a deterministic comparison.
   `prefiltering`, `targets`, `total_bytes`, `max_memory_bytes`). It retains the complete sorted
   `rules` and `fixpoint_timeouts` populations. A new unclassified `time` child throws instead of
   being silently discarded.
+- This is intentionally a raw-fixture contract, not the schema-8 reusable-receipt contract. The
+  fixture preserves every raw fixpoint-timeout field and duplicate occurrence so parser and
+  upstream-shape drift remain testable. Production schema 8 treats the rows as non-reusable
+  telemetry, retains them in content-addressed sidecars, and derives family-level taint NotAssessed
+  evidence without parsing their volatile message suffix or admitting them to cache/readiness
+  equality.
 - Every per-result field is retained, including `extra.lines`, `extra.fingerprint`,
   `extra.validation_state`, `extra.engine_kind`, `extra.message`, `extra.severity`, and the complete
   `extra.metadata` block. Every per-path error and skip remains client-facing drift evidence.
