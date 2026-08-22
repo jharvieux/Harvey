@@ -17,6 +17,7 @@ import {
   type CorpusCacheTransportManifest,
 } from "./corpus-cache-transport.js";
 import { EXTERNAL_CORPUS } from "./scan/external-corpus.js";
+import { compareUtf8Bytes, TARGET_SCAN_SECONDS } from "./scan/corpus-shards.js";
 
 const targets = EXTERNAL_CORPUS.map((target) => ({
   slug: target.slug,
@@ -26,8 +27,21 @@ const targets = EXTERNAL_CORPUS.map((target) => ({
   scanRoots: target.scanRoots,
   installFlags: target.m8?.installFlags,
 }));
-const scope = (namespace = 1, input = targets): CorpusCacheOwnershipScope => corpusCacheOwnershipScope(input, namespace);
+const scope = (
+  namespace = 1,
+  input: Parameters<typeof corpusCacheOwnershipScope>[0] = targets,
+  weights: Readonly<Record<string, number>> = TARGET_SCAN_SECONDS,
+): CorpusCacheOwnershipScope => corpusCacheOwnershipScope(input, namespace, weights);
 const EMPTY_INVENTORY_SHA = createHash("sha256").update("[]").digest("hex");
+
+function stableUtf8(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableUtf8).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort(compareUtf8Bytes).map((key) => `${JSON.stringify(key)}:${stableUtf8(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 const source = (overrides: Partial<CorpusCacheTransportManifest> = {}, namespace = 1): CorpusCacheTransportManifest => {
   const ownership = overrides.scope ?? scope(namespace);
@@ -93,6 +107,36 @@ describe("ownership-bound corpus cache transport", () => {
     const expected = scope(3, oldOwners);
     expect(corpusCacheScopeSha256(stale.scope)).not.toBe(corpusCacheScopeSha256(expected));
     expect(decideCorpusCacheRestore(stale, current(stale, { scope: expected })).reason).toContain("is not current scope");
+  });
+
+  it("rotates every owner scope when the complete weight table changes without moving membership", () => {
+    const changedWeights = { ...TARGET_SCAN_SECONDS, carbon: 1410 };
+    const before = [1, 2, 3, 4].map((namespace) => scope(namespace));
+    const after = [1, 2, 3, 4].map((namespace) => scope(namespace, targets, changedWeights));
+    expect(after.map((ownership) => ownership.partitions)).toEqual(before.map((ownership) => ownership.partitions));
+    after.forEach((ownership, index) => {
+      expect(corpusCacheScopeSha256(ownership)).not.toBe(corpusCacheScopeSha256(before[index]!));
+      expect(ownership.weights.find((row) => row.slug === "carbon")?.seconds).toBe(1410);
+    });
+
+    const stale = source({}, 4);
+    expect(decideCorpusCacheRestore(stale, current(stale, { scope: after[3]! })).reason).toContain("is not current scope");
+  });
+
+  it("uses one POSIX UTF-8 order for scope construction and scope hashing", () => {
+    const trapTargets = [
+      { slug: "path/a.ts", repo: "owner/a", commit: "a".repeat(40), scanRoots: { "path/a.ts": "a", "path/\u{10000}.ts": "astral", "path/\uE000.ts": "private", "path/A.ts": "A" } },
+      { slug: "path/\u{10000}.ts", repo: "owner/astral", commit: "b".repeat(40) },
+      { slug: "path/\uE000.ts", repo: "owner/private", commit: "c".repeat(40) },
+      { slug: "path/A.ts", repo: "owner/A", commit: "d".repeat(40) },
+    ];
+    const trapWeights = Object.fromEntries(trapTargets.map((target) => [target.slug, 1]));
+    const ownership = scope(1, trapTargets, trapWeights);
+    const expectedOrder = ["path/A.ts", "path/a.ts", "path/\uE000.ts", "path/\u{10000}.ts"];
+    expect(ownership.population.map((target) => target.slug)).toEqual(expectedOrder);
+    expect(ownership.weights.map((row) => row.slug)).toEqual(expectedOrder);
+    expect(Object.keys(ownership.population.find((target) => target.slug === "path/a.ts")!.scanRoots)).toEqual(expectedOrder);
+    expect(corpusCacheScopeSha256(ownership)).toBe(createHash("sha256").update(stableUtf8(ownership)).digest("hex"));
   });
 
   it("fails closed on incomplete, duplicate, unknown, or repartitioned ownership", () => {

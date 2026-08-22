@@ -4,9 +4,12 @@ import { isAbsolute, join, relative } from "node:path";
 import { readEntriesLstatSafe } from "./fs-walk.js";
 import {
   assertPartitionCoversEveryTarget,
+  compareUtf8Bytes,
   CORPUS_CACHE_PARTITION_POLICY,
   CORPUS_CACHE_SHARD_COUNT,
+  DEFAULT_SCAN_SECONDS,
   partitionTargets,
+  TARGET_SCAN_SECONDS,
 } from "./scan/corpus-shards.js";
 
 export const CORPUS_CACHE_MAX_PAYLOAD_BYTES = 6 * 1024 * 1024 * 1024;
@@ -26,6 +29,8 @@ export interface CorpusCacheOwnershipScope {
   policy: typeof CORPUS_CACHE_PARTITION_POLICY;
   shardCount: typeof CORPUS_CACHE_SHARD_COUNT;
   namespace: number;
+  defaultWeightSeconds: number;
+  weights: Array<{ slug: string; seconds: number }>;
   partitions: Array<{ namespace: number; targets: string[] }>;
   population: Array<{
     slug: string;
@@ -89,31 +94,33 @@ interface CorpusCacheTransportDecision {
 const MANIFEST = "transport-provenance.json";
 const SHA256 = /^[0-9a-f]{64}$/;
 const KEY = /^corpus-phase-(run|main)-v6-([A-Za-z0-9_.-]+)-shard([1-9]\d*)-scope([0-9a-f]{64})-(\d+)-(\d+)-([0-9a-f]{40})$/;
-const compareUtf8 = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
-
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") {
     const object = value as Record<string, unknown>;
-    return `{${Object.keys(object).sort(compareUtf8).map((key) => `${JSON.stringify(key)}:${stable(object[key])}`).join(",")}}`;
+    return `{${Object.keys(object).sort(compareUtf8Bytes).map((key) => `${JSON.stringify(key)}:${stable(object[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
 }
 
-export function corpusCacheOwnershipScope(targets: readonly CorpusCacheScopeTarget[], namespace: number): CorpusCacheOwnershipScope {
+export function corpusCacheOwnershipScope(
+  targets: readonly CorpusCacheScopeTarget[],
+  namespace: number,
+  weights: Readonly<Record<string, number>> = TARGET_SCAN_SECONDS,
+): CorpusCacheOwnershipScope {
   if (!Number.isInteger(namespace) || namespace < 1 || namespace > CORPUS_CACHE_SHARD_COUNT) {
     throw new Error(`corpus cache namespace must be within 1..${CORPUS_CACHE_SHARD_COUNT}, got ${namespace}`);
   }
   const slugs = targets.map((target) => target.slug);
   if (new Set(slugs).size !== slugs.length) throw new Error("corpus cache scope contains a duplicate target slug");
-  const shards = partitionTargets(slugs, CORPUS_CACHE_SHARD_COUNT);
+  const shards = partitionTargets(slugs, CORPUS_CACHE_SHARD_COUNT, weights);
   assertPartitionCoversEveryTarget(slugs, shards);
-  const population = [...targets].sort((a, b) => compareUtf8(a.slug, b.slug)).map((target) => ({
+  const population = [...targets].sort((a, b) => compareUtf8Bytes(a.slug, b.slug)).map((target) => ({
     slug: target.slug,
     repo: target.repo,
     commit: target.commit,
-    vendoredSubtrees: [...(target.vendoredSubtrees ?? [])].sort(compareUtf8),
-    scanRoots: Object.fromEntries(Object.entries(target.scanRoots ?? {}).sort(([a], [b]) => compareUtf8(a, b))),
+    vendoredSubtrees: [...(target.vendoredSubtrees ?? [])].sort(compareUtf8Bytes),
+    scanRoots: Object.fromEntries(Object.entries(target.scanRoots ?? {}).sort(([a], [b]) => compareUtf8Bytes(a, b))),
     installFlags: [...(target.installFlags ?? [])],
   }));
   return {
@@ -121,9 +128,13 @@ export function corpusCacheOwnershipScope(targets: readonly CorpusCacheScopeTarg
     policy: CORPUS_CACHE_PARTITION_POLICY,
     shardCount: CORPUS_CACHE_SHARD_COUNT,
     namespace,
+    defaultWeightSeconds: DEFAULT_SCAN_SECONDS,
+    weights: Object.entries(weights)
+      .sort(([a], [b]) => compareUtf8Bytes(a, b))
+      .map(([slug, seconds]) => ({ slug, seconds })),
     partitions: shards.map((members, index) => ({ namespace: index + 1, targets: [...members] })),
     population,
-    owners: [...shards[namespace - 1]!].sort(compareUtf8),
+    owners: [...shards[namespace - 1]!].sort(compareUtf8Bytes),
   };
 }
 
@@ -191,9 +202,9 @@ function payloadReceipt(dir: string): CorpusCachePayloadReceipt {
     }
   };
   walk(dir);
-  if (symlinks.length > 0) throw new Error(`transport payload contains path-bound link(s): ${symlinks.sort(compareUtf8).slice(0, 3).join(", ")}`);
-  if (specials.length > 0) throw new Error(`transport payload contains unsupported special file(s): ${specials.sort(compareUtf8).slice(0, 3).join(", ")}`);
-  discovered.sort((a, b) => compareUtf8(a.path, b.path));
+  if (symlinks.length > 0) throw new Error(`transport payload contains path-bound link(s): ${symlinks.sort(compareUtf8Bytes).slice(0, 3).join(", ")}`);
+  if (specials.length > 0) throw new Error(`transport payload contains unsupported special file(s): ${specials.sort(compareUtf8Bytes).slice(0, 3).join(", ")}`);
+  discovered.sort((a, b) => compareUtf8Bytes(a.path, b.path));
   const bytes = discovered.reduce((total, file) => total + file.bytes, 0);
   if (!Number.isSafeInteger(bytes)) throw new Error("transport payload byte count exceeds safe integer range");
   if (bytes > CORPUS_CACHE_MAX_PAYLOAD_BYTES) throw new Error(`transport payload ${bytes} bytes exceeds ${CORPUS_CACHE_MAX_PAYLOAD_BYTES}-byte ceiling`);
@@ -212,7 +223,7 @@ function payloadReceipt(dir: string): CorpusCachePayloadReceipt {
     bytes,
     files: files.length,
     inventorySha256: createHash("sha256").update(stable(files)).digest("hex"),
-    classes: [...classes].sort(([a], [b]) => compareUtf8(a, b)).map(([name, value]) => ({ name, ...value })),
+    classes: [...classes].sort(([a], [b]) => compareUtf8Bytes(a, b)).map(([name, value]) => ({ name, ...value })),
     maxBytes: CORPUS_CACHE_MAX_PAYLOAD_BYTES,
     symlinks: 0,
   };

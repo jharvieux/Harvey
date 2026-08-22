@@ -60,7 +60,15 @@ export const DEFAULT_SCAN_SECONDS = 120;
 export const CORPUS_CACHE_SHARD_COUNT = 4;
 export const CORPUS_CACHE_PARTITION_POLICY = "corpus-lpt-four-owner-v1";
 
-export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? DEFAULT_SCAN_SECONDS;
+/** POSIX-style byte ordering for identities shared across runners and locales. */
+export const compareUtf8Bytes = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
+
+const weightFrom = (
+  slug: string,
+  weights: Readonly<Record<string, number>>,
+): number => weights[slug] ?? DEFAULT_SCAN_SECONDS;
+
+export const weightOf = (slug: string): number => weightFrom(slug, TARGET_SCAN_SECONDS);
 
 /**
  * Longest-processing-time-first partition: sort by descending cost, then repeatedly assign the next
@@ -71,17 +79,22 @@ export const weightOf = (slug: string): number => TARGET_SCAN_SECONDS[slug] ?? D
  * LPT rather than round-robin because the corpus is heavily skewed: round-robin over a list whose
  * largest element is 44% of the total pairs that element with others and wastes the parallelism.
  */
-export function partitionTargets(slugs: readonly string[], shardCount: number): string[][] {
+export function partitionTargets(
+  slugs: readonly string[],
+  shardCount: number,
+  weights: Readonly<Record<string, number>> = TARGET_SCAN_SECONDS,
+): string[][] {
   if (!Number.isInteger(shardCount) || shardCount < 1) {
     throw new Error(`shard count must be a positive integer, got ${shardCount}`);
   }
   const shards = Array.from({ length: shardCount }, () => ({ slugs: [] as string[], load: 0 }));
+  const selectedWeight = weights === TARGET_SCAN_SECONDS ? weightOf : (slug: string): number => weightFrom(slug, weights);
 
-  const ordered = [...slugs].sort((a, b) => weightOf(b) - weightOf(a) || a.localeCompare(b));
+  const ordered = [...slugs].sort((a, b) => selectedWeight(b) - selectedWeight(a) || compareUtf8Bytes(a, b));
   for (const slug of ordered) {
     const lightest = shards.reduce((a, b) => (b.load < a.load ? b : a));
     lightest.slugs.push(slug);
-    lightest.load += weightOf(slug);
+    lightest.load += selectedWeight(slug);
   }
   return shards.map((s) => s.slugs);
 }

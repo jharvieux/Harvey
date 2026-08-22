@@ -4,6 +4,7 @@ import { parse as parseYaml } from "yaml";
 
 import {
   assertPartitionCoversEveryTarget,
+  compareUtf8Bytes,
   corpusCacheNamespaceForTarget,
   CORPUS_CACHE_PARTITION_POLICY,
   CORPUS_CACHE_SHARD_COUNT,
@@ -84,7 +85,7 @@ describe("corpus shard partition (#1586)", () => {
   it.each([1, 2, 3, 4, 5])("scores every corpus target exactly once at %i shard(s)", (count) => {
     const shards = partitionTargets(SLUGS, count);
     expect(shards).toHaveLength(count);
-    expect([...shards.flat()].sort()).toEqual([...SLUGS].sort());
+    expect([...shards.flat()].sort(compareUtf8Bytes)).toEqual([...SLUGS].sort(compareUtf8Bytes));
   });
 
   it("addresses shards 1-based, matching how the CI matrix names them", () => {
@@ -97,6 +98,13 @@ describe("corpus shard partition (#1586)", () => {
 
   it("is deterministic, so shards need no coordination between runners", () => {
     expect(partitionTargets(SLUGS, 4)).toEqual(partitionTargets([...SLUGS].reverse(), 4));
+  });
+
+  it("uses explicit POSIX UTF-8 order, not locale or implicit UTF-16 order", () => {
+    const traps = ["path/a.ts", "path/\u{10000}.ts", "path/\uE000.ts", "path/A.ts"];
+    const expected = ["path/A.ts", "path/a.ts", "path/\uE000.ts", "path/\u{10000}.ts"];
+    expect([...traps].sort(compareUtf8Bytes)).toEqual(expected);
+    expect(partitionTargets(traps, 1)).toEqual([expected]);
   });
 
   it("gives every target one fixed four-way cache owner independent of execution shard count", () => {
@@ -127,7 +135,7 @@ describe("corpus shard partition (#1586)", () => {
     expect(weightOf("a-target-never-measured")).toBe(DEFAULT_SCAN_SECONDS);
     const withNew = [...SLUGS, "a-target-never-measured"];
     const shards = partitionTargets(withNew, 4);
-    expect([...shards.flat()].sort()).toEqual([...withNew].sort());
+    expect([...shards.flat()].sort(compareUtf8Bytes)).toEqual([...withNew].sort(compareUtf8Bytes));
   });
 
   it("rejects a nonsensical shard count instead of silently scoring nothing", () => {
