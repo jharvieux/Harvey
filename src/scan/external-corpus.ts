@@ -284,7 +284,7 @@ export interface ExternalTarget {
   vendoredSubtrees?: string[];
 }
 
-// #1795: count-only corpus scoring cannot see a semantic reclassification. The production change
+// #1795: count-only corpus scoring is blind to a semantic reclassification. The production change
 // keeps Ghostfolio's M7 baseline at 78/78 and its whole-library population at 59 while correcting
 // exactly one client-facing claim. Keep the controlled before/after as structured data so the live
 // corpus scorer below can fail if the old 23/36 split returns without moving either count.
@@ -1537,7 +1537,7 @@ function hasUnsupportedReachabilityClaim(finding: Finding): boolean {
 }
 
 // #1795: Ghostfolio's recovered Nest provider is a semantic movement at constant count. The
-// ordinary M7 baseline cannot distinguish 23 supported / 36 unsupported from 24 / 35, so score the
+// ordinary M7 baseline treats 23 supported / 36 unsupported and 24 / 35 identically, so score the
 // real client-facing evidence split and the exact recovered row in the same live corpus consumer.
 function scoreGhostfolioM7NestImportChain(findings: Finding[]): { pass: boolean; detail: string } {
   const baseline = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
