@@ -34,6 +34,7 @@ import {
   buildSemgrepCommandSemanticReceipt,
   canonicalizeOwnedSemgrepOutput,
   canonicalizeSemgrepOutput,
+  comparePosixRelativePaths,
   discoverLocalSemgrepFamilies,
   executeSemgrepFamily,
   localSemgrepConfigYardstick,
@@ -644,7 +645,7 @@ function regularFilesOutsideRoutingExclusions(root: string): Array<{ path: strin
     }
   };
   walk(root, "");
-  return files.sort((left, right) => left.relative.localeCompare(right.relative));
+  return files.sort((left, right) => comparePosixRelativePaths(left.relative, right.relative));
 }
 
 function localInjectionRoutingManifest(root: string): SemgrepRoutingManifestReceipt {

@@ -95,6 +95,10 @@ export interface SemgrepRoutingManifestReceipt {
   sha256: string;
 }
 
+export function comparePosixRelativePaths(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
 export interface SemgrepFamilyExecutionReceipt {
   ordinal: number;
   id: string;
@@ -378,7 +382,7 @@ function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: s
         || !selector.extensions.includes(entry.type) || entry.bytes <= selector.lowerExclusiveBytes || entry.bytes >= selector.upperExclusiveBytes
         || !/^[a-f0-9]{64}$/.test(entry.contentSha256) || entry.path.startsWith("/") || entry.path.split("/").some((part) => selector.excludedDirectories.includes(part as ".git" | "node_modules")))
       || new Set(entries.map((entry) => entry.path)).size !== entries.length
-      || stable(entries.map((entry) => entry.path)) !== stable(entries.map((entry) => entry.path).sort())) {
+      || stable(entries.map((entry) => entry.path)) !== stable(entries.map((entry) => entry.path).sort(comparePosixRelativePaths))) {
       throw new Error("artifact routed manifest identity/order is malformed");
     }
     const [remainder, ...rest] = receipt.partitions;

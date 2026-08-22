@@ -30,7 +30,7 @@ import {
   type SemgrepOutput,
   type SemgrepResult,
 } from "./semgrep.js";
-import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
+import { assertSuccessfulSemgrepExecutionReceipt, comparePosixRelativePaths, type SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
 
 const CACHE_REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
 
@@ -728,6 +728,72 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(pathChanged.entries.some((entry) => entry.path === "renamed.ts")).toBe(true);
       expect(pathChanged.sha256).not.toBe(bytesChanged.sha256);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses one explicit POSIX path order for routed manifest construction and validation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-routing-order-"));
+    const lowerPath = "src/components/npm-stats/NPMStatsChart.tsx";
+    const upperPath = "src/components/SearchModal.tsx";
+    const bmpPath = "src/components/\uE000.ts";
+    const nonBmpPath = "src/components/\u{1F600}.ts";
+    const deterministicOrder = [upperPath, lowerPath, bmpPath, nonBmpPath];
+    const originalLocaleCompare = String.prototype.localeCompare;
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(function (this: string, other, ...args) {
+      const left = String(this);
+      const right = String(other);
+      if (left === lowerPath && right === upperPath) return -1;
+      if (left === upperPath && right === lowerPath) return 1;
+      return originalLocaleCompare.call(left, right, ...args);
+    });
+    try {
+      const target = join(dir, "target");
+      mkdirSync(join(target, "src", "components", "npm-stats"), { recursive: true });
+      writeFileSync(join(target, upperPath), Buffer.alloc(81_921, "a"));
+      writeFileSync(join(target, lowerPath), Buffer.alloc(81_921, "b"));
+      writeFileSync(join(target, bmpPath), Buffer.alloc(81_921, "c"));
+      writeFileSync(join(target, nonBmpPath), Buffer.alloc(81_921, "d"));
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry, target);
+      const injection = plan.families.find((family) => family.id === "local-injection")!;
+      expect([lowerPath, nonBmpPath, upperPath, bmpPath].sort(comparePosixRelativePaths)).toEqual(deterministicOrder);
+      expect([bmpPath, nonBmpPath].sort()).toEqual([nonBmpPath, bmpPath]);
+      expect(injection.routingManifest?.entries.map((entry) => entry.path)).toEqual(deterministicOrder);
+
+      const output = (ruleIds: string[]): string => JSON.stringify({
+        version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, upperPath)], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
+      });
+      for (const family of plan.families) {
+        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+          for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(output(partition.ownedRuleIds));
+        } else {
+          const envelope = output(family.ruleIds);
+          semgrepMock.outputs.push(envelope, ...(family.verification === "paired-cold-exact" ? [envelope] : []));
+        }
+      }
+      const run = await runSemgrepPartitioned(target, registry, {
+        dir: join(dir, "cache"), mode: "off", targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
+      });
+      expect(run.failure).toBeUndefined();
+      localeCompare.mockRestore();
+
+      const originalSort = Array.prototype.sort;
+      const implicitSort = vi.spyOn(Array.prototype, "sort").mockImplementation(function (this: unknown[], compareFn) {
+        if (compareFn === undefined && this.includes(bmpPath) && this.includes(nonBmpPath)) {
+          throw new Error("routed manifest validation used implicit default ordering");
+        }
+        return originalSort.call(this, compareFn as ((left: unknown, right: unknown) => number) | undefined);
+      });
+      try {
+        expect(() => assertSuccessfulSemgrepExecutionReceipt(run.executionPlan)).not.toThrow();
+      } finally {
+        implicitSort.mockRestore();
+      }
+    } finally {
+      localeCompare.mockRestore();
+      semgrepMock.outputs.length = 0;
       rmSync(dir, { recursive: true, force: true });
     }
   });
