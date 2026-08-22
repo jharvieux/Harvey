@@ -12,34 +12,40 @@
 
 // Per-target scan cost in SECONDS.
 //
-// PROVENANCE: MEASURED from CI run 30584074986 (job `clone pinned commits + score baselines`,
-// 2026-07-30, a full `--install` scoring pass over every target). Derived from the per-target
-// `=== <slug> (<repo> @ <sha>) ===` banners corpus-drift.ts prints: each target's cost is the
-// interval between its banner and the next one, and the last target's is the interval to the
-// scorecard print. Total 1287s, which reconciles with that step's own 1289s runtime.
+// PROVENANCE: re-measured on the pinned 1.173 toolchain from pull-request run 32578027739
+// (2026-08-22), producer jobs 97043194001/97043193929/97043193919. The integer seconds below are
+// the per-target elapsed rows emitted by corpus-drift.ts. Shard 3 hit its unchanged 30-minute hard
+// timeout after starting documenso, so its three omitted rows come from prior complete exact-version
+// run 32576123221, independent replay job 97038691019: conservative ceiling seconds between its
+// exact target boundary timestamps (documenso 493s, supabase-security-labs 65s, effective 70s).
+// These three are deliberately partition hints from the replay surface, not producer wall-time
+// claims, and should be replaced after the next complete four-shard producer run.
 //
 // These are a PARTITIONING HINT, not a claim about any future run — clone times, runner class and
 // upstream tool versions all move them. Nothing is scored against them and no gate reads them; the
 // only consequence of a stale weight is a less even split. `--shard` prints each target's ACTUAL
 // elapsed seconds so a real run always re-measures what this table only estimates.
 //
-// n=1. carbon's dominance is what makes the partition robust to that: at 564s it is 4.7x the next
-// largest target, so it lands alone in a shard under any plausible re-measurement.
+// n=1. Carbon remains indivisible at 1409s. Four shards keep it alone and distribute the remaining
+// 2898 measured seconds without putting another target on that critical path.
 export const TARGET_SCAN_SECONDS: Readonly<Record<string, number>> = {
-  carbon: 564,
-  documenso: 119,
-  "inbox-zero": 95,
-  proposit: 86,
-  "saas-lite": 77,
-  ghostfolio: 67,
-  rallly: 56,
-  boxyhq: 54,
-  "tanstack-com": 46,
-  "multi-tenant-starter": 37,
-  "mvp-boilerplate": 35,
-  "launch-mvp": 24,
-  "subscription-payments": 17,
-  "supabase-security-labs": 7,
+  carbon: 1409,
+  documenso: 493,
+  "inbox-zero": 584,
+  "tanstack-com": 265,
+  ghostfolio: 212,
+  rallly: 206,
+  cravab: 171,
+  "flori-web": 167,
+  proposit: 121,
+  boxyhq: 116,
+  "saas-lite": 94,
+  "mvp-boilerplate": 91,
+  "multi-tenant-starter": 86,
+  "launch-mvp": 79,
+  "subscription-payments": 78,
+  effective: 70,
+  "supabase-security-labs": 65,
 };
 
 // A target added to EXTERNAL_CORPUS after the table was measured has no entry. It gets a weight at

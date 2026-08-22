@@ -151,25 +151,26 @@ jobs:
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
   #
-  # SHARD COUNT VARIES BY EVENT. PRs, merge groups and default-branch pushes use the same three
+  # SHARD COUNT VARIES BY EVENT. PRs, merge groups and default-branch pushes use the same four
   # namespaces: each successful main leg seeds exactly the transport its corresponding PR leg
   # consumes. This replaced the single 29m30s main seed that timed out before it could publish a
   # complete trusted transport (runs 31601042773/31602706320).
   # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
-  # poisoned it beyond repair by re-running. No shard holds all 14, so a sharded run can never save.
-  #   * pull_request / merge_group / push -> 3 shards.
+  # poisoned it beyond repair by re-running. No shard holds all 17, so a sharded run can never save.
+  #   * pull_request / merge_group / push -> 4 shards.
   #     Each shard owns an exhaustive slice for the current producer↔replay population comparison.
-  #   * schedule / workflow_dispatch -> ONE shard holding all 14, which still saves the cache and
+  #   * schedule / workflow_dispatch -> ONE shard holding all 17, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
   #
-  # Three, from the per-target cost measured in #1586 (runs 30584074986 and 30588890377, in
-  # agreement): carbon is 564-587s of a ~1290s total and is indivisible, so the longest shard is
-  # carbon's own and a 4th shard buys nothing. The split itself lives in src/scan/corpus-shards.ts,
-  # which asserts it is exhaustive and disjoint — a target silently dropped from the partition would
-  # stop being scored while every shard still exited 0.
+  # Four, re-measured on pinned-toolchain runs 32578027739/32576123221: Carbon is an indivisible
+  # 1409s, while the old three-way assignment put 1454 measured seconds plus setup on one runner and
+  # hit the unchanged 30-minute timeout during Documenso. Four keeps Carbon alone and all other
+  # measured shard loads below 990s. The split itself lives in src/scan/corpus-shards.ts, which
+  # asserts it is exhaustive and disjoint — a target silently dropped from the partition would stop
+  # being scored while every shard still exited 0.
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs
@@ -179,7 +180,7 @@ jobs:
       # it shows everything that moved, not the first thing.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3]' || '[1]') }}
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3,4]' || '[1]') }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -460,9 +461,9 @@ jobs:
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
           HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
-          # Kept in step with the matrix above: 3 on a PR, queue entry, or main push; 1 on the
+          # Kept in step with the matrix above: 4 on a PR, queue entry, or main push; 1 on the
           # scheduled/manual canonical-scorecard lane, which still holds every clone.
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 3 || 1 }}
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 4 || 1 }}
         run: |
           set -euo pipefail
           cold_flag=()
@@ -606,7 +607,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3]' || '[1]') }}
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3,4]' || '[1]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -636,7 +637,7 @@ jobs:
       - name: Execute the independent exact-head replay
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4 || 1 }}
         run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-semgrep --out "current-replay-${{ matrix.shard }}.json"
       - name: Upload independent raw replay
         uses: actions/upload-artifact@v4
