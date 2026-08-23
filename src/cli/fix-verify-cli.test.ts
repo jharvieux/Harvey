@@ -10,7 +10,7 @@
 // This is the #1407 shape (library proof, unguarded flag parsing) at a fourth site, so it is fixed
 // the same way: spawn the real entry point and assert on what a client would see.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const target = join(dir, "client-checkout");
 const findingsPath = join(dir, "findings.json");
 const priorPath = join(dir, "prior.json");
+const aliasFindingsPath = join(dir, "alias-findings.json");
 
 // An M5 "Unused parameter" finding whose detector needs no external binary, so this test is
 // hermetic. In the target below the parameter IS used, so the detector does not fire and the row
@@ -72,6 +73,12 @@ beforeAll(() => {
     scope: "n/a", methodology: "n/a", outOfScope: "n/a",
   };
   writeFileSync(findingsPath, JSON.stringify({ meta, findings: [FINDING] }));
+  symlinkSync("app/api/x/route.ts", join(target, "route-alias.ts"));
+  writeFileSync(aliasFindingsPath, JSON.stringify({ meta, findings: [
+    { ...FINDING, id: "F-REL", location: "app/api/x/route.ts:1" },
+    { ...FINDING, id: "F-ABS", location: `${join(target, "app/api/x/route.ts")}:1` },
+    { ...FINDING, id: "F-LINK", location: "route-alias.ts:1" },
+  ] }));
 
   const prior: GateReport = {
     engagement: "harvey",
@@ -140,5 +147,16 @@ describe("fix-verify CLI applies the paid-rescan gate it parses (#1546)", () => 
     expect(code).toBe(0);
     expect(out.length).toBeGreaterThan(0);
     expect(out).toContain("Fix-verification gate");
+  });
+
+  it("uses the target root to collapse relative, absolute, and symlink finding identities", () => {
+    const reportPath = join(dir, "alias-report.json");
+    const { out, code } = runCli([aliasFindingsPath, "--target", target, "--out", reportPath]);
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as GateReport;
+
+    expect(code).toBe(0);
+    expect(out).toContain("3 delivered finding(s) re-verified");
+    expect(new Set(report.results.map((result) => result.identity))).toHaveLength(1);
+    expect(new Set(report.results.map((result) => result.marker))).toHaveLength(1);
   });
 });
