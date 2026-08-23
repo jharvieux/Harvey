@@ -16,10 +16,12 @@
 // Run: pnpm detector-census
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CALIBRATION_PLANTS } from "../audit-conservation.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
 import {
   buildEffectivenessInventory,
-  EFFECTIVENESS_INVENTORY,
-  EFFECTIVENESS_INVENTORY_JSON,
+  getEffectivenessInventory,
+  getEffectivenessInventoryJson,
   serializeEffectivenessInventory,
   validateEffectivenessInventory,
 } from "../effectiveness-registry.js";
@@ -27,11 +29,14 @@ import { discoverEffectivenessRouteGraph } from "../effectiveness-route-graph.js
 import type { EffectivenessInventory } from "../effectiveness-schema.js";
 import { assertUniqueProducerExecutionReceipts, semgrepProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
+import { SCORED_GATES } from "../scored-gates.js";
+import { MECHANICAL_DETECTORS } from "../scan/mechanical-detector-registry.js";
 import {
   MECHANICAL_REGISTRY,
   operatorMechanicalScopeRows,
   validateMechanicalEngineRegistry,
 } from "../scan/mechanical-engine-registry.js";
+import { REGISTRY_PACKS } from "../scan/semgrep.js";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 
@@ -50,9 +55,24 @@ function effectivenessJson(): string {
       assertUniqueProducerExecutionReceipts(producerExecutionReceipts);
     }
   }
-  const inventory: EffectivenessInventory = buildEffectivenessInventory({ root: ROOT, producerExecutionReceipts });
+  const reverseInputs = process.argv.includes("--reverse-effectiveness-inputs");
+  const inventory: EffectivenessInventory = reverseInputs
+    ? buildEffectivenessInventory({
+        root: ROOT,
+        auditRunners: [...AUDIT_RUNNERS].reverse(),
+        mechanicalRegistry: [...MECHANICAL_REGISTRY].reverse(),
+        mechanicalDetectors: [...MECHANICAL_DETECTORS].reverse(),
+        scoredGates: [...SCORED_GATES].reverse(),
+        plants: [...CALIBRATION_PLANTS].reverse(),
+        registryPacks: [...REGISTRY_PACKS].reverse(),
+        producerExecutionReceipts,
+      })
+    : producerExecutionReceipts.length === 0
+      ? getEffectivenessInventory()
+      : buildEffectivenessInventory({ root: ROOT, producerExecutionReceipts });
   const problems = validateEffectivenessInventory(inventory, { root: ROOT });
   if (problems.length > 0) throw new Error(`effectiveness inventory invalid:\n${problems.join("\n")}`);
+  if (!Object.isFrozen(inventory)) throw new Error("effectiveness inventory must be deeply frozen at the production boundary");
 
   const implementations = inventory.producers.flatMap((producer) =>
     producer.implementations.map((item) => ({
@@ -67,7 +87,9 @@ function effectivenessJson(): string {
   }
 
   const serialized = serializeEffectivenessInventory(inventory);
-  if (producerExecutionReceipts.length === 0 && (serialized !== EFFECTIVENESS_INVENTORY_JSON || JSON.stringify(inventory) !== JSON.stringify(EFFECTIVENESS_INVENTORY))) {
+  if (!reverseInputs && producerExecutionReceipts.length === 0
+    && (serialized !== getEffectivenessInventoryJson()
+      || JSON.stringify(inventory) !== JSON.stringify(getEffectivenessInventory()))) {
     throw new Error("effectiveness inventory drifted from its deterministic module export");
   }
   return serialized;

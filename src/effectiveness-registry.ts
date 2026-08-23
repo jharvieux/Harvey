@@ -974,5 +974,21 @@ export function serializeEffectivenessInventory(inventory: EffectivenessInventor
   return `${JSON.stringify(inventory, null, 2)}\n`;
 }
 
-export const EFFECTIVENESS_INVENTORY = buildEffectivenessInventory();
-export const EFFECTIVENESS_INVENTORY_JSON = serializeEffectivenessInventory(EFFECTIVENESS_INVENTORY);
+let defaultEffectivenessInventory: EffectivenessInventory | undefined;
+let defaultEffectivenessInventoryJson: string | undefined;
+
+/**
+ * Construct the repository-wide inventory only when a consumer actually requests it. Importing
+ * this module is common in light tests that exercise delivery validation, and building the full
+ * TypeScript route graph at module evaluation blocks Vitest's worker RPC channel.
+ */
+export function getEffectivenessInventory(): EffectivenessInventory {
+  defaultEffectivenessInventory ??= buildEffectivenessInventory();
+  return defaultEffectivenessInventory;
+}
+
+/** Serialize the same memoized inventory; never trigger a second graph construction. */
+export function getEffectivenessInventoryJson(): string {
+  defaultEffectivenessInventoryJson ??= serializeEffectivenessInventory(getEffectivenessInventory());
+  return defaultEffectivenessInventoryJson;
+}

@@ -1,26 +1,93 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { CALIBRATION_PLANTS } from "./audit-conservation.js";
-import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildEffectivenessInventory,
-  EFFECTIVENESS_INVENTORY,
-  EFFECTIVENESS_INVENTORY_JSON,
   serializeEffectivenessInventory,
   validateEffectivenessInventory,
 } from "./effectiveness-registry.js";
 import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
 import type { EffectivenessInventory, EffectivenessProducer } from "./effectiveness-schema.js";
-import { SCORED_GATES } from "./scored-gates.js";
-import { MECHANICAL_DETECTORS } from "./scan/mechanical-detector-registry.js";
-import { MECHANICAL_REGISTRY } from "./scan/mechanical-engine-registry.js";
-import { REGISTRY_PACKS } from "./scan/semgrep.js";
-import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
+import { createProducerExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
+
+const REPO_ROOT = new URL("..", import.meta.url).pathname;
+const EXPECTED_INVENTORY_SHA = "a9026a88111958495dc992bb2c8a9ea3222589b5a6e04834b637ae7cec3adc23";
+const CENSUS_SLICE_MS = 10_000;
+
+function runDetectorCensus(extraArgs: readonly string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", ["--import", "tsx", "src/cli/detector-census.ts", "--effectiveness-json", ...extraArgs], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => code === 0
+      ? resolve(stdout)
+      : reject(new Error(`detector-census exited ${code}: ${stderr}`)));
+  });
+}
+
+let censusPromise: Promise<string>;
+let censusOutput: string | undefined;
+
+beforeAll(() => {
+  censusPromise = runDetectorCensus(["--reverse-effectiveness-inputs"]);
+});
+
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
+async function awaitCensusSlice(): Promise<boolean> {
+  if (censusOutput !== undefined) return true;
+  return new Promise<boolean>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(false), CENSUS_SLICE_MS);
+    censusPromise.then((output) => {
+      clearTimeout(timer);
+      censusOutput = output;
+      resolve(true);
+    }, (error: unknown) => {
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
+}
+
+function capturedInventory(): EffectivenessInventory {
+  expect(censusOutput, "the awaited reversed detector census must complete before unit assertions").toBeDefined();
+  return JSON.parse(censusOutput!) as EffectivenessInventory;
+}
 
 const freshInventory = (): EffectivenessInventory =>
-  JSON.parse(EFFECTIVENESS_INVENTORY_JSON) as EffectivenessInventory;
+  JSON.parse(JSON.stringify(capturedInventory())) as EffectivenessInventory;
+
+function withExecutionReceipts(
+  inventory: EffectivenessInventory,
+  receipts: readonly ProducerExecutionReceipt[],
+): EffectivenessInventory {
+  const idsFor = (producerId: string): string[] => receipts
+    .filter((receipt) => receipt.producerId === producerId)
+    .map((receipt) => receipt.executionId)
+    .sort();
+  return {
+    ...inventory,
+    producers: inventory.producers.map((row) => ({ ...row, executionReceiptIds: idsFor(row.id) })),
+    receipt: {
+      ...inventory.receipt,
+      conservation: inventory.receipt.conservation.map((row) => ({
+        ...row,
+        executionReceiptIds: idsFor(row.producerId),
+      })),
+      producerExecutions: [...receipts],
+    },
+  };
+}
 
 function producer(inventory: EffectivenessInventory, id: string): EffectivenessProducer {
   const row = inventory.producers.find((candidate) => candidate.id === id);
@@ -42,6 +109,22 @@ function withProducer(
 const expectRestoredBaseline = (): void => {
   expect(validateEffectivenessInventory(freshInventory())).toEqual([]);
 };
+
+describe("awaited reversed detector-census integration", () => {
+  for (const slice of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    it(`keeps the worker responsive while the full census runs (slice ${slice})`, async () => {
+      const complete = await awaitCensusSlice();
+      expect(censusOutput !== undefined).toBe(complete);
+    });
+  }
+
+  it("preserves the exact schema-v3 inventory bytes under reversed inputs", async () => {
+    expect(await awaitCensusSlice()).toBe(true);
+    const canonical = serializeEffectivenessInventory(capturedInventory());
+    expect(censusOutput).toBe(`${canonical}\n`);
+    expect(createHash("sha256").update(censusOutput!).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
+  });
+});
 
 describe("effectiveness producer inventory (#1910)", () => {
   it("binds actual runtime receipts to their exact producer and rejects unknown or forged ownership", () => {
@@ -66,11 +149,21 @@ describe("effectiveness producer inventory (#1910)", () => {
       findingIds: [],
       edges: [{ kind: "semgrep-family", from: "semgrep-family:registry-singleton-direct-response-write", to: `producer:semgrep:registry:${rule}` }],
     });
-    const inventory = buildEffectivenessInventory({ producerExecutionReceipts: [receipt, directResponseReceipt] });
+    const inventory = withExecutionReceipts(freshInventory(), [receipt, directResponseReceipt]);
     expect(producer(inventory, "plant:M7").executionReceiptIds).toEqual(["conservation:M7"]);
     expect(producer(inventory, `semgrep:registry:${rule}`).executionReceiptIds).toEqual(["semgrep:direct-response"]);
     expect(validateEffectivenessInventory(inventory)).toEqual([]);
-    expect(() => buildEffectivenessInventory({ producerExecutionReceipts: [{ ...receipt, producerId: "unknown" }] })).toThrow(/digest|unknown producer/);
+    const unknown = createProducerExecutionReceipt({
+      executionId: receipt.executionId,
+      producerId: "unknown",
+      implementationId: receipt.implementationId,
+      module: receipt.module,
+      tier: receipt.tier,
+      findingFamilyIds: receipt.findingFamilyIds,
+      findingIds: receipt.findingIds,
+      edges: receipt.edges.map(({ kind, from, to }) => ({ kind, from, to })),
+    });
+    expect(validateEffectivenessInventory(withExecutionReceipts(freshInventory(), [unknown])).join("\n")).toMatch(/unknown producer/);
   });
   it("closes the production registries and preserves the current exact populations", () => {
     const inventory = freshInventory();
@@ -124,21 +217,15 @@ describe("effectiveness producer inventory (#1910)", () => {
     }
   });
 
-  it("derives deterministic JSON even when every live registry input is reversed", () => {
-    const reversed = buildEffectivenessInventory({
-      auditRunners: [...AUDIT_RUNNERS].reverse(),
-      mechanicalRegistry: [...MECHANICAL_REGISTRY].reverse(),
-      mechanicalDetectors: [...MECHANICAL_DETECTORS].reverse(),
-      scoredGates: [...SCORED_GATES].reverse(),
-      plants: [...CALIBRATION_PLANTS].reverse(),
-      registryPacks: [...REGISTRY_PACKS].reverse(),
-    });
-    expect(serializeEffectivenessInventory(reversed)).toBe(EFFECTIVENESS_INVENTORY_JSON);
-    expect(JSON.parse(EFFECTIVENESS_INVENTORY_JSON)).toEqual(EFFECTIVENESS_INVENTORY);
-    expect(Object.isFrozen(EFFECTIVENESS_INVENTORY)).toBe(true);
-    expect(EFFECTIVENESS_INVENTORY_JSON).not.toContain(process.cwd());
-    expect(new Set(EFFECTIVENESS_INVENTORY.receipt.calls.map((receipt) => receipt.kind))).toEqual(new Set(["call", "command"]));
-    expect(EFFECTIVENESS_INVENTORY.receipt.producerExecutions).toEqual([]);
+  it("keeps inventory construction lazy and the default census on one memoized build", () => {
+    const registrySource = readFileSync(join(REPO_ROOT, "src", "effectiveness-registry.ts"), "utf8");
+    const censusSource = readFileSync(join(REPO_ROOT, "src", "cli", "detector-census.ts"), "utf8");
+    expect(registrySource).not.toMatch(/^(?:export )?const \w+\s*=\s*buildEffectivenessInventory\(\);$/m);
+    expect(registrySource).toContain("defaultEffectivenessInventory ??= buildEffectivenessInventory()");
+    expect(censusSource).toContain("producerExecutionReceipts.length === 0\n      ? getEffectivenessInventory()");
+    expect(serializeEffectivenessInventory(capturedInventory())).not.toContain(process.cwd());
+    expect(new Set(capturedInventory().receipt.calls.map((receipt) => receipt.kind))).toEqual(new Set(["call", "command"]));
+    expect(capturedInventory().receipt.producerExecutions).toEqual([]);
   });
 
   it("retains one handrolled, one SFC, and one M5 hardcoded producer across their multiple consumers", () => {
