@@ -194,7 +194,7 @@ describe("awaited reversed detector-census integration", () => {
     censusInventory = deepFreeze(JSON.parse(output) as EffectivenessInventory);
   });
 
-  it("routes every detector-census child integration through one exhaustive heavy shard", () => {
+  it("routes both census owners once and requires their afterAll terminate-and-reap teardown", () => {
     const detectorCensusTests = execFileSync("git", ["ls-files", "*.test.ts"], {
       cwd: REPO_ROOT,
       encoding: "utf8",
@@ -211,6 +211,7 @@ describe("awaited reversed detector-census integration", () => {
       "src/effectiveness-registry.test.ts",
     ]);
     expect(detectorCensusTests.every((file) => HEAVY_CLI_TESTS.includes(file))).toBe(true);
+    const afterAllCleanup = /afterAll\(\s*async\s*\(\)\s*=>\s*\{\s*if\s*\(\s*censusRun\s*!==\s*undefined\s*\)\s*await\s+terminateAndReap\(\s*censusRun\s*\);\s*\}\s*\);/;
     for (const file of detectorCensusTests) {
       const source = readFileSync(join(REPO_ROOT, file), "utf8");
       expect(source, `${file} must bound each child wait below the global timeout`).toContain("waitForCensusSlice");
@@ -221,6 +222,7 @@ describe("awaited reversed detector-census integration", () => {
       expect(source, `${file} must not directly await the unbounded child lifetime`).not.toMatch(
         /await\s+(?:runDetectorCensus\s*\(|censusRun!?\.close)/,
       );
+      expect(source, `${file} must clean up its retained census child in afterAll`).toMatch(afterAllCleanup);
       const censusJsonArg = new RegExp(["--effectiveness", "json"].join("-"), "g");
       expect(source.match(censusJsonArg), `${file} must start exactly one real census`).toHaveLength(1);
     }
