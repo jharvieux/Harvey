@@ -11,6 +11,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import type { Finding } from "./findings.js";
+import {
+  assertProducerExecutionReceipt,
+  assertUniqueProducerExecutionReceipts,
+  extendProducerExecutionReceipt,
+  type ProducerExecutionReceipt,
+} from "./producer-execution-receipt.js";
 
 // One recorded pass. `target` and `generatedAt` are the two fields the probe checks: it must
 // describe THIS engagement's target and must not be stale. `findings` (optional) lets a pass that
@@ -31,6 +37,8 @@ export interface RecordedPass {
   // produced. Surfaced by the m3 probe so the cross-module enrichment (#515) also fires when M3 ran
   // via a pass artifact (vitals off PATH during run-audit), not only the in-process capture path.
   hotspots?: string[];
+  /** Actual executions that produced this pass. Absence is legacy evidence, never effectiveness liveness. */
+  producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
 
 // The file at <artifacts-dir>/<module>.pass.json: the most recently recorded pass, plus the tiers
@@ -146,10 +154,17 @@ export function buildPassArtifact(parts: {
   findings?: Finding[];
   hotspotFocus?: boolean;
   hotspots?: string[];
+  producerExecutionReceipts?: readonly ProducerExecutionReceipt[];
 }): PassArtifact {
   if (!parts.target.trim()) throw new Error("pass artifact needs a non-empty target (the audited directory)");
   if (!parts.pass.trim()) throw new Error("pass artifact needs a non-empty pass name (e.g. semantic, dynamic, verdict)");
   if (Number.isNaN(Date.parse(parts.generatedAt))) throw new Error(`pass artifact generatedAt is not a valid ISO-8601 timestamp: ${parts.generatedAt}`);
+  if (parts.producerExecutionReceipts) assertUniqueProducerExecutionReceipts(parts.producerExecutionReceipts);
+  const producerExecutionReceipts = parts.producerExecutionReceipts?.map((receipt) => extendProducerExecutionReceipt(
+    receipt,
+    { kind: "artifact-produce", from: receipt.edges.at(-1)!.to, to: `pass-artifact:${parts.module}:${parts.pass}` },
+    { module: parts.module, target: parts.target, pass: parts.pass, generatedAt: parts.generatedAt },
+  ));
   return {
     module: parts.module,
     target: parts.target,
@@ -159,7 +174,27 @@ export function buildPassArtifact(parts: {
     ...(parts.findings?.length ? { findings: parts.findings } : {}),
     ...(parts.hotspotFocus !== undefined ? { hotspotFocus: parts.hotspotFocus } : {}),
     ...(parts.hotspots?.length ? { hotspots: parts.hotspots } : {}),
+    ...(producerExecutionReceipts?.length ? { producerExecutionReceipts } : {}),
   };
+}
+
+/** Strict effectiveness read: validates producer multiplicity and witnesses this artifact's ingest. */
+export function ingestPassArtifactReceipts(artifact: PassArtifact, consumerId: string): ProducerExecutionReceipt[] {
+  if (!consumerId.trim()) throw new Error("pass artifact ingestion needs a non-empty consumer id");
+  if (!artifact.producerExecutionReceipts?.length) throw new Error("pass artifact has no actual producer execution receipts");
+  assertUniqueProducerExecutionReceipts(artifact.producerExecutionReceipts);
+  return artifact.producerExecutionReceipts.map((receipt) => {
+    assertProducerExecutionReceipt(receipt);
+    const expectedArtifact = `pass-artifact:${artifact.module}:${artifact.pass}`;
+    if (receipt.edges.at(-1)?.kind !== "artifact-produce" || receipt.edges.at(-1)?.to !== expectedArtifact) {
+      throw new Error(`${receipt.producerId}: pass artifact producer edge is missing or misbound`);
+    }
+    return extendProducerExecutionReceipt(receipt, {
+      kind: "artifact-ingest",
+      from: expectedArtifact,
+      to: consumerId,
+    }, { artifact: { module: artifact.module, target: artifact.target, pass: artifact.pass, generatedAt: artifact.generatedAt } });
+  });
 }
 
 // Fold a newly recorded pass into whatever the slot already held (#1522). The incoming pass becomes

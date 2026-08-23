@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildMechanicalPhaseCache, discoverMechanicalPhaseImplementationFiles } from "./mechanical-phase-identity.js";
 
+const yieldToVitestRpc = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 describe("mechanical phase implementation identities (#1864)", () => {
   const dirs: string[] = [];
-  afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  afterEach(async () => {
+    dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+    await yieldToVitestRpc();
+  });
 
   const fixture = (): string => {
     const root = mkdtempSync(join(tmpdir(), "harvey-phase-identity-"));
@@ -39,9 +44,10 @@ describe("mechanical phase implementation identities (#1864)", () => {
     expect(after["structural-ast"]).toBe(before["structural-ast"]);
   });
 
-  it("a pinned Semgrep worker-topology or paired-family policy edit invalidates phase and family caches", () => {
+  it("a pinned Semgrep worker-topology or paired-family policy edit invalidates phase and family caches", async () => {
     const root = fixture();
     const before = buildCache(root);
+    await yieldToVitestRpc();
     const semgrep = join(root, "src", "scan", "semgrep.ts");
     const original = readFileSync(semgrep, "utf8");
     for (const [needle, replacement] of [
@@ -55,6 +61,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
       expect(source).toContain(replacement);
       writeFileSync(semgrep, source);
       const after = buildCache(root);
+      await yieldToVitestRpc();
       expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
       expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
     }

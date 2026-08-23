@@ -108,4 +108,14 @@ describe("conservation gate — seeded violations", () => {
     expect(held.ok).toBe(false);
     expect(held.rows.find((r) => r.module === "M2")?.verdict).toBe("not-produced");
   });
+
+  it("emits conservation evidence only for a plant actually consumed at the accounting boundary", () => {
+    const report = checkConservation(healthy());
+    expect(report.producerExecutionReceipts).toHaveLength(10);
+    expect(report.producerExecutionReceipts.find((receipt) => receipt.producerId === "plant:M7")?.edges[0]?.kind).toBe("conservation-consume");
+
+    const missing = healthy();
+    missing.findingsByModule.M7 = [];
+    expect(checkConservation(missing).producerExecutionReceipts.some((receipt) => receipt.producerId === "plant:M7")).toBe(false);
+  });
 });

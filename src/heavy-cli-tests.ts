@@ -23,9 +23,11 @@ export const HEAVY_CLI_TESTS = [
   "src/cli/validate-calibration.test.ts",
   "src/cli/fix-execute.test.ts",
   "src/corpus-scanner-cross-process.test.ts",
+  "src/effectiveness-registry.test.ts",
+  "src/effectiveness-delivery.test.ts",
 ];
 
-// Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
+// Seconds, MEASURED from CI unless an inline row says otherwise. A BALANCE HINT ONLY — correctness never depends on these being
 // current. They drift as tests are added, and a stale number costs a few seconds of imbalance,
 // never a dropped file. A file absent from this table is deliberately treated as the heaviest known
 // (see shardHeavyTests): an unweighted newcomer gets placed first and alone rather than silently
@@ -49,6 +51,9 @@ const WEIGHT_HINT_SECONDS: Record<string, number> = {
   "src/cli/validate-calibration.test.ts": 40.0,
   "src/cli/fix-execute.test.ts": 23.3,
   "src/corpus-scanner-cross-process.test.ts": 17.0,
+  // Measured locally on the routing repair's serial heavy run: 39.410s and 35.408s respectively.
+  "src/effectiveness-registry.test.ts": 40.0,
+  "src/effectiveness-delivery.test.ts": 36.0,
 };
 
 /**

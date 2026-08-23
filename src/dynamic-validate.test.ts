@@ -24,6 +24,7 @@ import {
 import type { Finding } from "./findings.js";
 import { driveAppBehaviorSuite } from "./pentest/live-standup.js";
 import type { AppBehaviorProbed } from "./pentest/scope-ledger.js";
+import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const layout = (over: Partial<RepoLayout> = {}): RepoLayout => ({
   migrationDirs: ["/repo/supabase/migrations"],
@@ -256,6 +257,27 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
     expect(written.module).toBe("M2");
     expect(written.target).toBe("/repo");
     expect(probeFindings(written.findings)).toHaveLength(1);
+  });
+
+  it("threads an invoked producer through artifact ingest and client delivery", () => {
+    const receipt = createProducerExecutionReceipt({
+      executionId: "m2-live-1", producerId: "m2:rest-explore", implementationId: "src/pentest/engine.ts#runExplore",
+      module: "M2", tier: "dynamic", findingFamilyIds: ["M2-EXPLORE-*"], findingIds: [FINDING.id],
+      edges: [{ kind: "registry-iteration", from: "registry:pentest", to: "producer:m2:rest-explore" }, { kind: "callback", from: "producer:m2:rest-explore", to: "result:m2-live-1" }],
+    });
+    const r = run({ runner: runner({ pentest: () => ({ ok: true, findings: [FINDING], output: "", producerExecutionReceipts: [receipt] }) }) });
+    expect(r.producerExecutionReceipts?.[0]?.edges.map((edge) => edge.kind)).toEqual(["registry-iteration", "callback", "artifact-produce", "artifact-ingest", "client-delivery"]);
+    const written = JSON.parse(readFileSync(r.artifactPath!, "utf8"));
+    expect(written.producerExecutionReceipts[0].edges.at(-1).kind).toBe("artifact-produce");
+  });
+
+  it("rejects duplicate or forged dynamic producer receipts", () => {
+    const receipt = createProducerExecutionReceipt({
+      executionId: "dup", producerId: "m2:rest-explore", implementationId: "src/pentest/engine.ts#runExplore", module: "M2", tier: "dynamic",
+      findingFamilyIds: ["M2-EXPLORE-*"], findingIds: [], edges: [{ kind: "registry-iteration", from: "registry", to: "producer" }],
+    });
+    expect(() => run({ runner: runner({ pentest: () => ({ ok: true, findings: [FINDING], output: "", producerExecutionReceipts: [receipt, receipt] }) }) })).toThrow(/duplicate/);
+    expect(() => run({ runner: runner({ pentest: () => ({ ok: true, findings: [FINDING], output: "", producerExecutionReceipts: [{ ...receipt, producerId: "forged" }] }) }) })).toThrow(/digest/);
   });
 
   // #875 — the deliverable must say it probed a RECONSTRUCTION, not the deployed system; an

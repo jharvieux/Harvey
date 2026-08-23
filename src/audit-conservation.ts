@@ -30,6 +30,7 @@ import { AUDIT_MODULES, type AuditModule, type ModuleCoverage, type ModuleStatus
 import type { Finding } from "./findings.js";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import { mechanicalFinding } from "./scan/common.js";
+import { createProducerExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 // A defect planted in the fixture, and the signature that identifies its finding. Anchored on
 // taxonomy AND location so the row names an actual planted bug: a taxonomy-only match would be
@@ -157,6 +158,7 @@ interface ConservationRow {
 interface ConservationReport {
   rows: ConservationRow[];
   ok: boolean;
+  producerExecutionReceipts: ProducerExecutionReceipt[];
 }
 
 interface ConservationInput {
@@ -178,6 +180,7 @@ interface ConservationInput {
 export function checkConservation(input: ConservationInput): ConservationReport {
   const required = new Set(input.required ?? []);
   const rows: ConservationRow[] = [];
+  const producerExecutionReceipts: ProducerExecutionReceipt[] = [];
 
   for (const module of AUDIT_MODULES) {
     const probeRow = input.recorded.find((r) => r.module === module);
@@ -202,9 +205,25 @@ export function checkConservation(input: ConservationInput): ConservationReport 
     const delivered = plant ? input.delivered.filter(hit).length : input.delivered.filter((f) => producedIds.has(f.id)).length;
     const verdict: ConservationVerdict = producedFindings.length === 0 ? "not-produced" : delivered === 0 ? "lost-in-assembly" : "delivered";
     rows.push({ module, verdict, detail, produced: producedFindings.length, delivered, ...probeStatus });
+    if (plant && producedFindings.length > 0) {
+      producerExecutionReceipts.push(createProducerExecutionReceipt({
+        executionId: `conservation:${module}`,
+        producerId: `plant:${module}`,
+        implementationId: "src/audit-conservation.ts#CALIBRATION_PLANTS",
+        module,
+        tier: "free",
+        findingFamilyIds: [`@conservation-plant:${module}`],
+        findingIds: producedFindings.map((finding) => finding.id),
+        edges: [
+          { kind: "conservation-consume", from: `plant:${module}`, to: `conservation:${module}` },
+          ...(delivered > 0 ? [{ kind: "client-delivery" as const, from: `conservation:${module}`, to: "venue:run-audit" }] : []),
+        ],
+        evidence: { produced: producedFindings, delivered: input.delivered.filter(hit) },
+      }));
+    }
   }
 
-  return { rows, ok: rows.every((r) => r.verdict === "delivered" || r.verdict === "unexercised") };
+  return { rows, ok: rows.every((r) => r.verdict === "delivered" || r.verdict === "unexercised"), producerExecutionReceipts };
 }
 
 const MARK: Record<ConservationVerdict, string> = {

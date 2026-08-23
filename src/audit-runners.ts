@@ -10,12 +10,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, ingestPassArtifactReceipts, type PassArtifact, passLabel, passSlotCensus, ranFromPass } from "./audit-pass-artifact.js";
 import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { briefFreshnessBanner } from "./brief-freshness.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type {
-  ProducerConsumerHop,
   ProducerFindingFamily,
   ProducerImplementation,
   ProducerPopulationClass,
@@ -41,33 +40,18 @@ const family = (
   kind: ProducerFindingFamily["kind"] = "finding",
 ): ProducerFindingFamily => Object.freeze({ module, idPattern, taxonomyPattern, kind });
 
-const delivery = (module: AuditModule, entryFile: string, entryToken: string): readonly ProducerConsumerHop[] => Object.freeze([
-  Object.freeze({ file: entryFile, contains: entryToken, description: "production entry point consumes the producer" }),
-  Object.freeze({ file: "src/audit-runners.ts", contains: `module: "${module}"`, description: `${module} probe captures the producer output` }),
-  Object.freeze({ file: "src/audit-runner.ts", contains: "findingsByModule", description: "audit runner retains module attribution" }),
-  Object.freeze({ file: "src/cli/run-audit.ts", contains: "assembleEngagementDocument", description: "engagement assembler consumes the captured findings" }),
-  Object.freeze({ file: "report-template/render.mjs", contains: "findings", description: "client report renders the assembled finding population" }),
-]);
-
-const m2Delivery = (entryFile: string, entryToken: string): readonly ProducerConsumerHop[] => Object.freeze([
-  Object.freeze({ file: entryFile, contains: entryToken, description: "M2 production probe or converter emits into the pentest result" }),
-  Object.freeze({ file: "src/cli/pentest.ts", contains: "writeFileSync", description: "pentest CLI writes its finding output" }),
-  Object.freeze({ file: "src/dynamic-validate.ts", contains: "writePassArtifact", description: "stand-up validation joins scope and findings into M2.pass.json" }),
-  Object.freeze({ file: "src/audit-runners.ts", contains: "recorded M2 dynamic pass artifact", description: "M2 probe consumes the fresh pass" }),
-  Object.freeze({ file: "src/audit-runner.ts", contains: "findingsByModule", description: "audit runner retains M2 attribution" }),
-  Object.freeze({ file: "src/cli/run-audit.ts", contains: "assembleEngagementDocument", description: "engagement assembler consumes M2" }),
-  Object.freeze({ file: "report-template/render.mjs", contains: "findings", description: "client report renders M2 findings and disclosures" }),
-]);
-
-const binding = (input: {
+type BindingInput = {
   id: string;
   modules: readonly AuditModule[];
   tiers: readonly ProducerTier[];
   populationClass: ProducerPopulationClass;
   implementations: readonly ProducerImplementation[];
   findingFamilies?: readonly ProducerFindingFamily[];
-  consumerPath: readonly ProducerConsumerHop[];
-}): ProductionProducerBinding => Object.freeze({ ...input, findingFamilies: Object.freeze([...(input.findingFamilies ?? [])]) });
+  deliveryKind?: ProductionProducerBinding["deliveryKind"];
+};
+
+const binding = (input: BindingInput): ProductionProducerBinding => Object.freeze({ ...input, deliveryKind: input.deliveryKind ?? "semantic-call", findingFamilies: Object.freeze([...(input.findingFamilies ?? [])]) });
+const artifactBinding = (input: BindingInput): ProductionProducerBinding => binding({ ...input, deliveryKind: "artifact-ingest" });
 
 const typedNotAssessed = (module: AuditModule, symbol: string): ProductionProducerBinding => binding({
   id: `audit:not-assessed:${module}`,
@@ -75,11 +59,7 @@ const typedNotAssessed = (module: AuditModule, symbol: string): ProductionProduc
   tiers: ["free", "connected", "dynamic", "paid"],
   populationClass: "typed-not-assessed",
   implementations: [impl("src/audit-runners.ts", symbol, "adapter")],
-  consumerPath: [
-    { file: "src/audit-runners.ts", contains: "kind: \"not-assessed\"", description: `${module} returns a typed NotAssessed gap` },
-    { file: "src/audit-runner.ts", contains: "toOutcome", description: "typed gap is normalized into the client coverage ledger" },
-    { file: "report-template/render.mjs", contains: "coverage", description: "the client report renders the coverage reason" },
-  ],
+  deliveryKind: "artifact-ingest",
 });
 
 const STATIC_DETECT_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
@@ -87,259 +67,224 @@ const STATIC_DETECT_PRODUCERS: readonly ProductionProducerBinding[] = Object.fre
     id: "detector:app-router", modules: ["M1", "M9"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/app-router.ts", "detectAppRouterFindings")],
     findingFamilies: [family("M9", "M9-*", "@literal-taxonomies"), family("M1", "M1-*", "@literal-taxonomies")],
-    consumerPath: delivery("M9", "src/cli/static-detect.ts", "detectAppRouterFindings"),
   }),
   binding({
     id: "detector:perf-code", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/perf-code.ts", "detectPerfCodeFindings")],
     findingFamilies: [family("M7", "M7C-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "detectPerfCodeFindings"),
   }),
   binding({
     id: "detector:hook-deps", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/hook-deps.ts", "detectHookDepFindings")],
     findingFamilies: [family("M7", "M7-HOOK-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "detectHookDepFindings"),
   }),
   binding({
     id: "detector:slop", modules: ["M5"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/slop.ts", "detectSlopFindings")],
     findingFamilies: [family("M5", "SLOP-*", "@literal-taxonomies")],
-    consumerPath: delivery("M9", "src/cli/static-detect.ts", "detectSlopFindings"),
   }),
   binding({
     id: "detector:test-intent", modules: ["M8"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/test-intent.ts", "detectTestIntentFindings")],
     findingFamilies: [family("M8", "M8-*", "@literal-taxonomies")],
-    consumerPath: delivery("M8", "src/cli/static-detect.ts", "detectTestIntentFindings"),
   }),
   binding({
     id: "detector:vitest-intent", modules: ["M8"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/vitest-intent.ts", "detectVitestIntentFindings")],
     findingFamilies: [family("M8", "M8-VITEST-*", "@literal-taxonomies")],
-    consumerPath: delivery("M8", "src/cli/static-detect.ts", "detectVitestIntentFindings"),
   }),
   binding({
     id: "detector:asset-weight", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/asset-weight.ts", "scanAssetWeight")],
     findingFamilies: [family("M7", "M7A-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "scanAssetWeight"),
   }),
   binding({
     id: "detector:bundle-next", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/bundle-stats.ts", "parseBundleStats")],
     findingFamilies: [family("M7", "M7B-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "parseBundleStats"),
   }),
   binding({
     id: "detector:bundle-analyzer", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/bundle-stats.ts", "parseBundleAnalyzerStats")],
     findingFamilies: [family("M7", "M7B-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "parseBundleAnalyzerStats"),
   }),
   binding({
     id: "detector:bundle-vite", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/detectors/bundle-stats.ts", "parseViteBundleStats")],
     findingFamilies: [family("M7", "M7B-VITE-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "parseViteBundleStats"),
   }),
   binding({
     id: "detector:prisma-schema-perf", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/scan/prisma-schema-perf.ts", "scanPrismaSchemaPerf")],
     findingFamilies: [family("M7", "M7P-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "scanPrismaSchemaPerf"),
   }),
   binding({
     id: "detector:prisma-app-perf", modules: ["M7"], tiers: ["free"], populationClass: "true-finding-producer",
     implementations: [impl("src/scan/prisma-app-perf.ts", "scanPrismaAppPerf")],
     findingFamilies: [family("M7", "M7P-*", "@literal-taxonomies")],
-    consumerPath: delivery("M7", "src/cli/static-detect.ts", "scanPrismaAppPerf"),
   }),
   binding({
     id: "disclosure:source-extension", modules: ["M1"], tiers: ["free"], populationClass: "disclosure-only",
     implementations: [impl("src/scan/ext-coverage.ts", "checkUnreadSourceExtensions")],
     findingFamilies: [family("M1", "M1-EXT-00", "Coverage — source files not read*", "not-assessed")],
-    consumerPath: delivery("M9", "src/cli/static-detect.ts", "checkUnreadSourceExtensions"),
   }),
   binding({
     id: "disclosure:import-graph", modules: ["M1"], tiers: ["free"], populationClass: "disclosure-only",
     implementations: [impl("src/scan/import-graph-scope.ts", "importGraphNotAssessedRows")],
     findingFamilies: [family("M1", "M1-IMPORTGRAPH-00", "Coverage — cross-file import graph*", "not-assessed")],
-    consumerPath: delivery("M9", "src/cli/static-detect.ts", "importGraphNotAssessedRows"),
   }),
 ]);
 
 const QUALITY_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({ id: "quality:jscpd", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/quality-scan.ts", "jscpdToFindings")], findingFamilies: [family("M4", "M4-<n>", "M4 — Duplication")], consumerPath: delivery("M4", "src/cli/quality-scan.ts", "jscpdToFindings") }),
-  binding({ id: "quality:diverged-security-clones", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/diverged-clones.ts", "divergedCloneFindings")], findingFamilies: [family("M4", "M4-DIV-*", "M4 — Diverged security-path clone*")], consumerPath: delivery("M4", "src/cli/quality-scan.ts", "divergedCloneFindings") }),
-  binding({ id: "quality:diverged-whole-repo", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/diverged-clones.ts", "wholeRepoDivergedCloneFindings")], findingFamilies: [family("M4", "M4-DIVW-*", "M4 — Diverged clone*")], consumerPath: delivery("M4", "src/cli/quality-scan.ts", "wholeRepoDivergedCloneFindings") }),
-  binding({ id: "quality:knip", modules: ["M5"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/quality-scan.ts", "knipToFindings")], findingFamilies: [family("M5", "M5-<n>", "M5 — Slop / dead code")], consumerPath: delivery("M5", "src/cli/quality-scan.ts", "knipToFindings") }),
-  binding({ id: "quality:jscpd-disclosures", modules: ["M4"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/quality-scan.ts", "jscpdIgnoreScopeFinding"), impl("src/quality-scan.ts", "jscpdUnavailableFinding"), impl("src/diverged-clones.ts", "divergedScopeFinding")], findingFamilies: [family("M4", "M4-SCOPE-00|M4-97|M4-99", "M4 — Duplication", "coverage-disclosure")], consumerPath: delivery("M4", "src/cli/quality-scan.ts", "jscpdUnavailableFinding") }),
-  binding({ id: "quality:knip-disclosures", modules: ["M5"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/quality-scan.ts", "knipUnavailableFinding"), impl("src/quality-scan.ts", "knipEntryUncertainFinding"), impl("src/quality-scan.ts", "knipReducedTierFinding")], findingFamilies: [family("M5", "M5-00|M5-98|M5-99", "M5 — Slop / dead code", "coverage-disclosure")], consumerPath: delivery("M5", "src/cli/quality-scan.ts", "knipUnavailableFinding") }),
+  binding({ id: "quality:jscpd", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/quality-scan.ts", "jscpdToFindings")], findingFamilies: [family("M4", "M4-<n>", "M4 — Duplication")] }),
+  binding({ id: "quality:diverged-security-clones", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/diverged-clones.ts", "divergedCloneFindings")], findingFamilies: [family("M4", "M4-DIV-*", "M4 — Diverged security-path clone*")] }),
+  binding({ id: "quality:diverged-whole-repo", modules: ["M4"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/diverged-clones.ts", "wholeRepoDivergedCloneFindings")], findingFamilies: [family("M4", "M4-DIVW-*", "M4 — Diverged clone*")] }),
+  binding({ id: "quality:knip", modules: ["M5"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/quality-scan.ts", "knipToFindings")], findingFamilies: [family("M5", "M5-<n>", "M5 — Slop / dead code")] }),
+  binding({ id: "quality:jscpd-disclosures", modules: ["M4"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/quality-scan.ts", "jscpdIgnoreScopeFinding"), impl("src/quality-scan.ts", "jscpdUnavailableFinding"), impl("src/diverged-clones.ts", "divergedScopeFinding")], findingFamilies: [family("M4", "M4-SCOPE-00|M4-97|M4-99", "M4 — Duplication", "coverage-disclosure")] }),
+  binding({ id: "quality:knip-disclosures", modules: ["M5"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/quality-scan.ts", "knipUnavailableFinding"), impl("src/quality-scan.ts", "knipEntryUncertainFinding"), impl("src/quality-scan.ts", "knipReducedTierFinding")], findingFamilies: [family("M5", "M5-00|M5-98|M5-99", "M5 — Slop / dead code", "coverage-disclosure")] }),
 ]);
 
 const M2_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({
+  artifactBinding({
     id: "m2:rest-explore", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/engine.ts", "runExplore", "probe"), impl("src/pentest/engine.ts", "readFinding"), impl("src/pentest/engine.ts", "writeFinding")],
     findingFamilies: [family("M2", "M2-EXPLORE-*", "Tenant isolation / RLS"), family("M2", "M2-EXPLORE-*", "Tenant isolation / RLS (write)")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runExplore"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:graphql", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/graphql-probe.ts", "runGraphqlProbe", "probe")],
     findingFamilies: [family("M2", "M2-GRAPHQL-*", "M2 — GraphQL / cross-tenant"), family("M2", "M2-GRAPHQL-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runGraphqlProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:guest", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/guest-probe.ts", "runGuestProbe", "probe")],
     findingFamilies: [family("M2", "M2-GUEST-XTENANT-*", "M2 — Guest / cross-org collaborator identity / cross-tenant"), family("M2", "M2-GUEST-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "runGuestProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:storage", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/storage-probe.ts", "runStorageProbe", "probe")],
     findingFamilies: [family("M2", "M2-STORAGE-PUBLIC-*", "M2 — Storage / public bucket"), family("M2", "M2-STORAGE-BOLA-*", "M2 — Storage / object authorization (BOLA)"), family("M2", "M2-STORAGE-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runStorageProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:realtime-postgres-changes", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/realtime-probe.ts", "runRealtimeProbes", "probe"), impl("src/pentest/realtime-probe.ts", "realtimeScopeDisclosure")],
     findingFamilies: [family("M2", "M2-REALTIME-LEAK-*", "M2 — Realtime channel authorization / cross-tenant"), family("M2", "M2-REALTIME-SCOPE*", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "runRealtimeProbes"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:realtime-broadcast-presence", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/realtime-channel-probe.ts", "runRealtimeChannelProbe", "probe"), impl("src/pentest/realtime-channel-probe.ts", "realtimeChannelDisclosure")],
     findingFamilies: [family("M2", "M2-REALTIME-BROADCAST-OPEN|M2-REALTIME-PRESENCE-OPEN", "M2 — Realtime * channel authorization / cross-identity"), family("M2", "M2-REALTIME-CHANNEL-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "runRealtimeChannelProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:invitation", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/invitation-probe.ts", "runInvitationProbe", "probe")],
     findingFamilies: [family("M2", "M2-INVITATION-*", "M2 — Non-role identity / invitation BOLA"), family("M2", "M2-INVITATION-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runInvitationProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:share-link", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/share-probe.ts", "runShareProbe", "probe")],
     findingFamilies: [family("M2", "M2-SHARE-*", "M2 — Non-role identity / share-link BOLA"), family("M2", "M2-SHARE-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runShareProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:token-identity", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/token-identity-probe.ts", "runTokenProbe", "probe")],
     findingFamilies: [family("M2", "M2-TOKEN-*", "M2 — Non-role identity / service-account credential exposure"), family("M2", "M2-TOKEN-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runTokenProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:data-residue", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/data-residue.ts", "runDataResidueProbe", "probe")],
     findingFamilies: [family("M2", "M2-RESIDUE-SOFTDELETE-*", "M2 — Data residue / soft delete"), family("M2", "M2-RESIDUE-RESTORE-*", "M2 — Data residue / restore"), family("M2", "M2-RESIDUE-TEARDOWN-*", "M2 — Data residue / tenant teardown"), family("M2", "M2-DATA-RESIDUE-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runDataResidueProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:powered-by", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/powered-by-probe.ts", "runPoweredByProbe", "probe")],
     findingFamilies: [family("M2", "M2-POWERED-BY", "M2 — Framework version disclosure"), family("M2", "M2-POWERED-BY-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/engine.ts", "runPoweredByProbe"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:route-result-converters", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/live-standup.ts", "verifyResultToFinding"), impl("src/pentest/external-target.ts", "runExternalTarget", "probe"), impl("src/pentest/external-target.ts", "externalFinding")],
     findingFamilies: [family("M2", "M2-APP-*", "M2 — App-route / seam probe"), family("M2", "M2-EXT-*", "M2 — External-target app-route probe")],
-    consumerPath: m2Delivery("src/pentest/live-standup.ts", "verifyResultToFinding"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:prisma-cross-tenant-bola", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/prisma-xtenant.ts", "crossTenantProbe", "probe"), impl("src/pentest/prisma-standup.ts", "xtenantScopeFinding")],
     findingFamilies: [family("M2", "M2-APP-XTENANT-BOLA", "M2 — App-route / cross-tenant (BOLA)"), family("M2", "M2-APP-XTENANT-BOLA-SCOPE", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/prisma-standup.ts", "xtenantScopeFinding"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:client-surface", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/client-surface.ts", "surveyClientSurface", "probe"), impl("src/pentest/client-surface.ts", "clientSurfaceFindings")],
     findingFamilies: [family("M2", "M2-SURFACE-*-<n>", "Client-only surface / embedded secret"), family("M2", "M2-SURFACE-*-00", "Client-only surface / read failure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "clientSurfaceFindings"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:standup-provisioning", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/dynamic-validate.ts", "migrationApplyFinding"), impl("src/dynamic-validate.ts", "clientSuiteFailureFinding"), impl("src/dynamic-validate.ts", "prunedDepsFinding")],
     findingFamilies: [family("M2", "M2-PROVISION-MIGRATE", "M2 — Provisioning / reproducibility"), family("M2", "M2-CLIENT-SUITE", "M2 — Tenant isolation"), family("M2", "M2-DEPPRUNE-00", "M2 — Scope disclosure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/dynamic-validate.ts", "migrationApplyFinding"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:auth-and-session-suites", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/auth-attack.ts", "runAuthAttackSuite", "probe"), impl("src/pentest/session-lifecycle.ts", "runSessionLifecycleSuite", "probe"), impl("src/pentest/auth-attack.ts", "authResultsToFindings")],
     findingFamilies: [family("M2", "M2-AUTH-*", "M2 — Auth attack / *"), family("M2", "M2-AUTH-*", "M2 — Auth attack / *", "not-assessed")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "authResultsToFindings"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:active-exploit-suite", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/active-exploit.ts", "runActiveExploitSuite", "probe"), impl("src/pentest/active-exploit.ts", "activeExploitResultsToFindings")],
     findingFamilies: [family("M2", "M2-ACTIVE-*", "M2 — Active exploitation / *")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "activeExploitResultsToFindings"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:business-logic-suite", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/business-logic.ts", "runBusinessLogicSuite", "probe"), impl("src/pentest/business-logic.ts", "businessLogicResultsToFindings")],
     findingFamilies: [family("M2", "M2-BIZLOGIC-*", "M2 — Business logic / *")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "businessLogicResultsToFindings"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:upload-attack-suite", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/upload-attack.ts", "runUploadAttackSuite", "probe"), impl("src/pentest/upload-attack.ts", "uploadResultsToFindings")],
     findingFamilies: [family("M2", "M2-UPLOAD-*", "M2 — File-upload / *")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "uploadResultsToFindings"),
   }),
-  binding({
+  artifactBinding({
     id: "m2:race-toctou-suite", modules: ["M2"], tiers: ["dynamic"], populationClass: "true-finding-producer",
     implementations: [impl("src/pentest/race-toctou.ts", "runRaceToctouSuite", "probe"), impl("src/pentest/race-toctou.ts", "raceToctouResultsToFindings")],
     findingFamilies: [family("M2", "M2-RACE-TOCTOU-*", "M2 — Race / TOCTOU *")],
-    consumerPath: m2Delivery("src/cli/pentest.ts", "raceToctouResultsToFindings"),
   }),
-  binding({ id: "adapter:m2-verify-replays", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/verify.ts", "runVerifyReplays", "adapter"), impl("src/pentest/engine.ts", "runVerify", "adapter")], consumerPath: m2Delivery("src/cli/pentest.ts", "runVerify") }),
-  binding({ id: "synthesizer:m2-apply-verify-results", modules: ["M2"], tiers: ["dynamic"], populationClass: "synthesizer", implementations: [impl("src/pentest/verify.ts", "applyVerifyResults", "synthesizer")], consumerPath: m2Delivery("src/cli/pentest.ts", "applyVerifyResults") }),
-  binding({ id: "adapter:m2-effect-oracle", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/effect-oracle.ts", "assessDuplicateEffects", "adapter")], consumerPath: m2Delivery("src/pentest/effect-oracle.ts", "assessDuplicateEffects") }),
-  binding({ id: "adapter:m2-route-only-applicability", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/effect-oracle.ts", "routeOnlyNotAssessed", "adapter")], consumerPath: m2Delivery("src/pentest/app-behavior-seeds.ts", "routeOnlyNotAssessed") }),
-  binding({ id: "adapter:m2-finding-shape", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/report.ts", "pentestFinding", "adapter")], consumerPath: m2Delivery("src/pentest/engine.ts", "pentestFinding") }),
-  binding({
+  artifactBinding({ id: "adapter:m2-verify-replays", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/verify.ts", "runVerifyReplays", "adapter"), impl("src/pentest/engine.ts", "runVerify", "adapter")] }),
+  artifactBinding({ id: "synthesizer:m2-apply-verify-results", modules: ["M2"], tiers: ["dynamic"], populationClass: "synthesizer", implementations: [impl("src/pentest/verify.ts", "applyVerifyResults", "synthesizer")] }),
+  artifactBinding({ id: "adapter:m2-effect-oracle", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/effect-oracle.ts", "assessDuplicateEffects", "adapter")] }),
+  artifactBinding({ id: "adapter:m2-route-only-applicability", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/effect-oracle.ts", "routeOnlyNotAssessed", "adapter")] }),
+  artifactBinding({ id: "adapter:m2-finding-shape", modules: ["M2"], tiers: ["dynamic"], populationClass: "adapter", implementations: [impl("src/pentest/report.ts", "pentestFinding", "adapter")] }),
+  artifactBinding({
     id: "disclosure:m2-scope-reporting", modules: ["M2"], tiers: ["dynamic"], populationClass: "disclosure-only",
     implementations: [impl("src/pentest/report.ts", "appRouteCoverageFinding"), impl("src/pentest/report.ts", "controlRouteCoverageFinding"), impl("src/pentest/report.ts", "appBehaviorCoverageFinding"), impl("src/pentest/exploit-seed-derivation.ts", "seedDerivationScope"), impl("src/pentest/scope-ledger.ts", "buildScopeLedger"), impl("src/pentest/discovery.ts", "routeDiscoveryUnreadableFinding")],
     findingFamilies: [family("M2", "M2-APP-ROUTE-COVERAGE|M2-CONTROL-PROBED-00|M2-*-COVERAGE|M2-SEED-SCOPE|M2-SCOPE-RECONSTRUCTION", "M2 — Scope disclosure", "coverage-disclosure"), family("M2", "M2-ROUTE-DISCOVERY-00", "M2 — Route discovery / read failure", "coverage-disclosure")],
-    consumerPath: m2Delivery("src/pentest/report.ts", "appRouteCoverageFinding"),
   }),
 ]);
 
 const M3_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({ id: "analytics:m3-facts", modules: ["M3"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/hotspot-scan.ts", "toFactFindings")], findingFamilies: [family("M3", "M3-TRUCKFACTOR-*", "Knowledge risk (truck-factor-1)"), family("M3", "M3-COUPLING-*", "Coupling (co-change)"), family("M3", "M3-AIPROV-*", "AI provenance (AI-authored, high-churn)"), family("M3", "M3-TREND-*", "Codebase health trend (degrading)"), family("M3", "M3-KNOWLEDGE-00", "M3 — Knowledge risk coverage", "coverage-disclosure")], consumerPath: delivery("M3", "src/cli/hotspot-scan.ts", "toFactFindings") }),
-  binding({ id: "disclosure:m3-input-scope", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/hotspot-scan.ts", "capScopeFinding")], findingFamilies: [family("M3", "M3-SCOPE-00", "M3 — Input scope", "coverage-disclosure")], consumerPath: delivery("M3", "src/cli/hotspot-scan.ts", "capScopeFinding") }),
-  binding({ id: "synthesizer:m3-hotspot-cross-reference", modules: ["M3"], tiers: ["free"], populationClass: "synthesizer", implementations: [impl("src/hotspot-scan.ts", "crossReferenceHotspots", "synthesizer"), impl("src/hotspot-scan.ts", "enrichFindingsWithHotspots", "synthesizer")], consumerPath: delivery("M3", "src/cli/hotspot-scan.ts", "crossReferenceHotspots") }),
+  binding({ id: "analytics:m3-facts", modules: ["M3"], tiers: ["free"], populationClass: "true-finding-producer", implementations: [impl("src/hotspot-scan.ts", "toFactFindings")], findingFamilies: [family("M3", "M3-TRUCKFACTOR-*", "Knowledge risk (truck-factor-1)"), family("M3", "M3-COUPLING-*", "Coupling (co-change)"), family("M3", "M3-AIPROV-*", "AI provenance (AI-authored, high-churn)"), family("M3", "M3-TREND-*", "Codebase health trend (degrading)"), family("M3", "M3-KNOWLEDGE-00", "M3 — Knowledge risk coverage", "coverage-disclosure")] }),
+  binding({ id: "disclosure:m3-input-scope", modules: ["M3"], tiers: ["free"], populationClass: "disclosure-only", implementations: [impl("src/hotspot-scan.ts", "capScopeFinding")], findingFamilies: [family("M3", "M3-SCOPE-00", "M3 — Input scope", "coverage-disclosure")] }),
+  binding({ id: "synthesizer:m3-hotspot-cross-reference", modules: ["M3"], tiers: ["free"], populationClass: "synthesizer", implementations: [impl("src/hotspot-scan.ts", "crossReferenceHotspots", "synthesizer"), impl("src/hotspot-scan.ts", "enrichFindingsWithHotspots", "synthesizer")] }),
 ]);
 
 const M7_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({ id: "detector:supabase-performance-advisors", modules: ["M7"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/perf-scan.ts", "parseAdvisorFindings")], findingFamilies: [family("M7", "PERF-*", "@literal-taxonomies")], consumerPath: delivery("M7", "src/cli/perf-scan.ts", "parseAdvisorFindings") }),
-  binding({ id: "detector:lighthouse", modules: ["M7"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/lighthouse.ts", "parseLighthouseFindings")], findingFamilies: [family("M7", "M7L-*", "@literal-taxonomies")], consumerPath: delivery("M7", "src/cli/lighthouse-scan.ts", "parseLighthouseFindings") }),
-  binding({ id: "disclosure:lighthouse", modules: ["M7"], tiers: ["connected"], populationClass: "disclosure-only", implementations: [impl("src/lighthouse.ts", "lighthouseScopeDisclosureFinding"), impl("src/lighthouse.ts", "lighthouseUnavailableFinding")], findingFamilies: [family("M7", "M7L-SCOPE|M7L-00", "M7 — Lighthouse*", "not-assessed")], consumerPath: delivery("M7", "src/cli/lighthouse-scan.ts", "lighthouseScopeDisclosureFinding") }),
+  binding({ id: "detector:supabase-performance-advisors", modules: ["M7"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/perf-scan.ts", "parseAdvisorFindings")], findingFamilies: [family("M7", "PERF-*", "@literal-taxonomies")] }),
+  binding({ id: "detector:lighthouse", modules: ["M7"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/lighthouse.ts", "parseLighthouseFindings")], findingFamilies: [family("M7", "M7L-*", "@literal-taxonomies")] }),
+  binding({ id: "disclosure:lighthouse", modules: ["M7"], tiers: ["connected"], populationClass: "disclosure-only", implementations: [impl("src/lighthouse.ts", "lighthouseScopeDisclosureFinding"), impl("src/lighthouse.ts", "lighthouseUnavailableFinding")], findingFamilies: [family("M7", "M7L-SCOPE|M7L-00", "M7 — Lighthouse*", "not-assessed")] }),
 ]);
 
 const M8_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({ id: "mutation:surviving-mutants", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "survivingMutantFindings")], findingFamilies: [family("M8", "M8-MUT-*", "M8 — Denial/boundary path untested")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "survivingMutantFindings") }),
-  binding({ id: "mutation:vacuous-tests", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "vacuousTestFindings")], findingFamilies: [family("M8", "M8-VACUOUS-*", "M8 — Vacuous test*")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "vacuousTestFindings") }),
-  binding({ id: "mutation:no-coverage", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noCoverageFindings")], findingFamilies: [family("M8", "M8-NOCOV-*", "M8 — Module has no mutation test coverage")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "noCoverageFindings") }),
-  binding({ id: "mutation:stub-survival", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/stub-check.ts", "stubSurvivalFindings")], findingFamilies: [family("M8", "M8-STUB-*", "M8 — Survives implementation deletion")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "stubSurvivalFindings") }),
-  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "noTestSuiteFinding") }),
-  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "dryRunFailureFinding") }),
-  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")], consumerPath: delivery("M8", "src/cli/mutation-scan.ts", "rootWorkspaceTestFinding") }),
+  binding({ id: "mutation:surviving-mutants", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "survivingMutantFindings")], findingFamilies: [family("M8", "M8-MUT-*", "M8 — Denial/boundary path untested")] }),
+  binding({ id: "mutation:vacuous-tests", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "vacuousTestFindings")], findingFamilies: [family("M8", "M8-VACUOUS-*", "M8 — Vacuous test*")] }),
+  binding({ id: "mutation:no-coverage", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noCoverageFindings")], findingFamilies: [family("M8", "M8-NOCOV-*", "M8 — Module has no mutation test coverage")] }),
+  binding({ id: "mutation:stub-survival", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/stub-check.ts", "stubSurvivalFindings")], findingFamilies: [family("M8", "M8-STUB-*", "M8 — Survives implementation deletion")] }),
+  binding({ id: "mutation:no-test-suite", modules: ["M8"], tiers: ["free", "connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "noTestSuiteFinding")], findingFamilies: [family("M8", "M8-00", "M8 — No automated test suite")] }),
+  binding({ id: "mutation:dry-run-failure", modules: ["M8"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/mutation-scan.ts", "dryRunFailureFinding")], findingFamilies: [family("M8", "M8-03", "M8 — Suite fails unmutated dry run (env-fragile tests)")] }),
+  binding({ id: "disclosure:mutation-workspace-suite-scope", modules: ["M8"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/mutation-scan.ts", "rootWorkspaceTestFinding"), impl("src/mutation-scan.ts", "workspaceTestSuiteFinding")], findingFamilies: [family("M8", "M8-04", "M8 — Root-workspace test suite not reachable per-app", "coverage-disclosure")] }),
 ]);
 
 const M10_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
-  binding({ id: "m10:data-map", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "dataMapToFindings")], findingFamilies: [family("M10", "M10-<n>", "M10 — Data classification (PII/PHI/PCI)")], consumerPath: delivery("M10", "tools/pii-classify.mjs", "dataMapToFindings") }),
-  binding({ id: "m10:value-sampling", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "valueSamplingToFindings")], findingFamilies: [family("M10", "M10-VS-<n>", "M10 — Data classification (PII/PHI/PCI)"), family("M10", "M10-VS-00", "M10 — Data classification (PII/PHI/PCI)", "coverage-disclosure")], consumerPath: delivery("M10", "tools/pii-classify.mjs", "valueSamplingToFindings") }),
-  binding({ id: "m10:pii-protection", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/pii-protection-review.ts", "piiProtectionFindings")], findingFamilies: [family("M10", "M10-PROT-*", "M10 — PII protection*")], consumerPath: delivery("M10", "tools/pii-classify.mjs", "piiProtectionFindings") }),
-  binding({ id: "disclosure:m10-protection-scope", modules: ["M10"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/pii-protection-review.ts", "piiProtectionScope")], findingFamilies: [family("M10", "M10-PROT-00", "M10 — PII protection*", "not-assessed")], consumerPath: delivery("M10", "tools/pii-classify.mjs", "piiProtectionScope") }),
-  binding({ id: "adapter:m10-classification", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "adapter", implementations: [impl("tools/pii-classify.mjs", "classifyColumn", "adapter"), impl("tools/pii-classify.mjs", "buildDataMap", "adapter"), impl("tools/pii-classify.mjs", "classifyWithFallback", "adapter"), impl("tools/pii-classify.mjs", "classifySampledValues", "adapter")], consumerPath: delivery("M10", "tools/pii-classify.mjs", "classifyWithFallback") }),
+  binding({ id: "m10:data-map", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "dataMapToFindings")], findingFamilies: [family("M10", "M10-<n>", "M10 — Data classification (PII/PHI/PCI)")] }),
+  binding({ id: "m10:value-sampling", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("tools/pii-classify.mjs", "valueSamplingToFindings")], findingFamilies: [family("M10", "M10-VS-<n>", "M10 — Data classification (PII/PHI/PCI)"), family("M10", "M10-VS-00", "M10 — Data classification (PII/PHI/PCI)", "coverage-disclosure")] }),
+  binding({ id: "m10:pii-protection", modules: ["M10"], tiers: ["connected"], populationClass: "true-finding-producer", implementations: [impl("src/pii-protection-review.ts", "piiProtectionFindings")], findingFamilies: [family("M10", "M10-PROT-*", "M10 — PII protection*")] }),
+  binding({ id: "disclosure:m10-protection-scope", modules: ["M10"], tiers: ["free", "connected"], populationClass: "disclosure-only", implementations: [impl("src/pii-protection-review.ts", "piiProtectionScope")], findingFamilies: [family("M10", "M10-PROT-00", "M10 — PII protection*", "not-assessed")] }),
+  binding({ id: "adapter:m10-classification", modules: ["M10"], tiers: ["free", "connected", "paid"], populationClass: "adapter", implementations: [impl("tools/pii-classify.mjs", "classifyColumn", "adapter"), impl("tools/pii-classify.mjs", "buildDataMap", "adapter"), impl("tools/pii-classify.mjs", "classifyWithFallback", "adapter"), impl("tools/pii-classify.mjs", "classifySampledValues", "adapter")] }),
 ]);
 
 const forModule = (bindings: readonly ProductionProducerBinding[], module: AuditModule): readonly ProductionProducerBinding[] =>
@@ -347,15 +292,33 @@ const forModule = (bindings: readonly ProductionProducerBinding[], module: Audit
 
 const M1_AUDIT_PRODUCERS: readonly ProductionProducerBinding[] = Object.freeze([
   binding({
+    id: "detector:deeper-definer", modules: ["M1"], tiers: ["connected"], populationClass: "true-finding-producer",
+    implementations: [impl("src/definer-classifier.ts", "definerFindings")],
+    findingFamilies: [family("M1", "@runtime-id", "@literal-taxonomies")],
+  }),
+  binding({
+    id: "detector:deeper-definer-review", modules: ["M1"], tiers: ["connected"], populationClass: "true-finding-producer",
+    implementations: [impl("src/definer-review.ts", "definerReviewFindings")],
+    findingFamilies: [family("M1", "@runtime-id", "@literal-taxonomies")],
+  }),
+  binding({
+    id: "detector:deeper-grants", modules: ["M1"], tiers: ["connected"], populationClass: "true-finding-producer",
+    implementations: [impl("src/grant-classifier.ts", "grantFindings")],
+    findingFamilies: [family("M1", "@runtime-id", "@literal-taxonomies")],
+  }),
+  binding({
+    id: "detector:deeper-policy-review", modules: ["M1"], tiers: ["connected"], populationClass: "true-finding-producer",
+    implementations: [impl("src/rls-policy-review.ts", "policyReviewFindings")],
+    findingFamilies: [family("M1", "@runtime-id", "@literal-taxonomies")],
+  }),
+  binding({
     id: "disclosure:m1-brief-provenance", modules: ["M1"], tiers: ["free", "paid"], populationClass: "disclosure-only",
     implementations: [impl("src/audit-runners.ts", "briefProvenanceFinding")],
     findingFamilies: [family("M1", "M1-BRIEF-00", "Coverage — M1 semantic brief provenance", "coverage-disclosure")],
-    consumerPath: delivery("M1", "src/audit-runners.ts", "briefProvenanceFinding"),
   }),
   binding({
     id: "synthesizer:m1-recorded-pass-ingest", modules: ["M1"], tiers: ["connected", "dynamic", "paid"], populationClass: "synthesizer",
     implementations: [impl("src/audit-pass-artifact.ts", "ranFromPass", "synthesizer")],
-    consumerPath: delivery("M1", "src/audit-runners.ts", "ranFromPass"),
   }),
 ]);
 
@@ -448,7 +411,10 @@ const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
     // app, so repeating it per instance would multiply one recorded finding across every row.
     // #1522: the slot accumulates, so fold EVERY fresh pass it holds — a superseded tier's findings
     // are evidence in the same way the newest tier's are, and used to be deleted at the write side.
-    const first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    let first = pass.fresh ? foldPassInto(outcomes[0]!, ...recordedPassNote(pass.artifact, ctx.now ?? Date.now())) : rejectedPassNote(outcomes[0]!, pass.reason!);
+    if (pass.fresh && pass.artifact.producerExecutionReceipts?.length && "kind" in first && first.kind === "examined") {
+      first = { ...first, producerExecutionReceipts: ingestPassArtifactReceipts(pass.artifact, `audit-runner:${runner.module}`) };
+    }
     return [first, ...outcomes.slice(1)];
   },
 });
