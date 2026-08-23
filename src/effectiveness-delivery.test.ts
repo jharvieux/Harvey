@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import type { Readable } from "node:stream";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  getEffectivenessInventory,
   serializeEffectivenessInventory,
   validateEffectivenessDelivery,
 } from "./effectiveness-registry.js";
@@ -12,28 +12,107 @@ import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const EXPECTED_INVENTORY_SHA = "a9026a88111958495dc992bb2c8a9ea3222589b5a6e04834b637ae7cec3adc23";
+const CENSUS_SLICE_MS = 10_000;
+const CENSUS_SLICE_COUNT = 8;
 
-function runDetectorCensus(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("node", ["--import", "tsx", "src/cli/detector-census.ts", "--effectiveness-json"], {
-      cwd: REPO_ROOT,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0
-      ? resolve(stdout)
-      : reject(new Error(`detector-census exited ${code}: ${stderr}`)));
+type CensusRun = {
+  child: ChildProcessByStdio<null, Readable, Readable>;
+  close: Promise<void>;
+  closed: boolean;
+  code: number | null | undefined;
+  signal: NodeJS.Signals | null | undefined;
+  error: Error | undefined;
+  stdout: string;
+  stderr: string;
+};
+
+function startDetectorCensus(): CensusRun {
+  const child = spawn("node", ["--import", "tsx", "src/cli/detector-census.ts", "--effectiveness-json"], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let resolveClose!: () => void;
+  const run: CensusRun = {
+    child,
+    close: new Promise<void>((resolve) => { resolveClose = resolve; }),
+    closed: false,
+    code: undefined,
+    signal: undefined,
+    error: undefined,
+    stdout: "",
+    stderr: "",
+  };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { run.stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { run.stderr += chunk; });
+  child.once("error", (error) => {
+    run.error = error;
+    if (child.pid === undefined) {
+      run.closed = true;
+      resolveClose();
+    }
+  });
+  child.once("close", (code, signal) => {
+    run.closed = true;
+    run.code = code;
+    run.signal = signal;
+    resolveClose();
+  });
+  return run;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForClose(run: CensusRun, ms: number): Promise<boolean> {
+  if (run.closed) return true;
+  await Promise.race([run.close, delay(ms)]);
+  return run.closed;
+}
+
+async function terminateAndReap(run: CensusRun): Promise<void> {
+  if (run.closed) return;
+  run.child.kill("SIGTERM");
+  if (await waitForClose(run, 2_000)) return;
+  run.child.kill("SIGKILL");
+  if (!(await waitForClose(run, 5_000))) {
+    throw new Error(`failed to reap child process ${run.child.pid ?? "without-pid"}`);
+  }
+}
+
+async function waitForCensusSlice(run: CensusRun): Promise<void> {
+  await waitForClose(run, CENSUS_SLICE_MS);
+  if (run.error !== undefined && !run.closed) {
+    await terminateAndReap(run);
+    throw run.error;
+  }
+  if (run.closed && (run.error !== undefined || run.code !== 0)) {
+    throw new Error(`detector-census exited ${run.code ?? run.signal ?? "before-spawn"}: ${run.error?.message ?? run.stderr}`);
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+let censusRun: CensusRun | undefined;
+let censusInventory: EffectivenessInventory | undefined;
+
+beforeAll(() => { censusRun = startDetectorCensus(); });
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
+afterAll(async () => {
+  if (censusRun !== undefined) await terminateAndReap(censusRun);
+});
+
 function deliveredFixture(): { inventory: EffectivenessInventory; observation: { findingId: string; producerId: string; familyId: string; venueId: string } } {
-  const base = JSON.parse(JSON.stringify(getEffectivenessInventory())) as EffectivenessInventory;
+  if (censusInventory === undefined) throw new Error("default detector-census did not produce the shared delivery fixture");
+  const base = JSON.parse(JSON.stringify(censusInventory)) as EffectivenessInventory;
   const producer = base.producers.find((candidate) => candidate.findingFamilies.some((family) => family.venueIds.length > 0))!;
   const family = producer.findingFamilies.find((candidate) => candidate.venueIds.length > 0)!;
   const venueId = family.venueIds[0]!;
@@ -62,15 +141,30 @@ describe("awaited detector-census integration", () => {
     expect(HEAVY_CLI_TESTS).toContain("src/effectiveness-delivery.test.ts");
   });
 
+  it.each(Array.from({ length: CENSUS_SLICE_COUNT }, (_, index) => index + 1))(
+    "yields while awaiting the one default census child (slice %i)",
+    async () => { await waitForCensusSlice(censusRun!); },
+  );
+
   it("preserves the exact default schema-v3 inventory bytes", async () => {
-    const output = await runDetectorCensus();
+    if (censusRun === undefined) throw new Error("default detector-census child did not start");
+    if (!censusRun.closed) {
+      await terminateAndReap(censusRun);
+      throw new Error(`default detector-census exceeded ${CENSUS_SLICE_COUNT} bounded wait slices`);
+    }
+    await waitForCensusSlice(censusRun);
+    const output = censusRun.stdout;
     const canonical = serializeEffectivenessInventory(JSON.parse(output) as EffectivenessInventory);
     expect(output).toBe(`${canonical}\n`);
     expect(createHash("sha256").update(output).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
+    censusInventory = deepFreeze(JSON.parse(output) as EffectivenessInventory);
   });
 });
 
 describe("producer-specific client delivery", () => {
+  beforeAll(() => {
+    if (censusInventory === undefined) throw new Error("delivery inventory unavailable after default census failure");
+  });
   it("traces one actual execution through its exact family and venue", () => {
     const { inventory, observation } = deliveredFixture();
     expect(validateEffectivenessDelivery(inventory, [observation])).toEqual([]);

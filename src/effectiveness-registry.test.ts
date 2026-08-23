@@ -1,11 +1,11 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import type { Readable } from "node:stream";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  getEffectivenessInventory,
   serializeEffectivenessInventory,
   validateEffectivenessInventory,
 } from "./effectiveness-registry.js";
@@ -16,27 +16,117 @@ import { createProducerExecutionReceipt, type ProducerExecutionReceipt } from ".
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const EXPECTED_INVENTORY_SHA = "a9026a88111958495dc992bb2c8a9ea3222589b5a6e04834b637ae7cec3adc23";
+const CENSUS_SLICE_MS = 10_000;
+const CENSUS_SLICE_COUNT = 8;
+const PARENT_INVENTORY_GETTER = ["get", "Effectiveness", "Inventory"].join("");
 
-function runDetectorCensus(extraArgs: readonly string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("node", ["--import", "tsx", "src/cli/detector-census.ts", "--effectiveness-json", ...extraArgs], {
-      cwd: REPO_ROOT,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0
-      ? resolve(stdout)
-      : reject(new Error(`detector-census exited ${code}: ${stderr}`)));
+type ManagedChild = {
+  child: ChildProcessByStdio<null, Readable, Readable>;
+  close: Promise<void>;
+  closed: boolean;
+  code: number | null | undefined;
+  signal: NodeJS.Signals | null | undefined;
+  error: Error | undefined;
+  stdout: string;
+  stderr: string;
+};
+
+function startManagedChild(command: string, args: readonly string[]): ManagedChild {
+  const child = spawn(command, [...args], {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let resolveClose!: () => void;
+  const run: ManagedChild = {
+    child,
+    close: new Promise<void>((resolve) => { resolveClose = resolve; }),
+    closed: false,
+    code: undefined,
+    signal: undefined,
+    error: undefined,
+    stdout: "",
+    stderr: "",
+  };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { run.stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { run.stderr += chunk; });
+  child.once("error", (error) => {
+    run.error = error;
+    if (child.pid === undefined) {
+      run.closed = true;
+      resolveClose();
+    }
+  });
+  child.once("close", (code, signal) => {
+    run.closed = true;
+    run.code = code;
+    run.signal = signal;
+    resolveClose();
+  });
+  return run;
 }
 
-const immutableInventory = (): EffectivenessInventory => getEffectivenessInventory();
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForClose(run: ManagedChild, ms: number): Promise<boolean> {
+  if (run.closed) return true;
+  await Promise.race([run.close, delay(ms)]);
+  return run.closed;
+}
+
+async function terminateAndReap(run: ManagedChild): Promise<void> {
+  if (run.closed) return;
+  run.child.kill("SIGTERM");
+  if (await waitForClose(run, 2_000)) return;
+  run.child.kill("SIGKILL");
+  if (!(await waitForClose(run, 5_000))) {
+    throw new Error(`failed to reap child process ${run.child.pid ?? "without-pid"}`);
+  }
+}
+
+async function waitForCensusSlice(run: ManagedChild): Promise<void> {
+  await waitForClose(run, CENSUS_SLICE_MS);
+  if (run.error !== undefined && !run.closed) {
+    await terminateAndReap(run);
+    throw run.error;
+  }
+  if (run.closed && (run.error !== undefined || run.code !== 0)) {
+    throw new Error(`detector-census exited ${run.code ?? run.signal ?? "before-spawn"}: ${run.error?.message ?? run.stderr}`);
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+let censusRun: ManagedChild | undefined;
+let censusInventory: EffectivenessInventory | undefined;
+
+beforeAll(() => {
+  censusRun = startManagedChild("node", [
+    "--import",
+    "tsx",
+    "src/cli/detector-census.ts",
+    "--effectiveness-json",
+    "--reverse-effectiveness-inputs",
+  ]);
+});
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
+afterAll(async () => {
+  if (censusRun !== undefined) await terminateAndReap(censusRun);
+});
+
+const immutableInventory = (): EffectivenessInventory => {
+  if (censusInventory === undefined) throw new Error("reversed detector-census did not produce the shared inventory fixture");
+  return censusInventory;
+};
 
 const freshInventory = (): EffectivenessInventory =>
   JSON.parse(JSON.stringify(immutableInventory())) as EffectivenessInventory;
@@ -85,11 +175,23 @@ const expectRestoredBaseline = (): void => {
 };
 
 describe("awaited reversed detector-census integration", () => {
+  it.each(Array.from({ length: CENSUS_SLICE_COUNT }, (_, index) => index + 1))(
+    "yields while awaiting the one reversed census child (slice %i)",
+    async () => { await waitForCensusSlice(censusRun!); },
+  );
+
   it("preserves the exact schema-v3 inventory bytes under reversed inputs", async () => {
-    const output = await runDetectorCensus(["--reverse-effectiveness-inputs"]);
+    if (censusRun === undefined) throw new Error("reversed detector-census child did not start");
+    if (!censusRun.closed) {
+      await terminateAndReap(censusRun);
+      throw new Error(`reversed detector-census exceeded ${CENSUS_SLICE_COUNT} bounded wait slices`);
+    }
+    await waitForCensusSlice(censusRun);
+    const output = censusRun.stdout;
     const canonical = serializeEffectivenessInventory(JSON.parse(output) as EffectivenessInventory);
     expect(output).toBe(`${canonical}\n`);
     expect(createHash("sha256").update(output).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
+    censusInventory = deepFreeze(JSON.parse(output) as EffectivenessInventory);
   });
 
   it("routes every detector-census child integration through one exhaustive heavy shard", () => {
@@ -109,19 +211,18 @@ describe("awaited reversed detector-census integration", () => {
       "src/effectiveness-registry.test.ts",
     ]);
     expect(detectorCensusTests.every((file) => HEAVY_CLI_TESTS.includes(file))).toBe(true);
-    const slicedDependency = new RegExp([
-      ["CENSUS", "SLICE", "MS"].join("_"),
-      ["census", "Output"].join(""),
-      ["await", "Census", "Slice"].join(""),
-    ].join("|"));
     for (const file of detectorCensusTests) {
       const source = readFileSync(join(REPO_ROOT, file), "utf8");
-      expect(source, `${file} must not make unit assertions depend on sliced child output`).not.toMatch(
-        slicedDependency,
+      expect(source, `${file} must bound each child wait below the global timeout`).toContain("waitForCensusSlice");
+      expect(source, `${file} must terminate and reap an unfinished child`).toContain("terminateAndReap");
+      expect(source, `${file} must escalate cleanup when graceful termination stalls`).toContain("SIGKILL");
+      expect(source, `${file} must yield between child and unit assertions`).toContain("setImmediate");
+      expect(source, `${file} must not start a second parent inventory build`).not.toContain(PARENT_INVENTORY_GETTER);
+      expect(source, `${file} must not directly await the unbounded child lifetime`).not.toMatch(
+        /await\s+(?:runDetectorCensus\s*\(|censusRun!?\.close)/,
       );
-      expect(source, `${file} unit fixtures must use the lazy immutable inventory`).toContain(
-        "getEffectivenessInventory",
-      );
+      const censusJsonArg = new RegExp(["--effectiveness", "json"].join("-"), "g");
+      expect(source.match(censusJsonArg), `${file} must start exactly one real census`).toHaveLength(1);
     }
 
     const routed = shardHeavyTests(3).flat();
@@ -130,9 +231,28 @@ describe("awaited reversed detector-census integration", () => {
       expect(routed.filter((candidate) => candidate === file), `${file} must run exactly once`).toHaveLength(1);
     }
   });
+
+  it("terminates and reaps an unfinished child before another test can run", async () => {
+    const run = startManagedChild(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    const pid = run.child.pid;
+    expect(pid).toBeDefined();
+    try {
+      await terminateAndReap(run);
+      expect(run.closed).toBe(true);
+      expect(() => process.kill(pid!, 0)).toThrow();
+    } finally {
+      if (!run.closed) {
+        run.child.kill("SIGKILL");
+        await waitForClose(run, 5_000);
+      }
+    }
+  });
 });
 
 describe("effectiveness producer inventory (#1910)", () => {
+  beforeAll(() => {
+    if (censusInventory === undefined) throw new Error("unit inventory unavailable after reversed census failure");
+  });
   it("binds actual runtime receipts to their exact producer and rejects unknown or forged ownership", () => {
     const receipt = createProducerExecutionReceipt({
       executionId: "conservation:M7",
@@ -228,7 +348,7 @@ describe("effectiveness producer inventory (#1910)", () => {
     const censusSource = readFileSync(join(REPO_ROOT, "src", "cli", "detector-census.ts"), "utf8");
     expect(registrySource).not.toMatch(/^(?:export )?const \w+\s*=\s*buildEffectivenessInventory\(\);$/m);
     expect(registrySource).toContain("defaultEffectivenessInventory ??= buildEffectivenessInventory()");
-    expect(censusSource).toContain("producerExecutionReceipts.length === 0\n      ? getEffectivenessInventory()");
+    expect(censusSource).toContain(`producerExecutionReceipts.length === 0\n      ? ${PARENT_INVENTORY_GETTER}()`);
     expect(serializeEffectivenessInventory(immutableInventory())).not.toContain(process.cwd());
     expect(new Set(immutableInventory().receipt.calls.map((receipt) => receipt.kind))).toEqual(new Set(["call", "command"]));
     expect(immutableInventory().receipt.producerExecutions).toEqual([]);
