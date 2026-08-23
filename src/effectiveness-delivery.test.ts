@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { serializeEffectivenessInventory, validateEffectivenessDelivery } from "./effectiveness-registry.js";
+import { describe, expect, it } from "vitest";
+import {
+  getEffectivenessInventory,
+  serializeEffectivenessInventory,
+  validateEffectivenessDelivery,
+} from "./effectiveness-registry.js";
 import { REQUIRED_RUNTIME_EDGE, type EffectivenessInventory } from "./effectiveness-schema.js";
+import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const EXPECTED_INVENTORY_SHA = "a9026a88111958495dc992bb2c8a9ea3222589b5a6e04834b637ae7cec3adc23";
-const CENSUS_SLICE_MS = 10_000;
 
 function runDetectorCensus(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -28,37 +32,8 @@ function runDetectorCensus(): Promise<string> {
   });
 }
 
-let censusPromise: Promise<string>;
-let censusOutput: string | undefined;
-
-beforeAll(() => {
-  censusPromise = runDetectorCensus();
-});
-
-afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
-
-async function awaitCensusSlice(): Promise<boolean> {
-  if (censusOutput !== undefined) return true;
-  return new Promise<boolean>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(false), CENSUS_SLICE_MS);
-    censusPromise.then((output) => {
-      clearTimeout(timer);
-      censusOutput = output;
-      resolve(true);
-    }, (error: unknown) => {
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
-}
-
-function capturedInventory(): EffectivenessInventory {
-  expect(censusOutput, "the awaited detector census must complete before delivery assertions").toBeDefined();
-  return JSON.parse(censusOutput!) as EffectivenessInventory;
-}
-
 function deliveredFixture(): { inventory: EffectivenessInventory; observation: { findingId: string; producerId: string; familyId: string; venueId: string } } {
-  const base = JSON.parse(JSON.stringify(capturedInventory())) as EffectivenessInventory;
+  const base = JSON.parse(JSON.stringify(getEffectivenessInventory())) as EffectivenessInventory;
   const producer = base.producers.find((candidate) => candidate.findingFamilies.some((family) => family.venueIds.length > 0))!;
   const family = producer.findingFamilies.find((candidate) => candidate.venueIds.length > 0)!;
   const venueId = family.venueIds[0]!;
@@ -83,18 +58,15 @@ function deliveredFixture(): { inventory: EffectivenessInventory; observation: {
 }
 
 describe("awaited detector-census integration", () => {
-  for (const slice of [1, 2, 3, 4, 5, 6, 7, 8]) {
-    it(`keeps the worker responsive while the full census runs (slice ${slice})`, async () => {
-      const complete = await awaitCensusSlice();
-      expect(censusOutput !== undefined).toBe(complete);
-    });
-  }
+  it("remains on the required serial heavy-test route", () => {
+    expect(HEAVY_CLI_TESTS).toContain("src/effectiveness-delivery.test.ts");
+  });
 
   it("preserves the exact default schema-v3 inventory bytes", async () => {
-    expect(await awaitCensusSlice()).toBe(true);
-    const canonical = serializeEffectivenessInventory(capturedInventory());
-    expect(censusOutput).toBe(`${canonical}\n`);
-    expect(createHash("sha256").update(censusOutput!).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
+    const output = await runDetectorCensus();
+    const canonical = serializeEffectivenessInventory(JSON.parse(output) as EffectivenessInventory);
+    expect(output).toBe(`${canonical}\n`);
+    expect(createHash("sha256").update(output).digest("hex")).toBe(EXPECTED_INVENTORY_SHA);
   });
 });
 
