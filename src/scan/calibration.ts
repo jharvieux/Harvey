@@ -608,7 +608,12 @@ const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
         // whether the work could be done. The operator granted workflow edits, the step landed, and
         // the exemption now names a venue that runs rather than an issue that waits. Both directions
         // MEASURED the same day: exit 0 on `--tested app:root`, exit 1 on `--tested bogus-id`.
-        cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 3", when: "every code PR + daily schedule" },
+        cadence: {
+          kind: "workflow",
+          file: ".github/workflows/ci.yml",
+          job: "heavy-cli planned M2-coverage slot",
+          when: "mapped/shared-runtime PRs that launch heavy-cli + merge queue/main/daily schedule",
+        },
       },
       {
         what: "the M2 conservation plant in src/audit-conservation.ts, asserted by src/cli/validate-conservation.ts (#1155)",

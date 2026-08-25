@@ -11,7 +11,7 @@ import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
-const EXPECTED_INVENTORY_SHA = "a9026a88111958495dc992bb2c8a9ea3222589b5a6e04834b637ae7cec3adc23";
+const EXPECTED_INVENTORY_SHA = "002b42909d683967584929b37111689915a77f9b20dc4d9232d695897bacb107";
 const CENSUS_SLICE_MS = 10_000;
 const CENSUS_SLICE_COUNT = 8;
 

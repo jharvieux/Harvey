@@ -549,10 +549,10 @@ console.log(
     `${coverage.droppedByPerRuleGate.length ? `: ${coverage.droppedByPerRuleGate.join(", ")}` : " — zero, and zero by construction, because the pairing gate above fails `pnpm verify` on an unpaired rule so one cannot reach `main`"}`,
 );
 
-// #1509's second-order defect: this gate rides inside `heavy CLI tests (shard 1/3)` behind an
-// `if: matrix.shard == 1`, so a condition that stopped matching would retire the repo's scored recall
-// gate in complete silence — the shape #1301 found when it ran in no workflow at all. Emitted before
-// the verdict: reaching the measuring phase is true of a failing gate too.
+// #1509's second-order defect: this gate rides in a planner-assigned heavy runner, so a selection or
+// condition bug could retire the repo's scored recall gate in complete silence — the shape #1301
+// found when it ran in no workflow at all. Its receipt is required by the same matrix row. Emitted
+// before the verdict: reaching the measuring phase is true of a failing gate too.
 recordMeasured("calibration-gate", scoredCorpus.length, "corpus entries scored against a real mechanical scan");
 
 const gatePass = graduationBroken.length === 0 && misplacedNeighbours.length === 0 && graduationControl.ok && neighbourControl.ok && unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && newTwinless.length === 0 && staleTwinBacklog.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && undeclaredShapes.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;

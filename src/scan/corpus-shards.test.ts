@@ -42,7 +42,7 @@ interface WorkflowStep {
 interface CorpusWorkflow {
   jobs: {
     shard: { strategy: { matrix: { shard: unknown } }; "timeout-minutes": number; steps: WorkflowStep[] };
-    "current-replay": { strategy: { matrix: { shard: unknown } }; steps: WorkflowStep[] };
+    "current-replay": { if: string; strategy: { matrix: { shard: unknown } }; steps: WorkflowStep[] };
   };
 }
 
@@ -59,23 +59,17 @@ function contractErrors(
   const replay = workflow.jobs["current-replay"].steps.find((step) => step.name === "Execute the independent exact-head replay");
   const producerCount = String(score?.env?.SHARD_COUNT);
   const replayCount = String(replay?.env?.SHARD_COUNT);
-  if (!producerMatrix.includes("'[1,2,3,4]' || '[1]'")) errors.push("producer matrix is not four/single");
-  if (!replayMatrix.includes("'[1,2,3,4]' || '[1]'")) errors.push("replay matrix is not four/single");
-  if (!producerCount.includes("&& 4 || 1")) errors.push("producer count is not four/single");
-  if (!replayCount.includes("&& 4 || 1")) errors.push("replay count is not four/single");
-  if (producerMatrix.match(/\[[0-9,]+\]/)?.[0] !== replayMatrix.match(/\[[0-9,]+\]/)?.[0]
-    || producerCount.match(/&& ([0-9]+) \|\| 1/)?.[1] !== replayCount.match(/&& ([0-9]+) \|\| 1/)?.[1]) {
-    errors.push("producer/replay shard populations differ");
-  }
+  const readiness = String(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS);
+  if (!producerMatrix.includes("github.event_name == 'push' && '[1,2,3,4]' || '[1]'")) errors.push("producer matrix is not main-four/other-one");
+  if (replayMatrix !== "1,2,3,4") errors.push("post-merge replay matrix is not fixed at four");
+  if (!producerCount.includes("github.event_name == 'push' && 4 || 1")) errors.push("producer count is not main-four/other-one");
+  if (replayCount !== "4") errors.push("post-merge replay count is not fixed at four");
+  if (!workflow.jobs["current-replay"].if.includes("github.event_name == 'push'")) errors.push("replay is not restricted to the main push");
+  if (!readiness.includes("github.event_name == 'push' && '1' || '0'")) errors.push("producer readiness is not enabled on the main push");
   if (new Set(slugs).size !== slugs.length) errors.push("corpus contains a duplicate target");
   if ([...new Set([...slugs, ...Object.keys(weights)])].some((slug) => !slugs.includes(slug) || weights[slug] === undefined)) errors.push("weights and corpus differ");
   if (JSON.stringify(weights) !== JSON.stringify(EXPECTED_WEIGHTS)) errors.push("weights differ from hosted evidence");
   return errors;
-}
-
-function replaceNth(value: string, search: string, replacement: string, ordinal: number): string {
-  let seen = 0;
-  return value.replaceAll(search, (match) => (++seen === ordinal ? replacement : match));
 }
 
 describe("corpus shard partition (#1586)", () => {
@@ -180,7 +174,7 @@ describe("the weight table tracks the corpus (#1586)", () => {
 });
 
 describe("corpus workflow four-shard production contract", () => {
-  it("keeps producer and replay four-way while schedule/manual remains one canonical shard", () => {
+  it("keeps main producer/replay four-way, schedule/manual canonical, and PR replay-free", () => {
     expect(contractErrors()).toEqual([]);
   });
 
@@ -194,8 +188,10 @@ describe("corpus workflow four-shard production contract", () => {
   it.each([
     ["old weights", WORKFLOW_TEXT, SLUGS, { ...EXPECTED_WEIGHTS, carbon: 564, documenso: 119, "inbox-zero": 95 }],
     ["producer 4→3", WORKFLOW_TEXT.replace("'[1,2,3,4]'", "'[1,2,3]'").replace("&& 4 || 1", "&& 3 || 1"), SLUGS, EXPECTED_WEIGHTS],
-    ["replay 4→3", replaceNth(replaceNth(WORKFLOW_TEXT, "'[1,2,3,4]'", "'[1,2,3]'", 2), "&& 4 || 1", "&& 3 || 1", 2), SLUGS, EXPECTED_WEIGHTS],
-    ["producer/replay mismatch", replaceNth(WORKFLOW_TEXT, "&& 4 || 1", "&& 2 || 1", 2), SLUGS, EXPECTED_WEIGHTS],
+    ["replay 4→3", WORKFLOW_TEXT.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]").replace("SHARD_COUNT: 4", "SHARD_COUNT: 3"), SLUGS, EXPECTED_WEIGHTS],
+    ["producer/replay mismatch", WORKFLOW_TEXT.replace("SHARD_COUNT: 4", "SHARD_COUNT: 2"), SLUGS, EXPECTED_WEIGHTS],
+    ["readiness moved off main", WORKFLOW_TEXT.replace("github.event_name == 'push' && '1' || '0'", "github.event_name == 'pull_request' && '1' || '0'"), SLUGS, EXPECTED_WEIGHTS],
+    ["replay allowed on PR", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'", "needs.prepare-current-inputs.result == 'success'"), SLUGS, EXPECTED_WEIGHTS],
     ["dropped target", WORKFLOW_TEXT, SLUGS.slice(1), EXPECTED_WEIGHTS],
     ["duplicated target", WORKFLOW_TEXT, [...SLUGS, SLUGS[0]!], EXPECTED_WEIGHTS],
   ] as const)("turns red in a disposable %s reversion", (_name, workflow, slugs, weights) => {
