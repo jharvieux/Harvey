@@ -4,6 +4,7 @@
 // scorers in `pnpm verify` with no network; this is the pass that actually re-measures real repos.
 //
 //   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--baseline-findings <path>] [--install] [--m8]
+//   pnpm corpus-drift --diagnostic-replay <path>
 //
 // --install (#251) installs each clone's own dependency tree before the scanners — with the package
 // manager that clone's lockfile implies, since #1268 — which is what lets knip resolve the target's
@@ -54,7 +55,7 @@ import { dirname, join, resolve } from "node:path";
 import { recordMeasured } from "../ci-liveness.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
-import type { Finding } from "../findings.js";
+import { SEVERITIES, type Finding } from "../findings.js";
 import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
@@ -120,6 +121,20 @@ const keep = args.includes("--keep");
 // invocation; driftExplanationLines then falls back to naming the module's current findings instead
 // of a true added/removed split, disclosed as exactly that rather than silently saying nothing.
 const baselineFindingsPath = flag("--baseline-findings");
+const diagnosticReplayPath = flag("--diagnostic-replay");
+if (args.includes("--diagnostic-replay")) {
+  if (args.length !== 2 || args[0] !== "--diagnostic-replay" || !diagnosticReplayPath) {
+    console.error("--diagnostic-replay is an exclusive diagnostic mode and requires exactly one JSON input path");
+    process.exit(2);
+  }
+  try {
+    runDiagnosticReplay(diagnosticReplayPath);
+  } catch (error) {
+    console.error(`corpus-drift diagnostic replay rejected: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+  process.exit(1);
+}
 // #251/#300: both opt-in because both cost real minutes of install per target. The scheduled jobs
 // pass them (corpus-drift.yml --install, corpus-m8.yml --install --m8); a local run stays fast and
 // scores the source-tier modules exactly as before.
@@ -492,6 +507,141 @@ interface Row {
   module?: string;
 }
 
+interface DiagnosticReplayInput {
+  schemaVersion: 1;
+  kind: "corpus-drift-diagnostic-replay";
+  failedRow: {
+    slug: string;
+    check: string;
+    module: string;
+    detail: string;
+  };
+  currentFindings: Finding[];
+  priorSnapshot: {
+    path: string;
+    findings: Finding[];
+  } | null;
+}
+
+function recordOf(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function exactRecord(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
+  const record = recordOf(value, label);
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`${label} must contain exactly: ${expected.join(", ")}`);
+  }
+  return record;
+}
+
+function nonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function diagnosticFindings(value: unknown, label: string): Finding[] {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value.map((item, index) => {
+    const row = exactRecord(item, ["location", "taxonomy", "severity"], `${label}[${index}]`);
+    const severity = nonEmptyString(row.severity, `${label}[${index}].severity`);
+    if (!(SEVERITIES as readonly string[]).includes(severity)) {
+      throw new Error(`${label}[${index}].severity must be one of: ${SEVERITIES.join(", ")}`);
+    }
+    const taxonomy = nonEmptyString(row.taxonomy, `${label}[${index}].taxonomy`);
+    const location = nonEmptyString(row.location, `${label}[${index}].location`);
+    return {
+      id: `diagnostic-${label}-${index}`,
+      title: taxonomy,
+      severity: severity as Finding["severity"],
+      confidence: "Review",
+      category: "Diagnostic replay",
+      taxonomy,
+      location,
+      status: "diagnostic-replay",
+      evidence: "Schema-validated corpus-drift diagnostic replay input",
+      impact: "Diagnostic output only",
+      fix: "Not applicable",
+      value: 0,
+      ease: 0,
+      safety: 0,
+    };
+  });
+}
+
+function parseDiagnosticReplay(value: unknown): DiagnosticReplayInput {
+  const root = exactRecord(
+    value,
+    ["schemaVersion", "kind", "failedRow", "currentFindings", "priorSnapshot"],
+    "diagnostic replay",
+  );
+  if (root.schemaVersion !== 1) throw new Error("diagnostic replay schemaVersion must be 1");
+  if (root.kind !== "corpus-drift-diagnostic-replay") {
+    throw new Error('diagnostic replay kind must be "corpus-drift-diagnostic-replay"');
+  }
+  const failedRow = exactRecord(root.failedRow, ["slug", "check", "module", "detail"], "diagnostic replay.failedRow");
+  const module = nonEmptyString(failedRow.module, "diagnostic replay.failedRow.module");
+  if (!/^M(?:[1-9]|10)(?:-[a-z0-9]+)?$/.test(module)) {
+    throw new Error("diagnostic replay.failedRow.module must be an M1-M10 module identifier");
+  }
+  const priorSnapshot = root.priorSnapshot === null
+    ? null
+    : exactRecord(root.priorSnapshot, ["path", "findings"], "diagnostic replay.priorSnapshot");
+  return {
+    schemaVersion: 1,
+    kind: "corpus-drift-diagnostic-replay",
+    failedRow: {
+      slug: nonEmptyString(failedRow.slug, "diagnostic replay.failedRow.slug"),
+      check: nonEmptyString(failedRow.check, "diagnostic replay.failedRow.check"),
+      module,
+      detail: nonEmptyString(failedRow.detail, "diagnostic replay.failedRow.detail"),
+    },
+    currentFindings: diagnosticFindings(root.currentFindings, "diagnostic replay.currentFindings"),
+    priorSnapshot: priorSnapshot && {
+      path: nonEmptyString(priorSnapshot.path, "diagnostic replay.priorSnapshot.path"),
+      findings: diagnosticFindings(priorSnapshot.findings, "diagnostic replay.priorSnapshot.findings"),
+    },
+  };
+}
+
+function reportFailedRows(
+  failed: readonly Row[],
+  currentFindingsBySlug: Readonly<Record<string, Finding[]>>,
+  priorSnapshotFindingsBySlug: Readonly<Record<string, Finding[]>> | undefined,
+  priorSnapshotPath: string | undefined,
+): void {
+  for (const r of failed) {
+    console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
+    if (!r.module) continue;
+    for (const line of driftExplanationLines(
+      r.module,
+      r.slug,
+      currentFindingsBySlug[r.slug] ?? [],
+      priorSnapshotFindingsBySlug?.[r.slug],
+      priorSnapshotPath,
+    )) console.error(line);
+  }
+}
+
+function runDiagnosticReplay(path: string): void {
+  const replay = parseDiagnosticReplay(JSON.parse(readFileSync(path, "utf8")));
+  console.error("\n──── corpus drift diagnostic replay ────");
+  console.error("DIAGNOSTIC REPLAY ONLY — no corpus scan ran, no liveness receipt was recorded, and this mode always exits non-zero.");
+  reportFailedRows(
+    [{ ...replay.failedRow, pass: false }],
+    { [replay.failedRow.slug]: replay.currentFindings },
+    replay.priorSnapshot ? { [replay.failedRow.slug]: replay.priorSnapshot.findings } : undefined,
+    replay.priorSnapshot?.path,
+  );
+}
+
 const rows: Row[] = [];
 // #1564: the current findings this run computed per target, keyed by slug — captured so
 // a drift can be explained from data already in memory, and so THIS run's --json output can serve
@@ -854,16 +1004,9 @@ if (failed.length === 0 && unscored.length === 0 && floorBreaches.length === 0) 
 // who did not know to ask for them (both 2026-07-30 incidents this exists for were resolved only by
 // someone cloning the target and diffing by hand — 20+ minutes each).
 //
-// #1580: the lines come from driftExplanationLines() rather than being printed here, because the
-// case that mattered — a standing drift whose row diff is empty — used to print nothing at all, and
-// a `void` printer inside a CLI is reachable by no test. The loop below is now thin enough that what
-// it prints is what that function returns.
-for (const r of failed) {
-  console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
-  // Not a count-baseline row (free tier / M8 mutation / stale not-run reason) — explainDrift has
-  // nothing to add.
-  if (!r.module) continue;
-  for (const line of driftExplanationLines(r.module, r.slug, findingsBySlug[r.slug] ?? [], priorFindingsBySlug?.[r.slug], baselineFindingsPath)) console.error(line);
-}
+// #1580: production and the schema-validated, always-red diagnostic replay share this exact
+// reporter. The executable regression test therefore reaches the same failed-row loop without a
+// live corpus scan or a route that can emit a forged green/liveness result.
+reportFailedRows(failed, findingsBySlug, priorFindingsBySlug, baselineFindingsPath);
 for (const e of unscored) console.error(`\n✗ NOT SCORED ${e.slug} / free-tier invariant — the check never ran, which is not a pass.`);
 process.exit(1);
