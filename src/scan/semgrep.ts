@@ -568,11 +568,22 @@ function parseEnvelope(out: string): { result: SemgrepOutput; failure?: string }
 //     local-xss runs exactly two cold whole-family j1 commands and requires exact strict semantic
 //     equality plus equal timeout presence; it is deliberately not partitioned, retried, unioned,
 //     timeout-normalized, or suppressed.
+//   * `p/typescript` has the same measured boundary. On inbox-zero@2b78f2b, a hosted producer and
+//     cold replay disagreed only on fixpoint-timeout presence for this source identity. Three local
+//     Semgrep 1.173.0 whole-family j1 cold runs over the same 2,345 paths then agreed exactly: one
+//     result, 21 diagnostics, 24 skips, 73 loaded rules, zero timeout rows, results SHA-256
+//     e36627b9aa6f7e9435e52b7f1fce35f084504ca1bf6a77b5ddbf8955fb85dbae, and semantic SHA-256
+//     20626682eda38912af6fa77300c211e6fd956c5c234de43acd8a2965e483c66c with all 46 loaded taint
+//     rule identities bound. Therefore the stable
+//     registry source identity, rather than its incidental ordinal, gets the same fixed paired-j1
+//     admission policy. Either attempt may disclose a timeout; empty/nonempty disagreement fails
+//     before reusable cache admission and retains both raw telemetry rows as non-reusable evidence.
 const SEMGREP_PINNED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"] as const;
 const SEMGREP_VERIFIED_PREFIX = ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"] as const;
 const LOCAL_INJECTION_FAMILY = "local-injection";
 const LOCAL_XSS_FAMILY = "local-xss";
 const SEMGREP_PAIRED_FAMILIES = new Set([LOCAL_XSS_FAMILY, "registry-singleton-direct-response-write"]);
+const SEMGREP_PAIRED_SOURCE_IDENTITIES = new Set(["p/typescript"]);
 const LOG_INJECTION_RULE = "harvey-log-injection";
 const DIRECT_RESPONSE_WRITE_RULE = "javascript.express.security.audit.xss.direct-response-write.direct-response-write";
 const DIRECT_RESPONSE_WRITE_SEMANTIC_SHA256 = "2720a80865498f7a782b59d616a91789fee17aaa852102bc1430316a25c9f49f";
@@ -591,12 +602,12 @@ interface OwnedSemgrepFamily extends SemgrepFamily {
   routingManifest?: SemgrepRoutingManifestReceipt;
 }
 
-function semgrepFamilyPolicy(family: SemgrepFamily): {
+function semgrepFamilyPolicy(family: OwnedSemgrepFamily): {
   prefix: readonly string[];
   verification: "single" | "paired-cold-exact" | "paired-topology-exact";
 } {
   if (family.id === LOCAL_INJECTION_FAMILY) return { prefix: SEMGREP_VERIFIED_PREFIX, verification: "paired-topology-exact" };
-  return SEMGREP_PAIRED_FAMILIES.has(family.id)
+  return SEMGREP_PAIRED_FAMILIES.has(family.id) || SEMGREP_PAIRED_SOURCE_IDENTITIES.has(family.sourceId)
     ? { prefix: SEMGREP_VERIFIED_PREFIX, verification: "paired-cold-exact" }
     : { prefix: SEMGREP_PINNED_PREFIX, verification: "single" };
 }
