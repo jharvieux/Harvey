@@ -8,29 +8,26 @@
 # stays deterministic and offline so it's fast and never flakes on someone else's infrastructure;
 # Layer 1 (src/scan/external-corpus.test.ts) covers the scorers there.
 #
-# Continuous baseline, outside the PR critical path: the targets are frozen at exact commits and
-# the full corpus runs after merges to main, daily, and on explicit workflow_dispatch. Pull requests
-# and merge-queue entries report a declared no-op through the same required context, but clone no
-# third-party target and run no independent replay. This throughput-first policy was operator
-# approved 2026-08-25: cross-app regressions may be discovered after merge, where the main/scheduled
-# run and tracking-issue alert make them visible. workflow_dispatch remains the pre-merge escape
-# hatch when a scanner change warrants an explicit full-corpus proof.
+# The targets are frozen at exact commits. Pushes to main, schedules, and explicit dispatches always
+# run the full corpus. Pull requests and merge-queue entries first execute the production-owned
+# dependency closure from src/cli/corpus-drift-relevance.ts. A proven-disjoint change declares an
+# explicit nothing-assessed no-op; a change that reaches a corpus input, or any uncertainty in the
+# proof, launches the complete pinned population. workflow_dispatch remains the manual escape hatch.
 #
 # The context remains required on `main` so every PR reports and branch protection never waits for a
-# context that was filtered out. On PRs its green result means exactly "external corpus intentionally
-# deferred to post-merge monitoring", not "the pinned population was scanned"; the liveness receipt
-# preserves that distinction.
+# context that was filtered out. On a classified no-op its green result means exactly "the immutable
+# runtime closure proved this diff disjoint; nothing was assessed", not "the pinned population was
+# scanned"; the liveness and relevance receipts preserve that distinction.
 #
 # Being required is why this workflow has NO `paths:` filter on `pull_request` any more. GitHub
 # waits forever for a required context that never reports, so a path-filtered required check
-# deadlocks every PR outside its filter (#1107, and gotcha 5 on #1379). The filter moved INSIDE the
-# job (the `filter` step below), same shape conservation.yml and dry-run-drift.yml already use: the
-# job always runs and always reports, and only the expensive work is conditional.
+# deadlocks every PR outside its filter (#1107, and gotcha 5 on #1379). Relevance therefore runs
+# INSIDE the workflow's preparation job: the required aggregate always reports, and only a proven
+# full-scan receipt allocates the expensive shard.
 #
-# There is deliberately no PR path router here. A path allow/deny list still makes many harmless PRs
-# pay the full corpus cost and silently becomes a second dependency graph to maintain. PR and
-# merge_group are event-level no-ops; push to main, schedule, and workflow_dispatch always run the
-# complete pinned population.
+# There is deliberately no hand-maintained PR path router here. Runtime roots, live mechanical
+# producers, pinned targets, workflow commands, and registered non-import inputs build one exact
+# ownership receipt. Both Git sides are walked with rename-aware closure; unknown input fails open.
 #
 # On failure: the job names the module and target that drifted. A drift is EITHER an intended
 # precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
@@ -67,8 +64,8 @@ on:
   push:
     branches: [main]
   # #1498: merge queue. Without this the required context never reports on a queue entry and the
-  # queue deadlocks. Like pull_request, merge_group reports a declared no-op; the resulting push to
-  # main runs the full corpus.
+  # queue deadlocks. Like pull_request, merge_group classifies its exact range and either proves a
+  # nothing-assessed no-op or runs the full corpus; the resulting main push is always full again.
   merge_group:
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
@@ -85,23 +82,89 @@ permissions:
   contents: read
 
 jobs:
-  # On full-corpus events, fetch one exact six-file registry input. The bytes are checksummed once
-  # and every hosted producer shard consumes this artifact in reuse-only mode. PR/merge-group no-op
-  # runs do not fetch the external registry at all.
+  # Every event prepares one exact ownership/routing receipt. PR/merge-group runs classify their
+  # immutable Git range; push/schedule/manual bypass classification and remain unconditional full.
+  # A relevant run then fetches the exact six-file Semgrep input once for every producer shard.
   prepare-current-inputs:
-    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.route.outputs.relevant }}
+      decision: ${{ steps.route.outputs.decision }}
+      closure-digest: ${{ steps.route.outputs.closure-digest }}
+      target-count: ${{ steps.route.outputs.target-count }}
+      scope: ${{ steps.route.outputs.scope }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Generate live corpus ownership and classify the exact Git range
+        id: route
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ownership="$RUNNER_TEMP/corpus-drift-ownership.json"
+          receipt="$RUNNER_TEMP/corpus-drift-relevance.json"
+          pnpm exec tsx src/cli/corpus-drift-relevance.ts ownership --out "$ownership"
+          target_count=$(jq -er '.consumers[0].targetSelection.targets | length | select(. > 0)' "$ownership")
+
+          if [ "$EVENT_NAME" = pull_request ] || [ "$EVENT_NAME" = merge_group ]; then
+            base="$PR_BASE_SHA"
+            [ "$EVENT_NAME" = merge_group ] && base="$MERGE_GROUP_BASE_SHA"
+            [ -n "$base" ] || { echo "::error::corpus relevance has no base SHA for $EVENT_NAME"; exit 2; }
+            pnpm exec tsx src/cli/corpus-drift-relevance.ts classify \
+              --root "$GITHUB_WORKSPACE" \
+              --base "$base" \
+              --head "$HEAD_SHA" \
+              --ownership "$ownership" \
+              --out "$receipt"
+            decision=$(jq -er '.decision | select(. == "full-scan" or . == "declared-no-op")' "$receipt")
+            closure_digest=$(jq -r '.closureDigest // "unavailable"' "$receipt")
+            if [ "$decision" = full-scan ]; then
+              relevant=true
+              scope="all $target_count pinned targets; relevance receipt requires the hosted full-population backstop"
+            else
+              relevant=false
+              target_count=0
+              scope="nothing assessed; exact Git change is disjoint from immutable closure $closure_digest"
+            fi
+          else
+            decision=unconditional-full
+            closure_digest=not-classified
+            relevant=true
+            scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"
+          fi
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "closure-digest=$closure_digest" >> "$GITHUB_OUTPUT"
+          echo "target-count=$target_count" >> "$GITHUB_OUTPUT"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "Corpus route: decision=$decision relevant=$relevant target-count=$target_count closure=$closure_digest"
+          mkdir -p .harvey-corpus-relevance
+          cp "$ownership" .harvey-corpus-relevance/ownership.json
+          [ ! -f "$receipt" ] || cp "$receipt" .harvey-corpus-relevance/receipt.json
+      - name: Retain the PR/merge-group relevance proof
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-drift-relevance
+          path: .harvey-corpus-relevance
+          if-no-files-found: error
       - name: Materialize the one current Semgrep registry input
+        if: steps.route.outputs.relevant == 'true'
         run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --out .harvey-current-semgrep/receipt.json
       - name: Retain exact registry bytes and their receipt
+        if: steps.route.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: current-mechanical-semgrep-pack
@@ -114,8 +177,8 @@ jobs:
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
   #
   # SHARD COUNT VARIES BY EVENT. Default-branch pushes use four namespaces and seed their matching
-  # transports. PRs and merge groups skip this job before runner allocation; the required aggregate
-  # declares their no-op directly. This replaced the single 29m30s main seed that timed out before
+  # transports. Proven-disjoint PRs and merge groups skip this job before runner allocation; the
+  # required aggregate declares their nothing-assessed no-op. This replaced the single 29m30s main seed that timed out before
   # it could publish a complete trusted transport
   # (runs 31601042773/31602706320).
   # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
@@ -123,7 +186,7 @@ jobs:
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
   # poisoned it beyond repair by re-running. No shard holds all 17, so a sharded run can never save.
   #   * push -> 4 shards, each owning an exhaustive slice of the pinned population.
-  #   * pull_request / merge_group -> no shard runner and no third-party target execution.
+  #   * relevant pull_request / merge_group -> one all-target shard; declared-no-op -> no shard.
   #   * schedule / workflow_dispatch -> ONE shard holding all 17, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
@@ -137,7 +200,7 @@ jobs:
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs
-    if: needs.prepare-current-inputs.result == 'success' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     strategy:
       # A drifted baseline in one shard must not cancel the others: the scorecard is most useful when
@@ -173,44 +236,14 @@ jobs:
           echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a corpus-drift failure."
           exit 1
 
-      # Keep the event policy inside the job so the required context reports on every PR and merge
-      # group. This is intentionally event-based rather than a second approximation of the scanner's
-      # dependency graph: PR/merge-group defer, while push/schedule/manual always score everything.
-      - id: filter
-        name: Route third-party corpus execution by event
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "No third-party target is cloned or scored before merge. The resulting main push and daily schedule run the complete pinned corpus."
-            exit 0
-          fi
-          echo "relevant=true" >> "$GITHUB_OUTPUT"
-
-      # #1509: a short-circuited job and a job that died in setup are both "nothing was scored", and
-      # from outside they look identical — which is how #1447 merged past a gate that had never run.
-      # The no-op is DECLARED, with its reason, so the assert step at the end can pass it while
-      # printing something a reader cannot mistake for a scoring run.
-      - name: Declare the no-op (a short-circuit must not read like a scoring run)
-        if: steps.filter.outputs.relevant != 'true'
-        uses: ./.github/actions/gate-liveness
-        with:
-          mode: record
-          gate: corpus-drift
-          status: declared-no-op
-          scope: "PR and merge-group policy defers all third-party corpus execution to the resulting main push, the daily schedule, or an explicit manual run. Nothing was cloned and nothing was scored; this PR result is intentionally not evidence about external-app behavior."
-
       - uses: pnpm/action-setup@v4
-        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
-        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-        if: steps.filter.outputs.relevant == 'true'
 
       - name: Authenticate private corpus mirrors
-        if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/corpus-mirror-auth
         with:
           private-key: ${{ secrets.CORPUS_MIRROR_DEPLOY_KEY }}
@@ -221,7 +254,6 @@ jobs:
       # which on a must-raise-an-indicator target would look like the free tier staying quiet. So
       # they are installed explicitly rather than left to chance.
       - name: Install mechanical-tier scanner binaries
-        if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/mechanical-binaries
 
       # #1571: cache the pinned clones themselves (not the --install tree), keyed on the pin set
@@ -231,7 +263,6 @@ jobs:
       # `mode: save` step is at the END of this job, after the clones exist.
       - name: Corpus clone cache
         id: corpus-cache
-        if: steps.filter.outputs.relevant == 'true'
         uses: ./.github/actions/corpus-clone-cache
 
       # #1864/#1871/#1872: phase/scanner artifacts and dependency-preparation receipts are
@@ -248,12 +279,12 @@ jobs:
       # and recomputing corrupt/incomplete entries with a visible CACHE/DEPENDENCY PREP REJECT line.
       - name: Compute canonical corpus cache ownership scopes
         id: phase-cache-scopes
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/corpus-cache-transport.ts scopes >> "$GITHUB_OUTPUT"
 
       - name: Restore content-addressed corpus phase results — owner 1
         id: phase-cache-1
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard1
@@ -264,7 +295,7 @@ jobs:
 
       - name: Restore content-addressed corpus phase results — owner 2
         id: phase-cache-2
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard2
@@ -272,7 +303,7 @@ jobs:
 
       - name: Restore content-addressed corpus phase results — owner 3
         id: phase-cache-3
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard3
@@ -280,7 +311,7 @@ jobs:
 
       - name: Restore content-addressed corpus phase results — owner 4
         id: phase-cache-4
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard4
@@ -291,7 +322,7 @@ jobs:
       # their exact current-run artifact above; all other fallback transport comes from main.
       - name: Restore trusted-main corpus phase results — owner 1
         id: main-phase-cache-1
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-1.outputs.cache-hit != 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-1.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard1
@@ -301,7 +332,7 @@ jobs:
 
       - name: Restore trusted-main corpus phase results — owner 2
         id: main-phase-cache-2
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-2.outputs.cache-hit != 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-2.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard2
@@ -311,7 +342,7 @@ jobs:
 
       - name: Restore trusted-main corpus phase results — owner 3
         id: main-phase-cache-3
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-3.outputs.cache-hit != 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-3.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard3
@@ -321,7 +352,7 @@ jobs:
 
       - name: Restore trusted-main corpus phase results — owner 4
         id: main-phase-cache-4
-        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-4.outputs.cache-hit != 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-4.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .harvey-corpus-phase-cache/shard4
@@ -330,7 +361,7 @@ jobs:
             corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-
 
       - name: Restore the run's exact shared Semgrep bytes
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         uses: actions/download-artifact@v4
         with:
           name: current-mechanical-semgrep-pack
@@ -340,7 +371,7 @@ jobs:
           path: .harvey-current-semgrep
 
       - name: Validate the exact shared Semgrep artifact layout
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --validate-only
 
       # Actions cache visibility is a transport boundary, not an authenticity claim. The inner
@@ -348,7 +379,7 @@ jobs:
       # restored directory came from main or this exact run. A cache from another PR ref is
       # deleted visibly before any scanner can read it; a miss remains a normal recompute.
       - name: Validate corpus phase-cache transport provenance
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           for namespace in 1 2 3 4; do
@@ -389,7 +420,7 @@ jobs:
       # #1498's manifest-only narrowing for relevant PRs; prose/test-only changes still short-circuit.
       - name: Declare the complete target population
         id: targets
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         run: |
           echo "scope=all" >> "$GITHUB_OUTPUT"
           echo "Scoring every target: the required current readiness comparator rejects a partial population."
@@ -408,7 +439,7 @@ jobs:
       # (naming the module's CURRENT findings) rather than staying silent, so the worst case here is
       # a less detailed explanation, never a broken run.
       - name: Fetch prior scorecard for --baseline-findings (#1564)
-        if: steps.filter.outputs.relevant == 'true'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -427,7 +458,7 @@ jobs:
 
       - name: Score the corpus against its baselines
         id: score
-        if: steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
           HARVEY_CORPUS_PHASE_CACHE_DIR: .harvey-corpus-phase-cache
@@ -442,8 +473,8 @@ jobs:
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
           HARVEY_CURRENT_MECHANICAL_READINESS: ${{ github.event_name == 'push' && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
-          # Kept in step with the matrix above: 4 on a main push; 1 on the scheduled/manual
-          # canonical-scorecard lane, which still holds every clone. PR/queue never reach this step.
+          # Kept in step with the matrix above: 4 on a main push; 1 on the scheduled/manual or
+          # relevant PR/queue canonical-scorecard lane, which still holds every clone.
           SHARD_COUNT: ${{ github.event_name == 'push' && 4 || 1 }}
         run: |
           set -euo pipefail
@@ -464,7 +495,7 @@ jobs:
           pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
 
       - name: Measure content-addressed cache size
-        if: always() && steps.phase-cache-scopes.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: always() && steps.phase-cache-scopes.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           set -euo pipefail
           for namespace in 1 2 3 4; do
@@ -479,7 +510,7 @@ jobs:
           done
 
       - name: Record corpus phase-cache transport provenance
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
+        if: success() && steps.score.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
         run: |
           set -euo pipefail
           for namespace in 1 2 3 4; do
@@ -500,28 +531,28 @@ jobs:
           done
 
       - name: Save current-run corpus phase results for an exact retry — owner 1
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard1
           key: corpus-phase-run-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save current-run corpus phase results for an exact retry — owner 2
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard2
           key: corpus-phase-run-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save current-run corpus phase results for an exact retry — owner 3
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard3
           key: corpus-phase-run-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save current-run corpus phase results for an exact retry — owner 4
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard4
@@ -531,28 +562,28 @@ jobs:
       # timed-out, drifted or setup-failed leg never reaches this step and cannot shadow the prior
       # trusted key. Each matrix leg writes only its own namespace.
       - name: Save successful main-shard corpus phase results — owner 1
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 1
+        if: success() && steps.score.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 1
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard1
           key: corpus-phase-main-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save successful main-shard corpus phase results — owner 2
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 2
+        if: success() && steps.score.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 2
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard2
           key: corpus-phase-main-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save successful main-shard corpus phase results — owner 3
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 3
+        if: success() && steps.score.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 3
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard3
           key: corpus-phase-main-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       - name: Save successful main-shard corpus phase results — owner 4
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 4
+        if: success() && steps.score.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 4
         uses: actions/cache/save@v4
         with:
           path: .harvey-corpus-phase-cache/shard4
@@ -584,7 +615,7 @@ jobs:
       # run (schedule/dispatch) writes that canonical name directly, so nothing about the
       # prior-snapshot lineage changes on the path that feeds it.
       - name: Upload drift scorecard
-        if: always() && steps.filter.outputs.relevant == 'true'
+        if: always() && needs.prepare-current-inputs.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event_name == 'push' && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
@@ -596,9 +627,8 @@ jobs:
       # required checks. `pnpm corpus-drift` writes a receipt AFTER it scores; without that record
       # this step fails naming the phase that never ran. `always()` so it still reports when an
       # earlier step already failed — that is exactly the case it exists to explain. Excluded on the
-      # alert drill, which fails on purpose before anything is scored. A short-circuited run reaches
-      # here too and passes on the DECLARED NO-OP record above, printing its reason rather than a
-      # count — which is what stops "the filter skipped it" reading like "it scored and found none".
+      # alert drill, which fails on purpose before anything is scored. Proven-disjoint runs never
+      # allocate this job; their nothing-assessed receipt is asserted by the required aggregate.
       - name: Gate liveness — did this job actually score anything?
         if: always() && !inputs.alert_drill
         uses: ./.github/actions/gate-liveness
@@ -627,7 +657,7 @@ jobs:
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."
+          body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A counted drift or setup failure needs classification before any baseline edit: remeasure the complete matching/loading/resolution/reachability/invocation blast radius, then distinguish incomplete population, precision fix, real regression, and setup failure. See the corpus-drift-scorecard artifact and docs/design/corpus-drift.md; close this issue once the owning fix and full-population rerun are green."
 
   # A separate post-merge process and clone/preparation path. It consumes the exact pack artifact
   # but no hosted phase artifacts, so the final comparison is not the scorecard comparing with
@@ -696,41 +726,38 @@ jobs:
     permissions:
       contents: read
     steps:
-      # The PR/merge-group fast path lives in the required context itself. Its prerequisite jobs are
-      # skipped before runner allocation, so branch protection gets one small, explicit result
-      # without serial runner startup or any third-party clone/replay work.
       - uses: actions/checkout@v4
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-      - name: Declare the external-corpus deferral
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+      - name: Shared preparation and relevance classification must have succeeded
+        run: |
+          set -euo pipefail
+          if [ '${{ needs.prepare-current-inputs.result }}' != success ]; then
+            echo "::error::corpus-drift relevance/shared-input preparation reported '${{ needs.prepare-current-inputs.result }}'; a missing or malformed classifier receipt can never become a green no-op."
+            exit 1
+          fi
+          echo "Corpus route: decision=${{ needs.prepare-current-inputs.outputs.decision }} relevant=${{ needs.prepare-current-inputs.outputs.relevant }} closure=${{ needs.prepare-current-inputs.outputs.closure-digest }}"
+
+      # A no-op is a machine conclusion from the exact immutable closure, never an event policy.
+      # It says nothing was assessed and carries the classifier digest a reviewer can retrieve.
+      - name: Declare the proven-disjoint no-op
+        if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant != 'true'
         uses: ./.github/actions/gate-liveness
         with:
           mode: record
           gate: corpus-drift
           status: declared-no-op
-          scope: "PR and merge-group policy defers all third-party corpus execution to the resulting main push, the daily schedule, or an explicit manual run. Nothing was cloned and nothing was scored; this PR result is intentionally not evidence about external-app behavior."
-      - name: Gate liveness — did this required context declare its outcome?
-        if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
-        uses: ./.github/actions/gate-liveness
-        with:
-          mode: assert
-          expect: corpus-drift
+          scope: "${{ needs.prepare-current-inputs.outputs.scope }}; decision=${{ needs.prepare-current-inputs.outputs.decision }}; relevance artifact closure=${{ needs.prepare-current-inputs.outputs.closure-digest }}. This is not evidence that any external target was clean."
 
       # `needs.<matrix-job>.result` is the AGGREGATE over every leg: 'success' only when all of them
       # succeeded. Anything else — a real baseline drift, a died-in-setup shard, a cancellation — is
       # a red required check, exactly as the single job behaved before it was split.
-      - name: Every shard must have succeeded
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+      - name: Every required corpus execution must have succeeded
+        if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           result='${{ needs.shard.result }}'
           echo "shard matrix aggregate result: $result"
           if [ "$result" != "success" ]; then
-            echo "::error::corpus-drift: the shard matrix reported '$result'. A baseline drifted, or a shard errored before it could score. Open the individual 'corpus shard N' jobs for the per-module table, and see the corpus-drift-scorecard artifact."
-            exit 1
-          fi
-          if [ '${{ needs.prepare-current-inputs.result }}' != 'success' ]; then
-            echo "::error::the shared-input preparation job did not succeed"
+            echo "::error::corpus-drift: the shard matrix reported '$result'. A baseline drifted, or a shard errored before it could score. Open the individual 'corpus shard N' jobs and the corpus-drift-scorecard artifact. For a counted drift, remeasure the complete matching/loading/resolution/reachability/invocation blast radius before changing baselines; see docs/design/corpus-drift.md."
             exit 1
           fi
           if [ '${{ github.event_name }}' = 'push' ] \
@@ -740,9 +767,27 @@ jobs:
           fi
           echo "Every shard succeeded."
 
+      - name: Record the measured full-population outcome
+        if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && needs.shard.result == 'success'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: corpus-drift
+          units: ${{ needs.prepare-current-inputs.outputs.target-count }}
+          status: measured
+          scope: "${{ needs.prepare-current-inputs.outputs.scope }}; every selected shard completed"
+
+      - name: Gate liveness — did this required context declare its outcome?
+        if: always()
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: corpus-drift
+
       # Reassemble the main-push shard parts into the ONE artifact name #1564's prior-snapshot
       # fetch reads. Only on the sharded path: a scheduled/manual single-shard run already uploaded
-      # that name itself, while PR/merge-group runs deliberately produce no corpus artifact.
+      # that name itself. A relevant PR/merge-group also uses one shard and writes the canonical
+      # artifact directly; a declared no-op produces only the relevance artifact.
       - name: Collect the shard scorecards
         id: parts
         if: github.event_name == 'push'
@@ -764,8 +809,8 @@ jobs:
 
       # The shards are disjoint by construction (src/scan/corpus-shards.ts asserts the partition is
       # exhaustive and non-overlapping), so `rows` concatenates and the `findings` maps merge with no
-      # key collisions. A short-circuited run uploads no parts at all, which is not a failure — there
-      # is simply nothing to merge, and the declared no-op is the record.
+      # key collisions. This step is push-only and push is unconditionally full, so zero parts after
+      # successful shards is an artifact/provenance failure, never a valid short-circuit.
       - name: Merge the shard scorecards into corpus-drift.json
         id: merge
         if: github.event_name == 'push'
@@ -774,9 +819,8 @@ jobs:
           shopt -s nullglob
           parts=(parts/corpus-drift-shard*.json)
           if [ ${#parts[@]} -eq 0 ]; then
-            echo "merged=false" >> "$GITHUB_OUTPUT"
-            echo "No shard scorecards to merge — this run short-circuited or scored nothing. Nothing to reassemble."
-            exit 0
+            echo "::error::no shard scorecards were retained after a successful full-corpus push; refusing to skip the merged readiness artifact"
+            exit 1
           fi
           echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
           jq -s '{

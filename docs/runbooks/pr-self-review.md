@@ -40,6 +40,7 @@ Per CLAUDE.md, before pushing:
 - [ ] No `customer_context: string` body fields (server-resolve refs only — see D-103)
 - [ ] Every tenant-scoped query has BOTH app-layer `.eq("tenant_id", …)` AND tenantClient RLS
 - [ ] No external credentials in URLs (`Authorization: Bearer ...` headers only)
+- [ ] Detector changes follow the [corpus-drift blast-radius rule](../design/corpus-drift.md): remeasure every reachable pinned target/module before editing counted baselines
 
 ## When CI catches something this didn't
 

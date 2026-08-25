@@ -100,17 +100,18 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     const revertedCli = corpusCli.replaceAll("cacheDir: targetPhaseCacheDir", "cacheDir: phaseCacheDir");
     expect(transportWorkflowErrors(workflow, revertedCli)).toContain("target owner routing");
   });
-  it("keeps the required context reporting while PR and merge-group execution is a declared no-op", () => {
+  it("keeps the required context reporting while PR and merge-group relevance may declare a no-op", () => {
     expect(workflow).toMatch(/^\s{2}pull_request:\s*$/m);
     expect(workflow).toMatch(/^\s{2}merge_group:\s*$/m);
     expect(workflow).toContain("fail-fast: false");
     expect(workflow).toMatch(/drift:\n\s+name: clone\s+pinned\s+commits\s+\+\s+score\s+baselines\n\s+needs: \[prepare-current-inputs, shard, current-replay\]\n\s+if: always\(\)/);
     expect(workflow).toContain(`if [ "$result" != "success" ]`);
-    expect(workflow).toContain("prepare-current-inputs:\n    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'");
-    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name != 'pull_request' && github.event_name != 'merge_group'");
-    expect(workflow).toContain("name: Declare the external-corpus deferral");
+    expect(workflow).not.toContain("prepare-current-inputs:\n    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true'");
+    expect(workflow).toContain("name: Generate live corpus ownership and classify the exact Git range");
+    expect(workflow).toContain("name: Declare the proven-disjoint no-op");
     expect(workflow).toContain("Gate liveness — did this required context declare its outcome?");
-    expect(workflow).toContain("PR and merge-group policy defers all third-party corpus execution");
+    expect(workflow).toContain("nothing assessed; exact Git change is disjoint from immutable closure");
     expect(workflow).toContain("shard: ${{ fromJSON(github.event_name == 'push' && '[1,2,3,4]' || '[1]') }}");
     expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'");
   });
@@ -265,11 +266,17 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
-  it("uses event policy rather than a path approximation for external corpus execution", () => {
+  it("uses the shipping executable closure rather than a path approximation or blanket event no-op", () => {
     expect(workflow).not.toContain("git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD");
     expect(workflow).not.toContain("*) relevant=true ;;");
-    expect(workflow.match(/Route third-party corpus execution by event/g)).toHaveLength(1);
-    expect(workflow.match(/github\.event_name }}" = "pull_request".*github\.event_name }}" = "merge_group"/g)).toHaveLength(1);
-    expect(workflow.match(/echo "relevant=true" >> "\$GITHUB_OUTPUT"/g)).toHaveLength(1);
+    expect(workflow).not.toContain("Route third-party corpus execution by event");
+    expect(workflow.match(/corpus-drift-relevance\.ts ownership/g)).toHaveLength(1);
+    expect(workflow.match(/corpus-drift-relevance\.ts classify/g)).toHaveLength(1);
+    expect(workflow).toContain('--root "$GITHUB_WORKSPACE"');
+    expect(workflow).toContain('--base "$base"');
+    expect(workflow).toContain('--head "$HEAD_SHA"');
+    expect(workflow).toContain('if [ "$EVENT_NAME" = pull_request ] || [ "$EVENT_NAME" = merge_group ]');
+    expect(workflow).toContain("decision=unconditional-full");
+    expect(workflow).toContain('if [ "$decision" = full-scan ]');
   });
 });

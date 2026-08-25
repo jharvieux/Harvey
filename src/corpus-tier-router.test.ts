@@ -1,65 +1,67 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const WORKFLOW = fileURLToPath(new URL("../.github/workflows/corpus-drift.yml", import.meta.url));
 
-function routerScripts(yaml: string = readFileSync(WORKFLOW, "utf8")): string[] {
-  const marker = "        name: Route third-party corpus execution by event\n        run: |\n";
-  const scripts: string[] = [];
-  let cursor = 0;
-  while (true) {
-    const markerStart = yaml.indexOf(marker, cursor);
-    if (markerStart === -1) break;
-    const bodyStart = markerStart + marker.length;
-    const bodyEnd = yaml.indexOf("\n      - ", bodyStart);
-    if (bodyEnd === -1) throw new Error("corpus event router has no following workflow step");
-    const body = yaml.slice(bodyStart, bodyEnd).replace(/^ {10}/gm, "");
-    if (!body.includes('echo "relevant=false"') || !body.includes('echo "relevant=true"')) {
-      throw new Error("corpus event router no longer emits both routing decisions");
-    }
-    scripts.push(body);
-    cursor = bodyEnd;
+function routeScript(yaml: string = readFileSync(WORKFLOW, "utf8")): string {
+  const marker = "      - name: Generate live corpus ownership and classify the exact Git range\n        id: route\n";
+  const markerStart = yaml.indexOf(marker);
+  if (markerStart === -1) throw new Error("corpus relevance route step is absent");
+  const runMarker = "        run: |\n";
+  const runStart = yaml.indexOf(runMarker, markerStart);
+  const bodyStart = runStart + runMarker.length;
+  const bodyEnd = yaml.indexOf("\n      - ", bodyStart);
+  if (runStart === -1 || bodyEnd === -1) throw new Error("corpus relevance route script is malformed");
+  const body = yaml.slice(bodyStart, bodyEnd).replace(/^ {10}/gm, "");
+  for (const fragment of [
+    "corpus-drift-relevance.ts ownership",
+    "corpus-drift-relevance.ts classify",
+    'if [ "$EVENT_NAME" = pull_request ] || [ "$EVENT_NAME" = merge_group ]',
+    "decision=unconditional-full",
+    'echo "relevant=$relevant"',
+  ]) {
+    if (!body.includes(fragment)) throw new Error(`corpus relevance route is missing ${fragment}`);
   }
-  if (scripts.length !== 1) throw new Error(`expected one corpus event router, found ${scripts.length}`);
-  return scripts;
+  return body;
 }
 
-function route(script: string, event: string): boolean {
-  const dir = mkdtempSync(join(tmpdir(), "harvey-corpus-router-"));
-  const out = join(dir, "github_output");
-  try {
-    const hydrated = script.replaceAll("${{ github.event_name }}", event);
-    execFileSync("bash", ["-c", `set -eu\n: > "$GITHUB_OUTPUT"\n${hydrated}\n`], {
-      env: { ...process.env, GITHUB_OUTPUT: out },
-      encoding: "utf8",
-    });
-    return readFileSync(out, "utf8").trim() === "relevant=true";
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+describe("corpus hosted relevance router", () => {
+  it("derives PR and merge-group routing from the shipping ownership/classifier CLI", () => {
+    const yaml = readFileSync(WORKFLOW, "utf8");
+    const script = routeScript(yaml);
 
-describe("corpus hosted event routers", () => {
-  it("defers every pull request and merge-group entry in the shard's defense-in-depth router", () => {
-    for (const script of routerScripts()) {
-      expect(route(script, "pull_request")).toBe(false);
-      expect(route(script, "merge_group")).toBe(false);
-    }
+    expect(script.indexOf("corpus-drift-relevance.ts ownership"))
+      .toBeLessThan(script.indexOf("corpus-drift-relevance.ts classify"));
+    expect(script).toContain('--root "$GITHUB_WORKSPACE"');
+    expect(script).toContain('--base "$base"');
+    expect(script).toContain('--head "$HEAD_SHA"');
+    expect(script).toContain('--ownership "$ownership"');
+    expect(yaml).not.toContain("Route third-party corpus execution by event");
+    expect(yaml).not.toContain("PR and merge-group policy defers all third-party corpus execution");
   });
 
-  it("runs the complete external corpus on post-merge and monitoring events", () => {
-    for (const script of routerScripts()) {
-      for (const event of ["push", "schedule", "workflow_dispatch", "unknown-event"]) {
-        expect(route(script, event), event).toBe(true);
-      }
-    }
+  it("fails open to a full pinned run and bypasses classification for non-PR events", () => {
+    const script = routeScript();
+    expect(script).toContain("select(. == \"full-scan\" or . == \"declared-no-op\")");
+    expect(script).toContain('if [ "$decision" = full-scan ]');
+    expect(script).toContain("decision=unconditional-full");
+    expect(script).toContain("relevant=true");
+    expect(script).toContain('scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"');
   });
 
-  it("refuses to test a workflow whose shipped event router cannot be found", () => {
-    expect(() => routerScripts("jobs: {}\n")).toThrow(/expected one corpus event router/);
+  it("allocates shards only for relevant receipts and keeps required-context liveness explicit", () => {
+    const yaml = readFileSync(WORKFLOW, "utf8");
+    expect(yaml).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true'");
+    expect(yaml).toContain("name: Declare the proven-disjoint no-op");
+    expect(yaml).toContain("status: declared-no-op");
+    expect(yaml).toContain("name: Record the measured full-population outcome");
+    expect(yaml).toContain("units: ${{ needs.prepare-current-inputs.outputs.target-count }}");
+    expect(yaml).toContain("name: Gate liveness — did this required context declare its outcome?\n        if: always()");
+  });
+
+  it("refuses the superseded blanket event router as a production proof", () => {
+    expect(() => routeScript("jobs:\n  shard:\n    steps:\n      - name: Route third-party corpus execution by event\n"))
+      .toThrow(/route step is absent/);
   });
 });

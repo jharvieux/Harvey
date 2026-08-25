@@ -1803,7 +1803,7 @@ export function countedBaselineDiagnostic(input: CountedBaselineDiagnosticInput)
     lines: [
       `    INCOMPLETE POPULATION CHECK: this failed counted baseline makes ${input.slug}/${module} actionable, but this one row is not the affected population boundary.`,
       "    BLAST-RADIUS REMEASUREMENT: a matching, loading, resolution, reachability, or invocation change requires remeasurement over every pinned target/module the mechanism can affect (its proven blast radius), not only the issue examples.",
-      "    CLASSIFY BEFORE EDITING BASELINES: INCOMPLETE POPULATION → finish that blast-radius measurement; PRECISION FIX → verify the moved rows are intentionally more accurate, then update every affected baseline with measured provenance; REAL REGRESSION → fix the scanner and keep the baseline; SETUP FAILURE → repair setup and rerun without rebaselining.",
+      "    CLASSIFY BEFORE EDITING BASELINES: INCOMPLETE POPULATION → finish that blast-radius measurement; PRECISION FIX → verify the moved rows are intentionally more accurate, then update every affected baseline with measured provenance; REAL REGRESSION → fix the scanner and keep the baseline; SETUP FAILURE → repair setup and rerun without rebaselining. Rule and examples: docs/design/corpus-drift.md.",
     ],
   };
 }
@@ -1826,7 +1826,7 @@ export function countedBaselineAggregateLines(diagnostics: readonly CountedBasel
   return [
     "\n──── counted-baseline diagnostic (#1742) ────",
     `✗ COUNTED-BASELINE AGGREGATE FAILURE: ${population.length} failed population row(s) across ${new Set(population.map((diagnostic) => diagnostic.slug)).size} target(s): ${identities}.`,
-    "  ACTION: remeasure the complete proven blast radius of any changed matching/loading/resolution/reachability/invocation mechanism, classify every movement as incomplete population, precision fix, real regression, or setup failure, and only then update affected baselines with measured provenance.",
+    "  ACTION: remeasure the complete proven blast radius of any changed matching/loading/resolution/reachability/invocation mechanism, classify every movement as incomplete population, precision fix, real regression, or setup failure, and only then update affected baselines with measured provenance. See docs/design/corpus-drift.md.",
     ...(setup.length > 0
       ? [`  EXCLUDED SETUP FAILURE(S): ${setupIdentities} — repair and rerun; these rows do not support a population-defect claim.`]
       : []),
