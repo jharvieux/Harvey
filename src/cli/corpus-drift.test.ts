@@ -87,6 +87,12 @@ describe("corpus-drift failed-row diagnostic replay (#1580)", () => {
       "2 M5-slop row(s) there vs 2 in this run",
       "committed manifest baseline in src/scan/external-corpus.ts",
       "NO ROW-LEVEL MOVEMENT",
+      "INCOMPLETE POPULATION CHECK",
+      "matching, loading, resolution, reachability, or invocation",
+      "PRECISION FIX",
+      "REAL REGRESSION",
+      "SETUP FAILURE",
+      "✗ COUNTED-BASELINE AGGREGATE FAILURE",
     ];
     let cursor = -1;
     for (const text of ordered) {
@@ -96,6 +102,9 @@ describe("corpus-drift failed-row diagnostic replay (#1580)", () => {
     }
     expect(result.stderr).not.toMatch(/\n\s+ADDED \(/);
     expect(result.stderr).not.toMatch(/\n\s+REMOVED \(/);
+    expect(result.stderr.match(/✗ COUNTED-BASELINE AGGREGATE FAILURE/g)).toHaveLength(1);
+    expect(result.stderr).toContain("proven blast radius");
+    expect(result.stderr).toContain("not only the issue examples");
   });
 
   it("reports actual ADDED and REMOVED identities through the same failed-row reporter", () => {
@@ -131,6 +140,8 @@ describe("corpus-drift failed-row diagnostic replay (#1580)", () => {
     expect(result.stderr).toContain("corpus-drift diagnostic replay rejected");
     expect(result.stderr).toContain("must contain exactly");
     expect(result.stderr).not.toContain("✗ DRIFT");
+    expect(result.stderr).not.toContain("INCOMPLETE POPULATION CHECK");
+    expect(result.stderr).not.toContain("COUNTED-BASELINE AGGREGATE FAILURE");
     expect(existsSync(result.livenessReceipt)).toBe(false);
   });
 });

@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 import { parseRecordedReasons, validateRecordedReason } from "../recorded-reasons.js";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
+  countedBaselineAggregateLines,
+  countedBaselineDiagnostic,
   EXTERNAL_CORPUS,
   GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE,
   driftExplanationLines,
@@ -564,6 +566,82 @@ describe("driftExplanationLines (#1580) — a consulted snapshot always says so"
     const text = driftExplanationLines("M5-slop", "carbon", [row("a.ts:1")], undefined, undefined).join("\n");
     expect(text).toContain("NO PRIOR SNAPSHOT CONSULTED for carbon");
     expect(text).toContain("CURRENT (1)");
+  });
+});
+
+describe("counted-baseline population diagnostics (#1742)", () => {
+  const failedCount = (overrides: Partial<Parameters<typeof countedBaselineDiagnostic>[0]> = {}) => ({
+    slug: "carbon",
+    module: "M7",
+    pass: false,
+    currentFindings: [finding("M7 — Nested-loop join", "Medium", "packages/react/src/MultiSelect.tsx:153")],
+    ...overrides,
+  });
+
+  it("plants a failed count row and emits row-level plus exactly one aggregate blast-radius failure", () => {
+    const diagnostic = countedBaselineDiagnostic(failedCount());
+    expect(diagnostic?.kind).toBe("population-remeasurement");
+    const rowText = diagnostic?.lines.join("\n") ?? "";
+    expect(rowText).toContain("INCOMPLETE POPULATION");
+    expect(rowText).toContain("PRECISION FIX");
+    expect(rowText).toContain("REAL REGRESSION");
+    expect(rowText).toContain("SETUP FAILURE");
+    for (const mechanism of ["matching", "loading", "resolution", "reachability", "invocation"]) {
+      expect(rowText).toContain(mechanism);
+    }
+    expect(rowText).toContain("proven blast radius");
+    expect(rowText).toContain("not only the issue examples");
+
+    const aggregate = countedBaselineAggregateLines([diagnostic!]).join("\n");
+    expect(aggregate.match(/COUNTED-BASELINE AGGREGATE FAILURE/g)).toHaveLength(1);
+    expect(aggregate).toContain("carbon/M7");
+    expect(aggregate).toContain("measured provenance");
+  });
+
+  it("does not claim a population defect for passing rows or failed non-count checks", () => {
+    expect(countedBaselineDiagnostic(failedCount({ pass: true }))).toBeUndefined();
+    expect(countedBaselineDiagnostic(failedCount({ module: undefined }))).toBeUndefined();
+    expect(countedBaselineAggregateLines([])).toEqual([]);
+  });
+
+  it("quarantines setup and incomplete-measurement disclosures from population guidance", () => {
+    for (const [module, id, taxonomy] of [
+      ["M4", "M4-99", "M4 — Duplication"],
+      ["M5-knip", "M5-00", "M5 — Slop / dead code"],
+      ["M5-knip", "M5-98", "M5 — Slop / dead code"],
+      ["M5-knip", "M5-99", "M5 — Slop / dead code"],
+    ] as const) {
+      const diagnostic = countedBaselineDiagnostic(failedCount({
+        module,
+        currentFindings: [{ ...finding(taxonomy, "Info"), id }],
+      }));
+      expect(diagnostic?.kind, id).toBe("setup-failure");
+      expect(diagnostic?.lines.join("\n"), id).toContain("Repair setup/coverage and rerun");
+      expect(diagnostic?.lines.join("\n"), id).not.toContain("INCOMPLETE POPULATION CHECK");
+      const aggregate = countedBaselineAggregateLines([diagnostic!]).join("\n");
+      expect(aggregate, id).toContain("SETUP-ONLY COUNT FAILURE");
+      expect(aggregate, id).not.toContain("COUNTED-BASELINE AGGREGATE FAILURE");
+    }
+  });
+
+  it("keeps M8-00 in the counted population because no test suite is a real finding, not setup failure", () => {
+    const diagnostic = countedBaselineDiagnostic(failedCount({
+      module: "M8",
+      currentFindings: [{ ...finding("M8 — No automated test suite", "High"), id: "M8-00" }],
+    }));
+    expect(diagnostic?.kind).toBe("population-remeasurement");
+  });
+
+  it("excludes setup rows from a mixed aggregate without suppressing its actionable population failure", () => {
+    const population = countedBaselineDiagnostic(failedCount());
+    const setup = countedBaselineDiagnostic(failedCount({
+      module: "M5-knip",
+      currentFindings: [{ ...finding("M5 — Slop / dead code", "Info"), id: "M5-00" }],
+    }));
+    const aggregate = countedBaselineAggregateLines([population!, setup!]).join("\n");
+    expect(aggregate.match(/COUNTED-BASELINE AGGREGATE FAILURE/g)).toHaveLength(1);
+    expect(aggregate).toContain("1 failed population row(s)");
+    expect(aggregate).toContain("EXCLUDED SETUP FAILURE(S): carbon/M5-knip");
   });
 });
 
