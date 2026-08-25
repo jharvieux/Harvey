@@ -1,0 +1,14 @@
+import { Injectable } from "@nestjs/common";
+import { readFileSync } from "node:fs";
+import { isEmpty } from "lodash";
+
+@Injectable()
+export class UnrelatedService {
+  status() {
+    return isEmpty({}) ? "idle" : "active";
+  }
+}
+
+export function loadUnrelatedState() {
+  return readFileSync("unrelated.json", "utf8");
+}

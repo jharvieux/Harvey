@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildMechanicalPhaseCache, discoverMechanicalPhaseImplementationFiles } from "./mechanical-phase-identity.js";
 
+const yieldToVitestRpc = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 describe("mechanical phase implementation identities (#1864)", () => {
   const dirs: string[] = [];
-  afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  afterEach(async () => {
+    dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+    await yieldToVitestRpc();
+  });
 
   const fixture = (): string => {
     const root = mkdtempSync(join(tmpdir(), "harvey-phase-identity-"));
@@ -15,6 +20,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
     cpSync(join(process.cwd(), "tools"), join(root, "tools"), { recursive: true });
     cpSync(join(process.cwd(), "package.json"), join(root, "package.json"));
     cpSync(join(process.cwd(), "pnpm-lock.yaml"), join(root, "pnpm-lock.yaml"));
+    writeFileSync(join(root, "registry.yml"), "rules: []\n");
     return root;
   };
   const buildCache = (root: string) => buildMechanicalPhaseCache({
@@ -24,7 +30,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
     targetRevision: "commit",
     targetTree: "tree",
     optionIdentity: "options",
-    registryPackIdentity: { identity: "resolved-registry-packs-v1" },
+    registryPackIdentity: { identity: "resolved-registry-packs-v1", files: [join(root, "registry.yml")] },
   });
   const build = (root: string) => buildCache(root).implementation;
 
@@ -38,14 +44,47 @@ describe("mechanical phase implementation identities (#1864)", () => {
     expect(after["structural-ast"]).toBe(before["structural-ast"]);
   });
 
-  it("an auth-guard helper edit invalidates Semgrep without falsely invalidating unrelated phases", () => {
+  it("a pinned Semgrep worker-topology or paired-family policy edit invalidates phase and family caches", async () => {
+    const root = fixture();
+    const before = buildCache(root);
+    await yieldToVitestRpc();
+    const semgrep = join(root, "src", "scan", "semgrep.ts");
+    const original = readFileSync(semgrep, "utf8");
+    for (const [needle, replacement] of [
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "8"]'],
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]', '["--x-ignore-semgrepignore-files", "--x-parmap"]'],
+      ['["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]', '["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "2"]'],
+      ['const SEMGREP_PAIRED_FAMILIES = new Set([LOCAL_XSS_FAMILY, "registry-singleton-direct-response-write"]);', 'const SEMGREP_PAIRED_FAMILIES = new Set(["local-auth", "registry-singleton-direct-response-write"]);'],
+      ['lowerExclusiveBytes: 81_920,', 'lowerExclusiveBytes: 81_921,'],
+    ] as const) {
+      const source = original.replace(needle, replacement);
+      expect(source).toContain(replacement);
+      writeFileSync(semgrep, source);
+      const after = buildCache(root);
+      await yieldToVitestRpc();
+      expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
+      expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
+    }
+  });
+
+  it("a shared Semgrep semantic-time policy edit invalidates phase and family caches", () => {
+    const root = fixture();
+    const before = buildCache(root);
+    const policy = join(root, "src", "scan", "semgrep-time.ts");
+    writeFileSync(policy, `${readFileSync(policy, "utf8")}\n// semantic-time identity control\n`);
+    const after = buildCache(root);
+    expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
+    expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
+  });
+
+  it("an auth-guard helper edit invalidates every consuming phase but not configuration", () => {
     const root = fixture();
     const before = build(root);
     writeFileSync(join(root, "src", "scan", "auth-guard-discovery.ts"), "\n// phase cache direct dependency control\n", { flag: "a" });
     const after = build(root);
     expect(after.semgrep).not.toBe(before.semgrep);
     expect(after.configuration).toBe(before.configuration);
-    expect(after["structural-ast"]).toBe(before["structural-ast"]);
+    expect(after["structural-ast"]).not.toBe(before["structural-ast"]);
   });
 
   it("a structural detector edit invalidates only structural/AST", () => {

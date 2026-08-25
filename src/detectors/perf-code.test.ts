@@ -562,6 +562,29 @@ describe("field FP families (#1475–#1480)", () => {
     expect(sync[0]?.evidence).toContain("The request entry point controllers/orders.controller.ts imports it");
   });
 
+  it("#1795: a controller reaches providers through a transitive, cyclic Nest module imports chain", () => {
+    const dir = "whole-lib-import/positive-nest-import-chain";
+    const wholeLibrary = byTaxonomy(dir, "M7 — Whole-library import");
+    const twitterBot = wholeLibrary.find((finding) => finding.location.includes("services/twitter-bot.service.ts"));
+    expect(twitterBot?.impact).toContain("Server-side only");
+    expect(twitterBot?.evidence).toContain("no client entry point does");
+
+    const sync = byTaxonomy(dir, "M7 — Blocking sync I/O in request handler");
+    expect(sync).toHaveLength(1);
+    expect(sync[0]?.location).toContain("services/twitter-bot.service.ts");
+    expect(sync[0]?.evidence).toContain("The request entry point controllers/orders.controller.ts imports it");
+  });
+
+  it("#1795 negative control: a provider in an unimported Nest module remains unreachable", () => {
+    const dir = "whole-lib-import/positive-nest-import-chain";
+    const wholeLibrary = byTaxonomy(dir, "M7 — Whole-library import");
+    const unrelated = wholeLibrary.find((finding) => finding.location.includes("unrelated/unrelated.service.ts"));
+    expect(unrelated).toBeDefined();
+    expect(unrelated?.impact).not.toContain("Server-side only");
+    expect(unrelated?.evidence).not.toContain("no client entry point does");
+    expect(byTaxonomy(dir, "M7 — Blocking sync I/O in request handler").some((finding) => finding.location.includes("unrelated/"))).toBe(false);
+  });
+
   it("#1479: with no client entry to answer from, the claim is left unqualified rather than asserted", () => {
     const unknown = byTaxonomy("whole-lib-import/positive", "M7 — Whole-library import");
     expect(unknown.length).toBeGreaterThan(0);

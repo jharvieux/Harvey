@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,6 +12,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 import { assembleEngagementDocument } from "./audit-report.js";
+import { M5_HARDCODED_SOURCE_COVERAGE_ID } from "./detectors/m5-hardcoded-deployment.js";
 
 // #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
 // asserted end to end.
@@ -28,7 +30,21 @@ const cleanOutput = (argv: string[]): string => {
   const cmd = argv.join(" ");
   if (cmd.includes("quality-scan")) return "[]"; // Finding[] with no M5-00 → knip ran clean
   if (cmd.includes("mutation-scan")) return JSON.stringify({ summary: { overall: {} }, reportRows: [] });
-  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\n\n3 findings across 2 classes:";
+  if (cmd.includes("detect-static")) {
+    const population = (module: "M5" | "M6") => JSON.stringify({
+      schema: 1,
+      module,
+      populations: [{
+        language: "javascript/typescript",
+        identified: { count: 30, pathsDigest: "a".repeat(64) },
+        examined: { count: 30, pathsDigest: "a".repeat(64) },
+        status: "examined",
+        provenance: "clean-run fixture",
+        falsifier: "remove the clean-run detector",
+      }],
+    });
+    return `loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\nidentified 40 source files across the polyglot inventory\nHARVEY_SOURCE_POPULATION M5 ${population("M5")}\nHARVEY_SOURCE_POPULATION M6 ${population("M6")}\n\n3 findings across 2 classes:`;
+  }
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
   if (cmd.includes("pentest.ts")) return JSON.stringify({ findings: [] });
   // #1109: the unit counts a clean run prints — quick-scan's codebase-size line and pii-classify's
@@ -62,7 +78,7 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   ...over,
 });
 
-const probe = (module: AuditModule, outcome: ProbeOutcome): ModuleRunner => ({ module, run: () => outcome });
+const probe = (module: AuditModule, outcome: ProbeOutcome): ModuleRunner => ({ module, producers: [], run: () => outcome });
 const allRan = (): ModuleRunner[] => AUDIT_MODULES.map((m) => probe(m, { status: "ran", detail: `ran ${m}` }));
 
 describe("assertRegistryComplete (#229 — a module with no runner is the skip itself)", () => {
@@ -119,7 +135,7 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
   it("routes a crashed runner to failures instead of excusing it as an environment gap", () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M4"),
-      { module: "M4" as const, run: () => { throw new Error("jscpd binary missing"); } },
+      { module: "M4" as const, producers: [], run: () => { throw new Error("jscpd binary missing"); } },
     ];
     const { recorded, failures } = runAudit(runners, ctx());
     expect(failures).toEqual([{ module: "M4", error: "jscpd binary missing" }]);
@@ -134,7 +150,7 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
   it("keeps running the remaining modules after one crashes, so one bug can't truncate the audit", () => {
     const runners = [
       ...allRan().filter((r) => r.module !== "M1"),
-      { module: "M1" as const, run: () => { throw new Error("boom"); } },
+      { module: "M1" as const, producers: [], run: () => { throw new Error("boom"); } },
     ];
     const { recorded } = runAudit(runners, ctx());
     expect(recorded).toHaveLength(10);
@@ -191,6 +207,70 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
   });
 
+  it("M5 delivers the exact zero-selector NotAssessed reason and finding instead of reading a nonempty broad inventory as clean", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "harvey-m5-static-shipping-"));
+    try {
+      const targetDir = join(fixtureRoot, "target");
+      const captureDir = join(fixtureRoot, "capture");
+      const staticOutPath = join(captureDir, "M5-static.json");
+      mkdirSync(join(targetDir, "src"), { recursive: true });
+      mkdirSync(captureDir);
+      writeFileSync(join(targetDir, "package.json"), `${JSON.stringify({ name: "python-service", private: true }, null, 2)}\n`);
+      writeFileSync(join(targetDir, "src", "service.py"), "def run():\n    return 1\n");
+
+      const repoRoot = join(import.meta.dirname, "..");
+      const staticRun = await new Promise<{ ok: true; output: string; stderr: string }>((resolve, reject) => {
+        const child = spawn(
+          join(repoRoot, "node_modules", ".bin", "tsx"),
+          [join(repoRoot, "src", "cli", "static-detect.ts"), targetDir, "--out", staticOutPath],
+          { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        let output = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => (output += chunk));
+        child.stderr.on("data", (chunk: string) => (stderr += chunk));
+        child.on("error", reject);
+        child.on("close", (code) => {
+          if (code === 0) resolve({ ok: true, output, stderr });
+          else reject(new Error(`static-detect exited ${code}: ${stderr || output}`));
+        });
+      });
+
+      const staticFindings = JSON.parse(readFileSync(staticOutPath, "utf8")) as Finding[];
+      expect(staticFindings.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+      const run = ctx({
+        targetDir,
+        captureDir,
+        readFindings: (path) => path === staticOutPath
+          ? JSON.parse(readFileSync(path, "utf8")) as Finding[]
+          : [],
+        exec: (_command, argv) => argv.includes("detect-static") && argv.includes(staticOutPath)
+          ? staticRun
+          : cleanRun(argv),
+      });
+      const result = runAudit(AUDIT_RUNNERS, run);
+      const m5 = result.recorded.find((row) => row.module === "M5");
+      expect(m5?.status).toBe("partial");
+      expect(m5?.reason).toContain("Hardcoded-deployment source coverage");
+      expect(m5?.reason).toContain("Broad product-source inventory: 1 path(s)");
+      expect(m5?.reason).toContain("exact JavaScript/TypeScript selector: 0 admitted");
+      expect(m5?.reason).toContain("Provenance:");
+      expect(m5?.reason).toContain("Falsifier:");
+      expect(result.findingsByModule.M5?.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+
+      const doc = assembleEngagementDocument(result.recorded, run.env, result.findings, m5137Meta);
+      expect(doc.findings.map((finding) => finding.id)).toContain(M5_HARDCODED_SOURCE_COVERAGE_ID);
+      expect(conservationLedger(result.findings, doc.findings, result.findingsByModule)).toMatchObject({
+        unaccounted: 0,
+        ok: true,
+      });
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   // #1137: knip's M5-00 disclosure has two shapes and the probe must not collapse them. When knip
   // ran on NO scope (no "M5 dead code across N scope(s)" line), the pass is NotAssessed — but the
   // disclosure must still reach the reader, so the reason (with provenance + falsifier) is carried
@@ -204,8 +284,9 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     });
     const { recorded } = runAudit(AUDIT_RUNNERS, noScope);
     const m5 = recorded.find((r) => r.module === "M5");
-    expect(m5?.status).toBe("requires-live-run");
+    expect(m5?.status).toBe("partial");
     expect(m5?.reason).toMatch(/knip did not run on any scope/);
+    expect(m5?.detail).toMatch(/source tier/);
     const cov = assembleEngagementDocument(recorded, noScope.env, [], m5137Meta).coverage?.find((c) => c.module === "M5");
     expect(cov?.reason).toMatch(/knip did not run on any scope/);
     expect(cov?.reason).toMatch(/\[MEASURED; falsifier:/);
@@ -510,7 +591,7 @@ describe("M10 classifies a Prisma app's schema.prisma when no migrations have be
 // --findings-out failed schema validation, so the engagement findings.json was never written.
 describe("monorepo fan-out namespaces finding ids by instance (#620)", () => {
   const withId = (id: string): Finding => ({ id } as unknown as Finding);
-  const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+  const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
 
   it("distinguishes the same finding id emitted by two apps so ids stay unique", () => {
     const runners = swap("M5", () => [
@@ -780,7 +861,7 @@ describe("a probe that examined nothing is not-assessed, not a clean row (#1096/
 
   it("M8 — the test-intent tier's file count is the unit on every rung of the verdict ladder", () => {
     const m8 = status(AUDIT_RUNNERS, {}, "M8");
-    expect(m8?.detail).toContain("examined 42 source files (test-intent tier, tests included)");
+    expect(m8?.detail).toContain("examined 40 source files (test-intent tier, tests included)");
   });
 });
 
@@ -1741,7 +1822,7 @@ describe("formatFailures", () => {
 // wrote NOTHING because `assembleEngagementDocument`'s output failed report-schema validation on
 // two duplicate ids. Both roots are fixed at their detectors; this is the net under the next one.
 describe("duplicate finding ids are disambiguated, never dropped and never fatal (#1470)", () => {
-  const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+  const swapIn = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { ...r, run } : r));
   const at = (id: string, location: string): Finding => ({ id, location } as unknown as Finding);
 
   it("gives two DIFFERENT findings that share an id two different ids", () => {

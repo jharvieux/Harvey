@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, relative } from "node:path";
 import { validateFindings, type Finding, type ReportMeta } from "../findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "../fs-walk.js";
-import type { SemgrepDiagnosticEvidence, SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
+import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence, type SemgrepExecutionPlanReceipt, type SemgrepFamilyCacheOptions } from "./semgrep-family-cache.js";
 
 export const MECHANICAL_PHASES = [
   "secrets-history",
@@ -32,24 +32,37 @@ export interface MechanicalExaminedUnitIdentity {
   identity: string;
 }
 
+export interface MechanicalProducerNotAssessed {
+  reason: string;
+  provenance: string;
+  falsifier: string;
+  inventory: {
+    broadUnits: number;
+    selectedUnits: 0;
+    pathSetDigest: string;
+    scope: string;
+  };
+}
+
 export interface MechanicalProducerRecord {
   detector: string;
   phase: MechanicalPhase;
   order: number;
-  module: "M1" | "M6";
+  module: "M1" | "M5" | "M6" | "M8";
   unitsExamined: number;
   examinedUnitIdentities: MechanicalExaminedUnitIdentity[];
   examinedUnitDigest?: string;
   findings: number;
   durationMs: number;
-  status: "ran" | "not-applicable" | "cached";
+  status: "ran" | "not-assessed" | "not-applicable" | "cached";
+  notAssessed?: MechanicalProducerNotAssessed;
 }
 
 export interface MechanicalPhaseValue {
   findings: Finding[];
   scope: MechanicalPhaseScope;
   producers?: MechanicalProducerRecord[];
-  evidence?: { semgrepDiagnostics: SemgrepDiagnosticEvidence };
+  evidence?: { semgrepDiagnostics: SemgrepDiagnosticEvidence; semgrepExecution?: SemgrepExecutionPlanReceipt };
 }
 
 export interface MechanicalPhaseRecord extends MechanicalPhaseValue {
@@ -82,7 +95,7 @@ interface MechanicalPhaseIdentityComponents {
 }
 
 interface CacheArtifact {
-  schema: 3;
+  schema: 5;
   phase: MechanicalPhase;
   key: string;
   targetRevision: string;
@@ -204,16 +217,38 @@ function producerRecordProblems(producer: unknown, expectedPhase: MechanicalPhas
   if (typeof row.detector !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(row.detector)) problems.push("producer id is missing or noncanonical");
   if (row.phase !== expectedPhase) problems.push("producer phase does not match its artifact");
   if (!Number.isInteger(row.order) || row.order! < 0) problems.push("producer order is malformed");
-  if (row.module !== "M1" && row.module !== "M6") problems.push("producer module is malformed");
+  if (row.module !== "M1" && row.module !== "M5" && row.module !== "M6" && row.module !== "M8") problems.push("producer module is malformed");
   if (!Number.isInteger(row.unitsExamined) || row.unitsExamined! < 0) problems.push("producer examined count is malformed");
   if (!Number.isInteger(row.findings) || row.findings! < 0) problems.push("producer finding count is malformed");
   if (typeof row.durationMs !== "number" || !Number.isFinite(row.durationMs) || row.durationMs < 0) problems.push("producer duration is malformed");
-  if (row.status !== "ran" && row.status !== "not-applicable" && row.status !== "cached") problems.push("producer status is malformed");
+  if (row.status !== "ran" && row.status !== "not-assessed" && row.status !== "not-applicable" && row.status !== "cached") problems.push("producer status is malformed");
   const unitProblems = examinedUnitProblems(row.detector ?? "", row.examinedUnitIdentities);
   problems.push(...unitProblems);
   if (Array.isArray(row.examinedUnitIdentities) && row.unitsExamined !== row.examinedUnitIdentities.length) problems.push("producer examined count differs from its exact identity population");
   if (requireDigest && typeof row.examinedUnitDigest !== "string") problems.push("producer examined-unit digest is missing");
   if (Array.isArray(row.examinedUnitIdentities) && row.examinedUnitDigest !== undefined && row.examinedUnitDigest !== mechanicalExaminedUnitDigest(row.examinedUnitIdentities)) problems.push("producer examined-unit digest does not match its raw identity population");
+  const receipt = row.notAssessed;
+  if (row.status === "not-assessed") {
+    if (row.unitsExamined !== 0) problems.push("not-assessed producer must examine zero selected units");
+    if (!Number.isInteger(row.findings) || row.findings! <= 0) problems.push("not-assessed producer must emit a client-visible disclosure finding");
+    if (!receipt || typeof receipt !== "object") {
+      problems.push("not-assessed producer is missing its typed reason receipt");
+    } else {
+      if (typeof receipt.reason !== "string" || receipt.reason.trim().length < 20) problems.push("not-assessed reason is incomplete");
+      if (typeof receipt.provenance !== "string" || receipt.provenance.trim().length < 20) problems.push("not-assessed provenance is incomplete");
+      if (typeof receipt.falsifier !== "string" || receipt.falsifier.trim().length < 20) problems.push("not-assessed falsifier is incomplete");
+      if (!receipt.inventory || typeof receipt.inventory !== "object") {
+        problems.push("not-assessed inventory is missing");
+      } else {
+        if (!Number.isInteger(receipt.inventory.broadUnits) || receipt.inventory.broadUnits <= 0) problems.push("not-assessed broad inventory must be non-empty");
+        if (receipt.inventory.selectedUnits !== 0) problems.push("not-assessed selected inventory must be exactly zero");
+        if (!/^[a-f0-9]{64}$/.test(receipt.inventory.pathSetDigest ?? "")) problems.push("not-assessed path-set digest is malformed");
+        if (typeof receipt.inventory.scope !== "string" || receipt.inventory.scope.trim().length < 20) problems.push("not-assessed scope is incomplete");
+      }
+    }
+  } else if (receipt !== undefined) {
+    problems.push("typed not-assessed receipt is attached to a producer with a different status");
+  }
   return problems;
 }
 
@@ -222,10 +257,18 @@ function phaseValueProblems(phase: MechanicalPhase, value: MechanicalPhaseValue,
   if (value.evidence !== undefined) {
     const diagnostic = value.evidence.semgrepDiagnostics;
     if (phase !== "semgrep") problems.push("Semgrep diagnostic evidence is attached to a non-Semgrep phase");
-    if (diagnostic?.schema !== 1 || !Array.isArray(diagnostic.errors) || !Array.isArray(diagnostic.skipped) || !/^[a-f0-9]{64}$/.test(diagnostic.sha256 ?? "")) {
+    if (diagnostic?.schema !== 4 || !Array.isArray(diagnostic.errors) || !Array.isArray(diagnostic.skipped)
+      || !/^[a-f0-9]{64}$/.test(diagnostic.sha256 ?? "")) {
       problems.push("Semgrep diagnostic evidence is incomplete or malformed");
     } else if (diagnostic.sha256 !== createHash("sha256").update(stable({ errors: diagnostic.errors, skipped: diagnostic.skipped })).digest("hex")) {
       problems.push("Semgrep diagnostic evidence digest differs from its complete raw content");
+    }
+    if (value.evidence.semgrepExecution !== undefined) {
+      try {
+        assertSuccessfulSemgrepExecutionReceipt(value.evidence.semgrepExecution);
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : String(error));
+      }
     }
   }
   if (value.producers === undefined) return problems;
@@ -326,9 +369,9 @@ export function mechanicalPhasePayloadDigest(value: MechanicalPhaseValue): strin
   return digestParts([stable(persistedPhaseValue(value))]);
 }
 
-function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">): CacheArtifact {
+function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "phase" | "key" | "targetRevision" | "targetTree" | "identity">, requireSemgrepExecution: boolean): CacheArtifact {
   const value = JSON.parse(text) as Partial<CacheArtifact>;
-  if (value.schema !== 3 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
+  if (value.schema !== 5 || value.phase !== expected.phase || value.key !== expected.key || value.targetRevision !== expected.targetRevision || value.targetTree !== expected.targetTree || stable(value.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
   }
   if (!Array.isArray(value.findings)) throw new Error("artifact findings are incomplete or malformed");
@@ -338,6 +381,7 @@ function parseArtifact(text: string, expected: Pick<CacheArtifact, "schema" | "p
     throw new Error("artifact examined-scope metadata is incomplete or zero");
   }
   if (value.producers !== undefined && !Array.isArray(value.producers)) throw new Error("artifact producer execution receipts are malformed");
+  if (requireSemgrepExecution && value.evidence?.semgrepExecution === undefined) throw new Error("artifact successful Semgrep semantic execution receipt is missing");
   const receiptProblems = phaseValueProblems(expected.phase, {
     findings: value.findings,
     scope: value.scope,
@@ -372,7 +416,7 @@ function closestPriorIdentity(dir: string, phase: MechanicalPhase, current: Mech
   for (const name of readEntriesSafe(phaseDir).entries.filter((candidate) => !candidate.isDirectory && candidate.name.endsWith(".json")).map((candidate) => candidate.name)) {
     try {
       const value = JSON.parse(readFileSync(join(phaseDir, name), "utf8")) as Partial<CacheArtifact>;
-      if (value.schema !== 3 || value.phase !== phase || !value.identity) continue;
+      if (value.schema !== 5 || value.phase !== phase || !value.identity) continue;
       const previous = new Map(componentEntries(value.identity));
       const names = [...new Set([...currentEntries.keys(), ...previous.keys()])].sort();
       const changed = names.filter((component) => currentEntries.get(component) !== previous.get(component));
@@ -418,11 +462,12 @@ export async function executeMechanicalPhase(
   };
   const key = digestParts([stable({ phase, identity })]);
   const path = join(cache.dir, phase, `${key}.json`);
-  const expected = { schema: 3 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const expected = { schema: 5 as const, phase, key, targetRevision: cache.targetRevision, targetTree: cache.targetTree, identity };
+  const requireSemgrepExecution = phase === "semgrep" && cache.semgrepFamilies !== undefined;
   let hit: CacheArtifact | undefined;
   if (existsSync(path)) {
     try {
-      hit = parseArtifact(readFileSync(path, "utf8"), expected);
+      hit = parseArtifact(readFileSync(path, "utf8"), expected, requireSemgrepExecution);
     } catch (error) {
       cache.onEvent?.(`CACHE REJECT ${phase} ${key.slice(0, 12)}: ${error instanceof Error ? error.message : String(error)}; recomputing`);
       rmSync(path, { force: true });
@@ -431,10 +476,11 @@ export async function executeMechanicalPhase(
   const movedIdentity = hit ? undefined : closestPriorIdentity(cache.dir, phase, identity);
   if (hit && cache.mode === "read-write") {
     cache.onEvent?.(`CACHE HIT ${phase} ${key.slice(0, 12)} (${hit.findings.length} finding(s), ${hit.scope.unitsExamined} unit(s))`);
-    return { phase, findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" ? "not-applicable" : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
+    return { phase, findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), producers: hit.producers?.map((producer) => ({ ...producer, durationMs: 0, status: producer.status === "not-applicable" || producer.status === "not-assessed" ? producer.status : "cached" })), durationMs: Date.now() - started, cache: "hit", reason: reproducible ?? policy.reason, key };
   }
   const value = withProducerDigests(await execute());
   assertPhaseValue(phase, value, true);
+  if (requireSemgrepExecution && value.evidence?.semgrepExecution === undefined) throw new Error("semgrep: cacheable current-readiness phase cannot publish without an actual successful semantic execution receipt");
   if (!Number.isInteger(value.scope.unitsExamined) || value.scope.unitsExamined <= 0) throw new Error(`${phase}: examined scope must be a positive integer`);
   const hitValue = hit ? { findings: hit.findings, scope: hit.scope, ...(hit.evidence === undefined ? {} : { evidence: hit.evidence }), ...(hit.producers === undefined ? {} : { producers: hit.producers }) } : undefined;
   if (hitValue && !equivalent(value, hitValue)) throw new Error(`${phase}: forced-cold result differs from cached findings, examined scope, or producer census for ${key}`);
@@ -444,7 +490,7 @@ export async function executeMechanicalPhase(
   const payloadDigest = mechanicalPhasePayloadDigest(persisted);
   writeFileSync(temp, `${JSON.stringify({ ...expected, payloadDigest, ...persisted }, null, 2)}\n`);
   renameSync(temp, path);
-  const reread = parseArtifact(readFileSync(path, "utf8"), expected);
+  const reread = parseArtifact(readFileSync(path, "utf8"), expected, requireSemgrepExecution);
   if (!equivalent(value, { findings: reread.findings, scope: reread.scope, ...(reread.evidence === undefined ? {} : { evidence: reread.evidence }), ...(reread.producers === undefined ? {} : { producers: reread.producers }) })) throw new Error(`${phase}: artifact changed during write/read equivalence check`);
   const status: MechanicalCacheStatus = hit ? "recomputed" : "miss";
   cache.onEvent?.(`CACHE ${hit ? "VERIFY" : "MISS"} ${phase} ${key.slice(0, 12)}: cold result ${hit ? "matches" : "stored and reread from"} artifact${movedIdentity ? `; identity changed: ${movedIdentity}` : ""}`);

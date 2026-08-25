@@ -26,6 +26,7 @@ import { resolve } from "node:path";
 import { AUDIT_MODULES, type AuditModule } from "../audit-coverage.js";
 import { buildPassArtifact, type PassArtifact, writePassArtifact } from "../audit-pass-artifact.js";
 import type { Finding } from "../findings.js";
+import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -39,6 +40,7 @@ const pass = flag("--pass");
 const out = flag("--out");
 const summary = flag("--summary");
 const findingsPath = flag("--findings");
+const executionReceiptsPath = flag("--execution-receipts");
 // #502: for an M1 semantic pass, record whether an M3 hotspot focus brief (scan-focus) was supplied
 // to /vuln-scan. Presence of the flag ⇒ true; absence ⇒ left unrecorded (surfaced as "no focus").
 const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
@@ -47,7 +49,7 @@ const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
 const hotspotsPath = flag("--hotspots");
 
 if (!module || !target || !pass || !out) {
-  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--hotspots file.json] [--summary text] [--hotspot-focus]");
+  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--execution-receipts receipts.json] [--require-effectiveness-receipts]");
   process.exit(2);
 }
 if (!AUDIT_MODULES.includes(module as AuditModule)) {
@@ -83,6 +85,28 @@ if (hotspotsPath) {
   hotspots = parsed as string[];
 }
 
+let producerExecutionReceipts: ProducerExecutionReceipt[] | undefined;
+if (executionReceiptsPath) {
+  if (!existsSync(executionReceiptsPath)) {
+    console.error(`--execution-receipts file not found: ${executionReceiptsPath}`);
+    process.exit(1);
+  }
+  const parsed = JSON.parse(readFileSync(executionReceiptsPath, "utf8")) as unknown;
+  if (!Array.isArray(parsed)) {
+    console.error(`--execution-receipts must be a JSON array: ${executionReceiptsPath}`);
+    process.exit(1);
+  }
+  try { assertUniqueProducerExecutionReceipts(parsed); } catch (error) {
+    console.error(`--execution-receipts is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  producerExecutionReceipts = parsed;
+}
+if (args.includes("--require-effectiveness-receipts") && !producerExecutionReceipts?.length) {
+  console.error("record-pass: actual producer execution receipts are required for effectiveness liveness");
+  process.exit(1);
+}
+
 try {
   const artifact = buildPassArtifact({
     module: module as AuditModule,
@@ -93,6 +117,7 @@ try {
     findings,
     hotspotFocus,
     hotspots,
+    producerExecutionReceipts,
   });
   const path = writePassArtifact(resolve(out), artifact);
   console.error(`Recorded ${module} ${pass} pass for ${resolve(target)}${findings ? ` (${findings.length} finding(s))` : ""} → ${path}`);

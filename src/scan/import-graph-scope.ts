@@ -32,10 +32,14 @@
 // MEASURED 2026-08-01 over the 17 pinned EXTERNAL_CORPUS commits (`scratch/census-1503.ts`, the
 // production loader + this census). It fires on 14 and is SILENT on 3 (multi-tenant-starter,
 // launch-mvp, supabase-security-labs), so it has a real failing direction rather than being a
-// status line: boxyhq 125 dropped of 644 (its tsconfig sets `baseUrl` with no `paths` wildcard, so
-// `import "hooks/useTeam"` is a resolution shape this repo has never modelled — found BY this row),
+// status line: boxyhq 125 dropped of 644 (its tsconfig sets `baseUrl: "."` plus two unrelated
+// `paths` wildcards, so `import "hooks/useTeam"` was a resolution shape this repo had never
+// modelled — found BY this row),
 // inbox-zero 239 of 6,623 (`@/generated/prisma/*`, output not in the checkout), tanstack-com 42,
 // documenso 28, ghostfolio 12, carbon 12.
+// #1812 re-measured the same 17 clean pins on 2026-08-20: boxyhq is now 4 dropped of 644 (640
+// resolved), documenso 27 of 8,516, inbox-zero 238 of 6,623, and subscription-payments 1 of 92;
+// the other 13 targets' resolved/dropped counts are unchanged. The remaining rows stay disclosed.
 // NEGATIVE CONTROL, same command with `collectPathAliases` stubbed to its bare default — i.e. the
 // #1479 regression re-created: ghostfolio 12 -> 2,128 dropped (2,577 -> 461 resolved), carbon
 // 12 -> 7,494, inbox-zero 239 -> 6,284. The row that was absent when this actually happened now
@@ -56,6 +60,7 @@ const ASSET_SPECIFIER = /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|
 // by its shape: proposit really declares `"@/*": ["./*"]` with `baseUrl: "."`, which produces a
 // byte-identical row, and a shape test read that genuine alias as a degradation.
 const isBuiltInDefault = (a: PathAlias): boolean => a.fallback === true;
+const isBaseUrlRoot = (a: PathAlias): boolean => a.kind === "base-url";
 
 const BUILTINS = new Set(builtinModules);
 const isBuiltinModule = (specifier: string): boolean => BUILTINS.has(specifier.split("/")[0] ?? specifier);
@@ -108,6 +113,8 @@ interface ImportGraphCensus {
    * split would be a guess dressed as a count.
    */
   aliasPrefixes: number;
+  /** Configuration-scoped compilerOptions.baseUrl roots available to the production resolver. */
+  baseUrlRoots: number;
   /** Of those, the workspace-member package names matched EXACTLY as whole specifiers (#1353). */
   workspacePackages: number;
   /** True when `collectPathAliases` declared nothing and fell back to the built-in `@/` default. */
@@ -130,10 +137,12 @@ export function importGraphCensus(files: readonly SourceInput[]): ImportGraphCen
   const allPaths = new Set(mutable.map((f) => f.path));
   const manifests = mutable.filter((f) => f.path === "package.json" || f.path.endsWith("/package.json"));
   const external = declaredDependencies(manifests);
+  const baseUrlRoots = aliases.filter(isBaseUrlRoot).length;
   const census: ImportGraphCensus = {
-    aliasPrefixes: aliases.filter((a) => !isBuiltInDefault(a)).length,
+    aliasPrefixes: aliases.filter((a) => a.kind === "paths" || a.kind === "workspace").length,
+    baseUrlRoots,
     workspacePackages: aliases.filter((a) => a.entryBases !== undefined).length,
-    builtInDefaultOnly: aliases.some(isBuiltInDefault),
+    builtInDefaultOnly: aliases.some(isBuiltInDefault) && baseUrlRoots === 0,
     workspaceImplied: manifests.length > 1 || mutable.some((f) => f.path === "pnpm-workspace.yaml") || manifests.some((f) => /"workspaces"\s*:/.test(f.text)),
     edgesResolved: 0,
     unresolvedRelative: 0,
@@ -184,7 +193,7 @@ export function importGraphNotAssessedRows(files: readonly SourceInput[]): Findi
 
   const aliasSource = c.builtInDefaultOnly
     ? `NO tsconfig/jsconfig in this target declares a wildcard \`paths\` alias, so alias resolution fell back to the built-in \`@/\` → repo-root default${c.workspaceImplied ? " — on a target whose manifests declare a workspace, which is the shape that silently disconnected an entire Nx monorepo's graph (#1479/#1490)" : ""}`
-    : `${c.aliasPrefixes} alias prefix(es) were resolvable (tsconfig/jsconfig \`paths\` entries plus workspace-member subpaths), ${c.workspacePackages} of them workspace-member package names`;
+    : `${c.baseUrlRoots > 0 ? `${c.baseUrlRoots} configuration-scoped \`baseUrl\` root(s) and ` : ""}${c.aliasPrefixes} alias prefix(es) were resolvable (tsconfig/jsconfig \`paths\` entries plus workspace-member subpaths), ${c.workspacePackages} of the prefixes workspace-member package names`;
   // Stated as what was MEASURED, not as a diagnosis. A dropped bare specifier is either a repo-local
   // module the resolver could not reach OR a package no manifest in this checkout declares; the
   // check does not separate those two, and both mean the same thing here — the edge is not in the graph.
@@ -206,7 +215,7 @@ export function importGraphNotAssessedRows(files: readonly SourceInput[]): Findi
       evidence: `${aliasSource}. ${c.edgesResolved} import edge(s) resolved. ${droppedDetail}.${c.examples.length ? ` e.g. ${c.examples.join("; ")}.` : ""}`,
       impact:
         "Six checks read this graph and all of them answer by silence when an edge is missing: M7's bundle and blocking-sync-I/O reachability, M9's server→client data leak and server-only-guard resolution, the request-reachability closure that decides whether a route can reach a sink, M5's cross-file async-caller check, M1's cross-file service-role-key literal, and M1's BOLA-through-an-imported-repository check. For the edges listed here every one of those passes saw an UNCONNECTED module. Recorded so their absence reads as 'not assessed', not 'assessed and clean'.",
-      fix: "Read the examples above. If they point at generated code (a Prisma client, compiled protobufs) or at a dependency that is installed but undeclared, that is expected and this row is the record of it. If they point at real committed source, the mapping is declared somewhere Harvey does not read — a bare `baseUrl` with no `paths` wildcard, a bundler config (`vite.config`, `webpack.resolve.alias`), a tsconfig `extends` chain, or a package `exports` condition — so declare it as a tsconfig `paths` wildcard and re-run to connect those edges.",
+      fix: "Read the examples above. If they point at generated code (a Prisma client, compiled protobufs) or at a dependency that is installed but undeclared, that is expected and this row is the record of it. If they point at real committed source, the mapping is declared somewhere Harvey does not read — a bundler config (`vite.config`, `webpack.resolve.alias`), a tsconfig `extends` chain, or a package `exports` condition — so declare it as a tsconfig `paths` wildcard and re-run to connect those edges.",
       value: 1,
       ease: 4,
       safety: 5,

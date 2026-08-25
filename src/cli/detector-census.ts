@@ -16,14 +16,88 @@
 // Run: pnpm detector-census
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CALIBRATION_PLANTS } from "../audit-conservation.js";
+import { AUDIT_RUNNERS } from "../audit-runners.js";
+import {
+  buildEffectivenessInventory,
+  getEffectivenessInventory,
+  getEffectivenessInventoryJson,
+  serializeEffectivenessInventory,
+  validateEffectivenessInventory,
+} from "../effectiveness-registry.js";
+import { discoverEffectivenessRouteGraph } from "../effectiveness-route-graph.js";
+import type { EffectivenessInventory } from "../effectiveness-schema.js";
+import { assertUniqueProducerExecutionReceipts, semgrepProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
 import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
+import { SCORED_GATES } from "../scored-gates.js";
+import { MECHANICAL_DETECTORS } from "../scan/mechanical-detector-registry.js";
 import {
   MECHANICAL_REGISTRY,
   operatorMechanicalScopeRows,
   validateMechanicalEngineRegistry,
 } from "../scan/mechanical-engine-registry.js";
+import { REGISTRY_PACKS } from "../scan/semgrep.js";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
+
+function effectivenessJson(): string {
+  const receiptFlag = process.argv.indexOf("--execution-receipts");
+  let producerExecutionReceipts: ProducerExecutionReceipt[] = [];
+  if (receiptFlag >= 0) {
+    const path = process.argv[receiptFlag + 1];
+    if (!path) throw new Error("--execution-receipts needs a JSON file");
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (Array.isArray(parsed)) {
+      assertUniqueProducerExecutionReceipts(parsed);
+      producerExecutionReceipts = parsed;
+    } else {
+      producerExecutionReceipts = semgrepProducerExecutionReceipts(parsed);
+      assertUniqueProducerExecutionReceipts(producerExecutionReceipts);
+    }
+  }
+  const reverseInputs = process.argv.includes("--reverse-effectiveness-inputs");
+  const inventory: EffectivenessInventory = reverseInputs
+    ? buildEffectivenessInventory({
+        root: ROOT,
+        auditRunners: [...AUDIT_RUNNERS].reverse(),
+        mechanicalRegistry: [...MECHANICAL_REGISTRY].reverse(),
+        mechanicalDetectors: [...MECHANICAL_DETECTORS].reverse(),
+        scoredGates: [...SCORED_GATES].reverse(),
+        plants: [...CALIBRATION_PLANTS].reverse(),
+        registryPacks: [...REGISTRY_PACKS].reverse(),
+        producerExecutionReceipts,
+      })
+    : producerExecutionReceipts.length === 0
+      ? getEffectivenessInventory()
+      : buildEffectivenessInventory({ root: ROOT, producerExecutionReceipts });
+  const problems = validateEffectivenessInventory(inventory, { root: ROOT });
+  if (problems.length > 0) throw new Error(`effectiveness inventory invalid:\n${problems.join("\n")}`);
+  if (!Object.isFrozen(inventory)) throw new Error("effectiveness inventory must be deeply frozen at the production boundary");
+
+  const implementations = inventory.producers.flatMap((producer) =>
+    producer.implementations.map((item) => ({
+      ...item,
+      producerId: producer.id,
+      deliveryKind: producer.deliveryKind,
+      endpoint: producer.deliveryKind === "conservation" ? "conservation" as const : producer.populationClass === "true-finding-producer" ? "client-finding-delivery" as const : "coverage-disclosure" as const,
+    })));
+  const discovered = discoverEffectivenessRouteGraph(ROOT, implementations);
+  if (JSON.stringify(discovered.routes) !== JSON.stringify(inventory.receipt.routes)) {
+    throw new Error("effectiveness discovery receipt drifted from the live production call graph");
+  }
+
+  const serialized = serializeEffectivenessInventory(inventory);
+  if (!reverseInputs && producerExecutionReceipts.length === 0
+    && (serialized !== getEffectivenessInventoryJson()
+      || JSON.stringify(inventory) !== JSON.stringify(getEffectivenessInventory()))) {
+    throw new Error("effectiveness inventory drifted from its deterministic module export");
+  }
+  return serialized;
+}
+
+if (process.argv.includes("--effectiveness-json")) {
+  console.log(effectivenessJson());
+} else {
 const registryProblems = validateMechanicalEngineRegistry(ROOT);
 if (registryProblems.length > 0) throw new Error(`mechanical engine registry invalid:\n${registryProblems.join("\n")}`);
 
@@ -123,3 +197,4 @@ console.log(
     "(pnpm validate:calibration). Re-run this tool after any detector change — never quote a\n" +
     "stored number.",
 );
+}

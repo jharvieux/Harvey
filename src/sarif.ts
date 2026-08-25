@@ -27,7 +27,7 @@
 // way to export without one is to state IN THE OUTPUT why there isn't one (`coverageAbsent`),
 // which becomes its own warning notification. There is no silent path.
 
-import { findingIdentity } from "./audit-diff.js";
+import { findingIdentity, type FindingIdentityOptions } from "./audit-diff.js";
 import type { CoverageRow, Finding, Severity } from "./findings.js";
 import { relativizeScanScope } from "./scan/scan-scope.js";
 
@@ -135,7 +135,7 @@ interface SarifNotification {
 
 type CoverageInput = { coverage: CoverageRow[] } | { coverageAbsent: string };
 
-interface SarifOptions {
+interface SarifOptions extends Pick<FindingIdentityOptions, "caseSensitive"> {
   toolVersion?: string;
   // Absolute-path prefix stripped from artifact URIs so they are repo-relative, which is what
   // GitHub code scanning needs to attach an alert to a file.
@@ -218,7 +218,9 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
             }],
           }
         : {}),
-      partialFingerprints: { "harveyFindingIdentity/v1": findingIdentity(f) },
+      partialFingerprints: {
+        "harveyFindingIdentity/v1": findingIdentity(f, { root: opts.baseUri, caseSensitive: opts.caseSensitive }),
+      },
       properties: {
         harveyId: f.id,
         severity: f.severity,

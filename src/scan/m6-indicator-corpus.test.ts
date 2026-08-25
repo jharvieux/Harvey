@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { declaredIndicatorClasses, scoreM6IndicatorCorpus } from "./m6-indicator-corpus.js";
 import { m6HandrolledEntries } from "./calibration/m6-handrolled.entries.js";
+import { m5PolyglotQualityEntries } from "./calibration/m5-polyglot-quality.entries.js";
 import { CORPUS, corpusMatchKeyedRows, moduleCensus, parityVerdict, selfMatchingKeys } from "./calibration.js";
 import type { CorpusEntry } from "./calibration/types.js";
 
@@ -93,11 +94,12 @@ describe("M6 indicator corpus (#1371)", () => {
 });
 
 describe("M6 joins the census and the parity minimum for real (#341/#427/#1314)", () => {
-  it("counts M6 in the per-module census on its own fixtures", () => {
+  it("counts M6 indicator and polyglot coverage fixtures in the per-module census", () => {
     const m6 = moduleCensus(CORPUS).find((c) => c.module === "M6");
+    const ownedEntries = [...m6HandrolledEntries, ...m5PolyglotQualityEntries].filter((e) => e.module === "M6");
     expect(m6).toBeDefined();
-    expect(m6!.positivesStatic).toBe(m6HandrolledEntries.filter((e) => e.kind === "positive").length);
-    expect(m6!.negatives).toBe(m6HandrolledEntries.filter((e) => e.kind === "negative").length);
+    expect(m6!.positivesStatic).toBe(ownedEntries.filter((e) => e.kind === "positive").length);
+    expect(m6!.negatives).toBe(ownedEntries.filter((e) => e.kind === "negative").length);
   });
 
   it("retires M6's parity exemption — neither thin, nor exempt, nor stale", () => {

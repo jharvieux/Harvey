@@ -14,6 +14,34 @@ import type { SourceInput } from "./common.js";
 // parses everything through ts.ScriptKind.TS/TSX, which handles plain JS, so widening the filter
 // is all that was needed.
 export const SOURCE_FILE = /\.(ts|tsx|jsx|js|mjs|cjs|mts|cts)$/;
+
+export const SOURCE_LANGUAGES = [
+  "javascript/typescript",
+  "python",
+  "go",
+  "rust",
+  "csharp",
+  "c",
+  "cpp",
+] as const;
+export type SourceLanguage = (typeof SOURCE_LANGUAGES)[number];
+
+// #1928: this is the IDENTIFICATION surface, deliberately broader than SOURCE_FILE. Existing
+// TypeScript-AST consumers keep using SOURCE_FILE; polyglot consumers enumerate this inventory and
+// explicitly record which language populations they did and did not examine.
+export const IDENTIFIED_SOURCE_FILE = /\.(?:[cm]?[jt]sx?|py|go|rs|cs|c|h|cc|cpp|cxx|hh|hpp|hxx)$/i;
+
+export function sourceLanguage(path: string): SourceLanguage | undefined {
+  const lower = path.toLowerCase();
+  if (/\.[cm]?[jt]sx?$/.test(lower)) return "javascript/typescript";
+  if (lower.endsWith(".py")) return "python";
+  if (lower.endsWith(".go")) return "go";
+  if (lower.endsWith(".rs")) return "rust";
+  if (lower.endsWith(".cs")) return "csharp";
+  if (/\.(?:c|h)$/.test(lower)) return "c";
+  if (/\.(?:cc|cpp|cxx|hh|hpp|hxx)$/.test(lower)) return "cpp";
+  return undefined;
+}
 // Bundler output committed into a repo (public/ vendor scripts, prebuilt chunks) is machine-
 // generated, not fixable in place, and would swamp the M5/M6 indicator detectors now that .js is
 // read at all. Name check plus a content check, because minified filenames are not standardised.
@@ -59,20 +87,36 @@ export const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out
 // full set instead, because test files are its subject matter.
 export const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mocks__|__fixtures__|__snapshots__)\/|\.stories\./;
 
-export function loadSources(root: string): SourceInput[] {
+export function isTestSourcePath(path: string): boolean {
+  return NON_PRODUCT.test(path)
+    || /(^|\/)tests?\/.*\.py$|(^|\/)test_[^/]+\.py$|[^/]+_test\.py$/.test(path)
+    || /_test\.go$/.test(path)
+    || /(^|\/)tests?\/.*\.rs$/.test(path);
+}
+
+function loadTree(root: string, include: (entry: string) => boolean): SourceInput[] {
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
     for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
       if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
-      } else if (SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry)) {
+      } else if (include(entry)) {
         const path = relative(root, full).split(sep).join("/");
         const text = readFileSync(full, "utf8");
-        if (!CONFIG_FILE.test(entry) && isGeneratedSource(entry, text)) continue;
+        if (SOURCE_FILE.test(entry) && !CONFIG_FILE.test(entry) && isGeneratedSource(entry, text)) continue;
         files.push({ path, text });
       }
     }
   };
   walk(root);
   return files;
+}
+
+/** Exact source-language population for consumers that make polyglot coverage claims. */
+export function loadSourceInventory(root: string): SourceInput[] {
+  return loadTree(root, (entry) => IDENTIFIED_SOURCE_FILE.test(entry));
+}
+
+export function loadSources(root: string): SourceInput[] {
+  return loadTree(root, (entry) => SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry));
 }

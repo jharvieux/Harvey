@@ -2,8 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildPassArtifact, findFreshPass, MAX_PASS_AGE_MS, mergePassArtifact, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
+import { buildPassArtifact, findFreshPass, ingestPassArtifactReceipts, MAX_PASS_AGE_MS, mergePassArtifact, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
+import { createProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const NOW = Date.parse("2026-07-17T12:00:00Z");
 const iso = (msAgo: number): string => new Date(NOW - msAgo).toISOString();
@@ -15,6 +16,33 @@ const artifact = (over: Partial<PassArtifact> = {}): PassArtifact => ({
   pass: "semantic",
   generatedAt: iso(DAY),
   ...over,
+});
+
+describe("schema-v3 pass effectiveness evidence", () => {
+  const execution = () => createProducerExecutionReceipt({
+    executionId: "m2-run",
+    producerId: "m2:active-exploit-suite",
+    implementationId: "src/pentest/active-exploit.ts#runActiveExploitSuite",
+    module: "M2",
+    tier: "dynamic",
+    findingFamilyIds: ["M2-ACTIVE-*"] ,
+    findingIds: ["M2-ACTIVE-1"],
+    edges: [{ kind: "callback", from: "pentest", to: "result:m2-run" }],
+  });
+
+  it("binds actual producer and ingest edges without losing multiplicity", () => {
+    const pass = buildPassArtifact({ module: "M2", target: "/target", pass: "dynamic", generatedAt: iso(DAY), producerExecutionReceipts: [execution()] });
+    expect(pass.producerExecutionReceipts?.[0]?.edges.at(-1)?.kind).toBe("artifact-produce");
+    const ingested = ingestPassArtifactReceipts(pass, "audit-runner:M2");
+    expect(ingested[0]?.edges.map((edge) => edge.kind)).toEqual(["callback", "artifact-produce", "artifact-ingest"]);
+  });
+
+  it("rejects missing and independently tampered producer evidence", () => {
+    expect(() => ingestPassArtifactReceipts(artifact({ module: "M2", pass: "dynamic" }), "audit-runner:M2")).toThrow(/no actual producer/);
+    const pass = buildPassArtifact({ module: "M2", target: "/target", pass: "dynamic", generatedAt: iso(DAY), producerExecutionReceipts: [execution()] });
+    pass.producerExecutionReceipts![0] = { ...pass.producerExecutionReceipts![0]!, producerId: "forged" };
+    expect(() => ingestPassArtifactReceipts(pass, "audit-runner:M2")).toThrow(/digest/);
+  });
 });
 
 // A context whose artifactsDir is set and whose readArtifact returns `stored` for the M1 path.

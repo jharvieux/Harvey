@@ -22,10 +22,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { findFreshPass, ranFromPass } from "../audit-pass-artifact.js";
+import { findFreshPass, ingestPassArtifactReceipts, ranFromPass } from "../audit-pass-artifact.js";
 import { readNamesSafe } from "../fs-walk.js";
 import type { RunContext } from "../audit-runner.js";
 import type { AuditModule } from "../audit-coverage.js";
+import { createProducerExecutionReceipt } from "../producer-execution-receipt.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(join(tmpdir(), "harvey-pass-cli-"));
@@ -223,5 +224,27 @@ describe("detect-deeper --findings-out → record-pass → M1 live (#1407, CLI v
     runCli("src/cli/detect-deeper.ts", ["--findings-out", control], stubEnv(oneGrantFinding), stubHook);
     expect(existsSync(control)).toBe(true);
     expect(JSON.parse(readFileSync(control, "utf8")).map((f: { id: string }) => f.id)).toEqual(["M1-GRANT-01"]);
+  });
+});
+
+describe("record-pass schema-v3 effectiveness receipt boundary", () => {
+  it("fails closed when strict effectiveness evidence is missing or malformed", () => {
+    const out = join(dir, "strict-missing");
+    expect(() => runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--require-effectiveness-receipts"])).toThrow();
+    const malformed = join(dir, "malformed-receipts.json");
+    writeFileSync(malformed, "[]\n");
+    expect(() => runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", malformed, "--require-effectiveness-receipts"])).toThrow();
+  });
+
+  it("writes and reads back producer-specific artifact evidence", () => {
+    const out = join(dir, "strict-valid");
+    const receipts = join(dir, "valid-receipts.json");
+    writeFileSync(receipts, JSON.stringify([createProducerExecutionReceipt({
+      executionId: "semantic-1", producerId: "semantic:m1", implementationId: "vuln-scan#triage", module: "M1", tier: "paid",
+      findingFamilyIds: ["M1-SEMANTIC-*"], findingIds: ["SEM-1"], edges: [{ kind: "callback", from: "vuln-scan", to: "triage" }],
+    })]));
+    runCli("src/cli/record-pass.ts", ["--module", "M1", "--target", "/target", "--pass", "semantic", "--out", out, "--execution-receipts", receipts, "--require-effectiveness-receipts"]);
+    const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
+    expect(ingestPassArtifactReceipts(stored, "audit-runner:M1")[0]?.edges.map((edge) => edge.kind)).toEqual(["callback", "artifact-produce", "artifact-ingest"]);
   });
 });

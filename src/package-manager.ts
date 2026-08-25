@@ -8,11 +8,141 @@
 // manager actually resolves its tree.
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-// Not exported: nothing outside this file needs to name this type — callers get it as the inferred
-// return of detectPackageManager, or infer it structurally when passing "npm"/"pnpm"/"yarn" literals.
+// Shared by the legacy execution helpers and the evidence-bearing readiness contract.
 export type PackageManager = "npm" | "pnpm" | "yarn";
+
+export interface PackageManagerEvidenceSource {
+  kind: "lockfile" | "package-manager-field";
+  path: string;
+  manager?: PackageManager;
+  requestedVersion?: string;
+  raw?: string;
+}
+
+export type PackageManagerNotAssessedReason =
+  | "missing-evidence"
+  | "conflicting-evidence"
+  | "unsupported-manager"
+  | "unsupported-version"
+  | "unreadable-manifest";
+
+export type PackageManagerResolution =
+  | {
+      status: "selected";
+      manager: PackageManager;
+      /** Exact version requested by package.json#packageManager; absent when no version was declared. */
+      requestedVersion?: string;
+      lockfile?: string;
+      evidence: PackageManagerEvidenceSource[];
+    }
+  | {
+      status: "not-assessed";
+      reason: PackageManagerNotAssessedReason;
+      detail: string;
+      evidence: PackageManagerEvidenceSource[];
+    };
+
+const LOCKFILE_MANAGERS = [
+  ["npm-shrinkwrap.json", "npm"],
+  ["package-lock.json", "npm"],
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+] as const satisfies readonly (readonly [string, PackageManager])[];
+
+const EXACT_PACKAGE_MANAGER = /^(npm|pnpm|yarn)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/;
+
+/**
+ * Resolve a target's package manager from retained files only. This stricter planning API never
+ * inherits detectPackageManager's historical npm fallback and never runs a version probe.
+ */
+export function resolvePackageManagerEvidence(dir: string): PackageManagerResolution {
+  const evidence: PackageManagerEvidenceSource[] = LOCKFILE_MANAGERS
+    .filter(([path]) => existsSync(join(dir, path)))
+    .map(([path, manager]) => ({ kind: "lockfile" as const, path, manager }));
+
+  const manifestPath = join(dir, "package.json");
+  if (existsSync(manifestPath)) {
+    let pkg: { packageManager?: unknown };
+    try {
+      pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof pkg;
+    } catch {
+      return { status: "not-assessed", reason: "unreadable-manifest", detail: "package.json could not be read as JSON", evidence };
+    }
+    if (pkg.packageManager !== undefined) {
+      if (typeof pkg.packageManager !== "string") {
+        evidence.push({ kind: "package-manager-field", path: "package.json", raw: JSON.stringify(pkg.packageManager) });
+        return {
+          status: "not-assessed",
+          reason: "unsupported-version",
+          detail: "package.json#packageManager must be an exact <manager>@<semver> string",
+          evidence,
+        };
+      }
+      const raw = pkg.packageManager;
+      const separator = raw.indexOf("@");
+      const managerName = separator < 0 ? raw : raw.slice(0, separator);
+      if (!(["npm", "pnpm", "yarn"] as string[]).includes(managerName)) {
+        evidence.push({ kind: "package-manager-field", path: "package.json", raw });
+        return { status: "not-assessed", reason: "unsupported-manager", detail: `unsupported package manager declaration: ${raw}`, evidence };
+      }
+      const parsed = raw.match(EXACT_PACKAGE_MANAGER);
+      if (!parsed) {
+        evidence.push({ kind: "package-manager-field", path: "package.json", manager: managerName as PackageManager, raw });
+        return {
+          status: "not-assessed",
+          reason: "unsupported-version",
+          detail: `package.json#packageManager is not an exact supported version: ${raw}`,
+          evidence,
+        };
+      }
+      evidence.push({
+        kind: "package-manager-field",
+        path: "package.json",
+        manager: parsed[1] as PackageManager,
+        requestedVersion: parsed[2],
+        raw,
+      });
+    }
+  }
+
+  const lockfiles = evidence.filter((source) => source.kind === "lockfile");
+  if (lockfiles.length > 1) {
+    return {
+      status: "not-assessed",
+      reason: "conflicting-evidence",
+      detail: `multiple package-manager lockfiles are present: ${lockfiles.map((source) => source.path).join(", ")}`,
+      evidence,
+    };
+  }
+  const field = evidence.find((source) => source.kind === "package-manager-field");
+  const lock = lockfiles[0];
+  if (field?.manager && lock?.manager && field.manager !== lock.manager) {
+    return {
+      status: "not-assessed",
+      reason: "conflicting-evidence",
+      detail: `package.json#packageManager selects ${field.manager} but ${lock.path} selects ${lock.manager}`,
+      evidence,
+    };
+  }
+  const manager = field?.manager ?? lock?.manager;
+  if (!manager) {
+    return {
+      status: "not-assessed",
+      reason: "missing-evidence",
+      detail: "no supported packageManager declaration or package-manager lockfile was found",
+      evidence,
+    };
+  }
+  return {
+    status: "selected",
+    manager,
+    ...(field?.requestedVersion ? { requestedVersion: field.requestedVersion } : {}),
+    ...(lock ? { lockfile: basename(lock.path) } : {}),
+    evidence,
+  };
+}
 
 export function detectPackageManager(dir: string): PackageManager {
   if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm";
@@ -28,6 +158,11 @@ export function installAllCommand(pm: PackageManager, flags: readonly string[] =
   if (pm === "pnpm") return { bin: "pnpm", args: ["install", ...flags] };
   if (pm === "yarn") return { bin: "yarn", args: ["install", ...flags] };
   return { bin: "npm", args: ["install", "--no-audit", "--no-fund", ...flags] };
+}
+
+/** Tokenize the package-manager wrapper, never the target's shell script body. */
+export function runPackageScriptCommand(pm: PackageManager, scriptName: string): { bin: PackageManager; args: string[] } {
+  return { bin: pm, args: ["run", scriptName] };
 }
 
 // Adds specific EXTRA packages (Stryker + its runner plugin) on top of whatever the target already

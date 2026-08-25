@@ -17,6 +17,7 @@ import { parseRecordedReasons, validateRecordedReason } from "../recorded-reason
 import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
+  GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE,
   driftExplanationLines,
   explainDrift,
   FLOOR_CLAIM_TRIAGE,
@@ -45,6 +46,34 @@ function finding(taxonomy: string, severity: Severity = "Perf", location = "app/
     location, status: "Open", evidence: "", impact: "", fix: "",
     value: 3, ease: 3, safety: 3, mechanical: true,
   };
+}
+
+function ghostfolioWholeLibraryFinding(location: string, supported: boolean): Finding {
+  return {
+    ...finding("M7 — Whole-library import", "Low", location),
+    impact: supported
+      ? "Server-side only: resident memory and cold-start parse for a library one function is used from."
+      : "Tens to hundreds of KB of dead code in the bundle that imports it.",
+    evidence: supported
+      ? "A request entry point in this tree imports this module and no client entry point does."
+      : "Whether this module reaches a client chunk was not established.",
+  };
+}
+
+function ghostfolioM7Findings(mode: "current" | "before" | "wrong-row" = "current"): Finding[] {
+  const baseline = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
+  const twitterSupported = mode === "current";
+  const otherSupported = mode === "wrong-row" ? 24 : 23;
+  const otherUnsupported = mode === "wrong-row" ? 34 : 35;
+  return [
+    ghostfolioWholeLibraryFinding(baseline.recoveredLocation, twitterSupported),
+    ...Array.from({ length: otherSupported }, (_, index) =>
+      ghostfolioWholeLibraryFinding(`apps/api/src/services/supported-${index}.service.ts:1`, true)),
+    ...Array.from({ length: otherUnsupported }, (_, index) =>
+      ghostfolioWholeLibraryFinding(`libs/unsupported-${index}.ts:1`, false)),
+    ...Array.from({ length: 19 }, (_, index) =>
+      finding("M7 — Nested-loop join", "Perf", `apps/api/src/other-m7-${index}.ts:1`)),
+  ];
 }
 
 const target = (slug: string): ExternalTarget => {
@@ -107,6 +136,47 @@ describe("external corpus manifest", () => {
     // prereq, so every target should carry a measured M5-slop baseline, never not-run.
     for (const t of EXTERNAL_CORPUS) {
       expect(isNotRun(t.modules["M5-slop"]!), t.slug).toBe(false);
+    }
+  });
+
+  it("#1948: records every hosted corpus movement from the new M5/M8 detector families", () => {
+    const movements = [
+      { slug: "proposit", module: "M5-slop", before: [24, 34], after: [145, 155], added: 121, classes: ["4 ambiguous exception success", "6 empty catch", "11 log-only catch", "98 `as any`", "2 double assertions"] },
+      { slug: "subscription-payments", module: "M5-slop", before: [14, 16], after: [17, 19], added: 3, classes: ["2 empty catch", "1 unexplained `@ts-ignore`"] },
+      { slug: "boxyhq", module: "M5-slop", before: [97, 98], after: [110, 111], added: 13, classes: ["1 empty catch", "7 log-only catch", "3 `as any`", "2 double assertions"] },
+      { slug: "launch-mvp", module: "M5-slop", before: [6, 8], after: [20, 22], added: 14, classes: ["5 log-only catch", "9 unexplained `@ts-ignore`"] },
+      { slug: "saas-lite", module: "M5-slop", before: [68, 71], after: [70, 73], added: 2, classes: ["1 ambiguous exception success", "1 empty catch"] },
+      { slug: "tanstack-com", module: "M5-slop", before: [454, 514], after: [706, 766], added: 252, classes: ["42 ambiguous exception success", "19 empty catch", "17 log-only catch", "167 `as any`", "7 double assertions"] },
+      { slug: "cravab", module: "M5-slop", before: [476, 575], after: [736, 835], added: 260, classes: ["14 ambiguous exception success", "22 empty catch", "31 log-only catch", "183 `as any`", "10 double assertions"] },
+      { slug: "flori-web", module: "M5-slop", before: [95, 108], after: [135, 148], added: 40, classes: ["15 ambiguous exception success", "17 empty catch", "7 log-only catch", "1 double assertion"] },
+      { slug: "multi-tenant-starter", module: "M5-slop", before: [1, 1], after: [6, 6], added: 5, classes: ["3 `as any`", "2 double assertions"] },
+      { slug: "mvp-boilerplate", module: "M5-slop", before: [24, 29], after: [31, 36], added: 7, classes: ["4 empty catch", "1 log-only catch", "2 double assertions"] },
+      { slug: "ghostfolio", module: "M5-slop", before: [51, 52], after: [104, 105], added: 53, classes: ["5 ambiguous exception success", "11 empty catch", "7 log-only catch", "6 `as any`", "23 double assertions", "1 unexplained `@ts-ignore`"] },
+      { slug: "rallly", module: "M5-slop", before: [113, 167], after: [137, 191], added: 24, classes: ["10 ambiguous exception success", "4 empty catch", "6 log-only catch", "2 `as any`", "2 double assertions"] },
+      { slug: "inbox-zero", module: "M5-slop", before: [1098, 1123], after: [1398, 1423], added: 300, classes: ["93 ambiguous exception success", "21 empty catch", "135 log-only catch", "25 `as any`", "22 double assertions", "4 unexplained `@ts-ignore`"] },
+      { slug: "documenso", module: "M5-slop", before: [233, 238], after: [315, 320], added: 82, classes: ["26 ambiguous exception success", "7 empty catch", "14 log-only catch", "10 `as any`", "25 double assertions"] },
+      { slug: "effective", module: "M5-slop", before: [12, 12], after: [18, 18], added: 6, classes: ["2 ambiguous exception success", "4 empty catch"] },
+      { slug: "carbon", module: "M5-slop", before: [841, 979], after: [1719, 1857], added: 878, classes: ["64 ambiguous exception success", "45 empty catch", "48 log-only catch", "489 `as any`", "142 double assertions", "90 unexplained `@ts-ignore`"] },
+      { slug: "carbon", module: "M8-intent", before: [3, 3], after: [5, 5], added: 2, classes: ["packages/checks/src/smoke.test.ts:5", "packages/harness/src/smoke.test.ts:5"] },
+    ] as const;
+
+    expect(movements).toHaveLength(17);
+    for (const movement of movements) {
+      const baseline = target(movement.slug).modules[movement.module];
+      if (!baseline) throw new Error(`missing ${movement.slug}/${movement.module} baseline`);
+      expect(isNotRun(baseline), `${movement.slug}/${movement.module}`).toBe(false);
+      if (isNotRun(baseline)) continue;
+
+      expect(movement.after[0] - movement.before[0], `${movement.slug}/${movement.module} counted delta`).toBe(movement.added);
+      expect(movement.after[1] - movement.before[1], `${movement.slug}/${movement.module} total delta`).toBe(movement.added);
+      expect([baseline.counted, baseline.total], `${movement.slug}/${movement.module}`).toEqual(movement.after);
+      expect(baseline.note, `${movement.slug}/${movement.module} provenance`).toContain("#1948 HOSTED REPLAY run 32345629796");
+      expect(baseline.note, `${movement.slug}/${movement.module} arithmetic`).toContain(
+        `at ${movement.after[0]}/${movement.after[1]} (was ${movement.before[0]}/${movement.before[1]}), +${movement.added}`,
+      );
+      for (const findingClass of movement.classes) {
+        expect(baseline.note, `${movement.slug}/${movement.module} ${findingClass}`).toContain(findingClass);
+      }
     }
   });
 
@@ -200,6 +270,47 @@ describe("scoreExternalBaseline", () => {
       finding("M9 — Accidental dynamic rendering"),
     ]);
     expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: true, actual: 2, drift: 0 });
+  });
+
+  it("#1795: pins Ghostfolio's count-neutral 24 supported / 35 unsupported whole-library split", () => {
+    const measurement = GHOSTFOLIO_M7_NEST_IMPORT_CHAIN_BASELINE;
+    const ghostfolio = target("ghostfolio");
+    const m7 = ghostfolio.modules.M7;
+    if (!m7 || isNotRun(m7)) throw new Error("ghostfolio M7 baseline must be measured");
+
+    expect(ghostfolio.commit).toBe(measurement.targetCommit);
+    expect([m7.counted, m7.total]).toEqual([measurement.m7.counted, measurement.m7.total]);
+    expect(measurement.wholeLibrary.before).toEqual({ serverSideSupported: 23, reachabilityUnsupported: 36 });
+    expect(measurement.wholeLibrary.after).toEqual({ serverSideSupported: 24, reachabilityUnsupported: 35 });
+    expect(measurement.wholeLibrary.after.serverSideSupported + measurement.wholeLibrary.after.reachabilityUnsupported)
+      .toBe(measurement.wholeLibrary.total);
+    expect(m7.note).toContain("M7 is conserved at 78/78");
+    expect(m7.note).toContain("23 server-side-supported / 36 reachability-unsupported to 24/35");
+    expect(m7.note).toContain(measurement.recoveredLocation);
+
+    const row = scoreExternalBaseline(ghostfolio, ghostfolioM7Findings()).find((candidate) => candidate.module === "M7");
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: true });
+    expect(row?.detail).toContain("59 = 24 server-side supported + 35 reachability unsupported");
+    expect(row?.detail).toContain("recovered imports-chain-only provider");
+  });
+
+  it("#1795: FAILS on the reproduced pre-fix 23/36 split even though M7 stays 78/78", () => {
+    const row = scoreExternalBaseline(target("ghostfolio"), ghostfolioM7Findings("before"))
+      .find((candidate) => candidate.module === "M7");
+
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: false });
+    expect(row?.detail).toContain("SEMANTIC DRIFT");
+    expect(row?.detail).toContain("59 = 23 server-side supported + 36 reachability unsupported");
+    expect(row?.detail).toContain("recovered twitter-bot supported=false");
+  });
+
+  it("#1795: FAILS if another row masks twitter-bot's regression at the same aggregate 24/35 split", () => {
+    const row = scoreExternalBaseline(target("ghostfolio"), ghostfolioM7Findings("wrong-row"))
+      .find((candidate) => candidate.module === "M7");
+
+    expect(row).toMatchObject({ expected: 78, actual: 78, drift: 0, pass: false });
+    expect(row?.detail).toContain("59 = 24 server-side supported + 35 reachability unsupported");
+    expect(row?.detail).toContain("recovered twitter-bot supported=false");
   });
 
   it("FAILS on a new over-match — the regression this corpus exists to catch", () => {
@@ -325,7 +436,7 @@ describe("scoreExternalBaseline", () => {
     ];
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
     expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 10, actual: 1, pass: false });
-    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 14, actual: 2, pass: false });
+    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 17, actual: 2, pass: false });
   });
 });
 

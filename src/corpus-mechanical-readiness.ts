@@ -10,8 +10,8 @@ import type { MechanicalPhaseCacheOptions, MechanicalProducerRecord } from "./sc
 import { binaryVersion, digestFiles, digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest, resolveGitTree } from "./scan/mechanical-phase-cache.js";
 import { buildMechanicalPhaseCache } from "./scan/mechanical-phase-identity.js";
 import { shardTargets } from "./scan/corpus-shards.js";
-import type { SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
-import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt } from "./scan/semgrep.js";
+import { assertSuccessfulSemgrepExecutionReceipt, type SemgrepDiagnosticEvidence } from "./scan/semgrep-family-cache.js";
+import { REGISTRY_PACKS, registryPackIdentity, semgrepExecutionPlanReceipt, type SemgrepExecutionPlanReceipt, type SemgrepPlannedExecutionReceipt } from "./scan/semgrep.js";
 
 export const CURRENT_MECHANICAL_POPULATION = "runMechanicalScanDetailed.current-readiness-v1" as const;
 export const CURRENT_MECHANICAL_PREPARATION = "pinned-tracked-tree/shared-pruned-scan-root/copy-before-install/bundle-off-v3" as const;
@@ -43,6 +43,7 @@ export interface CurrentMechanicalTargetReceipt {
   checkoutHead: string;
   checkoutTree: string;
   preparedTreeSha256: string;
+  gitVersion: string;
   emptyGitlinks: EmptyGitlinkReceipt[];
   preparation: typeof CURRENT_MECHANICAL_PREPARATION;
   removedVendoredSubtrees: string[];
@@ -84,7 +85,7 @@ interface CurrentMechanicalCachePolicyReceipt {
 }
 
 export interface CurrentMechanicalExecutionArtifact {
-  schema: 2;
+  schema: 3;
   kind: "current-mechanical-execution";
   population: typeof CURRENT_MECHANICAL_POPULATION;
   side: "hosted-producer" | "independent-replay";
@@ -104,7 +105,7 @@ export interface CurrentMechanicalExecutionArtifact {
   targetPinsSha256: string;
   allTargets: CurrentMechanicalTargetDefinition[];
   semgrepRegistry: SemgrepPackReceipt;
-  runtime: { node: string; platform: string; arch: string; semgrep: string; gitleaks: string; git: string };
+  runtime: { node: string; platform: string; arch: string; semgrep: string; gitleaks: string };
   shard: { index: number; count: number };
   targets: Record<string, CurrentMechanicalTargetReceipt>;
 }
@@ -136,7 +137,7 @@ export function buildCurrentMechanicalPhasePlan(options: {
   registry: { identity: string; files: string[] };
   producerMode?: "read-write" | "verify";
   onEvent?: (message: string) => void;
-}): { phaseCache: MechanicalPhaseCacheOptions; executionPlan: CurrentMechanicalExecutionPlanReceipt; cachePolicy: CurrentMechanicalCachePolicyReceipt } {
+}): { phaseCache: MechanicalPhaseCacheOptions; executionPlan: Omit<CurrentMechanicalExecutionPlanReceipt, "semgrep">; plannedSemgrep: SemgrepPlannedExecutionReceipt; cachePolicy: CurrentMechanicalCachePolicyReceipt } {
   const cacheDir = resolve(options.cacheDir);
   if (options.side === "independent-replay") {
     if (existsSync(cacheDir) && readRecursiveSafe(cacheDir).length > 0) throw new Error("independent replay cache namespace is not empty; producer artifacts must never enter replay");
@@ -167,8 +168,8 @@ export function buildCurrentMechanicalPhasePlan(options: {
       phases: MECHANICAL_PHASES,
       implementation: phaseCache.implementation,
       externalInputs: phaseCache.externalInputs,
-      semgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
     },
+    plannedSemgrep: semgrepExecutionPlanReceipt(phaseCache.materializedInputs.semgrep),
     cachePolicy: {
       schema: 1,
       mode: options.side === "independent-replay" ? "independent-cold-off" : "hosted-content-addressed",
@@ -417,8 +418,11 @@ export function currentRuntimeReceipt(): CurrentMechanicalExecutionArtifact["run
     arch: process.arch,
     semgrep: binaryVersion("semgrep"),
     gitleaks: binaryVersion("gitleaks"),
-    git: binaryVersion("git"),
   };
+}
+
+export function currentGitVersionReceipt(): string {
+  return binaryVersion("git");
 }
 
 export function newExecutionId(side: CurrentMechanicalExecutionArtifact["side"], shard: { index: number; count: number }): string {
@@ -450,13 +454,16 @@ function normalizedProducer(record: MechanicalProducerRecord): unknown {
 }
 
 function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: string): void {
-  if (artifact.schema !== 2 || artifact.kind !== "current-mechanical-execution" || artifact.population !== CURRENT_MECHANICAL_POPULATION) throw new Error(`${source}: not a current mechanical execution artifact`);
+  if (artifact.schema !== 3 || artifact.kind !== "current-mechanical-execution" || artifact.population !== CURRENT_MECHANICAL_POPULATION) throw new Error(`${source}: not a current mechanical execution artifact`);
   if (artifact.side !== "hosted-producer" && artifact.side !== "independent-replay") throw new Error(`${source}: execution side is invalid`);
   if (!artifact.executionId.startsWith(`${artifact.side}:`)) throw new Error(`${source}: execution id is missing or belongs to another side`);
   if (!Array.isArray(artifact.commands) || artifact.commands.length === 0 || artifact.commands.some((command) => typeof command !== "string" || command.length === 0)) throw new Error(`${source}: execution command receipt is missing`);
   if (!/^[a-f0-9]{40}$/.test(artifact.headCommit)) throw new Error(`${source}: head is not a full Git commit`);
   assertSha(artifact.harnessSha256, `${source}: harness`);
   assertSha(artifact.targetPinsSha256, `${source}: target pins`);
+  if (!artifact.runtime || [artifact.runtime.node, artifact.runtime.platform, artifact.runtime.arch, artifact.runtime.semgrep, artifact.runtime.gitleaks].some((value) => typeof value !== "string" || value.length === 0)) {
+    throw new Error(`${source}: runtime receipt is missing or malformed`);
+  }
   validatePack(artifact.semgrepRegistry, source);
   if (artifact.options.skipNetworkChecks !== true || artifact.options.skipBundleScan !== true || artifact.options.advisoryMode !== "snapshot"
     || artifact.options.bundleDir !== null || artifact.options.handrolledIndicators !== false || artifact.options.authGuards.length !== 0) {
@@ -474,6 +481,7 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
     const target = artifact.targets[slug]!;
     const declared = artifact.allTargets.find((candidate) => candidate.slug === slug);
     if (!declared || target.slug !== slug || target.repo !== declared.repo || target.pin !== declared.commit || target.checkoutHead !== declared.commit) throw new Error(`${source}: ${slug} pin/revision receipt differs from the declared target`);
+    if (typeof target.gitVersion !== "string" || target.gitVersion.length === 0) throw new Error(`${source}: ${slug} Git materialization provenance is missing`);
     if (target.preparation !== CURRENT_MECHANICAL_PREPARATION || target.captureBeforeInstall !== true || target.installMutationAtCapture !== false) throw new Error(`${source}: ${slug} was not captured before install mutation`);
     if (target.skipBundleScan !== true || target.bundleDigest !== digestParts(["bundle-pinned-off-v1"])) throw new Error(`${source}: ${slug} bundle input was not pinned off`);
     if (stable(target.removedVendoredSubtrees) !== stable([...(declared.vendoredSubtrees ?? [])])) throw new Error(`${source}: ${slug} vendored-subtree preparation differs from the manifest`);
@@ -482,13 +490,13 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
       throw new Error(`${source}: ${slug} empty-gitlink receipt is missing or malformed`);
     }
     if (target.executionPlan?.schema !== 1 || stable(target.executionPlan.phases) !== stable(MECHANICAL_PHASES)
-      || target.executionPlan.semgrep?.strategy !== "partitioned-families" || target.executionPlan.semgrep.families.length === 0
-      || new Set(target.executionPlan.semgrep.families.map((family) => family.id)).size !== target.executionPlan.semgrep.families.length
-      || target.executionPlan.semgrep.families.some((family, ordinal) => family.ordinal !== ordinal || !SHA256.test(family.configSha256))
-      || !Array.isArray(target.executionPlan.semgrep.primaryArgv) || target.executionPlan.semgrep.primaryArgv.length === 0
-      || !Array.isArray(target.executionPlan.semgrep.fallbackArgv) || target.executionPlan.semgrep.fallbackArgv.length === 0
       || Object.keys(target.executionPlan.implementation).length === 0 || Object.keys(target.executionPlan.externalInputs).length === 0) {
       throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed`);
+    }
+    try {
+      assertSuccessfulSemgrepExecutionReceipt(target.executionPlan.semgrep);
+    } catch (error) {
+      throw new Error(`${source}: ${slug} semantic execution-plan receipt is missing or malformed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const policy = target.cachePolicy;
     if (policy?.schema !== 1 || !SHA256.test(policy.namespaceSha256)
@@ -497,7 +505,7 @@ function validateArtifact(artifact: CurrentMechanicalExecutionArtifact, source: 
       throw new Error(`${source}: ${slug} cache policy/namespace does not preserve producer/replay isolation`);
     }
     const diagnostics = target.semgrepDiagnostics;
-    if (diagnostics?.schema !== 1 || !Array.isArray(diagnostics.errors) || !Array.isArray(diagnostics.skipped)
+    if (diagnostics?.schema !== 4 || !Array.isArray(diagnostics.errors) || !Array.isArray(diagnostics.skipped)
       || diagnostics.sha256 !== sha256(stable({ errors: diagnostics.errors, skipped: diagnostics.skipped }))) {
       throw new Error(`${source}: ${slug} complete Semgrep diagnostic evidence is missing or corrupt`);
     }
@@ -577,6 +585,9 @@ export function compareCurrentMechanicalExecutions(producer: CurrentMechanicalEx
   for (const slug of Object.keys(producer.targets).sort()) {
     const left = producer.targets[slug]!;
     const right = replay.targets[slug]!;
+    // Git provenance is deliberately retained on each target but not compared as an engine
+    // identity. A different Git build is acceptable only after the same target's pin, checkout
+    // tree, prepared bytes, execution plan, findings, producer census, and diagnostics all agree.
     const receipt = (target: CurrentMechanicalTargetReceipt): unknown => ({
       slug: target.slug,
       repo: target.repo,

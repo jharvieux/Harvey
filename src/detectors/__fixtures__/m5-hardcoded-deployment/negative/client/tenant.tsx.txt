@@ -1,0 +1,3 @@
+"use client";
+
+export const tenantClient = new TenantClient({ tenantId: "example-tenant-id" });

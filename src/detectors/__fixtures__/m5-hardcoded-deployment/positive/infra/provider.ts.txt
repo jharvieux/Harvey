@@ -1,0 +1,4 @@
+export const ledgerService = new CloudService("ledger", {
+  endpoint: "https://ledger.prod.harvey-platform.com/v1",
+  accountId: "123456789012",
+});

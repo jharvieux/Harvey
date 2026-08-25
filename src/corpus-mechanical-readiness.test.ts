@@ -19,6 +19,8 @@ import {
   type CurrentMechanicalExecutionArtifact,
 } from "./corpus-mechanical-readiness.js";
 import { digestParts, MECHANICAL_PHASES, mechanicalExaminedUnitDigest } from "./scan/mechanical-phase-cache.js";
+import type { SemgrepCommandSemanticReceipt } from "./scan/semgrep-family-cache.js";
+import { shardTargets } from "./scan/corpus-shards.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
 const digest = "a".repeat(64);
@@ -26,6 +28,15 @@ const packBody = Buffer.from("x");
 const packDigest = createHash("sha256").update(packBody).digest("hex");
 const packAggregate = registryPackIdentity(REGISTRY_PACKS.map((pack) => ({ pack, body: packBody.toString("utf8") })));
 const diagnosticDigest = createHash("sha256").update('{"errors":[],"skipped":[]}').digest("hex");
+const mixedRun = JSON.parse(readFileSync(new URL("./__fixtures__/current-mechanical-run-32334325227.json", import.meta.url), "utf8")) as {
+  runId: number;
+  commonRuntime: CurrentMechanicalExecutionArtifact["runtime"];
+  producerShards: Array<{ index: number; gitVersion: string; targets: string[] }>;
+  carbonCrossGit: {
+    producer: { gitVersion: string; preparationSha256: string; executionPlanSha256: string; findingsSha256: string; normalizedProducersSha256: string; semgrepDiagnosticsSha256: string; findingCount: number; semgrepFindingCount: number };
+    replay: { gitVersion: string; preparationSha256: string; executionPlanSha256: string; findingsSha256: string; normalizedProducersSha256: string; semgrepDiagnosticsSha256: string; findingCount: number; semgrepFindingCount: number; uniqueFinding: string };
+  };
+};
 const target = { slug: "target", repo: "https://example.invalid/target.git", commit: "b".repeat(40), vendoredSubtrees: ["vendor/reference"] };
 const finding: Finding = { id: "ROW-1", title: "row", severity: "Low", confidence: "Likely", category: "test", taxonomy: "test", location: "a.ts:1", status: "Open", evidence: "evidence", impact: "impact", fix: "fix", value: 1, ease: 1, safety: 1, mechanical: true };
 
@@ -35,9 +46,56 @@ function stableFixture(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function semgrepExecutionFixture() {
+  const family = (input: { ordinal: number; id: string; sourceKind: "registry-pack" | "local-config"; sourceId: string; configSha256: string; ruleIds: string[]; argv: string[] }) => {
+    const semantic = { argv: input.argv, loadedRuleIds: input.ruleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const };
+    const attempts = [{ status: "succeeded" as const, attempt: 1, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") }];
+    return { ...input, familyId: input.id, sourceConfigSha256: input.configSha256, ownedRuleIds: input.ruleIds, ownedTaintRuleIds: [], loadedRuleIds: input.ruleIds, loadedTaintRuleIds: [], taintCoverage: "no-timeout-observed" as const, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, topology: "single-command-v1" as const, mergeAlgorithm: "single-command-v1" as const, partitions: [], verification: "single" as const, status: "succeeded" as const, attempts };
+  };
+  const injectionRuleIds = ["harvey-log-injection", ...Array.from({ length: 29 }, (_, index) => `harvey-injection-${index}`)].sort();
+  const selector = { extensions: ["js", "jsx", "ts", "tsx"] as ["js", "jsx", "ts", "tsx"], lowerExclusiveBytes: 81920 as const, upperExclusiveBytes: 1000000 as const, excludedDirectories: [".git", "node_modules"] as [".git", "node_modules"], order: "posix-relative-path" as const };
+  const routingManifest = { entries: [], sha256: createHash("sha256").update(stableFixture({ selector, entries: [] })).digest("hex") };
+  const partitions = [
+    { ordinal: 0, id: "log-remainder", component: "log-remainder" as const, target: "<SEMGREP_ROUTING_VIEW:remainder>" as const, configSha256: "c".repeat(64), ownedRuleIds: ["harvey-log-injection"], ownedTaintRuleIds: ["harvey-log-injection"], argv: ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1", "--config", "log", "--timeout", "0"] },
+    { ordinal: 1, id: "complement", component: "complement" as const, target: "<SEMGREP_TARGET_ROOT>" as const, configSha256: "d".repeat(64), ownedRuleIds: injectionRuleIds.filter((id) => id !== "harvey-log-injection"), ownedTaintRuleIds: [], argv: ["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1", "--config", "complement", "--timeout", "0"] },
+  ];
+  const injectionAttempts = [1, 2].map((attempt) => {
+    const components = partitions.map((partition) => {
+      const semantic = { argv: partition.argv, loadedRuleIds: partition.ownedRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [] };
+      return { status: "succeeded" as const, ordinal: partition.ordinal, id: partition.id, component: partition.component, target: partition.target, configSha256: partition.configSha256, ownedRuleIds: partition.ownedRuleIds, ownedTaintRuleIds: partition.ownedTaintRuleIds, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+    });
+    const semantic = { argv: ["<SEMGREP_ROUTED_SEQUENCE:log-remainder,complement>", "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"], loadedRuleIds: injectionRuleIds, resultCount: 1, resultsSha256: digest, scanned: ["<SEMGREP_TARGET_ROOT>/a.ts"], skipped: [], skippedRules: [], errors: [], loadedTaintRuleIds: ["harvey-log-injection"], taintCoverage: "no-timeout-observed" as const, components };
+    return { status: "succeeded" as const, attempt, ...semantic, semanticSha256: createHash("sha256").update(stableFixture(semantic)).digest("hex") };
+  });
+  const injection = { ordinal: 1, id: "local-injection", familyId: "local-injection", sourceKind: "local-config" as const, sourceId: "injection.yml", sourceConfigSha256: "b".repeat(64), configSha256: "b".repeat(64), ruleIds: injectionRuleIds, ownedRuleIds: injectionRuleIds, ownedTaintRuleIds: ["harvey-log-injection"], loadedRuleIds: injectionRuleIds, loadedTaintRuleIds: ["harvey-log-injection"], taintCoverage: "no-timeout-observed" as const, excludedRuleIds: [], semanticObjectSha256: undefined as string | undefined, selector, routingManifest, argv: ["<SEMGREP_ROUTED_SEQUENCE:log-remainder,complement>", "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"], topology: "rule-and-size-routed-file-isolation-v1" as const, mergeAlgorithm: "canonical-routed-semgrep-family-output-v1" as const, partitions, verification: "paired-topology-exact" as const, status: "succeeded" as const, attempts: injectionAttempts };
+  const families = [
+    family({ ordinal: 0, id: "registry-0", sourceKind: "registry-pack", sourceId: "p/typescript", configSha256: digest, ruleIds: ["registry-rule"], argv: ["--x-parmap", "-j", "9", "--timeout", "0"] }),
+    injection,
+  ];
+  const ownership = families.map((entry) => ({
+    ordinal: entry.ordinal,
+    id: entry.id,
+    sourceKind: entry.sourceKind,
+    sourceId: entry.sourceId,
+    sourceConfigSha256: entry.sourceConfigSha256,
+    configSha256: entry.configSha256,
+    ownedRuleIds: entry.ownedRuleIds,
+    ownedTaintRuleIds: entry.ownedTaintRuleIds,
+    excludedRuleIds: entry.excludedRuleIds,
+    semanticObjectSha256: entry.semanticObjectSha256,
+    selector: "selector" in entry ? entry.selector : undefined,
+    routingManifest: "routingManifest" in entry ? entry.routingManifest : undefined,
+    topology: entry.topology,
+    mergeAlgorithm: entry.mergeAlgorithm,
+    partitions: entry.partitions,
+    verification: entry.verification,
+  }));
+  return { schema: 8 as const, timeoutPolicy: "fixpoint-family-not-assessed-v1" as const, status: "succeeded" as const, strategy: "globally-owned-partitioned-families" as const, ownershipSha256: createHash("sha256").update(stableFixture(ownership)).digest("hex"), families };
+}
+
 function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMechanicalExecutionArtifact {
   return {
-    schema: 2,
+    schema: 3,
     kind: "current-mechanical-execution",
     population: CURRENT_MECHANICAL_POPULATION,
     side,
@@ -49,12 +107,12 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
     targetPinsSha256: currentTargetPinsSha256([target]),
     allTargets: [target],
     semgrepRegistry: { schema: 1, aggregateSha256: packAggregate, files: Array.from({ length: 6 }, (_, ordinal) => ({ ordinal, name: `${ordinal}-${REGISTRY_PACKS[ordinal]!.replaceAll("/", "-")}.yml`, bytes: 1, sha256: packDigest, bodyBase64: packBody.toString("base64") })) },
-    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1", git: "1" },
+    runtime: { node: "v24", platform: "linux", arch: "x64", semgrep: "1", gitleaks: "1" },
     shard: { index: 1, count: 1 },
     targets: {
       target: {
         slug: "target", repo: target.repo, pin: target.commit, checkoutHead: target.commit, checkoutTree: digest,
-        preparedTreeSha256: digest, preparation: CURRENT_MECHANICAL_PREPARATION, removedVendoredSubtrees: ["vendor/reference"],
+        preparedTreeSha256: digest, gitVersion: "git version 2.54.0", preparation: CURRENT_MECHANICAL_PREPARATION, removedVendoredSubtrees: ["vendor/reference"],
         emptyGitlinks: [{ path: "apps/web/app/(marketing)", object: "f".repeat(40), representation: "empty-directory" }],
         captureBeforeInstall: true, installMutationAtCapture: false, skipBundleScan: true,
         bundleDigest: digestParts(["bundle-pinned-off-v1"]),
@@ -67,10 +125,10 @@ function artifact(side: CurrentMechanicalExecutionArtifact["side"]): CurrentMech
           phases: MECHANICAL_PHASES,
           implementation: { semgrep: digest },
           externalInputs: { semgrep: { semgrep: "1", node: "v24", options: "pinned" } },
-          semgrep: { schema: 1, strategy: "partitioned-families", families: [{ ordinal: 0, id: "registry-0", configSha256: digest }, { ordinal: 1, id: "local-auth", configSha256: "b".repeat(64) }], primaryArgv: ["--x-parmap"], fallbackArgv: ["-j", "1"] },
+          semgrep: semgrepExecutionFixture(),
         },
         cachePolicy: { schema: 1, mode: side === "hosted-producer" ? "hosted-content-addressed" : "independent-cold-off", namespaceSha256: side === "hosted-producer" ? "d".repeat(64) : "e".repeat(64), emptyNamespaceVerified: side === "independent-replay", producerArtifactsAllowed: side === "hosted-producer" },
-        semgrepDiagnostics: { schema: 1, errors: [], skipped: [], sha256: diagnosticDigest },
+        semgrepDiagnostics: { schema: 4, errors: [], skipped: [], sha256: diagnosticDigest },
       },
     },
   };
@@ -83,7 +141,24 @@ function expectDifference(mutate: (value: CurrentMechanicalExecutionArtifact) =>
   expect(() => compareCurrentMechanicalExecutions(producer, replay)).toThrow(message);
 }
 
+function rehashAttempt(attempt: SemgrepCommandSemanticReceipt): void {
+  const semantic = Object.fromEntries(Object.entries(attempt).filter(([key]) => !["status", "attempt", "semanticSha256"].includes(key)));
+  attempt.semanticSha256 = createHash("sha256").update(stableFixture(semantic)).digest("hex");
+}
+
 describe("fresh current mechanical producer ↔ replay readiness", () => {
+  it("requires schema 3 target-bound Git provenance and rejects legacy aggregate-only receipts", () => {
+    const legacy = artifact("hosted-producer") as unknown as { schema: number; runtime: Record<string, string>; targets: Record<string, { gitVersion?: string }> };
+    legacy.schema = 2;
+    legacy.runtime.git = legacy.targets.target!.gitVersion!;
+    delete legacy.targets.target!.gitVersion;
+    expect(() => mergeCurrentMechanicalShards([legacy as unknown as CurrentMechanicalExecutionArtifact], "legacy producer")).toThrow(/not a current mechanical execution artifact/);
+
+    const missing = artifact("hosted-producer");
+    delete (missing.targets.target! as { gitVersion?: string }).gitVersion;
+    expect(() => mergeCurrentMechanicalShards([missing], "missing provenance")).toThrow(/Git materialization provenance is missing/);
+  });
+
   it("wires the required aggregate to shared bytes and two fresh sides without claiming historical proof", () => {
     const workflow = readFileSync(new URL("../.github/workflows/corpus-drift.yml", import.meta.url), "utf8");
     const producer = readFileSync(new URL("./cli/corpus-drift.ts", import.meta.url), "utf8");
@@ -109,6 +184,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
   it("accepts two distinct exact-head executions and ignores duration/cache status only", () => {
     const producer = artifact("hosted-producer");
     const replay = artifact("independent-replay");
+    replay.targets.target!.gitVersion = "git version 2.55.0";
     replay.targets.target!.producers[0]!.durationMs = 99;
     replay.targets.target!.producers[0]!.status = "cached";
     expect(() => compareCurrentMechanicalExecutions(producer, replay)).not.toThrow();
@@ -123,17 +199,79 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
   });
 
   it("strictly compares the partition strategy, family order/membership, flags, and config bytes", () => {
-    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "partitioned-families"; }, /execution-plan|preparation/);
+    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep as { schema: number }).schema = 4; }, /execution-plan|preparation/);
+    expectDifference((value) => { (value.targets.target!.executionPlan.semgrep.families[1]! as unknown as { subpartitions: string[] }).subpartitions = ["invented-shard"]; }, /execution-plan|preparation/);
+    expectDifference((value) => {
+      const family = value.targets.target!.executionPlan.semgrep.families[0]!;
+      value.targets.target!.executionPlan.semgrep.families = Array.from({ length: 22 }, (_, ordinal) => ({
+        ...family,
+        ordinal,
+        id: `historical-subscan-${ordinal}`,
+        familyId: `historical-subscan-${ordinal}`,
+        sourceId: `historical-${ordinal}.yml`,
+      }));
+    }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.strategy = "monolithic" as "globally-owned-partitioned-families"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.reverse().forEach((family, ordinal) => { family.ordinal = ordinal; }); }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families.pop(); }, /execution-plan|preparation/);
-    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.primaryArgv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.argv.push("--changed-flag"); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.verification = "single"; }, /execution-plan|preparation/);
     expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[0]!.configSha256 = "c".repeat(64); }, /execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.topology = "single-command-v1"; }, /topology|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.mergeAlgorithm = "single-command-v1"; }, /topology|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions[0]!.argv.push("--mutated"); }, /component|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions.pop(); }, /partition|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.partitions[1]!.ownedRuleIds.push("harvey-log-injection"); }, /partition|execution-plan|preparation/);
+    expectDifference((value) => { value.targets.target!.executionPlan.semgrep.families[1]!.attempts[0]!.components![0]!.resultsSha256 = "e".repeat(64); }, /semantic|execution-plan|preparation/);
   });
 
-  it("strictly compares complete ordered Semgrep errors and skipped paths, not their counts", () => {
+  it("requires actual successful semantics rather than a planned, failed, or population-swapped receipt", () => {
+    expectDifference((value) => {
+      const receipt = value.targets.target!.executionPlan.semgrep as unknown as { status?: string; families: Array<{ status?: string; attempts?: unknown[] }> };
+      delete receipt.status;
+      receipt.families.forEach((family) => { delete family.status; delete family.attempts; });
+    }, /successful|execution-plan/);
+    expectDifference((value) => {
+      const family = value.targets.target!.executionPlan.semgrep.families[0]!;
+      family.loadedRuleIds = ["substituted-rule"];
+      family.attempts[0]!.loadedRuleIds = ["substituted-rule"];
+      rehashAttempt(family.attempts[0]!);
+    }, /successful|population|execution-plan/);
+    const producer = artifact("hosted-producer");
+    const replay = artifact("independent-replay");
+    producer.targets.target!.executionPlan.semgrep.families[0]!.status = "failed" as "succeeded";
+    replay.targets.target!.executionPlan.semgrep.families[0]!.status = "failed" as "succeeded";
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).toThrow(/successful|failed|execution-plan/);
+  });
+
+  it("strictly binds scanned, skipped-rule, result, and duplicate-error multiplicity in actual attempts", () => {
+    expectDifference((value) => {
+      const attempt = value.targets.target!.executionPlan.semgrep.families[0]!.attempts[0]!;
+      attempt.scanned = ["<SEMGREP_TARGET_ROOT>/b.ts"];
+      rehashAttempt(attempt);
+    }, /execution-plan/);
+    expectDifference((value) => {
+      const attempt = value.targets.target!.executionPlan.semgrep.families[0]!.attempts[0]!;
+      attempt.skippedRules = [{ ruleId: "registry-rule", reason: "not-applicable" }];
+      rehashAttempt(attempt);
+    }, /execution-plan/);
+    expectDifference((value) => {
+      const attempt = value.targets.target!.executionPlan.semgrep.families[0]!.attempts[0]!;
+      attempt.resultsSha256 = "f".repeat(64);
+      rehashAttempt(attempt);
+    }, /execution-plan/);
+    expectDifference((value) => {
+      const attempt = value.targets.target!.executionPlan.semgrep.families[0]!.attempts[0]!;
+      const duplicate = { path: "<SEMGREP_TARGET_ROOT>/a.ts", message: "same diagnostic twice" };
+      attempt.errors = [duplicate, duplicate];
+      rehashAttempt(attempt);
+    }, /execution-plan/);
+  });
+
+  it("strictly compares complete ordered Semgrep errors and skipped paths", () => {
     const setDiagnostics = (value: CurrentMechanicalExecutionArtifact, errors: Array<{ path: string; message: string }>, skipped: Array<{ path: string; reason: string }>): void => {
       const payload = { errors, skipped };
-      value.targets.target!.semgrepDiagnostics = { schema: 1, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
+      value.targets.target!.semgrepDiagnostics = { schema: 4, ...payload, sha256: createHash("sha256").update(stableFixture(payload)).digest("hex") };
     };
     expectDifference((value) => { setDiagnostics(value, [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", message: "substituted" }], []); }, /ordered Semgrep/);
     expectDifference((value) => { setDiagnostics(value, [], [{ path: "<SEMGREP_TARGET_ROOT>/a.ts", reason: "too large" }]); }, /ordered Semgrep/);
@@ -206,6 +344,76 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/mixed/);
     second.headCommit = left.headCommit;
     expect(() => mergeCurrentMechanicalShards([left, second], "producer")).toThrow(/index population/);
+  });
+
+  it("merges shards across hosted Git patch-level drift without weakening engine invariants", () => {
+    const first = artifact("hosted-producer");
+    const second = structuredClone(first);
+    const otherTarget = { ...target, slug: "other", repo: "https://example.invalid/other.git", commit: "d".repeat(40) };
+    const targetReceipts = {
+      target: first.targets.target!,
+      other: { ...structuredClone(first.targets.target!), slug: otherTarget.slug, repo: otherTarget.repo, pin: otherTarget.commit, checkoutHead: otherTarget.commit },
+    };
+    for (const [index, value] of [first, second].entries()) {
+      value.allTargets = [target, otherTarget];
+      value.targetPinsSha256 = currentTargetPinsSha256(value.allTargets);
+      value.shard = { index: index + 1, count: 2 };
+      value.executionId = `hosted-producer:${index + 1}/2:fixture`;
+      value.targets = Object.fromEntries(
+        shardTargets(value.allTargets.map((entry) => entry.slug), index + 1, 2)
+          .map((slug) => [slug, targetReceipts[slug as keyof typeof targetReceipts]]),
+      );
+    }
+    for (const receipt of Object.values(first.targets)) receipt.gitVersion = mixedRun.producerShards[0]!.gitVersion;
+    for (const receipt of Object.values(second.targets)) receipt.gitVersion = mixedRun.producerShards[1]!.gitVersion;
+
+    const merged = mergeCurrentMechanicalShards([first, second], "hosted receipts from run 32334325227");
+    expect(Object.fromEntries(Object.entries(merged.targets).map(([slug, receipt]) => [slug, receipt.gitVersion]))).toEqual({
+      other: "git version 2.54.0",
+      target: "git version 2.55.0",
+    });
+    expect(Object.keys(merged.targets).sort()).toEqual(["other", "target"]);
+
+    second.runtime.semgrep = "different-semgrep";
+    expect(() => mergeCurrentMechanicalShards([first, second], "producer")).toThrow(/mixed engine\/input\/runtime/);
+  });
+
+  it("keeps exact mixed-run output drift fatal after accepting target-bound Git provenance", () => {
+    const { producer: observedProducer, replay: observedReplay } = mixedRun.carbonCrossGit;
+    expect(mixedRun.runId).toBe(32334325227);
+    expect(mixedRun.commonRuntime).toEqual({
+      node: "v24.19.0",
+      platform: "linux",
+      arch: "x64",
+      semgrep: "1.164.0",
+      gitleaks: "gitleaks version 8.30.1",
+    });
+    expect(mixedRun.producerShards.map(({ index, gitVersion }) => ({ index, gitVersion }))).toEqual([
+      { index: 1, gitVersion: "git version 2.54.0" },
+      { index: 2, gitVersion: "git version 2.55.0" },
+      { index: 3, gitVersion: "git version 2.54.0" },
+    ]);
+    expect(mixedRun.producerShards.flatMap(({ targets }) => targets)).toEqual([
+      "carbon",
+      "proposit", "subscription-payments", "boxyhq", "launch-mvp", "saas-lite", "tanstack-com", "cravab", "flori-web",
+      "multi-tenant-starter", "mvp-boilerplate", "ghostfolio", "rallly", "inbox-zero", "documenso", "supabase-security-labs", "effective",
+    ]);
+    expect(observedProducer.preparationSha256).toBe(observedReplay.preparationSha256);
+    expect(observedProducer.executionPlanSha256).toBe(observedReplay.executionPlanSha256);
+    expect(observedProducer.semgrepDiagnosticsSha256).toBe(observedReplay.semgrepDiagnosticsSha256);
+    expect(observedProducer.findingsSha256).not.toBe(observedReplay.findingsSha256);
+    expect(observedProducer.normalizedProducersSha256).not.toBe(observedReplay.normalizedProducersSha256);
+    expect(observedReplay.findingCount - observedProducer.findingCount).toBe(1);
+    expect(observedReplay.semgrepFindingCount - observedProducer.semgrepFindingCount).toBe(1);
+    expect(observedReplay.uniqueFinding).toContain("harvey-log-injection@packages/database/supabase/functions/post-shipment/index.ts:1114");
+
+    const producer = artifact("hosted-producer");
+    const replay = artifact("independent-replay");
+    producer.targets.target!.gitVersion = observedProducer.gitVersion;
+    replay.targets.target!.gitVersion = observedReplay.gitVersion;
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).not.toThrow();
+    replay.targets.target!.findings.push({ ...finding, id: "SEM-EXTRA", location: "packages/database/supabase/functions/post-shipment/index.ts:1114" });
+    expect(() => compareCurrentMechanicalExecutions(producer, replay)).toThrow(/ordered raw mechanical finding/);
   });
 
   it("refuses dirty tracked or untracked harness inputs before producing an artifact", () => {

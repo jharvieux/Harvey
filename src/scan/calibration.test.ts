@@ -27,6 +27,7 @@ import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { detectBolaOwnerFindings } from "./bola-owner.js";
 import { detectCounterRaceFindings } from "./counter-race.js";
+import { detectIdempotencyFindings } from "./idempotency.js";
 import { walkSourceFiles } from "./common.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
@@ -653,6 +654,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     warning("harvey-cron-no-secret", "pages/api/cron/rollup.js"),
     warning("harvey-dynamic-require", "pages/api/plugin.js"),
     warning("harvey-dynamic-dispatch", "pages/api/dispatch.js"),
+    warning("harvey-dynamic-dispatch", "client-url-source/dynamic-dispatch-client.ts"),
     warning("harvey-template-autoescape-off", "lib/render-template.js"),
     warning("harvey-html-template-literal", "pages/api/greet.js"),
     warning("harvey-incomplete-sanitize", "lib/sanitize-bad.js"),
@@ -776,8 +778,8 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     // 8 before #1425; +2 for the protect-then-unprotect plant and its scope control.
     expect(m.positivesCaughtHigh).toBe(10);
     // 12 before #1323; +7 for the root-schema probes of the six checks readMigrations feeds
-    // (checkMigrationStorageBuckets contributes two, one per half).
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(19);
+    // (checkMigrationStorageBuckets contributes two, one per half); +1 for #1708 client dispatch.
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(20);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
@@ -852,7 +854,12 @@ describe("#353/#354/#433 mechanical graduations (real detectors over the committ
     "pages/api/preview/enable-safe.js",
   ].map(read);
   const mechanicalFixtures = walkSourceFiles(CAL);
-  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...detectCounterRaceFindings(mechanicalFixtures), ...detectBolaOwnerFindings(mechanicalFixtures)];
+  const findings = [
+    ...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)),
+    ...detectCounterRaceFindings(mechanicalFixtures),
+    ...detectIdempotencyFindings(mechanicalFixtures),
+    ...detectBolaOwnerFindings(mechanicalFixtures),
+  ];
 
   const graduated = [
     ...b17RaceUnscopedEntries,
@@ -1294,6 +1301,7 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
   const CHECKS: { check: string; dir: string; neg: string; framework?: TargetFramework }[] = [
     { check: "leak", dir: "server-client-leak", neg: "negative" },
     { check: "serveronly", dir: "missing-server-only", neg: "negative" },
+    { check: "serveronly-baseurl", dir: "missing-server-only-baseurl", neg: "negative" },
     { check: "action-auth", dir: "server-action-auth", neg: "negative" },
     { check: "action-validation", dir: "server-action-validation", neg: "negative" },
     { check: "cache", dir: "cache-config", neg: "negative" },
@@ -1376,6 +1384,35 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
       expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
     }
+  });
+
+  it("#1812 registered positive reaches the secret only through the production baseUrl edge", () => {
+    const entry = m9CheckEntries.find((e) => e.id === "M9C-SERVERONLY-BASEURL-POS");
+    expect(entry).toBeDefined();
+
+    const findings = detectAppRouterFindings(
+      loadPrefixed("missing-server-only-baseurl/positive", "m9-corpus/serveronly-baseurl/positive"),
+    );
+    const guardFindings = findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard");
+    expect(guardFindings.map((f) => f.location)).toEqual(["m9-corpus/serveronly-baseurl/positive/lib/secrets.ts:1"]);
+
+    const row = scoreEntry(entry!, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.caughtTier).toBe("review");
+  });
+
+  it("#1812 registered benign package remains external without a loaded local candidate", () => {
+    const entry = m9CheckEntries.find((e) => e.id === "M9C-SERVERONLY-BASEURL-NEG");
+    expect(entry).toBeDefined();
+
+    const sources = loadPrefixed("missing-server-only-baseurl/negative", "m9-corpus/serveronly-baseurl/negative");
+    expect(sources.some((source) => source.path.endsWith("/lib/secrets.ts") && source.text.includes("STRIPE_SECRET_KEY"))).toBe(true);
+    const findings = detectAppRouterFindings(sources);
+    expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toEqual([]);
+
+    const row = scoreEntry(entry!, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.highFlagged).toBe(false);
   });
 
   it("#1459: M1-boundary covers every M1 taxonomy the boundary pass emits", () => {

@@ -3,18 +3,34 @@
 // filesystem sweep for every package.json outside node_modules, pulls in examples/ and standalone
 // fixture roots and reports their deliberately-pinned vulnerable dependencies as the application's
 // own. Every assertion below is about which manifests are IN, and which stay out.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectWorkspaceManifests, workspacePackages } from "./workspaces.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const directoryOrder = vi.hoisted(() => ({ reverse: false }));
+vi.mock("./fs-walk.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./fs-walk.js")>();
+  return {
+    ...actual,
+    readEntriesSafe(path: string) {
+      const result = actual.readEntriesSafe(path);
+      return directoryOrder.reverse ? { ...result, entries: [...result.entries].reverse() } : result;
+    },
+  };
+});
+
+import { collectWorkspaceManifests, discoverWorkspaceInventory, workspacePackages } from "./workspaces.js";
 
 describe("collectWorkspaceManifests", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "harvey-workspaces-"));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    directoryOrder.reverse = false;
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   const manifest = (rel: string, body: object): void => {
     mkdirSync(join(dir, rel), { recursive: true });
@@ -36,8 +52,8 @@ describe("collectWorkspaceManifests", () => {
     manifest("packages/features/auth", { name: "auth", dependencies: { zod: "^3.22.0" } });
     const scope = collectWorkspaceManifests(dir);
     expect(scope.manifests.map((m) => m.label).sort()).toEqual([
-      join("apps", "web", "package.json"),
-      join("packages", "features", "auth", "package.json"),
+      "apps/web/package.json",
+      "packages/features/auth/package.json",
       "package.json",
     ].sort());
     expect(scope.source).toBe("pnpm-workspace.yaml");
@@ -47,10 +63,12 @@ describe("collectWorkspaceManifests", () => {
     root({ name: "monorepo", workspaces: { packages: ["apps/*"] } });
     manifest("apps/api", { name: "api" });
     expect(collectWorkspaceManifests(dir).manifests).toHaveLength(2);
+    expect(discoverWorkspaceInventory(dir).packages[1]?.discoveredBy[0]?.sourceField).toBe("workspaces.packages");
     root({ name: "monorepo", workspaces: ["apps/*"] });
     const scope = collectWorkspaceManifests(dir);
     expect(scope.manifests).toHaveLength(2);
     expect(scope.source).toBe("package.json#workspaces");
+    expect(discoverWorkspaceInventory(dir).packages[1]?.discoveredBy[0]?.sourceField).toBe("workspaces");
   });
 
   // THE trap this module exists to avoid. `examples/` and a standalone fixture root are not
@@ -74,8 +92,8 @@ describe("collectWorkspaceManifests", () => {
     manifest("packages/ui", { name: "ui" });
     manifest("packages/scratch", { name: "scratch" });
     const labels = collectWorkspaceManifests(dir).manifests.map((m) => m.label);
-    expect(labels).toContain(join("packages", "ui", "package.json"));
-    expect(labels).not.toContain(join("packages", "scratch", "package.json"));
+    expect(labels).toContain("packages/ui/package.json");
+    expect(labels).not.toContain("packages/scratch/package.json");
   });
 
   it("names a glob that matched nothing instead of degrading silently to the root", () => {
@@ -91,7 +109,174 @@ describe("collectWorkspaceManifests", () => {
     writeFileSync(join(dir, "apps", "broken", "package.json"), "{ not json");
     const scope = collectWorkspaceManifests(dir);
     expect(scope.manifests.map((m) => m.label)).toEqual(["package.json"]);
-    expect(scope.unreadable).toEqual([join("apps", "broken", "package.json")]);
+    expect(scope.unreadable).toEqual(["apps/broken/package.json"]);
+  });
+
+  it.each([
+    "apps/*",
+    "./apps//*/.",
+    ".\\apps\\*\\.",
+  ])("canonicalizes an equivalent in-root workspace spelling: %s", (workspaceGlob) => {
+    root({ name: "monorepo", workspaces: [workspaceGlob] });
+    manifest("apps/zeta", { name: "zeta" });
+    manifest("apps/alpha", { name: "alpha" });
+    expect(collectWorkspaceManifests(dir).manifests.map((entry) => entry.label)).toEqual([
+      "package.json",
+      "apps/alpha/package.json",
+      "apps/zeta/package.json",
+    ]);
+  });
+
+  it("keeps declared-glob order semantic while making members within each glob deterministic", () => {
+    root({ name: "monorepo", workspaces: ["z/*", "a/*"] });
+    manifest("z/zeta", { name: "zeta" });
+    manifest("z/alpha", { name: "alpha-z" });
+    manifest("a/zeta", { name: "zeta-a" });
+    manifest("a/alpha", { name: "alpha" });
+
+    const native = collectWorkspaceManifests(dir).manifests.map((entry) => entry.label);
+    directoryOrder.reverse = true;
+    const shuffled = collectWorkspaceManifests(dir).manifests.map((entry) => entry.label);
+    expect(native).toEqual([
+      "package.json",
+      "z/alpha/package.json",
+      "z/zeta/package.json",
+      "a/alpha/package.json",
+      "a/zeta/package.json",
+    ]);
+    expect(shuffled).toEqual(native);
+  });
+
+  it("rejects parent escapes and external directory symlinks without losing in-root members", () => {
+    const repo = join(dir, "repo");
+    const outside = join(dir, "outside");
+    mkdirSync(join(repo, "packages", "inside"), { recursive: true });
+    mkdirSync(join(outside, "nested"), { recursive: true });
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      name: "root",
+      workspaces: ["../outside", "..\\outside", "linked", "packages/*"],
+    }));
+    writeFileSync(join(repo, "packages", "inside", "package.json"), JSON.stringify({ name: "inside" }));
+    writeFileSync(join(outside, "package.json"), JSON.stringify({ name: "escaped-parent" }));
+    writeFileSync(join(outside, "nested", "package.json"), JSON.stringify({ name: "escaped-link" }));
+    symlinkSync(outside, join(repo, "linked"), "dir");
+    symlinkSync(join(outside, "nested"), join(repo, "packages", "escaped"), "dir");
+
+    const scope = collectWorkspaceManifests(repo);
+    expect(scope.manifests.map(({ label, name }) => ({ label, name }))).toEqual([
+      { label: "package.json", name: "root" },
+      { label: "packages/inside/package.json", name: "inside" },
+    ]);
+    expect(scope.unresolvedGlobs).toEqual(["../outside", "..\\outside", "linked"]);
+    expect(scope.manifests.map((entry) => entry.label).join("\n")).not.toContain("..");
+  });
+
+  it("preserves case-distinct in-root workspace members on case-sensitive filesystems", () => {
+    root({ name: "monorepo", workspaces: ["apps/*"] });
+    manifest("apps/A", { name: "upper" });
+    manifest("apps/a", { name: "lower" });
+    const upper = lstatSync(join(dir, "apps", "A"));
+    const lower = lstatSync(join(dir, "apps", "a"));
+    const caseDistinct = upper.dev !== lower.dev || upper.ino !== lower.ino;
+    expect(collectWorkspaceManifests(dir).manifests.map(({ label, name }) => [label, name])).toEqual(caseDistinct
+      ? [
+          ["package.json", "monorepo"],
+          ["apps/A/package.json", "upper"],
+          ["apps/a/package.json", "lower"],
+        ]
+      : [
+          ["package.json", "monorepo"],
+          ["apps/A/package.json", "lower"],
+        ]);
+  });
+});
+
+describe("discoverWorkspaceInventoryV1", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-workspace-inventory-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const manifest = (rel: string, body: object | string): void => {
+    mkdirSync(join(dir, rel), { recursive: true });
+    writeFileSync(join(dir, rel, "package.json"), typeof body === "string" ? body : JSON.stringify(body));
+  };
+
+  it("records the root once, deduplicates overlapping members, and retains stable script evidence", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["apps/*", "apps/**"] }));
+    manifest("apps/web", { name: "web", scripts: { test: "vitest --run", e2e: "playwright test && echo $TOKEN" } });
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.schemaVersion).toBe(1);
+    expect(inventory.packages.map(({ id, dir: workspaceDir }) => ({ id, dir: workspaceDir }))).toEqual([
+      { id: "workspace:root", dir: "." },
+      { id: "workspace:apps/web", dir: "apps/web" },
+    ]);
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:apps/web"]);
+    expect(inventory.packages[1]?.discoveredBy.map((source) => source.glob)).toEqual(["apps/*", "apps/**"]);
+    expect(inventory.packages[1]?.scripts).toEqual([
+      { name: "e2e", body: "playwright test && echo $TOKEN", source: { path: "apps/web/package.json", pointer: "/scripts/e2e" } },
+      { name: "test", body: "vitest --run", source: { path: "apps/web/package.json", pointer: "/scripts/test" } },
+    ]);
+  });
+
+  it("retains negative, unresolved, invalid, and unreadable observations in stable order", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      name: "root",
+      workspaces: ["packages/*", "services/*", "../escape", "!packages/generated", "!examples/*"],
+    }));
+    manifest("packages/app", { name: "app" });
+    manifest("packages/generated", { name: "generated" });
+    manifest("packages/broken", "{not json");
+    manifest("examples/demo", { name: "demo" });
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.packages.map((entry) => entry.id)).toEqual([
+      "workspace:root",
+      "workspace:packages/app",
+      "workspace:packages/broken",
+    ]);
+    expect(inventory.applicationWorkspaceIds).toEqual(["workspace:packages/app", "workspace:packages/broken"]);
+    expect(inventory.packages.find((entry) => entry.id === "workspace:packages/broken")?.scripts).toEqual([]);
+    expect(inventory.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "packages/generated/package.json", glob: "!packages/generated" }),
+      expect.objectContaining({ kind: "excluded", path: "examples/demo/package.json", glob: "!examples/*" }),
+      expect.objectContaining({ kind: "unreadable-manifest", path: "packages/broken/package.json" }),
+      expect.objectContaining({ kind: "unresolved-glob", glob: "services/*" }),
+      expect.objectContaining({ kind: "invalid-glob", glob: "../escape" }),
+    ]));
+    expect(discoverWorkspaceInventory(dir)).toEqual(inventory);
+  });
+
+  it("uses the physical in-repository path as identity so a symlink alias cannot duplicate a member", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*", "aliases/*"] }));
+    manifest("packages/app", { name: "app" });
+    mkdirSync(join(dir, "aliases"), { recursive: true });
+    symlinkSync(join(dir, "packages", "app"), join(dir, "aliases", "app"), "dir");
+
+    const inventory = discoverWorkspaceInventory(dir);
+    expect(inventory.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:packages/app"]);
+    expect(inventory.packages[1]?.discoveredBy.map((source) => source.glob)).toEqual(["aliases/*", "packages/*"]);
+  });
+
+  it("does not infer generated/vendor/fixture packages through ** but honours an explicit declaration", () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["**"] }));
+    manifest("apps/web", { name: "web" });
+    manifest("generated/sdk", { name: "sdk" });
+    manifest("vendor/tool", { name: "tool" });
+    manifest("fixtures/case", { name: "fixture" });
+    const broad = discoverWorkspaceInventory(dir);
+    expect(broad.packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:apps/web"]);
+    expect(broad.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "excluded", path: "fixtures/case/package.json", glob: "**", reason: "implicit-directory-policy" }),
+      expect.objectContaining({ kind: "excluded", path: "generated/sdk/package.json", glob: "**", reason: "implicit-directory-policy" }),
+      expect.objectContaining({ kind: "excluded", path: "vendor/tool/package.json", glob: "**", reason: "implicit-directory-policy" }),
+    ]));
+    expect(broad.observations.filter((row) => row.kind === "excluded")).toHaveLength(3);
+
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "root", workspaces: ["fixtures/*"] }));
+    expect(discoverWorkspaceInventory(dir).packages.map((entry) => entry.id)).toEqual(["workspace:root", "workspace:fixtures/case"]);
   });
 });
 

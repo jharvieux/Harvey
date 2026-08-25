@@ -21,14 +21,14 @@
 
 import { createHash } from "node:crypto";
 import type { Confidence, Finding, Severity } from "../findings.js";
-import { findingIdentity } from "../audit-diff.js";
+import { findingIdentity, type FindingIdentityOptions } from "../audit-diff.js";
 import { renderFixSection } from "./fix-diff.js";
 import { makePacer, type Pacer } from "./rate-limit.js";
 import type { CreatedRef, ItemInput, Tracker } from "./types.js";
 
 export type Grouping = "flat" | "grouped";
 
-export interface FileOptions {
+export interface FileOptions extends FindingIdentityOptions {
   grouping?: Grouping; // default "grouped"
   // Disambiguates markers across engagements sharing one tracker (e.g. two clients' audits filed to
   // the same Jira project). Folded into every marker's hash. Default "harvey".
@@ -125,8 +125,12 @@ function markerFor(prefix: string, key: string): string {
   return `<!-- harvey-${prefix}:${hash} -->`;
 }
 
-export function findingMarker(f: Finding, engagement = "harvey"): string {
-  return markerFor("finding", `${engagement}::${findingIdentity(f)}`);
+export function findingMarker(
+  f: Finding,
+  engagement = "harvey",
+  identityOptions: FindingIdentityOptions = {},
+): string {
+  return markerFor("finding", `${engagement}::${findingIdentity(f, identityOptions)}`);
 }
 
 function epicMarker(category: string, engagement: string): string {
@@ -164,7 +168,7 @@ function ticketBody(f: Finding, marker: string, paid: boolean): string {
 // Finding -> tracker item. The single source of truth for what a filed ticket says.
 export function findingToTicket(f: Finding, opts: FileOptions = {}): PlannedTicket {
   const engagement = opts.engagement ?? "harvey";
-  const marker = findingMarker(f, engagement);
+  const marker = findingMarker(f, engagement, opts);
   return {
     finding: f,
     title: `[${f.severity}] ${f.title}`,

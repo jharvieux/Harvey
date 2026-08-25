@@ -1,0 +1,8 @@
+import { expect, test } from "vitest";
+import { computeScore } from "./score.js";
+
+test("contains one placeholder among real assertions", () => {
+  expect(computeScore()).toBe(7);
+  expect(true).toBe(true);
+  expect(computeScore()).toBeGreaterThan(0);
+});

@@ -21,6 +21,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { readEntriesSafe, readNamesSafe, type SafeDirEntry } from "./fs-walk.js";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
+import { ingestPassArtifactReceipts } from "./audit-pass-artifact.js";
+import { assertUniqueProducerExecutionReceipts, extendProducerExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
 import { buildScopeLedger, type AppBehaviorProbed, type ScopeRow } from "./pentest/scope-ledger.js";
@@ -376,7 +378,7 @@ export interface StandUpResult {
 export interface StandUpRunner {
   standUpDb: (targetDir: string, plan: ProvisioningPlan) => StandUpResult;
   runApp: (targetDir: string) => { ok: boolean; output: string; prunedDeps?: PrunedDep[] };
-  pentest: (targetDir: string, coverage: Coverage) => { ok: boolean; findings: Finding[]; output: string; appBehaviorProbed?: AppBehaviorProbed };
+  pentest: (targetDir: string, coverage: Coverage) => { ok: boolean; findings: Finding[]; output: string; appBehaviorProbed?: AppBehaviorProbed; producerExecutionReceipts?: ProducerExecutionReceipt[] };
   clientSuite?: (targetDir: string, suite: ClientSecuritySuite) => { ok: boolean; output: string };
 }
 
@@ -389,6 +391,7 @@ export interface DynamicValidationResult {
   notes: string[]; // operator-facing, non-limitation disclosures (e.g. the bonus client-suite outcome)
   artifactPath: string | null; // null whenever we produced no evidence — a no-go never writes a pass
   findings: Finding[];
+  producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
 
 // The outcome of probing ONE Supabase project (one stood-up DB). The artifact-writing decision lives
@@ -402,6 +405,7 @@ interface ProbeResult {
   findings: Finding[];
   producedEvidence: boolean; // stood up + probed, OR a migration-apply M2 finding — warrants an artifact
   artifactSummary?: string; // the summary to use when this project's evidence is the whole artifact
+  producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
 
 // Probe one Supabase project: assess → stand up its DB (apply its migrations + seed two tenants) →
@@ -470,6 +474,7 @@ function probeOneProject(opts: {
   if (!pt.ok) {
     return { standUp: false, coverage, reason: `pen-test failed against the local stack: ${pt.output}`, limitations, notes, findings: [], producedEvidence: false };
   }
+  if (pt.producerExecutionReceipts) assertUniqueProducerExecutionReceipts(pt.producerExecutionReceipts);
 
   const findings = [...pt.findings];
 
@@ -512,7 +517,7 @@ function probeOneProject(opts: {
     }
   }
 
-  return { standUp: true, coverage, reason: `dynamic validation ran (${coverage})`, limitations, notes, findings, producedEvidence: true };
+  return { standUp: true, coverage, reason: `dynamic validation ran (${coverage})`, limitations, notes, findings, producedEvidence: true, producerExecutionReceipts: pt.producerExecutionReceipts ?? [] };
 }
 
 // Orchestrate one target: assess → stand up DB (apply client migrations + seed two tenants) →
@@ -538,10 +543,18 @@ export function runDynamicValidation(opts: {
       module: "M2", target: targetDir, pass: "dynamic", generatedAt: now(),
       summary: r.artifactSummary ?? `dynamic validation (${r.coverage} coverage); ${r.findings.length} finding(s)`,
       findings: r.findings,
+      producerExecutionReceipts: r.producerExecutionReceipts,
     });
     artifactPath = writePassArtifact(artifactsDir, artifact);
+    if (artifact.producerExecutionReceipts?.length) {
+      r.producerExecutionReceipts = ingestPassArtifactReceipts(artifact, "dynamic-validation:artifact-consumer").map((receipt) => extendProducerExecutionReceipt(
+        receipt,
+        { kind: "client-delivery", from: "dynamic-validation:artifact-consumer", to: "venue:run-audit" },
+        { findingIds: r.findings.map((finding) => finding.id) },
+      ));
+    }
   }
-  return { target: targetDir, standUp: r.standUp, coverage: r.coverage, reason: r.reason, limitations: r.limitations, notes: r.notes, artifactPath, findings: r.findings };
+  return { target: targetDir, standUp: r.standUp, coverage: r.coverage, reason: r.reason, limitations: r.limitations, notes: r.notes, artifactPath, findings: r.findings, producerExecutionReceipts: r.producerExecutionReceipts ?? [] };
 }
 
 // ---- monorepo: stand up + probe EVERY Supabase project (#610) ---------------
@@ -632,6 +645,7 @@ export function runMultiProjectDynamicValidation(opts: {
   const findings: Finding[] = [];
   const limitations: string[] = [];
   const notes: string[] = [];
+  const producerExecutionReceipts: ProducerExecutionReceipt[] = [];
 
   for (const project of projects) {
     const sql = readSchemaSql(project.layout);
@@ -644,6 +658,7 @@ export function runMultiProjectDynamicValidation(opts: {
       made.stop(); // tear this project's stack down before the next binds its ports
     }
     results.push(r);
+    producerExecutionReceipts.push(...(r.producerExecutionReceipts ?? []));
     // Only tag/prefix in the multi-project case; a single-project repo keeps its findings verbatim.
     for (const f of r.findings) findings.push(projects.length > 1 ? tagFindingWithProject(f, project.label) : f);
     const prefix = projects.length > 1 ? `DB "${project.label}": ` : "";
@@ -665,12 +680,20 @@ export function runMultiProjectDynamicValidation(opts: {
         ? `dynamic validation across ${projects.length} Supabase project(s) [${perDb}]; ${findings.length} finding(s)`
         : `dynamic validation (${coverage} coverage); ${findings.length} finding(s)`,
       findings,
+      producerExecutionReceipts,
     });
     artifactPath = writePassArtifact(artifactsDir, artifact);
+    if (artifact.producerExecutionReceipts?.length) {
+      producerExecutionReceipts.splice(0, producerExecutionReceipts.length, ...ingestPassArtifactReceipts(artifact, "dynamic-validation:artifact-consumer").map((receipt) => extendProducerExecutionReceipt(
+        receipt,
+        { kind: "client-delivery", from: "dynamic-validation:artifact-consumer", to: "venue:run-audit" },
+        { findingIds: findings.map((finding) => finding.id) },
+      )));
+    }
   }
 
   const reason = projects.length > 1
     ? `dynamic validation across ${projects.length} Supabase project(s): ${projects.map((p, i) => `${p.label} (${results[i]!.coverage})`).join(", ")}`
     : results[0]!.reason;
-  return { target: targetDir, standUp, coverage, reason, limitations, notes, artifactPath, findings };
+  return { target: targetDir, standUp, coverage, reason, limitations, notes, artifactPath, findings, producerExecutionReceipts };
 }

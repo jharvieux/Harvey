@@ -108,8 +108,12 @@ function eventBlock(name: string, yaml: string = readFileSync(CI_YML, "utf8")): 
 describe("the CI tier router (#1025)", () => {
   it("routes the exact cheap-docs whitelist to claim checks without the full build", () => {
     const docsOnly = { code: false, workflows: false, docs: true };
+    expect(route(["AGENTS.md"])).toEqual(docsOnly);
+    expect(route(["CLAUDE.md"])).toEqual(docsOnly);
+    expect(route(["MODULES.md"])).toEqual(docsOnly);
     expect(route(["README.md"])).toEqual(docsOnly);
     expect(route(["SESSION.md"])).toEqual(docsOnly);
+    expect(route([".codex/agents/acceptance-verifier.toml"])).toEqual(docsOnly);
     expect(route(["docs/design/free-tier-recall-measurement.md"])).toEqual(docsOnly);
     expect(route(["docs/tier1-runbook.md", "docs/runbooks/README.md", "SESSION.md"])).toEqual(docsOnly);
   });
@@ -123,14 +127,17 @@ describe("the CI tier router (#1025)", () => {
 
   it("keeps Markdown outside the exact whitelist on the full-build catch-all", () => {
     for (const f of [
-      "AGENTS.md",
-      "CLAUDE.md",
-      "MODULES.md",
       "packages/widget/README.md",
       "briefs/anti-patterns.md",
       "targets/calibration/README.md",
       "src/scan/__fixtures__/semgrep/PROVENANCE.md",
     ]) {
+      expect(route([f]), f).toEqual({ code: true, workflows: false, docs: false });
+    }
+  });
+
+  it("does not broaden the Codex/docs exception beyond TOML and Markdown", () => {
+    for (const f of ["docs/data.json", ".codex/agents/unclassified.txt", ".codex/agents/team/nested.toml"]) {
       expect(route([f]), f).toEqual({ code: true, workflows: false, docs: false });
     }
   });
@@ -187,7 +194,8 @@ describe("the CI tier router (#1025)", () => {
     const docsClaims = jobBlock("docs-claims");
     expect(docsClaims).toMatch(/^ {4}needs: changes$/m);
     expect(docsClaims).toMatch(/^ {4}if: needs\.changes\.outputs\.docs == 'true'$/m);
-    expect(docsClaims).toContain("- run: pnpm exec vitest run src/recorded-reasons.test.ts");
+    expect(docsClaims).toContain("src/local-verify.test.ts src/recorded-reasons.test.ts src/ci-tier-router.test.ts src/corpus-tier-router.test.ts");
+    expect(docsClaims).toContain("tomllib");
     expect(docsClaims).not.toContain("pnpm verify");
 
     const verify = jobBlock("verify");

@@ -5,7 +5,8 @@
 // (secrets, semgrep) shell out to real binaries and are mocked here purely so this test stays
 // fast and offline like the rest of the suite (matching pnpm verify's own deterministic-offline
 // convention) — they aren't what this test is about.
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +20,9 @@ const scanSecrets = vi.fn(() => []);
 // on a string rather than proving the wiring, since parseSemgrepFindings below is ALSO mocked to
 // ignore its argument. Kept a well-formed no-failure result so the two describe blocks lower down
 // (which override this per-test to exercise the failure branch) have an honest baseline to diff.
-const runSemgrep = vi.fn(() => ({ result: {} }) as { result: object; failure?: string });
+const runSemgrep = vi.fn(() => ({
+  result: { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } },
+}) as { result: object; executionPlan?: object; failure?: string });
 
 vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
@@ -35,8 +38,21 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 });
 
 const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
+const { MechanicalScanContext } = await import("./mechanical-context.js");
+const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
 const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
+const { buildSemgrepCommandSemanticReceipt } = await import("./semgrep-family-cache.js");
+
+function stableReceipt(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableReceipt).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableReceipt(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+function receiptSha(value: unknown): string {
+  return createHash("sha256").update(stableReceipt(value)).digest("hex");
+}
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;
@@ -102,7 +118,7 @@ describe("runMechanicalScan skipNetworkChecks", () => {
       expect(warm.detectors.map((detector) => [detector.detector, detector.unitsExamined])).toEqual(
         cold.detectors.map((detector) => [detector.detector, detector.unitsExamined]),
       );
-      expect(cold.detectors).toHaveLength(65);
+      expect(cold.detectors).toHaveLength(73);
       expect(new Set(cold.detectors.map((detector) => detector.phase))).toEqual(new Set(phases));
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.length === detector.unitsExamined)).toBe(true);
       expect(cold.detectors.every((detector) => detector.examinedUnitIdentities.every((unit) => unit.producer === detector.detector))).toBe(true);
@@ -252,6 +268,54 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
     expect(findings.some((f) => f.id === "SUP-IOC-flatmap-stream")).toBe(false);
     expect(findings.find((f) => f.id === "SUP-SCOPE-00")?.evidence).toContain("2 manifests (pnpm-workspace.yaml)");
   });
+
+  it("binds dependency-registry receipts to the sorted contained workspace population", async () => {
+    const container = mkdtempSync(join(tmpdir(), "harvey-mechanical-workspace-boundary-"));
+    try {
+      const root = join(container, "repo");
+      const outside = join(container, "outside");
+      mkdirSync(join(root, "packages", "zeta"), { recursive: true });
+      mkdirSync(join(root, "packages", "alpha"), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "root",
+        workspaces: ["./packages//*", "../outside", "linked"],
+        dependencies: { rootdep: "1.0.0" },
+      }));
+      writeFileSync(join(root, "packages", "zeta", "package.json"), JSON.stringify({ name: "zeta", dependencies: { zetadep: "1.0.0" } }));
+      writeFileSync(join(root, "packages", "alpha", "package.json"), JSON.stringify({ name: "alpha", dependencies: { alphadep: "1.0.0" } }));
+      writeFileSync(join(outside, "package.json"), JSON.stringify({ name: "escaped", dependencies: { escapeddep: "1.0.0" } }));
+      symlinkSync(outside, join(root, "linked"), "dir");
+
+      const context = new MechanicalScanContext(root);
+      try {
+        const result = await runRegisteredDependencyDetectors({
+          context,
+          scanDir: root,
+          pkg: { dependencies: { rootdep: "1.0.0" } },
+          osv: { failure: "offline fixture" },
+          skipNetworkChecks: true,
+        }, "supply");
+        expect(result.records.find((record) => record.detector === "manifest-install-scripts")?.examinedUnitIdentities).toEqual([
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "package.json" },
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "packages/alpha/package.json" },
+          { producer: "manifest-install-scripts", kind: "target-path", identity: "packages/zeta/package.json" },
+        ]);
+        expect(result.records.find((record) => record.detector === "dependency-pinning")?.examinedUnitIdentities).toEqual([
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "package.json#rootdep" },
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/alpha/package.json#alphadep" },
+          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/zeta/package.json#zetadep" },
+        ]);
+        expect(result.findings.find((finding) => finding.id === "SUP-SCOPE-00")?.evidence).toContain(
+          "2 declared workspace glob(s) matched no package.json and were skipped: ../outside, linked",
+        );
+      } finally {
+        context.dispose();
+      }
+    } finally {
+      rmSync(container, { recursive: true, force: true });
+    }
+  });
 });
 
 // #757 (part of #756): on a Prisma/Postgres app the Supabase-specific migration/RLS detectors have
@@ -395,6 +459,7 @@ describe("runMechanicalScan surfaces semgrep parse errors and skipped files (#10
       result: {
         errors: [{ type: "Syntax error", message: "Syntax error at line 1", path: join(dir, "broken.tsx") }],
         paths: { scanned: [join(dir, "broken.tsx")], skipped: [{ path: join(dir, "vendor", "huge.js"), reason: "too_big" }] },
+        time: { rules: [], fixpoint_timeouts: [] },
       },
     });
   });
@@ -406,5 +471,107 @@ describe("runMechanicalScan surfaces semgrep parse errors and skipped files (#10
     expect(disclosure).toBeDefined();
     expect(disclosure?.evidence).toContain("broken.tsx");
     expect(disclosure?.evidence).toContain("huge.js");
+  });
+});
+
+// #1954: fixpoint timeout telemetry is intentionally excluded from SEM-ERR-00 because its raw
+// rows are volatile. The stable replacement still has to cross the real registered-producer seam:
+// execution receipt -> findingsFor companion -> phase result -> assembled client findings and the
+// producer's conservation count. A unit test of semgrepTaintNotAssessedFindings alone would not
+// prove that the disclosure ships.
+describe("runMechanicalScan delivers stable Semgrep taint NotAssessed findings (#1954)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-mechanical-semgrep-taint-na-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture" }));
+    const scanned = join(dir, "src", "route.ts");
+    mkdirSync(dirname(scanned), { recursive: true });
+    writeFileSync(scanned, "export const route = () => 'ok';\n");
+    const raw = {
+      results: [], errors: [], paths: { scanned: [scanned], skipped: [] },
+      time: {
+        rules: ["harvey-auth-taint"],
+        fixpoint_timeouts: [{
+          error_type: "Fixpoint timeout",
+          severity: "warn",
+          message: "volatile experimental timeout row",
+          location: { path: scanned, start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } },
+        }],
+      },
+    };
+    const attempt = buildSemgrepCommandSemanticReceipt(
+      raw, dir, ["semgrep"], 1, ["harvey-auth-taint"], undefined, "raw", ["harvey-auth-taint"],
+    );
+    const configSha256 = "1".repeat(64);
+    const family = {
+      ordinal: 0,
+      id: "local-auth",
+      familyId: "local-auth",
+      sourceKind: "local-config" as const,
+      sourceId: "auth.yml",
+      sourceConfigSha256: configSha256,
+      configSha256,
+      ruleIds: ["harvey-auth-taint"],
+      ownedRuleIds: ["harvey-auth-taint"],
+      ownedTaintRuleIds: ["harvey-auth-taint"],
+      loadedRuleIds: ["harvey-auth-taint"],
+      loadedTaintRuleIds: ["harvey-auth-taint"],
+      taintCoverage: "not-assessed" as const,
+      excludedRuleIds: [],
+      argv: ["semgrep"],
+      topology: "single-command-v1" as const,
+      mergeAlgorithm: "single-command-v1" as const,
+      partitions: [],
+      verification: "single" as const,
+      status: "succeeded" as const,
+      attempts: [attempt],
+    };
+    const ownership = [{
+      ordinal: family.ordinal,
+      id: family.id,
+      sourceKind: family.sourceKind,
+      sourceId: family.sourceId,
+      sourceConfigSha256: family.sourceConfigSha256,
+      configSha256: family.configSha256,
+      ownedRuleIds: family.ownedRuleIds,
+      ownedTaintRuleIds: family.ownedTaintRuleIds,
+      excludedRuleIds: family.excludedRuleIds,
+      semanticObjectSha256: undefined,
+      selector: undefined,
+      routingManifest: undefined,
+      topology: family.topology,
+      mergeAlgorithm: family.mergeAlgorithm,
+      partitions: family.partitions,
+      verification: family.verification,
+    }];
+    runSemgrep.mockReturnValueOnce({
+      result: {
+        results: [], errors: [], paths: { scanned: [scanned], skipped: [] },
+        time: { rules: ["harvey-auth-taint"] },
+      },
+      executionPlan: {
+        schema: 8,
+        timeoutPolicy: "fixpoint-family-not-assessed-v1",
+        status: "succeeded",
+        strategy: "globally-owned-partitioned-families",
+        ownershipSha256: receiptSha(ownership),
+        families: [family],
+      },
+    });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("ships one collision-free family row through assembly and producer conservation", async () => {
+    const scan = await runMechanicalScanDetailed({ dir, skipNetworkChecks: true });
+    const disclosure = scan.findings.find((finding) => finding.id === "SEM-TAINT-NA-local-auth");
+    expect(disclosure).toBeDefined();
+    expect(disclosure?.taxonomy).toBe("Next.js/web footgun — coverage not assessed");
+    expect(disclosure?.evidence).toContain("One or more taint rules in this family did not complete");
+    expect(disclosure?.evidence).toContain("harvey-auth-taint");
+    expect(disclosure?.evidence).toContain("exact scope SHA-256");
+    const semgrepProducer = scan.detectors.find((record) => record.detector === "semgrep-and-companion-config");
+    expect(semgrepProducer).toBeDefined();
+    expect(semgrepProducer?.findings).toBe(scan.phases.find((phase) => phase.phase === "semgrep")?.findings.length);
+    expect(scan.findings.filter((finding) => finding.id.startsWith("SEM-TAINT-NA-"))).toEqual([disclosure]);
   });
 });

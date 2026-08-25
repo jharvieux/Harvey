@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { calculateTotal } from "./total.js";
+
+test("checks a production value", () => {
+  assert.equal(calculateTotal(), 42);
+  assert.strictEqual(typeof calculateTotal(), "number");
+});
+
+test("deliberate Node smoke check", () => {
+  // Intentional framework smoke check because this verifies node:test is available.
+  assert.ok(true);
+});

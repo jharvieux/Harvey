@@ -27,12 +27,11 @@ runs:
         GITLEAKS=8.30.1
         TRUFFLEHOG=head
         # #1266: semgrep was the one tool `pipx install semgrep` left UNPINNED, contradicting this
-        # action's own "pins EVERY version" comment above. MEASURED 2026-07-30: a runner resolved
-        # 1.172.0 while the committed fixture (src/scan/__fixtures__/semgrep/) and
-        # SEMGREP_PINNED_VERSION (src/scan/fixture-drift-contracts.ts) are both 1.164.0 — the new
-        # semgrep-fixture-drift check correctly failed loud on that mismatch (its whole job), which
-        # is what surfaced the gap. Pinned here to match.
-        SEMGREP=1.164.0
+        # action's own "pins EVERY version" comment above. The fixture-drift gate caught the first
+        # mismatch against the then-current 1.164.0 fixture. #1954 re-captured that fixture and its
+        # parser/diagnostic evidence with 1.173.0; keep the CI binary and
+        # SEMGREP_PINNED_VERSION (src/scan/fixture-drift-contracts.ts) on that same authority.
+        SEMGREP=1.173.0
         # The KEY is emitted here too, so restore and save read ONE string. Since #1516 they are two
         # separate steps, and two hand-written copies of a key is a silent way to save under a key
         # nothing will ever restore. Suffix bumped v3 -> v4: v3 entries were written before anything

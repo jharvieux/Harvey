@@ -13,6 +13,8 @@ import {
   checkStrykerContract,
   checkLighthouseContract,
   checkSemgrepFixtureContract,
+  canonicalizeSemgrepFixtureOutput,
+  compareSemgrepFixtureOutput,
   checkGitleaksFixtureContract,
   classifyVitalsGitScopeFailure,
   churnOnlySwallowDiagnosis,
@@ -64,9 +66,9 @@ describe("checkKnipContract", () => {
 });
 
 describe("checkTruffleHogContract", () => {
-  const rows8 = load<TruffleHogResult[]>("./__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json");
-  const rows10 = load<TruffleHogResult[]>("./__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json");
-  it("passes both committed trufflehog 3.96.0 fixtures", () => {
+  const rows8 = load<TruffleHogResult[]>("./__fixtures__/trufflehog/trufflehog-3.97.0-git-unverified.json");
+  const rows10 = load<TruffleHogResult[]>("./__fixtures__/trufflehog-git-history/trufflehog-3.97.0-git-history.json");
+  it("passes both committed trufflehog 3.97.0 fixtures", () => {
     expect(checkTruffleHogContract(rows8)).toEqual([]);
     expect(checkTruffleHogContract(rows10)).toEqual([]);
   });
@@ -342,8 +344,8 @@ describe("checkLighthouseContract", () => {
 // semgrep and gitleaks, which #1165 recaptured 24 minutes before #1170 landed the drift-check
 // family and neither was registered in it. These two contracts close that gap.
 describe("checkSemgrepFixtureContract", () => {
-  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.164.0-corpus.json");
-  it("passes the committed semgrep 1.164.0 fixture", () => {
+  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.173.0-corpus.json");
+  it("passes the committed semgrep 1.173.0 fixture", () => {
     expect(checkSemgrepFixtureContract(fixture)).toEqual([]);
   });
   it("fires when the free-count rule (harvey-service-role-in-client) no longer fires", () => {
@@ -366,6 +368,162 @@ describe("checkSemgrepFixtureContract", () => {
   });
   it("fires when results is empty", () => {
     expect(checkSemgrepFixtureContract({ ...fixture, results: [] }).join("\n")).toContain("results is empty");
+  });
+  it("fires when the committed fixture claims a different Semgrep authority", () => {
+    expect(checkSemgrepFixtureContract({ ...fixture, version: "1.173.1" }).join("\n")).toContain(
+      "not the pinned fixture authority 1.173.0",
+    );
+  });
+});
+
+// #1954: shape-only checking would accept a renamed rule, changed remediation message, or moved
+// PartialParsing span. The tracked canonicalizer is shared with build-corpus.mjs, and the live
+// drift CLI compares its output exactly after removing only documented run volatility.
+describe("canonical Semgrep fixture comparison (#1954)", () => {
+  const fixture = load<SemgrepContractOutput>("./__fixtures__/semgrep/semgrep-1.173.0-corpus.json");
+
+  it("is idempotent", () => {
+    const once = canonicalizeSemgrepFixtureOutput(fixture);
+    expect(canonicalizeSemgrepFixtureOutput(once)).toEqual(once);
+  });
+
+  it("accepts only documented telemetry, ordering, and throwaway-root path volatility", () => {
+    const root = "/tmp/harvey-semgrep-corpus-authority";
+    const expected = structuredClone(fixture);
+    expected.errors = [
+      {
+        code: 3,
+        type: "Syntax error",
+        message: "Syntax error at line app/a.ts:2",
+        path: "app/a.ts",
+        spans: [{ file: "app/a.ts", start: { line: 2 }, end: { line: 2 } }],
+      },
+      {
+        code: 3,
+        type: "Syntax error",
+        message: "Syntax error at line app/b.ts:3",
+        path: "app/b.ts",
+        spans: [{ file: "app/b.ts", start: { line: 3 }, end: { line: 3 } }],
+      },
+    ];
+    expected.paths = {
+      ...expected.paths,
+      skipped: [
+        { path: "app/a.ts", reason: "analysis_failed_parser_or_internal_error" },
+        { path: "app/b.ts", reason: "too_big" },
+      ],
+    };
+    const fresh = structuredClone(expected);
+    fresh.time = { ...(fresh.time as Record<string, unknown>), total_bytes: 999, profiling_times: { run: 123.456 } };
+    fresh.profiling_results = [{ volatile: true }];
+    fresh.results = [...(fresh.results ?? [])].reverse().map((result) => ({ ...result, path: `${root}/${result.path}` }));
+    fresh.errors = [...(fresh.errors ?? [])].reverse().map((error) => {
+      const record = error as { path?: string; message?: string; spans?: Array<{ file?: string }> };
+      return {
+        ...record,
+        path: record.path ? `${root}/${record.path}` : record.path,
+        message: record.message?.replace("line app/", `line ${root}/app/`),
+        spans: record.spans?.map((span) => ({ ...span, file: span.file ? `${root}/${span.file}` : span.file })),
+      };
+    });
+    fresh.paths = {
+      ...fresh.paths,
+      scanned: [...(fresh.paths?.scanned ?? [])].reverse().map((path) => `${root}/${path}`),
+      skipped: [...(fresh.paths?.skipped ?? [])].reverse().map((skip) => ({ ...skip, path: skip.path ? `${root}/${skip.path}` : skip.path })),
+    };
+    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toEqual([]);
+  });
+
+  it("fails when a finding field changes", () => {
+    const fresh = structuredClone(fixture);
+    fresh.results![0]!.extra = { ...fresh.results![0]!.extra, message: `${fresh.results![0]!.extra?.message ?? ""}semantic drift` };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical results changed — finding fields, population, or semantic identity drifted",
+    );
+  });
+
+  it("fails when the fixture version changes even if the semantic populations do not", () => {
+    const fresh = { ...fixture, version: "1.173.1" };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toEqual([
+      'version changed from "1.173.0" to "1.173.1"',
+    ]);
+  });
+
+  it("fails when Semgrep omits a rule instead of executing the committed rule scope", () => {
+    const fresh = { ...fixture, skipped_rules: [{ rule_id: "harvey-log-injection", reason: "unsupported" }] };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical envelope changed outside version/results/errors/paths",
+    );
+  });
+
+  it("fails when the requested execution engine changes", () => {
+    const fresh = { ...fixture, engine_requested: "PRO" };
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical envelope changed outside version/results/errors/paths",
+    );
+  });
+
+  it("fails when a client-facing diagnostic changes", () => {
+    const fresh = structuredClone(fixture);
+    fresh.errors = [
+      ...(fresh.errors ?? []),
+      {
+        code: 3,
+        level: "warn",
+        type: ["PartialParsing", [{ path: "app/partial.ts", start: { line: 79 }, end: { line: 79 } }]],
+        message: "Syntax error at line app/partial.ts:79:\n `}` was unexpected",
+        path: "app/partial.ts",
+      },
+    ];
+    expect(compareSemgrepFixtureOutput(fixture, fresh)).toContain(
+      "canonical errors changed — a client-facing Semgrep diagnostic moved or changed",
+    );
+  });
+
+  it("keeps fixture raw timeout rows byte-exact while allowing only documented profiling/root volatility", () => {
+    const root = "/tmp/harvey-semgrep-time-root";
+    const expected = structuredClone(fixture);
+    expected.time = {
+      rules: ["rule-b", "rule-a", "rule-a"],
+      fixpoint_timeouts: [{
+        error_type: "Fixpoint timeout", severity: "warn",
+        message: "Fixpoint timeout while performing taint analysis at app/route.ts:1:0 [rules: 1, first: rule-a]",
+        location: { path: "app/route.ts", start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
+      }],
+    };
+    const fresh = structuredClone(expected);
+    fresh.time = {
+      ...(fresh.time as Record<string, unknown>),
+      rules: ["rule-a", "rule-b"],
+      fixpoint_timeouts: [{
+        error_type: "Fixpoint timeout", severity: "warn",
+        message: `Fixpoint timeout while performing taint analysis at ${root}/app/route.ts:1:0 [rules: 2, first: rule-b]`,
+        location: { path: `${root}/app/route.ts`, start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 1, offset: 0 } },
+      }],
+      scanning_time: { total_time: 99 },
+    };
+    expect(compareSemgrepFixtureOutput(expected, fresh, root)).toContain("canonical envelope changed outside version/results/errors/paths");
+  });
+
+  it("fails when executed rules or fixpoint timeout evidence changes", () => {
+    const rules = structuredClone(fixture);
+    (rules.time as { rules: string[] }).rules.pop();
+    expect(compareSemgrepFixtureOutput(fixture, rules)).toContain("canonical envelope changed outside version/results/errors/paths");
+
+    const timeout = structuredClone(fixture);
+    const rule = (timeout.time as { rules: string[] }).rules[0]!;
+    (timeout.time as { fixpoint_timeouts: unknown[] }).fixpoint_timeouts.push({
+      error_type: "Fixpoint timeout", severity: "warn",
+      message: `Fixpoint timeout while performing taint analysis at app/new.ts:1:0 [rules: 1, first: ${rule}]`,
+      location: { path: "app/new.ts", start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } },
+    });
+    expect(compareSemgrepFixtureOutput(fixture, timeout)).toContain("canonical envelope changed outside version/results/errors/paths");
+  });
+
+  it("fails closed on a new unclassified time child", () => {
+    const fresh = structuredClone(fixture);
+    fresh.time = { ...(fresh.time as Record<string, unknown>), future_semantic_population: [] };
+    expect(() => compareSemgrepFixtureOutput(fixture, fresh)).toThrow(/unclassified child evidence.*future_semantic_population/);
   });
 });
 

@@ -93,15 +93,9 @@ runs:
         source "$GITHUB_ACTION_PATH/find-or-update.sh"
 
         if [ "$DRILL" != "true" ]; then
-          # Captured as a plain top-level assignment (not nested inside another command's word) so
-          # `set -e` aborts here if find_or_update itself returned non-zero, per the note above.
-          result=$(find_or_update real "$TITLE" "$BODY")
-          IFS=$'\t' read -r status num url <<<"$result"
-          if [ "$status" = "created" ]; then
-            echo "Opened tracking issue $url."
-          else
-            echo "Commented on existing tracking issue #${num}."
-          fi
+          # This exact production-only parse/status adapter is executable from a focused test; keep
+          # action.yml as its caller so the tested seam cannot diverge from the live action (#1348).
+          run_production_find_or_update "$TITLE" "$BODY"
           exit 0
         fi
 

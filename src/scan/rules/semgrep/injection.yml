@@ -31,7 +31,7 @@ x-request-source: &request_source
             - pattern: $REQ.header(...)
         - metavariable-regex:
             metavariable: $REQ
-            regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
+            regex: ^_?(?:req|request|nextReq|nextRequest|httpReq|incoming)$
     # #1221: the App Router query string. `$U.searchParams` subsumes `req.nextUrl.searchParams`
     # AND the split `const u = new URL(req.url); u.searchParams.get(…)` form, so neither needs its
     # own pattern; the `.get(...)` arm carries the inline `new URL(req.url).searchParams.get(…)`
@@ -293,16 +293,17 @@ x-throw-schema-guard: &throw_schema_guard
                     if (!$P.success) throw $E;
     - focus-metavariable: $P
 
-# #1708: the CLIENT URL PARAM source, for the three sinks in this file that a "use client"
-# component can call directly with no server hop (a supabase-js call ships in the browser bundle):
-# Supabase Storage object keys (harvey-path-traversal), `.rpc(...)` (harvey-sql-injection-rpc) and
-# `.or`/`.filter`/`.textSearch` (harvey-postgrest-filter-injection). Judgment for every rule that
-# consumes `*request_source` is recorded in shared-sources.test.ts's CLIENT_URL_PARAM_* maps.
+# #1708: the CLIENT URL PARAM source for sinks that a "use client" component can call directly
+# with no server hop. Three supabase-js sinks consume it in-place (Storage object keys, `.rpc(...)`,
+# and `.or`/`.filter`/`.textSearch`); dynamic dispatch does too. Eval/new Function and the
+# PapaParse/SheetJS subset of CSV serialization use it through lower-severity companion rules,
+# because their server/request siblings retain different severity or sink-family semantics.
+# Judgment for every rule that consumes `*request_source` is recorded in shared-sources.test.ts.
 #
 # THIS IS A NARROWING OF xss.yml's `x-dom-source`, NOT A COPY OF IT, and the difference is the whole
 # point. xss.yml can afford a receiver-agnostic `$SP.get(...)` / `$RT.query.$K` because its sinks
 # (innerHTML, document.write, dangerouslySetInnerHTML) exist ONLY in a browser, so the receiver is
-# overwhelmingly a URLSearchParams. The three sinks here run on BOTH sides of the boundary, so the
+# overwhelmingly a URLSearchParams. The sinks here run on BOTH sides of the boundary, so the
 # bare arms fire on every server-side `.get()` and every `.query.` property access — which is
 # precisely what base.yml's canonical request block records as the reason IT carries no bare
 # `$SP.get(...)`: "measured to fire on Map/Headers/config/FormData `.get()`".
@@ -316,7 +317,8 @@ x-throw-schema-guard: &throw_schema_guard
 # count that sets a client's letter grade. Bound arms below: 0. The receiver is therefore bound to a
 # URL-parameter-shaped name here.
 #
-# What the binding costs, MEASURED on carbon (crbnos/carbon@92e19c04417e, 5 repeats per arm) rather
+# What the binding cost when introduced, MEASURED on carbon (crbnos/carbon@92e19c04417e, 5 repeats
+# per arm) rather
 # than assumed: eleven `harvey-path-traversal` rows, every one of them `formData.get(...)`-derived
 # and every one read against source. They are genuine request-body taint — but they are the REQUEST
 # class, not the client-URL-param class. `*request_source` deliberately does not model a bare
@@ -859,7 +861,7 @@ rules:
       data (e.g. JSON.parse) or dispatch against an allowlist; never evaluate untrusted strings.
     pattern-sources:
       - *request_source
-    pattern-sanitizers:
+    pattern-sanitizers: &eval_sanitizers
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
@@ -985,12 +987,38 @@ rules:
                   ...
       - *throw_guard
       - *throw_schema_guard
-    pattern-sinks:
+    pattern-sinks: &eval_sinks
       - patterns:
           - pattern-either:
               - pattern: eval($C)
               - pattern: new Function(..., $C)
           - focus-metavariable: $C
+
+  # #1708: browser-local eval/new Function is a real client-side injection primitive, but it does
+  # not carry the server-RCE blast radius of harvey-code-injection-eval. Keep it in a distinct
+  # WARNING/MEDIUM/Harvey Medium review rule so a client URL source can never inherit the server
+  # rule's ERROR/HIGH/Critical grading. The sanitizer and sink lists are aliases of the server
+  # rule's exact lists: the only intentional differences are source and severity band.
+  - id: harvey-code-injection-eval-client-url
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+      cwe: ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"]
+      owasp: ["A03:2021 - Injection"]
+    message: >
+      A client URL parameter reaches eval()/new Function() — browser-local code injection. Parse
+      the value as data (e.g. JSON.parse) or dispatch against an allowlist; never evaluate an
+      untrusted URL value. This is review-tier rather than the Critical server-request rule because
+      execution is confined to the browser context unless a separate cross-user delivery path is
+      established.
+    pattern-sources:
+      - *client_url_source
+    pattern-sanitizers: *eval_sanitizers
+    pattern-sinks: *eval_sinks
 
   # PostgREST filter injection: request input concatenated into a string .or()/.filter()/
   # .textSearch() expression. Review — a string filter can be legitimate, and PostgREST scopes
@@ -1210,6 +1238,10 @@ rules:
       `node-expat` exposes no external-entity handler, so neither reaches an external entity. Feed
       either one XML you do not trust and you still own a resource-exhaustion question, which is a
       different weakness from this one and is not what this rule reports.
+      Browser-native DOMParser fed from a client URL parameter is ALSO deliberately excluded
+      (#1708): current stable browser engines do not fetch or expand an external DTD through
+      DOMParser.parseFromString, so that client-local parse is outside this XXE threat model.
+      Server-side DOMParser polyfills and libxmljs remain in scope when fed from a request source.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -1815,6 +1847,38 @@ rules:
                       regex: ^(json2csv|@json2csv/plainjs|@json2csv/node)$
           - focus-metavariable: $X
 
+  # #1708: PapaParse and SheetJS/XLSX ship in browser bundles and commonly implement a client-side
+  # export button, so client URL values reaching those serializers are in class. The Node-only
+  # csv-stringify/fast-csv/json2csv families deliberately remain on the server/request rule above.
+  # Reuse only the browser-capable sink arm, not the five-family sink list.
+  - id: harvey-csv-formula-injection-client-url
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-1236: Improper Neutralization of Formula Elements in a CSV File"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A client URL parameter is serialized by PapaParse or SheetJS into a CSV/spreadsheet export
+      without neutralizing formula prefixes. A cell starting `=`, `+`, `-`, `@`, tab or CR can be
+      executed by Excel or Google Sheets when another user opens the export. Prefix such cells with
+      a single quote or reject them before export. Node-only CSV serializers are outside this
+      client-source rule and remain covered by the request-source companion.
+    pattern-sources:
+      - *client_url_source
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $P.unparse($X, ...)
+              - pattern: $P.json_to_sheet($X, ...)
+              - pattern: $P.aoa_to_sheet($X, ...)
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^([Pp]apa([Pp]arse)?|(XLSX|xlsx)(\.utils)?|utils)$
+          - focus-metavariable: $X
+
   # ReDoS: a regex literal with a nested quantifier ((a+)+ style) — catastrophic backtracking on a
   # crafted input. A linear regex with negated classes (N-REDOS-SAFE) has no nested group + does
   # not match. metavariable-regex flags the nested-quantifier shape.
@@ -2141,6 +2205,9 @@ rules:
       before dispatch.
     pattern-sources:
       - *request_source
+      # #1708: receiver-bound URL hooks/query params are in class at this rule's existing review
+      # band. Keeping both sources in one rule prevents a single flow from producing companion IDs.
+      - *client_url_source
     pattern-sinks:
       - patterns:
           - pattern: $OBJ[$IDX](...)

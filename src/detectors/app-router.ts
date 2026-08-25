@@ -14,6 +14,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { workspacePackages } from "../workspaces.js";
+import type { PathScopeContext, PathScopedClass } from "../scan/path-scope.js";
 import {
   FRAMEWORK_LABELS,
   isViteTooling,
@@ -43,6 +44,7 @@ import {
 } from "./owner-id.js";
 import { remixAdapter } from "./remix-adapter.js";
 import { tanstackAdapter } from "./tanstack-adapter.js";
+import { NON_PRODUCT, SOURCE_FILE } from "./load-sources.js";
 
 export type { SourceInput } from "./common.js";
 // `validator(`/`.validator(`/`.inputValidator(` recognises chain-level input validation: TanStack
@@ -77,6 +79,22 @@ const PAGES_DIR_PATTERN = /(^|\/)pages\/(?!api\/)/;
 // the guard is moot there, not missing).
 function isPagesRouterOnly(files: SourceInput[]): boolean {
   return !files.some((f) => APP_DIR_PATTERN.test(f.path)) && files.some((f) => PAGES_DIR_PATTERN.test(f.path));
+}
+
+function isAppRouterClientSource(sf: ts.SourceFile): boolean {
+  return leadingDirective(sf) === "use client";
+}
+
+function isAppRouterPageLayoutPath(path: string): boolean {
+  return /\/(page|layout)\.[cm]?[jt]sx?$/.test(path);
+}
+
+function appRouterProductFiles(files: readonly SourceInput[]): SourceInput[] {
+  return files.filter((file) => SOURCE_FILE.test(file.path) && !NON_PRODUCT.test(file.path));
+}
+
+function nextAppRouterApplicable(_files: readonly SourceInput[], context: Readonly<PathScopeContext>): boolean {
+  return context.framework === undefined || context.framework === "next" || context.framework === "other";
 }
 
 // #1238: a whole row does not have to arrive through a Supabase/Drizzle `.from().select()` chain.
@@ -237,6 +255,12 @@ function candidatePaths(base: string): string[] {
 // the same import-resolution logic instead of re-implementing it — "one implementation so the
 // surfaces can't drift apart", same rationale as src/detectors/owner-id.ts.
 export interface PathAlias {
+  /**
+   * Resolution provenance. A baseUrl root is deliberately not represented as an empty-prefix
+   * paths alias: a matching `paths` pattern whose target is absent must stop resolution rather
+   * than silently probing baseUrl, and workspace-package ordering remains a separate phase.
+   */
+  kind: "paths" | "base-url" | "workspace" | "fallback";
   prefix: string;
   baseDir: string;
   // #1461: the directory of the tsconfig that declared this alias ("" = repo root). A MONOREPO
@@ -259,11 +283,12 @@ export interface PathAlias {
   fallback?: true;
 }
 
-// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
-// workspace member package (#1353). ts.parseConfigFileTextToJson tolerates the comments/trailing
-// commas tsconfig commonly carries. With no config paths in the set, fall back to Next.js's own
-// `@/*`→root default rather than giving up — the vast majority of otherwise-unresolved specifiers
-// are exactly that scaffolding default.
+// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380) and configuration-scoped
+// `baseUrl` roots (#1812), plus one alias pair per workspace member package (#1353).
+// ts.parseConfigFileTextToJson tolerates the comments/trailing commas tsconfig commonly carries.
+// With no config paths in the set, preserve Next.js's own `@/*`→root fallback rather than giving
+// up — baseUrl support is an additional resolution phase, not permission to remove an existing
+// edge family.
 //
 // Three independent monorepo failures were fixed here on 2026-07-28. They compose — one decides
 // WHICH FILENAMES are read, one HOW MANY of them, one what a NON-tsconfig specifier resolves to.
@@ -292,24 +317,35 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
     .filter((f) => /(^|\/)(tsconfig|jsconfig)(\.[\w.-]+)?\.json$/.test(f.path))
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
   const aliases: PathAlias[] = [];
+  let declaredPathAlias = false;
   for (const cfg of configs) {
     const { config } = ts.parseConfigFileTextToJson(cfg.path, cfg.text);
     const opts = config?.compilerOptions;
-    if (!opts?.paths) continue;
     const cfgDir = cfg.path.includes("/") ? cfg.path.slice(0, cfg.path.lastIndexOf("/")) : "";
-    const baseUrl = typeof opts.baseUrl === "string" ? opts.baseUrl : "";
+    const declaredBaseUrl = typeof opts?.baseUrl === "string" ? opts.baseUrl : undefined;
+    const baseUrl = declaredBaseUrl ?? "";
+    if (declaredBaseUrl !== undefined) {
+      aliases.push({ kind: "base-url", prefix: "", baseDir: normalizeRepoPath(`${cfgDir}/${declaredBaseUrl}`), scope: cfgDir });
+    }
+    if (!opts?.paths) continue;
     for (const [key, targets] of Object.entries(opts.paths)) {
       const target = Array.isArray(targets) ? targets[0] : undefined;
       if (!key.endsWith("/*") || typeof target !== "string" || !target.endsWith("/*")) continue;
-      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scope: cfgDir });
+      aliases.push({
+        kind: "paths",
+        prefix: key.slice(0, -1),
+        baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`),
+        scope: cfgDir,
+      });
+      declaredPathAlias = true;
     }
   }
-  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "", scope: "", fallback: true });
+  if (!declaredPathAlias) aliases.push({ kind: "fallback", prefix: "@/", baseDir: "", scope: "", fallback: true });
   // #1353: workspace members last, at repo scope — a package name is valid from anywhere in the
   // tree, so it must not out-rank an enclosing package's own tsconfig alias.
   for (const pkg of workspacePackages(files)) {
-    for (const sub of pkg.subpaths) aliases.push({ ...sub, scope: "" });
-    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
+    for (const sub of pkg.subpaths) aliases.push({ kind: "workspace", ...sub, scope: "" });
+    aliases.push({ kind: "workspace", prefix: pkg.name, baseDir: pkg.dir, scope: "", entryBases: pkg.entryBases });
   }
   return aliases;
 }
@@ -329,25 +365,61 @@ function resolveRelativeImport(fromPath: string, specifier: string, allPaths: Se
 // first; an alias from some other workspace is only a last resort. Keeping that fallback is
 // deliberate — before this change one arbitrary package's aliases were applied repo-wide, so
 // dropping it outright would un-resolve specifiers that resolve today.
-function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+interface AliasResolution {
+  path?: string;
+  /** An applicable tsconfig `paths` pattern matched, even if none of its candidates existed. */
+  matchedPathsPattern: boolean;
+}
+
+function scopeRank(fromPath: string, alias: PathAlias): number {
+  return alias.scope === "" || fromPath.startsWith(`${alias.scope}/`) ? alias.scope.length + 1 : 0;
+}
+
+function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): AliasResolution {
   // 0 = declared by some other workspace; higher = a deeper enclosing package, which wins.
-  const rank = (a: PathAlias) => (a.scope === "" || fromPath.startsWith(`${a.scope}/`) ? a.scope.length + 1 : 0);
-  const ordered = [...aliases].sort((a, b) => rank(b) - rank(a));
-  for (const { prefix, baseDir, entryBases } of ordered) {
+  const ordered = aliases.filter((a) => a.kind !== "base-url").sort((a, b) => scopeRank(fromPath, b) - scopeRank(fromPath, a));
+  let matchedPathsPattern = false;
+  for (const alias of ordered) {
+    const { prefix, baseDir, entryBases } = alias;
     if (entryBases) {
       // #1353: a workspace package named EXACTLY, with no subpath — resolve to its own entry module.
       if (specifier !== prefix) continue;
       const hit = entryBases.flatMap(candidatePaths).find((c) => allPaths.has(c));
-      if (hit) return hit;
+      if (hit) return { path: hit, matchedPathsPattern };
       continue;
     }
     if (!specifier.startsWith(prefix)) continue;
+    if (alias.kind === "paths" && scopeRank(fromPath, alias) > 0) matchedPathsPattern = true;
     const rest = specifier.slice(prefix.length);
     const base = normalizeRepoPath(baseDir ? `${baseDir}/${rest}` : rest);
     const hit = candidatePaths(base).find((c) => allPaths.has(c));
+    if (hit) return { path: hit, matchedPathsPattern };
+  }
+  return { matchedPathsPattern };
+}
+
+function resolveBaseUrlImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  if (specifier.startsWith(".") || specifier.startsWith("/")) return undefined;
+  const roots = aliases
+    .filter((alias) => alias.kind === "base-url" && scopeRank(fromPath, alias) > 0)
+    .sort((a, b) => scopeRank(fromPath, b) - scopeRank(fromPath, a));
+  for (const { baseDir } of roots) {
+    const base = normalizeRepoPath(baseDir ? `${baseDir}/${specifier}` : specifier);
+    const hit = candidatePaths(base).find((candidate) => allPaths.has(candidate));
     if (hit) return hit;
   }
   return undefined;
+}
+
+function resolveImportAttempt(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  if (specifier.startsWith(".")) return resolveRelativeImport(fromPath, specifier, allPaths);
+  const aliased = resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  if (aliased.path !== undefined) return aliased.path;
+  // TypeScript does not fall through to baseUrl after an applicable `paths` pattern matched but
+  // produced no candidate. Keeping the distinction is what prevents a repo-root guess from
+  // manufacturing edges for misspelled/missing alias targets.
+  if (aliased.matchedPathsPattern) return undefined;
+  return resolveBaseUrlImport(fromPath, specifier, allPaths, aliases);
 }
 
 // #1659: the ESM-TS convention writes `from "./helpers.js"` for a sibling `helpers.ts`, and
@@ -379,10 +451,10 @@ function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set
 const ESM_JS_SUFFIX = /\.(m|c)?js$/;
 
 export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  const verbatim = resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
+  const verbatim = resolveImportAttempt(fromPath, specifier, allPaths, aliases);
   if (verbatim !== undefined || !ESM_JS_SUFFIX.test(specifier)) return verbatim;
   const stripped = specifier.replace(ESM_JS_SUFFIX, "");
-  return resolveRelativeImport(fromPath, stripped, allPaths) ?? resolveAliasedImport(fromPath, stripped, allPaths, aliases);
+  return resolveImportAttempt(fromPath, stripped, allPaths, aliases);
 }
 
 // An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
@@ -499,12 +571,12 @@ function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPa
 function detectClientRenderOnlyAuthz(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
-  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  const clientPaths = new Set([...sources].filter(([, sf]) => isAppRouterClientSource(sf)).map(([p]) => p));
   if (clientPaths.size === 0) return findings;
   const gates = new GateResolver(sources, aliases);
 
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
+    if (isAppRouterClientSource(sf)) continue;
     const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths, aliases);
     if (clientImports.size === 0) continue;
     const rawRowNames = collectRawRowNames(sf);
@@ -599,10 +671,10 @@ function renderOnlyPropGate(childSf: ts.SourceFile | undefined, componentName: s
 function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
-  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  const clientPaths = new Set([...sources].filter(([, sf]) => isAppRouterClientSource(sf)).map(([p]) => p));
 
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
+    if (isAppRouterClientSource(sf)) continue;
     const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths, aliases);
     if (clientImports.size === 0) continue;
     const rawRowNames = collectRawRowNames(sf);
@@ -657,6 +729,10 @@ function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: Nex
 // --- Missing `server-only` guard [HIGH] ------------------------------------
 
 const SERVER_ONLY_EXEMPT_PATTERN = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$/;
+
+function isMissingServerOnlyCandidate(path: string, sf: ts.SourceFile): boolean {
+  return leadingDirective(sf) === undefined && !SERVER_ONLY_EXEMPT_PATTERN.test(path) && !hasServerOnlyImport(sf);
+}
 
 function hasServerOnlyImport(sf: ts.SourceFile): boolean {
   return sf.statements.some((s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only");
@@ -738,7 +814,7 @@ function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: Ne
 
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
-  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  const clientPaths = new Set([...sources].filter(([, sf]) => isAppRouterClientSource(sf)).map(([p]) => p));
   // #1461: the walk must STOP at a server-exclusive boundary, for the same reason this loop below
   // skips such files as candidates. `import "server-only"` is a build-time poison pill — nothing
   // behind it can reach a client bundle — and a `"use server"` module compiles to an RPC endpoint,
@@ -756,9 +832,7 @@ function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: Ne
   const reachedFromClient = importClosure(clientPaths, clientGraph);
 
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) !== undefined) continue; // 'use client' can't hold secrets like this meaningfully; 'use server' modules are already server-exclusive by the Next compiler
-    if (SERVER_ONLY_EXEMPT_PATTERN.test(path)) continue; // route handlers / middleware are already server-exclusive by Next.js routing convention
-    if (hasServerOnlyImport(sf)) continue;
+    if (!isMissingServerOnlyCandidate(path, sf)) continue; // directives, route handlers, middleware, and poison-pilled modules are server-exclusive already
     const secretNode = findSecretEnvAccess(sf);
     if (!secretNode) continue;
     if (!reachedFromClient.has(path)) continue; // nothing on the client side imports this module — no bundling risk to guard against
@@ -1635,7 +1709,7 @@ function detectUnsafeCacheConfig(sources: Map<string, ts.SourceFile>, nextId: Ne
     // different caching surface (route segment config / Cache-Control) and,
     // on the ATC dogfood, were 225 of 230 hits here — almost all admin or
     // mutation endpoints that were never cache candidates (#181).
-    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
+    if (!isAppRouterPageLayoutPath(path)) continue;
     const text = sf.text;
     if (!(/\.from\(\s*["'`]/.test(text) && /\.select\(/.test(text))) continue;
     if (CACHE_SIGNAL_PATTERN.test(text)) continue;
@@ -1703,6 +1777,10 @@ const SHARED_CACHE_VALUE = /\b(public|s-maxage)\b/i;
 const PRIVATE_CACHE_VALUE = /\b(private|no-store|no-cache)\b/i;
 const RESPONSE_BUILDING_FILE = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$/;
 
+function isAppRouterResponsePath(path: string): boolean {
+  return RESPONSE_BUILDING_FILE.test(path);
+}
+
 function unstableCacheCalls(sf: ts.SourceFile): ts.CallExpression[] {
   const out: ts.CallExpression[] = [];
   const visit = (node: ts.Node) => {
@@ -1749,7 +1827,7 @@ function detectCrossUserCacheBleed(sources: Map<string, ts.SourceFile>, nextId: 
   const opaque: string[] = [];
 
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
+    if (isAppRouterClientSource(sf)) continue;
 
     for (const call of unstableCacheCalls(sf)) {
       const cb = call.arguments[0];
@@ -1803,7 +1881,7 @@ function detectCrossUserCacheBleed(sources: Map<string, ts.SourceFile>, nextId: 
       );
     }
 
-    if (!RESPONSE_BUILDING_FILE.test(path)) continue;
+    if (!isAppRouterResponsePath(path)) continue;
     if (!AUTH_PATTERN.test(sf.text) && !readsDynamicApi(sf)) continue;
     for (const m of sf.text.matchAll(CACHE_CONTROL_HEADER)) {
       const value = m[1] ?? "";
@@ -2030,7 +2108,7 @@ const MAX_EXTRA_PAIRS_SHOWN = 4;
 function detectDataFetchingWaterfalls(
   sources: Map<string, ts.SourceFile>,
   nextId: NextId,
-  isClientContext: (sf: ts.SourceFile) => boolean = (sf) => leadingDirective(sf) === "use client",
+  isClientContext: (sf: ts.SourceFile) => boolean = isAppRouterClientSource,
   aliases: PathAlias[] = [],
 ): Finding[] {
   const findings: Finding[] = [];
@@ -2220,8 +2298,8 @@ function readsDynamicApi(sf: ts.SourceFile): boolean {
 function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
-    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
+    if (isAppRouterClientSource(sf)) continue;
+    if (!isAppRouterPageLayoutPath(path)) continue;
 
     const dynamicCall = findDynamicApiCall(sf);
     if (dynamicCall) {
@@ -2629,6 +2707,10 @@ function isOffPathModuleHelper(fn: ts.Node, sf: ts.SourceFile, seen: Set<ts.Node
   return crossSites.every(({ node, sf: callerSf }) => !isOnSsrRenderPath(node, callerSf, ctx, next));
 }
 
+function isSsrJsxPath(path: string): boolean {
+  return /\.[jt]sx$/.test(path);
+}
+
 function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, ctx: SsrCrossFileContext | undefined = undefined, seen: Set<ts.Node> = new Set()): boolean {
   if (/(^|\/)entry\.client\.[jt]sx?$/.test(sf.fileName)) return false;
   const fns: ts.Node[] = [];
@@ -2642,7 +2724,7 @@ function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile, ctx: SsrCrossFileCo
     if (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest)) {
       return false;
     }
-    if (!/\.[jt]sx$/.test(sf.fileName)) return false;
+    if (!isSsrJsxPath(sf.fileName)) return false;
     if (isOffPathModuleHelper(nearest, sf, seen, ctx, findSourcePath(sf, ctx))) return false;
   }
   return true;
@@ -3341,6 +3423,10 @@ function uncappedRetryScopeNote(sources: Map<string, ts.SourceFile>, nextId: Nex
 // shell first.
 const ROUTE_SEGMENT_FILE = /\/(page|layout|route)\.[cm]?[jt]sx?$/;
 
+function isAppRouterRouteSegmentPath(path: string): boolean {
+  return ROUTE_SEGMENT_FILE.test(path);
+}
+
 interface SegmentConfig {
   dynamic?: string;
   dynamicNode?: ts.Node;
@@ -3374,8 +3460,8 @@ function collectSegmentConfig(sf: ts.SourceFile): SegmentConfig {
 function detectRouteSegmentConfig(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
-    if (!ROUTE_SEGMENT_FILE.test(path)) continue;
+    if (isAppRouterClientSource(sf)) continue;
+    if (!isAppRouterRouteSegmentPath(path)) continue;
     const cfg = collectSegmentConfig(sf);
     if (cfg.dynamic === undefined && cfg.revalidate === undefined) continue;
 
@@ -3462,8 +3548,8 @@ function hasAsyncDataFetch(sf: ts.SourceFile): boolean {
 function detectMissingSuspenseBoundary(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
-    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
+    if (isAppRouterClientSource(sf)) continue;
+    if (!isAppRouterPageLayoutPath(path)) continue;
     // Only meaningful when a dynamic read AND real async data-fetching coexist with no boundary —
     // that's the case where a static shell could stream while the dynamic data resolves.
     if (!readsDynamicApi(sf) || !hasAsyncDataFetch(sf) || fileHasSuspense(sf)) continue;
@@ -3543,6 +3629,178 @@ function dataLayerNotAssessed(nextId: NextId, layer: string): Finding[] {
   }));
 }
 
+function parsedAppRouterProduct(files: readonly SourceInput[]): Map<string, ts.SourceFile> {
+  return new Map(appRouterProductFiles(files).map((file) => [file.path, parse(file.path, file.text)]));
+}
+
+/** Client roots are the production entry population for Next's two server→client boundary classes. */
+export function appRouterClientRootFiles(files: readonly SourceInput[]): SourceInput[] {
+  return appRouterProductFiles(files).filter((file) => isAppRouterClientSource(parse(file.path, file.text)));
+}
+
+/** Missing-server-only is meaningful only with a client root and a non-exempt server candidate. */
+export function appRouterMissingServerOnlyFiles(files: readonly SourceInput[]): SourceInput[] {
+  const product = appRouterProductFiles(files);
+  if (isPagesRouterOnly(product) || appRouterClientRootFiles(product).length === 0) return [];
+  return product.filter((file) => isMissingServerOnlyCandidate(file.path, parse(file.path, file.text)));
+}
+
+export function appRouterPageLayoutFiles(files: readonly SourceInput[]): SourceInput[] {
+  return appRouterProductFiles(files).filter((file) => {
+    if (!isAppRouterPageLayoutPath(file.path)) return false;
+    return !isAppRouterClientSource(parse(file.path, file.text));
+  });
+}
+
+export function appRouterResponseFiles(files: readonly SourceInput[]): SourceInput[] {
+  return appRouterProductFiles(files).filter((file) => {
+    if (!isAppRouterResponsePath(file.path)) return false;
+    return !isAppRouterClientSource(parse(file.path, file.text));
+  });
+}
+
+export function appRouterRouteOrEdgeFiles(files: readonly SourceInput[]): SourceInput[] {
+  const sources = parsedAppRouterProduct(files);
+  return appRouterProductFiles(files).filter((file) => isRouteOrEdgeHandler(file.path, sources.get(file.path)!));
+}
+
+export function appRouterRouteSegmentFiles(files: readonly SourceInput[]): SourceInput[] {
+  return appRouterProductFiles(files).filter((file) => {
+    if (!isAppRouterRouteSegmentPath(file.path)) return false;
+    return !isAppRouterClientSource(parse(file.path, file.text));
+  });
+}
+
+export function appRouterSsrJsxFiles(files: readonly SourceInput[]): SourceInput[] {
+  return appRouterProductFiles(files).filter((file) => isSsrJsxPath(file.path));
+}
+
+function ssrBoundaryApplicable(files: readonly SourceInput[], context: Readonly<PathScopeContext>): boolean {
+  if (nextAppRouterApplicable(files, context)) return true;
+  const adapter = context.framework === undefined ? undefined : selectAdapter(context.framework);
+  return adapter?.supports.has("ssr-browser-api") ?? false;
+}
+
+const appRouterClass = (
+  rowId: string,
+  classId: string,
+  selectorSymbol: string,
+  select: PathScopedClass["select"],
+  convention: string,
+  classes: string,
+  applicable: PathScopedClass["applicable"] = nextAppRouterApplicable,
+): PathScopedClass => ({
+  rowId,
+  detector: "app-router",
+  classId,
+  ownerFile: "src/detectors/app-router.ts",
+  selectorSymbol,
+  convention,
+  select,
+  applicable,
+  classes,
+});
+
+export const APP_ROUTER_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  appRouterClass(
+    "M1-PATHSCOPE-APP-CLIENT-RENDER-AUTHZ-00",
+    "M1 — Authorization enforced only by a client-side conditional render",
+    "appRouterClientRootFiles",
+    appRouterClientRootFiles,
+    "product modules rooted by a leading `\"use client\"` directive in an applicable Next boundary pass",
+    "a server component that serializes privileged data to a client component whose only gate is conditional rendering",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-SERVER-CLIENT-LEAK-00",
+    "M9 — Server→client data leak",
+    "appRouterClientRootFiles",
+    appRouterClientRootFiles,
+    "product modules rooted by a leading `\"use client\"` directive in an applicable Next boundary pass",
+    "a full database row crossing from a server component into a Client Component",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-MISSING-SERVER-ONLY-00",
+    "M9 — Missing server-only guard",
+    "appRouterMissingServerOnlyFiles",
+    appRouterMissingServerOnlyFiles,
+    "a non-Pages-only Next boundary with at least one Client Component root and non-route, non-middleware server-module candidates",
+    "a client-reachable secret-reading module missing the `server-only` poison pill",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-CACHE-CONFIG-00",
+    "M9 — Unsafe/missing cache config",
+    "appRouterPageLayoutFiles",
+    appRouterPageLayoutFiles,
+    "server `page.*` and `layout.*` product modules",
+    "a database-reading route candidate with no explicit cache or dynamic-rendering decision",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-ACCIDENTAL-DYNAMIC-00",
+    "M9 — Accidental dynamic rendering",
+    "appRouterPageLayoutFiles",
+    appRouterPageLayoutFiles,
+    "server `page.*` and `layout.*` product modules",
+    "a page or layout that forces per-request rendering by reading a dynamic API at route scope",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-MISSING-SUSPENSE-00",
+    "M9 — Missing Suspense boundary",
+    "appRouterPageLayoutFiles",
+    appRouterPageLayoutFiles,
+    "server `page.*` and `layout.*` product modules",
+    "a dynamic page or layout that fetches data without a Suspense streaming boundary",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-CACHE-BLEED-RESPONSE-00",
+    "M9 — Cross-user cache bleed (response Cache-Control branch)",
+    "appRouterResponseFiles",
+    appRouterResponseFiles,
+    "server `route.*` and `middleware.*` response-building modules",
+    "an authenticated response sent with shared-cache directives and no private/no-store directive",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-UNBOUNDED-ROUTE-00",
+    "M9 — Unbounded/self-calling route or edge fn",
+    "appRouterRouteOrEdgeFiles",
+    appRouterRouteOrEdgeFiles,
+    "route handlers, Pages API modules, middleware, and modules declaring `runtime = \"edge\"`",
+    "an unbounded loop or self-referential fetch in a request/edge handler",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-UNCAPPED-RETRY-00",
+    "M9 — Uncapped retry/fan-out",
+    "appRouterRouteOrEdgeFiles",
+    appRouterRouteOrEdgeFiles,
+    "route handlers, Pages API modules, middleware, and modules declaring `runtime = \"edge\"`",
+    "an uncapped retry loop or request-sized outbound fan-out in a request/edge handler",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-UNSAFE-SEGMENT-CONFIG-00",
+    "M9 — Unsafe route segment config",
+    "appRouterRouteSegmentFiles",
+    appRouterRouteSegmentFiles,
+    "server `page.*`, `layout.*`, and `route.*` segment modules",
+    "a force-static route segment that reads dynamic or authenticated data",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-CONFLICTING-SEGMENT-CONFIG-00",
+    "M9 — Conflicting route segment config",
+    "appRouterRouteSegmentFiles",
+    appRouterRouteSegmentFiles,
+    "server `page.*`, `layout.*`, and `route.*` segment modules",
+    "a route segment whose dynamic and revalidate settings contradict each other",
+  ),
+  appRouterClass(
+    "M1-PATHSCOPE-APP-SSR-BROWSER-API-00",
+    "M9 — SSR-only API misuse (component render path)",
+    "appRouterSsrJsxFiles",
+    appRouterSsrJsxFiles,
+    "product `.jsx`/`.tsx` modules in a framework adapter that supports SSR browser-API analysis",
+    "a browser-global access executed from an SSR component render path",
+    ssrBoundaryApplicable,
+  ),
+];
+
 // The Next.js App Router adapter — the boundary model's original and reference implementation
 // (#916). Its markers ARE the Next literals the module was built on: a client context is a
 // `"use client"` module, a server mutation is a `"use server"` function (collectServerActions), and
@@ -3570,7 +3828,7 @@ const nextAdapter: BoundaryAdapter = {
   label: FRAMEWORK_LABELS.next,
   supports: new Set(NEXT_CHECKS),
   mutationNoun: "Server Action",
-  isClientContext: (sf) => leadingDirective(sf) === "use client",
+  isClientContext: isAppRouterClientSource,
   detectServerClientLeak: (sources, nextId, files) => detectServerClientLeak(sources, nextId, collectPathAliases(files)),
   serverMutations: (_path, sf) => collectServerActions(sf),
 };

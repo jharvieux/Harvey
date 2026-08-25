@@ -8,8 +8,9 @@
 // only until the tool's OWN output schema drifts underneath it. The periodic drift check
 // (src/cli/fixture-drift.ts) re-runs the pinned tool against a reproducible seed and asserts the
 // FRESH output still satisfies the contract below: the fields the parser reads exist with the right
-// SHAPE. A byte diff is not usable (tool CONTENT churns run-to-run); what must not change is the
-// shape, and #1063 was a shape change (a value read as the wrong type).
+// SHAPE. Most tools stop there because their content legitimately churns run-to-run. Semgrep is the
+// exception: its purpose-built corpus is deterministic after the narrow canonicalization below, so
+// it also gets an exact semantic comparison that protects findings, diagnostics, and scanned scope.
 //
 // These are PURE (no I/O), so the negative controls run under `pnpm verify`
 // (src/scan/fixture-drift-contracts.test.ts). The binary-running CLI is not, like osv-fixture-drift.
@@ -19,17 +20,18 @@ import type { TruffleHogResult } from "./secrets.js";
 import type { VitalsReport } from "../hotspot-scan.js";
 import type { StrykerReport } from "../mutation-scan.js";
 import type { LighthouseResult } from "../lighthouse.js";
+import { canonicalizeSemgrepTime } from "./semgrep-time.js";
 
 // The tool versions each committed fixture was captured from (its PROVENANCE.md) and each parser's
 // field-reads were verified against. A drift check run against a different version cannot vouch for
 // the fixture — it must fail loud and prompt a re-verification, not silently pass.
 export const JSCPD_PINNED_VERSION = "4.2.5";
 export const KNIP_PINNED_VERSION = "5.88.1";
-export const TRUFFLEHOG_PINNED_VERSION = "3.96.0";
+export const TRUFFLEHOG_PINNED_VERSION = "3.97.0";
 export const VITALS_PINNED_VERSION = "0.2.0";
 export const STRYKER_PINNED_VERSION = "9.6.1";
 export const LIGHTHOUSE_PINNED_VERSION = "13.4.0";
-export const SEMGREP_PINNED_VERSION = "1.164.0";
+export const SEMGREP_PINNED_VERSION = "1.173.0";
 export const GITLEAKS_PINNED_VERSION = "8.30.1";
 
 function isNum(v: unknown): boolean {
@@ -432,7 +434,7 @@ export function checkLighthouseContract(result: LighthouseResult): string[] {
   return v;
 }
 
-// semgrep 1.164.0 (the six registry packs + src/scan/rules/semgrep/) → parseSemgrepFindings
+// semgrep 1.173.0 (the six registry packs + src/scan/rules/semgrep/) → parseSemgrepFindings
 // (src/scan/semgrep.ts). Reads check_id, path, start.line, end.line, extra.message, extra.severity,
 // extra.metadata.{confidence, harveySeverity, harveyTaxonomy, cwe, owasp, references, likelihood,
 // impact, source} — the last two (cwe/owasp) admit EITHER a string[] or a bare string (#976).
@@ -446,12 +448,163 @@ export interface SemgrepContractResult {
   extra?: {
     message?: string;
     severity?: string;
-    metadata?: { confidence?: string; cwe?: string[] | string; owasp?: string[] | string };
+    metadata?: { confidence?: string; cwe?: string[] | string; owasp?: string[] | string; [key: string]: unknown };
+    [key: string]: unknown;
   };
+  [key: string]: unknown;
 }
 export interface SemgrepContractOutput {
   version?: string;
   results?: SemgrepContractResult[];
+  errors?: unknown[];
+  paths?: { scanned?: string[]; skipped?: Array<{ path?: string; reason?: string; [key: string]: unknown }>; [key: string]: unknown };
+  skipped_rules?: unknown[];
+  engine_requested?: string;
+  time?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * The committed Semgrep fixture is compared byte-for-byte after this one canonicalization step.
+ * It removes only raw run telemetry which the parser/deliverable never reads, normalizes the
+ * throwaway root in path-bearing strings, and sorts the three Semgrep populations whose order is
+ * not semantic. Finding fields and per-path diagnostics are retained in full: a changed rule
+ * message, span, error, or skip therefore remains a loud fixture drift rather than disappearing
+ * behind the older shape-only contract.
+ *
+ * The corpus builder imports this function through tsx, and fixture-drift invokes it again before
+ * comparison. Keeping one tracked implementation replaces the untracked `process.py` from the
+ * previous capture and makes re-capture deterministic and reproducible.
+ */
+const SEMGREP_RAW_TELEMETRY_KEYS = new Set(["profiling_results"]);
+
+function stableSemgrepValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSemgrepValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableSemgrepValue(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+const SEMGREP_PATH_VALUE_KEYS = new Set(["file", "path", "scanned"]);
+
+function normalizeSemgrepValue(value: unknown, pathRoot: string | undefined, pathValue = false): unknown {
+  if (typeof value === "string") {
+    let normalized = pathValue ? value.replaceAll("\\", "/") : value;
+    if (!pathRoot) return normalized;
+
+    // Exact throwaway roots can also occur inside diagnostic messages. Remove only that known
+    // path prefix; do not rewrite arbitrary backslashes in messages/rule text as if they were path
+    // separators, because those strings are semantic fixture evidence.
+    const roots = new Set([
+      pathRoot.replace(/[\\/]$/, ""),
+      pathRoot.replaceAll("\\", "/").replace(/\/$/, ""),
+      pathRoot.replaceAll("/", "\\").replace(/\\$/, ""),
+    ]);
+    for (const root of roots) {
+      normalized = normalized
+        .replaceAll(`${root}/`, "")
+        .replaceAll(`${root}\\`, "")
+        .replaceAll(root, ".");
+    }
+    return normalized;
+  }
+  if (Array.isArray(value)) return value.map((item) => normalizeSemgrepValue(item, pathRoot, pathValue));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, normalizeSemgrepValue(item, pathRoot, SEMGREP_PATH_VALUE_KEYS.has(key))]),
+    );
+  }
+  return value;
+}
+
+function sortSemgrepPopulation<T>(items: readonly T[], identity: (item: T) => unknown[]): T[] {
+  return [...items].sort((left, right) => {
+    const a = stableSemgrepValue(identity(left));
+    const b = stableSemgrepValue(identity(right));
+    return a.localeCompare(b);
+  });
+}
+
+export function canonicalizeSemgrepFixtureOutput(output: SemgrepContractOutput, pathRoot?: string): SemgrepContractOutput {
+  if (!output || typeof output !== "object" || Array.isArray(output)) throw new Error("Semgrep fixture output is not an object");
+  const normalized = normalizeSemgrepValue(output, pathRoot) as SemgrepContractOutput;
+  const retained = { ...normalized };
+  for (const key of SEMGREP_RAW_TELEMETRY_KEYS) delete retained[key];
+  retained.time = canonicalizeSemgrepTime(normalized.time);
+
+  if (Array.isArray(normalized.results)) {
+    retained.results = sortSemgrepPopulation(normalized.results, (result) => [
+      result.path,
+      result.check_id,
+      result.start,
+      result.end,
+      result,
+    ]);
+  }
+  if (Array.isArray(normalized.errors)) {
+    retained.errors = sortSemgrepPopulation(normalized.errors, (error) => {
+      const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+      return [record.path, record.type, record.message, error];
+    });
+  }
+  if (normalized.paths && typeof normalized.paths === "object") {
+    retained.paths = {
+      ...normalized.paths,
+      ...(Array.isArray(normalized.paths.scanned)
+        ? { scanned: [...normalized.paths.scanned].sort((a, b) => a.localeCompare(b)) }
+        : {}),
+      ...(Array.isArray(normalized.paths.skipped)
+        ? {
+            skipped: sortSemgrepPopulation(normalized.paths.skipped, (skip) => [
+              skip.path,
+              skip.reason,
+              skip,
+            ]),
+          }
+        : {}),
+    };
+  }
+  return normalizeSemgrepValue(retained, undefined) as SemgrepContractOutput;
+}
+
+export function compareSemgrepFixtureOutput(
+  committed: SemgrepContractOutput,
+  fresh: SemgrepContractOutput,
+  freshPathRoot?: string,
+): string[] {
+  const expected = canonicalizeSemgrepFixtureOutput(committed);
+  const actual = canonicalizeSemgrepFixtureOutput(fresh, freshPathRoot);
+  const violations: string[] = [];
+  if (expected.version !== actual.version) {
+    violations.push(`version changed from ${JSON.stringify(expected.version)} to ${JSON.stringify(actual.version)}`);
+  }
+  if (stableSemgrepValue(expected.results) !== stableSemgrepValue(actual.results)) {
+    violations.push("canonical results changed — finding fields, population, or semantic identity drifted");
+  }
+  if (stableSemgrepValue(expected.errors) !== stableSemgrepValue(actual.errors)) {
+    violations.push("canonical errors changed — a client-facing Semgrep diagnostic moved or changed");
+  }
+  if (stableSemgrepValue(expected.paths) !== stableSemgrepValue(actual.paths)) {
+    violations.push("canonical paths changed — scanned or skipped scope/reason drifted");
+  }
+  const withoutCore = (value: SemgrepContractOutput): Record<string, unknown> => {
+    const rest = { ...value };
+    delete rest.version;
+    delete rest.results;
+    delete rest.errors;
+    delete rest.paths;
+    return rest;
+  };
+  if (stableSemgrepValue(withoutCore(expected)) !== stableSemgrepValue(withoutCore(actual))) {
+    violations.push("canonical envelope changed outside version/results/errors/paths");
+  }
+  return violations;
 }
 
 const REQUIRED_SEMGREP_RULES = [
@@ -464,7 +617,26 @@ const REQUIRED_SEMGREP_RULES = [
 
 export function checkSemgrepFixtureContract(output: SemgrepContractOutput): string[] {
   const v: string[] = [];
-  if (!isStr(output.version)) v.push("version is not a string");
+  if (output.version !== SEMGREP_PINNED_VERSION) {
+    v.push(
+      `version is ${JSON.stringify(output.version)}, not the pinned fixture authority ${SEMGREP_PINNED_VERSION}`,
+    );
+  }
+  if (!Array.isArray(output.skipped_rules)) {
+    v.push("skipped_rules is not an array — omitted-rule scope evidence must remain explicit");
+  }
+  if (!isStr(output.engine_requested)) {
+    v.push("engine_requested is not a string — execution-engine provenance must remain explicit");
+  }
+  if (!Array.isArray(output.errors)) v.push("errors is not an array — semgrepErrorFinding consumes its per-path diagnostics");
+  if (!Array.isArray(output.paths?.scanned) || !Array.isArray(output.paths?.skipped)) {
+    v.push("paths.scanned/paths.skipped are not both arrays — scope and skip disclosures consume them");
+  }
+  try {
+    canonicalizeSemgrepTime(output.time);
+  } catch (error) {
+    v.push(error instanceof Error ? error.message : String(error));
+  }
   if (!Array.isArray(output.results) || output.results.length === 0) {
     v.push("results is empty or not an array — the seed corpus should produce matches (corpus or semgrep drift?)");
     return v;
