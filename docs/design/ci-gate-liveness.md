@@ -34,6 +34,11 @@ a green short-circuit that looks like a green scoring run is the same defect one
 no-op is therefore **declared**, with its reason, and the job summary says so in words a reader
 will not mistake for a scored run.
 
+For `corpus-drift`, #1962 makes that middle row the normal pull-request and merge-group policy:
+those events report a declared no-op and explicitly defer all pinned third-party execution to the
+resulting `main` push, the daily schedule, or an explicit manual run. The required context still
+reports; it no longer puts the external corpus on the pre-merge critical path.
+
 ## The mechanism
 
 **`.github/actions/gate-liveness`** — one composite action, two modes.
@@ -84,7 +89,8 @@ replaced by it.
 
 Registered as gates: `corpus-drift`; `conservation` (gate + negative controls); `dry-run-drift`
 (regenerate + diff, as separate phases); `ci.yml`'s `heavy-cli` shards (tests + the
-shard-conditional `calibration-gate`, `source-recall-gate` and `m2-coverage-gate`); `secbench`;
+planner-assigned `calibration-gate`, `source-recall-gate`, `m2-coverage-gate`, and
+`shared-source-match`); `secbench`;
 `free-recall`; `disclosure-venue` (gate 4 + gate 4b); `alert-paths` (label pass + its three seeded
 controls); `acceptance`; `acceptance-close`; and `supervised-declines`.
 
@@ -109,10 +115,13 @@ Exempt today: `reasons-drift`, `corpus-m8`, `osv-staleness`, `owasp-ack-watch`,
 `semantic-freshness`, `site-smoke` (each unconditional and alarmed on a scheduled failure) and
 `site-ci` (reports on the PR that caused it).
 
-Two gates deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because three scored gates
-ride inside `if: matrix.shard == N` — a condition that stopped matching would retire them in complete
-silence, which is the shape #1301, #1288 and #1483 each found when those gates ran in no workflow at
-all. And **conservation's negative controls get their own gate id**, because "the controls ran" is a
+Two gates deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because four scored gates
+are assigned through each planner row's `matrix.gates` and their steps use `contains(matrix.gates,
+'<gate>')`. Pull requests may launch zero heavy runners or one to three selected runners; full
+non-PR runs retain three. The liveness expectation is derived from the same row, so a selected gate
+whose step stops matching makes the row's liveness assertion fail. That closes the shape #1301,
+#1288, #1483, and #1544 each found when those gates ran in no workflow at all. And
+**conservation's negative controls get their own gate id**, because "the controls ran" is a
 separate claim from "the gate ran": a gate nobody has watched fail is indistinguishable from a gate
 with no failing direction at all.
 
@@ -188,9 +197,9 @@ env of every registered gate, and that rule is proven in both directions.
 
 ## What this deliberately does not do
 
-- **It changes no required status check and does not touch branch protection.** Promoting
-  `corpus-drift` to required is sequenced *after* this: making a 22-minute job required before you
-  can tell "did not run" from "passed" makes the failure mode worse, not better.
+- **It does not require removing a required status check or changing branch protection.** The
+  `corpus-drift` context remains required while #1962 routes PR and merge-group events to a declared
+  no-op. Full scoring and independent replay run after merge on `main`.
 - **It does not make the common path slower.** A file append and a file read; milliseconds.
 - **It does not assert that a gate PASSED.** `MEASURED` means the phase ran and produced a number. A
   failing gate that reached its measuring phase records `MEASURED` and is red on its own merits —
@@ -199,10 +208,10 @@ env of every registered gate, and that rule is proven in both directions.
 
 ## What it does not yet cover
 
-**The DECLARED NO-OP verdict has still not been observed on a live short-circuited job.** It is
-proven by `src/ci-liveness.test.ts` against the real script, but every PR that touches this mechanism
-also touches the paths those jobs filter on, so their in-job filters correctly report
-`relevant=true`. The first docs-only PR after this lands will exercise it.
+**The original DECLARED NO-OP live-proof gap is superseded by #1962.** PR and merge-group corpus
+runs now take that path regardless of changed files, and the workflow contract test refuses a
+return to diff-based external-corpus routing. A green PR context must still be read as "intentionally
+deferred", never as evidence that the corpus was scored.
 
 **`supervised-declines` is unproven in both of its paths** until its workflow file is on `main` —
 see #1688, which carries the 404 that makes it unprovable before the merge.

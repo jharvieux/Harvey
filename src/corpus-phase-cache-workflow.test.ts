@@ -100,11 +100,19 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     const revertedCli = corpusCli.replaceAll("cacheDir: targetPhaseCacheDir", "cacheDir: phaseCacheDir");
     expect(transportWorkflowErrors(workflow, revertedCli)).toContain("target owner routing");
   });
-  it("keeps the required context reporting on every PR and failing on any shard result", () => {
+  it("keeps the required context reporting while PR and merge-group execution is a declared no-op", () => {
     expect(workflow).toMatch(/^\s{2}pull_request:\s*$/m);
+    expect(workflow).toMatch(/^\s{2}merge_group:\s*$/m);
     expect(workflow).toContain("fail-fast: false");
     expect(workflow).toMatch(/drift:\n\s+name: clone\s+pinned\s+commits\s+\+\s+score\s+baselines\n\s+needs: \[prepare-current-inputs, shard, current-replay\]\n\s+if: always\(\)/);
     expect(workflow).toContain(`if [ "$result" != "success" ]`);
+    expect(workflow).toContain("prepare-current-inputs:\n    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name != 'pull_request' && github.event_name != 'merge_group'");
+    expect(workflow).toContain("name: Declare the external-corpus deferral");
+    expect(workflow).toContain("Gate liveness — did this required context declare its outcome?");
+    expect(workflow).toContain("PR and merge-group policy defers all third-party corpus execution");
+    expect(workflow).toContain("shard: ${{ fromJSON(github.event_name == 'push' && '[1,2,3,4]' || '[1]') }}");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'");
   });
 
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
@@ -131,13 +139,14 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("CORPUS CACHE OWNER $namespace SIZE:");
   });
 
-  it("seeds the default-branch cache after merge while preserving unconditional PR reporting", () => {
+  it("runs and seeds the full corpus after merge while preserving unconditional PR reporting", () => {
     expect(workflow).toMatch(/push:\n\s+branches: \[main\]/);
     expect(workflow).toContain("--default-ref 'refs/heads/${{ github.event.repository.default_branch }}'");
     expect(workflow).toContain("--event '${{ github.event_name }}'");
     expect(workflow).toContain("--ref '${{ github.ref }}'");
-    expect(workflow).toContain("github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'");
-    expect(workflow.match(/github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group' \|\| github\.event_name == 'push'/g)).toHaveLength(5);
+    expect(workflow).toContain("github.event_name == 'push' && '[1,2,3,4]' || '[1]'");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'");
+    expect(workflow).toContain("if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'");
     expect(workflow.match(/Save successful main-shard corpus phase results — owner [1-4]/g)).toHaveLength(4);
     expect(workflow).toContain("key: corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
     expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");
@@ -256,14 +265,11 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(mechanical).toContain("assertMechanicalCacheVerification(phases, opts.phaseCache)");
   });
 
-  it("declares test-only source edits unreachable while unknown production source remains fail-open", () => {
-    const testCase = workflow.indexOf("src/*.test.ts) ;;");
-    const failOpen = workflow.indexOf("*) relevant=true ;;", testCase);
-    expect(testCase).toBeGreaterThan(0);
-    expect(failOpen).toBeGreaterThan(testCase);
-    const productionFiles = readRecursiveSafe(join(root, "src"))
-      .filter((rel) => rel.endsWith(".ts") && !rel.endsWith(".test.ts") && statSafe(join(root, "src", rel))?.isFile());
-    const importsTest = productionFiles.filter((rel) => /from\s+["'][^"']+\.test(?:\.js)?["']/.test(readFileSync(join(root, "src", rel), "utf8")));
-    expect(importsTest, "a production module importing a test invalidates the workflow's test-only exclusion").toEqual([]);
+  it("uses event policy rather than a path approximation for external corpus execution", () => {
+    expect(workflow).not.toContain("git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD");
+    expect(workflow).not.toContain("*) relevant=true ;;");
+    expect(workflow.match(/Route third-party corpus execution by event/g)).toHaveLength(1);
+    expect(workflow.match(/github\.event_name }}" = "pull_request".*github\.event_name }}" = "merge_group"/g)).toHaveLength(1);
+    expect(workflow.match(/echo "relevant=true" >> "\$GITHUB_OUTPUT"/g)).toHaveLength(1);
   });
 });

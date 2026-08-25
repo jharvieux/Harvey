@@ -2,9 +2,10 @@
 //
 //   pnpm exec tsx src/cli/heavy-shard.ts --shard 2 --of 3
 //
-// .github/workflows/ci.yml's `heavy-cli` matrix calls this instead of listing file names itself, so
+// This is the local/full-run sharder. Hosted PR selection uses src/heavy-test-plan.mjs. Locally,
 // the shard membership is derived from src/heavy-cli-tests.ts and an eighth heavy file cannot be
-// added to the suite and then run in no shard (#1228).
+// excluded by Vitest yet absent from the hosted or local population: both paths now consume the
+// same heavy-test-workloads.json registry (#1228).
 //
 // Exits non-zero on a bad index, and prints nothing but file paths on success — the workflow feeds
 // stdout straight to vitest, so any stray output would be read as a filename.

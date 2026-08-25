@@ -93,7 +93,7 @@
         "m2-coverage-gate",
         "shared-source-match"
       ],
-      "note": "heavy-cli, sharded 1..3. calibration-gate is shard 1 only, source-recall-gate shard 2 only, and m2-coverage-gate (#1483) and shared-source-match (#1544) shard 3 only, so the assert's `expect` is matrix-dependent — a `if: matrix.shard == N` step that stops matching would otherwise vanish in silence. shared-source-match is the only venue where the pattern-MATCH half of shared-sources.test.ts can execute: it needs semgrep, which the `verify` job does not install.",
+      "note": "heavy-cli runs 1..3 planner-selected shards on pull requests and the full three-shard population on merge queue/main/schedule. The planner assigns calibration-gate, source-recall-gate, m2-coverage-gate (#1483), and shared-source-match (#1544) across the runners, so each shard's assert derives `expect` from its own matrix.gates row — a selected gate that stops matching would otherwise vanish in silence. shared-source-match is the only venue where the pattern-MATCH half of shared-sources.test.ts can execute: it needs semgrep, which the verify job does not install.",
       "provenBy": {
         "run": "https://github.com/jharvieux/Harvey/actions/runs/30636830407",
         "at": "2026-07-31"
