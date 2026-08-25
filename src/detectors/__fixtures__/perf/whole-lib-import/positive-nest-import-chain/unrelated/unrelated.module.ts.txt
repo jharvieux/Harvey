@@ -1,0 +1,5 @@
+import { Module } from "@nestjs/common";
+import { UnrelatedService } from "./unrelated.service";
+
+@Module({ providers: [UnrelatedService] })
+export class UnrelatedModule {}

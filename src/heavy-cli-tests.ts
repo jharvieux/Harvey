@@ -31,7 +31,7 @@ if (registry.version !== 1 || !Array.isArray(registry.workloads) || registry.wor
 
 export const HEAVY_CLI_TESTS = registry.workloads.map((workload) => workload.testFile);
 
-// Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
+// Seconds, MEASURED from CI unless an inline row says otherwise. A BALANCE HINT ONLY — correctness never depends on these being
 // current. They drift as tests are added, and a stale number costs a few seconds of imbalance,
 // never a dropped file. A file absent from this table is deliberately treated as the heaviest known
 // (see shardHeavyTests): an unweighted newcomer gets placed first and alone rather than silently

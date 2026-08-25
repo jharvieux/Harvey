@@ -49,6 +49,7 @@ import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m6HandrolledEntries } from "./calibration/m6-handrolled.entries.js";
+import { m1HardcodedTenantEntries } from "./calibration/m1-hardcoded-tenant.entries.js";
 import { m5ExceptionTypeEntries } from "./calibration/m5-exception-type.entries.js";
 import { m5HardcodedConfigEntries } from "./calibration/m5-hardcoded-config.entries.js";
 import { m5PolyglotQualityEntries } from "./calibration/m5-polyglot-quality.entries.js";
@@ -115,6 +116,7 @@ export const CORPUS: CorpusEntry[] = [
   ...m7InitplanStaticEntries,
   ...m3Entries,
   ...m6HandrolledEntries,
+  ...m1HardcodedTenantEntries,
   ...m5ExceptionTypeEntries,
   ...m5HardcodedConfigEntries,
   ...m5PolyglotQualityEntries,

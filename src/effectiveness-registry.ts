@@ -7,17 +7,24 @@ import { AUDIT_MODULES, type AuditModule } from "./audit-coverage.js";
 import { CALIBRATION_PLANTS } from "./audit-conservation.js";
 import type { ModuleRunner } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { discoverEffectivenessRouteGraph, type RouteGraphImplementation } from "./effectiveness-route-graph.js";
+import { HEURISTIC_CORPUS } from "./scan/heuristic-precision.js";
+import { CORPUS, mechanicalCorpus } from "./scan/calibration.js";
+import { m6HandrolledEntries } from "./scan/calibration/m6-handrolled.entries.js";
+import { sourceTierCorpus } from "./scan/source-recall.js";
+import { FREE_RECALL_CORPUS } from "./scan/free-recall-corpus.js";
 import {
   EFFECTIVENESS_INVENTORY_SCHEMA,
   PRODUCER_POPULATION_CLASSES,
   PRODUCER_TIERS,
-  type EffectivenessDiscoveredCall,
+  REQUIRED_RUNTIME_EDGE,
   type EffectivenessExemption,
+  type EffectivenessConservationReceipt,
+  type EffectivenessFamilyCoverageReceipt,
   type EffectivenessInventory,
   type EffectivenessPopulationSummary,
   type EffectivenessProducer,
   type EffectivenessVenue,
-  type ProducerConsumerHop,
   type ProducerFindingFamily,
   type ProducerImplementation,
   type ProducerPopulationClass,
@@ -41,18 +48,16 @@ import {
 } from "./scan/mechanical-engine-registry.js";
 import { discoverLocalSemgrepFamilies } from "./scan/semgrep-family-cache.js";
 import { REGISTRY_PACKS } from "./scan/semgrep.js";
+import {
+  assertProducerExecutionReceipt,
+  assertUniqueProducerExecutionReceipts,
+  receiptHasRoute,
+  type ProducerExecutionReceipt,
+} from "./producer-execution-receipt.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_SEMGREP_ROOT = join("src", "scan", "rules", "semgrep");
-const COMPOSITION_SEAMS = [
-  "src/cli/static-detect.ts",
-  "src/cli/quality-scan.ts",
-  "src/cli/hotspot-scan.ts",
-  "src/cli/mutation-scan.ts",
-  "src/cli/pentest.ts",
-  "src/pentest/engine.ts",
-  "tools/pii-classify.mjs",
-] as const;
+const DIRECT_RESPONSE_WRITE_RULE = "javascript.express.security.audit.xss.direct-response-write.direct-response-write";
 
 interface LocalSemgrepRule {
   readonly familyId: string;
@@ -71,6 +76,7 @@ interface RegistryInputs {
   readonly registryPacks?: readonly string[];
   /** Optional exact ids from a materialized registry snapshot; the six pack identities remain stable. */
   readonly registryPackRuleIds?: Readonly<Record<string, readonly string[]>>;
+  readonly producerExecutionReceipts?: readonly ProducerExecutionReceipt[];
 }
 
 const nonEmpty = (value: string): boolean => value.trim().length > 0;
@@ -89,44 +95,6 @@ function implementation(file: string, symbol: string, kind: ProducerImplementati
 
 function family(module: AuditModule, idPattern: string, taxonomyPattern: string, kind = findingFamilyKind({ id: idPattern, taxonomy: taxonomyPattern })): ProducerFindingFamily {
   return { module, idPattern, taxonomyPattern, kind };
-}
-
-function mechanicalDelivery(entry: MechanicalRegistryEntry): ProducerConsumerHop[] {
-  const phaseRunner: Record<MechanicalRegistryEntry["phase"], string> = {
-    "secrets-history": "runRegisteredSecretsEngines",
-    "dependency-advisory": "runRegisteredDependencyDetectors",
-    semgrep: "runRegisteredSemgrepEngines",
-    configuration: "runRegisteredConfigurationDetectors",
-    "structural-ast": "runRegisteredMechanicalDetectors",
-    normalization: "runRegisteredNormalizationEngines",
-  };
-  const additionalConsumers = entry.implementations.some((item) => ["detectHandrolledFindings", "checkUnassessedSfcFiles"].includes(item.exportName))
-    ? [
-        { file: "src/cli/static-detect.ts", contains: entry.implementations[0]!.exportName, description: "the static detector is an additional production consumer of this same producer identity" },
-        { file: "src/audit-runners.ts", contains: "pnpm detect-static", description: "the M9 runner captures the additional static-detector output" },
-      ]
-    : [];
-  return [
-    { file: entry.registryFile, contains: entry.id, description: "the live mechanical phase registry owns this identity" },
-    { file: "src/scan/mechanical.ts", contains: phaseRunner[entry.phase], description: "the production mechanical scan invokes this phase registry" },
-    { file: "src/cli/quick-scan.ts", contains: "runMechanicalScan", description: "quick-scan consumes the mechanical result" },
-    { file: "src/audit-runners.ts", contains: "pnpm quick-scan", description: "the M1 runner captures quick-scan findings" },
-    { file: "src/cli/run-audit.ts", contains: "assembleEngagementDocument", description: "the engagement assembler consumes the captured findings" },
-    { file: "report-template/render.mjs", contains: "findings", description: "the client report renders the finding population" },
-    ...additionalConsumers,
-  ];
-}
-
-function semgrepDelivery(file: string, token: string): ProducerConsumerHop[] {
-  return [
-    { file, contains: token, description: "the configured rule or pack identity is present in the production input" },
-    { file: "src/scan/semgrep.ts", contains: "runSemgrep", description: "the Semgrep runtime executes the configured input" },
-    { file: "src/scan/mechanical-semgrep-registry.ts", contains: "semgrep-and-companion-config", description: "the live mechanical phase owns Semgrep output" },
-    { file: "src/scan/mechanical.ts", contains: "runRegisteredSemgrepEngines", description: "the production mechanical scan invokes the Semgrep phase" },
-    { file: "src/cli/quick-scan.ts", contains: "runMechanicalScan", description: "quick-scan consumes the Semgrep result" },
-    { file: "src/audit-runners.ts", contains: "pnpm quick-scan", description: "the M1 runner captures quick-scan findings" },
-    { file: "src/cli/run-audit.ts", contains: "assembleEngagementDocument", description: "the engagement assembler consumes the captured findings" },
-  ];
 }
 
 function readLocalSemgrepRules(root: string): { families: string[]; rules: LocalSemgrepRule[] } {
@@ -215,7 +183,6 @@ function normalizeBinding(binding: ProductionProducerBinding, root: string): Pro
     tiers: unique(binding.tiers).sort(byText),
     implementations: [...binding.implementations].sort((a, b) => `${a.file}#${a.symbol}`.localeCompare(`${b.file}#${b.symbol}`)),
     findingFamilies: unique(families.map((entry) => JSON.stringify(entry))).map((entry) => JSON.parse(entry) as ProducerFindingFamily).sort((a, b) => `${a.module}:${a.idPattern}:${a.taxonomyPattern}:${a.kind}`.localeCompare(`${b.module}:${b.idPattern}:${b.taxonomyPattern}:${b.kind}`)),
-    consumerPath: [...binding.consumerPath],
   };
 }
 
@@ -241,7 +208,7 @@ function normalizeMechanicalProducer(
     populationClass: inferred,
     implementations: entry.implementations.map((item) => implementation(item.file, item.exportName, implementationKind)),
     findingFamilies,
-    consumerPath: mechanicalDelivery(entry),
+    deliveryKind: "registry-dispatch",
   };
 }
 
@@ -264,27 +231,27 @@ function expandSemgrepAggregate(
   const disclosures = entry.implementations.filter((item) => disclosureSymbols.has(item.exportName));
   const companions = entry.implementations.filter((item) => companionSymbols.has(item.exportName));
   const adapters = entry.implementations.filter((item) => !disclosureSymbols.has(item.exportName) && !companionSymbols.has(item.exportName));
-  const aggregatePath = mechanicalDelivery(entry);
   const result: ProductionProducerBinding[] = [
     {
       id: "adapter:semgrep-runtime",
       modules: ["M1"], tiers: ["free"], populationClass: "adapter",
       implementations: adapters.map((item) => implementation(item.file, item.exportName, "adapter")),
-      findingFamilies: [], consumerPath: aggregatePath,
+      findingFamilies: [],
+      deliveryKind: "registry-dispatch",
     },
     {
       id: "disclosure:semgrep-runtime-scope",
       modules: ["M1"], tiers: ["free"], populationClass: "disclosure-only",
       implementations: disclosures.map((item) => implementation(item.file, item.exportName)),
       findingFamilies: entry.taxonomies.filter((taxonomy) => findingFamilyKind({ id: "", taxonomy }) !== "finding").map((taxonomy) => family("M1", "@runtime-id", taxonomy)),
-      consumerPath: aggregatePath,
+      deliveryKind: "registry-dispatch",
     },
     {
       id: "mechanical:semgrep:companion-config",
       modules: ["M1"], tiers: ["free"], populationClass: "true-finding-producer",
       implementations: companions.map((item) => implementation(item.file, item.exportName)),
       findingFamilies: entry.taxonomies.filter((taxonomy) => taxonomy === "Missing security headers" || taxonomy === "Sensitive file in public/ directory").map((taxonomy) => family("M1", "@runtime-id", taxonomy)),
-      consumerPath: aggregatePath,
+      deliveryKind: "registry-dispatch",
     },
   ];
   for (const rule of local.rules) {
@@ -293,7 +260,7 @@ function expandSemgrepAggregate(
       modules: ["M1"], tiers: ["free"], populationClass: "true-finding-producer",
       implementations: [implementation(rule.file, rule.id, "rule")],
       findingFamilies: [family("M1", rule.id, rule.taxonomy)],
-      consumerPath: semgrepDelivery(rule.file, rule.id),
+      deliveryKind: "registry-dispatch",
     });
   }
   for (const pack of packs) {
@@ -305,9 +272,16 @@ function expandSemgrepAggregate(
       findingFamilies: ruleIds.length > 0
         ? ruleIds.map((id) => family("M1", id, id))
         : [family("M1", "@resolved-registry-rule-ids", `Semgrep registry pack ${pack}`)],
-      consumerPath: semgrepDelivery("src/scan/semgrep.ts", pack),
+      deliveryKind: "registry-dispatch",
     });
   }
+  result.push({
+    id: `semgrep:registry:${DIRECT_RESPONSE_WRITE_RULE}`,
+    modules: ["M1"], tiers: ["free"], populationClass: "true-finding-producer",
+    implementations: [implementation("src/scan/semgrep.ts", DIRECT_RESPONSE_WRITE_RULE, "rule")],
+    findingFamilies: [family("M1", DIRECT_RESPONSE_WRITE_RULE, DIRECT_RESPONSE_WRITE_RULE)],
+    deliveryKind: "registry-dispatch",
+  });
   return result;
 }
 
@@ -333,10 +307,7 @@ function producerPopulation(
     populationClass: "conservation-plant",
     implementations: [implementation("src/audit-conservation.ts", "CALIBRATION_PLANTS", "plant")],
     findingFamilies: [family(plant.module, `@conservation-plant:${plant.module}`, plant.taxonomy)],
-    consumerPath: [
-      { file: "src/audit-conservation.ts", contains: plant.taxonomy, description: "the conserved module plant declares this finding family" },
-      { file: "src/cli/validate-conservation.ts", contains: "checkConservation", description: "the conservation CLI asserts production and delivery" },
-    ],
+    deliveryKind: "conservation",
   }));
   return {
     bindings: [...auditBindings, ...mechanicalBindings, ...plantBindings].map((binding) => normalizeBinding(binding, root)),
@@ -346,62 +317,101 @@ function producerPopulation(
   };
 }
 
-const VENUE_MODULES: Readonly<Record<string, readonly AuditModule[]>> = {
-  "validate-calibration": ["M1", "M6"],
-  "validate-precision": ["M1", "M7", "M8"],
-  "validate-source-recall": ["M1", "M9"],
-  "validate-secbench": ["M1"],
-  "validate-free-recall": ["M1"],
-};
+interface SemanticVenueInput {
+  readonly gate: ScoredGate;
+  readonly rootId: string;
+  readonly producerIds: ReadonlySet<string>;
+  readonly callReceiptIds: readonly string[];
+  readonly corpusIds: readonly string[];
+  readonly corpusRows: readonly ScorerCorpusRow[];
+}
 
-function buildVenues(gates: readonly ScoredGate[]): EffectivenessVenue[] {
+interface ScorerCorpusRow {
+  readonly id: string;
+  readonly module: AuditModule;
+  /** Exact finding-id keys consumed by the scorer, never prose descriptions or notes. */
+  readonly findingIds: readonly string[];
+  /** Exact finding taxonomies consumed by scorers that declare one. */
+  readonly taxonomies: readonly string[];
+}
+
+function corpusRow(value: { id: string; module?: string; cls?: string; taxonomy?: string; match?: readonly string[] }): ScorerCorpusRow {
+  return {
+    id: value.id,
+    module: AUDIT_MODULES.includes(value.module as AuditModule) ? value.module as AuditModule : "M1",
+    findingIds: unique([value.id, ...(value.match ?? [])].filter(nonEmpty)).sort(byText),
+    taxonomies: unique([value.taxonomy ?? ""].filter(nonEmpty)).sort(byText),
+  };
+}
+
+function scorerCorpus(gateId: string): ScorerCorpusRow[] {
+  if (gateId === "validate-calibration") return [...mechanicalCorpus(CORPUS), ...m6HandrolledEntries].map(corpusRow).sort((a, b) => a.id.localeCompare(b.id));
+  if (gateId === "validate-precision") return HEURISTIC_CORPUS.map(corpusRow).sort((a, b) => a.id.localeCompare(b.id));
+  if (gateId === "validate-source-recall") return sourceTierCorpus().map(corpusRow).sort((a, b) => a.id.localeCompare(b.id));
+  if (gateId === "validate-free-recall") return FREE_RECALL_CORPUS.flatMap((target) => target.entries.map(corpusRow)).sort((a, b) => a.id.localeCompare(b.id));
+  return [];
+}
+
+function patternMatches(pattern: string, value: string): boolean {
+  if (pattern.startsWith("@")) return false;
+  const source = pattern.split("|").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*").replace(/<n>/gi, "[0-9]+")).join("|");
+  return new RegExp(`^(?:${source})$`, "i").test(value);
+}
+
+function familyCorpusIds(entry: ProducerFindingFamily, rows: readonly ScorerCorpusRow[]): string[] {
+  return rows.filter((row) => row.module === entry.module && (
+    row.findingIds.some((id) => patternMatches(entry.idPattern, id))
+    || row.taxonomies.some((taxonomy) => patternMatches(entry.taxonomyPattern, taxonomy))
+  )).map((row) => row.id).sort(byText);
+}
+
+function buildVenues(inputs: readonly SemanticVenueInput[], coveredFamilyIds: ReadonlyMap<string, readonly string[]>): EffectivenessVenue[] {
+  const byGate = new Map(inputs.map((input) => [input.gate.id, input]));
+  const gates = inputs.map((input) => input.gate);
   return gates.flatMap((gate): EffectivenessVenue[] => {
-    const modules = VENUE_MODULES[gate.id];
-    if (!modules || gate.cadence.kind === "none") return [];
+    const input = byGate.get(gate.id);
+    if (!input || gate.cadence.kind === "none") return [];
     const provenance = gate.cadence.kind === "verify"
       ? "package.json#scripts.verify"
       : `${gate.cadence.file}#${gate.cadence.job}`;
+    const familyIds = [...(coveredFamilyIds.get(gate.id) ?? [])].sort(byText);
     return [{
       id: gate.id,
       gateId: gate.id,
-      modules,
+      modules: unique(familyIds.map((id) => id.split("::")[1]).filter((module): module is AuditModule => AUDIT_MODULES.includes(module as AuditModule))).sort(byText),
       producerClasses: ["true-finding-producer"],
       command: `pnpm ${gate.script}`,
       cadence: { kind: gate.cadence.kind, description: describeCadence(gate.cadence) },
       provenance,
+      rootId: input.rootId,
+      callReceiptIds: [...input.callReceiptIds].sort(byText),
+      corpusIds: [...input.corpusIds].sort(byText),
+      coveredFamilyIds: familyIds,
     }];
   }).sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function venueIdsFor(binding: ProductionProducerBinding): string[] {
-  if (binding.populationClass !== "true-finding-producer") return [];
-  // #1948 added module-tagged detector fixtures that validate-calibration deliberately excludes
-  // from its scored corpus. A unit/fixture pair is evidence, but it is not a scored venue. Keep
-  // those producers explicit and structurally exempt until a named SCORED_GATES consumer actually
-  // includes them; assigning the broad mechanical venue would manufacture M1/M5/M8 scores.
-  const unscoredMechanical = new Set([
-    "mechanical:structural-ast:m1-exception-flow",
-    "mechanical:structural-ast:m5-exception-flow",
-    "mechanical:structural-ast:m5-hardcoded-deployment",
-    "mechanical:structural-ast:m5-polyglot-quality",
-    "mechanical:structural-ast:m5-type-escape",
-    "mechanical:structural-ast:m8-vacuous-assertion",
-  ]);
-  if (binding.id.startsWith("mechanical:") || binding.id.startsWith("semgrep:")) {
-    return unscoredMechanical.has(binding.id) ? [] : ["validate-calibration"];
-  }
-  if (binding.id === "detector:app-router") return ["validate-source-recall"];
-  if (["detector:perf-code", "detector:test-intent", "detector:vitest-intent"].includes(binding.id)) return ["validate-precision"];
-  return [];
+function familyIdentity(producerId: string, entry: ProducerFindingFamily): string {
+  return `${producerId}::${entry.module}::${entry.kind}::${entry.idPattern}::${entry.taxonomyPattern}`;
 }
 
-function buildExemptions(bindings: readonly ProductionProducerBinding[], venuesByProducer: ReadonlyMap<string, readonly string[]>): EffectivenessExemption[] {
+function buildExemptions(
+  bindings: readonly ProductionProducerBinding[],
+  venuesByFamily: ReadonlyMap<string, readonly string[]>,
+): EffectivenessExemption[] {
   const result: EffectivenessExemption[] = [];
-  const m2 = bindings.filter((binding) => binding.populationClass === "true-finding-producer" && binding.modules.includes("M2") && (venuesByProducer.get(binding.id)?.length ?? 0) === 0).map((binding) => binding.id).sort(byText);
-  if (m2.length > 0) result.push({
+  const uncoveredFamilies = (binding: ProductionProducerBinding): string[] => binding.findingFamilies
+    .map((entry) => familyIdentity(binding.id, entry))
+    .filter((id) => (venuesByFamily.get(id)?.length ?? 0) === 0)
+    .sort(byText);
+  const m2Bindings = bindings.filter((binding) => binding.populationClass === "true-finding-producer" && binding.modules.includes("M2") && uncoveredFamilies(binding).length > 0);
+  const m2 = m2Bindings.map((binding) => binding.id).sort(byText);
+  const m2Families = m2Bindings.flatMap(uncoveredFamilies).sort(byText);
+  if (m2Families.length > 0) result.push({
     id: "exemption:m2-live-score",
     kind: "empirical",
     applicableProducerIds: m2,
+    applicableFamilyIds: m2Families,
     provenance: "src/scored-gates.ts#validate-connected; tracked by #1491",
     owner: "Harvey M2 effectiveness owner (#1491)",
     decision: "Do not publish a producer effectiveness score from an M2 venue that has never run on cadence.",
@@ -410,13 +420,14 @@ function buildExemptions(bindings: readonly ProductionProducerBinding[], venuesB
     falsifier: "A named SCORED_GATES venue invokes every applicable M2 producer on labelled vulnerable and clean targets, reports its score, and has a verified non-none cadence.",
   });
 
-  const unscored = bindings.filter((binding) => binding.populationClass === "true-finding-producer" && !binding.modules.includes("M2") && (venuesByProducer.get(binding.id)?.length ?? 0) === 0);
+  const unscored = bindings.filter((binding) => binding.populationClass === "true-finding-producer" && !binding.modules.includes("M2") && uncoveredFamilies(binding).length > 0);
   for (const modules of unique(unscored.map((binding) => [...binding.modules].sort(byText).join("-"))).sort(byText)) {
     const ids = unscored.filter((binding) => [...binding.modules].sort(byText).join("-") === modules).map((binding) => binding.id).sort(byText);
     result.push({
       id: `exemption:unscored:${modules}`,
       kind: "structural",
       applicableProducerIds: ids,
+      applicableFamilyIds: unscored.filter((binding) => [...binding.modules].sort(byText).join("-") === modules).flatMap(uncoveredFamilies).sort(byText),
       provenance: `src/scored-gates.ts and effectiveness inventory schema ${EFFECTIVENESS_INVENTORY_SCHEMA}`,
       owner: `Harvey ${modules} effectiveness owner`,
       decision: "Keep this production population explicit without manufacturing a score from an unrelated module or helper test.",
@@ -433,6 +444,7 @@ function buildExemptions(bindings: readonly ProductionProducerBinding[], venuesB
       id: `exemption:not-a-producer:${populationClass}`,
       kind: "not-a-producer",
       applicableProducerIds: ids,
+      applicableFamilyIds: bindings.filter((binding) => binding.populationClass === populationClass).flatMap((binding) => binding.findingFamilies.map((entry) => familyIdentity(binding.id, entry))).sort(byText),
       provenance: `src/effectiveness-schema.ts#${populationClass}`,
       owner: "Harvey effectiveness registry",
       decision: "Exclude this disjoint population from the true-finding-producer denominator while retaining its client-delivery identity.",
@@ -442,66 +454,6 @@ function buildExemptions(bindings: readonly ProductionProducerBinding[], venuesB
     });
   }
   return result.sort((a, b) => a.id.localeCompare(b.id));
-}
-
-function sourceImportPath(root: string, sourceFile: string, specifier: string): string | undefined {
-  if (!specifier.startsWith(".")) return undefined;
-  const unresolved = resolve(root, dirname(sourceFile), specifier);
-  const stem = unresolved.replace(/\.(?:js|mjs|cjs)$/, "");
-  const candidates = [unresolved, `${stem}.ts`, `${stem}.tsx`, `${stem}.js`, `${stem}.mjs`];
-  const found = candidates.find(existsSync);
-  return found ? relative(root, found) : undefined;
-}
-
-// Calls already named by a live binding are always retained. For unknown calls, only finding-shaped
-// names are candidates: broad detect*/check*/scan* matching incorrectly classified framework,
-// package-manager, version, and test-harness discovery helpers as client-finding producers.
-function producerLikeSymbol(symbol: string): boolean {
-  if (symbol.endsWith("FromFindings")) return false;
-  return /(?:Finding|Findings)$/.test(symbol)
-    || /^run(?:Explore|Verify|ExternalTarget|GuestProbe|Realtime.*|.*Suite|.*Probe)$/.test(symbol)
-    || /(?:NotAssessedRows)$/.test(symbol)
-    || /^(?:applyVerifyResults|assessDuplicateEffects|routeOnlyNotAssessed)$/.test(symbol);
-}
-
-export function discoverProductionProducerCalls(
-  root = REPO_ROOT,
-  registeredImplementations: ReadonlySet<string> = new Set(),
-  compositionSeams: readonly string[] = COMPOSITION_SEAMS,
-): EffectivenessDiscoveredCall[] {
-  const calls: EffectivenessDiscoveredCall[] = [];
-  for (const file of compositionSeams) {
-    const path = join(root, file);
-    const sourceText = readFileSync(path, "utf8");
-    const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, extname(file) === ".mjs" ? ts.ScriptKind.JS : ts.ScriptKind.TS);
-    const imported = new Map<string, EffectivenessDiscoveredCall>();
-    for (const statement of source.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      const importedFile = sourceImportPath(root, file, statement.moduleSpecifier.text);
-      const bindings = statement.importClause?.namedBindings;
-      if (!importedFile || !bindings || !ts.isNamedImports(bindings)) continue;
-      for (const element of bindings.elements) imported.set(element.name.text, { file: importedFile, symbol: element.propertyName?.text ?? element.name.text });
-    }
-    const localFunctions = new Set(source.statements.flatMap((statement) => ts.isFunctionDeclaration(statement) && statement.name ? [statement.name.text] : []));
-    const seenIdentifiers = new Set<string>();
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) seenIdentifiers.add(node.expression.text);
-      if (ts.isIdentifier(node) && imported.has(node.text)) {
-        const identity = imported.get(node.text)!;
-        const key = `${identity.file}#${identity.symbol}`;
-        if (registeredImplementations.has(key) && sourceText.match(new RegExp(`\\b${node.text}\\b`, "g"))!.length > 1) seenIdentifiers.add(node.text);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
-    for (const name of seenIdentifiers) {
-      const identity = imported.get(name) ?? (localFunctions.has(name) ? { file, symbol: name } : undefined);
-      if (!identity) continue;
-      const key = `${identity.file}#${identity.symbol}`;
-      if (registeredImplementations.has(key) || producerLikeSymbol(identity.symbol)) calls.push(identity);
-    }
-  }
-  return unique(calls.map((call) => JSON.stringify(call))).map((call) => JSON.parse(call) as EffectivenessDiscoveredCall).sort((a, b) => `${a.file}#${a.symbol}`.localeCompare(`${b.file}#${b.symbol}`));
 }
 
 function populationSummary(producers: readonly EffectivenessProducer[]): EffectivenessPopulationSummary {
@@ -527,11 +479,28 @@ function populationSummary(producers: readonly EffectivenessProducer[]): Effecti
   };
 }
 
-function normalizeProducer(binding: ProductionProducerBinding, venueIds: readonly string[], exemptionId?: string): EffectivenessProducer {
+function normalizeProducer(
+  binding: ProductionProducerBinding,
+  routes: readonly string[],
+  venuesByFamily: ReadonlyMap<string, readonly string[]>,
+  exemptionByFamily: ReadonlyMap<string, string>,
+  executionReceiptIds: readonly string[],
+): EffectivenessProducer {
+  const findingFamilies = binding.findingFamilies.map((entry) => {
+    const id = familyIdentity(binding.id, entry);
+    const venueIds = [...(venuesByFamily.get(id) ?? [])].sort(byText);
+    const exemptionId = exemptionByFamily.get(id);
+    return { ...entry, id, venueIds, ...(exemptionId ? { exemptionId } : {}) };
+  });
+  const venueIds = unique(findingFamilies.flatMap((entry) => entry.venueIds)).sort(byText);
+  const exemptions = unique(findingFamilies.flatMap((entry) => entry.exemptionId ? [entry.exemptionId] : []));
   return {
     ...binding,
-    venueIds: [...venueIds].sort(byText),
-    ...(exemptionId ? { exemptionId } : {}),
+    findingFamilies,
+    routeIds: [...routes].sort(byText),
+    venueIds,
+    executionReceiptIds: [...executionReceiptIds].sort(byText),
+    ...(exemptions.length === 1 ? { exemptionId: exemptions[0] } : {}),
   };
 }
 
@@ -545,17 +514,87 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
   const packs = inputs.registryPacks ?? REGISTRY_PACKS;
   const gateProblems = checkScoredGates(loadGateInputs(root), scoredGates);
   if (gateProblems.length > 0) throw new Error(`scored venue registry is invalid:\n${gateProblems.join("\n")}`);
-  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, inputs.registryPackRuleIds ?? {});
-  const venueIds = new Map(population.bindings.map((binding) => [binding.id, venueIdsFor(binding)]));
-  const exemptions = buildExemptions(population.bindings, venueIds);
-  const exemptionByProducer = new Map(exemptions.flatMap((exemption) => exemption.applicableProducerIds.map((id) => [id, exemption.id] as const)));
-  const producers = population.bindings.map((binding) => normalizeProducer(binding, venueIds.get(binding.id) ?? [], exemptionByProducer.get(binding.id))).sort((a, b) => a.id.localeCompare(b.id));
-  const registeredImplementations = new Set(producers.flatMap((producer) => producer.implementations.map((item) => `${item.file}#${item.symbol}`)));
-  const composedCalls = discoverProductionProducerCalls(root, registeredImplementations);
+  const producerExecutions = [...(inputs.producerExecutionReceipts ?? [])];
+  assertUniqueProducerExecutionReceipts(producerExecutions);
+  const runtimePackRuleIds = Object.fromEntries(producerExecutions
+    .filter((receipt) => receipt.producerId.startsWith("semgrep:registry:"))
+    .map((receipt) => [receipt.producerId.slice("semgrep:registry:".length), receipt.findingFamilyIds]));
+  const population = producerPopulation(root, auditRunners, mechanicalRegistry, mechanicalDetectors, plants, packs, { ...(inputs.registryPackRuleIds ?? {}), ...runtimePackRuleIds });
+  const routeImplementations: RouteGraphImplementation[] = population.bindings.flatMap((binding) => binding.implementations.map((item) => ({
+    ...item,
+    producerId: binding.id,
+    deliveryKind: binding.deliveryKind,
+    endpoint: binding.deliveryKind === "conservation" ? "conservation" : binding.populationClass === "true-finding-producer" ? "client-finding-delivery" : "coverage-disclosure",
+  })));
+  const routeGraph = discoverEffectivenessRouteGraph(root, routeImplementations);
+  const semanticVenues: SemanticVenueInput[] = scoredGates.flatMap((gate): SemanticVenueInput[] => {
+    if (gate.cadence.kind === "none") return [];
+    const rootId = `src/cli/${gate.id}.ts`;
+    const graph = discoverEffectivenessRouteGraph(root, routeImplementations, [rootId], { detectUnknown: false });
+    const corpusRows = scorerCorpus(gate.id);
+    return [{
+      gate,
+      rootId,
+      producerIds: new Set(graph.routes.map((route) => route.producerId)),
+      callReceiptIds: graph.calls.map((call) => call.id),
+      corpusIds: corpusRows.map((row) => row.id),
+      corpusRows,
+    }];
+  });
+  const venuesByFamily = new Map<string, string[]>();
+  const familyCorpusByVenue = new Map<string, readonly string[]>();
+  for (const binding of population.bindings) {
+    for (const entry of binding.findingFamilies) {
+      const id = familyIdentity(binding.id, entry);
+      const venueIds = binding.populationClass === "true-finding-producer"
+        ? semanticVenues.filter((venue) => {
+            if (!venue.producerIds.has(binding.id)) return false;
+            const corpusIds = familyCorpusIds(entry, venue.corpusRows);
+            if (corpusIds.length === 0) return false;
+            familyCorpusByVenue.set(`${id}=>${venue.gate.id}`, corpusIds);
+            return true;
+          }).map((venue) => venue.gate.id).sort(byText)
+        : [];
+      venuesByFamily.set(id, venueIds);
+    }
+  }
+  const exemptions = buildExemptions(population.bindings, venuesByFamily);
+  const exemptionByFamily = new Map(exemptions.flatMap((exemption) => exemption.applicableFamilyIds.map((id) => [id, exemption.id] as const)));
+  const routesByProducer = new Map(population.bindings.map((binding) => [binding.id, routeGraph.routes.filter((route) => route.producerId === binding.id).map((route) => route.id)]));
+  const producers = population.bindings.map((binding) => normalizeProducer(
+    binding,
+    routesByProducer.get(binding.id) ?? [],
+    venuesByFamily,
+    exemptionByFamily,
+    producerExecutions.filter((receipt) => receipt.producerId === binding.id).map((receipt) => receipt.executionId),
+  )).sort((a, b) => a.id.localeCompare(b.id));
+  const coveredFamilyIds = new Map(semanticVenues.map((venue) => [venue.gate.id, producers.flatMap((producer) => producer.findingFamilies.filter((entry) => entry.venueIds.includes(venue.gate.id)).map((entry) => entry.id)).sort(byText)]));
+  const venues = buildVenues(semanticVenues, coveredFamilyIds);
+  const semanticVenueById = new Map(semanticVenues.map((venue) => [venue.gate.id, venue]));
+  const familyCoverage: EffectivenessFamilyCoverageReceipt[] = producers.flatMap((producer) => producer.findingFamilies.map((entry) => {
+    const scoredBindings = entry.venueIds.map((venueId) => ({
+      venueId,
+      corpusIds: [...(familyCorpusByVenue.get(`${entry.id}=>${venueId}`) ?? [])],
+      callReceiptIds: [...(semanticVenueById.get(venueId)?.callReceiptIds ?? [])].sort(byText),
+    }));
+    return {
+      id: `family-coverage:${entry.id}`,
+      producerId: producer.id,
+      familyId: entry.id,
+      kind: scoredBindings.length > 0 ? "scored-family-binding" as const : "exempt-family-binding" as const,
+      scoredBindings,
+      ...(entry.exemptionId ? { exemptionId: entry.exemptionId } : {}),
+    };
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  const conservation: EffectivenessConservationReceipt[] = producers.filter((producer) => producer.populationClass === "conservation-plant").map((producer) => ({
+    id: `conservation:${producer.id}`,
+    producerId: producer.id,
+    executionReceiptIds: [...producer.executionReceiptIds],
+  })).sort((a, b) => a.id.localeCompare(b.id));
   const inventory: EffectivenessInventory = {
     schema: EFFECTIVENESS_INVENTORY_SCHEMA,
     producers,
-    venues: buildVenues(scoredGates),
+    venues,
     exemptions,
     summary: populationSummary(producers),
     receipt: {
@@ -569,8 +608,14 @@ export function buildEffectivenessInventory(inputs: RegistryInputs = {}): Effect
       registrySemgrepPackIds: [...packs].sort(byText),
       auditRunnerBindings: population.auditIds.length,
       auditRunnerProducerIds: population.auditIds,
-      discoveredComposedCalls: composedCalls.length,
-      composedCalls,
+      productionRoots: routeGraph.roots,
+      calls: routeGraph.calls,
+      consumers: routeGraph.consumers,
+      routes: routeGraph.routes,
+      familyCoverage,
+      conservation,
+      unresolvedFindingDispatches: routeGraph.unresolvedFindingDispatches,
+      producerExecutions: producerExecutions.sort((a, b) => a.executionId.localeCompare(b.executionId)),
     },
   };
   const problems = validateEffectivenessInventory(inventory, { root, scoredGates });
@@ -604,15 +649,14 @@ export function validateEffectivenessInventory(
     if (producer.modules.length === 0 || producer.modules.some((module) => !AUDIT_MODULES.includes(module))) problems.push(`${producer.id}: module ownership is empty or invalid`);
     if (producer.tiers.length === 0 || producer.tiers.some((tier) => !PRODUCER_TIERS.includes(tier))) problems.push(`${producer.id}: tier ownership is empty or invalid`);
     if (producer.implementations.length === 0) problems.push(`${producer.id}: no implementation identity`);
-    if (producer.consumerPath.length === 0) problems.push(`${producer.id}: no production consumer path`);
     for (const item of producer.implementations) {
       const path = join(root, item.file);
       if (!existsSync(path)) {
         problems.push(`${producer.id}: orphaned implementation file ${item.file}`);
-      } else if (!readFileSync(path, "utf8").includes(item.symbol)) {
-        problems.push(`${producer.id}: orphaned implementation symbol ${item.file}#${item.symbol}`);
       }
     }
+    // routeIds describe static candidates only. Runtime liveness is established exclusively by
+    // producerExecutionReceipts and therefore an empty candidate list is not manufactured here.
     if (producer.implementations.some((item) => item.kind === "synthesizer") && producer.populationClass !== "synthesizer") {
       problems.push(`${producer.id}: synthesizer implementation is wrongly classified as ${producer.populationClass}`);
     }
@@ -622,14 +666,19 @@ export function validateEffectivenessInventory(
     for (const entry of producer.findingFamilies) {
       if (!producer.modules.includes(entry.module)) problems.push(`${producer.id}: family ${entry.idPattern} belongs to ${entry.module}, outside producer modules [${producer.modules.join(", ")}]`);
       if (!nonEmpty(entry.idPattern) || !nonEmpty(entry.taxonomyPattern)) problems.push(`${producer.id}: empty finding-family pattern`);
+      if (entry.venueIds.length > 0 && entry.exemptionId) problems.push(`${entry.id}: stale exemption ${entry.exemptionId} remains after a scored venue was assigned`);
+      if (entry.venueIds.length === 0 && !entry.exemptionId) problems.push(`${entry.id}: neither scored venue nor structured exemption is assigned`);
+      for (const venueId of entry.venueIds) {
+        const venue = venueById.get(venueId);
+        if (!venue) problems.push(`${entry.id}: scored venue ${venueId} no longer exists`);
+        else if (!venue.coveredFamilyIds.includes(entry.id)) problems.push(`${entry.id}: venue ${venueId} does not point back to this family`);
+      }
+      if (entry.exemptionId) {
+        const exemption = exemptionById.get(entry.exemptionId);
+        if (!exemption) problems.push(`${entry.id}: exemption ${entry.exemptionId} no longer exists`);
+        else if (!exemption.applicableFamilyIds.includes(entry.id)) problems.push(`${entry.id}: exemption ${entry.exemptionId} does not point back to this family`);
+      }
     }
-    for (const hop of producer.consumerPath) {
-      const path = join(root, hop.file);
-      if (!existsSync(path)) problems.push(`${producer.id}: orphaned consumer hop ${hop.file}`);
-      else if (!readFileSync(path, "utf8").includes(hop.contains)) problems.push(`${producer.id}: consumer proof ${hop.file} no longer contains ${JSON.stringify(hop.contains)}`);
-    }
-    if (producer.venueIds.length > 0 && producer.exemptionId) problems.push(`${producer.id}: stale exemption ${producer.exemptionId} remains after a scored venue was assigned`);
-    if (producer.venueIds.length === 0 && !producer.exemptionId) problems.push(`${producer.id}: neither scored venue nor structured exemption is assigned`);
     for (const id of producer.venueIds) {
       const venue = venueById.get(id);
       if (!venue) {
@@ -650,6 +699,37 @@ export function validateEffectivenessInventory(
     }
   }
 
+  const executionIds = inventory.receipt.producerExecutions.map((receipt) => receipt.executionId);
+  if (unique(executionIds).length !== executionIds.length) problems.push("producer execution receipt ids are duplicated");
+  for (const receipt of inventory.receipt.producerExecutions) {
+    try { assertProducerExecutionReceipt(receipt); } catch (error) {
+      problems.push(`producer execution ${receipt.executionId ?? "<unknown>"}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const producer = producerById.get(receipt.producerId);
+    if (!producer) {
+      problems.push(`${receipt.executionId}: unknown producer ${receipt.producerId}`);
+      continue;
+    }
+    if (!producer.executionReceiptIds.includes(receipt.executionId)) problems.push(`${receipt.executionId}: producer does not point back to this execution`);
+    if (producer.modules.length !== 1 && !producer.modules.includes(receipt.module)) problems.push(`${receipt.executionId}: receipt module is outside producer ownership`);
+    else if (!producer.modules.includes(receipt.module)) problems.push(`${receipt.executionId}: receipt module is outside producer ownership`);
+    if (!producer.tiers.includes(receipt.tier)) problems.push(`${receipt.executionId}: receipt tier is outside producer ownership`);
+    if (!producer.implementations.some((implementation) => `${implementation.file}#${implementation.symbol}` === receipt.implementationId)) {
+      problems.push(`${receipt.executionId}: receipt implementation is not owned by ${producer.id}`);
+    }
+    const requiredEdge = producer.id.startsWith("semgrep:") ? "semgrep-family" : REQUIRED_RUNTIME_EDGE[producer.deliveryKind];
+    if (!receiptHasRoute(receipt, [requiredEdge])) {
+      problems.push(`${receipt.executionId}: missing required ${requiredEdge} runtime edge`);
+    }
+    const knownFamilies = new Set(producer.findingFamilies.flatMap((family) => [family.id, family.idPattern]));
+    for (const familyId of receipt.findingFamilyIds) if (!knownFamilies.has(familyId)) problems.push(`${receipt.executionId}: unknown finding family ${familyId}`);
+  }
+  for (const producer of inventory.producers) {
+    const expected = inventory.receipt.producerExecutions.filter((receipt) => receipt.producerId === producer.id).map((receipt) => receipt.executionId).sort(byText);
+    if (JSON.stringify(expected) !== JSON.stringify([...producer.executionReceiptIds].sort(byText))) problems.push(`${producer.id}: execution receipt backlink drift`);
+  }
+
   for (const venue of inventory.venues) {
     const gate = gateById.get(venue.gateId);
     if (!gate) problems.push(`${venue.id}: mapped scored gate ${venue.gateId} no longer exists`);
@@ -664,8 +744,8 @@ export function validateEffectivenessInventory(
           ? `${gate.cadence.file}#${gate.cadence.job}`
           : undefined;
       if (expectedProvenance && venue.provenance !== expectedProvenance) problems.push(`${venue.id}: provenance no longer matches ${expectedProvenance}`);
-      const expectedModules = VENUE_MODULES[gate.id];
-      if (!expectedModules || JSON.stringify([...venue.modules].sort(byText)) !== JSON.stringify([...expectedModules].sort(byText))) {
+      const expectedModules = unique(venue.coveredFamilyIds.map((id) => id.split("::")[1]).filter((module): module is AuditModule => AUDIT_MODULES.includes(module as AuditModule))).sort(byText);
+      if (JSON.stringify([...venue.modules].sort(byText)) !== JSON.stringify(expectedModules)) {
         problems.push(`${venue.id}: module claims do not match the live venue population`);
       }
       if (JSON.stringify([...venue.producerClasses].sort(byText)) !== JSON.stringify(["true-finding-producer"])) {
@@ -686,10 +766,16 @@ export function validateEffectivenessInventory(
     if (exemption.cadence !== "none") problems.push(`${exemption.id}: exemption cadence must be none`);
     if (exemption.applicableProducerIds.length === 0) problems.push(`${exemption.id}: exemption applies to no producers`);
     if (unique(exemption.applicableProducerIds).length !== exemption.applicableProducerIds.length) problems.push(`${exemption.id}: exemption repeats a producer id`);
+    if (unique(exemption.applicableFamilyIds).length !== exemption.applicableFamilyIds.length) problems.push(`${exemption.id}: exemption repeats a family id`);
     for (const producerId of exemption.applicableProducerIds) {
       const producer = producerById.get(producerId);
       if (!producer) problems.push(`${exemption.id}: orphaned producer ${producerId}`);
-      else if (producer.exemptionId !== exemption.id) problems.push(`${exemption.id}: ${producerId} does not point back to this exemption`);
+      else if (!producer.findingFamilies.some((family) => family.exemptionId === exemption.id) && producer.findingFamilies.length > 0) problems.push(`${exemption.id}: ${producerId} does not point back to this exemption`);
+    }
+    for (const familyId of exemption.applicableFamilyIds) {
+      const family = inventory.producers.flatMap((producer) => producer.findingFamilies).find((entry) => entry.id === familyId);
+      if (!family) problems.push(`${exemption.id}: orphaned family ${familyId}`);
+      else if (family.exemptionId !== exemption.id) problems.push(`${exemption.id}: ${familyId} does not point back to this exemption`);
     }
   }
 
@@ -708,15 +794,12 @@ export function validateEffectivenessInventory(
     }
   }
   const implementationOwners = new Set(implementationOwnerLists.keys());
-  for (const call of inventory.receipt.composedCalls) {
-    if (!implementationOwners.has(`${call.file}#${call.symbol}`)) problems.push(`${call.file}#${call.symbol}: discovered production producer call is unregistered`);
-  }
+  for (const problem of inventory.receipt.unresolvedFindingDispatches) problems.push(problem);
   if (inventory.receipt.mechanicalDefinitions !== inventory.receipt.mechanicalProducerIds.length) problems.push("mechanical discovery receipt count does not match its identities");
   if (inventory.receipt.localSemgrepFamilies !== inventory.receipt.localSemgrepFamilyIds.length) problems.push("local Semgrep family receipt count does not match its identities");
   if (inventory.receipt.localSemgrepRuleIds !== inventory.receipt.localSemgrepRules.length) problems.push("local Semgrep rule receipt count does not match its identities");
   if (inventory.receipt.registrySemgrepPacks !== inventory.receipt.registrySemgrepPackIds.length) problems.push("registry Semgrep pack receipt count does not match its identities");
   if (inventory.receipt.auditRunnerBindings !== inventory.receipt.auditRunnerProducerIds.length) problems.push("audit-runner receipt count does not match its identities");
-  if (inventory.receipt.discoveredComposedCalls !== inventory.receipt.composedCalls.length) problems.push("composition receipt count does not match its identities");
 
   const compareIdentityPopulation = (label: string, actual: readonly string[], expected: readonly string[]): void => {
     const actualUnique = unique(actual);
@@ -746,12 +829,86 @@ export function validateEffectivenessInventory(
   for (const id of inventory.receipt.auditRunnerProducerIds) if (!producerById.has(id)) problems.push(`${id}: audit-runner binding has no derived producer`);
   for (const module of AUDIT_MODULES) if (!producerById.has(`plant:${module}`)) problems.push(`${module}: conservation plant has no derived producer`);
 
-  const discoveredNow = discoverProductionProducerCalls(root, implementationOwners);
+  compareIdentityPopulation("route", inventory.receipt.routes.map((route) => route.id), inventory.receipt.routes.map((route) => route.id));
+  compareIdentityPopulation("call", inventory.receipt.calls.map((call) => call.id), inventory.receipt.calls.map((call) => call.id));
+  compareIdentityPopulation("consumer", inventory.receipt.consumers.map((consumer) => consumer.id), inventory.receipt.consumers.map((consumer) => consumer.id));
+  const callById = new Map(inventory.receipt.calls.map((call) => [call.id, call]));
+  const consumerById = new Map(inventory.receipt.consumers.map((consumer) => [consumer.id, consumer]));
+  for (const consumer of inventory.receipt.consumers) {
+    if (!producerById.has(consumer.producerId)) problems.push(`${consumer.id}: consumer names unknown producer ${consumer.producerId}`);
+    if (!implementationOwners.has(consumer.implementationId)) problems.push(`${consumer.id}: consumer names unregistered implementation ${consumer.implementationId}`);
+    if (!callById.has(consumer.callReceiptId)) problems.push(`${consumer.id}: consumer names missing call receipt ${consumer.callReceiptId}`);
+  }
+  for (const route of inventory.receipt.routes) {
+    const owner = producerById.get(route.producerId);
+    const consumer = consumerById.get(route.consumerReceiptId);
+    if (!owner) problems.push(`${route.id}: route names unknown producer ${route.producerId}`);
+    else {
+      const ownedImplementations = owner.implementations.map((item) => `${item.file}#${item.symbol}`);
+      if (!ownedImplementations.includes(route.implementationId)) problems.push(`${route.id}: route implementation ${route.implementationId} is not owned by ${route.producerId}`);
+      const expectedEndpoint = owner.deliveryKind === "conservation"
+        ? "conservation"
+        : owner.populationClass === "true-finding-producer"
+          ? "client-finding-delivery"
+          : "coverage-disclosure";
+      if (route.endpoint !== expectedEndpoint) problems.push(`${route.id}: route endpoint ${route.endpoint} does not match ${expectedEndpoint}`);
+    }
+    if (!consumer) problems.push(`${route.id}: route names missing consumer receipt ${route.consumerReceiptId}`);
+    else if (consumer.producerId !== route.producerId || consumer.implementationId !== route.implementationId) problems.push(`${route.id}: route and consumer identities do not conserve`);
+    if (route.callReceiptIds.length === 0) problems.push(`${route.id}: route has no typed call/registry/command/artifact receipt`);
+    for (const callId of route.callReceiptIds) if (!callById.has(callId)) problems.push(`${route.id}: route names missing call receipt ${callId}`);
+  }
+  for (const producer of inventory.producers) {
+    const expected = inventory.receipt.routes.filter((route) => route.producerId === producer.id).map((route) => route.id).sort(byText);
+    if (JSON.stringify(producer.routeIds) !== JSON.stringify(expected)) problems.push(`${producer.id}: producer route ids do not close on the semantic route graph`);
+  }
+  const venuePairs = inventory.venues.flatMap((venue) => venue.coveredFamilyIds.map((familyId) => `${familyId}=>${venue.id}`)).sort(byText);
+  const familyVenuePairs = inventory.producers.flatMap((producer) => producer.findingFamilies.flatMap((family) => family.venueIds.map((venueId) => `${family.id}=>${venueId}`))).sort(byText);
+  if (JSON.stringify(venuePairs) !== JSON.stringify(familyVenuePairs)) problems.push("scored family/venue pair sets do not conserve exactly");
+  const exemptionPairs = inventory.exemptions.flatMap((exemption) => exemption.applicableFamilyIds.map((familyId) => `${familyId}=>${exemption.id}`)).sort(byText);
+  const familyExemptionPairs = inventory.producers.flatMap((producer) => producer.findingFamilies.flatMap((family) => family.exemptionId ? [`${family.id}=>${family.exemptionId}`] : [])).sort(byText);
+  if (JSON.stringify(exemptionPairs) !== JSON.stringify(familyExemptionPairs)) problems.push("exempt family pair sets do not conserve exactly");
+  const allFamilies = inventory.producers.flatMap((producer) => producer.findingFamilies.map((family) => ({ producer, family })));
+  const familyById = new Map(allFamilies.map((row) => [row.family.id, row]));
   compareIdentityPopulation(
-    "composition",
-    inventory.receipt.composedCalls.map((call) => `${call.file}#${call.symbol}`),
-    discoveredNow.map((call) => `${call.file}#${call.symbol}`),
+    "family coverage",
+    inventory.receipt.familyCoverage.map((receipt) => receipt.familyId),
+    allFamilies.map((row) => row.family.id).sort(byText),
   );
+  for (const receipt of inventory.receipt.familyCoverage) {
+    const row = familyById.get(receipt.familyId);
+    if (!row) continue;
+    if (receipt.producerId !== row.producer.id) problems.push(`${receipt.id}: family coverage names wrong producer ${receipt.producerId}`);
+    const scored = row.family.venueIds.length > 0;
+    const expectedKind = scored ? "scored-family-binding" : "exempt-family-binding";
+    if (receipt.kind !== expectedKind) problems.push(`${receipt.id}: family coverage kind does not match ${expectedKind}`);
+    if (scored) {
+      if (receipt.exemptionId) problems.push(`${receipt.id}: scored family coverage also names exemption ${receipt.exemptionId}`);
+      const bindingVenues = receipt.scoredBindings.map((binding) => binding.venueId).sort(byText);
+      if (JSON.stringify(bindingVenues) !== JSON.stringify([...row.family.venueIds].sort(byText))) problems.push(`${receipt.id}: scored bindings do not close on family venues`);
+      for (const binding of receipt.scoredBindings) {
+        const venue = venueById.get(binding.venueId);
+        if (!venue) continue;
+        if (binding.corpusIds.length === 0 || binding.corpusIds.some((id) => !venue.corpusIds.includes(id))) problems.push(`${receipt.id}: scorer corpus ids are empty or outside ${binding.venueId}`);
+        if (JSON.stringify([...binding.callReceiptIds].sort(byText)) !== JSON.stringify([...venue.callReceiptIds].sort(byText))) problems.push(`${receipt.id}: scorer call path does not close on ${binding.venueId}`);
+      }
+    } else {
+      if (receipt.scoredBindings.length > 0) problems.push(`${receipt.id}: exempt family coverage retains scored bindings`);
+      if (receipt.exemptionId !== row.family.exemptionId) problems.push(`${receipt.id}: family coverage exemption does not close on ${row.family.exemptionId ?? "none"}`);
+    }
+  }
+  const expectedConservation = inventory.producers.filter((producer) => producer.populationClass === "conservation-plant");
+  compareIdentityPopulation(
+    "conservation",
+    inventory.receipt.conservation.map((receipt) => receipt.producerId),
+    expectedConservation.map((producer) => producer.id).sort(byText),
+  );
+  for (const receipt of inventory.receipt.conservation) {
+    const producer = producerById.get(receipt.producerId);
+    if (!producer) continue;
+    if (JSON.stringify(receipt.executionReceiptIds) !== JSON.stringify(producer.executionReceiptIds)) problems.push(`${receipt.id}: conservation executions do not close on ${producer.id}`);
+    if (receipt.executionReceiptIds.some((id) => !inventory.receipt.producerExecutions.some((execution) => execution.executionId === id && receiptHasRoute(execution, ["conservation-consume"])))) problems.push(`${receipt.id}: conservation execution does not contain a consume edge`);
+  }
   for (const module of AUDIT_MODULES) if (!inventory.producers.some((producer) => producer.modules.includes(module))) problems.push(`${module}: no producer population is registered`);
   const summary = populationSummary(inventory.producers);
   if (JSON.stringify(summary) !== JSON.stringify(inventory.summary)) problems.push("population summary does not match the disjoint producer/family population");
@@ -759,9 +916,79 @@ export function validateEffectivenessInventory(
   return problems;
 }
 
+interface EffectivenessDeliveryObservation {
+  readonly findingId: string;
+  readonly producerId: string;
+  readonly familyId: string;
+  readonly venueId: string;
+}
+
+/**
+ * Validate the final W4 boundary. Venue calls and family declarations are intentionally ignored:
+ * every delivered finding must be conserved by one producer-specific runtime route ending at the
+ * exact venue, and every claimed runtime delivery must name a finding actually in the client set.
+ */
+export function validateEffectivenessDelivery(
+  inventory: EffectivenessInventory,
+  delivered: readonly EffectivenessDeliveryObservation[],
+): string[] {
+  const problems = validateEffectivenessInventory(inventory);
+  const producerById = new Map(inventory.producers.map((producer) => [producer.id, producer]));
+  const receiptByExecution = new Map(inventory.receipt.producerExecutions.map((receipt) => [receipt.executionId, receipt]));
+  const observedKeys: string[] = [];
+  for (const observation of delivered) {
+    const producer = producerById.get(observation.producerId);
+    if (!producer) {
+      problems.push(`${observation.findingId}: delivery names unknown producer ${observation.producerId}`);
+      continue;
+    }
+    const family = producer.findingFamilies.find((candidate) => candidate.id === observation.familyId || candidate.idPattern === observation.familyId);
+    if (!family) {
+      problems.push(`${observation.findingId}: delivery names unknown family ${observation.familyId}`);
+      continue;
+    }
+    if (observation.venueId !== "run-audit" && !family.venueIds.includes(observation.venueId)) problems.push(`${observation.findingId}: family ${family.id} is not bound to venue ${observation.venueId}`);
+    const candidates = producer.executionReceiptIds.map((id) => receiptByExecution.get(id)).filter((receipt): receipt is ProducerExecutionReceipt => !!receipt)
+      .filter((receipt) => receipt.findingIds.includes(observation.findingId)
+        && receipt.findingFamilyIds.some((id) => id === family.id || id === family.idPattern)
+        && receipt.edges.some((edge) => edge.kind === "client-delivery" && edge.to === `venue:${observation.venueId}`));
+    if (candidates.length !== 1) problems.push(`${observation.findingId}: expected one exact producer-to-client delivery receipt, found ${candidates.length}`);
+    observedKeys.push(`${observation.producerId}:${observation.familyId}:${observation.venueId}:${observation.findingId}`);
+  }
+  if (unique(observedKeys).length !== observedKeys.length) problems.push("client delivery observations contain duplicates");
+  for (const receipt of inventory.receipt.producerExecutions) {
+    for (const edge of receipt.edges.filter((candidate) => candidate.kind === "client-delivery")) {
+      const venueId = edge.to.startsWith("venue:") ? edge.to.slice("venue:".length) : "";
+      if (venueId !== "run-audit" && !inventory.venues.some((venue) => venue.id === venueId)) problems.push(`${receipt.executionId}: client delivery names unknown venue ${edge.to}`);
+      for (const findingId of receipt.findingIds) {
+        if (!delivered.some((observation) => observation.findingId === findingId && observation.producerId === receipt.producerId && observation.venueId === venueId)) {
+          problems.push(`${receipt.executionId}: runtime receipt claims undelivered finding ${findingId}`);
+        }
+      }
+    }
+  }
+  return unique(problems);
+}
+
 export function serializeEffectivenessInventory(inventory: EffectivenessInventory): string {
   return `${JSON.stringify(inventory, null, 2)}\n`;
 }
 
-export const EFFECTIVENESS_INVENTORY = buildEffectivenessInventory();
-export const EFFECTIVENESS_INVENTORY_JSON = serializeEffectivenessInventory(EFFECTIVENESS_INVENTORY);
+let defaultEffectivenessInventory: EffectivenessInventory | undefined;
+let defaultEffectivenessInventoryJson: string | undefined;
+
+/**
+ * Construct the repository-wide inventory only when a consumer actually requests it. Importing
+ * this module is common in light tests that exercise delivery validation, and building the full
+ * TypeScript route graph at module evaluation blocks Vitest's worker RPC channel.
+ */
+export function getEffectivenessInventory(): EffectivenessInventory {
+  defaultEffectivenessInventory ??= buildEffectivenessInventory();
+  return defaultEffectivenessInventory;
+}
+
+/** Serialize the same memoized inventory; never trigger a second graph construction. */
+export function getEffectivenessInventoryJson(): string {
+  defaultEffectivenessInventoryJson ??= serializeEffectivenessInventory(getEffectivenessInventory());
+  return defaultEffectivenessInventoryJson;
+}

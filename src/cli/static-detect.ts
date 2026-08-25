@@ -133,7 +133,7 @@ try {
     ...detectM1ExceptionFlowFindings(sources),
     ...detectM5ExceptionFlowFindings(sources),
     ...detectM5TypeEscapeFindings(sources),
-    ...detectM5HardcodedDeploymentFindings(sources),
+    ...detectM5HardcodedDeploymentFindings(sources, { productSourceInventory }),
     ...detectM5PolyglotQualityAndCoverageFindings(productSourceInventory),
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...detectM6PolyglotCoverageFindings(productSourceInventory),

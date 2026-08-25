@@ -151,25 +151,26 @@ jobs:
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
   #
-  # SHARD COUNT VARIES BY EVENT. PRs, merge groups and default-branch pushes use the same three
+  # SHARD COUNT VARIES BY EVENT. PRs, merge groups and default-branch pushes use the same four
   # namespaces: each successful main leg seeds exactly the transport its corresponding PR leg
   # consumes. This replaced the single 29m30s main seed that timed out before it could publish a
   # complete trusted transport (runs 31601042773/31602706320).
   # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
-  # poisoned it beyond repair by re-running. No shard holds all 14, so a sharded run can never save.
-  #   * pull_request / merge_group / push -> 3 shards.
+  # poisoned it beyond repair by re-running. No shard holds all 17, so a sharded run can never save.
+  #   * pull_request / merge_group / push -> 4 shards.
   #     Each shard owns an exhaustive slice for the current producer↔replay population comparison.
-  #   * schedule / workflow_dispatch -> ONE shard holding all 14, which still saves the cache and
+  #   * schedule / workflow_dispatch -> ONE shard holding all 17, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
   #
-  # Three, from the per-target cost measured in #1586 (runs 30584074986 and 30588890377, in
-  # agreement): carbon is 564-587s of a ~1290s total and is indivisible, so the longest shard is
-  # carbon's own and a 4th shard buys nothing. The split itself lives in src/scan/corpus-shards.ts,
-  # which asserts it is exhaustive and disjoint — a target silently dropped from the partition would
-  # stop being scored while every shard still exited 0.
+  # Four, re-measured on pinned-toolchain runs 32578027739/32576123221: Carbon is an indivisible
+  # 1409s, while the old three-way assignment put 1454 measured seconds plus setup on one runner and
+  # hit the unchanged 30-minute timeout during Documenso. Four keeps Carbon alone and all other
+  # measured shard loads below 990s. The split itself lives in src/scan/corpus-shards.ts, which
+  # asserts it is exhaustive and disjoint — a target silently dropped from the partition would stop
+  # being scored while every shard still exited 0.
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs
@@ -179,7 +180,7 @@ jobs:
       # it shows everything that moved, not the first thing.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3]' || '[1]') }}
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3,4]' || '[1]') }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -329,36 +330,96 @@ jobs:
       # individually content-addressed inside this directory. Package-manager stores are
       # relocatable transport used only for an offline rematerialization into each fresh clone;
       # node_modules is never restored. The
-      # outer Actions cache is only transport between runs; its per-shard rolling key avoids
-      # concurrent matrix legs overwriting one another. Scheduled/manual runs retain one all-target
-      # shard for canonical scorecard/clone-cache lineage; main pushes seed three transports in
-      # parallel and never promote a partial all-target directory across namespaces.
+      # outer Actions cache is only transport between runs. Cache ownership is always the canonical
+      # four-way partition, even when schedule/manual uses one all-target scorer for canonical
+      # scorecard/clone-cache lineage. PR/queue/push legs touch their one owner root; the single
+      # scheduled/manual leg touches all four. Scope-bound keys prevent an older partition from
+      # being restored into a reused numeric namespace and growing it with another owner's bytes.
       # A restored artifact is never trusted by presence:
       # corpus-drift validates its schema, key, findings, and examined-scope metadata, rejecting
       # and recomputing corrupt/incomplete entries with a visible CACHE/DEPENDENCY PREP REJECT line.
-      - name: Restore content-addressed corpus phase results
-        id: phase-cache
+      - name: Compute canonical corpus cache ownership scopes
+        id: phase-cache-scopes
         if: steps.filter.outputs.relevant == 'true'
+        run: pnpm exec tsx src/cli/corpus-cache-transport.ts scopes >> "$GITHUB_OUTPUT"
+
+      - name: Restore content-addressed corpus phase results — owner 1
+        id: phase-cache-1
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/restore@v4
         with:
-          path: .harvey-corpus-phase-cache
+          path: .harvey-corpus-phase-cache/shard1
           # Retry attempts request attempt 1's exact key. `cache-hit` below distinguishes that
           # artifact from an older rolling-prefix fallback, whose registry bytes have no lineage
           # to this run and therefore may not be reused as though they did.
-          key: corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-1-${{ github.sha }}
+          key: corpus-phase-run-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.run_id }}-1-${{ github.sha }}
+
+      - name: Restore content-addressed corpus phase results — owner 2
+        id: phase-cache-2
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard2
+          key: corpus-phase-run-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.run_id }}-1-${{ github.sha }}
+
+      - name: Restore content-addressed corpus phase results — owner 3
+        id: phase-cache-3
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard3
+          key: corpus-phase-run-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.run_id }}-1-${{ github.sha }}
+
+      - name: Restore content-addressed corpus phase results — owner 4
+        id: phase-cache-4
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard4
+          key: corpus-phase-run-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-1-${{ github.sha }}
 
       # A PR-prefix fallback can be newer than main and shadow the trusted seed, only to be rejected
       # by provenance after restore. Separate key families make that impossible: retries get only
       # their exact current-run artifact above; all other fallback transport comes from main.
-      - name: Restore trusted-main corpus phase results
-        id: main-phase-cache
-        if: steps.filter.outputs.relevant == 'true' && steps.phase-cache.outputs.cache-hit != 'true'
+      - name: Restore trusted-main corpus phase results — owner 1
+        id: main-phase-cache-1
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-1.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
-          path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.sha }}
+          path: .harvey-corpus-phase-cache/shard1
+          key: corpus-phase-main-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.sha }}
           restore-keys: |
-            corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-
+            corpus-phase-main-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-
+
+      - name: Restore trusted-main corpus phase results — owner 2
+        id: main-phase-cache-2
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-2.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard2
+          key: corpus-phase-main-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-main-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-
+
+      - name: Restore trusted-main corpus phase results — owner 3
+        id: main-phase-cache-3
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-3.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard3
+          key: corpus-phase-main-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-main-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-
+
+      - name: Restore trusted-main corpus phase results — owner 4
+        id: main-phase-cache-4
+        if: steps.filter.outputs.relevant == 'true' && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.phase-cache-4.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard4
+          key: corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.sha }}
+          restore-keys: |
+            corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-
 
       - name: Restore the run's exact shared Semgrep bytes
         if: steps.filter.outputs.relevant == 'true'
@@ -379,19 +440,31 @@ jobs:
       # restored directory came from main or this exact run. A cache from another PR ref is
       # deleted visibly before any scanner can read it; a miss remains a normal recompute.
       - name: Validate corpus phase-cache transport provenance
-        id: phase-cache-transport
         if: steps.filter.outputs.relevant == 'true'
         run: |
-          pnpm exec tsx src/cli/corpus-cache-transport.ts restore \
-            --dir .harvey-corpus-phase-cache \
-            --matched-key '${{ steps.phase-cache.outputs.cache-matched-key || steps.main-phase-cache.outputs.cache-matched-key }}' \
-            --event '${{ github.event_name }}' \
-            --ref '${{ github.ref }}' \
-            --run-id '${{ github.run_id }}' \
-            --default-ref 'refs/heads/${{ github.event.repository.default_branch }}' \
-            --platform '${{ runner.os }}' \
-            --namespace '${{ matrix.shard }}' \
-            --head-sha '${{ github.sha }}'
+          set -euo pipefail
+          for namespace in 1 2 3 4; do
+            active=false
+            [ "$namespace" = '${{ matrix.shard }}' ] && active=true
+            if [ '${{ github.event_name }}' = schedule ] || [ '${{ github.event_name }}' = workflow_dispatch ]; then active=true; fi
+            [ "$active" = true ] || continue
+            case "$namespace" in
+              1) matched='${{ steps.phase-cache-1.outputs.cache-matched-key || steps.main-phase-cache-1.outputs.cache-matched-key }}' ;;
+              2) matched='${{ steps.phase-cache-2.outputs.cache-matched-key || steps.main-phase-cache-2.outputs.cache-matched-key }}' ;;
+              3) matched='${{ steps.phase-cache-3.outputs.cache-matched-key || steps.main-phase-cache-3.outputs.cache-matched-key }}' ;;
+              4) matched='${{ steps.phase-cache-4.outputs.cache-matched-key || steps.main-phase-cache-4.outputs.cache-matched-key }}' ;;
+            esac
+            pnpm exec tsx src/cli/corpus-cache-transport.ts restore \
+              --dir ".harvey-corpus-phase-cache/shard$namespace" \
+              --matched-key "$matched" \
+              --event '${{ github.event_name }}' \
+              --ref '${{ github.ref }}' \
+              --run-id '${{ github.run_id }}' \
+              --default-ref 'refs/heads/${{ github.event.repository.default_branch }}' \
+              --platform '${{ runner.os }}' \
+              --namespace "$namespace" \
+              --head-sha '${{ github.sha }}'
+          done
 
       # --install (#251): installs each clone's own dependency tree before the scanners — with the
       # package manager that clone's lockfile implies, since #1268 — which is what lets knip
@@ -460,9 +533,9 @@ jobs:
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
           HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
-          # Kept in step with the matrix above: 3 on a PR, queue entry, or main push; 1 on the
+          # Kept in step with the matrix above: 4 on a PR, queue entry, or main push; 1 on the
           # scheduled/manual canonical-scorecard lane, which still holds every clone.
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 3 || 1 }}
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 4 || 1 }}
         run: |
           set -euo pipefail
           cold_flag=()
@@ -482,46 +555,99 @@ jobs:
           pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
 
       - name: Measure content-addressed cache size
-        if: always() && steps.phase-cache.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+        if: always() && steps.phase-cache-scopes.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
         run: |
           set -euo pipefail
-          bytes=$(du -sk .harvey-corpus-phase-cache | awk '{print $1 * 1024}')
-          receipts=0
-          if [ -d .harvey-corpus-phase-cache/dependency-preparation/receipts ]; then
-            receipts=$(find .harvey-corpus-phase-cache/dependency-preparation/receipts -type f -name '*.json' | wc -l)
-          fi
-          echo "CORPUS CACHE SIZE: ${bytes} bytes; dependency preparation receipts: ${receipts}; node_modules is rematerialized per disposable clone and is not in this transport."
+          for namespace in 1 2 3 4; do
+            dir=".harvey-corpus-phase-cache/shard$namespace"
+            [ -d "$dir" ] || continue
+            bytes=$(du -sk "$dir" | awk '{print $1 * 1024}')
+            receipts=0
+            if [ -d "$dir/dependency-preparation/receipts" ]; then
+              receipts=$(find "$dir/dependency-preparation/receipts" -type f -name '*.json' | wc -l)
+            fi
+            echo "CORPUS CACHE OWNER $namespace SIZE: ${bytes} bytes; dependency preparation receipts: ${receipts}; node_modules is rematerialized per disposable clone and is not in this transport."
+          done
 
       - name: Record corpus phase-cache transport provenance
         if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (steps.targets.outputs.scope == 'all' || matrix.shard == 1)
         run: |
-          pnpm exec tsx src/cli/corpus-cache-transport.ts save \
-            --dir .harvey-corpus-phase-cache \
-            --event '${{ github.event_name }}' \
-            --ref '${{ github.ref }}' \
-            --run-id '${{ github.run_id }}' \
-            --run-attempt '${{ github.run_attempt }}' \
-            --head-sha '${{ github.sha }}' \
-            --platform '${{ runner.os }}' \
-            --family '${{ github.event_name == 'push' && 'main' || 'run' }}' \
-            --namespace '${{ matrix.shard }}'
+          set -euo pipefail
+          for namespace in 1 2 3 4; do
+            active=false
+            [ "$namespace" = '${{ matrix.shard }}' ] && active=true
+            if [ '${{ github.event_name }}' = schedule ] || [ '${{ github.event_name }}' = workflow_dispatch ]; then active=true; fi
+            [ "$active" = true ] || continue
+            pnpm exec tsx src/cli/corpus-cache-transport.ts save \
+              --dir ".harvey-corpus-phase-cache/shard$namespace" \
+              --event '${{ github.event_name }}' \
+              --ref '${{ github.ref }}' \
+              --run-id '${{ github.run_id }}' \
+              --run-attempt '${{ github.run_attempt }}' \
+              --head-sha '${{ github.sha }}' \
+              --platform '${{ runner.os }}' \
+              --family '${{ github.event_name == 'push' && 'main' || 'run' }}' \
+              --namespace "$namespace"
+          done
 
-      - name: Save current-run corpus phase results for an exact retry
-        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill
+      - name: Save current-run corpus phase results for an exact retry — owner 1
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 1 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         uses: actions/cache/save@v4
         with:
-          path: .harvey-corpus-phase-cache
-          key: corpus-phase-run-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: .harvey-corpus-phase-cache/shard1
+          key: corpus-phase-run-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save current-run corpus phase results for an exact retry — owner 2
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 2 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard2
+          key: corpus-phase-run-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save current-run corpus phase results for an exact retry — owner 3
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 3 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard3
+          key: corpus-phase-run-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save current-run corpus phase results for an exact retry — owner 4
+        if: success() && steps.score.outcome == 'success' && github.event_name != 'push' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && (matrix.shard == 4 || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard4
+          key: corpus-phase-run-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # Only a successful default-branch shard can publish a trusted rolling seed. A cancelled,
       # timed-out, drifted or setup-failed leg never reaches this step and cannot shadow the prior
       # trusted key. Each matrix leg writes only its own namespace.
-      - name: Save successful main-shard corpus phase results
-        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      - name: Save successful main-shard corpus phase results — owner 1
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 1
         uses: actions/cache/save@v4
         with:
-          path: .harvey-corpus-phase-cache
-          key: corpus-phase-main-v5-${{ runner.os }}-shard${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: .harvey-corpus-phase-cache/shard1
+          key: corpus-phase-main-v6-${{ runner.os }}-shard1-scope${{ steps.phase-cache-scopes.outputs.scope1 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save successful main-shard corpus phase results — owner 2
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 2
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard2
+          key: corpus-phase-main-v6-${{ runner.os }}-shard2-scope${{ steps.phase-cache-scopes.outputs.scope2 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save successful main-shard corpus phase results — owner 3
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 3
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard3
+          key: corpus-phase-main-v6-${{ runner.os }}-shard3-scope${{ steps.phase-cache-scopes.outputs.scope3 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+
+      - name: Save successful main-shard corpus phase results — owner 4
+        if: success() && steps.score.outcome == 'success' && steps.filter.outputs.relevant == 'true' && !inputs.liveness_drill && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && matrix.shard == 4
+        uses: actions/cache/save@v4
+        with:
+          path: .harvey-corpus-phase-cache/shard4
+          key: corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
 
       # #1571: the ONLY place the pin-set cache key is written, and only when this run actually
       # cloned every pinned target — the action re-reads the tree and refuses otherwise. corpus-m8
@@ -606,7 +732,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3]' || '[1]') }}
+        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3,4]' || '[1]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -636,7 +762,7 @@ jobs:
       - name: Execute the independent exact-head replay
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 3 || 1 }}
+          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4 || 1 }}
         run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-semgrep --out "current-replay-${{ matrix.shard }}.json"
       - name: Upload independent raw replay
         uses: actions/upload-artifact@v4

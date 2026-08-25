@@ -35,3 +35,50 @@ export function sendEncodedReceipt(tenantId: string, bookingId: string) {
     },
   });
 }
+
+export function createTwoIndependentPayments(stripe: Stripe, tenantId: string, bookingId: string) {
+  stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["authorize-dual-charge", tenantId, bookingId, "v1"]) },
+  );
+  return stripe.paymentIntents.create(
+    { amount: 200, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["capture-dual-charge", tenantId, bookingId, "v1"]) },
+  );
+}
+
+export function createSequentialContractVariants(stripe: Stripe, tenantId: string, bookingId: string) {
+  stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["sequential-authorize-charge", tenantId, bookingId, "v1"]) },
+  );
+  return stripe.paymentIntents.create(
+    { amount: 200, metadata: { bookingId } },
+    {
+      idempotencyKey: `sequential-capture-charge:${encodeURIComponent(tenantId)}:${encodeURIComponent(bookingId)}:v1`,
+    },
+  );
+}
+
+export function reserveInvoice(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["reserve-invoice", tenantId, bookingId, "v1"]) },
+  );
+}
+
+export function settleInvoice(stripe: Stripe, tenantId: string, bookingId: string) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["settle-invoice", tenantId, bookingId, "v1"]) },
+  );
+}
+
+type FiniteBookingId = 1001 | 1002;
+
+export function chargeKnownNumericBooking(stripe: Stripe, tenantId: string, bookingId: FiniteBookingId) {
+  return stripe.paymentIntents.create(
+    { amount: 100, metadata: { bookingId } },
+    { idempotencyKey: JSON.stringify(["known-numeric-charge", tenantId, bookingId, "v1"]) },
+  );
+}

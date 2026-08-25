@@ -59,6 +59,7 @@ import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { type Finding, type ReportMeta, validateFindings } from "../findings.js";
+import { buildEffectivenessInventory, validateEffectivenessDelivery, validateEffectivenessInventory } from "../effectiveness-registry.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -163,6 +164,15 @@ if (!schemaOk) {
 }
 
 const report = checkConservation({ findingsByModule, recorded: run.recorded, delivered: doc.findings, required });
+const effectiveness = buildEffectivenessInventory({ root: REPO_ROOT, producerExecutionReceipts: report.producerExecutionReceipts });
+const effectivenessProblems = validateEffectivenessInventory(effectiveness, { root: REPO_ROOT });
+effectivenessProblems.push(...validateEffectivenessDelivery(effectiveness, report.producerExecutionReceipts.flatMap((receipt) => receipt.edges.some((edge) => edge.kind === "client-delivery")
+  ? receipt.findingIds.map((findingId) => ({ findingId, producerId: receipt.producerId, familyId: receipt.findingFamilyIds[0]!, venueId: "run-audit" }))
+  : [])));
+if (effectivenessProblems.length) {
+  console.error(`Conservation producer receipts are invalid:\n${effectivenessProblems.join("\n")}`);
+  process.exit(1);
+}
 
 if (args.includes("--json")) console.log(JSON.stringify({ ledger, baselineLedger: bLedger, plants: report }, null, 2));
 else console.log(formatConservation(report));

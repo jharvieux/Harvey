@@ -1,0 +1,14 @@
+import { Injectable } from "@nestjs/common";
+import { readFileSync } from "node:fs";
+import { isEmpty } from "lodash";
+
+@Injectable()
+export class TwitterBotService {
+  status() {
+    return isEmpty({}) ? "idle" : "active";
+  }
+}
+
+export function loadBotState() {
+  return readFileSync("bot-state.json", "utf8");
+}

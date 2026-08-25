@@ -22,6 +22,13 @@ import { esc } from "../report-template/sections.mjs";
 import { assembleEngagementDocument } from "./audit-report.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { conservationLedger } from "./conservation-ledger.js";
+import {
+  detectM1HardcodedTenantFindings,
+  detectM5HardcodedDeploymentFindings,
+  M1_HARDCODED_TENANT_TAXONOMY,
+  M5_HARDCODED_SOURCE_COVERAGE_ID,
+} from "./detectors/m5-hardcoded-deployment.js";
 import { osvUnavailableFinding } from "./scan/dependencies.js";
 import { truffleHogUnavailableFinding } from "./scan/secrets.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
@@ -350,6 +357,62 @@ describe("#1435 a finding's own words survive the render seam", () => {
     const broken = html.replace(esc(extra.evidence), "");
     const breaches = renderFidelityBreaches(doc, broken);
     expect(breaches.some((b) => b.kind === "miscounted-rollup")).toBe(true);
+  });
+});
+
+describe("#1929 hardcoded tenant/source-coverage rows survive production, assembly, and render", () => {
+  const m1 = detectM1HardcodedTenantFindings([{
+    path: "src/server/tenant-request.ts",
+    text: `export const run = () => fetch("/api/data", { headers: { "X-Tenant-ID": "tenant_acme-prod-4821" } });`,
+  }])[0]!;
+  const m5 = detectM5HardcodedDeploymentFindings([], {
+    productSourceInventory: [{ path: "src/service.py", text: "def run():\n    return 1\n" }],
+  })[0]!;
+  const produced = [m1, m5];
+  const doc = assembleEngagementDocument(RECORDED, ENV, produced, META);
+  const html = buildHtml(doc);
+
+  it("uses the frozen disjoint identities and renders each real producer's client-legible evidence", () => {
+    expect(m1).toMatchObject({
+      id: expect.stringMatching(/^M1-HARDCODED-TENANT-/),
+      taxonomy: M1_HARDCODED_TENANT_TAXONOMY,
+    });
+    expect(m5.id).toBe(M5_HARDCODED_SOURCE_COVERAGE_ID);
+    expect(html).toContain(esc(m1.evidence));
+    expect(html).toContain(esc(m5.evidence));
+    expect(html).toContain(esc("authenticated/session context"));
+    expect(html).toContain(esc("exact JavaScript/TypeScript selector: 0 admitted"));
+    expect(renderFidelityBreaches(doc, html)).toEqual([]);
+  });
+
+  it("conserves both rows through assembly and fails when the M5 NotAssessed row is removed", () => {
+    const byModule = { M1: [m1], M5: [m5] };
+    expect(conservationLedger(produced, doc.findings, byModule)).toMatchObject({
+      produced: 2,
+      deliveredFromProduced: 2,
+      unaccounted: 0,
+      ok: true,
+    });
+    const dropped = conservationLedger(
+      produced,
+      doc.findings.filter((finding) => finding.id !== M5_HARDCODED_SOURCE_COVERAGE_ID),
+      byModule,
+    );
+    expect(dropped).toMatchObject({ unaccounted: 1, ok: false });
+    expect(dropped.rows).toContainEqual(expect.objectContaining({
+      id: M5_HARDCODED_SOURCE_COVERAGE_ID,
+      disposition: "unaccounted",
+      modules: ["M5"],
+    }));
+  });
+
+  it("CONTROL — dropping the M5 NotAssessed reason from HTML is a fidelity breach", () => {
+    const broken = html.replace(esc(m5.evidence), "");
+    expect(broken).not.toBe(html);
+    expect(renderFidelityBreaches(doc, broken)).toContainEqual(expect.objectContaining({
+      id: M5_HARDCODED_SOURCE_COVERAGE_ID,
+      kind: "reason-dropped",
+    }));
   });
 });
 

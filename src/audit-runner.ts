@@ -18,6 +18,7 @@
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { DataClassMap } from "./data-class-escalation.js";
 import type { ProductionProducerBinding } from "./effectiveness-schema.js";
+import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 import type { Finding, TestQuality } from "./findings.js";
 import type { TargetOrm } from "./scan/framework-detect.js";
 
@@ -39,8 +40,8 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 // it needs its own channel out of the probe — without one the orchestrator dropped it, and the
 // renderer's test-quality section was unreachable for its whole life.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; testQuality?: TestQuality }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; subStatus?: ModuleSubStatus; testQuality?: TestQuality }
+  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; testQuality?: TestQuality; producerExecutionReceipts?: ProducerExecutionReceipt[] }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; subStatus?: ModuleSubStatus; testQuality?: TestQuality; producerExecutionReceipts?: ProducerExecutionReceipt[] }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
 // ---- #1096 invariant (2): the typed non-empty result ----
@@ -75,6 +76,7 @@ export interface Examined {
   hotspots?: string[];
   dataMap?: DataClassMap;
   testQuality?: TestQuality;
+  producerExecutionReceipts?: ProducerExecutionReceipt[];
 }
 
 export interface NotAssessed {
@@ -141,6 +143,7 @@ export function toOutcome(result: ProbeResult): ProbeOutcome {
     ...(result.hotspots ? { hotspots: result.hotspots } : {}),
     ...(result.dataMap ? { dataMap: result.dataMap } : {}),
     ...(result.testQuality ? { testQuality: result.testQuality } : {}),
+    ...(result.producerExecutionReceipts ? { producerExecutionReceipts: result.producerExecutionReceipts } : {}),
   };
   // The unit count rides on the ledger's own detail string, so the deliverable's coverage row says
   // what was looked at — a "ran, 0 findings" row that names 0 units read is no longer possible, and
@@ -248,9 +251,10 @@ export interface RunContext {
 export interface ModuleRunner {
   module: AuditModule;
   /**
-   * #1910: production producer identities delivered through this runner. Binding inventory rows
-   * here couples their lifecycle to the live delivery route. Mechanical producers remain owned by
-   * their own phase registries and are joined by the inventory exporter rather than duplicated.
+   * #1910: production producer identities delivered through this runner. Schema-v2 bindings name
+   * stable declarations and their dispatch kind; the effectiveness graph derives live routes from
+   * those declarations. Mechanical producers remain owned by their phase registries and are joined
+   * by the exporter rather than copied into this runner table.
    */
   producers: readonly ProductionProducerBinding[];
   // #506: a per-app/per-DB probe returns ONE outcome per instance (an array). A single-instance
@@ -297,6 +301,8 @@ interface AuditRunResult {
   // non-empty list is printed loudly by the caller, because it names a detector minting an id that
   // is not unique per finding — a real defect, just no longer one that costs the client the report.
   idCollisions: IdCollision[];
+  /** Runtime-only evidence. A registered producer absent here is not live for this audit. */
+  producerExecutionReceipts: ProducerExecutionReceipt[];
 }
 
 /** One finding id that arrived on two or more DIFFERENT findings, and what they were renamed to. */
@@ -428,6 +434,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   // severity weight, and both entries classify the same name, so the merge cannot invent sensitivity.
   let dataMap: DataClassMap | undefined;
   let testQuality: TestQuality | undefined;
+  const producerExecutionReceipts: ProducerExecutionReceipt[] = [];
 
   // Iterate AUDIT_MODULES, not `runners`: the ledger's shape is owned by the module enumeration,
   // so a registry can never shorten the audit by reordering or under-listing itself.
@@ -486,11 +493,19 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
       if (outcome.status !== "requires-live-run" && outcome.dataMap) dataMap = { ...dataMap, ...outcome.dataMap };
       if (outcome.status !== "requires-live-run" && outcome.testQuality) testQuality = outcome.testQuality;
+      if (outcome.status !== "requires-live-run" && outcome.producerExecutionReceipts) {
+        assertUniqueProducerExecutionReceipts(outcome.producerExecutionReceipts);
+        for (const receipt of outcome.producerExecutionReceipts) {
+          if (receipt.module !== module) throw new Error(`${receipt.producerId}: execution receipt belongs to ${receipt.module}, not runner ${module}`);
+          producerExecutionReceipts.push(receipt);
+        }
+      }
     }
   }
 
   const unique = disambiguateFindingIds(findings, findingsByModule);
-  return { recorded, failures, findings: unique.findings, findingsByModule: unique.byModule, idCollisions: unique.collisions, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
+  assertUniqueProducerExecutionReceipts(producerExecutionReceipts);
+  return { recorded, failures, findings: unique.findings, findingsByModule: unique.byModule, idCollisions: unique.collisions, producerExecutionReceipts, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {

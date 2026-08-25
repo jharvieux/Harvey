@@ -172,6 +172,28 @@
         "src/quality-scan.ts",
         "src/quality-scan.test.ts"
       ]
+    },
+    {
+      "id": "effectiveness-registry",
+      "testFile": "src/effectiveness-registry.test.ts",
+      "weightSeconds": 40,
+      "paths": [
+        "src/effectiveness-",
+        "src/cli/detector-census.ts",
+        "src/producer-execution-receipt.ts",
+        "src/producer-execution-receipt.test.ts"
+      ]
+    },
+    {
+      "id": "effectiveness-delivery",
+      "testFile": "src/effectiveness-delivery.test.ts",
+      "weightSeconds": 36,
+      "paths": [
+        "src/effectiveness-",
+        "src/cli/detector-census.ts",
+        "src/producer-execution-receipt.ts",
+        "src/producer-execution-receipt.test.ts"
+      ]
     }
   ]
 }

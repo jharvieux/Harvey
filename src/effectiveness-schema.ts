@@ -1,8 +1,9 @@
 import type { AuditModule } from "./audit-coverage.js";
 import type { FindingFamilyKind } from "./findings.js";
+import type { ProducerExecutionReceipt, ProducerRouteEdgeKind } from "./producer-execution-receipt.js";
 
 /** Version of the deterministic producer-inventory contract consumed by downstream metrics. */
-export const EFFECTIVENESS_INVENTORY_SCHEMA = 1 as const;
+export const EFFECTIVENESS_INVENTORY_SCHEMA = 3 as const;
 
 export const PRODUCER_POPULATION_CLASSES = [
   "true-finding-producer",
@@ -25,13 +26,6 @@ export interface ProducerImplementation {
   readonly kind: "function" | "rule" | "probe" | "adapter" | "synthesizer" | "plant";
 }
 
-export interface ProducerConsumerHop {
-  readonly file: string;
-  /** Literal production symbol/command/artifact name whose presence proves this hop. */
-  readonly contains: string;
-  readonly description: string;
-}
-
 export interface ProducerFindingFamily {
   readonly idPattern: string;
   readonly taxonomyPattern: string;
@@ -51,7 +45,61 @@ export interface ProductionProducerBinding {
   readonly populationClass: ProducerPopulationClass;
   readonly implementations: readonly ProducerImplementation[];
   readonly findingFamilies: readonly ProducerFindingFamily[];
-  readonly consumerPath: readonly ProducerConsumerHop[];
+  readonly deliveryKind: "semantic-call" | "registry-dispatch" | "artifact-ingest" | "conservation";
+}
+
+/** Required runtime observation for a declaration's dispatch style. It is not itself evidence. */
+export const REQUIRED_RUNTIME_EDGE: Readonly<Record<ProductionProducerBinding["deliveryKind"], ProducerRouteEdgeKind>> = Object.freeze({
+  "semantic-call": "semantic-call",
+  "registry-dispatch": "registry-iteration",
+  "artifact-ingest": "artifact-ingest",
+  conservation: "conservation-consume",
+});
+
+export interface EffectivenessCallReceipt {
+  readonly id: string;
+  readonly kind: "call" | "registry" | "command" | "artifact";
+  readonly consumerFile: string;
+  readonly targetFile: string;
+  readonly targetSymbol: string;
+}
+
+export interface EffectivenessConsumerReceipt {
+  readonly id: string;
+  readonly producerId: string;
+  readonly implementationId: string;
+  readonly callReceiptId: string;
+}
+
+export interface EffectivenessRouteReceipt {
+  readonly id: string;
+  readonly producerId: string;
+  readonly implementationId: string;
+  readonly rootId: string;
+  readonly callReceiptIds: readonly string[];
+  readonly consumerReceiptId: string;
+  readonly endpoint: "client-finding-delivery" | "coverage-disclosure" | "conservation";
+}
+
+export interface EffectivenessScoredFamilyBinding {
+  readonly venueId: string;
+  readonly corpusIds: readonly string[];
+  readonly callReceiptIds: readonly string[];
+}
+
+export interface EffectivenessFamilyCoverageReceipt {
+  readonly id: string;
+  readonly producerId: string;
+  readonly familyId: string;
+  readonly kind: "scored-family-binding" | "exempt-family-binding";
+  readonly scoredBindings: readonly EffectivenessScoredFamilyBinding[];
+  readonly exemptionId?: string;
+}
+
+export interface EffectivenessConservationReceipt {
+  readonly id: string;
+  readonly producerId: string;
+  readonly executionReceiptIds: readonly string[];
 }
 
 export interface EffectivenessVenue {
@@ -67,12 +115,17 @@ export interface EffectivenessVenue {
   };
   /** Source-level proof that the named venue invokes the scored gate. */
   readonly provenance: string;
+  readonly rootId: string;
+  readonly callReceiptIds: readonly string[];
+  readonly corpusIds: readonly string[];
+  readonly coveredFamilyIds: readonly string[];
 }
 
 export interface EffectivenessExemption {
   readonly id: string;
   readonly kind: "empirical" | "structural" | "not-a-producer";
   readonly applicableProducerIds: readonly string[];
+  readonly applicableFamilyIds: readonly string[];
   readonly provenance: string;
   readonly owner: string;
   readonly decision: string;
@@ -81,9 +134,19 @@ export interface EffectivenessExemption {
   readonly falsifier: string;
 }
 
-export interface EffectivenessProducer extends ProductionProducerBinding {
+export interface EffectivenessProducerFindingFamily extends ProducerFindingFamily {
+  readonly id: string;
   readonly venueIds: readonly string[];
   readonly exemptionId?: string;
+}
+
+export interface EffectivenessProducer extends Omit<ProductionProducerBinding, "findingFamilies"> {
+  readonly findingFamilies: readonly EffectivenessProducerFindingFamily[];
+  readonly routeIds: readonly string[];
+  readonly venueIds: readonly string[];
+  readonly exemptionId?: string;
+  /** Exact successful runtime receipts supplied to this inventory build; empty means not witnessed. */
+  readonly executionReceiptIds: readonly string[];
 }
 
 export interface EffectivenessPopulationSummary {
@@ -101,11 +164,6 @@ export interface EffectivenessPopulationSummary {
   readonly denominatorConserved: boolean;
 }
 
-export interface EffectivenessDiscoveredCall {
-  readonly file: string;
-  readonly symbol: string;
-}
-
 export interface EffectivenessDiscoveryReceipt {
   readonly mechanicalDefinitions: number;
   readonly mechanicalProducerIds: readonly string[];
@@ -117,8 +175,14 @@ export interface EffectivenessDiscoveryReceipt {
   readonly registrySemgrepPackIds: readonly string[];
   readonly auditRunnerBindings: number;
   readonly auditRunnerProducerIds: readonly string[];
-  readonly discoveredComposedCalls: number;
-  readonly composedCalls: readonly EffectivenessDiscoveredCall[];
+  readonly productionRoots: readonly string[];
+  readonly calls: readonly EffectivenessCallReceipt[];
+  readonly consumers: readonly EffectivenessConsumerReceipt[];
+  readonly routes: readonly EffectivenessRouteReceipt[];
+  readonly familyCoverage: readonly EffectivenessFamilyCoverageReceipt[];
+  readonly conservation: readonly EffectivenessConservationReceipt[];
+  readonly unresolvedFindingDispatches: readonly string[];
+  readonly producerExecutions: readonly ProducerExecutionReceipt[];
 }
 
 export interface EffectivenessInventory {

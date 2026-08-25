@@ -70,7 +70,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { readNamesSafe } from "./fs-walk.js";
+import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
+import { readNamesSafe, readRecursiveSafe } from "./fs-walk.js";
 
 /** Where a gate runs, and the evidence that proves it still does. */
 export type Cadence =
@@ -209,7 +210,14 @@ export const MEASURED_OUTSIDE_DISCOVERY: readonly ScoredGate[] = [
  * The other `src/cli/validate-*.ts` CLIs, each with the reason it produces no score. Present so
  * discovery is exhaustive: a new validate-* CLI must land in one list or the other.
  */
-export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[] = [
+interface StructuralGate {
+  readonly id: string;
+  readonly why: string;
+  /** Automatically discovered light-suite file that supplies this structural gate's cadence. */
+  readonly verificationTest?: string;
+}
+
+export const NOT_SCORED: readonly StructuralGate[] = [
   { id: "validate-acceptance", why: "structural — checks a PR against the acceptance criteria of the issues it closes" },
   { id: "validate-alert-paths", why: "structural — checks every CI alert path is dispatch-provable and proven" },
   { id: "validate-conditional-scan", why: "structural — checks a scan path discloses the checks its sibling runs" },
@@ -219,6 +227,11 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-entries-headers", why: "structural — checks a *.entries.ts header's tier and count claims against its own rows (#1827); a violation count plus a disclosed unread-token ratchet, not a recall number. The standing gate is src/entries-header-drift.test.ts inside `pnpm verify`; this CLI is the human-readable venue for the same check" },
   { id: "validate-findings", why: "schema validation of a findings file" },
   { id: "validate-fs-walk", why: "structural — bans raw statSync/readdirSync outside src/fs-walk.ts; a violation count, not a recall number" },
+  {
+    id: "validate-m9-taxonomy-docs",
+    why: "structural — compares the source-derived M9 taxonomy registry bidirectionally with docs/m9-app-router.md Checks headers (#1640)",
+    verificationTest: "src/detectors/m9-taxonomy-docs.test.ts",
+  },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
@@ -242,6 +255,8 @@ export interface GateInputs {
   readonly scripts: Readonly<Record<string, string>>;
   /** Workflow path → file text, for every `.github/workflows/*.yml`. */
   readonly workflows: Readonly<Record<string, string>>;
+  /** Test files actually eligible for Vitest's default light-suite discovery. */
+  readonly lightTests: readonly string[];
 }
 
 const EXECUTABLE_KEYS = new Set(["run", "uses"]);
@@ -306,7 +321,7 @@ function invokes(yml: string, gate: ScoredGate): boolean | undefined {
 export function checkScoredGates(
   inputs: GateInputs,
   gates: readonly ScoredGate[] = SCORED_GATES,
-  notScored: readonly { id: string; why: string }[] = NOT_SCORED,
+  notScored: readonly StructuralGate[] = NOT_SCORED,
   outsideDiscovery: readonly ScoredGate[] = MEASURED_OUTSIDE_DISCOVERY,
 ): string[] {
   const violations: string[] = [];
@@ -322,6 +337,14 @@ export function checkScoredGates(
   const found = new Set(inputs.discovered);
   for (const id of classified) {
     if (!found.has(id)) violations.push(`${id}: registered in src/scored-gates.ts but src/cli/${id}.ts does not exist — stale row.`);
+  }
+  const lightTests = new Set(inputs.lightTests);
+  for (const gate of notScored) {
+    if (gate.verificationTest && !lightTests.has(gate.verificationTest)) {
+      violations.push(
+        `${gate.id}: declares ${gate.verificationTest} as its pnpm verify cadence, but that file is absent from light-suite discovery. Restore the test or name its discovered replacement.`,
+      );
+    }
   }
 
   // The disclosed rows outside the discovery predicate get the same cadence check, which is what
@@ -377,10 +400,16 @@ export function loadGateInputs(root = REPO_ROOT): GateInputs {
     workflows[`.github/workflows/${f}`] = readFileSync(join(workflowDir, f), "utf8");
   }
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+  const heavy = new Set<string>(HEAVY_CLI_TESTS);
   return {
     discovered: discoverValidateClis(join(root, "src", "cli")),
     scripts: pkg.scripts ?? {},
     workflows,
+    lightTests: readRecursiveSafe(join(root, "src"))
+      .filter((path) => /\.(?:test|spec)\.(?:ts|tsx|mts|cts)$/.test(path))
+      .map((path) => `src/${path}`)
+      .filter((path) => !heavy.has(path))
+      .sort(),
   };
 }
 
