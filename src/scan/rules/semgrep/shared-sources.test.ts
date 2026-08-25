@@ -22,10 +22,10 @@ const RULES_DIR = dirname(fileURLToPath(import.meta.url));
 
 // The executable half of this file needs the real binary. `pnpm verify`'s CI job deliberately does
 // not install it, so the block below skips there — and a skipIf is a silent pass by design, which is
-// this repo's own worst failure shape. Two things close that: `heavy CLI tests (shard 3/3)` runs this
-// file with HARVEY_REQUIRE_SEMGREP=1, which turns a missing binary into a red run instead of a skip;
-// and the two mustCatch corpus rows (P-RSC-ARROW-TYPED-BINDING / P-RSC-ARROW-UNTYPED-BINDING) gate
-// the same arms through `validate-calibration` in shard 1.
+// this repo's own worst failure shape. Two things close that: the planned shared-source heavy slot
+// runs this file with HARVEY_REQUIRE_SEMGREP=1, which turns a missing binary into a red run instead
+// of a skip; and the two mustCatch corpus rows (P-RSC-ARROW-TYPED-BINDING /
+// P-RSC-ARROW-UNTYPED-BINDING) gate the same arms through `validate-calibration`.
 const SEMGREP_PRESENT = ((): boolean => {
   try {
     execFileSync("which", ["semgrep"], { stdio: "ignore" });
@@ -40,7 +40,7 @@ if (process.env.HARVEY_REQUIRE_SEMGREP === "1" && !SEMGREP_PRESENT) {
 if (!SEMGREP_PRESENT) {
   console.warn(
     "⚠ shared-sources.test.ts: semgrep absent — the block that EXECUTES the canonical source block against probes did not run.\n" +
-      "  It is the only check here that can catch a pattern that is present but inert (#1544). CI runs it in `heavy CLI tests (shard 3/3)`.",
+      "  It is the only check here that can catch a pattern that is present but inert (#1544). CI runs it in the planned shared-source heavy slot.",
   );
 }
 

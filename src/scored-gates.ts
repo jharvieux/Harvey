@@ -108,7 +108,12 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-calibration",
     script: "validate:calibration",
     measures: "M1 mechanical recall/FP against the corpus answer key",
-    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1", when: "every PR + daily schedule" },
+    cadence: {
+      kind: "workflow",
+      file: ".github/workflows/ci.yml",
+      job: "heavy-cli planned calibration slot",
+      when: "mapped/shared-runtime PRs that launch heavy-cli + merge queue/main/daily schedule",
+    },
   },
   {
     id: "validate-precision",
@@ -122,9 +127,14 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-source-recall",
     script: "validate:source-recall",
     measures: "app-layer request→sink source-detector recall (free tier)",
-    // Runs the real mechanical scan, so it needs the binaries only heavy-cli installs. Shard 2:
-    // shard 1 already carries the calibration gate.
-    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 2", when: "every PR + daily schedule" },
+    // Runs the real mechanical scan, so it needs the binaries only heavy-cli installs. The planner
+    // spreads it away from calibration when multiple runners exist and co-locates it when one does.
+    cadence: {
+      kind: "workflow",
+      file: ".github/workflows/ci.yml",
+      job: "heavy-cli planned source-recall slot",
+      when: "mapped/shared-runtime PRs that launch heavy-cli + merge queue/main/daily schedule",
+    },
   },
   {
     id: "validate-secbench",

@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "globalPaths": [
+    ".github/actions/mechanical-binaries/",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+    "src/cli/sync-stdio.ts"
+  ],
+  "workloads": [
+    {
+      "id": "run-audit",
+      "testFile": "src/cli/run-audit.test.ts",
+      "weightSeconds": 100,
+      "paths": [
+        "src/audit-",
+        "src/cli/run-audit.ts",
+        "src/cli/run-audit.test.ts",
+        "src/audit-runners.ts",
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/cli/mutation-scan.ts",
+        "src/cli/mutation-scan.test.ts",
+        "src/mutation-scan.ts",
+        "src/mutation-scan.test.ts",
+        "src/stub-check.ts",
+        "src/stub-check.test.ts",
+        "src/stub-worktree.ts",
+        "src/stub-worktree.test.ts",
+        "src/corpus-scanner-scope.ts",
+        "src/corpus-scanner-scope.test.ts"
+      ]
+    },
+    {
+      "id": "fix-calibration-acceptance",
+      "testFile": "src/fix/calibration-acceptance.test.ts",
+      "weightSeconds": 37.7,
+      "paths": [
+        "src/fix/",
+        "src/cli/fix-"
+      ]
+    },
+    {
+      "id": "quick-scan",
+      "testFile": "src/cli/quick-scan.test.ts",
+      "weightSeconds": 28.4,
+      "paths": [
+        "src/cli/quick-scan.ts",
+        "src/cli/quick-scan.test.ts",
+        "src/quick-scan.ts",
+        "src/quick-scan.test.ts",
+        "src/health-scorecard.ts",
+        "src/health-scorecard.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts"
+      ]
+    },
+    {
+      "id": "fix-detector-rerun",
+      "testFile": "src/fix/detector-rerun.test.ts",
+      "weightSeconds": 25.9,
+      "paths": [
+        "src/fix/",
+        "src/cli/fix-"
+      ]
+    },
+    {
+      "id": "mutation-scan",
+      "testFile": "src/cli/mutation-scan.test.ts",
+      "weightSeconds": 21.1,
+      "paths": [
+        "src/cli/mutation-scan.ts",
+        "src/cli/mutation-scan.test.ts",
+        "src/mutation-scan.ts",
+        "src/mutation-scan.test.ts",
+        "src/stub-check.ts",
+        "src/stub-check.test.ts",
+        "src/stub-worktree.ts",
+        "src/stub-worktree.test.ts",
+        "src/corpus-scanner-scope.ts",
+        "src/corpus-scanner-scope.test.ts"
+      ]
+    },
+    {
+      "id": "quality-scan",
+      "testFile": "src/cli/quality-scan.test.ts",
+      "weightSeconds": 18.9,
+      "paths": [
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts",
+        "src/diverged-clones.ts",
+        "src/diverged-clones.test.ts",
+        "src/corpus-scanner-scope.ts",
+        "src/corpus-scanner-scope.test.ts"
+      ]
+    },
+    {
+      "id": "lighthouse-scan",
+      "testFile": "src/cli/lighthouse-scan.test.ts",
+      "weightSeconds": 15,
+      "paths": [
+        "src/cli/lighthouse-scan.ts",
+        "src/cli/lighthouse-scan.test.ts",
+        "src/lighthouse.ts",
+        "src/lighthouse.test.ts",
+        "src/lighthouse-chrome-candidates.ts",
+        "src/lighthouse-chrome-candidates.test.ts"
+      ]
+    },
+    {
+      "id": "validate-calibration",
+      "testFile": "src/cli/validate-calibration.test.ts",
+      "weightSeconds": 40,
+      "paths": [
+        "src/cli/validate-calibration.ts",
+        "src/cli/validate-calibration.test.ts",
+        "src/calibration-verdict.ts",
+        "src/calibration-verdict.test.ts",
+        "src/scan/calibration.ts",
+        "src/scan/calibration.test.ts",
+        "src/scan/calibration/",
+        "src/scan/detection-metrics.ts",
+        "src/scan/detection-metrics.test.ts",
+        "src/scan/heuristic-precision.ts",
+        "src/scan/heuristic-precision.test.ts",
+        "src/scan/match-keyed-corpora.ts",
+        "src/scan/match-keyed-corpora.test.ts",
+        "src/scan/rule-corpus-pairing.ts",
+        "src/scan/rule-corpus-pairing.test.ts"
+      ]
+    },
+    {
+      "id": "fix-execute",
+      "testFile": "src/cli/fix-execute.test.ts",
+      "weightSeconds": 23.3,
+      "paths": [
+        "src/fix/",
+        "src/cli/fix-"
+      ]
+    },
+    {
+      "id": "corpus-scanner-cross-process",
+      "testFile": "src/corpus-scanner-cross-process.test.ts",
+      "weightSeconds": 17,
+      "paths": [
+        "src/corpus-",
+        "src/scan/external-corpus.ts",
+        "src/scan/external-corpus.test.ts",
+        "src/cli/mutation-scan.ts",
+        "src/cli/mutation-scan.test.ts",
+        "src/mutation-scan.ts",
+        "src/mutation-scan.test.ts",
+        "src/cli/quality-scan.ts",
+        "src/cli/quality-scan.test.ts",
+        "src/quality-scan.ts",
+        "src/quality-scan.test.ts"
+      ]
+    }
+  ]
+}

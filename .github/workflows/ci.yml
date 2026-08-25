@@ -11,7 +11,7 @@ on:
   # rather than a filtered subset. That is deliberate — the queue tests the merged state, which is
   # the one thing `strict: true` never did.
   merge_group:
-  # #1138: a daily run so heavy-cli (the seven heavy files + real binaries) is exercised on a
+  # #1138: a daily run so heavy-cli (the complete registered population + real binaries) is exercised on a
   # cadence, not only when a push/PR touches code. A regression from something no PR touches — a
   # transitive dep bump, a runner-image change, a scanner-binary drift — would otherwise never trip
   # it. On a schedule event the `changes` router sets code=true, so heavy-cli (and the full verify)
@@ -48,8 +48,8 @@ concurrency:
 jobs:
   # Tier router: inspect the change set and decide which jobs are needed.
   # Operating-policy/docs-only PRs (root guidance Markdown, docs/**.md and Codex agent profiles)
-  # run only the cheap policy/docs ratchet. Workflow-only PRs need actionlint, not the full JS verify
-  # (tsc/eslint/vitest/knip never read workflow YAML). Everything else — code,
+  # run only the cheap policy/docs ratchet. Workflow-only PRs run actionlint; neither prose nor
+  # workflow YAML launches unrelated heavy binaries. Everything else — code,
   # config, briefs/**, targets/** — runs the full verify. A non-PR event runs every
   # tier as a post-merge or scheduled safety net.
   changes:
@@ -59,6 +59,11 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       workflows: ${{ steps.filter.outputs.workflows }}
       docs: ${{ steps.filter.outputs.docs }}
+      heavy_matrix: ${{ steps.heavy-plan.outputs.matrix }}
+      heavy_run: ${{ steps.heavy-plan.outputs.run }}
+      heavy_mode: ${{ steps.heavy-plan.outputs.mode }}
+      heavy_digest: ${{ steps.heavy-plan.outputs.digest }}
+      heavy_selected: ${{ steps.heavy-plan.outputs.selected }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +78,8 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # A missing diff is a routing failure, not a reason to spend three heavy runners. Bash's
+          # fail-fast behavior makes the required `changes` job red before any tier can be skipped.
           files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
           echo "Changed files:"
           echo "$files"
@@ -100,6 +107,27 @@ jobs:
             echo "workflows=$workflows"
             echo "docs=$docs"
           } >> "$GITHUB_OUTPUT"
+
+      # Pull requests run only the heavy workloads with an explicit owner for a changed path.
+      # Unmapped paths are reported and launch no heavy workload of their own. Shared runtime
+      # inputs select the full population. Every non-PR event is full, preserving merge-queue,
+      # main and daily monitoring as the backstop for ownership gaps discovered after rollout.
+      - id: heavy-plan
+        name: Plan the heavy workload population
+        run: >
+          node src/heavy-test-plan.mjs
+          --event '${{ github.event_name }}'
+          --base '${{ github.event.pull_request.base.sha }}'
+          --head HEAD
+          --max-shards 3
+          --github-output "$GITHUB_OUTPUT"
+      - name: Summarize the heavy workload plan
+        run: |
+          {
+            echo "### Heavy PR workload plan"
+            echo "${{ steps.heavy-plan.outputs.summary }}"
+            echo "Selected: ${{ steps.heavy-plan.outputs.selected }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # #1763: prose-only changes used to bypass the one ratchet that reads their claims, then reveal
   # the breach only after merge when main ran the full build. Keep the expensive build tiered, but
@@ -136,17 +164,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
 
-  # #1120: the seven heavy child-process test files vitest.config.ts keeps out of `pnpm verify`'s
-  # shared worker pool. They are not dropped, they are moved here — serialized (maxForks 1, set by
-  # the config when HARVEY_HEAVY_CLI_TESTS=1) so they cannot starve each other's worker RPC channel
-  # the way they did inside the main suite.
+  # #1120: the heavy child-process test files vitest.config.ts keeps out of `pnpm verify`'s shared
+  # worker pool. Pull requests run only workloads with explicit changed-path ownership; unmapped
+  # paths launch none. Merge queue, main, schedule and manual events run the full population as the
+  # monitoring backstop. Files remain serialized within each runner (maxForks 1) so they cannot
+  # starve each other's worker RPC channel.
   #
   # This job installs the mechanical binaries and the `build` job deliberately does not, which also
   # closes a standing blind spot: three of these files gate blocks behind
   # skipIf(!MECHANICAL_BINARIES_PRESENT) / skipIf(!SEMGREP_PRESENT), so until now those blocks had
   # never executed in CI at all — main looked green while they ran nowhere.
   #
-  # It is in the `verify` gate's needs below, not advisory: these seven files WERE part of the
+  # It is in the `verify` gate's needs below, not advisory: these files WERE part of the
   # required check until this change, and moving required coverage to a non-blocking job would be
   # the silent-omission failure this repo's coverage guard exists to prevent.
   heavy-cli:
@@ -155,28 +184,20 @@ jobs:
     # where these files starve vitest's worker RPC channel (#1120/#1133). Separate runners are
     # separate machines, so sharding preserves it exactly rather than relaxing it.
     #
-    # MEASURED (CI run 30272315745, 2026-07-27): serialized on one runner the seven files take 205s
-    # of a 236s job, and because they are serial that is the SUM, not the max — run-audit 58.3s,
-    # calibration-acceptance 37.7s, quick-scan 28.4s, detector-rerun 25.9s, mutation-scan 21.1s,
-    # quality-scan 18.9s, lighthouse-scan 15.0s. Three shards brings wall-clock to ~104s. The floor
-    # is the longest single file (run-audit, 58.3s), so a fourth shard buys only ~15s more and pays
-    # a whole extra runner's setup for it.
-    #
-    # The shard's file list is DERIVED, never written here: src/cli/heavy-shard.ts reads the same
-    # array vitest.config.ts uses. Listing names in this file would let an eighth heavy test be
-    # added to the suite and run in no shard — green CI, silently reduced coverage.
-    # src/heavy-cli-tests.test.ts asserts the partition for every width.
-    name: heavy CLI tests (shard ${{ matrix.shard }}/3, real binaries)
+    # The matrix is DERIVED from src/heavy-test-workloads.json by src/heavy-test-plan.mjs, never
+    # restated here. The same registry feeds Vitest's heavy exclusion, and executable tests assert
+    # selection, fallback and partition conservation. A module-local PR can therefore launch one
+    # or two runners, while a full plan retains the measured three-runner LPT partition.
+    name: heavy CLI tests (shard ${{ matrix.shard }}/${{ matrix.total }}, real binaries)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.heavy_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       # Every shard runs even when one fails — a red shard 1 must not hide a different failure in
       # shard 3, which would turn two bugs into one round trip.
       fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
+      matrix: ${{ fromJSON(needs.changes.outputs.heavy_matrix) }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138). A
     # job-level block replaces the default token perms, so contents: read is restated for checkout.
     permissions:
@@ -225,17 +246,6 @@ jobs:
             command -v "$b" >/dev/null || { echo "::error::$b is not on PATH — the heavy tests would skip silently"; exit 1; }
           done
 
-      # `tsx` directly, not `pnpm exec tsx`: pnpm writes "Already up to date / Done in ..." to
-      # STDOUT, which would be fed to vitest as filenames. The heavy tests spawn tsx the same way.
-      - name: Resolve this shard's files
-        id: shard
-        run: |
-          set -euo pipefail
-          files=$(node_modules/.bin/tsx src/cli/heavy-shard.ts --shard '${{ matrix.shard }}' --of 3)
-          test -n "$files"   # an empty shard would make vitest exit non-zero for the wrong reason
-          echo "This shard runs:"; echo "$files"
-          echo "files=$(echo "$files" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
-
       # The json reporter rides alongside the default one: it costs nothing on the console and gives
       # the record step below a real number instead of a claim. Three of these files gate blocks
       # behind skipIf(), so "the step succeeded" and "tests executed" are genuinely different facts.
@@ -243,7 +253,13 @@ jobs:
         if: ${{ !inputs.liveness_drill }}
         env:
           HARVEY_HEAVY_CLI_TESTS: "1"
-        run: pnpm exec vitest run ${{ steps.shard.outputs.files }} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shard.json"
+          HARVEY_HEAVY_FILES_JSON: ${{ toJSON(matrix.files) }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(jq -r '.[]' <<< "$HARVEY_HEAVY_FILES_JSON")
+          test "${#files[@]}" -gt 0
+          printf 'This shard runs: %s\n' "${files[@]}"
+          pnpm exec vitest run "${files[@]}" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest-shard.json"
 
       # #1509: `always()` because a shard whose tests RAN AND FAILED reached its measuring phase and a
       # shard that died before vitest did not — the job is red either way, and only one of them means
@@ -267,7 +283,7 @@ jobs:
           mode: record
           gate: heavy-cli-tests
           units: ${{ steps.heavy-count.outputs.ran }}
-          scope: "heavy CLI tests executed in shard ${{ matrix.shard }} of 3 (passed + failed, skipped excluded)"
+          scope: "heavy workloads ${{ join(matrix.workloadIds, ',') }} executed in shard ${{ matrix.shard }} of ${{ matrix.total }} (plan ${{ needs.changes.outputs.heavy_digest }}; passed + failed, skipped excluded)"
 
       # #1301: `validate:calibration` scores the REAL mechanical scan against the corpus answer key
       # and ran in no workflow at all — the gate that would catch "a rule stopped firing on its
@@ -275,21 +291,21 @@ jobs:
       # installs the mechanical binaries. Shard 1 only: it is one run of one scan, not a sharded
       # test file, and three copies would just burn two runners.
       - name: Calibration gate (real binaries, scored against the corpus answer key)
-        if: matrix.shard == 1 && !inputs.liveness_drill
+        if: contains(matrix.gates, 'calibration') && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-calibration.ts
 
       # #1288: the same hole one gate over. `validate-source-recall` scores the app-layer
       # request→sink SOURCE detectors — the free-tier recall number #868 publishes — and ran in no
       # workflow either. It runs the same runMechanicalScan the calibration gate does, so it needs
-      # the binaries this job installs and belongs nowhere else. Shard 2, not 1: shard 1 already
-      # carries the calibration gate, and both are single scans (~16s measured locally 2026-07-28),
-      # so splitting them keeps either shard from becoming the long pole.
+      # the binaries this job installs and belongs nowhere else. The planner spreads these scored
+      # gates over however many selected runners exist; a single-runner scoped plan carries all of
+      # them, while a full three-runner plan preserves the established distribution.
       #
       # Deliberately WITHOUT --real: that mode git-clones six pinned external repos and always exits
       # 0 by design (it reports, it does not gate), so on a cadence it would spend network on a
       # number nothing can fail. The planted-fixture gate below is the one with a pass/fail.
       - name: Source-detector recall gate (real binaries, request→sink answer key)
-        if: matrix.shard == 2 && !inputs.liveness_drill
+        if: contains(matrix.gates, 'source-recall') && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/validate-source-recall.ts
 
       # #1483, and the relay #1481 owed. M2 carries the parity exemption whose substitute gates are
@@ -300,12 +316,12 @@ jobs:
       # granted workflow edits for the 2026-07-31 sweep, so the relay is DISCHARGED rather than
       # re-recorded.
       #
-      # Shard 3, because shards 1 and 2 already carry a scored gate each. Offline and sub-second —
+      # Assigned alongside the cheapest selected shard when the matrix has room. Offline and sub-second —
       # MEASURED 2026-07-31: 0.9s wall, exit 0 on `--tested app:root`, exit 1 on `--tested bogus-id`
       # ("Incomplete target coverage — 1 enumerated target(s) untested: app:root"). Both directions,
       # so this is not a step that can only pass.
       - name: M2 target-coverage gate (assertComplete over the discovered manifest)
-        if: matrix.shard == 3 && !inputs.liveness_drill
+        if: contains(matrix.gates, 'm2-coverage') && !inputs.liveness_drill
         run: pnpm exec tsx src/cli/pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested app:root
 
       # #1544: shared-sources.test.ts asserted for months that the canonical request-source block
@@ -314,11 +330,10 @@ jobs:
       # was green throughout. It now also EXECUTES the block against probes with real semgrep, which
       # means it skips in `verify` (that job installs no binaries) and this is the only job where it
       # can run. HARVEY_REQUIRE_SEMGREP=1 makes a missing binary red rather than a silent skip.
-      # Shard 3 alongside the M2 coverage gate: shards 1 and 2 carry the two long scans, and this is
-      # one 3s vitest file, so it is the cheapest of the four to place.
+      # Assigned alongside the M2 coverage gate; this is one ~3s Vitest file.
       - name: Shared request-source block — patterns MATCH probes, not merely present
         id: shared-source-match
-        if: matrix.shard == 3 && !inputs.liveness_drill
+        if: contains(matrix.gates, 'shared-source-match') && !inputs.liveness_drill
         env:
           HARVEY_REQUIRE_SEMGREP: "1"
         run: |
@@ -328,7 +343,7 @@ jobs:
           ran=$(jq '(.numPassedTests // 0) + (.numFailedTests // 0)' "$RUNNER_TEMP/vitest-shared-sources.json")
           echo "ran=$ran" >> "$GITHUB_OUTPUT"
       - name: Record the shared-source match gate's executed-probe count
-        if: matrix.shard == 3 && !inputs.liveness_drill
+        if: contains(matrix.gates, 'shared-source-match') && !inputs.liveness_drill
         uses: ./.github/actions/gate-liveness
         with:
           mode: record
@@ -361,17 +376,15 @@ jobs:
       # NO CADENCE — the registry must not assert a venue that has never once executed. #1491 stays
       # open with the measured cause on it.
 
-      # #1509: the scored gates above ride inside `if: matrix.shard == N`, and a condition that
-      # stopped matching would retire them in complete silence — the shape #1301/#1288 found when each
-      # ran in no workflow at all. `expect` is matrix-dependent for the same reason: shard 1 must
-      # prove the calibration gate ran, shard 2 the source-recall gate, and neither can be satisfied
-      # by the other's record. `always()` so a shard that died in setup names the phase.
+      # #1509: the scored gates above ride in the planner's per-runner `gates` assignment. A planner
+      # or condition bug must not retire one silently, so `expect` is derived from the same matrix row
+      # and each gate still has to produce its own receipt. `always()` names setup deaths too.
       - name: Gate liveness — did this shard actually measure anything?
         if: always() && !(inputs.alert_drill && matrix.shard == 1)
         uses: ./.github/actions/gate-liveness
         with:
           mode: assert
-          expect: heavy-cli-tests ${{ matrix.shard == 1 && 'calibration-gate' || '' }} ${{ matrix.shard == 2 && 'source-recall-gate' || '' }} ${{ matrix.shard == 3 && 'm2-coverage-gate shared-source-match' || '' }}
+          expect: heavy-cli-tests ${{ contains(matrix.gates, 'calibration') && 'calibration-gate' || '' }} ${{ contains(matrix.gates, 'source-recall') && 'source-recall-gate' || '' }} ${{ contains(matrix.gates, 'm2-coverage') && 'm2-coverage-gate' || '' }} ${{ contains(matrix.gates, 'shared-source-match') && 'shared-source-match' || '' }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
@@ -388,7 +401,7 @@ jobs:
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The scheduled heavy-cli run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, shard ${{ matrix.shard }} of 3). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
+          body: "The scheduled heavy-cli run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, shard ${{ matrix.shard }} of ${{ matrix.total }}). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
 
   actionlint:
     name: actionlint

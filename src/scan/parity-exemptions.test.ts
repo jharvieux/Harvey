@@ -136,7 +136,12 @@ describe("#1483 a substitute gate declares a cadence, and the cadence is checked
     expect(Object.values(real.workflows).some((w) => w.includes("mode=coverage"))).toBe(true);
     const m2 = parityVerdict(CORPUS).exempt.find((e) => e.module === "M2")?.exemption as ParityExemption;
     const pentest = m2.substituteGates.find((g) => g.invokes === "src/cli/pentest.ts") as SubstituteGate;
-    expect(pentest.cadence).toEqual({ kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 3", when: "every code PR + daily schedule" });
+    expect(pentest.cadence).toEqual({
+      kind: "workflow",
+      file: ".github/workflows/ci.yml",
+      job: "heavy-cli planned M2-coverage slot",
+      when: "mapped/shared-runtime PRs that launch heavy-cli + merge queue/main/daily schedule",
+    });
     expect(describeCadence(pentest.cadence)).not.toContain("NO CADENCE");
   });
 

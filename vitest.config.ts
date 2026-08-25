@@ -74,11 +74,11 @@ const BASE_EXCLUDE = [
 // execFileSync. **The standing constraint for anything in this list: no single blocking window may
 // approach 60s.** The remaining six block ~15s at most, which is why they were left synchronous.
 //
-// They are NOT dropped — .github/workflows/ci.yml runs them on every code PR in the `heavy-cli`
-// job, serialized, with the mechanical binaries actually installed (which the `verify` job
-// deliberately does not do, so the skipIf(MECHANICAL_BINARIES_PRESENT) blocks inside three of them
-// had never executed in CI at all). That job is in the `verify` gate's needs, so this moves
-// required coverage, it does not downgrade it.
+// They are NOT dropped — .github/workflows/ci.yml's `heavy-cli` job runs the changed-path-owned
+// population on PRs and the full population on merge queue/main/schedule, serialized, with the
+// mechanical binaries actually installed (which the `verify` job deliberately does not do).
+// Unmapped PR paths launch no heavy workload; the full post-merge run detects ownership gaps, and
+// that job remains in the required `verify` gate's needs whenever the planner selects it.
 //
 // REASON: vitest exposes no configuration knob for the worker→main birpc ack window, so a blocking call that outlasts it cannot be waited out — only the load that makes calls that slow can be reduced.
 // KIND: empirical
@@ -105,7 +105,8 @@ if (!heavyRun) {
   console.warn(
     `⚠ ${HEAVY_CLI_TESTS.length} heavy child-process test files EXCLUDED from this run (#1120): ${HEAVY_CLI_TESTS.join(", ")}\n` +
       `  They block a vitest worker for 6-70s each and starve its RPC channel when run alongside the rest of the suite.\n` +
-      `  CI runs them on every code PR (.github/workflows/ci.yml, job \`heavy-cli\`). Locally: HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run`,
+      `  CI selects them by changed-path ownership on PRs and runs all on merge queue/main/schedule (.github/workflows/ci.yml, job \`heavy-cli\`).\n` +
+      `  Locally: HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run`,
   );
 }
 

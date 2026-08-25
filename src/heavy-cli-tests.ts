@@ -1,29 +1,35 @@
-// The heavy child-process test files, and how they are split across CI runners.
+// The heavy child-process test files, and how a full run is split across CI runners.
 //
-// The list lives here rather than in vitest.config.ts so that BOTH consumers read the same array:
-// the vitest config (which excludes them from `pnpm verify` and includes them in the heavy run) and
-// src/cli/heavy-shard.ts (which tells each CI shard what to run). The alternative — writing the
-// file names into .github/workflows/ci.yml — would mean another heavy file could be added to the
-// config and run in NO shard, passing CI by being invisible. That is the silent-omission shape
-// CLAUDE.md ranks as worse than a wrong status, so the shard assignment is DERIVED, never declared.
+// The list and weights live in heavy-test-workloads.json. Vitest, the local full-run sharder and
+// CI's PR impact planner all consume that one registry. Writing file names into ci.yml would let a
+// new heavy file be excluded locally and run in no hosted shard, passing CI by being invisible.
+// That is the silent-omission shape Harvey ranks as worse than a wrong status, so selection and
+// shard assignment are derived, never independently declared.
 //
 // Why sharding is sound despite `poolOptions.forks.maxForks: 1`: that constraint is about
 // contention on ONE machine — the files starve vitest's worker→main birpc ack channel when they
 // overlap (measured in vitest.config.ts's header, #1120/#1133). Separate GitHub runners are
 // separate machines, so a shard still runs its own files one at a time while shards run
 // concurrently. The constraint is preserved exactly, not relaxed.
-export const HEAVY_CLI_TESTS = [
-  "src/cli/run-audit.test.ts",
-  "src/fix/calibration-acceptance.test.ts",
-  "src/cli/quick-scan.test.ts",
-  "src/fix/detector-rerun.test.ts",
-  "src/cli/mutation-scan.test.ts",
-  "src/cli/quality-scan.test.ts",
-  "src/cli/lighthouse-scan.test.ts",
-  "src/cli/validate-calibration.test.ts",
-  "src/cli/fix-execute.test.ts",
-  "src/corpus-scanner-cross-process.test.ts",
-];
+import { readFileSync } from "node:fs";
+
+interface HeavyWorkload {
+  id: string;
+  testFile: string;
+  weightSeconds: number;
+}
+
+interface HeavyRegistry {
+  version: number;
+  workloads: HeavyWorkload[];
+}
+
+const registry = JSON.parse(readFileSync(new URL("./heavy-test-workloads.json", import.meta.url), "utf8")) as HeavyRegistry;
+if (registry.version !== 1 || !Array.isArray(registry.workloads) || registry.workloads.length === 0) {
+  throw new Error("src/heavy-test-workloads.json is not a version-1 heavy workload registry");
+}
+
+export const HEAVY_CLI_TESTS = registry.workloads.map((workload) => workload.testFile);
 
 // Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
 // current. They drift as tests are added, and a stale number costs a few seconds of imbalance,
@@ -37,19 +43,9 @@ export const HEAVY_CLI_TESTS = [
 // the wall-clock floor no matter how many shards there are. Weighting it high makes LPT give it a
 // shard to itself, so its variance stops pushing a second file's cost onto the critical path —
 // which is exactly what made that first sharded run land at 141s against a 104s prediction.
-const WEIGHT_HINT_SECONDS: Record<string, number> = {
-  // 100s is a scheduling reservation above the 87s high observation so the long pole stays alone.
-  "src/cli/run-audit.test.ts": 100.0,
-  "src/fix/calibration-acceptance.test.ts": 37.7,
-  "src/cli/quick-scan.test.ts": 28.4,
-  "src/fix/detector-rerun.test.ts": 25.9,
-  "src/cli/mutation-scan.test.ts": 21.1,
-  "src/cli/quality-scan.test.ts": 18.9,
-  "src/cli/lighthouse-scan.test.ts": 15.0,
-  "src/cli/validate-calibration.test.ts": 40.0,
-  "src/cli/fix-execute.test.ts": 23.3,
-  "src/corpus-scanner-cross-process.test.ts": 17.0,
-};
+const WEIGHT_HINT_SECONDS: Record<string, number> = Object.fromEntries(
+  registry.workloads.map((workload) => [workload.testFile, workload.weightSeconds]),
+);
 
 /**
  * Reserve run-audit by itself when at least three shards are available, then use
