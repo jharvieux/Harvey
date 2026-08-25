@@ -572,6 +572,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
   const injectionRuleIds = [...readFileSync(new URL("./rules/semgrep/injection.yml", import.meta.url), "utf8").matchAll(/^\s*-\s*id:\s*([\w.-]+)\s*$/gm)].map((match) => match[1]!);
   const complementRuleIds = injectionRuleIds.filter((id) => id !== "harvey-log-injection");
   const xssRuleIds = [...readFileSync(new URL("./rules/semgrep/xss.yml", import.meta.url), "utf8").matchAll(/^\s*-\s*id:\s*([\w.-]+)\s*$/gm)].map((match) => match[1]!);
+  const fixtureTypescriptRuleIds = ["fixture-overlapping-registry-rule", "fixture-registry-0-p-typescript"].sort();
   const injectionOutput = (ruleIds: readonly string[], results: SemgrepResult[] = []): SemgrepOutput => ({
     version: "1.173.0", results, errors: [], skipped_rules: [],
     paths: { scanned: ["/some/target/a.ts"], skipped: [] },
@@ -589,8 +590,11 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     const log = injectionOutput(["harvey-log-injection"]);
     const complement = injectionOutput(complementRuleIds);
     const xss = injectionOutput(xssRuleIds);
+    const typescript = injectionOutput(fixtureTypescriptRuleIds);
     semgrepMock.outputs.push(...[
       options.monolithic ?? injectionOutput(["registry.other"], [{ check_id: "registry.other", path: "/some/target/a.ts", start: { line: 1 } }]),
+      typescript,
+      typescript,
       options.firstLog ?? log,
       options.firstComplement ?? complement,
       options.secondLog ?? log,
@@ -668,6 +672,12 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       const excluded = receipt.families.find((family) => family.id === "registry-3-p-owasp-top-ten");
       expect(owner?.ownedRuleIds).toContain("fixture-overlapping-registry-rule");
       expect(owner?.ownedTaintRuleIds).toEqual(["fixture-registry-0-p-typescript"]);
+      expect(owner).toMatchObject({
+        sourceKind: "registry-pack",
+        sourceId: "p/typescript",
+        verification: "paired-cold-exact",
+      });
+      expect(owner?.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
       expect(excluded?.ownedRuleIds).not.toContain("fixture-overlapping-registry-rule");
       expect(excluded?.excludedRuleIds).toContain("fixture-overlapping-registry-rule");
       expect(receipt.families.flatMap((family) => family.ownedRuleIds).filter((id) => id === "fixture-overlapping-registry-rule")).toHaveLength(1);
@@ -689,7 +699,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(xss?.ownedRuleIds).toHaveLength(12);
       expect(xss?.argv.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1"]);
       expect(receipt.families.filter((family) => family.id !== "local-injection").every((family) =>
-        (["local-xss", "registry-singleton-direct-response-write"].includes(family.id) && family.verification === "paired-cold-exact" && family.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")
+        (["registry-0-p-typescript", "local-xss", "registry-singleton-direct-response-write"].includes(family.id) && family.verification === "paired-cold-exact" && family.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")
         || (family.verification === "single" && family.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9")
       )).toBe(true);
     } finally {
@@ -820,7 +830,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         "src.scan.rules.semgrep.harvey-log-injection:20",
       ]);
       const argvs = semgrepArgvs();
-      expect(argvs).toHaveLength(7);
+      expect(argvs).toHaveLength(9);
       expect(argvs[0]?.slice(0, 4)).toEqual(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "9"]);
       expect(argvs.slice(1).every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
       expect(argvs.slice(1).filter((argv) => argv.some((arg) => arg.includes("local-injection-"))).map((argv) => argv.find((arg) => arg.includes("local-injection-"))?.match(/local-injection-(log|complement)-/)?.[1])).toEqual(["log", "complement", "log", "complement"]);
@@ -916,7 +926,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
-  it("executes injection's paired partitions and exactly two unchanged whole-family local-xss commands at j1", async () => {
+  it("executes measured paired families as two byte-identical whole-family j1 commands", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-policy-"));
     try {
       const target = join(dir, "target");
@@ -954,7 +964,14 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(xss).toHaveLength(2);
       expect(xss[0]).toEqual(xss[1]);
       expect(xss.every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
-      expect(calls.filter((argv) => !argv.some((arg) => arg.includes("local-injection-") || arg.endsWith("/xss.yml"))).every((argv) =>
+      const typescript = calls.filter((argv) => argv.some((arg) => /registry-0-[a-f0-9]{64}\.yml$/.test(arg)));
+      expect(typescript).toHaveLength(2);
+      expect(typescript[0]).toEqual(typescript[1]);
+      const typescriptConfig = typescript[0]![typescript[0]!.indexOf("--config") + 1]!;
+      expect(createHash("sha256").update(readFileSync(typescriptConfig)).digest("hex"))
+        .toBe(plan.families.find((family) => family.sourceId === "p/typescript")?.configSha256);
+      expect(typescript.every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
+      expect(calls.filter((argv) => !argv.some((arg) => arg.includes("local-injection-") || arg.endsWith("/xss.yml") || /registry-0-[a-f0-9]{64}\.yml$/.test(arg))).every((argv) =>
         argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
     } finally {
@@ -1086,6 +1103,76 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     }
   });
 
+  it("rejects p/typescript timeout drift before cache admission and retains both raw attempts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-typescript-drift-"));
+    try {
+      const target = join(dir, "target");
+      const cache = join(dir, "cache");
+      mkdirSync(target);
+      writeFileSync(join(target, "a.ts"), "export {};\n");
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry, target);
+      const typescript = plan.families.find((family) => family.sourceId === "p/typescript")!;
+      expect(typescript).toMatchObject({ verification: "paired-cold-exact" });
+      const envelope = (ruleIds: readonly string[]): SemgrepOutput => ({
+        version: "1.173.0", results: [], errors: [], skipped_rules: [],
+        paths: { scanned: [join(target, "a.ts")], skipped: [] },
+        time: { rules: [...ruleIds], fixpoint_timeouts: [] },
+      });
+      for (const family of plan.families) {
+        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+          for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
+          continue;
+        }
+        const first = envelope(family.ruleIds);
+        semgrepMock.outputs.push(JSON.stringify(first));
+        if (family.verification === "paired-cold-exact") {
+          const second = structuredClone(first);
+          if (family.sourceId === "p/typescript") second.time!.fixpoint_timeouts!.push({
+            error_type: "Fixpoint timeout", severity: "warn",
+            message: `Fixpoint timeout while performing taint analysis at ${join(target, "a.ts")}:1:0 [rules: 1, first: ${family.ownedTaintRuleIds[0]!}]`,
+            location: { path: join(target, "a.ts"), start: { line: 1, col: 1, offset: 0 }, end: { line: 1, col: 2, offset: 1 } },
+          });
+          semgrepMock.outputs.push(JSON.stringify(second));
+        }
+      }
+      const options = {
+        dir: cache, mode: "read-write" as const, targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" },
+      };
+      const failed = await runSemgrepPartitioned(target, registry, options);
+      expect(failed.result).toEqual({});
+      expect(failed.executionPlan).toBeUndefined();
+      expect(failed.failure).toMatch(/paired cold.*registry-0-p-typescript.*taintCoverage.*semanticSha256/i);
+      expect(existsSync(join(cache, "semgrep-families", typescript.id))).toBe(false);
+      const failureKeyDirs = readNamesSafe(join(cache, "semgrep-family-failures", typescript.id));
+      expect(failureKeyDirs).toHaveLength(1);
+      const failureFiles = readNamesSafe(join(cache, "semgrep-family-failures", typescript.id, failureKeyDirs[0]!));
+      expect(failureFiles).toHaveLength(1);
+      const evidence = JSON.parse(readFileSync(join(cache, "semgrep-family-failures", typescript.id, failureKeyDirs[0]!, failureFiles[0]!), "utf8")) as {
+        reusable: boolean;
+        failure: { mismatchFields: string[]; timeoutTelemetry: Array<{ components: Array<{ fixpointTimeouts: unknown[] }> }>; attempts: Array<{ attempt: number; merged: { receipt: { taintCoverage: string; semanticSha256: string } } }> };
+      };
+      expect(evidence).toMatchObject({
+        reusable: false,
+        failure: {
+          mismatchFields: expect.arrayContaining(["taintCoverage", "semanticSha256"]),
+          attempts: [
+            { attempt: 1, merged: { receipt: { taintCoverage: "no-timeout-observed" } } },
+            { attempt: 2, merged: { receipt: { taintCoverage: "not-assessed" } } },
+          ],
+        },
+      });
+      expect(evidence.failure.attempts[0]!.merged.receipt.semanticSha256)
+        .not.toBe(evidence.failure.attempts[1]!.merged.receipt.semanticSha256);
+      expect(evidence.failure.timeoutTelemetry.map((attempt) => attempt.components[0]!.fixpointTimeouts.length)).toEqual([0, 1]);
+
+    } finally {
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("retains malformed raw timeout evidence as non-reusable schema-8 failure and re-executes the same key", async () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-timeout-failure-evidence-"));
     try {
@@ -1112,7 +1199,8 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         if (family.topology === "rule-and-size-routed-file-isolation-v1") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
         } else {
-          semgrepMock.outputs.push(JSON.stringify(family.id === "local-xss" ? invalid(family.ruleIds[0]!) : envelope(family.ruleIds)));
+          const first = JSON.stringify(family.id === "local-xss" ? invalid(family.ruleIds[0]!) : envelope(family.ruleIds));
+          semgrepMock.outputs.push(first, ...(family.id !== "local-xss" && family.verification === "paired-cold-exact" ? [first] : []));
         }
         if (family.id === "local-xss") break;
       }
@@ -1152,6 +1240,18 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
     };
     expect(() => assertPolicy(source)).not.toThrow();
     const reverted = source.replace('const LOCAL_XSS_FAMILY = "local-xss"', 'const LOCAL_XSS_FAMILY = "local-xss-reverted"');
+    expect(reverted).not.toBe(source);
+    expect(() => assertPolicy(reverted)).toThrow();
+  });
+
+  it("has a physical failing direction when the p/typescript source policy is neutralized", () => {
+    const source = readFileSync(new URL("./semgrep.ts", import.meta.url), "utf8");
+    const assertPolicy = (implementation: string): void => {
+      expect(implementation).toContain('const SEMGREP_PAIRED_SOURCE_IDENTITIES = new Set(["p/typescript"])');
+      expect(implementation).toContain("SEMGREP_PAIRED_SOURCE_IDENTITIES.has(family.sourceId)");
+    };
+    expect(() => assertPolicy(source)).not.toThrow();
+    const reverted = source.replace('new Set(["p/typescript"])', "new Set([])");
     expect(reverted).not.toBe(source);
     expect(() => assertPolicy(reverted)).toThrow();
   });
