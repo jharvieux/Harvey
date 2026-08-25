@@ -92,30 +92,31 @@ missing artifact is a miss and executes the phase. A malformed, partial, zero-sc
 wrong-identity artifact logs `CACHE REJECT`, is removed, and is recomputed. A manual dispatch with
 the explicit `force_cold_cache` input executes every deterministic phase and compares the cold
 value with the restored artifact, failing on any findings or scope difference. A miss can seed the
-next run but fails the current equivalence assertion; normal PR, scheduled, and main-push
-read/write runs are the distinct seeding mode.
+next run but fails the current equivalence assertion; scheduled/manual and main-push read/write
+runs are the distinct seeding mode. Pull requests and merge groups never enter that mode.
 
 The Actions cache is transport, not trust. Per-shard rolling keys avoid matrix legs overwriting
 one another; inner artifacts remain content addressed. The bare required context still gates on
-the aggregate result of every shard and reports on every pull request, including declared no-op
-changes.
+the aggregate result of every shard on full-corpus events. On every pull request it reports the
+declared deferral directly, without allocating a producer shard.
 
 ## Falsifiers
 
-## Cross-run transport, scanner families, and deterministic PR state
+## Cross-run transport, scanner families, and deterministic hosted state
 
-The `corpus-phase-run-v5` and `corpus-phase-main-v5` transports carry a context-bound provenance
-manifest. Pull-request retries use their exact run family; a rolling-prefix lookup is restricted to
-the trusted default-branch family, keeping a newer artifact from another PR separate from the main
-seed. The key encodes family, platform, shard namespace, run,
+The `corpus-phase-run-v6` and `corpus-phase-main-v6` transports carry a context-bound provenance
+manifest. Scheduled/manual retries can use their exact run family; a rolling-prefix lookup is
+restricted to the trusted default-branch family. Pull requests never restore or save either
+transport. The key encodes family, platform, shard namespace, run,
 attempt, and head SHA. The validator reconstructs that key, checks the matched source key/current
 namespace, then checks the source event/ref/SHA trust relationship before any inner artifact is
 read. Missing, corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
 Default-branch pushes use four producer shards and four independent replay shards. Each successful
 main producer leg saves only its corresponding trusted namespace after scoring, and the aggregate
-compares the two executions. Pull requests and merge groups use one declared-no-op leg and read or
-write no corpus phase transport; this moves the external-app proof out of the merge critical path.
+compares the two executions. Pull requests and merge groups use the required aggregate's
+declared-no-op path and read or write no corpus phase transport; this moves the external-app proof
+out of the merge critical path.
 Scheduled/manual validation remains single-shard for canonical scorecard and clone-cache lineage,
 but is warm by default; an explicit `force_cold_cache` dispatch input exercises
 cold-versus-restored equivalence without making daily provider validation pay that cost.
