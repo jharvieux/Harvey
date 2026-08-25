@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { rejectCorpusCacheTransport } from "./corpus-cache-transport.js";
 import { semgrepPackReceipt, validateRestoredSemgrepPackArtifact } from "./corpus-mechanical-readiness.js";
 import { readRecursiveSafe, statSafe } from "./fs-walk.js";
@@ -59,8 +60,26 @@ function seedSemgrepArtifact(dir: string, marker: string): string {
   return identity;
 }
 
+interface ArtifactUploadStep {
+  uses?: string;
+  if?: string;
+  with: { name: string; path: string; "include-hidden-files"?: boolean; "if-no-files-found"?: string };
+}
+
+function artifactUploads(text: string): ArtifactUploadStep[] {
+  const document = parse(text) as { jobs: Record<string, { steps: ArtifactUploadStep[] }> };
+  return Object.values(document.jobs).flatMap((job) => job.steps)
+    .filter((step) => step.uses?.startsWith("actions/upload-artifact@"));
+}
+
+function hiddenPath(path: string): boolean {
+  return path.split(/[\\/]/).some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
+}
+
 /** Model upload-artifact's directory common-root stripping and download-by-name's direct restore. */
 function artifactPayload(source: string, includeHiddenFiles: boolean): Map<string, Buffer> {
+  // The uploader's globber prunes a hidden search root before it visits any descendants.
+  if (!includeHiddenFiles && hiddenPath(source)) return new Map();
   return new Map(readRecursiveSafe(source)
     .filter((relative) => statSafe(join(source, relative))?.isFile())
     .filter((relative) => includeHiddenFiles || !relative.split("/").some((segment) => segment.startsWith(".")))
@@ -182,7 +201,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow.match(/name: Restore the run's exact shared Semgrep bytes/g)).toHaveLength(2);
     expect(workflow.match(/name: Validate the exact shared Semgrep artifact layout/g)).toHaveLength(2);
     expect(workflow.match(/path: \.harvey-current-semgrep/g)).toHaveLength(3);
-    expect(workflow).toContain("include-hidden-files: true");
+    expect(artifactUploads(workflow).find((step) => step.with.name === "current-mechanical-semgrep-pack")?.with["include-hidden-files"]).toBe(true);
     expect(workflow).toContain("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR: .harvey-current-semgrep");
     expect(workflow).not.toContain("path: .harvey-current-replay-cache");
     expect(workflow).toContain("HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse");
@@ -190,6 +209,33 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(corpusCli).toContain("validateRestoredSemgrepPackArtifact(registrySnapshotDir!)");
     expect(corpusCli).toContain("resolve(registrySnapshotDir) === resolve(phaseCacheDir)");
     expect(replayCli).toContain("validateRestoredSemgrepPackArtifact(registryDir)");
+  });
+
+  it("opts every hidden artifact search root into the uploader's file selection", () => {
+    const hiddenUploads = artifactUploads(workflow).filter((step) => step.with.path.split(/\r?\n/).some(hiddenPath));
+    expect(hiddenUploads.length).toBeGreaterThan(0);
+    for (const step of hiddenUploads) {
+      expect(step.with["include-hidden-files"], step.with.name).toBe(true);
+    }
+  });
+
+  it("retains the relevance ownership and no-op receipt through their exact production upload step", () => {
+    const uploads = artifactUploads(workflow).filter((step) => step.with.name === "corpus-drift-relevance");
+    expect(uploads).toHaveLength(1);
+    const upload = uploads[0];
+    if (!upload) throw new Error("relevance artifact upload step is absent");
+    expect(upload.if).toBe("github.event_name == 'pull_request' || github.event_name == 'merge_group'");
+    expect(upload.with.path).toBe(".harvey-corpus-relevance");
+    expect(upload.with["if-no-files-found"]).toBe("error");
+    const source = join(temporary("relevance-artifact-roundtrip-"), upload.with.path);
+    mkdirSync(source);
+    writeFileSync(join(source, "ownership.json"), '{"schema":1}\n');
+    writeFileSync(join(source, "receipt.json"), '{"decision":"declared-no-op","assessment":{"status":"nothing-assessed","unitsAssessed":0}}\n');
+
+    const payload = artifactPayload(source, upload.with["include-hidden-files"] === true);
+    expect([...payload.keys()].sort()).toEqual(["ownership.json", "receipt.json"]);
+    // The production omission returns no files, even though neither child's basename is hidden.
+    expect(artifactPayload(source, false).size).toBe(0);
   });
 
   it("reconstructs upload → download-by-name for both consumers with one identical canonical pack", () => {
@@ -214,7 +260,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
   });
 
   it("fails loud on nested, missing, mixed, or hidden upload payloads", () => {
-    const source = join(temporary("semgrep-artifact-falsifiers-"), ".harvey-current-semgrep");
+    const source = temporary("semgrep-artifact-falsifiers-");
     seedSemgrepArtifact(source, "canonical");
     writeFileSync(join(source, ".partial-upload"), "must not disappear silently\n");
     const withHidden = artifactPayload(source, true);

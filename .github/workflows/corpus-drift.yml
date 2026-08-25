@@ -159,6 +159,7 @@ jobs:
         with:
           name: corpus-drift-relevance
           path: .harvey-corpus-relevance
+          include-hidden-files: true
           if-no-files-found: error
       - name: Materialize the one current Semgrep registry input
         if: steps.route.outputs.relevant == 'true'
