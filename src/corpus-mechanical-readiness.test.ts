@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readRecursiveSafe } from "./fs-walk.js";
@@ -12,6 +12,7 @@ import {
   buildCurrentMechanicalPhasePlan,
   CURRENT_MECHANICAL_POPULATION,
   CURRENT_MECHANICAL_PREPARATION,
+  currentMechanicalTargetProvenanceAdapter,
   currentTargetPinsSha256,
   currentHarnessReceipt,
   mergeCurrentMechanicalShards,
@@ -479,6 +480,8 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
         },
       });
       expect(producer.checkoutHead).toBe(commit);
+      expect(producer.provenance.preparedExecutionRoot).toBe(realpathSync(producer.preparedDir));
+      expect(producer.provenance.checkoutReceiptOnly).toMatchObject({ root: realpathSync(producer.checkoutDir), gitRoot: realpathSync(producer.checkoutDir), head: commit, clean: true });
       expect(existsSync(join(producer.preparedDir, "repos"))).toBe(false);
       expect(existsSync(join(producer.scanDir, "repos"))).toBe(false);
       expect(existsSync(join(producer.preparedDir, ".git"))).toBe(false);
@@ -527,6 +530,51 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
       expect(() => assertPreparedTargetUnchanged(producer)).not.toThrow();
       writeFileSync(join(producer.preparedDir, "package.json"), "{\"mutated\":true}\n");
       expect(() => assertPreparedTargetUnchanged(producer)).toThrow(/mutated/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the prepared execution root separate from exact clean checkout history provenance", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-current-provenance-"));
+    const checkoutDir = join(root, "checkout");
+    const preparedDir = join(root, "prepared");
+    try {
+      mkdirSync(checkoutDir);
+      writeFileSync(join(checkoutDir, "first.txt"), "first\n");
+      execFileSync("git", ["init", "-q"], { cwd: checkoutDir });
+      execFileSync("git", ["add", "."], { cwd: checkoutDir });
+      execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "first"], { cwd: checkoutDir });
+      writeFileSync(join(checkoutDir, "second.txt"), "second\n");
+      execFileSync("git", ["add", "."], { cwd: checkoutDir });
+      execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "second"], { cwd: checkoutDir });
+      mkdirSync(preparedDir);
+      cpSync(join(checkoutDir, "first.txt"), join(preparedDir, "first.txt"));
+      cpSync(join(checkoutDir, "second.txt"), join(preparedDir, "second.txt"));
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkoutDir, encoding: "utf8" }).trim();
+      const tree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: checkoutDir, encoding: "utf8" }).trim();
+      const commits = execFileSync("git", ["rev-list", "HEAD"], { cwd: checkoutDir, encoding: "utf8" }).trim().split("\n").sort();
+      const receipt = currentMechanicalTargetProvenanceAdapter({ checkoutDir, preparedDir, expectedHead: head, expectedTree: tree });
+      expect(receipt).toEqual({
+        schema: 1,
+        preparedExecutionRoot: realpathSync(preparedDir),
+        checkoutReceiptOnly: {
+          root: realpathSync(checkoutDir),
+          gitRoot: realpathSync(checkoutDir),
+          head,
+          tree,
+          clean: true,
+          reachableCommitPopulation: {
+            count: 2,
+            sha256: createHash("sha256").update(`${commits.join("\n")}\n`).digest("hex"),
+          },
+        },
+      });
+      expect(() => currentMechanicalTargetProvenanceAdapter({ checkoutDir: preparedDir, preparedDir: checkoutDir, expectedHead: head, expectedTree: tree })).toThrow(/realpath Git root/);
+      expect(() => currentMechanicalTargetProvenanceAdapter({ checkoutDir, preparedDir, expectedHead: "f".repeat(40), expectedTree: tree })).toThrow(/HEAD .* differs/);
+      expect(() => currentMechanicalTargetProvenanceAdapter({ checkoutDir, preparedDir, expectedHead: head, expectedTree: "e".repeat(40) })).toThrow(/tree .* differs/);
+      writeFileSync(join(checkoutDir, "untracked.txt"), "dirty\n");
+      expect(() => currentMechanicalTargetProvenanceAdapter({ checkoutDir, preparedDir, expectedHead: head, expectedTree: tree })).toThrow(/clean state/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

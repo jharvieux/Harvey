@@ -20,16 +20,13 @@ import {
   type MechanicalPhaseValue,
 } from "./mechanical-phase-cache.js";
 import { MechanicalScanContext, type MechanicalContextMetrics } from "./mechanical-context.js";
-import {
-  MECHANICAL_DETECTORS,
-  runRegisteredMechanicalDetectors,
-  type DetectorExecutionRecord,
-} from "./mechanical-detector-registry.js";
-import { CONFIGURATION_DETECTORS, runRegisteredConfigurationDetectors } from "./mechanical-configuration-registry.js";
-import { DEPENDENCY_DETECTORS, runRegisteredDependencyDetectors } from "./mechanical-dependency-registry.js";
-import { SEMGREP_ENGINES, runRegisteredSemgrepEngines } from "./mechanical-semgrep-registry.js";
-import { SECRETS_ENGINES, runRegisteredSecretsEngines } from "./mechanical-secrets-registry.js";
-import { NORMALIZATION_ENGINES, runRegisteredNormalizationEngines } from "./mechanical-normalization-registry.js";
+import { runRegisteredMechanicalDetectors, type DetectorExecutionRecord } from "./mechanical-detector-registry.js";
+import { runRegisteredConfigurationDetectors } from "./mechanical-configuration-registry.js";
+import { runRegisteredDependencyDetectors } from "./mechanical-dependency-registry.js";
+import { runRegisteredSemgrepEngines } from "./mechanical-semgrep-registry.js";
+import { runRegisteredSecretsEngines } from "./mechanical-secrets-registry.js";
+import { runRegisteredNormalizationEngines } from "./mechanical-normalization-registry.js";
+import { MECHANICAL_REGISTRY, type MechanicalRegistryEntry } from "./mechanical-engine-registry.js";
 import type { SemgrepDiagnosticEvidence, SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
 
 interface PackageJson {
@@ -85,6 +82,39 @@ interface MechanicalScanResult {
   context: MechanicalContextMetrics;
   semgrepDiagnostics: SemgrepDiagnosticEvidence;
   semgrepExecution?: SemgrepExecutionPlanReceipt;
+}
+
+export interface MechanicalProducerPhaseOwnership {
+  producer: string;
+  phase: MechanicalRegistryEntry["phase"];
+  order: number;
+  module: MechanicalRegistryEntry["module"];
+  registryFile: string;
+}
+
+export interface MechanicalCorpusOwnership {
+  schema: 1;
+  producers: readonly MechanicalProducerPhaseOwnership[];
+}
+
+/**
+ * Project the live mechanical registries into their execution ownership census.
+ * The optional registry is a pure seam for discovery/negative controls; production callers use
+ * MECHANICAL_REGISTRY, whose entries are themselves assembled from every live phase registry.
+ */
+export function discoverMechanicalCorpusOwnership(
+  registry: readonly Pick<MechanicalRegistryEntry, "id" | "phase" | "order" | "module" | "registryFile">[] = MECHANICAL_REGISTRY,
+): MechanicalCorpusOwnership {
+  return Object.freeze({
+    schema: 1,
+    producers: Object.freeze(registry.map((producer) => Object.freeze({
+      producer: producer.id,
+      phase: producer.phase,
+      order: producer.order,
+      module: producer.module,
+      registryFile: producer.registryFile,
+    }))),
+  });
 }
 
 export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Promise<MechanicalScanResult> {
@@ -228,14 +258,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       throw new Error(`mechanical phase accounting incomplete: missing [${missing.join(", ")}], duplicated [${duplicates.join(", ")}]`);
     }
     const detectorRecords = phases.flatMap((phase) => phase.producers ?? []);
-    const expectedProducers = [
-      ...SECRETS_ENGINES.map((producer) => `${producer.phase}:${producer.id}`),
-      ...DEPENDENCY_DETECTORS.map((producer) => `${producer.phase}:${producer.id}`),
-      ...SEMGREP_ENGINES.map((producer) => `${producer.phase}:${producer.id}`),
-      ...CONFIGURATION_DETECTORS.map((producer) => `${producer.phase}:${producer.id}`),
-      ...MECHANICAL_DETECTORS.map((producer) => `structural-ast:${producer.id}`),
-      ...NORMALIZATION_ENGINES.map((producer) => `${producer.phase}:${producer.id}`),
-    ];
+    const expectedProducers = discoverMechanicalCorpusOwnership().producers.map((producer) => `${producer.phase}:${producer.producer}`);
     const actualProducers = detectorRecords.map((producer) => `${producer.phase}:${producer.detector}`);
     const missingProducers = expectedProducers.filter((identity) => !actualProducers.includes(identity));
     const extraProducers = actualProducers.filter((identity) => !expectedProducers.includes(identity));

@@ -37,7 +37,7 @@ vi.mock("./semgrep.js", async (importOriginal) => {
   return { ...actual, runSemgrep };
 });
 
-const { runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
+const { discoverMechanicalCorpusOwnership, runMechanicalScan, runMechanicalScanDetailed } = await import("./mechanical.js");
 const { MechanicalScanContext } = await import("./mechanical-context.js");
 const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
@@ -53,6 +53,30 @@ function stableReceipt(value: unknown): string {
 function receiptSha(value: unknown): string {
   return createHash("sha256").update(stableReceipt(value)).digest("hex");
 }
+
+describe("mechanical corpus ownership discovery", () => {
+  it("projects every live registry producer and discovers a newly registered producer without another ID list", () => {
+    const live = discoverMechanicalCorpusOwnership();
+    expect(live.schema).toBe(1);
+    expect(live.producers.map(({ phase, producer }) => `${phase}:${producer}`)).toEqual(
+      MECHANICAL_REGISTRY.map(({ phase, id }) => `${phase}:${id}`),
+    );
+
+    const added = { ...MECHANICAL_REGISTRY[0]!, id: "fixture-newly-registered-producer", order: 999 };
+    const before = discoverMechanicalCorpusOwnership(MECHANICAL_REGISTRY);
+    const after = discoverMechanicalCorpusOwnership([...MECHANICAL_REGISTRY, added]);
+    expect(before.producers.some(({ producer }) => producer === added.id)).toBe(false);
+    expect(after.producers.at(-1)).toEqual({
+      producer: added.id,
+      phase: added.phase,
+      order: added.order,
+      module: added.module,
+      registryFile: added.registryFile,
+    });
+    expect(Object.isFrozen(after)).toBe(true);
+    expect(Object.isFrozen(after.producers)).toBe(true);
+  });
+});
 
 describe("runMechanicalScan skipNetworkChecks", () => {
   let dir: string;

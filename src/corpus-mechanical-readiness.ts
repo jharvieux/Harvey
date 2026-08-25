@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Finding } from "./findings.js";
 import { readEntriesSafe, readRecursiveSafe, statSafe } from "./fs-walk.js";
@@ -119,6 +119,78 @@ export interface PreparedMechanicalTarget {
   preparedTreeSha256: string;
   emptyGitlinks: EmptyGitlinkReceipt[];
   removedVendoredSubtrees: string[];
+  provenance: CurrentMechanicalTargetProvenanceAdapter;
+}
+
+export interface CurrentMechanicalTargetProvenanceAdapter {
+  schema: 1;
+  /** The manifest-pruned immutable input C1 may pass to mechanical execution. */
+  preparedExecutionRoot: string;
+  /** Git evidence only. This root is not an alternate scanner or TruffleHog input. */
+  checkoutReceiptOnly: {
+    root: string;
+    gitRoot: string;
+    head: string;
+    tree: string;
+    clean: true;
+    reachableCommitPopulation: {
+      count: number;
+      sha256: string;
+    };
+  };
+}
+
+/**
+ * Bind a prepared execution root to the exact clean checkout that proves its Git provenance.
+ * This adapter only reads and returns a receipt; it deliberately performs no scanner execution.
+ */
+export function currentMechanicalTargetProvenanceAdapter(options: {
+  checkoutDir: string;
+  preparedDir: string;
+  expectedHead: string;
+  expectedTree: string;
+}): CurrentMechanicalTargetProvenanceAdapter {
+  const checkoutRoot = realpathSync(options.checkoutDir);
+  const resolvedPreparedDir = resolve(options.preparedDir);
+  const preparedExecutionRoot = existsSync(resolvedPreparedDir)
+    ? realpathSync(resolvedPreparedDir)
+    : join(realpathSync(dirname(resolvedPreparedDir)), basename(resolvedPreparedDir));
+  const git = (args: string[], proof: string): string => {
+    try {
+      return execFileSync("git", ["-C", checkoutRoot, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`current mechanical checkout provenance could not prove ${proof}: ${detail}`);
+    }
+  };
+  const gitRoot = realpathSync(git(["rev-parse", "--show-toplevel"], "a realpath Git root"));
+  if (gitRoot !== checkoutRoot) throw new Error(`current mechanical checkout provenance root ${checkoutRoot} is nested under Git root ${gitRoot}`);
+  if (preparedExecutionRoot === checkoutRoot) throw new Error("current mechanical prepared execution root must remain distinct from the receipt-only checkout root");
+  const head = git(["rev-parse", "HEAD"], "HEAD");
+  if (head !== options.expectedHead) throw new Error(`current mechanical checkout HEAD ${head} differs from expected ${options.expectedHead}`);
+  const tree = git(["rev-parse", "HEAD^{tree}"], "HEAD^{tree}");
+  if (tree !== options.expectedTree) throw new Error(`current mechanical checkout tree ${tree} differs from expected ${options.expectedTree}`);
+  const dirty = git(["status", "--porcelain=v1", "--untracked-files=all"], "clean state");
+  if (dirty) throw new Error(`current mechanical checkout provenance requires a clean state: ${dirty.split("\n")[0]}`);
+  const reachableCommits = git(["rev-list", "HEAD"], "the reachable commit population").split("\n").filter(Boolean).sort();
+  if (reachableCommits.length === 0 || reachableCommits.some((commit) => !/^[a-f0-9]{40,64}$/.test(commit)) || !reachableCommits.includes(head)) {
+    throw new Error("current mechanical checkout provenance returned an invalid reachable commit population");
+  }
+  return {
+    schema: 1,
+    preparedExecutionRoot,
+    checkoutReceiptOnly: {
+      root: checkoutRoot,
+      gitRoot,
+      head,
+      tree,
+      clean: true,
+      reachableCommitPopulation: {
+        count: reachableCommits.length,
+        sha256: sha256(`${reachableCommits.join("\n")}\n`),
+      },
+    },
+  };
 }
 
 function currentMechanicalOptionIdentity(): string {
@@ -306,6 +378,7 @@ export function prepareCurrentMechanicalTarget(options: {
     const path = join(checkoutDir, subtree);
     if (!existsSync(path)) throw new Error(`${target.slug}: vendored subtree ${subtree} is absent before preparation`);
   }
+  const provenance = currentMechanicalTargetProvenanceAdapter({ checkoutDir, preparedDir, expectedHead: checkoutHead, expectedTree: checkoutTree });
   options.onPreparationStage?.("checkout-validated", checkoutDir);
   const trackedGitlinks = materializePinnedTrackedTree(checkoutDir, preparedDir, removedVendoredSubtrees);
   for (const subtree of removedVendoredSubtrees) rmSync(join(preparedDir, subtree), { recursive: true, force: true });
@@ -331,7 +404,7 @@ export function prepareCurrentMechanicalTarget(options: {
   if (scanTreeSha256 !== preparedTreeSha256) {
     throw new Error(`${target.slug}: mutable scan tree differs from the pinned prepared population before install: ${scanTreeSha256} != ${preparedTreeSha256}`);
   }
-  return { checkoutDir, preparedDir, scanDir: checkoutDir, checkoutHead, checkoutTree, preparedTreeSha256, emptyGitlinks: trackedGitlinks, removedVendoredSubtrees };
+  return { checkoutDir, preparedDir, scanDir: checkoutDir, checkoutHead, checkoutTree, preparedTreeSha256, emptyGitlinks: trackedGitlinks, removedVendoredSubtrees, provenance };
 }
 
 function materializePinnedTrackedTree(checkoutDir: string, preparedDir: string, excludedSubtrees: readonly string[]): EmptyGitlinkReceipt[] {
