@@ -8,17 +8,18 @@
 # stays deterministic and offline so it's fast and never flakes on someone else's infrastructure;
 # Layer 1 (src/scan/external-corpus.test.ts) covers the scorers there.
 #
-# Scheduled AND per-PR: the targets are frozen at a commit, so nothing changes between runs except
-# OUR scanners. Daily (was weekly until #1138) shrinks the drift-accumulation window from 7 days to
-# 1 — the systemic fix behind #1128, where 12 baselines drifted unseen for up to a week.
-# workflow_dispatch is for checking a scanner change on demand. A scheduled failure find-or-updates
-# a tracking issue (label ci-corpus-drift-alert) so red on this branch that nobody watches can't be
-# scrolled past.
+# Continuous baseline, outside the PR critical path: the targets are frozen at exact commits and
+# the full corpus runs after merges to main, daily, and on explicit workflow_dispatch. Pull requests
+# and merge-queue entries report a declared no-op through the same required context, but clone no
+# third-party target and run no independent replay. This throughput-first policy was operator
+# approved 2026-08-25: cross-app regressions may be discovered after merge, where the main/scheduled
+# run and tracking-issue alert make them visible. workflow_dispatch remains the pre-merge escape
+# hatch when a scanner change warrants an explicit full-corpus proof.
 #
-# BECOMING A REQUIRED STATUS CHECK on `main` (operator-approved 2026-07-30). "Not required" is not
-# "not important": this job died at SETUP for days (#1509's poisoned pipx cache) and PR #1447 merged
-# on three green required checks while the gate measuring its blast radius had never executed — 653
-# M5-slop findings silently suppressed and a live regression on `main`.
+# The context remains required on `main` so every PR reports and branch protection never waits for a
+# context that was filtered out. On PRs its green result means exactly "external corpus intentionally
+# deferred to post-merge monitoring", not "the pinned population was scanned"; the liveness receipt
+# preserves that distinction.
 #
 # Being required is why this workflow has NO `paths:` filter on `pull_request` any more. GitHub
 # waits forever for a required context that never reports, so a path-filtered required check
@@ -26,16 +27,10 @@
 # job (the `filter` step below), same shape conservation.yml and dry-run-drift.yml already use: the
 # job always runs and always reports, and only the expensive work is conditional.
 #
-# THE RELEVANCE RULE IS A DENY-LIST, NOT AN ALLOW-LIST — and that polarity is the point. The old
-# three-path `pull_request` filter (src/scan/external-corpus.ts, src/cli/corpus-drift.ts, this file)
-# was scoped for an advisory check and is far too narrow to gate a merge: what a corpus baseline
-# scores is the OUTPUT OF THE SCANNERS, so a change to any detector, rule, taxonomy or scan helper
-# moves a baseline without touching one of those three files. Enumerating the reachable set would be
-# a transitive-import guess that decays silently — exactly the failure this promotion exists to
-# prevent — so the job instead names the directories it can show are UNREACHABLE from clone →
-# detect-static/quality-scan/mutation-scan/quick-scan → score, and treats everything else as
-# relevant. FAIL OPEN: an unknown path scores. A false "relevant" costs ~23 minutes; a false "not
-# relevant" is a silently unscored regression.
+# There is deliberately no PR path router here. A path allow/deny list still makes many harmless PRs
+# pay the full corpus cost and silently becomes a second dependency graph to maintain. PR and
+# merge_group are event-level no-ops; push to main, schedule, and workflow_dispatch always run the
+# complete pinned population.
 #
 # On failure: the job names the module and target that drifted. A drift is EITHER an intended
 # precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
@@ -66,15 +61,14 @@ on:
         type: boolean
         default: false
   pull_request:
-  # #1867: the default branch is the only Actions-cache scope every PR can read. A push after
-  # merge therefore runs the full corpus once in seeding mode; scheduled/dispatch runs remain the
-  # forced-cold freshness/parity lane below. The required aggregate context still reports on every
-  # PR because pull_request remains unconditional.
+  # #1867: the default branch is the only Actions-cache scope every PR can read. The post-merge push
+  # now owns both full-corpus validation and cache seeding. The required aggregate context still
+  # reports on every PR because pull_request remains unconditional.
   push:
     branches: [main]
   # #1498: merge queue. Without this the required context never reports on a queue entry and the
-  # queue deadlocks — a lesson already learned twice in these same workflows. The relevance filter
-  # below sets relevant=true on any non-`pull_request` event, so a queue entry scores for real.
+  # queue deadlocks. Like pull_request, merge_group reports a declared no-op; the resulting push to
+  # main runs the full corpus.
   merge_group:
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
@@ -91,55 +85,23 @@ permissions:
   contents: read
 
 jobs:
-  # One run, one exact six-file registry input. The bytes are fetched once, checksummed once, and
-  # uploaded; every hosted producer shard and every independent replay consumes this artifact in
-  # reuse-only mode. A registry release between shard starts can therefore never create a mixed run.
+  # On full-corpus events, fetch one exact six-file registry input. The bytes are checksummed once
+  # and every hosted producer shard consumes this artifact in reuse-only mode. PR/merge-group no-op
+  # runs do not fetch the external registry at all.
   prepare-current-inputs:
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    outputs:
-      relevant: ${{ steps.filter.outputs.relevant }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: filter
-        name: Does this change set require a real corpus execution?
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
-          if [ -z "$files" ]; then echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          relevant=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              src/scan/external-corpus.ts|.github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
-              .codex/agents/*.toml)
-                profile=${f#".codex/agents/"}
-                case "$profile" in */*) relevant=true ;; *) ;; esac
-                ;;
-              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*.md|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
-              AGENTS.md|CLAUDE.md|MODULES.md|README.md|SESSION.md|src/*.test.ts) ;;
-              *) relevant=true ;;
-            esac
-          done <<< "$files"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
       - uses: pnpm/action-setup@v4
-        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
-        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-        if: steps.filter.outputs.relevant == 'true'
       - name: Materialize the one current Semgrep registry input
-        if: steps.filter.outputs.relevant == 'true'
         run: pnpm materialize:current-semgrep --dir .harvey-current-semgrep --out .harvey-current-semgrep/receipt.json
       - name: Retain exact registry bytes and their receipt
-        if: steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: current-mechanical-semgrep-pack
@@ -151,16 +113,17 @@ jobs:
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
   #
-  # SHARD COUNT VARIES BY EVENT. PRs, merge groups and default-branch pushes use the same four
-  # namespaces: each successful main leg seeds exactly the transport its corresponding PR leg
-  # consumes. This replaced the single 29m30s main seed that timed out before it could publish a
-  # complete trusted transport (runs 31601042773/31602706320).
+  # SHARD COUNT VARIES BY EVENT. Default-branch pushes use four namespaces and seed their matching
+  # transports. PRs and merge groups skip this job before runner allocation; the required aggregate
+  # declares their no-op directly. This replaced the single 29m30s main seed that timed out before
+  # it could publish a complete trusted transport
+  # (runs 31601042773/31602706320).
   # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
   # poisoned it beyond repair by re-running. No shard holds all 17, so a sharded run can never save.
-  #   * pull_request / merge_group / push -> 4 shards.
-  #     Each shard owns an exhaustive slice for the current producer↔replay population comparison.
+  #   * push -> 4 shards, each owning an exhaustive slice of the pinned population.
+  #   * pull_request / merge_group -> no shard runner and no third-party target execution.
   #   * schedule / workflow_dispatch -> ONE shard holding all 17, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
   #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
@@ -174,13 +137,14 @@ jobs:
   shard:
     name: corpus shard ${{ matrix.shard }}
     needs: prepare-current-inputs
+    if: needs.prepare-current-inputs.result == 'success' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     strategy:
       # A drifted baseline in one shard must not cancel the others: the scorecard is most useful when
       # it shows everything that moved, not the first thing.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && '[1,2,3,4]' || '[1]') }}
+        shard: ${{ fromJSON(github.event_name == 'push' && '[1,2,3,4]' || '[1]') }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -199,13 +163,9 @@ jobs:
     env:
       HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     steps:
-      # fetch-depth: 0 so the relevance filter can reach the PR base. A shallow checkout previously
-      # made that diff unreadable and forced every prose-only PR through the expensive lane.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # Before the six clones and installs on purpose: the drill proves the ALERT path, not the
+      # Before the clones and installs on purpose: the drill proves the ALERT path, not the
       # corpus, so it must not pay 30 minutes to reach it. Everything below is skipped once it fails.
       - name: Alert-path liveness drill — fail deliberately (#1287)
         if: inputs.alert_drill
@@ -213,70 +173,18 @@ jobs:
           echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a corpus-drift failure."
           exit 1
 
-      # The `paths:` filter that used to live on the `pull_request` trigger, moved in-job so this
-      # context reports on EVERY PR (see the header note on the #1107 deadlock).
-      #
-      # A DENY-LIST, deliberately inverted from conservation.yml's allow-list, because the two jobs
-      # have opposite reachability: conservation names a short pipeline it can enumerate, while a
-      # corpus baseline scores the output of the whole scanner tree, which is nearly all of `src/`.
-      # So this lists only what it can show is UNREACHABLE from clone → detect-static / quality-scan
-      # / mutation-scan / quick-scan → scoreExternalBaseline, and everything else — src/**,
-      # targets/**, tools/**, briefs/**, package.json, pnpm-lock.yaml, the root tool configs
-      # (.jscpd.json, knip.json — the scanner CLIs run with cwd=repoRoot, so they are live inputs),
-      # and any path nobody has classified yet — is RELEVANT. `case` patterns, not pathspecs: in
-      # `case` a `*` matches `/` too, so `docs/*` covers the whole subtree.
-      #
-      # The two forced-relevant entries come first because `.github/*` below would otherwise swallow
-      # them: this workflow itself, and `.github/actions/**` (mechanical-binaries provisions the
-      # scanner binaries the free-tier invariant shells out to; gate-liveness is this job's own
-      # receipt machinery).
-      #
-      # Schedule, workflow_dispatch and merge_group always run the full job. A merge-queue entry is
-      # the last gate before `main` and its diff is the whole batch, so it scores rather than
-      # inheriting any PR's verdict.
+      # Keep the event policy inside the job so the required context reports on every PR and merge
+      # group. This is intentionally event-based rather than a second approximation of the scanner's
+      # dependency graph: PR/merge-group defer, while push/schedule/manual always score everything.
       - id: filter
-        name: Does this change set touch anything that can move a corpus baseline?
+        name: Route third-party corpus execution by event
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "merge_group" ]; then
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No third-party target is cloned or scored before merge. The resulting main push and daily schedule run the complete pinned corpus."
             exit 0
           fi
-          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD || true)
-          echo "Changed files:"
-          echo "$files"
-          if [ -z "$files" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "Could not read the diff — scoring everything. A narrowing that cannot see the change set must cost time, never coverage."
-            exit 0
-          fi
-          relevant=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              src/scan/external-corpus.ts) relevant=true ;;
-              .github/workflows/corpus-drift.yml|.github/actions/*) relevant=true ;;
-              # .agents/* and AGENTS.md are the Codex-side mirrors of .claude/** and CLAUDE.md
-              # (tracked by #1578). Read by no part of the clone-and-score pipeline, exactly like the
-              # Claude-side originals two entries along. #1584: they were missing from this list, so a
-              # PR touching only them fell through to *) and paid a full 22m12s score (run
-              # 30584074986) while the equivalent CLAUDE.md-only PR short-circuited (run 30585661475).
-              .codex/agents/*.toml)
-                profile=${f#".codex/agents/"}
-                case "$profile" in */*) relevant=true ;; *) ;; esac
-                ;;
-              .agents/*|.claude/*|.github/*|breadth-sweep/*|docs/*.md|epic-builder-web/*|intake-site/*|report-template/*|reports/*|site/*) ;;
-              AGENTS.md|CLAUDE.md|MODULES.md|README.md|SESSION.md) ;;
-              # Test modules are never imported by the production scanner graph. Keep unknown
-              # production src/** fail-open below, while a focused test-only edit (PR #1860's
-              # sync-stdio.test.ts case) declares a no-op instead of spending the carbon shard.
-              src/*.test.ts) ;;
-              *) relevant=true ;;
-            esac
-          done <<< "$files"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          if [ "$relevant" = "false" ]; then
-            echo "Every changed path is prose, site or agent-config — none of it is read by the clone-and-score pipeline, so no baseline can have moved from this PR. The daily scheduled run covers the tree regardless."
-          fi
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
 
       # #1509: a short-circuited job and a job that died in setup are both "nothing was scored", and
       # from outside they look identical — which is how #1447 merged past a gate that had never run.
@@ -289,7 +197,7 @@ jobs:
           mode: record
           gate: corpus-drift
           status: declared-no-op
-          scope: "in-job filter found no changed path that the clone-and-score pipeline reads — every one is prose, site or agent config, so no corpus baseline can have moved from this PR. Nothing was cloned and nothing was scored; this run is evidence about nothing. The daily scheduled run covers the tree regardless."
+          scope: "PR and merge-group policy defers all third-party corpus execution to the resulting main push, the daily schedule, or an explicit manual run. Nothing was cloned and nothing was scored; this PR result is intentionally not evidence about external-app behavior."
 
       - uses: pnpm/action-setup@v4
         if: steps.filter.outputs.relevant == 'true'
@@ -527,15 +435,16 @@ jobs:
           # `prepare-current-inputs` fetched these exact six YAML files once for the whole run.
           # Producers are reuse-only: no shard may race the live registry independently.
           HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE: reuse
-          # PR/queue/push runs measure Harvey against immutable external inputs. The daily/manual
-          # lane uses current providers and compares live OSV bytes with the committed snapshot;
+          # Main-push runs measure Harvey against immutable external inputs so producer/replay
+          # equivalence has one frozen boundary. The daily/manual lane uses current providers and
+          # compares live OSV bytes with the committed snapshot;
           # client audit CLIs do not set this corpus-only variable and keep their live defaults.
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
-          HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
+          HARVEY_CURRENT_MECHANICAL_READINESS: ${{ github.event_name == 'push' && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
-          # Kept in step with the matrix above: 4 on a PR, queue entry, or main push; 1 on the
-          # scheduled/manual canonical-scorecard lane, which still holds every clone.
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && 4 || 1 }}
+          # Kept in step with the matrix above: 4 on a main push; 1 on the scheduled/manual
+          # canonical-scorecard lane, which still holds every clone. PR/queue never reach this step.
+          SHARD_COUNT: ${{ github.event_name == 'push' && 4 || 1 }}
         run: |
           set -euo pipefail
           cold_flag=()
@@ -678,7 +587,7 @@ jobs:
         if: always() && steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
+          name: ${{ github.event_name == 'push' && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
           path: corpus-drift*.json
           if-no-files-found: warn
 
@@ -720,19 +629,18 @@ jobs:
           repo: ${{ github.repository }}
           body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."
 
-  # A separate process and separate clone/preparation path. It consumes the exact pack artifact but
-  # no hosted phase artifacts, so the final comparison is not the scorecard comparing with itself.
-  # It starts beside the real producer matrix; the stronger evidence costs runner minutes, not an
-  # additional serial critical path.
+  # A separate post-merge process and clone/preparation path. It consumes the exact pack artifact
+  # but no hosted phase artifacts, so the final comparison is not the scorecard comparing with
+  # itself. It runs beside the main-push producer matrix; PR and merge-group events skip it.
   current-replay:
     needs: prepare-current-inputs
-    if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'
     name: current independent replay ${{ matrix.shard }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3,4]' || '[1]') }}
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -762,7 +670,7 @@ jobs:
       - name: Execute the independent exact-head replay
         env:
           HARVEY_CORPUS_CACHE_DIR: ${{ steps.corpus-cache.outputs.cache-dir }}
-          SHARD_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4 || 1 }}
+          SHARD_COUNT: 4
         run: pnpm replay:current-mechanical --shard "${{ matrix.shard }}/$SHARD_COUNT" --registry-dir .harvey-current-semgrep --out "current-replay-${{ matrix.shard }}.json"
       - name: Upload independent raw replay
         uses: actions/upload-artifact@v4
@@ -783,13 +691,36 @@ jobs:
     needs: [prepare-current-inputs, shard, current-replay]
     if: always()
     runs-on: ubuntu-latest
+    env:
+      HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     permissions:
       contents: read
     steps:
+      # The PR/merge-group fast path lives in the required context itself. Its prerequisite jobs are
+      # skipped before runner allocation, so branch protection gets one small, explicit result
+      # without serial runner startup or any third-party clone/replay work.
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+      - name: Declare the external-corpus deferral
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: record
+          gate: corpus-drift
+          status: declared-no-op
+          scope: "PR and merge-group policy defers all third-party corpus execution to the resulting main push, the daily schedule, or an explicit manual run. Nothing was cloned and nothing was scored; this PR result is intentionally not evidence about external-app behavior."
+      - name: Gate liveness — did this required context declare its outcome?
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        uses: ./.github/actions/gate-liveness
+        with:
+          mode: assert
+          expect: corpus-drift
+
       # `needs.<matrix-job>.result` is the AGGREGATE over every leg: 'success' only when all of them
       # succeeded. Anything else — a real baseline drift, a died-in-setup shard, a cancellation — is
       # a red required check, exactly as the single job behaved before it was split.
       - name: Every shard must have succeeded
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         run: |
           set -euo pipefail
           result='${{ needs.shard.result }}'
@@ -802,20 +733,19 @@ jobs:
             echo "::error::the shared-input preparation job did not succeed"
             exit 1
           fi
-          if { [ '${{ github.event_name }}' = 'pull_request' ] || [ '${{ github.event_name }}' = 'merge_group' ]; } \
-            && [ '${{ needs.prepare-current-inputs.outputs.relevant }}' = 'true' ] \
+          if [ '${{ github.event_name }}' = 'push' ] \
             && [ '${{ needs.current-replay.result }}' != 'success' ]; then
             echo "::error::the independent current replay matrix did not succeed"
             exit 1
           fi
           echo "Every shard succeeded."
 
-      # Reassemble the per-shard parts into the ONE artifact name #1564's prior-snapshot fetch reads,
-      # so a PR run leaves the same lineage a single-shard run does. Only on the sharded path: a
-      # single-shard run already uploaded that name itself.
+      # Reassemble the main-push shard parts into the ONE artifact name #1564's prior-snapshot
+      # fetch reads. Only on the sharded path: a scheduled/manual single-shard run already uploaded
+      # that name itself, while PR/merge-group runs deliberately produce no corpus artifact.
       - name: Collect the shard scorecards
         id: parts
-        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+        if: github.event_name == 'push'
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
@@ -825,7 +755,7 @@ jobs:
 
       - name: Collect the independent replay parts
         id: replay-parts
-        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.prepare-current-inputs.outputs.relevant == 'true'
+        if: github.event_name == 'push'
         uses: actions/download-artifact@v4
         with:
           pattern: current-mechanical-replay-part-*
@@ -838,7 +768,7 @@ jobs:
       # is simply nothing to merge, and the declared no-op is the record.
       - name: Merge the shard scorecards into corpus-drift.json
         id: merge
-        if: (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -876,7 +806,7 @@ jobs:
         if: steps.merge.outputs.merged == 'true'
         working-directory: source
       - name: Current registry producer ↔ independent replay equivalence/readiness
-        if: steps.merge.outputs.merged == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
         run: |
           set -euo pipefail
           producer_parts=(../parts/corpus-drift-shard*.json)

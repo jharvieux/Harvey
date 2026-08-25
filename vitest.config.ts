@@ -30,6 +30,10 @@ const BASE_EXCLUDE = [
   "site/.next/**",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
   ".claude/**",
+  // pnpm 11's global-virtual-store fallback can materialize a full project snapshot under a local
+  // `.pnpm-store/v11/projects/**` directory. That is dependency-cache data, not another checkout;
+  // collecting it runs stale duplicate tests against paths that are not a Git worktree.
+  ".pnpm-store/**",
   // #1738: Stryker's sandbox is a full repo copy too, and a killed run leaves it behind. Without
   // this the guard-mutation census's own tests get collected twice more, from stale copies whose
   // assertions are whatever they were when the run died.

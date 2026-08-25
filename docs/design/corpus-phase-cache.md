@@ -112,12 +112,13 @@ attempt, and head SHA. The validator reconstructs that key, checks the matched s
 namespace, then checks the source event/ref/SHA trust relationship before any inner artifact is
 read. Missing, corrupt, forged, mismatched, or untrusted transport is deleted visibly.
 
-PRs, merge groups, and default-branch pushes all use three shards. Each successful main leg saves
-only its corresponding trusted namespace, after successful scoring. This replaces the one-shard
-main seeding shape. Scheduled/manual validation remains single-shard for canonical
-scorecard and clone-cache lineage, but is warm by default; an explicit `force_cold_cache` dispatch
-input exercises cold-versus-restored equivalence without making daily provider validation pay that
-cost.
+Default-branch pushes use four producer shards and four independent replay shards. Each successful
+main producer leg saves only its corresponding trusted namespace after scoring, and the aggregate
+compares the two executions. Pull requests and merge groups use one declared-no-op leg and read or
+write no corpus phase transport; this moves the external-app proof out of the merge critical path.
+Scheduled/manual validation remains single-shard for canonical scorecard and clone-cache lineage,
+but is warm by default; an explicit `force_cold_cache` dispatch input exercises
+cold-versus-restored equivalence without making daily provider validation pay that cost.
 
 Every saved transport now carries a measured payload receipt. Authoring or restoring fails if the
 tree contains any symlink, if the remeasured byte count differs, or if the payload exceeds 6 GiB.
