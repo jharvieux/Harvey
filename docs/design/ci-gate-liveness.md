@@ -84,7 +84,8 @@ replaced by it.
 
 Registered as gates: `corpus-drift`; `conservation` (gate + negative controls); `dry-run-drift`
 (regenerate + diff, as separate phases); `ci.yml`'s `heavy-cli` shards (tests + the
-shard-conditional `calibration-gate`, `source-recall-gate` and `m2-coverage-gate`); `secbench`;
+planner-assigned `calibration-gate`, `source-recall-gate`, `m2-coverage-gate`, and
+`shared-source-match`); `secbench`;
 `free-recall`; `disclosure-venue` (gate 4 + gate 4b); `alert-paths` (label pass + its three seeded
 controls); `acceptance`; `acceptance-close`; and `supervised-declines`.
 
@@ -109,10 +110,13 @@ Exempt today: `reasons-drift`, `corpus-m8`, `osv-staleness`, `owasp-ack-watch`,
 `semantic-freshness`, `site-smoke` (each unconditional and alarmed on a scheduled failure) and
 `site-ci` (reports on the PR that caused it).
 
-Two gates deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because three scored gates
-ride inside `if: matrix.shard == N` — a condition that stopped matching would retire them in complete
-silence, which is the shape #1301, #1288 and #1483 each found when those gates ran in no workflow at
-all. And **conservation's negative controls get their own gate id**, because "the controls ran" is a
+Two gates deserve a note. **`heavy-cli`'s `expect` is matrix-dependent**, because four scored gates
+are assigned through each planner row's `matrix.gates` and their steps use `contains(matrix.gates,
+'<gate>')`. Pull requests may launch zero heavy runners or one to three selected runners; full
+non-PR runs retain three. The liveness expectation is derived from the same row, so a selected gate
+whose step stops matching makes the row's liveness assertion fail. That closes the shape #1301,
+#1288, #1483, and #1544 each found when those gates ran in no workflow at all. And
+**conservation's negative controls get their own gate id**, because "the controls ran" is a
 separate claim from "the gate ran": a gate nobody has watched fail is indistinguishable from a gate
 with no failing direction at all.
 
