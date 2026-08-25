@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   buildCorpusInputOwnership,
   classifyCorpusDriftRelevance,
+  discoverCorpusNonImportInputs,
   type CorpusInputOwnership,
   type CorpusRegisteredInputOwnership,
   type MechanicalCorpusOwnershipDiscovery,
@@ -72,18 +73,23 @@ async function generateOwnership(): Promise<void> {
   const mechanicalOwnership = mechanicalPath
     ? readJson<MechanicalCorpusOwnershipDiscovery>(mechanicalPath, "mechanical corpus ownership receipt")
     : await liveMechanicalOwnership();
+  const { EXTERNAL_CORPUS } = await import("../scan/external-corpus.js");
+  const pinnedTargets = EXTERNAL_CORPUS.map((target) => target.slug);
+  const discoveredInputs = discoverCorpusNonImportInputs({
+    repoRoot: process.cwd(),
+    pinnedTargets,
+  });
   const nonImportPath = value("--non-import-inputs");
   const nonImportBundle = nonImportPath
-    ? readJson<{ schema: 1; inputs: readonly CorpusRegisteredInputOwnership[] }>(nonImportPath, "registered non-import ownership receipt")
+    ? readJson<{ schema: 1; inputs: readonly CorpusRegisteredInputOwnership[] }>(nonImportPath, "registered non-import ownership extension")
     : { schema: 1 as const, inputs: [] };
   if (nonImportBundle.schema !== 1 || !Array.isArray(nonImportBundle.inputs)) {
-    throw new Error("registered non-import ownership receipt must have schema 1 and an inputs array");
+    throw new Error("registered non-import ownership extension must have schema 1 and an inputs array");
   }
-  const { EXTERNAL_CORPUS } = await import("../scan/external-corpus.js");
   const ownership = buildCorpusInputOwnership({
-    pinnedTargets: EXTERNAL_CORPUS.map((target) => target.slug),
+    pinnedTargets,
     mechanicalOwnership,
-    nonImportInputs: nonImportBundle.inputs,
+    nonImportInputs: [...discoveredInputs, ...nonImportBundle.inputs],
   });
   emit(ownership, outputPath);
   console.error(`CORPUS OWNERSHIP: wrote schema 1 with ${ownership.consumers.length} runtime roots, ${ownership.producers.length} live mechanical producer row(s), ${ownership.nonImportInputs.length} registered non-import input(s), and ${ownership.consumers[0]?.targetSelection.targets.length ?? 0} pinned target(s)`);

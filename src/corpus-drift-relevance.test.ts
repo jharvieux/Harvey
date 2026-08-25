@@ -9,11 +9,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyCorpusDriftRelevance,
+  buildCorpusInputOwnership,
   CORPUS_DRIFT_RUNTIME_ROOTS,
   defaultCorpusInputOwnership,
+  discoverCorpusNonImportInputs,
   type CorpusDriftRelevanceReceipt,
   type CorpusInputOwnership,
 } from "./corpus-drift-relevance.js";
@@ -60,6 +63,41 @@ function ownership(): CorpusInputOwnership {
   };
 }
 
+function putDiscoveryInputs(root: string): void {
+  put(root, "src/scan/secrets.ts", 'const config = new URL("./rules/gitleaks-supabase.toml", import.meta.url);\nvoid config;\n');
+  put(root, "src/scan/rules/gitleaks-supabase.toml", "title = \"fixture\"\n");
+  put(root, "src/scan/semgrep.ts", 'const rules = new URL("./rules/semgrep/", import.meta.url);\nvoid rules;\n');
+  put(root, "src/scan/rules/semgrep/fixture.yml", "rules: []\n");
+  put(root, "package.json", '{"name":"fixture"}\n');
+  put(root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+  put(root, "pnpm-workspace.yaml", "packages: []\n");
+  put(root, ".nvmrc", "24\n");
+  put(root, "tsconfig.json", '{}\n');
+  put(root, ".github/actions/fixture/action.yml", [
+    "name: fixture",
+    "runs:",
+    "  using: composite",
+    "  steps:",
+    '    - run: bash "$GITHUB_ACTION_PATH/run.sh"',
+    "      shell: bash",
+    "",
+  ].join("\n"));
+  put(root, ".github/actions/fixture/run.sh", "#!/usr/bin/env bash\nexit 0\n");
+  put(root, ".github/workflows/corpus-drift.yml", [
+    "jobs:",
+    "  drift:",
+    "    steps:",
+    "      - uses: actions/setup-node@v4",
+    "        with:",
+    "          node-version-file: .nvmrc",
+    "      - run: pnpm install --frozen-lockfile",
+    "      - uses: ./.github/actions/fixture",
+    "      - run: pnpm exec tsx src/cli/corpus-drift-relevance.ts ownership --out /tmp/ownership.json",
+    "      - run: node src/cli/corpus-cache-transport.ts",
+    "",
+  ].join("\n"));
+}
+
 function createRepository(): { root: string; base: string; ownership: CorpusInputOwnership } {
   const root = mkdtempSync(join(tmpdir(), "harvey-corpus-relevance-"));
   disposable.push(root);
@@ -80,6 +118,7 @@ function createRepository(): { root: string; base: string; ownership: CorpusInpu
     "",
   ].join("\n"));
   put(root, "src/cli/corpus-cache-transport.ts", 'export { cacheHelper } from "../corpus-cache-helper.js";\n');
+  put(root, "src/cli/corpus-drift-relevance.ts", "export const relevance = true;\n");
   put(root, "src/corpus-cache-helper.ts", "export const cacheHelper = 1;\n");
   put(root, "src/shared/common.ts", "export const sharedValue = 1;\n");
   put(root, "src/shared/side.ts", "export const side = 1;\n");
@@ -88,8 +127,7 @@ function createRepository(): { root: string; base: string; ownership: CorpusInpu
   put(root, "src/shared/dynamic.ts", "export const dynamic = 1;\n");
   put(root, "src/shared/required.ts", "export const required = 1;\n");
   put(root, "src/shared/type-only.ts", "export interface TypeOnly { value: string }\n");
-  put(root, "src/scan/rules/semgrep/fixture.yml", "rules: []\n");
-  put(root, ".github/workflows/corpus-drift.yml", "jobs:\n  drift:\n    steps:\n      - run: node src/cli/corpus-cache-transport.ts\n");
+  putDiscoveryInputs(root);
   put(root, "report-template/render.mjs", "export const render = true;\n");
   put(root, "site/app/page.tsx", "export default function Page() { return null; }\n");
   return { root, base: commit(root, "base"), ownership: ownership() };
@@ -114,13 +152,127 @@ afterEach(() => {
 });
 
 describe("corpus-drift immutable runtime closure", () => {
+  it("keeps the live manifest, baseline, schema, taxonomy, and mechanical implementation in runtime closure", () => {
+    const sourceRoot = fileURLToPath(new URL("..", import.meta.url));
+    const root = mkdtempSync(join(tmpdir(), "harvey-corpus-live-closure-"));
+    disposable.push(root);
+    execFileSync("git", ["clone", "-q", "--no-hardlinks", sourceRoot, root]);
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const liveOwnership = defaultCorpusInputOwnership(["fixture"]);
+    const receipt = classifyCorpusDriftRelevance({ repoRoot: root, base: head, ownership: liveOwnership });
+    const runtimePaths = receipt.closure?.head.runtimeRootClosure.files.map((file) => file.path) ?? [];
+    const discoveredPaths = discoverCorpusNonImportInputs({ repoRoot: root, pinnedTargets: ["fixture"] }).map((input) => input.path);
+
+    expect(receipt.decision).toBe("declared-no-op");
+    expect(runtimePaths).toEqual(expect.arrayContaining([
+      "src/scan/external-corpus.ts",
+      "src/findings.ts",
+      "src/scan/mechanical.ts",
+      "src/scan/mechanical-engine-registry.ts",
+      "src/scan/mechanical-detector-registry.ts",
+      "src/scan/secrets.ts",
+      "src/scan/semgrep.ts",
+    ]));
+    expect(discoveredPaths).not.toEqual(expect.arrayContaining([
+      "src/scan/external-corpus.ts",
+      "src/findings.ts",
+      "src/scan/mechanical.ts",
+      "src/scan/mechanical-engine-registry.ts",
+      "src/scan/mechanical-detector-registry.ts",
+    ]));
+  });
+
+  it("discovers every live non-import path class and newly referenced members automatically", () => {
+    const fixture = createRepository();
+    const initial = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["beta", "alpha", "alpha"] });
+    const initialPaths = initial.map((input) => input.path);
+    expect(initialPaths).toEqual(expect.arrayContaining([
+      "src/scan/rules/gitleaks-supabase.toml",
+      "src/scan/rules/semgrep/fixture.yml",
+      ".github/workflows/corpus-drift.yml",
+      ".github/actions/fixture/action.yml",
+      ".github/actions/fixture/run.sh",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".nvmrc",
+      "tsconfig.json",
+    ]));
+    expect(initial.every((input) => input.targetSelection.targets.join(",") === "alpha,beta"
+      && input.consumer.length > 0
+      && input.targetSelection.provenance.length > 0
+      && input.targetSelection.falsifier.length > 0)).toBe(true);
+
+    put(fixture.root, "src/scan/rules/semgrep/new-rule.yaml", "rules: []\n");
+    put(fixture.root, ".github/actions/new-action/action.yaml", [
+      "name: new action",
+      "runs:",
+      "  using: composite",
+      "  steps:",
+      "    - run: bash ${{ github.action_path }}/nested/helper.sh",
+      "      shell: bash",
+      "",
+    ].join("\n"));
+    put(fixture.root, ".github/actions/new-action/nested/helper.sh", "#!/usr/bin/env bash\nexit 0\n");
+    put(fixture.root, ".github/workflows/corpus-drift.yml", [
+      "jobs:",
+      "  drift:",
+      "    steps:",
+      "      - uses: actions/setup-node@v4",
+      "        with:",
+      "          node-version-file: .nvmrc",
+      "      - run: pnpm install --frozen-lockfile",
+      "      - uses: ./.github/actions/fixture",
+      "      - uses: ./.github/actions/new-action",
+      "      - run: pnpm exec tsx src/cli/corpus-drift-relevance.ts ownership --out /tmp/ownership.json",
+      "      - run: node src/cli/corpus-cache-transport.ts",
+      "",
+    ].join("\n"));
+    commit(fixture.root, "add discovered path-class members");
+    const expandedPaths = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["alpha", "beta"] }).map((input) => input.path);
+    expect(expandedPaths).toEqual(expect.arrayContaining([
+      "src/scan/rules/semgrep/new-rule.yaml",
+      ".github/actions/new-action/action.yaml",
+      ".github/actions/new-action/nested/helper.sh",
+    ]));
+  });
+
+  it("classifies known config, action, and runtime identity changes as owned inputs", () => {
+    const fixture = createRepository();
+    const discovered = discoverCorpusNonImportInputs({ repoRoot: fixture.root, pinnedTargets: ["alpha", "beta"] });
+    const registeredOwnership = buildCorpusInputOwnership({
+      pinnedTargets: ["alpha", "beta"],
+      mechanicalOwnership: {
+        schema: 1,
+        producers: [{ producer: "fixture-producer", phase: "structural-ast", order: 10, module: "M1", registryFile: "src/scan/mechanical-detector-registry.ts" }],
+      },
+      nonImportInputs: discovered,
+    });
+    put(fixture.root, "src/scan/rules/gitleaks-supabase.toml", "title = \"changed\"\n");
+    put(fixture.root, ".github/actions/fixture/run.sh", "#!/usr/bin/env bash\nexit 1\n");
+    put(fixture.root, "package.json", '{"name":"changed"}\n');
+    commit(fixture.root, "change registered inputs");
+    const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: registeredOwnership });
+
+    expect(receipt.decision).toBe("full-scan");
+    for (const path of ["src/scan/rules/gitleaks-supabase.toml", ".github/actions/fixture/run.sh", "package.json"]) {
+      expect(receipt.reasons).toContainEqual(expect.objectContaining({ code: "owned-input-change", path }));
+    }
+    expect(receipt.reasons).not.toContainEqual(expect.objectContaining({ code: "unknown-runtime-input" }));
+    expect(receipt.targetSelections.every((selection) => selection.targets.join(",") === "alpha,beta")).toBe(true);
+  });
+
   it("walks the exact nine roots plus the workflow command with runtime-only static/dynamic edges", () => {
     const fixture = createRepository();
     const receipt = classifyCorpusDriftRelevance({ repoRoot: fixture.root, base: fixture.base, ownership: fixture.ownership });
 
     expect(receipt.decision).toBe("declared-no-op");
     expect(receipt.git).toMatchObject({ base: fixture.base, head: fixture.base, clean: true });
-    expect(receipt.closure?.head.roots).toEqual([...CORPUS_DRIFT_RUNTIME_ROOTS, "src/cli/corpus-cache-transport.ts"]);
+    expect(receipt.closure?.head.roots).toEqual([
+      ...CORPUS_DRIFT_RUNTIME_ROOTS,
+      "src/cli/corpus-cache-transport.ts",
+      "src/cli/corpus-drift-relevance.ts",
+    ]);
     const paths = receipt.closure?.head.files.map((file) => file.path);
     expect(paths).toEqual(expect.arrayContaining([
       "src/shared/helper.ts",

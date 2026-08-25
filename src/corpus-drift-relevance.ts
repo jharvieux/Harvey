@@ -47,7 +47,7 @@ export interface CorpusConsumerInputOwnership {
   targetSelection: CorpusTargetSelection;
 }
 
-/** One data/config/tool input supplied by C2/C3 rather than rediscovered as a second registry. */
+/** One exact data/config/tool input discovered from a live path class or supplied by an extension. */
 export interface CorpusRegisteredInputOwnership {
   consumer: string;
   path: string;
@@ -65,7 +65,7 @@ export interface MechanicalCorpusOwnershipDiscovery {
  *
  * `producers` accepts the exact rows returned by C3's `discoverMechanicalCorpusOwnership()`.
  * They are retained as provenance and validated here; C1 never invents detector ids or a parallel
- * scanner map. `nonImportInputs` is the injection seam for C2's registered data inputs.
+ * scanner map. `nonImportInputs` is the exact discovery/extension seam for non-import bytes.
  */
 export interface CorpusInputOwnership {
   schema: 1;
@@ -461,8 +461,9 @@ function validateOwnership(ownership: CorpusInputOwnership): ValidatedOwnership 
   const nonImportKeys = new Set<string>();
   for (const input of ownership.nonImportInputs) {
     const path = canonicalRepoPath(input.path);
+    const consumer = canonicalRepoPath(input.consumer);
     const key = `${input.consumer}\0${path ?? input.path}`;
-    if (!input.consumer.trim() || !path || nonImportKeys.has(key)) conflict(`non-import ownership is malformed or duplicated for ${input.consumer}`, input.path);
+    if (!consumer || !path || nonImportKeys.has(key)) conflict(`non-import ownership is malformed or duplicated for ${input.consumer}`, input.path);
     nonImportKeys.add(key);
     const selectionProblem = targetSelectionProblem(input.targetSelection, `non-import:${input.consumer}:${input.path}`);
     if (selectionProblem) conflict(selectionProblem, input.path);
@@ -675,6 +676,167 @@ function exactTargetSelection(targets: readonly string[]): readonly string[] {
   return [...new Set(targets)].sort(compareUtf8);
 }
 
+function currentGitSnapshot(repoRoot: string): { root: string; snapshot: GitSnapshot } {
+  let root: string;
+  try {
+    root = realpathSync(resolve(repoRoot));
+  } catch {
+    throw new Error(`canonical non-import discovery root ${repoRoot} cannot be resolved`);
+  }
+  const top = gitText(root, ["rev-parse", "--show-toplevel"]);
+  if (!top.value) throw new Error(`canonical non-import discovery requires an exact Git worktree root: ${top.reason?.detail ?? root}`);
+  let gitRoot: string;
+  try {
+    gitRoot = realpathSync(top.value);
+  } catch {
+    throw new Error(`canonical non-import discovery cannot resolve Git root ${top.value}`);
+  }
+  if (gitRoot !== root) throw new Error(`canonical non-import discovery root ${root} differs from Git root ${gitRoot}`);
+  const commit = gitText(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const tree: { value?: string; reason?: CorpusRelevanceReason } = commit.value
+    ? gitText(root, ["rev-parse", `${commit.value}^{tree}`])
+    : {};
+  if (!commit.value || !tree.value || !GIT_OBJECT.test(commit.value) || !GIT_OBJECT.test(tree.value)) {
+    throw new Error(`canonical non-import discovery cannot bind HEAD/tree: ${commit.reason?.detail ?? tree.reason?.detail ?? "malformed Git object"}`);
+  }
+  const status = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]);
+  if (status.status !== 0) throw new Error(`canonical non-import discovery cannot prove a clean root: ${status.stderr || `exit ${status.status}`}`);
+  if (status.stdout.length !== 0) throw new Error(`canonical non-import discovery requires a clean root (${status.stdout.length} porcelain byte(s))`);
+  const parsed = parseTree(root, tree.value);
+  if (!parsed.entries) throw new Error(`canonical non-import discovery cannot read HEAD tree: ${parsed.reason?.detail ?? "unknown tree failure"}`);
+  return { root, snapshot: { commit: commit.value, tree: tree.value, entries: parsed.entries } };
+}
+
+function requiredDiscoveryText(root: string, snapshot: GitSnapshot, path: string): string {
+  const entry = snapshot.entries.get(path);
+  if (!entry) throw new Error(`canonical non-import discovery disagreement: required ${path} is absent from ${snapshot.commit}`);
+  const read = readBlob(root, entry);
+  if (read.text === undefined) throw new Error(`canonical non-import discovery disagreement at ${path}: ${read.reason?.detail ?? "unreadable Git blob"}`);
+  return read.text;
+}
+
+function matchedValues(text: string, expression: RegExp): string[] {
+  return [...text.matchAll(expression)].map((match) => match[1]!).filter(Boolean);
+}
+
+/**
+ * Discover the non-import bytes used by the real corpus path from the exact clean HEAD tree.
+ * Scanner/detector identity still comes exclusively from C3's live mechanical registries; these
+ * are path classes whose consumers load bytes without a TypeScript runtime import edge.
+ */
+export function discoverCorpusNonImportInputs(options: {
+  repoRoot: string;
+  pinnedTargets: readonly string[];
+}): readonly CorpusRegisteredInputOwnership[] {
+  const targets = exactTargetSelection(options.pinnedTargets);
+  if (targets.length === 0 || targets.some((target) => !target.trim())) {
+    throw new Error("canonical non-import discovery requires at least one live pinned target");
+  }
+  const { root, snapshot } = currentGitSnapshot(options.repoRoot);
+  const rows = new Map<string, CorpusRegisteredInputOwnership>();
+  const selections = new Map<string, CorpusTargetSelection>();
+  const selection = (consumer: string): CorpusTargetSelection => {
+    const prior = selections.get(consumer);
+    if (prior) return prior;
+    const value: CorpusTargetSelection = {
+      targets,
+      applicability: `${consumer} supplies non-import bytes to every live pinned target selected by corpus drift`,
+      provenance: `${consumer} was resolved from canonical path classes in exact Git commit ${snapshot.commit} tree ${snapshot.tree}`,
+      falsifier: `Remove or change ${consumer}'s live path reference and rerun unflagged corpus ownership discovery`,
+    };
+    selections.set(consumer, value);
+    return value;
+  };
+  const register = (consumer: string, path: string): void => {
+    const canonicalConsumer = canonicalRepoPath(consumer);
+    const canonicalPath = canonicalRepoPath(path);
+    if (!canonicalConsumer || !canonicalPath) throw new Error(`canonical non-import discovery produced a malformed consumer/path: ${consumer} -> ${path}`);
+    requiredDiscoveryText(root, snapshot, canonicalConsumer);
+    requiredDiscoveryText(root, snapshot, canonicalPath);
+    const key = `${canonicalConsumer}\0${canonicalPath}`;
+    rows.set(key, { consumer: canonicalConsumer, path: canonicalPath, targetSelection: selection(canonicalConsumer) });
+  };
+
+  const secretsConsumer = "src/scan/secrets.ts";
+  const gitleaksConfig = "src/scan/rules/gitleaks-supabase.toml";
+  const secretsSource = requiredDiscoveryText(root, snapshot, secretsConsumer);
+  if (!/new\s+URL\(\s*["']\.\/rules\/gitleaks-supabase\.toml["']\s*,\s*import\.meta\.url\s*\)/.test(secretsSource)) {
+    throw new Error(`canonical non-import discovery disagreement: ${secretsConsumer} no longer registers ${gitleaksConfig}`);
+  }
+  register(secretsConsumer, gitleaksConfig);
+
+  const semgrepConsumer = "src/scan/semgrep.ts";
+  const semgrepSource = requiredDiscoveryText(root, snapshot, semgrepConsumer);
+  if (!/new\s+URL\(\s*["']\.\/rules\/semgrep\/["']\s*,\s*import\.meta\.url\s*\)/.test(semgrepSource)) {
+    throw new Error(`canonical non-import discovery disagreement: ${semgrepConsumer} no longer registers the custom Semgrep rule directory`);
+  }
+  const semgrepRules = [...snapshot.entries.keys()]
+    .filter((path) => /^src\/scan\/rules\/semgrep\/.+\.ya?ml$/.test(path))
+    .sort(compareUtf8);
+  if (semgrepRules.length === 0) throw new Error("canonical non-import discovery disagreement: the live custom Semgrep path class is empty");
+  for (const path of semgrepRules) register(semgrepConsumer, path);
+
+  const workflow = CORPUS_DRIFT_WORKFLOW;
+  const workflowSource = requiredDiscoveryText(root, snapshot, workflow);
+  register(workflow, workflow);
+  if (!/^\s*node-version-file:\s*\.nvmrc\s*$/m.test(workflowSource)) {
+    throw new Error(`canonical non-import discovery disagreement: ${workflow} no longer registers .nvmrc`);
+  }
+  if (!/pnpm install --frozen-lockfile/.test(workflowSource) || !/pnpm exec tsx src\/cli\/corpus-drift-relevance\.ts/.test(workflowSource)) {
+    throw new Error(`canonical non-import discovery disagreement: ${workflow} no longer exposes the pnpm/tsx runtime identity seam`);
+  }
+  for (const path of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".nvmrc", "tsconfig.json"]) register(workflow, path);
+
+  const localActionReferences = (text: string): string[] => matchedValues(
+    text,
+    /^\s*(?:-\s*)?uses:\s*["']?(\.\/\.github\/actions\/[A-Za-z0-9._/-]+)["']?\s*(?:#.*)?$/gm,
+  );
+  const actionFileReferences = (text: string, manifest: boolean): string[] => {
+    const references = [
+      ...matchedValues(text, /\$GITHUB_ACTION_PATH\/([A-Za-z0-9._/-]+)/g),
+      ...matchedValues(text, /\$\{\{\s*github\.action_path\s*\}\}\/([A-Za-z0-9._/-]+)/g),
+    ];
+    if (manifest) references.push(...matchedValues(text, /^\s*(?:main|pre|post):\s*["']?([^\s"'#]+)["']?\s*(?:#.*)?$/gm));
+    return [...new Set(references)];
+  };
+  const actionQueue = localActionReferences(workflowSource).map((reference) => ({ reference, consumer: workflow }));
+  const expandedActions = new Set<string>();
+  for (let index = 0; index < actionQueue.length; index += 1) {
+    const { reference, consumer } = actionQueue[index]!;
+    const directory = canonicalRepoPath(reference.replace(/^\.\//, "").replace(/\/$/, ""));
+    if (!directory || !directory.startsWith(".github/actions/")) {
+      throw new Error(`canonical non-import discovery found a malformed local action reference ${reference}`);
+    }
+    const manifests = [`${directory}/action.yml`, `${directory}/action.yaml`].filter((path) => snapshot.entries.has(path));
+    if (manifests.length !== 1) {
+      throw new Error(`canonical non-import discovery disagreement: ${reference} resolves ${manifests.length} action manifests`);
+    }
+    const actionManifest = manifests[0]!;
+    register(consumer, actionManifest);
+    if (expandedActions.has(actionManifest)) continue;
+    expandedActions.add(actionManifest);
+    const actionSource = requiredDiscoveryText(root, snapshot, actionManifest);
+    for (const nested of localActionReferences(actionSource)) actionQueue.push({ reference: nested, consumer: actionManifest });
+    const fileQueue = actionFileReferences(actionSource, true);
+    const visitedFiles = new Set<string>();
+    for (let fileIndex = 0; fileIndex < fileQueue.length; fileIndex += 1) {
+      const relativePath = fileQueue[fileIndex]!;
+      const actionFile = canonicalRepoPath(posix.join(directory, relativePath));
+      if (!actionFile || !actionFile.startsWith(`${directory}/`)) {
+        throw new Error(`canonical non-import discovery found an escaping action file ${relativePath} in ${actionManifest}`);
+      }
+      if (visitedFiles.has(actionFile)) continue;
+      visitedFiles.add(actionFile);
+      register(actionManifest, actionFile);
+      const fileSource = requiredDiscoveryText(root, snapshot, actionFile);
+      fileQueue.push(...actionFileReferences(fileSource, false));
+    }
+  }
+  if (expandedActions.size === 0) throw new Error(`canonical non-import discovery disagreement: ${workflow} has no registered local actions`);
+
+  return [...rows.values()].sort((left, right) => compareUtf8(`${left.consumer}\0${left.path}`, `${right.consumer}\0${right.path}`));
+}
+
 export function buildCorpusInputOwnership(options: {
   pinnedTargets: readonly string[];
   mechanicalOwnership: MechanicalCorpusOwnershipDiscovery;
@@ -697,7 +859,8 @@ export function buildCorpusInputOwnership(options: {
       runtimeRoots: [root],
       targetSelection: selection(root),
     })),
-    nonImportInputs: [...(options.nonImportInputs ?? [])],
+    nonImportInputs: [...(options.nonImportInputs ?? [])]
+      .sort((left, right) => compareUtf8(`${left.consumer}\0${left.path}`, `${right.consumer}\0${right.path}`)),
     producers: [...options.mechanicalOwnership.producers],
     workflowCommandTargetSelection: {
       targets,
