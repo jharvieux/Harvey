@@ -22,9 +22,12 @@ flaky.
 The engineer who notices it (during PR review, CI failure investigation,
 or a re-run that goes green) follows this in order:
 
-1. **Quarantine immediately.** Add `.skip` (Vitest) or `test.skip`
-   (Playwright) to the test in a hotfix PR. Don't comment it out — `.skip`
-   keeps the test discoverable.
+1. **Quarantine immediately**, unless the root cause is identified, its fix
+   has already merged, and the occurrences and supporting evidence are logged.
+   In that case, keep the test enabled and proceed directly to step 4's
+   **Fixed** branch. Otherwise add `.skip` (Vitest) or `test.skip`
+   (Playwright) in a hotfix PR. Don't comment it out — `.skip` keeps the test
+   discoverable. This exception follows the [operator's #1758 ruling](https://github.com/jharvieux/Harvey/issues/1758#issuecomment-5288590454).
 2. **Open an issue** in the repo tagged `flaky-test` with:
    - Test file + name
    - First-observed run / commit

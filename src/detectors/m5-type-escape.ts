@@ -1,7 +1,8 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { PathScopedClass } from "../scan/path-scope.js";
 import { loc, parse, type SourceInput } from "./common.js";
-import { isGeneratedSource, SOURCE_FILE } from "./load-sources.js";
+import { isGeneratedSource, NON_PRODUCT, SOURCE_FILE } from "./load-sources.js";
 
 type EscapeKind = "as-any" | "double-assertion" | "unexplained-ts-ignore";
 
@@ -180,8 +181,23 @@ function finding(id: string, path: string, sf: ts.SourceFile, row: EscapeRow): F
 }
 
 export function m5TypeEscapeSources(files: readonly SourceInput[]): SourceInput[] {
-  return files.filter((file) => SOURCE_FILE.test(file.path) && !EXCLUDED_PATH.test(file.path) && !isGeneratedSource(file.path, file.text));
+  return files.filter((file) => SOURCE_FILE.test(file.path) && !NON_PRODUCT.test(file.path) && !EXCLUDED_PATH.test(file.path) && !isGeneratedSource(file.path, file.text));
 }
+
+export const M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
+  { suffix: "AS-ANY", classId: "M5 — Type escape (`as any`)", classes: "an unchecked value asserted as any" },
+  { suffix: "DOUBLE-ASSERTION", classId: "M5 — Type escape (double assertion)", classes: "an unchecked value forced through a double type assertion" },
+  { suffix: "TS-IGNORE", classId: "M5 — Unexplained @ts-ignore", classes: "an unexplained compiler-error suppression" },
+].map(({ suffix, classId, classes }) => ({
+  rowId: `M1-PATHSCOPE-M5-TYPE-ESCAPE-${suffix}-00`,
+  detector: "m5-type-escape",
+  classId,
+  ownerFile: "src/detectors/m5-type-escape.ts",
+  selectorSymbol: "m5TypeEscapeSources",
+  convention: "product JavaScript/TypeScript files, excluding declarations, tests, stories, fixtures, vendor/build trees, and generated sources",
+  select: m5TypeEscapeSources,
+  classes,
+}));
 
 export function detectM5TypeEscapeFindings(
   files: SourceInput[],

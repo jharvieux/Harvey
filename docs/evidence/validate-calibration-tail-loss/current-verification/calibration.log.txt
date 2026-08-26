@@ -1,0 +1,14 @@
+
+ RUN  v3.2.6 /private/tmp/harvey-sweep-1758
+
+ ✓ src/cli/validate-calibration.test.ts (3 tests) 76245ms
+   ✓ validate-calibration exits 1 on a review-tier recall regression (#1628) > exits 0 on the committed corpus, and reports the review-tier population it now holds fatal  34813ms
+   ✓ validate-calibration exits 1 on a review-tier recall regression (#1628) > exits 1 when one caught review-tier positive is darkened, naming the row  33836ms
+   ✓ validate-calibration exits 1 on a review-tier recall regression (#1628) > exits 2 and renders NO recall table when semgrep crashes instead of completing (#1664)  7596ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  01:19:52
+   Duration  76.35s (transform 13ms, setup 8ms, collect 12ms, tests 76.24s, environment 0ms, prepare 22ms)
+
+JSON report written to /private/tmp/harvey-1758-current-19f8f57c/vitest.json

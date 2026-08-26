@@ -161,6 +161,7 @@ export const IDEMPOTENCY_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "idempotency",
     classId: "External send without a deterministic idempotency key",
     ownerFile: "src/scan/idempotency.ts",
+    inventory: "source-files",
     selectorSymbol: "retryableExternalSendFiles",
     convention: "shipping source under Inngest, cron, queue, worker, job, task, webhook, or scheduler path segments",
     select: retryableExternalSendFiles,

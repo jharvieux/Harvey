@@ -1226,7 +1226,7 @@ export async function runSemgrepPartitioned(
       if (run.failedExecution) return { failure: run.failedExecution };
       if (!run.execution) throw new Error(run.failure ?? `${family.id}: successful semantic execution receipt is missing`);
       return { output: run.result, execution: run.execution, telemetry: run.telemetry, outputMode: "canonical" as const };
-    }).catch((error) => {
+    }, planned.families[ordinal]!).catch((error) => {
       failure ??= error instanceof Error ? error.message : String(error);
       cache.onEvent?.(`SEMGREP FAMILY VERIFY FAIL ${family.id}: ${failure}`);
       return undefined;

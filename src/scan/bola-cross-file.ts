@@ -70,6 +70,7 @@ export const BOLA_CROSS_FILE_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "bola-cross-file",
     classId: "Object-level authorization gap across a module boundary",
     ownerFile: "src/scan/bola-cross-file.ts",
+    inventory: "source-files",
     selectorSymbol: "bolaCrossFileHandlerFiles",
     convention: "Pages Router API modules and App Router `route.*` handlers",
     select: bolaCrossFileHandlerFiles,

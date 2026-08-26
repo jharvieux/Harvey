@@ -5,7 +5,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -273,20 +273,142 @@ describe("validate-reasons CLI", () => {
     expect(b.out).toContain("3 accepted row(s) use that phrase");
   });
 
-  it("includes issue bodies and comments in the disclosed prose population without calling them repository files", async () => {
+  it("reads every open-issue and comment page in the disclosed prose population without calling them repository files", async () => {
     const dir = plant({ "source.md": `${POSITIVE_REGISTER} in repository prose.\n` });
     const bin = plant({
-      gh: `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify([
-        { number: 1410, body: `${POSITIVE_REGISTER} in issue prose.`, comments: [{ body: "An ordinary comment." }] },
-      ]))});\n`,
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+const send = (value) => process.stdout.write(JSON.stringify(value));
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else if (query.includes("issues(first:100")) {
+  if (args.includes("after=issue-page-1")) send({ data: { repository: { issues: {
+    pageInfo: { hasNextPage: false, endCursor: null },
+    nodes: [{ number: 1412, body: "${POSITIVE_REGISTER} in the second issue page. " + "x".repeat(1024 * 1024 + 1), comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }],
+  } } } });
+  else send({ data: { repository: { issues: {
+    pageInfo: { hasNextPage: true, endCursor: "issue-page-1" },
+    nodes: [
+      { number: 1410, body: "${POSITIVE_REGISTER} in the first issue page.", comments: { totalCount: 1, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ body: "An ordinary comment." }] } },
+      { number: 1411, body: "An ordinary issue body.", comments: { totalCount: 2, pageInfo: { hasNextPage: true, endCursor: "comment-page-1" }, nodes: [{ body: "An ordinary first comment." }] } },
+    ],
+  } } } });
+} else if (query.includes("issue(number:$number)")) send({ data: { repository: { issue: { comments: {
+  totalCount: 2, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ body: "${POSITIVE_REGISTER} in the second comment page." }],
+} } } } });
+else process.exitCode = 9;
+`,
     });
     chmodSync(join(bin, "gh"), 0o755);
     try {
       const { code, out } = await gate(dir, ["--census", "--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
       expect(code).toBe(0);
-      expect(out).toContain(`CENSUSED WHOLE: 3 prose surface(s) across ${dir} and 2 open-issue body/comment surface(s)`);
-      expect(out).toContain("2 accepted row(s) use that phrase");
-      expect(out).toContain(`issue #1410:1  ${POSITIVE_REGISTER} in issue prose.`);
+      expect(out).toContain(`CENSUSED WHOLE: 7 prose surface(s) across ${dir} and 6 open-issue body/comment surface(s)`);
+      expect(out).toContain("4 accepted row(s) use that phrase");
+      expect(out).toContain(`issue #1410:1  ${POSITIVE_REGISTER} in the first issue page.`);
+      expect(out).toContain(`issue #1411 (comment 2):1  ${POSITIVE_REGISTER} in the second comment page.`);
+      expect(out).toContain(`issue #1412:1  ${POSITIVE_REGISTER} in the second issue page.`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a tracker child signal as a signal, not a guessed authentication failure", async () => {
+    const dir = plant({ "source.md": "Ordinary prose.\n" });
+    const bin = plant({
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else { process.stderr.write("credential expired\\n"); process.kill(process.pid, "SIGTERM"); }
+`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      const { code, out } = await gate(dir, ["--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
+      expect(code).toBe(1);
+      expect(out).toContain("was terminated by signal SIGTERM");
+      expect(out).toContain("credential expired");
+      expect(out).not.toContain("needs an authenticated gh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("names a null tracker response instead of throwing a generic TypeError", async () => {
+    const dir = plant({ "source.md": "Ordinary prose.\n" });
+    const bin = plant({
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else process.stdout.write("null");
+`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      const { code, out } = await gate(dir, ["--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
+      expect(code).toBe(1);
+      expect(out).toContain("open-issue query returned no top-level response object");
+      expect(out).not.toContain("TypeError");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses repeated issue and comment cursors rather than silently looping or truncating", async () => {
+    const dir = plant({ "source.md": "Ordinary prose.\n" });
+    const bin = plant({
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+const send = (value) => process.stdout.write(JSON.stringify(value));
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else if (query.includes("issues(first:100")) {
+  const comments = process.env.REPEAT_KIND === "comments"
+    ? { totalCount: 3, pageInfo: { hasNextPage: true, endCursor: "repeat" }, nodes: [{ body: "one" }] }
+    : { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+  const pageInfo = process.env.REPEAT_KIND === "comments" ? { hasNextPage: false, endCursor: null } : { hasNextPage: true, endCursor: "repeat" };
+  send({ data: { repository: { issues: { pageInfo, nodes: [{ number: 1410, body: "body", comments }] } } } });
+} else if (query.includes("issue(number:$number)")) send({ data: { repository: { issue: { comments: {
+  totalCount: 3, pageInfo: { hasNextPage: true, endCursor: "repeat" }, nodes: [{ body: "two" }],
+} } } } });
+else process.exitCode = 9;
+`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      for (const [repeat, message] of [["issues", "open-issue query repeated a page cursor"], ["comments", "issue #1410 repeated a comment-page cursor"]]) {
+        const { code, out } = await gate(dir, ["--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}`, REPEAT_KIND: repeat });
+        expect(code).toBe(1);
+        expect(out).toContain(message);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("does not execute a falsifier fetched from an untrusted issue body", async () => {
+    const dir = plant({ "source.md": "Ordinary prose.\n" });
+    const marker = join(dir, "untrusted-falsifier-ran");
+    const bin = plant({
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else process.stdout.write(JSON.stringify({ data: { repository: { issues: {
+  pageInfo: { hasNextPage: false, endCursor: null },
+  nodes: [{ number: 1410, body: "REASON: untrusted issue input\\nKIND: empirical\\nPROVENANCE: MEASURED 2026-08-25\\nFALSIFIER: touch ${marker}", comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }],
+} } } }));
+`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      const { code, out } = await gate(dir, ["--issues", "--revalidate"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
+      expect(code).toBe(0);
+      expect(out).toContain("NOT RE-TESTED  issue #1410:1");
+      expect(existsSync(marker)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });

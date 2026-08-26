@@ -1,0 +1,54 @@
+417: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4839807Z ^[[31m     → expected 'Scoring 719/965 corpus entries agains…' to contain 'GATE FAIL — review-tier positives not…'^[[39m
+418: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4954331Z 
+419: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4954973Z ^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m^[[1m^[[41m Failed Tests 1 ^[[49m^[[22m^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m
+420: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4955280Z 
+421: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4959031Z ^[[41m^[[1m FAIL ^[[22m^[[49m src/cli/validate-calibration.test.ts^[[2m > ^[[22mvalidate-calibration exits 1 on a review-tier recall regression (#1628)^[[2m > ^[[22mexits 1 when one caught review-tier positive is darkened, naming the row
+422: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4980043Z ^[[31m^[[1mAssertionError^[[22m: expected 'Scoring 719/965 corpus entries agains…' to contain 'GATE FAIL — review-tier positives not…'^[[39m
+423: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4981324Z 
+424: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4981544Z ^[[32m- Expected^[[39m
+425: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4981882Z ^[[31m+ Received^[[39m
+426: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4982017Z 
+427: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4982481Z ^[[32m- GATE FAIL — review-tier positives not caught by any rule (#1628): P-OPEN-REDIRECT^[[39m
+428: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4983862Z ^[[31m+ Scoring 719/965 corpus entries against runMechanicalScan (M1 mechanical); 246 module-tagged entries are excluded by design — see the per-module census below for where each is gated instead.^[[39m
+429: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4985675Z ^[[31m+ {"level":"info-0","ts":"2026-07-31T23:11:22Z","logger":"trufflehog","msg":"running source","source_manager_worker_id":"SAtoO","with_units":true}^[[39m
+430: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4987794Z ^[[31m+ {"level":"info-0","ts":"2026-07-31T23:11:22Z","logger":"trufflehog","msg":"finished scanning","chunks":724,"bytes":1280607,"verified_secrets":0,"unverified_secrets":0,"scan_duration":"219.70543ms","trufflehog_version":"3.96.0","verification_caching":{"Hits":0,"Misses":12,"HitsWasted":0,"AttemptsSaved":0,"VerificationTimeSpentMS":808}}^[[39m
+431: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4989599Z ^[[31m+^[[39m
+432: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4989985Z ^[[31m+     ○^[[39m
+433: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4990379Z ^[[31m+     │╲^[[39m
+434: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4990738Z ^[[31m+     │ ○^[[39m
+435: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4991109Z ^[[31m+     ○ ░^[[39m
+436: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4991508Z ^[[31m+     ░    gitleaks^[[39m
+437: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4991907Z ^[[31m+^[[39m
+438: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4992675Z ^[[31m+ ^[[90m11:11PM^[[0m ^[[32mINF^[[0m ^[[1mscanned ~789642 bytes (789.64 KB) in 382ms^[[0m^[[39m
+439: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4993601Z ^[[31m+ ^[[90m11:11PM^[[0m ^[[33mWRN^[[0m ^[[1mleaks found: 82^[[0m^[[39m
+440: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4994322Z ^[[31m+ Starting filesystem walk for root: /^[[39m
+441: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4995712Z ^[[31m+ Scanned /tmp/harvey-scan-scope-2h8IZn/package-lock.json file and found 397 packages^[[39m
+442: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4997120Z ^[[31m+ End status: 0 dirs visited, 1 inodes visited, 1 Extract calls, 7.571874ms elapsed, 7.571944ms wall time^[[39m
+443: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.4999306Z ^[[31m+ [00.05][WARNING]: !!! You're using one or more options starting with '--x-'. These options are not part of the semgrep API. They will change or will be removed without notice !!! ^[[39m
+444: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5000225Z ^[[31m+ running 842 rules from 16 configs^[[39m
+445: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5000559Z ^[[31m+ Rules:^[[39m
+446: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5001024Z ^[[31m+ <SKIPPED DATA (too many entries; use --max-log-list-entries)>^[[39m
+447: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5001451Z ^[[31m+                ^[[39m
+448: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5001735Z ^[[31m+                ^[[39m
+449: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5002028Z ^[[31m+ ┌─────────────┐^[[39m
+450: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5002317Z ^[[31m+ │ Scan Status │^[[39m
+451: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5002596Z ^[[31m+ └─────────────┘^[[39m
+452: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5003046Z ^[[31m+   Scanning 670 files tracked by git with 842 Code rules:^[[39m
+453: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5003726Z ^[[31m+                                                                                                                         ^[[39m
+454: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5004494Z ^[[31m+   Language      Rules   Files          Origin      Rules                                                                ^[[39m
+455: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5005302Z ^[[31m+  ─────────────────────────────        ───────────────────                                                               ^[[39m
+456: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5006066Z ^[[31m+   <multilang>      45     670          Community     728                                                                ^[[39m
+457: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5006829Z ^[[31m+   js              195     363          Custom        114                                                                ^[[39m
+458: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5007540Z ^[[31m+   ts              201     232                                                                                           ^[[39m
+459: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5008914Z ^[[31m+   json              3      23                                                                                           ^[[39m
+460: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5010095Z ^[[31m+   yaml             24       4                                                                                           ^[[39m
+461: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5010949Z ^[[31m+                                                                                                                         ^[[39m
+462: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5011506Z ^[[31m+ SCA findings adjustment: No SCA rules to adjust^[[39m
+463: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5011857Z ^[[31m+^[[39m
+464: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5012185Z ^[[31m+ ========================================^[[39m
+465: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5012537Z ^[[31m+ Files skipped:^[[39m
+466: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5012885Z ^[[31m+ ========================================^[[39m
+467: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5013179Z ^[[31m+^[[39m
+468: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5013708Z ^[[31m+   Always skipped by Semgrep:^[[39m
+469: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5014009Z ^[[31m+^[[39m
+470: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-07-31T23:11:40.5014257Z ^[[31m+    • <none>^[[39m

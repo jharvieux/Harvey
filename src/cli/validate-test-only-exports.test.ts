@@ -6,7 +6,7 @@
 // entry.ts calls, and an export used inside its own file plus asserted by the test (the shape every
 // detector in src/scan/ has, so a gate that reported it would fire on almost every new detector).
 
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -17,26 +17,31 @@ const FIXTURE = "targets/test-only-export-control";
 
 // One spawn per baseline, shared across the assertions below: each costs ~1.3s and the assertions
 // are independent views of the same run.
-const runs = new Map<string, { status: number; stdout: string }>();
+const runs = new Map<string, Promise<{ status: number; stdout: string }>>();
 
-function run(baseline: string, extra: string[] = []): { status: number; stdout: string } {
+function run(baseline: string, extra: string[] = []): Promise<{ status: number; stdout: string }> {
   const key = [baseline, ...extra].join(" ");
   const cached = runs.get(key);
   if (cached) return cached;
-  let result: { status: number; stdout: string };
-  try {
-    result = { status: 0, stdout: execFileSync("node_modules/.bin/tsx", [CLI, "--dir", FIXTURE, "--config", "knip.json", "--baseline", baseline, ...extra], { cwd: REPO_ROOT, encoding: "utf8" }) };
-  } catch (e) {
-    const err = e as { status?: number; stdout?: string };
-    result = { status: err.status ?? 1, stdout: err.stdout ?? "" };
-  }
+  const result = new Promise<{ status: number; stdout: string }>((resolveRun, rejectRun) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, "--dir", FIXTURE, "--config", "knip.json", "--baseline", baseline, ...extra], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.resume();
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.once("error", rejectRun);
+    child.once("close", (code) => resolveRun({ status: code ?? 1, stdout }));
+  });
   runs.set(key, result);
   return result;
 }
 
 describe("test-only-exports gate — negative control (#1307)", () => {
-  it("fails on a planted capability whose only referent is a test, and names it", () => {
-    const r = run("baseline.empty.json");
+  it("fails on a planted capability whose only referent is a test, and names it", async () => {
+    const r = await run("baseline.empty.json");
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("export src/lib.ts:testOnlyExport");
     expect(r.stdout).toContain("type   src/lib.ts:TestOnlyType");
@@ -45,21 +50,21 @@ describe("test-only-exports gate — negative control (#1307)", () => {
     expect(r.stdout).toContain("GATE FAIL — 3 new, 0 stale.");
   });
 
-  it("leaves the production-called and internally-used exports alone", () => {
-    const r = run("baseline.empty.json");
+  it("leaves the production-called and internally-used exports alone", async () => {
+    const r = await run("baseline.empty.json");
     expect(r.stdout).not.toContain("usedInProduction");
     expect(r.stdout).not.toContain("internallyUsed");
   });
 
-  it("passes once the plants are on the baseline, so the failure above was the plant and not the gate", () => {
-    const r = run("baseline.json");
+  it("passes once the plants are on the baseline, so the failure above was the plant and not the gate", async () => {
+    const r = await run("baseline.json");
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("GATE PASS");
     expect(r.stdout).toContain("3 still on it");
   });
 
-  it("fails when a baseline row has gained a production caller, so the backlog cannot be padded", () => {
-    const r = run("baseline.stale.json");
+  it("fails when a baseline row has gained a production caller, so the backlog cannot be padded", async () => {
+    const r = await run("baseline.stale.json");
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("export src/lib.ts:usedInProduction");
     expect(r.stdout).toContain("GATE FAIL — 0 new, 1 stale.");
@@ -70,8 +75,8 @@ describe("test-only-exports gate — negative control (#1307)", () => {
   // number could only fall by wiring. Driven through the real CLI rather than the pure function,
   // because the wiring — collectReasons over the analysed directory — is the half with no other
   // failing direction (#1407's class).
-  it("separates a baseline row carrying a recorded reason from one that carries none", () => {
-    const r = run("baseline.json", ["--list"]);
+  it("separates a baseline row carrying a recorded reason from one that carries none", async () => {
+    const r = await run("baseline.json", ["--list"]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("of the 3: 1 carry a recorded reason, 2 still await a caller or a reason");
     expect(r.stdout).toContain("2 untriaged");

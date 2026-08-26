@@ -13,10 +13,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadSources } from "../detectors/load-sources.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
-import { detectTargetFramework, type TargetFramework } from "../scan/framework-detect.js";
+import type { TargetFramework } from "../scan/framework-detect.js";
+import { MechanicalScanContext } from "../scan/mechanical-context.js";
 import {
   PATH_SCOPE_CLASS_GROUPS,
   PATH_SCOPED_DETECTORS,
@@ -55,6 +55,7 @@ const registryReceipt = PATH_SCOPE_CLASS_GROUPS.map((group) => ({
     classId: row.classId,
     ownerFile: row.ownerFile,
     selectorSymbol: row.selectorSymbol,
+    inventory: row.inventory ?? "loaded-sources",
     convention: row.convention,
     hasApplicabilityGate: row.applicable !== undefined,
   })),
@@ -106,23 +107,23 @@ export function runPathScopeCensus(cache?: string): PathScopeCensusReport {
 
   for (const target of EXTERNAL_CORPUS) {
     const dir = mkdtempSync(join(tmpdir(), `harvey-pathscope-${target.slug}-`));
+    let context: MechanicalScanContext | undefined;
     try {
       cloneAtPinCached(target.repo, target.commit, dir, cache);
-      // loadSources is the production inventory: source, package/config, generated-file, and
-      // exclusion semantics must match the real detector inputs rather than a parallel walker.
-      const files = loadSources(dir);
-      const framework = detectTargetFramework(dir);
-      for (const row of pathScopeCensus(files, { framework })) {
+      // The production context owns the distinct legacy, environment, loaded, and polyglot views.
+      context = new MechanicalScanContext(dir);
+      for (const row of pathScopeCensus(context.loadedSources, context)) {
         rows.push({
           target: target.slug,
           repo: target.repo,
           pin: target.commit,
-          framework,
-          loadedFiles: files.length,
+          framework: context.framework,
+          loadedFiles: context.loadedSources.length,
           ...row,
         });
       }
     } finally {
+      context?.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   }

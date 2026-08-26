@@ -28,6 +28,7 @@ import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { CONFIG_FILE, isTestSourcePath, loadSourceInventory, loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { PATH_SCOPE_CLASS_GROUPS, pathScopeNotAssessedRows } from "../scan/path-scope.js";
 import { detectM1ExceptionFlowFindings, detectM5ExceptionFlowFindings } from "../detectors/m5-exception-flow.js";
 import { detectM5HardcodedDeploymentFindings } from "../detectors/m5-hardcoded-deployment.js";
 import { detectM5TypeEscapeFindings } from "../detectors/m5-type-escape.js";
@@ -140,6 +141,9 @@ try {
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...detectVitestIntentFindings(allSources), // M8 vitest-specific (#629) — runner-gated
     ...detectM8VacuousAssertionFindings(identifiedSources),
+    // This entry point invokes the src/detectors owners above, but not the scan-only M1 owners.
+    ...pathScopeNotAssessedRows(allSources, { framework, identifiedSourceFiles: identifiedSources },
+      PATH_SCOPE_CLASS_GROUPS.filter((group) => group.ownerFile.startsWith("src/detectors/")).flatMap((group) => group.classes)),
     // scoped copy = committed files only; `allSources` lets it separate an asset a page serves
     // from one nothing references, which is repo bloat and not page weight (#1480).
     ...scanAssetWeight(scanDir, undefined, allSources),

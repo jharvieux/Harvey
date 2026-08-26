@@ -2420,6 +2420,7 @@ const perfPathClass = (
   detector: "perf-code",
   classId,
   ownerFile: "src/detectors/perf-code.ts",
+  inventory: "product-loaded-sources",
   selectorSymbol,
   convention,
   select,
