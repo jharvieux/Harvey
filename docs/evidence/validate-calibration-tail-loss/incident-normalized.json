@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 1,
+  "issue": 1758,
+  "originalFailures": [
+    {
+      "runId": 30672048114,
+      "runAttempt": 1,
+      "jobId": 91291753249,
+      "startedAt": "2026-07-31T23:09:19Z",
+      "completedAt": "2026-07-31T23:11:43Z",
+      "conclusion": "failure",
+      "capturedLines": 762,
+      "lastCapturedNonempty": "harvey-liveness gate=calibration-gate status=measured units=719 scope=corpus entries scored against a real mechanical scan",
+      "actualVerdictLines": 0,
+      "childStackLines": 0,
+      "capturedArtifact": "failure-91291753249-captured-diff.txt",
+      "capturedSha256": "c43b510c07e43e3caf6044048f151d309185e257b52185afca7e64c7a4ceb808",
+      "jobUrl": "https://github.com/jharvieux/Harvey/actions/runs/30672048114/job/91291753249",
+      "runHeadSha": "df87ef1ad0dd3ab99b72d23cc842b20f6e3e54f2",
+      "actualCheckoutSha": "3c9e7ad31c9ada8f1d09cb7e25f50cff0e0850ed",
+      "observedChildExitCode": null,
+      "childStatusQualification": "not observable: the failing output assertion precedes code==1; job/Vitest exit is not child exit",
+      "guardAtCheckout": "absent",
+      "mode": "exact-verdict/id substring missing",
+      "retainedDiagnosticExcerpt": {
+        "path": "failure-tails/failure-91291753249-diagnostic-excerpt.log",
+        "bytes": 9196,
+        "sha256": "5b168d63dc7b41623e3f0784c895975f34d8a013724c362fff12e74d5be2eada"
+      },
+      "originalRawLogReceipt": {
+        "artifact": "failure-91291753249.log",
+        "argv": [
+          "gh",
+          "run",
+          "view",
+          "30672048114",
+          "--repo",
+          "jharvieux/Harvey",
+          "--attempt",
+          "1",
+          "--job",
+          "91291753249",
+          "--log"
+        ],
+        "exitCode": 0,
+        "sha256": "f065a523210558ecd785101c0bc5836c6bc25efa7a1f23d2419118f75c2d1efd",
+        "bytes": 216746
+      }
+    },
+    {
+      "runId": 30674508595,
+      "runAttempt": 1,
+      "jobId": 91298884992,
+      "startedAt": "2026-08-01T00:03:07Z",
+      "completedAt": "2026-08-01T00:05:44Z",
+      "conclusion": "failure",
+      "capturedLines": 761,
+      "lastCapturedNonempty": "harvey-liveness gate=calibration-gate status=measured units=698 scope=corpus entries scored against a real mechanical scan",
+      "actualVerdictLines": 0,
+      "childStackLines": 0,
+      "capturedArtifact": "failure-91298884992-captured-diff.txt",
+      "capturedSha256": "8f99056099060181f9b52071146f8f17f253b470ea6990cb08fb905f5ec9c9f9",
+      "jobUrl": "https://github.com/jharvieux/Harvey/actions/runs/30674508595/job/91298884992",
+      "runHeadSha": "434ca817ea31d826a9ad8c33a94349f4eda074ff",
+      "actualCheckoutSha": "434ca817ea31d826a9ad8c33a94349f4eda074ff",
+      "observedChildExitCode": null,
+      "childStatusQualification": "not observable: the failing output assertion precedes code==1; job/Vitest exit is not child exit",
+      "guardAtCheckout": "absent",
+      "mode": "exact-verdict/id substring missing",
+      "retainedDiagnosticExcerpt": {
+        "path": "failure-tails/failure-91298884992-diagnostic-excerpt.log",
+        "bytes": 9301,
+        "sha256": "b846334b79606844718de2bfbbc57a4914c3973928f66ec9dfb77340b6955ec0"
+      },
+      "originalRawLogReceipt": {
+        "artifact": "failure-91298884992.log",
+        "argv": [
+          "gh",
+          "run",
+          "view",
+          "30674508595",
+          "--repo",
+          "jharvieux/Harvey",
+          "--attempt",
+          "1",
+          "--job",
+          "91298884992",
+          "--log"
+        ],
+        "exitCode": 0,
+        "sha256": "5ba47184ac954361fc69ae9401d937bfe72401689e94fb5f4123b01a10cf8070",
+        "bytes": 214985
+      }
+    },
+    {
+      "runId": 30674590006,
+      "runAttempt": 1,
+      "jobId": 91299383941,
+      "startedAt": "2026-08-01T00:06:56Z",
+      "completedAt": "2026-08-01T00:09:28Z",
+      "conclusion": "failure",
+      "capturedLines": 405,
+      "lastCapturedNonempty": "harvey-liveness gate=calibration-gate status=measured units=719 scope=corpus entries scored against a real mechanical scan",
+      "actualVerdictLines": 0,
+      "childStackLines": 0,
+      "capturedArtifact": "failure-91299383941-captured-diff.txt",
+      "capturedSha256": "a7393f56a0732434df088d9a6428e46e856904c4bafc674d2a977e9abd6dc42b",
+      "jobUrl": "https://github.com/jharvieux/Harvey/actions/runs/30674590006/job/91299383941",
+      "runHeadSha": "09f103565e852abb5e4aef187447bc34d15c3eaf",
+      "actualCheckoutSha": "09f103565e852abb5e4aef187447bc34d15c3eaf",
+      "observedChildExitCode": 1,
+      "childStatusQualification": "explicitly printed in the split diagnostic",
+      "guardAtCheckout": "absent",
+      "mode": "missing-verdict-with-tail",
+      "retainedDiagnosticExcerpt": {
+        "path": "failure-tails/failure-91299383941-diagnostic-excerpt.log",
+        "bytes": 9601,
+        "sha256": "df0a0da2a173c42f4e43b7cf8685d212c7331cac92a542f8e06256dee3dbceec"
+      },
+      "originalRawLogReceipt": {
+        "artifact": "failure-91299383941.log",
+        "argv": [
+          "gh",
+          "run",
+          "view",
+          "30674590006",
+          "--repo",
+          "jharvieux/Harvey",
+          "--attempt",
+          "1",
+          "--job",
+          "91299383941",
+          "--log"
+        ],
+        "exitCode": 0,
+        "sha256": "018121e344d672795a58bb9d137e18b56b54dc0f0b521519cce82b42e98d8ea3",
+        "bytes": 159855
+      }
+    }
+  ],
+  "sourceAnchors": [
+    {
+      "sha": "434ca817ea31d826a9ad8c33a94349f4eda074ff",
+      "path": "src/cli/validate-calibration.ts",
+      "artifact": "occurrence2-validate-calibration.ts",
+      "sha256": "b888e6ee20c29d7348a37e80d9aefd090a202e10a1db4828c2f0752552e4f782",
+      "firstImport": "import { existsSync, readFileSync } from \"node:fs\";",
+      "anchors": [
+        {
+          "line": 444,
+          "text": "recordMeasured(\"calibration-gate\", scoredCorpus.length, \"corpus entries scored against a real mechanical scan\");"
+        },
+        {
+          "line": 446,
+          "text": "const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;"
+        },
+        {
+          "line": 468,
+          "text": "process.exit(1);"
+        }
+      ]
+    },
+    {
+      "sha": "434ca817ea31d826a9ad8c33a94349f4eda074ff",
+      "path": "src/cli/validate-calibration.test.ts",
+      "artifact": "occurrence2-validate-calibration.test.ts",
+      "sha256": "4bedb28b58d622a0e2f0b5970fbb26c9f88772b6786f3466354ffd5fc5a0f32b",
+      "firstImport": "import { execFileSync, spawn } from \"node:child_process\";",
+      "anchors": []
+    },
+    {
+      "sha": "09f103565e852abb5e4aef187447bc34d15c3eaf",
+      "path": "src/cli/validate-calibration.ts",
+      "artifact": "occurrence3-validate-calibration.ts",
+      "sha256": "b888e6ee20c29d7348a37e80d9aefd090a202e10a1db4828c2f0752552e4f782",
+      "firstImport": "import { existsSync, readFileSync } from \"node:fs\";",
+      "anchors": [
+        {
+          "line": 444,
+          "text": "recordMeasured(\"calibration-gate\", scoredCorpus.length, \"corpus entries scored against a real mechanical scan\");"
+        },
+        {
+          "line": 446,
+          "text": "const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;"
+        },
+        {
+          "line": 468,
+          "text": "process.exit(1);"
+        }
+      ]
+    },
+    {
+      "sha": "09f103565e852abb5e4aef187447bc34d15c3eaf",
+      "path": "src/cli/validate-calibration.test.ts",
+      "artifact": "occurrence3-validate-calibration.test.ts",
+      "sha256": "e02ebac7334b7d84a0c10a6a285dc878c291ab4f221096078c6b453f31f20ac1",
+      "firstImport": "import { execFileSync, spawn } from \"node:child_process\";",
+      "anchors": [
+        {
+          "line": 89,
+          "text": "const verdict = \"GATE FAIL — review-tier positives not caught by any rule (#1628)\";"
+        }
+      ]
+    },
+    {
+      "sha": "c180bcc0521fc31a597a664405aae85b718259ce",
+      "path": "src/cli/validate-calibration.ts",
+      "artifact": "fix-validate-calibration.ts",
+      "sha256": "6d3e5b1fddfe32dc4b53aa3623b5c787cf24d147ba456bd3ad052245820fd280",
+      "firstImport": "import \"./sync-stdio.js\";",
+      "anchors": [
+        {
+          "line": 445,
+          "text": "recordMeasured(\"calibration-gate\", scoredCorpus.length, \"corpus entries scored against a real mechanical scan\");"
+        },
+        {
+          "line": 447,
+          "text": "const gatePass = unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;"
+        },
+        {
+          "line": 469,
+          "text": "process.exit(1);"
+        }
+      ]
+    },
+    {
+      "sha": "c180bcc0521fc31a597a664405aae85b718259ce",
+      "path": "src/cli/validate-calibration.test.ts",
+      "artifact": "fix-validate-calibration.test.ts",
+      "sha256": "e02ebac7334b7d84a0c10a6a285dc878c291ab4f221096078c6b453f31f20ac1",
+      "firstImport": "import { execFileSync, spawn } from \"node:child_process\";",
+      "anchors": [
+        {
+          "line": 89,
+          "text": "const verdict = \"GATE FAIL — review-tier positives not caught by any rule (#1628)\";"
+        }
+      ]
+    },
+    {
+      "sha": "c180bcc0521fc31a597a664405aae85b718259ce",
+      "path": "src/cli/sync-stdio.ts",
+      "artifact": "fix-sync-stdio.ts",
+      "sha256": "7a401a89dab110a7afa74b118ced57c6b07084063a8d6c874f92ae9846fb99cf",
+      "firstImport": null,
+      "anchors": [
+        {
+          "line": 6,
+          "text": "// line of a gate and the refusal banner of an export sit immediately before their `process.exit(1)`,"
+        },
+        {
+          "line": 13,
+          "text": "// and CI do — 20000 filler lines, then one marker line, then `process.exit(1)`:"
+        }
+      ]
+    },
+    {
+      "sha": "4acfe8241e351a998aaafaa92dcdcee642523c81",
+      "path": "src/cli/validate-calibration.ts",
+      "artifact": "current-validate-calibration.ts",
+      "sha256": "837b76ab0ddbacfd134f695821ce9e5f821387d0843955743e678be4882cce63",
+      "firstImport": "import \"./sync-stdio.js\";",
+      "anchors": [
+        {
+          "line": 556,
+          "text": "recordMeasured(\"calibration-gate\", scoredCorpus.length, \"corpus entries scored against a real mechanical scan\");"
+        },
+        {
+          "line": 558,
+          "text": "const gatePass = graduationBroken.length === 0 && misplacedNeighbours.length === 0 && graduationControl.ok && neighbourControl.ok && unkeyed.length === 0 && exemptionErrors.length === 0 && unpaired.length === 0 && newTwinless.length === 0 && staleTwinBacklog.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && undeclaredShapes.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && recallMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && m6.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok && reviewRecallControl.ok;"
+        },
+        {
+          "line": 600,
+          "text": "process.exit(1);"
+        }
+      ]
+    },
+    {
+      "sha": "4acfe8241e351a998aaafaa92dcdcee642523c81",
+      "path": "src/cli/validate-calibration.test.ts",
+      "artifact": "current-validate-calibration.test.ts",
+      "sha256": "eebdaa4ece8b1ed15fc042698591bdf6ed8510f26ce6edb6013e840bd5a87fc3",
+      "firstImport": "import { execFileSync, spawn } from \"node:child_process\";",
+      "anchors": [
+        {
+          "line": 89,
+          "text": "const verdict = \"GATE FAIL — review-tier positives not caught by any rule (#1628)\";"
+        }
+      ]
+    },
+    {
+      "sha": "4acfe8241e351a998aaafaa92dcdcee642523c81",
+      "path": "src/cli/sync-stdio.ts",
+      "artifact": "current-sync-stdio.ts",
+      "sha256": "7a401a89dab110a7afa74b118ced57c6b07084063a8d6c874f92ae9846fb99cf",
+      "firstImport": null,
+      "anchors": [
+        {
+          "line": 6,
+          "text": "// line of a gate and the refusal banner of an export sit immediately before their `process.exit(1)`,"
+        },
+        {
+          "line": 13,
+          "text": "// and CI do — 20000 filler lines, then one marker line, then `process.exit(1)`:"
+        }
+      ]
+    }
+  ],
+  "fixPr": {
+    "headRefOid": "a0167acbcadcbfe97a7f50caa2d83dabbce5941b",
+    "mergeCommit": {
+      "oid": "c180bcc0521fc31a597a664405aae85b718259ce"
+    },
+    "mergedAt": "2026-08-01T01:05:33Z",
+    "number": 1768,
+    "state": "MERGED",
+    "url": "https://github.com/jharvieux/Harvey/pull/1768"
+  },
+  "operatorRuling": {
+    "operatorCommentUrl": "https://github.com/jharvieux/Harvey/issues/1758#issuecomment-5288590454",
+    "operatorCreatedAt": "2026-08-14T02:07:29Z",
+    "verbatimBody": "Operator ruling (2026-08-13): approved.\n\nA flaky test whose root cause is already identified and fixed may skip quarantine, provided the occurrences and evidence are logged, and proceed directly to the policy’s Fixed branch. Apply the proposed runbook exception; do not quarantine the `validate-calibration` negative control for the already-fixed truncation defect.\n\nThe operator’s verbatim response was: “1758 yes”. The operator-policy blocker is resolved.\n",
+    "bodySha256": "1928b78a21469752d0a51be9c8a1bd3ecd7271bbf6015d9ac02db8b77ce27fa6",
+    "constraints": [
+      "This is the operator-approved already-fixed exception, not a general repeated-failure exemption.",
+      "Do not quarantine, remove, weaken or retry-mask the calibration negative control.",
+      "Keep occurrence chronology, merged-fix identity and falsifier linked from the disposition."
+    ],
+    "falsifier": "a post-c180bcc shard-2 failure with exit 1, output ending at the liveness receipt before the verdict, and no signal/stack reopens the mechanism and prevents closure."
+  },
+  "sameCommitPreFixRerun": {
+    "runId": 30672048114,
+    "attempt": 2,
+    "jobId": 91294401757,
+    "actualCheckoutSha": "3c9e7ad31c9ada8f1d09cb7e25f50cff0e0850ed",
+    "startedAt": "2026-07-31T23:28:29Z",
+    "completedAt": "2026-07-31T23:31:24Z",
+    "conclusion": "success",
+    "filePassLines": [
+      {
+        "line": 418,
+        "text": "2026-07-31T23:31:00.5878732Z  ✓ src/cli/validate-calibration.test.ts (2 tests) 44616ms"
+      }
+    ],
+    "seededPassLines": [
+      {
+        "line": 420,
+        "text": "2026-07-31T23:31:00.5883727Z    ✓ validate-calibration exits 1 on a review-tier recall regression (#1628) > exits 1 when one caught review-tier positive is darkened, naming the row  21764ms"
+      }
+    ],
+    "artifact": "occurrence1-rerun-job-91294401757.log",
+    "sha256": "80022ae6b0d0d69634c397e0c2ea449aa3588121d6cf1f863c8b8a0a91fd7ba0",
+    "argv": [
+      "gh",
+      "api",
+      "repos/jharvieux/Harvey/actions/jobs/91294401757/logs"
+    ]
+  }
+}

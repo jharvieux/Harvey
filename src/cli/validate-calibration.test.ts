@@ -81,11 +81,18 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-calibration exits 1 on a
     // preserving and the victim is the first caught review-tier positive in corpus order — so a
     // missing substring never means "the gate named a different row". It means the verdict line was
     // not printed at all: the run ended between its measuring phase and its verdict. The three
-    // pre-fix shard-2 occurrences (30672048114@df87ef1, 30674508595@434ca81, and
-    // 30674590006@09f1035) all ended with exit 1 and output truncated at the liveness receipt,
-    // establishing real process-tail loss rather than a wrong seeded row or a flaky assertion.
-    // c180bcc/PR1768 landed the stdio-drain fix after those occurrences; the operator ruling is
-    // to document this fixed-before-quarantine sequence here, rather than quarantine the test.
+    // pre-fix shard-2 occurrences were run 30672048114 attempt 1 (actual merge checkout 3c9e7ad,
+    // reported PR head df87ef1), 30674508595@434ca81, and 30674590006@09f1035. All captured tails
+    // end at the liveness receipt without a verdict; only the third diagnostic observes child
+    // exit 1. The first two assertions failed before checking that status. c180bcc/PR1768 merged
+    // at 2026-08-01T01:05:33Z, after all three failures, adding the first-import stdio-drain guard.
+    // Paired real-pipe controls reproduce loss without that guard and retention with it. The
+    // complete historical window through 2026-08-14T07:26:57Z contains 154 calibration passes:
+    // 153 successful jobs plus one job cancelled after its calibration tests passed. The later
+    // census, raw diagnostic tails, source identities, and operator-approved Fixed disposition
+    // are retained in docs/evidence/validate-calibration-tail-loss/manifest.json. A post-c180bcc
+    // shard-2 failure with exit 1, output ending at the liveness receipt before the verdict, and
+    // no signal/stack reopens the mechanism and prevents closure. The test remains enabled.
     const verdict = "GATE FAIL — review-tier positives not caught by any rule (#1628)";
     expect(out, `the gate exited ${code} without printing a "${verdict}" line at all — it did not reach its verdict. Last 2000 chars of its output:\n${out.slice(-2000)}`).toContain(verdict);
     expect(out).toContain(`${verdict}: ${seeded}`);
