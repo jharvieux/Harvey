@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "package": "#1758 mechanical evidence publication subset",
+  "generatedFrom": [
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/packet.json",
+      "bytes": 14366,
+      "sha256": "2d0bd8147f297ce6cb4776e8b04b337efe5cb81ed38932df6ab39467c29adbfc"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/policy-packet.json",
+      "bytes": 2573,
+      "sha256": "3e274c4f8edeeb56b5d7d4a041a22db49f2472a4118f7f843902cd0c7f07717b"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/fix-pr.json",
+      "bytes": 242,
+      "sha256": "2304f4d04aa8eb2bc0a44adb4b78be52ca36bb4a4a7ef9224cfa4bd201e346e9"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/source-anchors.json",
+      "bytes": 7627,
+      "sha256": "57fc074d707ede12de42dbd9bd5ac5789bde767b20aca7ddc74eab1f7ab0e8be"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/all-attempt-dispositions.json",
+      "bytes": 168870,
+      "sha256": "79c23ba9031e60852eaff8d98dfe9f23b8b74e71b0db607aab110fb251719afa"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/postfix-census-summary.json",
+      "bytes": 3145,
+      "sha256": "478569411643651cd87b0219d1d4622b26efb18efc596051755f6e2c10fc0790"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/occurrence-manifest.json",
+      "bytes": 2694,
+      "sha256": "60696a43381214e39187f5535bba291c7bebf955c2a44eb06546d60292e0ad30"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/summary-v2.json",
+      "bytes": 1149,
+      "sha256": "61a96dab33984eceec998632ec2f2c6545c0b04fd419aa0710d73e4c22582457"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/qualified-heavy-jobs-v2.json",
+      "bytes": 3364795,
+      "sha256": "94213c6645e356dc3f83cb254a94be7079901568b7884757286d02426a7e1916"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/source-qualification-v2.json",
+      "bytes": 65879,
+      "sha256": "13e83645a87b894b4f4b5d21d6516547bd2b8bb89b110eb5055ede9f545f1462"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/refresh-manifest.json",
+      "bytes": 1382,
+      "sha256": "6666fba5693210a059d76836c58ec7e6bc1e71bd9d212dadea27cf10784a277d"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/all-attempts.json",
+      "bytes": 4374187,
+      "sha256": "34ef74aa90cea5cb829af16f788b4c0dcdc81e028942a15c4e47751dc1314de5"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-late-27718611/window-runs.json",
+      "bytes": 1667981,
+      "sha256": "265d539cc072a65f096d8b619732a5cecaa91be368eeda33bc50ff2979fa9f3d"
+    }
+  ],
+  "retainedFiles": {
+    "census-normalized.json": {
+      "bytes": 878186,
+      "sha256": "4f914c58ef5fa3ecbc6d874c601189a87f7735c9d4898ff7992f38633bc7540a"
+    },
+    "incident-normalized.json": {
+      "bytes": 15949,
+      "sha256": "a0020662b05c5cf2cecbbafd4eb4547eaed3d22e4b333c01e90ece4cf59654b2"
+    },
+    "reproduction/harvey-1758-extend-census.py": {
+      "bytes": 8323,
+      "sha256": "39ded74db15cd74283a513ccee22b40e154315ddc442ba7ba6d4244f3bab73ca"
+    },
+    "reproduction/harvey-1758-replay-census.py": {
+      "bytes": 6030,
+      "sha256": "0be86b6bd8be6dded801dd629ec2e50ff6b2af1333082992a41b61867ab107e7"
+    },
+    "failure-tails/failure-91291753249-diagnostic-excerpt.log": {
+      "bytes": 9196,
+      "sha256": "5b168d63dc7b41623e3f0784c895975f34d8a013724c362fff12e74d5be2eada"
+    },
+    "failure-tails/failure-91298884992-diagnostic-excerpt.log": {
+      "bytes": 9301,
+      "sha256": "b846334b79606844718de2bfbbc57a4914c3973928f66ec9dfb77340b6955ec0"
+    },
+    "failure-tails/failure-91299383941-diagnostic-excerpt.log": {
+      "bytes": 9601,
+      "sha256": "df0a0da2a173c42f4e43b7cf8685d212c7331cac92a542f8e06256dee3dbceec"
+    },
+    "README.md": {
+      "bytes": 2107,
+      "sha256": "15104c3725b5b9971f87dcd17bc52623d0ae17ded596e7009f5b05cd4f0fdec6"
+    }
+  },
+  "claimMap": {
+    "original_failure_tails_and_checkout_identity": [
+      "incident-normalized.json",
+      "failure-tails/"
+    ],
+    "source_anchors_and_fix_merge": [
+      "incident-normalized.json"
+    ],
+    "operator_ruling": [
+      "incident-normalized.json"
+    ],
+    "historical_and_late_run_attempt_job_population": [
+      "census-normalized.json"
+    ],
+    "late_step_outcomes_checkout_and_literal_log_offsets": [
+      "census-normalized.json"
+    ],
+    "current_source_qualification": [
+      "census-normalized.json"
+    ],
+    "parser_correction_and_incomplete_late_execution": [
+      "census-normalized.json"
+    ],
+    "original_replay_material": [
+      "reproduction/harvey-1758-extend-census.py",
+      "reproduction/harvey-1758-replay-census.py"
+    ]
+  },
+  "safety": "Raw hosted logs are not retained here. The package retains only the three diagnostic excerpts and literal classified log lines/offsets. Original full-log hashes remain distinct from retained subset hashes."
+}
