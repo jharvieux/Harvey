@@ -11,7 +11,8 @@ import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
-const EXPECTED_INVENTORY_SHA = "002b42909d683967584929b37111689915a77f9b20dc4d9232d695897bacb107";
+// Includes static-detect path-scope delivery (#1800) and lock-range routes/corpus (#1774).
+const EXPECTED_INVENTORY_SHA = "aeaa35a60cfefc6742bde462a8b719c364d8e03a8c958fc6c0514d92bacdf720";
 const CENSUS_SLICE_MS = 10_000;
 const CENSUS_SLICE_COUNT = 8;
 
