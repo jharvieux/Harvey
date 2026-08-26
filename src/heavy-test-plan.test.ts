@@ -1,38 +1,111 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 import { buildHeavyPlan, loadHeavyRegistry, selectHeavyWorkloads, shardSelectedWorkloads } from "./heavy-test-plan.mjs";
+import { MEASURED_OUTSIDE_DISCOVERY, SCORED_GATES } from "./scored-gates.js";
 
 const registry = loadHeavyRegistry();
 const allIds = registry.workloads.map((workload) => workload.id);
+const censusOwners = ["effectiveness-registry", "effectiveness-delivery"];
+
+function inventorySourceInputs(): string[] {
+  const root = process.cwd();
+  const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+  const pending = ["src/cli/detector-census.ts", "src/cli/run-audit.ts"];
+  const bindings = ts.createSourceFile("src/audit-runners.ts", readFileSync("src/audit-runners.ts", "utf8"), ts.ScriptTarget.Latest, true);
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) && /^(?:src|tools)\/[^#]+\.[cm]?[jt]sx?$/.test(node.text)
+      && existsSync(node.text)) pending.push(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(bindings);
+  pending.push(...SCORED_GATES.filter((gate) => gate.cadence.kind !== "none").map((gate) => `src/cli/${gate.id}.ts`));
+  const inputs = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop()!;
+    if (inputs.has(file)) continue;
+    inputs.add(file);
+    const source = readFileSync(file, "utf8");
+    const commands = (node: ts.Node): void => {
+      if (ts.isStringLiteralLike(node) && (ts.isCallExpression(node.parent) || ts.isArrayLiteralExpression(node.parent))) {
+        const command = manifest.scripts[node.text];
+        for (const match of command?.matchAll(/(?:src|tools)\/[\w/.-]+\.[cm]?[jt]sx?\b/g) ?? []) {
+          if (existsSync(match[0])) pending.push(match[0]);
+        }
+      }
+      ts.forEachChild(node, commands);
+    };
+    commands(ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true));
+    for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
+      if (!imported.fileName.startsWith(".")) continue;
+      const path = resolve(dirname(file), imported.fileName);
+      const stem = path.replace(/\.[cm]?jsx?$/, "");
+      const candidates = [path, ...[".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"].flatMap((extension) => [stem + extension, join(path, `index${extension}`)])];
+      const found = candidates.find((candidate) => existsSync(candidate));
+      expect(found, `${file} imports ${imported.fileName}`).toBeDefined();
+      pending.push(relative(root, found!).split("\\").join("/"));
+    }
+  }
+  for (const command of Object.values(manifest.scripts)) {
+    const entry = /^(?:pnpm exec )?(?:node|tsx)\s+((?:src|tools)\/[\w/.-]+\.[cm]?[jt]sx?)(?:\s|$)/.exec(command)?.[1];
+    if (entry && !/(?:&&|\|\||[|;])/.test(command)) inputs.add(entry);
+  }
+  return [...inputs].sort();
+}
 
 describe("heavy PR impact planner", () => {
+  it("routes the census import, producer implementation, and scored-venue source closure to both owners", () => {
+    const inputs = inventorySourceInputs();
+    expect(inputs).toEqual(expect.arrayContaining(["src/sbom.ts", "src/scan/mechanical-dependency-registry.ts", "src/scan/calibration/b2-deps.entries.ts", "src/quick-scan.ts", "tools/pii-classify.mjs"]));
+    for (const path of inputs) {
+      expect(selectHeavyWorkloads(registry, [path]).selected, path).toEqual(expect.arrayContaining(censusOwners));
+    }
+  });
+
+  it("routes discovered input classes and scored cadence files without selecting unrelated workloads", () => {
+    const cadenceFiles = [...SCORED_GATES, ...MEASURED_OUTSIDE_DISCOVERY].flatMap((gate) =>
+      gate.cadence.kind === "workflow" ? [gate.cadence.file]
+        : gate.cadence.kind === "none" && gate.cadence.alarmedBy ? [gate.cadence.alarmedBy.file] : []);
+    for (const path of [
+      "src/scan/new-producer.ts", "src/scan/calibration/new-batch.entries.ts",
+      "src/scan/rules/semgrep/new-family.yml", "src/detectors/new-detector.ts",
+      "src/pentest/new-probe.ts", "src/cli/validate-new-venue.ts", ...cadenceFiles,
+    ]) {
+      const selection = selectHeavyWorkloads(registry, [path]);
+      expect(selection.mode, path).toBe("scoped");
+      expect(selection.selected, path).toEqual(expect.arrayContaining(censusOwners));
+      expect(selection.selected, path).not.toContain("run-audit");
+    }
+  });
+
   it("uses the same registry as Vitest's heavy exclusion — no second file list can drift", () => {
     expect(registry.workloads.map((workload) => workload.testFile)).toEqual(HEAVY_CLI_TESTS);
     expect(new Set(HEAVY_CLI_TESTS).size).toBe(HEAVY_CLI_TESTS.length);
   });
 
-  it("scopes a mutation-only change to its CLI, cross-process cache seam, and orchestrator consumer", () => {
+  it("scopes a mutation change to its CLI, cache, orchestrator, and inventory consumers", () => {
     expect(selectHeavyWorkloads(registry, ["src/mutation-scan.ts"])).toMatchObject({
       mode: "scoped",
-      selected: ["run-audit", "mutation-scan", "corpus-scanner-cross-process"],
+      selected: ["run-audit", "mutation-scan", "corpus-scanner-cross-process", ...censusOwners],
       unmatched: [],
     });
   });
 
   it("scopes independent module-local changes to their owned workloads", () => {
-    expect(selectHeavyWorkloads(registry, ["src/lighthouse.ts"]).selected).toEqual(["lighthouse-scan"]);
+    expect(selectHeavyWorkloads(registry, ["src/lighthouse.ts"]).selected).toEqual(["lighthouse-scan", ...censusOwners]);
     expect(selectHeavyWorkloads(registry, ["src/quality-scan.ts"]).selected).toEqual([
       "run-audit",
       "quick-scan",
       "quality-scan",
       "corpus-scanner-cross-process",
+      ...censusOwners,
     ]);
-    expect(selectHeavyWorkloads(registry, ["src/audit-report.ts"]).selected).toEqual(["run-audit"]);
-    expect(selectHeavyWorkloads(registry, ["src/health-scorecard.ts"]).selected).toEqual(["run-audit", "quick-scan"]);
+    expect(selectHeavyWorkloads(registry, ["src/audit-report.ts"]).selected).toEqual(["run-audit", ...censusOwners]);
+    expect(selectHeavyWorkloads(registry, ["src/health-scorecard.ts"]).selected).toEqual(["run-audit", "quick-scan", ...censusOwners]);
     expect(selectHeavyWorkloads(registry, ["src/fix/schedule.ts"]).selected).toEqual([
       "fix-calibration-acceptance",
       "fix-detector-rerun",
@@ -46,28 +119,29 @@ describe("heavy PR impact planner", () => {
       "mutation-scan",
       "quality-scan",
       "corpus-scanner-cross-process",
+      ...censusOwners,
     ]);
   });
 
   it("takes the union for a mixed but fully-owned PR", () => {
     const selection = selectHeavyWorkloads(registry, ["src/lighthouse.ts", "src/mutation-scan.ts"]);
     expect(selection.mode).toBe("scoped");
-    expect(selection.selected).toEqual(["run-audit", "mutation-scan", "lighthouse-scan", "corpus-scanner-cross-process"]);
+    expect(selection.selected).toEqual(["run-audit", "mutation-scan", "lighthouse-scan", "corpus-scanner-cross-process", ...censusOwners]);
   });
 
   it("runs mapped owners and reports unmapped paths without upgrading the PR to full", () => {
     const selection = selectHeavyWorkloads(registry, ["src/lighthouse.ts", "src/new-shared-runtime.ts"]);
     expect(selection.mode).toBe("scoped");
-    expect(selection.selected).toEqual(["lighthouse-scan"]);
+    expect(selection.selected).toEqual(["lighthouse-scan", ...censusOwners]);
     expect(selection.unmatched).toEqual(["src/new-shared-runtime.ts"]);
     expect(selection.reasons.join("\n")).toContain("full post-merge run remains the backstop");
   });
 
-  it("skips empty, workflow-only, docs-only, planner-only, and otherwise unmapped PRs", () => {
+  it("skips empty, non-venue workflow, docs, planner, and otherwise unmapped PRs", () => {
     for (const paths of [
       [],
       [".github/workflows/conservation.yml"],
-      [".github/workflows/ci.yml"],
+      [".github/workflows/acceptance-close.yml"],
       ["docs/design/heavy-routing.md"],
       ["src/heavy-test-plan.mjs"],
       ["src/unmapped-local-helper.ts"],
@@ -129,7 +203,7 @@ describe("heavy PR impact planner", () => {
   });
 
   it("uses two runners for a scoped multi-workload plan instead of paying for the full three-runner setup", () => {
-    const plan = buildHeavyPlan(registry, ["src/mutation-scan.ts"], { maxShards: 3 });
+    const plan = buildHeavyPlan(registry, ["src/mutation-scan.test.ts"], { maxShards: 3 });
     expect(plan.mode).toBe("scoped");
     expect(plan.matrix.include).toHaveLength(2);
     expect(plan.matrix.include.flatMap((group) => group.workloadIds).sort()).toEqual([
@@ -151,12 +225,29 @@ describe("heavy PR impact planner", () => {
     expect(first.digest).toBe(second.digest);
   });
 
-  it("the shipped CLI reads git's changed paths and writes the scoped matrix to GITHUB_OUTPUT", () => {
+  it.each([
+    { name: "independent test", paths: ["src/lighthouse.test.ts"], selected: ["lighthouse-scan"] },
+    { name: "SBOM producer input", paths: ["src/sbom.ts"], selected: censusOwners },
+    { name: "new corpus batch", paths: ["src/scan/calibration/new-batch.entries.ts"], selected: ["validate-calibration", ...censusOwners] },
+    { name: "scored workflow", paths: [".github/workflows/ci.yml"], selected: censusOwners },
+    {
+      name: "dependency-range PR",
+      paths: [
+        "dry-run/findings-report.json", "dry-run/findings.json", "src/findings.test.ts", "src/findings.ts",
+        "src/render-fidelity.test.ts", "src/sbom.test.ts", "src/sbom.ts", "src/scan/calibration/b2-deps.entries.ts",
+        "src/scan/mechanical-dependency-registry.ts", "src/scan/mechanical.test.ts", "src/scan/supply-chain.test.ts",
+        "src/scan/supply-chain.ts", "src/unstructured-claims-baseline.ts", "targets/calibration/GROUND-TRUTH.md",
+        "targets/calibration/package-lock.json",
+      ],
+      selected: ["validate-calibration", ...censusOwners],
+    },
+    { name: "unrelated documentation", paths: ["docs/design/operator-notes.md"], selected: [] },
+  ])("the shipped CLI routes $name from git into GITHUB_OUTPUT", ({ paths, selected }) => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-heavy-plan-cli-"));
     try {
       const git = join(dir, "git");
       const output = join(dir, "github-output");
-      writeFileSync(git, "#!/bin/sh\nprintf '%s\\n' src/lighthouse.ts\n");
+      writeFileSync(git, `#!/bin/sh\nprintf '%s\\n' ${paths.map((path) => `'${path}'`).join(" ")}\n`);
       chmodSync(git, 0o755);
       const result = spawnSync(
         process.execPath,
@@ -165,11 +256,11 @@ describe("heavy PR impact planner", () => {
       );
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
       const values = new Map(readFileSync(output, "utf8").trim().split("\n").map((line) => line.split("=", 2) as [string, string]));
-      expect(values.get("mode")).toBe("scoped");
-      expect(values.get("selected")).toBe("lighthouse-scan");
-      expect(JSON.parse(values.get("matrix") ?? "null")).toMatchObject({
-        include: [{ shard: 1, total: 1, workloadIds: ["lighthouse-scan"] }],
-      });
+      expect(values.get("mode")).toBe(selected.length > 0 ? "scoped" : "skipped");
+      expect(values.get("selected")).toBe(selected.join(","));
+      const matrix = JSON.parse(values.get("matrix") ?? "null") as { include: { workloadIds: string[]; files: string[] }[] };
+      expect(matrix.include.flatMap((group) => group.workloadIds).sort()).toEqual([...selected].sort());
+      expect(matrix.include.flatMap((group) => group.files).sort()).toEqual(registry.workloads.filter((workload) => selected.includes(workload.id)).map((workload) => workload.testFile).sort());
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

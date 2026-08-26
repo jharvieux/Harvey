@@ -12,10 +12,12 @@ import {
 import { discoverEffectivenessRouteGraph } from "./effectiveness-route-graph.js";
 import type { EffectivenessInventory, EffectivenessProducer } from "./effectiveness-schema.js";
 import { HEAVY_CLI_TESTS, shardHeavyTests } from "./heavy-cli-tests.js";
+import { loadHeavyRegistry, selectHeavyWorkloads } from "./heavy-test-plan.mjs";
 import { createProducerExecutionReceipt, type ProducerExecutionReceipt } from "./producer-execution-receipt.js";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
-const EXPECTED_INVENTORY_SHA = "002b42909d683967584929b37111689915a77f9b20dc4d9232d695897bacb107";
+// Includes static-detect path-scope delivery (#1800) and lock-range routes/corpus (#1774).
+const EXPECTED_INVENTORY_SHA = "aeaa35a60cfefc6742bde462a8b719c364d8e03a8c958fc6c0514d92bacdf720";
 const CENSUS_SLICE_MS = 10_000;
 const CENSUS_SLICE_COUNT = 8;
 const PARENT_INVENTORY_GETTER = ["get", "Effectiveness", "Inventory"].join("");
@@ -232,6 +234,19 @@ describe("awaited reversed detector-census integration", () => {
     for (const file of detectorCensusTests) {
       expect(routed.filter((candidate) => candidate === file), `${file} must run exactly once`).toHaveLength(1);
     }
+    const inventory = immutableInventory();
+    const inputFiles = new Set([
+      ...inventory.producers.flatMap((row) => row.implementations.map((item) => item.file)),
+      ...inventory.receipt.productionRoots,
+      ...inventory.receipt.calls.flatMap((call) => [call.consumerFile, call.targetFile]),
+      ...inventory.venues.map((venue) => venue.rootId),
+    ]);
+    const registry = loadHeavyRegistry();
+    for (const file of inputFiles) {
+      expect(selectHeavyWorkloads(registry, [file]).selected, file).toEqual(expect.arrayContaining([
+        "effectiveness-registry", "effectiveness-delivery",
+      ]));
+    }
   });
 
   it("terminates and reaps an unfinished child before another test can run", async () => {
@@ -313,6 +328,18 @@ describe("effectiveness producer inventory (#1910)", () => {
       "p/security-audit",
       "p/typescript",
     ]);
+    expect(producer(inventory, "mechanical:dependency-advisory:dependency-pinning").implementations).toContainEqual({
+      file: "src/sbom.ts", symbol: "dependencyRangeEdge", kind: "function",
+    });
+    expect(inventory.receipt.calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ consumerFile: "src/cli/static-detect.ts", targetFile: "src/scan/path-scope.ts", targetSymbol: "pathScopeNotAssessedRows" }),
+      ...["src/sbom.ts", "src/scan/mechanical-dependency-registry.ts", "src/scan/supply-chain.ts"].map((consumerFile) =>
+        expect.objectContaining({ consumerFile, targetFile: "src/sbom.ts", targetSymbol: "dependencyRangeEdge" })),
+    ]));
+    expect(inventory.venues.find((venue) => venue.id === "validate-calibration")?.corpusIds).toEqual(expect.arrayContaining([
+      "N-TRANSITIVE-DEP-PINNED", "N-TRANSITIVE-DEP-REGISTRY", "P-NONREGISTRY-DEP-TRANSITIVE",
+      "P-UNPINNED-DEP-TRANSITIVE", "P-UNPINNED-LOCK-NATURAL",
+    ]));
   });
 
   it("keeps each producer class disjoint and excludes controls from the true-family count", () => {
