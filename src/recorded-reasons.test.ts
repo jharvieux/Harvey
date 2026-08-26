@@ -488,6 +488,20 @@ describe("untriagedClaims — the claims outside every block, counted rather tha
     const reasons: ParsedReason[] = [];
     expect(untriagedClaims(sources, reasons)).toEqual(claimScopeMetrics(sources, reasons).accepted);
   });
+
+  it("excludes reason blocks and fences before measuring either accepted or comment-rejected rows", () => {
+    const sources = [
+      { file: "src/x.ts", text: `/*\nREASON: ${POSITIVE_REGISTER} in a recorded block.\nKIND: empirical\nPROVENANCE: MEASURED 2026-07-25\nFALSIFIER: false\n*/\nconst message = "${POSITIVE_REGISTER} in code";\n// ${POSITIVE_REGISTER} in a comment.` },
+      { file: "docs/x.md", text: `\`\`\`\n${POSITIVE_REGISTER} inside a fence.\n\`\`\`\n${POSITIVE_REGISTER} outside the fence.` },
+    ];
+    const reasons = sources.flatMap(({ file, text }) => parseRecordedReasons(text, file));
+    const metrics = claimScopeMetrics(sources, reasons);
+
+    expect(reasons).toHaveLength(1);
+    expect(metrics.excludedByCommentScope).toBe(1);
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map(({ file, line }) => `${file}:${line}`)).toEqual(["src/x.ts:8", "docs/x.md:4"]);
+  });
 });
 
 describe("untriagedClaims has one structural owner (#1410)", () => {

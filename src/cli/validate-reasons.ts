@@ -224,10 +224,10 @@ console.log("  Each is a standing claim outside any REASON block, so nothing re-
 
 // What this pass READ, not just what it found — a scope boundary nobody states reads as coverage.
 // The ratchet below inherits this boundary exactly, so it is printed on every run (#1347).
-console.log(`  CENSUSED WHOLE: ${claimMetrics.sourcesByScope.prose} prose surface(s) under ${(roots.length > 0 ? roots : DEFAULT_ROOTS).join(", ")}.`);
+console.log(`  CENSUSED WHOLE: ${claimMetrics.sourcesByScope.prose} prose surface(s) across ${(roots.length > 0 ? roots : DEFAULT_ROOTS).join(", ")}${issues.length > 0 ? ` and ${issues.length} open-issue body/comment surface(s)` : ""}.`);
 console.log(`  CENSUSED COMMENTS ONLY: ${claimMetrics.sourcesByScope.comments} .ts/.yml/.sql surface(s) — comment lines are read, code lines are NOT; ${claimMetrics.excludedByCommentScope} matching code line(s) were excluded by that boundary.`);
 console.log(`  NOT CENSUSED: ${claimMetrics.sourcesByScope.none} file(s) — generated surfaces that quote the governed population and would otherwise count it twice.`);
-console.log(`  VOCABULARY: standing impossibility, the unverified register, and the exact positive-register phrase; ${claimMetrics.acceptedVerifiedLive} accepted row(s) use that phrase.`);
+console.log(`  VOCABULARY: standing impossibility, the unverified register, and the exact phrase "verified live"; ${claimMetrics.acceptedVerifiedLive} accepted row(s) use that phrase.`);
 if (process.argv.includes("--census")) {
   for (const c of prose) console.log(`  ${c.file}:${c.line}  ${c.text.slice(0, 140)}`);
 }

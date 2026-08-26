@@ -135,7 +135,7 @@ export const DEFAULT_ROOTS = ["src", "docs", "briefs", "CLAUDE.md", "SESSION.md"
 
 // REASON: SESSION.md stays inside DEFAULT_ROOTS and inside the ratchet, despite being an actively-rewritten scratch log — a standing claim in the session log is the shape that has done the most damage here, and exempting one file would be the first entry on a suppression list this gate deliberately does not have
 // KIND: decisional
-// PROVENANCE: MEASURED 2026-07-31 — SESSION.md is an actively rewritten surface that can carry standing operational claims; current contribution and churn are derived by `pnpm validate-reasons --census`, never frozen in this comment
+// PROVENANCE: MEASURED 2026-07-31 — SESSION.md is an actively rewritten surface that can carry standing operational claims; its current contribution is reported by `pnpm validate-reasons --census`, never frozen in this comment
 // OWNER: operator
 // DECISION: #1401 — keep every governed root under the same ratchet unless the operator explicitly rules otherwise; excluding a frequently edited file would create the first suppression path for precisely the claims this gate exists to expose
 // TOUCHES: SESSION.md
@@ -189,8 +189,8 @@ export function collectReasons(roots: string[], base: string): ParsedReason[] {
 // #1347 added "untestable" and the unverified register. Until then the census was PROSE-ONLY and the
 // vocabulary was impossibility-only, so #1318's motivating source-comment examples fell outside
 // it. The selection rule includes "untestable" because it reaches a known standing-claim shape.
-// The unverified register covers the corresponding evidence-status shape; runtime metrics report
-// the current cost of both arms instead of this comment.
+// The unverified register covers the corresponding evidence-status shape; the runtime census
+// measures the matching population instead of this comment.
 const IMPOSSIBILITY_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|not possible|unable to|out of reach|infeasible|untestable)\b/i;
 // "the shape was never verified" forecloses nothing — it is the honest register, and refusing it on
 // an ASSUMED provenance would punish exactly the phrasing the doctrine asks for. So it is censused
@@ -198,7 +198,7 @@ const IMPOSSIBILITY_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|n
 const UNVERIFIED_VOCABULARY = /\b(unverified|not (?:independently )?(?:re-)?verified|never (?:been )?verified)\b/i;
 // #1410 — the positive register needs the same decay census as impossibility and the honest-negative
 // register. Keep this arm exact: widening it to the bare verb reaches ordinary evidence prose,
-// while punctuation/spacing variants do not make the same claim as the two-word status label.
+// while punctuation/spacing variants stay outside this deliberately bounded addition.
 const VERIFIED_LIVE_VOCABULARY = /\bverified live\b/i;
 const CLAIM_VOCABULARY = new RegExp(
   `${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}|${VERIFIED_LIVE_VOCABULARY.source}`,
@@ -290,12 +290,12 @@ export function claimScopeMetrics(sources: SourceText[], reasons: ParsedReason[]
     text.split("\n").forEach((raw, i) => {
       if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
       if (inFence || !CLAIM_VOCABULARY.test(raw)) return;
+      const line = i + 1;
+      if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
       if (comment && !comment.test(raw)) {
         excludedByCommentScope += 1;
         return;
       }
-      const line = i + 1;
-      if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
       accepted.push({ file, line, text: raw.trim() });
       if (VERIFIED_LIVE_VOCABULARY.test(raw)) acceptedVerifiedLive += 1;
     });
