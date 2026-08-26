@@ -284,7 +284,7 @@ if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
 else if (query.includes("issues(first:100")) {
   if (args.includes("after=issue-page-1")) send({ data: { repository: { issues: {
     pageInfo: { hasNextPage: false, endCursor: null },
-    nodes: [{ number: 1412, body: "${POSITIVE_REGISTER} in the second issue page.", comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }],
+    nodes: [{ number: 1412, body: "${POSITIVE_REGISTER} in the second issue page. " + "x".repeat(1024 * 1024 + 1), comments: { totalCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }],
   } } } });
   else send({ data: { repository: { issues: {
     pageInfo: { hasNextPage: true, endCursor: "issue-page-1" },
@@ -330,6 +330,27 @@ else { process.stderr.write("credential expired\\n"); process.kill(process.pid, 
       expect(out).toContain("was terminated by signal SIGTERM");
       expect(out).toContain("credential expired");
       expect(out).not.toContain("needs an authenticated gh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("names a null tracker response instead of throwing a generic TypeError", async () => {
+    const dir = plant({ "source.md": "Ordinary prose.\n" });
+    const bin = plant({
+      gh: `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo") process.stdout.write("jharvieux/Harvey\\n");
+else process.stdout.write("null");
+`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      const { code, out } = await gate(dir, ["--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
+      expect(code).toBe(1);
+      expect(out).toContain("open-issue query returned no top-level response object");
+      expect(out).not.toContain("TypeError");
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });

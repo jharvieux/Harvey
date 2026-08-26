@@ -252,6 +252,9 @@ function comments(value: unknown, what: string): FetchedComments {
 }
 
 function parseOpenIssuesPage(value: unknown): { pageInfo: PageInfo; nodes: FetchedIssueNode[] } {
+  if (typeof value !== "object" || value === null) {
+    malformedIssueResponse("open-issue query returned no top-level response object");
+  }
   const issues = (value as { data?: { repository?: { issues?: unknown } } }).data?.repository?.issues;
   if (typeof issues !== "object" || issues === null || !Array.isArray((issues as { nodes?: unknown }).nodes)) {
     malformedIssueResponse("open-issue query returned no issue page");
@@ -271,6 +274,9 @@ function parseOpenIssuesPage(value: unknown): { pageInfo: PageInfo; nodes: Fetch
 }
 
 function parseCommentsPage(value: unknown, number: number): FetchedComments {
+  if (typeof value !== "object" || value === null) {
+    malformedIssueResponse(`issue #${number} comment query returned no top-level response object`);
+  }
   const result = (value as { data?: { repository?: { issue?: { comments?: unknown } | null } } }).data?.repository?.issue?.comments;
   return comments(result, `issue #${number}`);
 }
