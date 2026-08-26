@@ -42,18 +42,18 @@ interface WorkflowStep {
 
 interface CorpusWorkflow {
   jobs: {
-    shard: { strategy: { matrix: { shard: unknown } }; "timeout-minutes": number; steps: WorkflowStep[] };
+    shard: { strategy: { matrix: { shard: unknown } }; "timeout-minutes": string | number; steps: WorkflowStep[] };
     "current-replay": { if: string; strategy: { matrix: { shard: unknown } }; steps: WorkflowStep[] };
   };
 }
 
 // These scalar expressions use the shared JS/Actions boolean operators. Evaluate the YAML,
 // including fromJSON, rather than recognizing a spelling of the intended event predicate.
-function eventExpression(value: unknown, event: string): unknown {
+function eventExpression(value: unknown, event: string, shard = 1): unknown {
   if (typeof value !== "string") return value;
   return runInNewContext(value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("needs.prepare-current-inputs.result", "preparationResult"), {
-    github: { event_name: event }, preparationResult: "success", fromJSON: JSON.parse,
+    github: { event_name: event }, matrix: { shard }, preparationResult: "success", fromJSON: JSON.parse,
   });
 }
 
@@ -188,11 +188,14 @@ describe("corpus workflow four-shard production contract", () => {
     expect(contractErrors()).toEqual([]);
   });
 
-  it("keeps the recorded-weight critical path below the unchanged timeout (not a runtime forecast)", () => {
+  it("keeps recorded shard weights below their event-scoped budgets (not a runtime forecast)", () => {
     const workflow = parseYaml(WORKFLOW_TEXT) as CorpusWorkflow;
-    const longest = Math.max(...partitionTargets(SLUGS, 4).map(load));
-    expect(longest + 5 * 60).toBeLessThan(workflow.jobs.shard["timeout-minutes"] * 60);
-    expect(workflow.jobs.shard["timeout-minutes"]).toBe(30);
+    for (const event of ["push", "pull_request", "merge_group"]) {
+      for (const [index, members] of partitionTargets(SLUGS, 4).entries()) {
+        const minutes = Number(eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1));
+        expect(load(members) + 5 * 60).toBeLessThan(minutes * 60);
+      }
+    }
   });
 
   it.each([

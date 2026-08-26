@@ -196,10 +196,10 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "path-scope-disclosure", order: 280, module: "M1", implementation: { file: "src/scan/path-scope.ts", exportName: "pathScopeNotAssessedRows" }, findingIds: ["M1-PATHSCOPE-*"], taxonomies: ["Coverage — *"],
     populationClass: "disclosure-only",
-    applicableFiles: { description: "the full shared load-sources view consumed by the registered class selectors", select: (context) => context.loadedSources },
+    applicableFiles: { description: "union of the actual caller inventories; each class consumes its declared production input", select: (context) => [...new Map([...context.loadedSources, ...context.identifiedSourceFiles, ...context.sourceFiles, ...context.envSourceFiles].map((file) => [file.path, file])).values()] },
     positiveFixture: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: zero-population paths emit their counted disclosure controls."),
     benignTwin: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: non-zero populations suppress the disclosure twin."),
-    invoke: (context, selected) => pathScopeNotAssessedRows(selected, { framework: context.framework }),
+    invoke: (context) => pathScopeNotAssessedRows(context.loadedSources, context),
   }),
   detector({ id: "secret-rotation", order: 290, module: "M1", implementation: { file: "src/scan/secret-rotation.ts", exportName: "detectSecretRotationFindings" }, findingIds: ["SECRET-rotation-pair-*"], taxonomies: ["Static secret verified with no rotation-pair acceptance window"], invoke: (_context, selected) => detectSecretRotationFindings([...selected]) }),
   detector({
@@ -271,7 +271,7 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
     implementation: { file: "src/detectors/m5-type-escape.ts", exportName: "detectM5TypeEscapeFindings" },
     findingIds: ["M5TYPE-*"],
     taxonomies: ["M5 — Type escape (`as any`)", "M5 — Type escape (double assertion)", "M5 — Unexplained @ts-ignore"],
-    applicableFiles: { description: "product JavaScript/TypeScript files accepted by the type-escape classifier", select: (context) => m5TypeEscapeSources(context.loadedSources.filter((file) => !NON_PRODUCT.test(file.path))) },
+    applicableFiles: { description: "product JavaScript/TypeScript files accepted by the type-escape classifier", select: (context) => m5TypeEscapeSources(context.loadedSources) },
     invoke: (_context, selected) => detectM5TypeEscapeFindings([...selected]),
   }),
   detector({

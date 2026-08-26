@@ -5,14 +5,16 @@
 // test, framework, or request-entry paths. A zero from that unread population is not a clean scan.
 //
 // Each owner exports its metadata and the selector its production implementation consumes. This
-// module only composes those exports; it never copies a regex. `path-scope.test.ts` discovers every
-// `*_PATH_SCOPE_CLASSES` export under the owned source tree, so adding an owner export without
-// registering it here fails the completeness ratchet. Re-run `src/cli/path-scope-census.ts` for
-// current counts — no historical count is asserted in source.
+// module only composes those exports; it never copies a regex. `path-scope.test.ts` independently
+// discovers source selectors as well as class-metadata exports, and exercises every class through
+// the shipping registry and rendered document. Re-run `src/cli/path-scope-census.ts` for counts.
 
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "../detectors/common.js";
+import { NON_PRODUCT } from "../detectors/load-sources.js";
 import type { TargetFramework } from "./framework-detect.js";
+import { M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES, m5TypeEscapeSources } from "../detectors/m5-type-escape.js";
+import { M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES, vacuousAssertionSourceFiles } from "../detectors/m8-vacuous-assertion.js";
 import {
   APP_ROUTER_PATH_SCOPE_CLASSES,
   appRouterClientRootFiles,
@@ -48,7 +50,13 @@ import {
 
 export interface PathScopeContext {
   framework?: TargetFramework;
+  /** Exact caller inventories; omitted only when the supplied in-memory fixture is the inventory. */
+  identifiedSourceFiles?: readonly SourceInput[];
+  sourceFiles?: readonly SourceInput[];
+  envSourceFiles?: readonly SourceInput[];
 }
+
+type PathScopeInventory = "loaded-sources" | "identified-sources" | "source-files" | "env-source-files" | "product-loaded-sources";
 
 export interface PathScopedClass {
   /** Row id emitted when this class's filter admits nothing. */
@@ -59,6 +67,8 @@ export interface PathScopedClass {
   /** Owning source export, retained by the census completeness receipt. */
   ownerFile: string;
   selectorSymbol: string;
+  /** The caller's input before this class's exported selector runs. */
+  inventory?: Exclude<PathScopeInventory, "loaded-sources">;
   /** What the filter admits, in the words a client reads. */
   convention: string;
   /** THE detector's own exported filter — never a copy of it. */
@@ -75,6 +85,7 @@ export const ENTRY_POINT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "bola-owner",
     classId: "Request-supplied owner id trusted by an authenticated Pages Router handler",
     ownerFile: "src/scan/bola-owner.ts",
+    inventory: "source-files",
     selectorSymbol: "bolaOwnerScannedFiles",
     convention: "Next.js Pages Router API routes (`pages/api/**`, excluding test/example trees)",
     select: bolaOwnerScannedFiles,
@@ -85,6 +96,7 @@ export const ENTRY_POINT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "job-tenant-scope",
     classId: "Service-role query in a background-job path with no tenant predicate",
     ownerFile: "src/scan/job-tenant-scope.ts",
+    inventory: "source-files",
     selectorSymbol: "jobTenantScopeScannedFiles",
     convention: "conventional background-job directories (`inngest/`, `jobs/`, `queues/`, `workers/`, `app/api/cron/`)",
     select: jobTenantScopeScannedFiles,
@@ -110,6 +122,8 @@ export const PATH_SCOPE_CLASS_GROUPS: readonly PathScopeClassGroup[] = [
   { ownerFile: "src/detectors/perf-code.ts", exportName: "PERF_CODE_PATH_SCOPE_CLASSES", classes: PERF_CODE_PATH_SCOPE_CLASSES },
   { ownerFile: "src/detectors/test-intent.ts", exportName: "TEST_INTENT_PATH_SCOPE_CLASSES", classes: TEST_INTENT_PATH_SCOPE_CLASSES },
   { ownerFile: "src/detectors/vitest-intent.ts", exportName: "VITEST_INTENT_PATH_SCOPE_CLASSES", classes: VITEST_INTENT_PATH_SCOPE_CLASSES },
+  { ownerFile: "src/detectors/m5-type-escape.ts", exportName: "M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES", classes: M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES },
+  { ownerFile: "src/detectors/m8-vacuous-assertion.ts", exportName: "M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES", classes: M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES },
 ];
 
 const EXPORTED_SELECTOR_BINDINGS = new Map<string, PathScopedClass["select"]>([
@@ -138,6 +152,8 @@ const EXPORTED_SELECTOR_BINDINGS = new Map<string, PathScopedClass["select"]>([
   ["src/detectors/test-intent.ts#securityCriticalSourceFiles", securityCriticalSourceFiles],
   ["src/detectors/vitest-intent.ts#vitestTestFiles", vitestTestFiles],
   ["src/detectors/vitest-intent.ts#vitestInSourceFiles", vitestInSourceFiles],
+  ["src/detectors/m5-type-escape.ts#m5TypeEscapeSources", m5TypeEscapeSources],
+  ["src/detectors/m8-vacuous-assertion.ts#vacuousAssertionSourceFiles", vacuousAssertionSourceFiles],
 ]);
 
 /** Existing public name retained while its population grows from detectors to per-class rows. */
@@ -157,6 +173,8 @@ export interface PathScopeCensusRow {
   ownerFile: string;
   selectorSymbol: string;
   convention: string;
+  inventory: PathScopeInventory;
+  inputFiles: number;
   applicable: boolean;
   filesRead: number;
 }
@@ -166,21 +184,35 @@ function selections(
   context: Readonly<PathScopeContext>,
   classes: readonly PathScopedClass[],
   invokeInapplicable = false,
-): Map<PathScopedClass, { applicable: boolean; files: SourceInput[] }> {
-  const selectorCache = new Map<PathScopedClass["select"], SourceInput[]>();
-  const out = new Map<PathScopedClass, { applicable: boolean; files: SourceInput[] }>();
+): Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }> {
+  const inventories: Record<PathScopeInventory, readonly SourceInput[]> = {
+    "loaded-sources": files,
+    "identified-sources": context.identifiedSourceFiles ?? files,
+    "source-files": context.sourceFiles ?? files,
+    "env-source-files": context.envSourceFiles ?? files,
+    "product-loaded-sources": files.filter((file) => !NON_PRODUCT.test(file.path)),
+  };
+  const selectorCache = new Map<PathScopeInventory, Map<PathScopedClass["select"], SourceInput[]>>();
+  const out = new Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }>();
   for (const entry of classes) {
-    const applicable = entry.applicable?.(files, context) ?? true;
+    const inventory = entry.inventory ?? "loaded-sources";
+    const inputs = inventories[inventory];
+    const applicable = entry.applicable?.(inputs, context) ?? true;
     if (!applicable && !invokeInapplicable) {
-      out.set(entry, { applicable: false, files: [] });
+      out.set(entry, { applicable: false, files: [], inputFiles: inputs.length });
       continue;
     }
-    let selected = selectorCache.get(entry.select);
-    if (selected === undefined) {
-      selected = entry.select(files, context);
-      selectorCache.set(entry.select, selected);
+    let cache = selectorCache.get(inventory);
+    if (!cache) {
+      cache = new Map();
+      selectorCache.set(inventory, cache);
     }
-    out.set(entry, { applicable, files: selected });
+    let selected = cache.get(entry.select);
+    if (selected === undefined) {
+      selected = entry.select(inputs, context);
+      cache.set(entry.select, selected);
+    }
+    out.set(entry, { applicable, files: selected, inputFiles: inputs.length });
   }
   return out;
 }
@@ -205,6 +237,8 @@ export function pathScopeCensus(
       ownerFile: entry.ownerFile,
       selectorSymbol: entry.selectorSymbol,
       convention: entry.convention,
+      inventory: entry.inventory ?? "loaded-sources",
+      inputFiles: population.inputFiles,
       applicable: population.applicable,
       filesRead: population.files.length,
     };
@@ -213,15 +247,15 @@ export function pathScopeCensus(
 
 /**
  * One counted not-assessed row per applicable path-gated class whose production selector admitted
- * no file. Deliberately silent when the target has no source files at all: M1-EXT-00 owns the whole
- * scan absence and the mechanical registry does not invoke this producer for an empty inventory.
+ * no file. M1-EXT-00 owns whole-scan absence; an entirely empty input emits no class-specific rows.
  */
 export function pathScopeNotAssessedRows(
   files: readonly SourceInput[],
   context: Readonly<PathScopeContext> = {},
   classes: readonly PathScopedClass[] = PATH_SCOPED_DETECTORS,
 ): Finding[] {
-  if (files.length === 0) return [];
+  if ([files, context.identifiedSourceFiles, context.sourceFiles, context.envSourceFiles]
+    .every((inventory) => !inventory?.length)) return [];
   const selected = selections(files, context, classes);
   return classes
     .filter((entry) => {
@@ -237,7 +271,7 @@ export function pathScopeNotAssessedRows(
       taxonomy: `Coverage — ${row.detector}/${row.classId} read zero files (its path convention matched nothing)`,
       location: "(repo-wide)",
       status: "Open" as const,
-      evidence: `The ${row.detector} class \`${row.classId}\` invokes its exported production selector \`${row.selectorSymbol}\`, which admits only ${row.convention}. This target supplied ${files.length} source/config file(s) and NONE were admitted, so the class ran over an empty population. Its zero findings are a statement about scope, not about the code.`,
+      evidence: `The ${row.detector} class \`${row.classId}\` invokes its exported production selector \`${row.selectorSymbol}\`, which admits only ${row.convention}. This target supplied ${selected.get(row)!.inputFiles} file(s) in its ${row.inventory ?? "loaded-sources"} inventory and NONE were admitted, so the class ran over an empty population. Its zero findings are a statement about scope, not about the code.`,
       impact: `This check would not have detected ${row.classes} here, wherever such code actually lives in this repo. Recorded so the absence of its findings reads as 'not assessed', not 'assessed and clean'.`,
       fix: "If this repo does hold code of that kind under a different layout, review those files by hand or move them under the convention so the check reaches them. If it holds none, this row records that the class had nothing to examine.",
       value: 1,

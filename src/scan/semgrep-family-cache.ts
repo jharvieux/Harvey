@@ -175,6 +175,7 @@ interface FamilyIdentity {
   targetTree: string;
   implementation: string;
   rules: string;
+  plannedExecution: string;
   externalInputs: Record<string, string>;
   timeoutPolicy: typeof SEMGREP_TIMEOUT_POLICY;
 }
@@ -501,7 +502,17 @@ function rehashExecutionReceipt(receipt: SemgrepFamilyExecutionReceipt, output?:
   };
 }
 
-function parseArtifact(value: unknown, expected: Pick<FamilyArtifact, "family" | "key" | "identity"> & { configSha256: string; ownedTaintRuleIds: string[] }): FamilyArtifact {
+function plannedReceipt(execution: SemgrepFamilyExecutionReceipt): SemgrepPlannedFamilyReceipt {
+  const planned: SemgrepPlannedFamilyReceipt & Partial<SemgrepFamilyExecutionReceipt> = { ...execution };
+  delete planned.loadedRuleIds;
+  delete planned.loadedTaintRuleIds;
+  delete planned.taintCoverage;
+  delete planned.status;
+  delete planned.attempts;
+  return planned;
+}
+
+function parseArtifact(value: unknown, expected: Pick<FamilyArtifact, "family" | "key" | "identity"> & { configSha256: string; ownedTaintRuleIds: string[]; planned?: SemgrepPlannedFamilyReceipt }): FamilyArtifact {
   const artifact = value as Partial<FamilyArtifact>;
   if (artifact.schema !== 8 || artifact.family !== expected.family || artifact.key !== expected.key || stable(artifact.identity) !== stable(expected.identity)) {
     throw new Error("artifact identity/schema mismatch");
@@ -510,6 +521,7 @@ function parseArtifact(value: unknown, expected: Pick<FamilyArtifact, "family" |
   assertSuccessfulSemgrepFamilyExecutionReceipt(artifact.execution, expected.family);
   if (artifact.execution!.configSha256 !== expected.configSha256) throw new Error("artifact semantic execution config hash differs from its cache identity");
   if (stable(artifact.execution!.ownedTaintRuleIds) !== stable(expected.ownedTaintRuleIds)) throw new Error("artifact taint-mode ownership differs from its bound config bytes");
+  if (expected.planned && stable(plannedReceipt(artifact.execution!)) !== stable(expected.planned)) throw new Error("artifact semantic execution differs from its fresh planned family receipt");
   assertExecutionMatchesOutput(artifact.execution!, artifact.output!);
   if (!Number.isInteger(artifact.unitsExamined) || artifact.unitsExamined! <= 0) throw new Error("artifact examined scope is zero or malformed");
   if (artifact.payloadDigest !== digest({ output: artifact.output, unitsExamined: artifact.unitsExamined, execution: artifact.execution })) throw new Error("artifact payload checksum mismatch");
@@ -564,6 +576,7 @@ export async function executeSemgrepFamily(
   family: SemgrepFamily,
   options: SemgrepFamilyCacheOptions,
   execute: () => ({ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }) | Promise<{ output: SemgrepOutput; execution: SemgrepFamilyExecutionReceipt; telemetry?: SemgrepFamilyTimeoutTelemetry[]; outputMode?: "raw" | "canonical" } | { failure: SemgrepFamilyExecutionFailure }>,
+  planned?: SemgrepPlannedFamilyReceipt,
 ): Promise<SemgrepFamilyRecord> {
   mkdirSync(options.dir, { recursive: true });
   const identity: FamilyIdentity = {
@@ -571,13 +584,14 @@ export async function executeSemgrepFamily(
     targetTree: digest(options.targetTree),
     implementation: digest(options.implementation),
     rules: digest({ config: readFileSync(family.configPath, "utf8"), cacheIdentity: family.cacheIdentity ?? null }),
+    plannedExecution: digest(planned ?? { direct: "unplanned-family-cache-v1" }),
     externalInputs: Object.fromEntries(Object.entries(options.externalInputs).sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => [name, digest(value)])),
     timeoutPolicy: SEMGREP_TIMEOUT_POLICY,
   };
   const key = digest({ family: family.id, identity });
   const path = join(options.dir, "semgrep-families", familyDirectory(family.id), `${key}.json`);
   const configSha256 = createHash("sha256").update(readFileSync(family.configPath)).digest("hex");
-  const expected = { family: family.id, key, identity, configSha256, ownedTaintRuleIds: configuredTaintRuleIds(family.configPath) };
+  const expected = { family: family.id, key, identity, configSha256, ownedTaintRuleIds: configuredTaintRuleIds(family.configPath), ...(planned ? { planned } : {}) };
   let hit: FamilyArtifact | undefined;
   if (existsSync(path)) {
     try {
