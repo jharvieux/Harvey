@@ -70,6 +70,11 @@ function executed(family: SemgrepFamily, value: SemgrepOutput): { output: Semgre
   } };
 }
 
+function planned(execution: SemgrepFamilyExecutionReceipt) {
+  const { loadedRuleIds: _loadedRuleIds, loadedTaintRuleIds: _loadedTaintRuleIds, taintCoverage: _taintCoverage, status: _status, attempts: _attempts, ...receipt } = execution;
+  return receipt;
+}
+
 describe("Semgrep family cache and reassembly (#1869)", () => {
   const dirs: string[] = [];
   afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
@@ -140,6 +145,25 @@ describe("Semgrep family cache and reassembly (#1869)", () => {
     expect(second.cache).toBe("miss");
     expect(second.key).not.toBe(first.key);
     expect(second.execution?.ownedTaintRuleIds).toEqual([]);
+  });
+
+  it("rejects a self-consistent cached execution whose full planned receipt changed", async () => {
+    const { families, options } = fixture();
+    const family = families[0]!;
+    const events: string[] = [];
+    const firstValue = executed(family, output(family.id));
+    const first = await executeSemgrepFamily(family, { ...options, onEvent: (event) => events.push(event) }, () => firstValue, planned(firstValue.execution));
+    const artifactPath = join(options.dir, "semgrep-families", family.id, `${first.key}.json`);
+    const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as { execution: SemgrepFamilyExecutionReceipt; output: SemgrepOutput; unitsExamined: number; payloadDigest: string };
+    artifact.execution.sourceConfigSha256 = "f".repeat(64);
+    artifact.payloadDigest = createHash("sha256").update(stableFixture({ output: artifact.output, unitsExamined: artifact.unitsExamined, execution: artifact.execution })).digest("hex");
+    writeFileSync(artifactPath, JSON.stringify(artifact));
+
+    const refreshedValue = executed(family, output(family.id));
+    const refreshed = await executeSemgrepFamily(family, { ...options, onEvent: (event) => events.push(event) }, () => refreshedValue, planned(refreshedValue.execution));
+    expect(refreshed.cache).toBe("miss");
+    expect(refreshed.execution?.sourceConfigSha256).toBe(firstValue.execution.sourceConfigSha256);
+    expect(events).toContainEqual(expect.stringContaining("semantic execution differs from its fresh planned family receipt"));
   });
 
   it("caches a complete zero-applicable-rule family and continues the exhaustive plan", async () => {

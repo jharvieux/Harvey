@@ -34,6 +34,12 @@ import { assertSuccessfulSemgrepExecutionReceipt, comparePosixRelativePaths, typ
 
 const CACHE_REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
 
+function stableReceipt(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableReceipt).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableReceipt(item)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 function seedRegistrySnapshot(cacheDir: string): { identity: string; files: string[] } {
   const bodies = CACHE_REGISTRY_PACKS.map((pack, index) => ({
     pack,
@@ -803,6 +809,64 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       }
     } finally {
       localeCompare.mockRestore();
+      semgrepMock.outputs.length = 0;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("recomputes a cached family whose execution is valid alone but differs from the fresh plan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-semgrep-partitioned-fresh-plan-"));
+    try {
+      const target = join(dir, "target");
+      const cache = join(dir, "cache");
+      mkdirSync(target);
+      writeFileSync(join(target, "a.ts"), "export {};\n");
+      const registry = seedRegistrySnapshot(dir).files;
+      const plan = semgrepExecutionPlanReceipt(registry, target);
+      const envelope = (ruleIds: readonly string[]): string => JSON.stringify({
+        version: "1.173.0", results: [], errors: [], skipped_rules: [],
+        paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: [...ruleIds], fixpoint_timeouts: [] },
+      });
+      const queue = (families: readonly typeof plan.families[number][]): void => {
+        for (const family of families) {
+          if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+            for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(envelope(partition.ownedRuleIds));
+          } else {
+            const value = envelope(family.ruleIds);
+            semgrepMock.outputs.push(value, ...(family.verification === "paired-cold-exact" ? [value] : []));
+          }
+        }
+      };
+      const events: string[] = [];
+      const options = {
+        dir: cache, mode: "read-write" as const, targetRevision: "revision", targetTree: "tree",
+        implementation: "implementation", externalInputs: { semgrep: "1.173.0" }, onEvent: (event: string) => events.push(event),
+      };
+      queue(plan.families);
+      const seeded = await runSemgrepPartitioned(target, registry, options);
+      expect(seeded.failure).toBeUndefined();
+      const victim = seeded.records[0]!;
+      const artifactPath = join(cache, "semgrep-families", victim.family, `${victim.key}.json`);
+      const artifact = JSON.parse(readFileSync(artifactPath, "utf8")) as {
+        output: SemgrepOutput;
+        unitsExamined: number;
+        execution: SemgrepExecutionPlanReceipt["families"][number];
+        payloadDigest: string;
+      };
+      artifact.execution.sourceConfigSha256 = "f".repeat(64);
+      artifact.payloadDigest = createHash("sha256").update(stableReceipt({ output: artifact.output, unitsExamined: artifact.unitsExamined, execution: artifact.execution })).digest("hex");
+      writeFileSync(artifactPath, JSON.stringify(artifact));
+
+      semgrepMock.outputs.length = 0;
+      queue([plan.families[0]!]);
+      const callsBefore = semgrepArgvs().length;
+      const repaired = await runSemgrepPartitioned(target, registry, options);
+      expect(repaired.failure).toBeUndefined();
+      expect(() => assertSuccessfulSemgrepExecutionReceipt(repaired.executionPlan)).not.toThrow();
+      expect(repaired.records[0]).toMatchObject({ family: victim.family, cache: "miss" });
+      expect(semgrepArgvs().length).toBeGreaterThan(callsBefore);
+      expect(events).toContainEqual(expect.stringContaining("semantic execution differs from its fresh planned family receipt"));
+    } finally {
       semgrepMock.outputs.length = 0;
       rmSync(dir, { recursive: true, force: true });
     }
