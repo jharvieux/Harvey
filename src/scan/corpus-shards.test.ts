@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
@@ -46,6 +47,16 @@ interface CorpusWorkflow {
   };
 }
 
+// These scalar expressions use the shared JS/Actions boolean operators. Evaluate the YAML,
+// including fromJSON, rather than recognizing a spelling of the intended event predicate.
+function eventExpression(value: unknown, event: string): unknown {
+  if (typeof value !== "string") return value;
+  return runInNewContext(value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replaceAll("needs.prepare-current-inputs.result", "preparationResult"), {
+    github: { event_name: event }, preparationResult: "success", fromJSON: JSON.parse,
+  });
+}
+
 function contractErrors(
   workflowText = WORKFLOW_TEXT,
   slugs: readonly string[] = SLUGS,
@@ -53,19 +64,18 @@ function contractErrors(
 ): string[] {
   const errors: string[] = [];
   const workflow = parseYaml(workflowText) as CorpusWorkflow;
-  const producerMatrix = String(workflow.jobs.shard.strategy.matrix.shard);
-  const replayMatrix = String(workflow.jobs["current-replay"].strategy.matrix.shard);
   const score = workflow.jobs.shard.steps.find((step) => step.name === "Score the corpus against its baselines");
   const replay = workflow.jobs["current-replay"].steps.find((step) => step.name === "Execute the independent exact-head replay");
-  const producerCount = String(score?.env?.SHARD_COUNT);
-  const replayCount = String(replay?.env?.SHARD_COUNT);
-  const readiness = String(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS);
-  if (!producerMatrix.includes("github.event_name == 'push' && '[1,2,3,4]' || '[1]'")) errors.push("producer matrix is not main-four/other-one");
-  if (replayMatrix !== "1,2,3,4") errors.push("post-merge replay matrix is not fixed at four");
-  if (!producerCount.includes("github.event_name == 'push' && 4 || 1")) errors.push("producer count is not main-four/other-one");
-  if (replayCount !== "4") errors.push("post-merge replay count is not fixed at four");
-  if (!workflow.jobs["current-replay"].if.includes("github.event_name == 'push'")) errors.push("replay is not restricted to the main push");
-  if (!readiness.includes("github.event_name == 'push' && '1' || '0'")) errors.push("producer readiness is not enabled on the main push");
+  for (const event of ["push", "pull_request", "merge_group", "schedule", "workflow_dispatch"]) {
+    const count = ["push", "pull_request", "merge_group"].includes(event) ? 4 : 1;
+    const expected = Array.from({ length: count }, (_, index) => index + 1);
+    if (JSON.stringify(eventExpression(workflow.jobs.shard.strategy.matrix.shard, event)) !== JSON.stringify(expected)) errors.push(`${event}: producer matrix`);
+    if (eventExpression(score?.env?.SHARD_COUNT, event) !== count) errors.push(`${event}: producer count`);
+    if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (event === "push" ? "1" : "0")) errors.push(`${event}: producer readiness`);
+    if (eventExpression(workflow.jobs["current-replay"].if, event) !== (event === "push")) errors.push(`${event}: replay activation`);
+  }
+  if (JSON.stringify(workflow.jobs["current-replay"].strategy.matrix.shard) !== "[1,2,3,4]") errors.push("post-merge replay matrix is not fixed at four");
+  if (replay?.env?.SHARD_COUNT !== 4) errors.push("post-merge replay count is not fixed at four");
   if (new Set(slugs).size !== slugs.length) errors.push("corpus contains a duplicate target");
   if ([...new Set([...slugs, ...Object.keys(weights)])].some((slug) => !slugs.includes(slug) || weights[slug] === undefined)) errors.push("weights and corpus differ");
   if (JSON.stringify(weights) !== JSON.stringify(EXPECTED_WEIGHTS)) errors.push("weights differ from hosted evidence");
@@ -174,11 +184,11 @@ describe("the weight table tracks the corpus (#1586)", () => {
 });
 
 describe("corpus workflow four-shard production contract", () => {
-  it("keeps main producer/replay four-way, schedule/manual canonical, and PR replay-free", () => {
+  it("keeps push/PR/queue four-way, schedule/manual single, and replay push-only", () => {
     expect(contractErrors()).toEqual([]);
   });
 
-  it("keeps the measured critical path below the unchanged hard timeout with five minutes setup slack", () => {
+  it("keeps the recorded-weight critical path below the unchanged timeout (not a runtime forecast)", () => {
     const workflow = parseYaml(WORKFLOW_TEXT) as CorpusWorkflow;
     const longest = Math.max(...partitionTargets(SLUGS, 4).map(load));
     expect(longest + 5 * 60).toBeLessThan(workflow.jobs.shard["timeout-minutes"] * 60);
@@ -194,6 +204,8 @@ describe("corpus workflow four-shard production contract", () => {
     ["replay allowed on PR", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'", "needs.prepare-current-inputs.result == 'success'"), SLUGS, EXPECTED_WEIGHTS],
     ["dropped target", WORKFLOW_TEXT, SLUGS.slice(1), EXPECTED_WEIGHTS],
     ["duplicated target", WORKFLOW_TEXT, [...SLUGS, SLUGS[0]!], EXPECTED_WEIGHTS],
+    ["PR/queue matrix alone reverted", WORKFLOW_TEXT.replace("fromJSON((github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')", "fromJSON((github.event_name == 'push')"), SLUGS, EXPECTED_WEIGHTS],
+    ["PR/queue count alone reverted", WORKFLOW_TEXT.replace("(github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4", "(github.event_name == 'push') && 4"), SLUGS, EXPECTED_WEIGHTS],
   ] as const)("turns red in a disposable %s reversion", (_name, workflow, slugs, weights) => {
     expect(contractErrors(workflow, slugs, weights)).not.toEqual([]);
   });
