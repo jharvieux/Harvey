@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LicenseCandidate, LicenseScope } from "../sbom.js";
+import { parsePackageLock, parsePnpmLock, parseYarnLock, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { checkDependencyInstallScripts, checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
@@ -37,6 +37,42 @@ describe("checkUnpinnedDependencies", () => {
   it("returns no finding when every dependency is exactly pinned", () => {
     expect(checkUnpinnedDependencies(declaredIn("package.json", { react: "18.2.0", zod: "3.22.0" }))).toEqual([]);
   });
+
+  it("rolls repeated owners up without truncating the sorted matching-edge JSON artifact", () => {
+    const packages = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`node_modules/parent-${i}`, {
+      version: "1.0.0", dependencies: { "aa-shared": "^1.0.0", [`child-${i}`]: "^2.0.0" },
+    }]));
+    const { edges } = parsePackageLock(JSON.stringify({ lockfileVersion: 3, packages })).ranges;
+    const [finding] = checkUnpinnedDependencies(edges.map((edge) => ({ manifest: edge.source, name: edge.name, range: edge.range, edge })));
+    expect(finding?.dependencyRangeEvidence).toMatchObject({ examined: 50, matched: 50, distinctSpecifications: 26, displayedSpecifications: 20 });
+    expect(finding?.dependencyRangeEvidence?.edges).toHaveLength(50);
+    expect(finding?.evidence).toContain("25 declarations across 25 owners");
+    expect(finding?.evidence).toContain("22 more owners");
+    expect(finding?.evidence).toContain("6 declarations omitted from prose");
+    expect(finding?.evidence.length).toBeLessThan(6000);
+    expect(JSON.parse(JSON.stringify(finding)).dependencyRangeEvidence.edges).toEqual(finding?.dependencyRangeEvidence?.edges);
+  });
+
+  it.each([
+    ["unpinned", checkUnpinnedDependencies, "^2.0.0", "SUP-UNPINNED"],
+    ["non-registry", checkNonRegistryDependencies, "git+https://example.invalid/child.git", "SUP-NON-REGISTRY"],
+  ] as const)("keeps direct and third-party %s findings distinct for remediation and calibration", (_label, check, range, id) => {
+    const edges = parsePackageLock(JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/parent": { version: "1.0.0", dependencies: { lodash: range } },
+    } })).ranges.edges;
+    const findings = check([
+      ...declaredIn("package.json", { lodash: "4.17.11", direct: range }),
+      ...edges.map((edge) => ({ manifest: edge.source, name: edge.name, range: edge.range, edge })),
+    ]);
+    expect(findings.map((finding) => finding.id)).toEqual([id, `${id}-TREE`]);
+    expect(findings[0]?.location).toBe("package.json");
+    expect(findings[0]?.evidence).not.toContain("lodash");
+    expect(findings[0]?.dependencyRangeEvidence).toMatchObject({ examined: 2, matched: 1 });
+    expect(findings[1]?.location).toBe("package-lock.json (third-party declaration ranges)");
+    expect(findings[1]?.evidence).toContain("lodash");
+    expect(findings[1]?.dependencyRangeEvidence).toMatchObject({ examined: 1, matched: 1, edges: [{ ownerPath: "node_modules/parent", direct: false }] });
+    expect(findings[1]?.fix).toContain("owning dependency");
+  });
 });
 
 describe("checkNonRegistryDependencies", () => {
@@ -58,6 +94,13 @@ describe("checkNonRegistryDependencies", () => {
 
   it("does not flag registry semver ranges", () => {
     expect(checkNonRegistryDependencies(declaredIn("package.json", { react: "^18.2.0", zod: "3.22.0", next: "~14.2.5" }))).toEqual([]);
+  });
+
+  it.each(["\u0000https://fixture-user:fixture-password@example.invalid/repo\u001f", "ht\ttps://fixture-user:fixture-password@example.invalid/repo"])("selects and safely projects URL control characters in %j", (range) => {
+    const findings = checkNonRegistryDependencies(declaredIn("package.json", { remote: range }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.dependencyRangeEvidence).toMatchObject({ matched: 1, edges: [{ range: "https://[redacted]@example.invalid/repo", redacted: true }] });
+    expect(JSON.stringify(findings)).not.toMatch(/fixture-(?:user|password)/);
   });
 });
 
@@ -217,6 +260,7 @@ describe("checkLicenseCompliance", () => {
   // #1213 case: a package reached only through the lockfile, which the pre-#1213 manifest-scoped
   // candidate list could never submit to the check.
   const scope = (candidates: LicenseCandidate[], over: Partial<LicenseScope> = {}): LicenseScope => ({
+    rangeScopes: [],
     candidates,
     source: "package-lock.json",
     completeness: "complete",
@@ -480,6 +524,7 @@ describe("checkSlopsquat registry-lookup cap (#1231)", () => {
 // indistinguishable from an oversight.
 describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
   const scope = (over: Partial<LicenseScope> = {}): LicenseScope => ({
+    rangeScopes: [],
     candidates: [],
     source: "pnpm-lock.yaml",
     completeness: "complete",
@@ -491,7 +536,7 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
   });
   const args = { license: scope(), treeNames: 395, declaredNames: 40, workspaceInternalNames: [], osvRan: true };
 
-  it("names every manifest-scoped check and why the tree cannot answer it", () => {
+  it("names manifest bounds and the independently measured declared-range population", () => {
     const finding = supplyChainScopeFinding(args);
     expect(finding.severity).toBe("Info");
     expect(finding.confidence).toBe("N/A");
@@ -500,6 +545,23 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
     expect(finding.evidence).toContain("SUP-UNPINNED and SUP-NON-REGISTRY");
     expect(finding.evidence).toContain("integrity hash");
     expect(finding.impact).toContain("NOT a verdict that the tree is clean");
+  });
+
+  it("keeps format-specific range facts in evidence and fix text and rejects the old blanket source claim", () => {
+    const npm = parsePackageLock(JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^1.0.0" }, peerDependencies: { react: "^18.0.0" } } } })).ranges;
+    const pnpm = parsePnpmLock("lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^1.0.0\n        version: 1.0.0\npackages:\n  child@1.0.0:\n").ranges;
+    const yarn = parseYarnLock('child@^1.0.0:\n  version "1.0.0"\n').ranges;
+    const forbidden = /tree cannot answer|never the range that was declared|range, which only a manifest carries|RANGE STRING, which only a manifest has|declared range, which no lockfile records/i;
+    for (const range of [npm, pnpm, yarn]) {
+      const finding = supplyChainScopeFinding({ ...args, license: scope({ source: range.source, rangeScopes: [range] }) });
+      expect(finding.evidence).toContain(`${range.source} (${range.format} version ${range.sourceVersion}`);
+      expect(finding.evidence).toContain(`${range.edges.length} admitted third-party range edges`);
+      expect(`${finding.evidence} ${finding.fix}`).not.toMatch(forbidden);
+      expect(finding.fix).toContain("npm v2/v3 declaration ranges are assessed");
+    }
+    expect(pnpm.detail).toContain("present but unread");
+    expect(yarn.detail).toContain("selector range(s)");
+    expect(readFileSync(new URL("./supply-chain.ts", import.meta.url), "utf8")).not.toMatch(forbidden);
   });
 
   it("moves the curated CVE table into the tree-wide set exactly when osv-scanner did not run", () => {

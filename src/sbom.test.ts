@@ -6,6 +6,7 @@ import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePn
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
+const inventory = ({ components, unmatched }: ReturnType<typeof parsePackageLock>) => ({ components, unmatched });
 
 describe("lockfile parsing", () => {
   it("reads resolved versions, the dev flag, and (#1079) the license and integrity hash from package-lock v2/v3", () => {
@@ -18,7 +19,7 @@ describe("lockfile parsing", () => {
         "node_modules/foo/node_modules/axios": { version: "0.21.1" }, // a nested duplicate is its own component
       },
     });
-    expect(parsePackageLock(text)).toEqual({
+    expect(inventory(parsePackageLock(text))).toEqual({
       components: [
         { name: "axios", version: "1.7.2", license: "MIT", integrity: "sha512-AAAA" },
         { name: "vitest", version: "3.2.6", dev: true },
@@ -36,7 +37,7 @@ describe("lockfile parsing", () => {
         "node_modules/malformed": { version: "2.0.0", license: { url: "https://example.invalid/unknown" } },
       },
     });
-    expect(parsePackageLock(text)).toEqual({
+    expect(inventory(parsePackageLock(text))).toEqual({
       components: [
         { name: "legacy", version: "1.0.0", license: "MIT" },
         { name: "malformed", version: "2.0.0" },
@@ -47,7 +48,7 @@ describe("lockfile parsing", () => {
 
   it("falls back to the v1 nested `dependencies` tree", () => {
     const text = JSON.stringify({ dependencies: { axios: { version: "1.7.2", dependencies: { follow: { version: "1.15.4" } } } } });
-    expect(parsePackageLock(text)).toEqual({
+    expect(inventory(parsePackageLock(text))).toEqual({
       components: [
         { name: "axios", version: "1.7.2" },
         { name: "follow", version: "1.15.4" },
@@ -70,7 +71,7 @@ describe("lockfile parsing", () => {
       "snapshots:",
       "  'should-not-be-read@9.9.9':",
     ].join("\n");
-    expect(parsePnpmLock(text)).toEqual({
+    expect(inventory(parsePnpmLock(text))).toEqual({
       components: [
         { name: "@babel/core", version: "7.29.7", integrity: "sha512-x==" },
         { name: "braces", version: "2.3.2" },
@@ -83,7 +84,7 @@ describe("lockfile parsing", () => {
 
   it("reads both yarn v1 and Berry entries", () => {
     const v1 = ['braces@^2.3.1:', '  version "2.3.2"', '', '"@babel/core@^7.0.0":', '  version "7.29.7"'].join("\n");
-    expect(parseYarnLock(v1)).toEqual({
+    expect(inventory(parseYarnLock(v1))).toEqual({
       components: [
         { name: "braces", version: "2.3.2" },
         { name: "@babel/core", version: "7.29.7" },
@@ -91,7 +92,105 @@ describe("lockfile parsing", () => {
       unmatched: 0,
     });
     const berry = ['"braces@npm:^2.3.1":', "  version: 2.3.2", "  checksum: 10c0/abc"].join("\n");
-    expect(parseYarnLock(berry)).toEqual({ components: [{ name: "braces", version: "2.3.2", integrity: "10c0/abc" }], unmatched: 0 });
+    expect(inventory(parseYarnLock(berry))).toEqual({ components: [{ name: "braces", version: "2.3.2", integrity: "10c0/abc" }], unmatched: 0 });
+  });
+});
+
+describe("declared lockfile range edges (#1774)", () => {
+  it.each([2, 3])("reads npm v%s owner/path/section identities without duplicate manifest or workspace facts", (lockfileVersion) => {
+    const ranges = parsePackageLock(JSON.stringify({ lockfileVersion, packages: {
+      "": { version: "1.0.0", dependencies: { direct: "^1.0.0" }, peerDependencies: { compatible: "*" } },
+      "node_modules/parent": { version: "1.0.0", dependencies: { child: "^1.0.0", exact: "1.0.0", remote: "git+https://user:secret@example.invalid/repo.git#abc" }, optionalDependencies: { child: "^1.0.0" }, devDependencies: { tool: "~2.0.0" }, peerDependencies: { peer: "*" } },
+      "node_modules/other": { version: "2.0.0", dependencies: { child: "^1.0.0" } },
+      "node_modules/parent/node_modules/other": { version: "3.0.0", dependencies: { child: "^1.0.0" } },
+      "node_modules/local": { link: true, resolved: "packages/local", dependencies: { duplicate: "*" }, peerDependencies: { compatible: "*" } },
+      "packages/local": { name: "local", version: "1.0.0", dependencies: { duplicate: "*" }, peerDependencies: { compatible: "*" } },
+      "not-a-package-path": { version: "1.0.0", dependencies: { unreadOwner: "*" } },
+      "node_modules/bad-value": { version: "1.0.0", dependencies: { object: { version: "^1.0.0" }, numeric: 2, valid: "1.0.0" } },
+      "node_modules/bad-map": { version: "1.0.0", dependencies: "*" },
+      "node_modules/..": { version: "1.0.0", dependencies: { child: "*" } },
+      "node_modules/bad-child": { version: "1.0.0", dependencies: { "@scope/..": "*" } },
+    } })).ranges;
+    expect(ranges).toMatchObject({ schemaVersion: 1, source: "package-lock.json", sourceVersion: String(lockfileVersion), status: "partial", examined: 14, unread: 6, unsupported: 0, excluded: { root: 1, workspace: 1, link: 1, peer: 4 } });
+    expect(ranges.edges).toHaveLength(8);
+    expect(new Set(ranges.edges.map((edge) => edge.identity)).size).toBe(8);
+    expect(ranges.edges.filter((edge) => edge.name === "child")).toHaveLength(4);
+    expect(ranges.edges.every((edge) => !edge.direct && edge.format === "package-lock")).toBe(true);
+    expect(ranges.edges.find((edge) => edge.ownerPath === "node_modules/parent/node_modules/other")).toMatchObject({ ownerName: "other", ownerVersion: "3.0.0", name: "child", range: "^1.0.0", section: "dependencies" });
+    expect(ranges.edges.find((edge) => edge.name === "remote")?.range).toContain("user:secret@");
+    expect(ranges.edges.map((edge) => edge.identity).join("\n")).not.toContain("secret");
+    expect(ranges.edges.map((edge) => edge.identity)).toEqual(ranges.edges.map((edge) => edge.identity).sort());
+  });
+
+  it("reports v1 requires ranges and unknown-version maps as present but unread", () => {
+    const v1 = parsePackageLock(JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0", remote: "github:owner/repo" } } } }));
+    expect(v1.components).toEqual([{ name: "parent", version: "1.0.0" }]);
+    expect(v1.ranges).toMatchObject({ sourceVersion: "1", status: "unsupported", edges: [], examined: 2, unread: 2, unsupported: 1 });
+    expect(v1.ranges.detail).toContain("requires maps can retain declared ranges");
+    const future = parsePackageLock(JSON.stringify({ lockfileVersion: 99, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }));
+    expect(future.ranges).toMatchObject({ sourceVersion: "99", status: "unsupported", edges: [], unread: 1 });
+  });
+
+  it.each(["5.4", "6.0", "9.0"])("discloses pnpm %s specifiers separately from resolved references and peer compatibility", (version) => {
+    const declarations = version === "5.4"
+      ? "specifiers:\n  child: ^2.0.0\ndependencies:\n  child: 2.0.1\n"
+      : "importers:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.1\n";
+    const key = version === "5.4" ? "/parent/1.0.0" : version === "6.0" ? "/parent@1.0.0" : "parent@1.0.0";
+    const parsed = parsePnpmLock(`lockfileVersion: '${version}'\n${declarations}packages:\n  '${key}':\n    dependencies:\n      child: 2.0.1\n    peerDependencies:\n      react: ^18.0.0\n`);
+    expect(parsed.components).toEqual([{ name: "parent", version: "1.0.0" }]);
+    expect(parsed.ranges).toMatchObject({ sourceVersion: version, status: "present-but-unread", edges: [], unread: 1, unsupported: 1, excluded: { peer: 1 } });
+    expect(parsed.ranges.detail).toContain("1 importer/root specifier value(s) are present but unread");
+    expect(parsed.ranges.detail).toContain("1 package/snapshot dependency reference(s)");
+  });
+
+  it.each([
+    ["importer map", { importers: "malformed" }],
+    ["null importer map", { importers: null }],
+    ["array importer map", { importers: [] }],
+    ["importer entry", { importers: { ".": "malformed" } }],
+    ["dependency map", { importers: { ".": { dependencies: "malformed" } } }],
+    ["null dependency map", { importers: { ".": { dependencies: null } } }],
+    ["array dependency map", { importers: { ".": { dependencies: [] } } }],
+    ["devDependency map", { importers: { ".": { devDependencies: "malformed" } } }],
+    ["optionalDependency map", { importers: { ".": { optionalDependencies: "malformed" } } }],
+    ["root specifier map", { specifiers: "malformed" }],
+    ["importer specifier map", { importers: { ".": { specifiers: "malformed" } } }],
+    ["package map", { packages: "malformed" }],
+    ["snapshot map", { snapshots: "malformed" }],
+    ["package entry", { packages: { "parent@1.0.0": "malformed" } }],
+    ["resolved dependency map", { snapshots: { "parent@1.0.0": { dependencies: "malformed" } } }],
+    ["peer map", { snapshots: { "parent@1.0.0": { peerDependencies: "malformed" } } }],
+  ])("counts a malformed pnpm %s as an unread boundary, never a guessed edge", (_label, fields) => {
+    const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields }));
+    expect(ranges).toMatchObject({ status: "present-but-unread", edges: [], examined: 1, unread: 1, unsupported: 1, excluded: { peer: 0 } });
+    expect(ranges.detail).toContain("0 importer/root specifier value(s)");
+    expect(ranges.detail).toContain("1 malformed map boundary");
+    expect(ranges.detail).toContain("not guessed dependency edges");
+    expect(ranges.detail).toContain("0 package/snapshot dependency reference(s)");
+  });
+
+  it("distinguishes absent and empty pnpm maps from present specifiers and malformed boundaries", () => {
+    for (const fields of [{}, { importers: {} }, { importers: { ".": { dependencies: {} } } }]) {
+      expect(parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields })).ranges).toMatchObject({ examined: 0, unread: 0, edges: [] });
+    }
+    const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", importers: {
+      ".": { dependencies: { child: { specifier: "^1.0.0", version: "1.0.1" }, untrusted: { specifier: { raw: "unread" } } } },
+      "apps/web": { dependencies: "malformed" },
+    } }));
+    expect(ranges).toMatchObject({ examined: 3, unread: 3, edges: [] });
+    expect(ranges.detail).toContain("2 importer/root specifier value(s)");
+    expect(ranges.detail).toContain("1 malformed map boundary");
+  });
+
+  it("keeps classic and Berry selector/dependency ranges visibly present but unread", () => {
+    for (const [text, sourceVersion] of [
+      ['# yarn lockfile v1\nparent@^1.0.0:\n  version "1.0.0"\n  dependencies:\n    child "^2.0.0"\n  peerDependencies:\n    react "^18.0.0"\n', "classic v1"],
+      ['__metadata:\n  version: 8\n\n"parent@npm:^1.0.0":\n  version: 1.0.0\n  dependencies:\n    child: "npm:^2.0.0"\n  peerDependencies:\n    react: ^18.0.0\n', "Berry 8"],
+    ]) {
+      const { ranges } = parseYarnLock(text!);
+      expect(ranges).toMatchObject({ sourceVersion, status: "present-but-unread", edges: [], examined: 2, unread: 2, excluded: { peer: 1 } });
+      expect(ranges.detail).toContain("1 selector range(s) and 1 dependency-block value(s) are present but unread");
+    }
   });
 });
 
@@ -280,6 +379,21 @@ describe("completeness is always stated", () => {
     const { warning } = buildSbom(dir);
     expect(warning).toContain("package-lock.json is present but Harvey could not extract components");
     expect(bomOf(dir).compositions[0].aggregate).toBe("incomplete");
+    expect(collectDependencies(dir).rangeScopes[0]).toMatchObject({ source: "package-lock.json", sourceVersion: "unknown", status: "unreadable", unread: 1, edges: [] });
+  });
+
+  it("names shrinkwrap and an unselected sibling lockfile without quietly admitting their ranges", () => {
+    const text = JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { direct: "1.0.0" } }));
+    writeFileSync(join(dir, "npm-shrinkwrap.json"), text);
+    expect(collectDependencies(dir).rangeScopes[0]).toMatchObject({ source: "npm-shrinkwrap.json", format: "npm-shrinkwrap", sourceVersion: "3", status: "present-but-unread", unread: 1, unsupported: 1, edges: [] });
+    expect(buildSbom(dir).warning).toContain("npm-shrinkwrap.json are present, but no supported resolved-tree parser selected them");
+    writeFileSync(join(dir, "package-lock.json"), text);
+    const source = collectDependencies(dir);
+    expect(source.rangeScopes.map((scope) => [scope.source, scope.edges.length, scope.unread])).toEqual([
+      ["package-lock.json", 1, 0], ["npm-shrinkwrap.json", 0, 1],
+    ]);
+    expect(source.rangeScopes[1]?.detail).toContain("package-lock.json has precedence");
   });
 
   it("a lockfile Harvey only partly resolved is INCOMPLETE, however many components it did recover", () => {

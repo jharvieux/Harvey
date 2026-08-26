@@ -7,9 +7,10 @@
 // registry lookup is a smaller ask than code egress, but still noted as a scope decision).
 
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { Finding } from "../findings.js";
-import type { LicenseCandidate, LicenseScope } from "../sbom.js";
+import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyRangeEvidence, type Finding } from "../findings.js";
+import { dependencyRangeEdge, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 
 // High-traffic npm packages a typosquat/slopsquat target would mimic. Not exhaustive.
@@ -183,19 +184,11 @@ function describeManifestSources(from: LicenseScope["declaredFrom"]): string {
   );
 }
 
-// #1231 — the scope every supply-chain check actually worked over, always emitted. The six checks
-// #1213 left behind do not want one widening: two ask about a declared RANGE that no lockfile
-// records, one asks a question a lockfile entry's integrity hash already answers, and one would
-// double-report osv-scanner. Those are defensible decisions and they are recorded in the code where
-// each check lives — but a decision that only exists in a comment is, from the deliverable's side,
-// indistinguishable from an oversight. #1213's lesson exactly: a manifest-scoped check whose
-// disclosure row does not admit the limit reads as a clean bill of health.
+// #1774: declare range coverage from the parser's actual format/version receipts. Resolved
+// component coverage and declared-range coverage are different populations; neither proves the other.
 //
-// #1350: of those declines, three survived re-testing and one did not. SUP-INSTALL-SCRIPT was
-// disclosed as manifest-only "since a lifecycle script only ever exists in a manifest" — false. The
-// lesson repeats one this repo already names: the decline was written in the same confident
-// register as the three true ones, so nothing in the row's own shape distinguished the claim that
-// held from the claim that did not.
+// #1350/#1351 corrected a similar false limit for dependency install scripts. Keep each scope
+// claim tied to the format actually read, rather than inheriting the earlier blanket reasoning.
 //
 // #1351 closed the gap the false reason had excused: SUP-INSTALL-SCRIPT-DEP (checkDependencyInstallScripts,
 // below) now reads `hasInstallScript` off every RESOLVED package, transitive ones included — but only
@@ -207,15 +200,21 @@ export function supplyChainScopeFinding(s: {
   license: LicenseScope;
   treeNames: number;
   declaredNames: number;
+  manifestDeclarations?: number;
   /** #1344 — workspace members depended on by their siblings. Never registry packages. */
   workspaceInternalNames: readonly string[];
   osvRan: boolean;
 }): Finding {
   const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
   const manifestOnly = [
-    "SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask",
     `SUP-SLOPSQUAT-* over ${s.declaredNames} declared name${s.declaredNames === 1 ? "" : "s"}, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves`,
   ];
+  const rangeScopes = s.license.rangeScopes;
+  const rangeDescription = rangeScopes.length === 0
+    ? "No supported lockfile range source was found; only manifest declarations were assessed."
+    : rangeScopes.map((scope) => `${scope.source} (${scope.format} version ${scope.sourceVersion}, ${scope.status}): ` +
+      `${scope.edges.length} admitted third-party range edges, ${scope.examined} input unit(s) examined, ${scope.unread} present/unread unit(s), ${scope.unsupported} unsupported source schema(s). ` +
+      `Excluded copies/constraints: root ${scope.excluded.root}, workspace ${scope.excluded.workspace}, link ${scope.excluded.link}, peer ${scope.excluded.peer}. ${scope.detail}`).join(" ");
   if (s.license.source === "package-lock.json") {
     treeWide.push("SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351)");
   } else {
@@ -228,7 +227,7 @@ export function supplyChainScopeFinding(s: {
   }
   return coverageFinding({
     id: "SUP-SCOPE-00",
-    title: `Supply-chain checks: ${treeWide.length} read the whole resolved dependency tree, ${manifestOnly.length} are limited to declared manifests`,
+    title: `Supply-chain scope: ${treeWide.length} resolved-tree check families; declaration ranges assessed separately`,
     taxonomy: "Coverage — supply-chain check scope",
     // Not "package.json": this row is a statement about every manifest AND the lockfile, and a
     // package.json location makes it substring-match the corpus entries keyed to that file — it
@@ -239,13 +238,15 @@ export function supplyChainScopeFinding(s: {
       `Resolved tree: ${s.treeNames} package name${s.treeNames === 1 ? "" : "s"} from ${s.license.source}. ` +
       `Read the whole resolved tree: ${treeWide.join("; ")}. ` +
       `Limited to the declared manifests: ${manifestOnly.join("; ")}.` +
+      ` SUP-UNPINNED and SUP-NON-REGISTRY examine ${s.manifestDeclarations === undefined ? "root/workspace manifest" : s.manifestDeclarations + " manifest"} declarations plus admitted npm v2/v3 dependency/devDependency/optionalDependency edges. ${rangeDescription} ` +
+      "Falsifier for an unread-format limit: a parser/registry replay of the named file that emits validated owner-path declaration edges and reports zero unread/unsupported units. Peer ranges are intentionally excluded compatibility constraints; the peer-only control in src/scan/mechanical.test.ts guards that boundary." +
       (s.workspaceInternalNames.length > 0
         ? ` Excluded from the registry-backed name checks (SUP-SLOPSQUAT-*, SUP-TYPO-*, SUP-IOC-*): ${s.workspaceInternalNames.length} workspace-internal package name(s) — ${s.workspaceInternalNames.join(", ")} — which resolve from inside this repo and are not published, so a registry lookup cannot say anything about them. Their CONTENTS are still scanned as first-party source; only the registry existence/name questions are skipped.`
         : ""),
     impact:
       "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     fix:
-      "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
+      "Keep root/workspace manifests authoritative and enforce a committed lockfile with frozen installs. npm v2/v3 declaration ranges are assessed; unread, unsupported or malformed range sources above need a validated format-specific parser/consumer before their absence of findings can count as coverage. For third-party declarations, update or override the owning dependency rather than editing generated lock metadata. Declare every workspace member so its manifest is included.",
   });
 }
 
@@ -327,55 +328,104 @@ export async function checkSlopsquat(depNames: readonly string[], fetchImpl: typ
 
 export type DependencyMap = Record<string, string>;
 
-// #1231 — one declared dependency, carrying the manifest that declared it. The two checks below ask
-// about the RANGE STRING, which only a manifest has, so their input is a flat list across every
-// workspace member rather than the root manifest's name→range map.
-interface DeclaredDependency {
+// Manifest declarations remain authoritative for first-party packages. npm v2/v3 also carries
+// third-party declarations, each with its own owner path and section (#1774).
+export interface DeclaredDependency {
   manifest: string;
   name: string;
   range: string;
+  edge?: DependencyRangeEdge;
 }
 
-function declaredLabel({ manifest, name, range }: DeclaredDependency): string {
-  return manifest === "package.json" ? `${name}@${range}` : `${name}@${range} (${manifest})`;
+function declaredLabel({ manifest, name, range, edge }: DeclaredDependency): string {
+  const label = `${name}@${redactDependencyRange(range)}`;
+  if (edge && !edge.direct) return `${label} (${edge.source}#${edge.ownerPath}, ${edge.section})`;
+  return manifest === "package.json" ? label : `${label} (${manifest})`;
 }
 
 // A finding aggregated over several manifests cannot claim one file as its location, and it must
 // not silently claim the root's either — a monorepo reader would look in the wrong file.
 function manifestLocation(deps: readonly DeclaredDependency[]): string {
   const manifests = [...new Set(deps.map((d) => d.manifest))];
+  if (deps.some((dependency) => dependency.edge && !dependency.edge.direct)) return `${manifests.sort().join("; ")} (third-party declaration ranges)`;
   return manifests.length === 1 ? manifests[0]! : `${manifests.length} workspace manifests`;
+}
+
+// A third-party declaration must not be attributed to the client's manifest. Keep the original
+// direct finding identities and a separate, stable tree rollup even when both populations match.
+function declarationPopulations(deps: readonly DeclaredDependency[]): { direct: boolean; declarations: DeclaredDependency[] }[] {
+  return [true, false].map((direct) => ({ direct, declarations: deps.filter((dependency) => (dependency.edge?.direct !== false) === direct) }));
+}
+
+function rangeEvidence(deps: readonly DeclaredDependency[], matched: readonly DeclaredDependency[], label: string): { evidence: string; artifact: DependencyRangeEvidence } {
+  const groups = new Map<string, DeclaredDependency[]>();
+  for (const dependency of matched) {
+    const key = JSON.stringify([dependency.name, dependency.range]);
+    const entries = groups.get(key) ?? [];
+    entries.push(dependency);
+    groups.set(key, entries);
+  }
+  const sorted = [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, entries]) => entries);
+  const displayed = sorted.slice(0, 20);
+  const abbreviate = (value: string): string => value.length > 240 ? `${value.slice(0, 240)}… (full value in dependencyRangeEvidence)` : value;
+  const prose = displayed.map((entries) => {
+    if (entries.length === 1) return abbreviate(declaredLabel(entries[0]!));
+    const owners = [...new Set(entries.map((entry) => entry.edge && !entry.edge.direct ? `${entry.edge.source}#${entry.edge.ownerPath}` : entry.manifest))].sort();
+    return `${abbreviate(`${entries[0]!.name}@${redactDependencyRange(entries[0]!.range)}`)} (${entries.length} declarations across ${owners.length} owners: ${owners.slice(0, 3).map(abbreviate).join(", ")}${owners.length > 3 ? `; ${owners.length - 3} more owners in dependencyRangeEvidence` : ""})`;
+  });
+  const edges: DependencyRangeEvidence["edges"] = matched.map((dependency) => {
+    const edge = dependency.edge ?? dependencyRangeEdge({ source: dependency.manifest, format: "package-json", sourceVersion: "unversioned",
+      ownerPath: dependency.manifest, ownerName: dependency.manifest, name: dependency.name, range: dependency.range, section: "dependencies", direct: true });
+    const range = redactDependencyRange(edge.range);
+    const ownerName = redactDependencyRange(edge.ownerName);
+    const ownerVersion = edge.ownerVersion === undefined ? undefined : redactDependencyRange(edge.ownerVersion);
+    return { identity: createHash("sha256").update(edge.identity).digest("hex"),
+      source: edge.source, format: edge.format, sourceVersion: edge.sourceVersion,
+      ownerPath: edge.ownerPath, ownerName, ...(ownerVersion === undefined ? {} : { ownerVersion }),
+      name: edge.name, range, section: edge.section, direct: edge.direct,
+      redacted: range !== edge.range || ownerName !== edge.ownerName || ownerVersion !== edge.ownerVersion };
+  }).sort((a, b) => a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0);
+  const omitted = matched.length - displayed.reduce((n, entries) => n + entries.length, 0);
+  return {
+    evidence: `${label}: ${prose.join(", ")}. ` +
+      `${matched.length} matching declarations in ${sorted.length} distinct name/range specifications; showing ${displayed.length} specifications${omitted > 0 ? ` (${omitted} declarations omitted from prose)` : ""}. ` +
+      "The complete sorted matching-edge artifact, including owner paths and sections, is retained in this finding's dependencyRangeEvidence in findings JSON; URL credentials and query values are redacted.",
+    artifact: { schemaVersion: 1, examined: deps.length, matched: matched.length, distinctSpecifications: sorted.length, displayedSpecifications: displayed.length, edges },
+  };
 }
 
 // Unpinned = the declared range can resolve to more than one published version. Syntactic
 // check on the range string → deterministic, "high" precision (whether an unpinned range is
 // *acceptable* is a severity/triage judgment, not this check's confidence).
 //
-// #1231 NOT WIDENED TO THE RESOLVED TREE, by construction rather than by cost: a lockfile records
-// the version that RESOLVED, never the range that was declared, so the tree cannot answer the
-// question this check asks. What it is widened to is every workspace member's manifest — the real
-// gap the root-only read left. (peerDependencies stay out for the #1213 reason: a peer range is
-// deliberately wide, so feeding it here is a false positive by design.)
+// Decision #1774: both range checks consume manifest declarations and validated npm v2/v3
+// dependency/devDependency/optionalDependency edges. Other format limits come from parser receipts.
+// Peer ranges remain excluded compatibility constraints; their observed population is disclosed.
+// Falsifier for the widening: `pnpm exec vitest run src/scan/mechanical.test.ts -t "npm lockfile range edges"`
+// fails when the shipping registry is reverted to manifest-only input.
 export function checkUnpinnedDependencies(deps: readonly DeclaredDependency[]): Finding[] {
-  const unpinned = deps.filter(({ range }) => {
-    const r = range.trim();
-    return r === "" || /^[\^~*]/.test(r) || /latest$/i.test(r) || /x$/i.test(r);
-  });
-  if (unpinned.length === 0) return [];
-  return [
-    mechanicalFinding({
-      id: "SUP-UNPINNED",
-      title: `${unpinned.length} dependencies declared with an unpinned version range`,
+  return declarationPopulations(deps).flatMap(({ direct, declarations }) => {
+    const unpinned = declarations.filter(({ range }) => {
+      const r = range.trim();
+      return r === "" || /^[\^~*]/.test(r) || /latest$/i.test(r) || /x$/i.test(r);
+    });
+    if (unpinned.length === 0) return [];
+    const report = rangeEvidence(declarations, unpinned, direct ? "Unpinned" : "Third-party unpinned");
+    return [{ ...mechanicalFinding({
+      id: direct ? "SUP-UNPINNED" : "SUP-UNPINNED-TREE",
+      title: `${unpinned.length} ${direct ? "direct" : "third-party"} dependency declarations use an unpinned version range`,
       severity: "Low",
       category: "Supply chain",
       taxonomy: "Unpinned dependency",
       location: manifestLocation(unpinned),
-      evidence: `Unpinned: ${unpinned.map(declaredLabel).join(", ")}.`,
+      evidence: report.evidence,
       impact: "A compromised upstream publish (or the next semver-compatible release) can land in installs without review, unless a lockfile is committed and enforced in CI.",
-      fix: "Pin exact versions, or rely on a committed, CI-enforced lockfile (frozen install) as the actual pin.",
+      fix: direct
+        ? "Pin exact direct versions, or enforce a committed lockfile with frozen installs."
+        : "Enforce a committed lockfile with frozen installs. Update or override the owning dependency when a third-party range needs tighter control; do not hand-edit generated lockfile ranges.",
       precisionTier: "high",
-    }),
-  ];
+    }), dependencyRangeEvidence: report.artifact }];
+  });
 }
 
 // A dependency range that resolves from somewhere other than the npm registry — a git/ssh/http
@@ -383,27 +433,30 @@ export function checkUnpinnedDependencies(deps: readonly DeclaredDependency[]): 
 // but whether it's a *problem* is a judgment (a private git dep can be intentional), and such a
 // source is unpinned-by-default with no registry integrity/provenance → "review" tier. The
 // vibe-code risk: an AI pastes `npm install some-git-url`, bypassing registry auditing entirely.
-const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:)/i;
+const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:|[/\\]{2})/i;
 
-// #1231: same construction as checkUnpinnedDependencies above — the protocol prefix lives in the
-// declared range, which no lockfile records, so this widens across workspace manifests, not the tree.
+// The same declared-range population and widening falsifier as checkUnpinnedDependencies apply;
+// a resolved version is never substituted for the parent's raw protocol/range declaration.
 export function checkNonRegistryDependencies(deps: readonly DeclaredDependency[]): Finding[] {
-  const nonRegistry = deps.filter(({ range }) => NON_REGISTRY_RANGE.test(range.trim()));
-  if (nonRegistry.length === 0) return [];
-  return [
-    mechanicalFinding({
-      id: "SUP-NON-REGISTRY",
-      title: `${nonRegistry.length} dependencies resolve from a non-registry source (git/url/file)`,
+  return declarationPopulations(deps).flatMap(({ direct, declarations }) => {
+    const nonRegistry = declarations.filter(({ range }) => NON_REGISTRY_RANGE.test(normalizeDependencyUrlInput(range)));
+    if (nonRegistry.length === 0) return [];
+    const report = rangeEvidence(declarations, nonRegistry, direct ? "Non-registry" : "Third-party non-registry");
+    return [{ ...mechanicalFinding({
+      id: direct ? "SUP-NON-REGISTRY" : "SUP-NON-REGISTRY-TREE",
+      title: `${nonRegistry.length} ${direct ? "direct" : "third-party"} dependency declarations use a non-registry source (git/url/file)`,
       severity: "Medium",
       category: "Supply chain",
       taxonomy: "Non-registry dependency source",
       location: manifestLocation(nonRegistry),
-      evidence: `Non-registry: ${nonRegistry.map(declaredLabel).join(", ")}.`,
+      evidence: report.evidence,
       impact: "A git/url/file dependency bypasses the npm registry's auditing and integrity checks and is unpinned by default — a compromised or rewritten upstream lands in installs without review.",
-      fix: "Prefer a registry-published, version-pinned dependency; if a git source is required, pin it to a commit SHA and vendor-review it.",
+      fix: direct
+        ? "Prefer a registry-published, version-pinned dependency; if a git source is required, pin it to a commit SHA and vendor-review it."
+        : "Review the owning dependency's source choice and update or override that dependency if needed; do not hand-edit generated lockfile ranges. Require immutable commit references for intentional git sources.",
       precisionTier: "review",
-    }),
-  ];
+    }), dependencyRangeEvidence: report.artifact }];
+  });
 }
 
 // Install-time lifecycle scripts (preinstall/install/postinstall) run arbitrary code on every

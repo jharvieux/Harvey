@@ -1562,7 +1562,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// nondeterministic. So the classification runs and the packages the lockfile cannot answer are",
     "// it's \"high\" precision, unlike the offline edit-distance check above. A network error can't",
     "// A finding aggregated over several manifests cannot claim one file as its location, and it must",
-    "// the version that RESOLVED, never the range that was declared, so the tree cannot answer the",
   ],
   "src/scan/tenant-guc-scope.ts": [
     "// A grep, not a dataflow proof: this cannot see whether the pool is in session mode (where SET is",

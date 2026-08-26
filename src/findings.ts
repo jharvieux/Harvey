@@ -119,6 +119,93 @@ export interface SuggestedFix {
   verification?: string; // how it was verified, surfaced in the ticket body
 }
 
+export interface DependencyRangeEvidence {
+  schemaVersion: 1;
+  examined: number;
+  matched: number;
+  distinctSpecifications: number;
+  displayedSpecifications: number;
+  /** Complete matching population; report prose is a bounded projection of this JSON artifact. */
+  edges: {
+    identity: string;
+    source: string;
+    format: string;
+    sourceVersion: string;
+    ownerPath: string;
+    ownerName: string;
+    ownerVersion?: string;
+    name: string;
+    range: string;
+    section: "dependencies" | "devDependencies" | "optionalDependencies";
+    direct: boolean;
+    redacted: boolean;
+  }[];
+}
+
+/** Match consumer trimming and WHATWG's removal of URL tabs/newlines and edge C0 controls. */
+export function normalizeDependencyUrlInput(range: string): string {
+  const value = range.replace(/[\t\r\n]/g, "").trim();
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) start++;
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) end--;
+  return value.slice(start, end);
+}
+
+function redactStandaloneDependencyUrl(range: string): string {
+  const normalized = normalizeDependencyUrlInput(range);
+  const gitPrefix = /^git\+/i.exec(normalized)?.[0] ?? "";
+  let input = normalized.slice(gitPrefix.length);
+  const malformed = "[redacted malformed dependency URL]";
+  // SCP syntax has no URL authority delimiter. Reject ambiguous extra userinfo rather than
+  // treating it as a repository path that can bypass URL credential projection.
+  if (/^git@/i.test(input)) {
+    const scp = /^git@([^/:@?#\s]+):([^@?#]+)([?#].*)?$/i.exec(input);
+    if (!scp) return malformed;
+    input = `ssh://git@${scp[1]}/${scp[2]}${scp[3] ?? ""}`;
+  }
+  const relative = /^[/\\]{2}/.test(input);
+  let projected = range;
+  if (relative || /^(?:https?|ssh|git|ftp|ftps|file):|^[a-z][a-z0-9+.-]*:[/\\]/i.test(input)) {
+    try {
+      const url = new URL(relative ? `https:${input}` : input);
+      if (!url.host && url.protocol !== "file:") return malformed;
+      const credentials = Boolean(url.username || url.password);
+      if (credentials || url.search || /[=&]/.test(url.hash)) {
+        url.username = "";
+        url.password = "";
+        // Serialize the parsed authority: regex replacement on the input misses WHATWG's
+        // backslash/four-slash normalization and can leave credentials in the host spelling.
+        const safe = credentials ? url.href.replace(`${url.protocol}//`, `${url.protocol}//[redacted]@`) : url.href;
+        projected = relative ? safe.slice(url.protocol.length) : `${gitPrefix}${safe}`;
+      }
+    } catch { return malformed; }
+  }
+  return projected
+    .replace(/\?[^#]*/g, "?[redacted]")
+    .replace(/#[\s\S]*[=&][\s\S]*/g, "#[redacted]");
+}
+
+/** URL credentials and query values must not enter prose or the nested range artifact. */
+export function redactDependencyRange(range: string): string {
+  const projected = redactStandaloneDependencyUrl(range);
+  // Owner metadata may wrap URLs in prose or embed another URL in a path/fragment.
+  // Match authority boundaries before applying the standalone URL projection.
+  const authorities = /((?<![a-z0-9+.-])(?:git\+)*(?:[a-z][a-z0-9+.-]*:[/\\]+|(?:https?|ssh|git|ftp|ftps|file|github|gitlab|bitbucket):)|git@|[/\\]{2,})([^/\\?#]*)/gi;
+  for (const match of normalizeDependencyUrlInput(projected).matchAll(authorities)) {
+    const scheme = match[1]!.replace(/^(?:git\+)+/i, "");
+    const prefix = /^(?:github|gitlab|bitbucket):$/i.test(scheme) ? "https://" : match[1]!;
+    const authority = match[2]!;
+    // Keep all potential userinfo, including malformed whitespace, but exclude surrounding
+    // prose/quotes after the host. Sanitized [redacted] userinfo stays idempotent on revalidation.
+    const hostStart = authority.lastIndexOf("@") + 1;
+    const end = authority.slice(hostStart).search(/[\s"'<>]/);
+    const candidate = `${prefix}${end < 0 ? authority : authority.slice(0, hostStart + end)}/`;
+    if (redactStandaloneDependencyUrl(candidate) !== candidate) return "[redacted embedded dependency URL]";
+  }
+  return projected;
+}
+
 export interface Finding {
   id: string;
   title: string;
@@ -131,6 +218,7 @@ export interface Finding {
   evidence: string;
   impact: string;
   fix: string;
+  dependencyRangeEvidence?: DependencyRangeEvidence;
   // #825: paid-tier applicable diff, surfaced under the prose `fix` in a filed ticket. Absent ⇒
   // prose-only (free tier, or no diff was produced/verified).
   suggestedFix?: SuggestedFix;
@@ -318,6 +406,39 @@ function scoreInRange(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5;
 }
 
+function validateDependencyRangeEvidence(value: unknown, at: string, errors: string[]): void {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.edges)) {
+    errors.push(`${at}: expected a schemaVersion 1 range-edge artifact`);
+    return;
+  }
+  for (const field of ["examined", "matched", "distinctSpecifications", "displayedSpecifications"] as const) {
+    if (!Number.isInteger(value[field]) || (value[field] as number) < 0) errors.push(`${at}.${field}: expected nonnegative integer`);
+  }
+  if (value.matched !== value.edges.length || (value.examined as number) < value.edges.length ||
+      (value.displayedSpecifications as number) > (value.distinctSpecifications as number) ||
+      (value.distinctSpecifications as number) > value.edges.length) {
+    errors.push(`${at}: range-edge population/counts disagree`);
+  }
+  let previous = "";
+  for (const [index, edge] of value.edges.entries()) {
+    const path = `${at}.edges[${index}]`;
+    if (!isRecord(edge)) { errors.push(`${path}: expected an edge object`); continue; }
+    if (typeof edge.identity !== "string" || !/^[a-f0-9]{64}$/.test(edge.identity) || edge.identity <= previous) {
+      errors.push(`${path}.identity: expected unique sorted SHA-256 identity`);
+    } else previous = edge.identity;
+    for (const field of ["source", "format", "sourceVersion", "ownerPath", "ownerName", "name"] as const) {
+      if (typeof edge[field] !== "string" || edge[field] === "") errors.push(`${path}.${field}: expected nonempty string`);
+    }
+    if (typeof edge.ownerName === "string" && redactDependencyRange(edge.ownerName) !== edge.ownerName) errors.push(`${path}.ownerName: URL credentials/query values must be redacted`);
+    if (typeof edge.range !== "string") errors.push(`${path}.range: expected string`);
+    else if (redactDependencyRange(edge.range) !== edge.range) errors.push(`${path}.range: URL credentials/query values must be redacted`);
+    if (edge.ownerVersion !== undefined && typeof edge.ownerVersion !== "string") errors.push(`${path}.ownerVersion: expected string`);
+    else if (typeof edge.ownerVersion === "string" && redactDependencyRange(edge.ownerVersion) !== edge.ownerVersion) errors.push(`${path}.ownerVersion: URL credentials/query values must be redacted`);
+    if (!["dependencies", "devDependencies", "optionalDependencies"].includes(edge.section as string)) errors.push(`${path}.section: unknown declaration section`);
+    if (typeof edge.direct !== "boolean" || typeof edge.redacted !== "boolean") errors.push(`${path}: direct/redacted must be boolean`);
+  }
+}
+
 function validateCoverage(coverage: unknown, errors: string[]): void {
   if (!Array.isArray(coverage)) {
     errors.push("coverage: expected an array of module rows");
@@ -476,6 +597,7 @@ export function validateFindings(data: unknown): ValidationResult {
     if (f.mechanical !== undefined && typeof f.mechanical !== "boolean") {
       errors.push(`${at}.mechanical: expected boolean`);
     }
+    if (f.dependencyRangeEvidence !== undefined) validateDependencyRangeEvidence(f.dependencyRangeEvidence, `${at}.dependencyRangeEvidence`, errors);
     if (f.exploitabilityVerified !== undefined && typeof f.exploitabilityVerified !== "boolean") {
       errors.push(`${at}.exploitabilityVerified: expected boolean`);
     }

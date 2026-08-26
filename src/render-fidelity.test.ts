@@ -34,10 +34,12 @@ import { truffleHogUnavailableFinding } from "./scan/secrets.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { parseSemgrepFindings, semgrepUnavailableFinding } from "./scan/semgrep.js";
 import { toSarif } from "./sarif.js";
+import { MechanicalScanContext } from "./scan/mechanical-context.js";
+import { runRegisteredDependencyDetectors } from "./scan/mechanical-dependency-registry.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
 import type { RunContext } from "./audit-runner.js";
 import type { EngagementEnv, ModuleCoverage } from "./audit-coverage.js";
-import type { CoverageRow, Finding, FindingsDocument, ReportMeta } from "./findings.js";
+import { validateFindings, type CoverageRow, type Finding, type FindingsDocument, type ReportMeta } from "./findings.js";
 
 const META: ReportMeta = {
   client: "Acme", subtitle: "Full audit", date: "2026-07-28", commit: "abc1234", auditor: "Harvey",
@@ -150,7 +152,179 @@ function deliverable(): FindingsDocument {
   return assembleEngagementDocument(RECORDED, ENV, findings, META);
 }
 
+describe("dependency URL delivery (#1774)", () => {
+  const spellings = [
+    ["valid", "https://canary-user:canary-password@example.invalid/repo?token=canary-query"],
+    ["leading whitespace malformed", "  https://canary-user:canary-password?token=canary-query@example.invalid/repo"],
+    ["leading tab malformed", "\thttps://canary-user:canary-password?token=canary-query@example.invalid/repo"],
+    ["leading newline malformed", "\nhttps://canary-user:canary-password?token=canary-query@example.invalid/repo"],
+    ["embedded tab scheme", "https:\t//canary-user:canary-password@example.invalid/repo"],
+    ["embedded tab git scheme", "git+ht\ttps://canary-user:canary-password@example.invalid/repo"],
+    ["backslashes", "https:\\canary-user:canary-password@example.invalid/repo"],
+    ["four slashes", "https:////canary-user:canary-password@example.invalid/repo"],
+    ["scheme relative", "//canary-user:canary-password@example.invalid/repo"],
+    ["malformed scp", "git@canary-user:canary-password@example.invalid:repo"],
+    ["scp", "git@example.invalid:repo?token=canary-query"],
+    ["uppercase", "GIT+HTTPS://canary-user:canary-password@example.invalid/repo?token=canary-query"],
+    ["ssh", "ssh://canary-user:canary-password@example.invalid/repo"],
+    ["encoded userinfo", "https://canary%2duser:canary%2dpassword@example.invalid/repo"],
+    ["URL-in-path", "https://safe.invalid/path/https://canary-user:canary-password@example.invalid/repo"],
+    ["URL-in-fragment", "https://safe.invalid/repo#https://canary-user:canary-password@example.invalid/repo"],
+    ["URL-in-query", "https://safe.invalid/repo?redirect=https://canary-user:canary-password@example.invalid/repo"],
+    ["prefixed malformed URL", "repository https://canary-user:canary-password?token=canary-query@example.invalid/repo", false],
+    ["embedded URL with tabs", "repository ht\ttps://canary-user:canary-password@example.invalid/repo", false],
+    ["leading C0", "\u0001https://canary-user:canary-password@example.invalid/repo\u001f"],
+    ["embedded CR scheme", "ht\rtps://canary-user:canary-password@example.invalid/repo"],
+    ["scheme relative backslashes", "\\\\canary-user:canary-password@example.invalid/repo"],
+    ["five slashes", "https://///canary-user:canary-password@example.invalid/repo"],
+    ["text-prefixed URL", "repository https://canary-user:canary-password@example.invalid/repo", false],
+    ["quoted URL", '"https://canary-user:canary-password@example.invalid/repo"', false],
+    ["embedded NUL scheme", "ht\u0000tps://canary-user:canary-password@example.invalid/repo", false],
+    ["hosted git shorthand", "github:canary-user:canary-password@example.invalid/repo"],
+    ...["github", "gitlab", "bitbucket"].flatMap((provider) =>
+      ["git+", "GIT+", "git+git+"].map((modifier) =>
+        [`hosted ${modifier}${provider} shorthand`, `${modifier}${provider}:canary-user:canary-password@example.invalid/repo`] as const)),
+    ["hosted text-prefixed shorthand", "repository git+github:canary-user:canary-password@example.invalid/repo", false],
+    ["hosted quoted shorthand", '"git+github:canary-user:canary-password@example.invalid/repo"', false],
+    ["hosted shorthand in URL path", "https://safe.invalid/path/git+github:canary-user:canary-password@example.invalid/repo"],
+    ["hosted shorthand in URL fragment", "https://safe.invalid/repo#git+github:canary-user:canary-password@example.invalid/repo"],
+    ["credential-free URL-in-path", "https://safe.invalid/path/https://example.invalid/repo", true, false],
+    ["credential-free URL-in-fragment", "https://safe.invalid/repo#https://example.invalid/repo", true, false],
+    ["credential-free text-prefixed URL", "repository https://example.invalid/repo", false, false],
+    ["credential-free quoted URL", '"https://example.invalid/repo"', false, false],
+    ["credential-free hosted git shorthand", "github:owner/repo#abcdef", true, false],
+  ] as const;
+  const venues = ["tree-range", "direct-range", "owner-version", "owner-name"] as const;
+  const cases = spellings.flatMap(([spelling, value, rangeSelected = true, redacted = true]) => venues.map((venue) => ({ spelling, value, venue, rangeSelected, redacted })));
+
+  it.each(cases)("preserves selection and protects $spelling in $venue through parser, registry, assembly, JSON and HTML", async ({ value, venue, rangeSelected, redacted }) => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-range-url-report-"));
+    const pkg: { name: string; dependencies: Record<string, string> } = {
+      name: venue === "owner-name" ? value : "range-report",
+      dependencies: venue === "direct-range" ? { remote: value } : venue === "owner-name" ? { child: "^1.0.0" } : {},
+    };
+    const direct = venue === "direct-range" || venue === "owner-name";
+    const field = venue === "owner-name" ? "ownerName" : venue === "owner-version" ? "ownerVersion" : "range";
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "node_modules/parent": {
+          version: venue === "owner-version" ? value : "1.0.0",
+          dependencies: venue === "tree-range" ? { remote: value } : venue === "owner-version" ? { child: "^1.0.0" } : {},
+        },
+      } }));
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline dependency URL fixture" }, skipNetworkChecks: true }, "supply");
+      const findings = result.findings.filter((finding) => /^SUP-(UNPINNED|NON-REGISTRY)(-TREE)?$/.test(finding.id));
+      // Invalid range prefixes stay outside the detector; the same untrusted text in owner
+      // metadata still reaches a selected, unrelated semver edge and must be protected there.
+      if (field === "range" && !rangeSelected) {
+        expect(findings).toEqual([]);
+        return;
+      }
+      const id = `SUP-${field === "range" ? "NON-REGISTRY" : "UNPINNED"}${direct ? "" : "-TREE"}`;
+      expect(findings.map((finding) => finding.id)).toEqual([id]);
+      const doc = assembleEngagementDocument(RECORDED, ENV, findings, META);
+      const html = buildHtml(doc);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const serialized = readFileSync(filename, "utf8");
+      for (const secret of ["canary-user", "canary-password", "canary-query", "canary%2duser", "canary%2dpassword"]) {
+        expect(serialized).not.toContain(secret);
+        expect(html).not.toContain(secret);
+      }
+      const delivered = JSON.parse(serialized) as FindingsDocument;
+      expect(validateFindings(delivered).errors).toEqual([]);
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+      const artifact = delivered.findings.find((finding) => finding.id === id)!.dependencyRangeEvidence!;
+      expect(artifact).toMatchObject({ examined: 1, matched: 1, distinctSpecifications: 1, displayedSpecifications: 1, edges: [{
+        source: direct ? "package.json" : "package-lock.json", format: direct ? "package-json" : "package-lock", sourceVersion: direct ? "unversioned" : "3",
+        ownerPath: direct ? "package.json" : "node_modules/parent", section: "dependencies", direct, redacted,
+        name: field === "range" ? "remote" : "child",
+      }] });
+      expect(artifact.edges[0]?.identity).toMatch(/^[a-f0-9]{64}$/);
+      if (field !== "range") expect(artifact.edges[0]?.range).toBe("^1.0.0");
+      if (field !== "ownerName") expect(artifact.edges[0]?.ownerName).toBe(direct ? "range-report" : "parent");
+      if (field !== "ownerVersion") expect(artifact.edges[0]?.ownerVersion).toBe(direct ? undefined : "1.0.0");
+      if (redacted) {
+        // The real validator must also refuse an unsafe nested field restored after projection.
+        artifact.edges[0]![field] = value;
+        expect(validateFindings(delivered).errors).toContainEqual(expect.stringContaining(`dependencyRangeEvidence.edges[0].${field}`));
+      } else {
+        expect(artifact.edges[0]![field]).toBe(value);
+      }
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("pnpm range disclosure delivery (#1774)", () => {
+  it.each([
+    ["malformed importer map", "importers: 'malformed'", 0, 1],
+    ["malformed dependency map", "importers:\n  .:\n    dependencies: 'malformed'", 0, 1],
+    ["restored specifier", "importers:\n  .:\n    dependencies:\n      child:\n        specifier: ^1.0.0\n        version: 1.0.1", 1, 0],
+    ["empty dependency map", "importers:\n  .:\n    dependencies: {}", 0, 0],
+  ] as const)("delivers the actual %s population without inventing range edges", async (_label, fields, specifiers, boundaries) => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-pnpm-range-report-"));
+    const pkg = { name: "pnpm-report", dependencies: { direct: "1.0.0" } };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "pnpm-lock.yaml"), `lockfileVersion: '9.0'\n${fields}\npackages:\n  parent@1.0.0:\n    resolution: {integrity: dummy}\n`);
+      context = new MechanicalScanContext(dir);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline pnpm boundary fixture" }, skipNetworkChecks: true }, "supply");
+      const scope = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(scope.evidence).toContain("0 admitted third-party range edges");
+      expect(scope.evidence).toContain(`${specifiers + boundaries} input unit(s) examined, ${specifiers + boundaries} present/unread unit(s)`);
+      expect(scope.evidence).toContain(`${specifiers} importer/root specifier value(s)`);
+      expect(scope.evidence).toContain(`${boundaries} malformed map boundar`);
+      const doc = assembleEngagementDocument(RECORDED, ENV, [scope], META);
+      const html = buildHtml(doc);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const delivered = JSON.parse(readFileSync(filename, "utf8")) as FindingsDocument;
+      expect(delivered.findings.find((finding) => finding.id === scope.id)?.evidence).toBe(scope.evidence);
+      expect(html).toContain(esc(scope.evidence));
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe("#1435 a finding's own words survive the render seam", () => {
+  it("delivers npm range provenance and corrected scope through the real registry, assembly, JSON and N/A evidence fallback (#1774)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-range-report-"));
+    const pkg = { name: "range-report", dependencies: {} };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "node_modules/parent": { version: "1.0.0", license: "MIT", dependencies: {
+          child: "^2.0.0", remote: "https://report-user:report-password@example.invalid/pkg.tgz?token=report-token",
+        }, peerDependencies: { compatible: "*" } },
+      } }));
+      context = new MechanicalScanContext(dir);
+      const { findings } = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline report fixture" }, skipNetworkChecks: true }, "supply");
+      const scope = findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(scope.evidence).toContain("2 admitted third-party range edges");
+      const doc = assembleEngagementDocument(RECORDED, ENV, findings, META);
+      const html = buildHtml(doc);
+      expect(html).toContain(esc(scope.evidence));
+      expect(html).not.toMatch(/tree cannot answer|range, which only a manifest carries/);
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const serialized = readFileSync(filename, "utf8");
+      for (const secret of ["report-user", "report-password", "report-token"]) {
+        expect(serialized).not.toContain(secret);
+        expect(html).not.toContain(secret);
+      }
+      const delivered = JSON.parse(serialized) as FindingsDocument;
+      const artifact = delivered.findings.find((finding) => finding.id === "SUP-NON-REGISTRY-TREE")?.dependencyRangeEvidence;
+      expect(artifact).toMatchObject({ examined: 2, matched: 1, edges: [{ source: "package-lock.json", ownerPath: "node_modules/parent", name: "remote", direct: false, redacted: true }] });
+      expect(renderFidelityBreaches(doc, html.replace(esc(scope.evidence), "Not applicable in context."))).not.toEqual([]);
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   const doc = deliverable();
   const html = buildHtml(doc);
 

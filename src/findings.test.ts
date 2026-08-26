@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bftb, validateFindings } from "./findings.js";
+import { bftb, redactDependencyRange, validateFindings } from "./findings.js";
+import { checkNonRegistryDependencies } from "./scan/supply-chain.js";
 
 const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
 
@@ -36,6 +37,45 @@ describe("validateFindings", () => {
 });
 
 describe("validateFindings — mechanical scan fields", () => {
+  it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {
+    for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz",
+      "repository https://example.invalid", '"https://example.invalid"', "https://safe.invalid/path/https://example.invalid/repo", "https://safe.invalid/repo#https://example.invalid/repo",
+      "https://example.invalid/one and https://other.invalid/two", "gitlab:owner/repo", "bitbucket:owner/repo",
+      "npm:package@^1.0.0", "git+github:owner/repo", "GIT+gitlab:owner/repo", "git+git+bitbucket:owner/repo",
+    ]) {
+      expect(redactDependencyRange(range)).toBe(range);
+    }
+    for (const range of ["\u0000https://fixture-user:fixture-password@example.invalid/repo\u001f", "ht\ttps://fixture-user:fixture-password@example.invalid/repo", "https://example.invalid/repo#token=fixture-token with spaces"]) {
+      const projected = redactDependencyRange(range);
+      expect(projected).not.toMatch(/fixture-(?:user|password|token)|with spaces/);
+      expect(projected).toContain("[redacted]");
+      expect(redactDependencyRange(projected)).toBe(projected);
+    }
+  });
+
+  it("retains and validates the real range artifact while rejecting count, identity, shape and credential regressions", () => {
+    const [finding] = checkNonRegistryDependencies([{ manifest: "package.json", name: "fixture", range: "https://fixture-user:fixture-password@example.invalid/pkg.tgz?token=fixture-token" }]);
+    const doc = { ...example, findings: [finding] };
+    expect(validateFindings(doc).errors).toEqual([]);
+    const json = JSON.stringify(doc);
+    for (const secret of ["fixture-user", "fixture-password", "fixture-token"]) expect(json).not.toContain(secret);
+    expect(JSON.parse(json).findings[0].dependencyRangeEvidence).toMatchObject({ schemaVersion: 1, examined: 1, matched: 1, edges: [{ range: "https://[redacted]@example.invalid/pkg.tgz?[redacted]", redacted: true }] });
+    const brokenArtifacts = [
+      { ...finding!.dependencyRangeEvidence, matched: 2 },
+      { ...finding!.dependencyRangeEvidence, schemaVersion: 99 },
+      { ...finding!.dependencyRangeEvidence, edges: [{ ...finding!.dependencyRangeEvidence!.edges[0], identity: "not-an-identity" }] },
+      { ...finding!.dependencyRangeEvidence, edges: [{ ...finding!.dependencyRangeEvidence!.edges[0], range: { not: "a string" } }] },
+      { ...finding!.dependencyRangeEvidence, edges: [{ ...finding!.dependencyRangeEvidence!.edges[0], range: "https://fixture-user:fixture-password@example.invalid/pkg.tgz" }] },
+      { ...finding!.dependencyRangeEvidence, edges: [{ ...finding!.dependencyRangeEvidence!.edges[0], ownerVersion: "https://fixture-user:fixture-password@example.invalid/pkg.tgz" }] },
+      { ...finding!.dependencyRangeEvidence, edges: [{ ...finding!.dependencyRangeEvidence!.edges[0], ownerName: "https://fixture-user:fixture-password@example.invalid/pkg.tgz" }] },
+    ];
+    for (const dependencyRangeEvidence of brokenArtifacts) {
+      const result = validateFindings({ ...example, findings: [{ ...finding, dependencyRangeEvidence }] });
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("dependencyRangeEvidence");
+    }
+  });
+
   it("accepts a finding with mechanical + precisionTier set", () => {
     const doc = {
       ...example,

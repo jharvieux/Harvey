@@ -321,8 +321,9 @@ one place the delivery mechanism does not put it.
 
 **This entry is deliberately SYNTHETIC, and that is the honest option here.** npm took `crossenv`
 down in 2017, so there is no real release to cite and no real integrity hash to commit. The entry
-therefore carries the NAME and nothing else — no `resolved` URL, no `integrity`, no `license`, and
-the plainly-fake version `0.0.0-synthetic`. The name is the only field `checkKnownIoc` reads (the
+therefore uses an unresolved synthetic identity — no `resolved` URL, no `integrity`, no `license`, and
+the plainly-fake version `0.0.0-synthetic`. #1774 adds separate DATA-ONLY declaration-range twins
+to this existing owner; those ranges do not assert a published release. The name is the only field `checkKnownIoc` reads (the
 feed's own premise is that any version of such a package is malicious), so nothing about the plant
 is fabricated in a field a check depends on. Contrast the #1213 plant above, which models a license
 claim and therefore had to use real published releases with real hashes.
@@ -362,6 +363,31 @@ sits equally transitively and is edit-distance 1 from nothing.
 
 Side effect, recorded: the entry has no `license`, so like `crossenv` it joins `SUP-LICENSE-00`'s
 indeterminate list on the offline path — the count in that row moves from 9 to 10 packages.
+
+### B2 third-party declaration ranges (#1774)
+
+Both `SUP-UNPINNED` and `SUP-NON-REGISTRY` assess validated declaration edges from npm
+package-lock v2/v3, in addition to authoritative root/workspace manifests. Each edge preserves
+the source format/version, owner package and path, child, section, raw range and stable identity.
+Root/workspace/link copies are excluded; peer ranges are excluded compatibility constraints.
+npm v1 `requires` maps, pnpm importer specifiers and Yarn selectors/dependency blocks may retain
+ranges; their present-but-unread populations remain explicit until corresponding consumers exist.
+
+`P-UNPINNED-LOCK-NATURAL` reads the unchanged `@swc/helpers` → `@swc/counter@^0.1.3`
+declaration. The existing synthetic `uid` owner also declares `@0-harvey/range-child@^1.2.3`
+and `@0-harvey/source-child` from a `git+https` URL at `example.invalid`; `crossenv` declares
+the same two names at exactly `1.2.3` from the registry. These four DATA-ONLY fields add no
+resolved components, licenses, integrity hashes or install-script flags. Do not fetch or install
+them. The two positives and exact/registry negatives are keyed to the separate third-party
+finding location so direct-manifest findings do not satisfy them.
+
+Client prose groups name/range specifications, displays at most 20 and states omitted counts.
+Each finding's `dependencyRangeEvidence` in findings JSON retains all matching owner/path/section
+edges in sorted identity order; URL credentials and query values are redacted. Direct and
+third-party findings have distinct identities and remediation, identifying the declaration owner.
+The production control is `pnpm exec vitest run src/scan/mechanical.test.ts -t "npm lockfile range edges"`:
+reverting either registry consumer to manifest-only input fails it. The scope source-text guard
+also fails when the prior blanket lockfile claim returns.
 
 ### B2 transitive-install-script plant (#1351)
 
