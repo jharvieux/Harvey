@@ -150,7 +150,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     return target;
   }
 
-  function signalOwnedGroup(pid: number | undefined, signal: NodeJS.Signals | 0): boolean {
+  function signalOwnedGroup(pid: number | undefined, signal: NodeJS.Signals): boolean {
     if (pid === undefined) return false;
     try {
       process.kill(-pid, signal);
@@ -159,10 +159,6 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
       if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
       throw error;
     }
-  }
-
-  function ownedGroupExists(pid: number | undefined): boolean {
-    return signalOwnedGroup(pid, 0);
   }
 
   // This observer deliberately does not share the production signal helper. A root-only `kill(pid,
@@ -200,7 +196,8 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
 
   async function waitForOwnedGroupExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
-    while (ownedGroupExists(pid)) {
+    // Observe membership while the child-exit handler reaps the killed group leader.
+    while ((await actualOwnedGroupMembers(pid)).length > 0) {
       if (Date.now() >= deadline) return false;
       await new Promise((resolveWait) => setTimeout(resolveWait, 25));
     }
@@ -284,8 +281,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     try {
       expect(await actualOwnedGroupMembers(cleanup.pgid)).toEqual([]);
     } finally {
-      // A physical root-only-signal reversion must fail above, then this test-only guard reaps
-      // the observed group so its real scanners cannot leak into a following test run.
+      // Reap the observed group after a failing root-only-signal control.
       await forceReapObservedGroup(cleanup.pgid);
     }
   });
