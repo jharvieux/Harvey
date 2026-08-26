@@ -114,6 +114,7 @@ describe("clone repository input boundary (#1778)", () => {
     `https://user:${canary}@github.com/owner/repo`, `user:${canary}@owner/repo`,
     `owner/repo%3Ftoken%3D${canary}`, `owner/repo\\${canary}`,
     `owner/repo\n${canary}`, "owner/repo ", "owner/.", "owner/..", "owner/repo/extra",
+    "owner/repo\n", "owner/repo\r", "owner/repo\r\n", "owner/repo\u2028", "owner/repo\u2029",
   ];
   const modes = ["direct", "uncached", "cold-cache", "warm-cache+verify"] as const;
 
