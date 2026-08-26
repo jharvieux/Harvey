@@ -111,10 +111,11 @@ exhortation: **impossibility vocabulary in a `REASON:` whose provenance is `ASSU
 error**, of either kind. Three honest exits, all one line — go look and re-tag it `MEASURED`/`TRIED`;
 name the real constraint (*"not attempted this round; the pull is ~20s, the stand-up is documented in
 X"*); or ask it as a question (*"does the token store expose non-owner reads?"*), which invites the
-next person to test it where an assertion ends the file. The vocabulary is the same list the
+next person to test it where an assertion ends the file. The vocabulary is the same impossibility list the
 untriaged-claim census uses, so the two cannot drift apart; it is matched literally, including inside
 a denial (*"not technically impossible"*), because re-tagging a denial as `MEASURED` is cheaper than
-teaching a regex to read sentences.
+teaching a regex to read sentences. The census's additional evidence-status phrases do not become
+impossibility-register violations.
 
 **What stays prose.** The rule also applies to PR bodies and issue comments, which this gate cannot
 reach — `collectSources` reads files, and `--issues` fetches issue text but nothing renders a PR
@@ -427,14 +428,23 @@ pnpm validate-reasons --root <dir> --list
   issue-recorded claims, which would be the silent pass in miniature.
 - **The untriaged claim census** — printed on every run, listed under `--census`. "N blocks, all
   well-formed" is a statement about the blocks that EXIST, and reads as a clean bill of health over
-  the repo's claims; the #1033 inventory measured 86 claim-shaped lines across 33 of 51 design docs
-  that were never triaged into empirical/decisional at all. So the untriaged population is **counted
-  on every run** instead of quoted from a doc. It is explicitly a **lower bound** over a fixed
-  vocabulary of standing-impossibility phrasings, and prose-only — the same inventory measured
-  `docs/design` carrying 2 provenance tags against `src/`'s 119, so prose is the weak surface.
-  Advisory, never a gate failure: a hard gate over a heuristic gets argued down or suppressed, and
-  what this needs to do is stay visible while the number shrinks. **Do not quote the number from
-  here — run the tool.**
+  the repo's claims. The census measures the standing claims outside those blocks instead. Its
+  fixed vocabulary is a **lower bound**: standing impossibility, the unverified register, and the
+  exact case-insensitive, word-bounded phrase `verified live` (#1410). Bare `verified` is not an arm.
+
+  Scope comes from the real sources selected for the run: `DEFAULT_ROOTS` unless `--root` narrows
+  them, plus issue bodies and comments when `--issues` is requested. Prose (`.md`, `.txt` and fetched
+  issue text) is read whole; `.ts`, `.yml` and `.sql` are **comment-line-only**, not whole-file.
+  A trailing comment on a code line is outside that boundary. Fenced lines and parsed reason blocks
+  are excluded, as is the generated `src/unstructured-claims-baseline.ts`, which quotes the governed
+  population and would otherwise count it twice.
+
+  `claimScopeMetrics` supplies both the census and its disclosure: accepted claims, source counts
+  by scope, accepted rows using the positive-register phrase, and matching code lines excluded
+  **solely** by the comment-only boundary after the other exclusions. The CLI renders those derived
+  values and names the source scope; it does not keep a second matcher or historical population
+  literals. The census report is advisory; the verbatim ratchet immediately below is a gate.
+  **For current counts, run `pnpm validate-reasons --census`.**
 - **The claim ratchet (#1318), which scores TEXT since #1399.** The census above is advisory; the
   ratchet over it is not. The committed baseline (`src/unstructured-claims-baseline.ts`) records every
   claim VERBATIM, and until #1399 the gate compared per-file COUNTS — so **rewriting a baselined
