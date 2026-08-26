@@ -189,9 +189,8 @@ function redactStandaloneDependencyUrl(range: string): string {
 /** URL credentials and query values must not enter prose or the nested range artifact. */
 export function redactDependencyRange(range: string): string {
   const projected = redactStandaloneDependencyUrl(range);
-  // Owner metadata can contain quoted URLs or an outer URL with another URL in its path or
-  // fragment. Inspect every authority, not only the outer URL's username/password. Bound each
-  // candidate to its authority so a safe outer URL cannot consume a later unsafe token.
+  // Owner metadata may wrap URLs in prose or embed another URL in a path/fragment.
+  // Match authority boundaries before applying the standalone URL projection.
   const authorities = /((?<![a-z0-9+.-])(?:git\+)*(?:[a-z][a-z0-9+.-]*:[/\\]+|(?:https?|ssh|git|ftp|ftps|file|github|gitlab|bitbucket):)|git@|[/\\]{2,})([^/\\?#]*)/gi;
   for (const match of normalizeDependencyUrlInput(projected).matchAll(authorities)) {
     const scheme = match[1]!.replace(/^(?:git\+)+/i, "");
