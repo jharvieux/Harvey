@@ -157,7 +157,7 @@ describe("clone repository input boundary (#1778)", () => {
     expect(result.stderr).toContain("expected a bare GitHub owner/repository slug");
     expect(result.stdout + result.stderr).not.toContain(canary);
     expect(fixture.calls()).toEqual([]);
-  }, 20_000);
+  });
 });
 
 describe("isFreshClone", () => {

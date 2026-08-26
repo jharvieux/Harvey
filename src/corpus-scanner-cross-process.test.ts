@@ -1,11 +1,12 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
+import { readNamesSafe } from "./fs-walk.js";
 import { SecretInArgvError } from "./secret-argv.js";
 
 // Record the production boundary while executing the real quality CLI and its local scanners.
@@ -545,7 +546,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(invocation).toMatchObject({ input: fullReason, stdio: ["pipe", "ignore", "inherit"] });
     expect(Object.values(invocation?.env ?? {}).some((value) => value?.includes(incompletePreparation.reason))).toBe(false);
     expect(result.cacheRecord).toBeUndefined();
-    expect(readdirSync(cacheDir)).toEqual([]);
+    expect(readNamesSafe(cacheDir)).toEqual([]);
     expect(result.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
     expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: `knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points: (repo root): ${fullReason}` }));
     expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);

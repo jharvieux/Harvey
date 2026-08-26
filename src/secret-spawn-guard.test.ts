@@ -2,12 +2,13 @@
 // Source hashes and runtime-test anchors bind that audit; this is not a control-flow proof or
 // a claim that a nearby guard protects a call. Guard bypasses remain the owning runtime tests.
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { readEntriesLstatSafe } from "./fs-walk.js";
 
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const POLICY_PATH = "src/secret-spawn-policy.json";
@@ -65,12 +66,12 @@ type BoundValue =
 function productionPaths(root: string): string[] {
   const paths: string[] = [];
   function walk(directory: string): void {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of readEntriesLstatSafe(directory).sort((a, b) => a.name.localeCompare(b.name))) {
       if (OMIT_DIRECTORIES.has(entry.name)) continue;
-      const absolute = join(directory, entry.name);
-      if (entry.isSymbolicLink()) throw new Error(`Unreviewed source symlink: ${slash(relative(root, absolute))}`);
-      if (entry.isDirectory()) walk(absolute);
-      else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name)) && !TEST_FILE.test(entry.name) && !DECLARATION_FILE.test(entry.name)) paths.push(slash(relative(root, absolute)));
+      const absolute = entry.path;
+      if (entry.isSymbolicLink) throw new Error(`Unreviewed source symlink: ${slash(relative(root, absolute))}`);
+      if (entry.isDirectory) walk(absolute);
+      else if (entry.isFile && SOURCE_EXTENSIONS.has(extname(entry.name)) && !TEST_FILE.test(entry.name) && !DECLARATION_FILE.test(entry.name)) paths.push(slash(relative(root, absolute)));
     }
   }
   walk(join(root, "src"));

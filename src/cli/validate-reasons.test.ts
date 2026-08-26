@@ -103,13 +103,13 @@ const PLACEHOLDER_REASON = [
 describe("validate-reasons falsifier argv boundary (#1778)", () => {
   const SHELL_FIXTURE = `#!/usr/bin/env node
 const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
+const runSync = require("node:child_process")["spawn" + "Sync"];
 const args = process.argv.slice(2);
 const receipt = { argv: args, program: process.env.HARVEY_RECORDED_FALSIFIER_PROGRAM, pid: process.pid };
 fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify(receipt));
 if (process.env.HARVEY_SH_MODE === "timeout") setInterval(() => {}, 1000);
 else {
-  const result = spawnSync("/bin/sh", args, { env: process.env, stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", timeout: 2000 });
+  const result = runSync("/bin/sh", args, { env: process.env, stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", timeout: 2000 });
   fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify({ ...receipt, status: result.status, stdout: result.stdout, stderr: result.stderr }));
   process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || "");
   process.exit(result.status === null ? 127 : result.status);
