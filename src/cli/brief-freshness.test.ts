@@ -132,6 +132,9 @@ describe("engagement bootstrap: freshness banner and catalog provenance (#678)",
 // So this spawns the real orchestrator. The check runs BEFORE any module, so it is a sub-second
 // child process, not a ten-module audit.
 describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wiring)", () => {
+  const AUDIT_CAP_MS = 4_000;
+  const GROUP_GRACE_MS = 1_000;
+
   function targetShippingCatalog(extra: string): string {
     const target = mkdtempSync(join(tmpdir(), "harvey-runaudit-brief-"));
     dirs.push(target);
@@ -146,14 +149,48 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     return target;
   }
 
+  function signalOwnedGroup(pid: number | undefined, signal: NodeJS.Signals | 0): boolean {
+    if (pid === undefined) return false;
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      throw error;
+    }
+  }
+
+  function ownedGroupExists(pid: number | undefined): boolean {
+    return signalOwnedGroup(pid, 0);
+  }
+
+  async function waitForOwnedGroupExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (ownedGroupExists(pid)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    }
+    return true;
+  }
+
+  async function terminateAndReapOwnedGroup(pid: number | undefined): Promise<{ termSent: boolean; killSent: boolean; settled: boolean }> {
+    const termSent = signalOwnedGroup(pid, "SIGTERM");
+    if (await waitForOwnedGroupExit(pid, GROUP_GRACE_MS)) return { termSent, killSent: false, settled: true };
+    const killSent = signalOwnedGroup(pid, "SIGKILL");
+    return { termSent, killSent, settled: await waitForOwnedGroupExit(pid, GROUP_GRACE_MS) };
+  }
+
   // Bounded on purpose. The bootstrap check runs BEFORE any module, so a stale brief exits in about
   // a second; a fresh one goes on to a ten-module audit that has no business inside this suite. The
   // bound is therefore also the assertion for the passing direction: still running at the cap means
   // the check let the run through.
-  function runAudit(target: string): Promise<{ status: number | null; out: string }> {
+  function runAudit(target: string): Promise<{ status: number | null; out: string; timedOut: boolean; cleanup: { termSent: boolean; killSent: boolean; settled: boolean } | null }> {
     return new Promise((resolveRun, rejectRun) => {
       const child = spawn("node_modules/.bin/tsx", [join(REPO_ROOT, "src", "cli", "run-audit.ts"), target], {
         cwd: REPO_ROOT,
+        // run-audit starts real scanner descendants after the fresh-brief banner. It must own a
+        // distinct group so the cap reaps every descendant before the fixture teardown runs.
+        detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
@@ -162,37 +199,53 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => (stdout += chunk));
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
-      const timeout = setTimeout(() => child.kill("SIGTERM"), 4_000);
+      let timedOut = false;
+      let cleanup: Promise<{ termSent: boolean; killSent: boolean; settled: boolean }> | null = null;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        cleanup = terminateAndReapOwnedGroup(child.pid);
+      }, AUDIT_CAP_MS);
       child.once("error", (error) => {
         clearTimeout(timeout);
         rejectRun(error);
       });
       child.once("close", (code) => {
         clearTimeout(timeout);
-        resolveRun({ status: code, out: `${stdout}${stderr}` });
+        void (async () => {
+          const completedCleanup = cleanup === null ? null : await cleanup;
+          if (completedCleanup !== null && !completedCleanup.settled) {
+            rejectRun(new Error("run-audit cap left its owned process group running"));
+            return;
+          }
+          resolveRun({ status: code, out: `${stdout}${stderr}`, timedOut, cleanup: completedCleanup });
+        })();
       });
     });
   }
 
   it("exits 1 and names the class before a single module runs", async () => {
-    const { status, out } = await runAudit(targetShippingCatalog("\n### 99. Brand-new class the vendored brief lacks\n"));
+    const { status, out, timedOut, cleanup } = await runAudit(targetShippingCatalog("\n### 99. Brand-new class the vendored brief lacks\n"));
     expect(status).toBe(1);
     expect(out).toContain("BRIEF STALE");
     expect(out).toContain("brand-new class the vendored brief lacks");
     // The refusal has to precede the audit, or a stale brief costs a full ten-module run first.
     expect(out).not.toContain("COVERAGE PASS");
     expect(out).not.toContain("Hotspot analysis");
+    expect(timedOut).toBe(false);
+    expect(cleanup).toBeNull();
   });
 
   // Both directions on the SAME target shape: the identical tree with a catalog the vendored copy
   // does cover must get past the check. Without this the test above passes for a bad reason
   // (anything that makes run-audit exit 1) instead of for the stale brief.
   it("gets past the check on the same tree when the catalog holds no new class", async () => {
-    const { status, out } = await runAudit(targetShippingCatalog(""));
+    const { status, out, timedOut, cleanup } = await runAudit(targetShippingCatalog(""));
     expect(out).toContain("vendored brief covers every class the target catalogues");
     expect(out).not.toContain("BRIEF STALE");
     // It ran ON past the check rather than refusing: the run was still going when the cap killed it.
     expect(status).not.toBe(1);
+    expect(timedOut).toBe(true);
+    expect(cleanup).toMatchObject({ termSent: true, settled: true });
   });
 });
 
