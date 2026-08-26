@@ -157,7 +157,7 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
       if ((value.module === "process" || value.module === "module") && name === undefined) return { kind: "unknown", reason: "Unresolved native loader member can hide child_process" };
       if (value.module === "url" && (name === "URL" || name === "pathToFileURL")) return { kind: name };
     }
-    // A bound loader's call/apply/bind or dynamic property cannot silently become untracked.
+    // Treat a bound loader's call/apply/bind or dynamic property as unresolved indirection.
     // require.resolve returns a module name, not an executable loader value.
     if ((value?.kind === "require" || value?.kind === "createRequire") && name !== "resolve") return { kind: "unknown", reason: "Unsupported member access on a native loader" };
     if (value?.kind === "promise" && loaderValue(value)) return { kind: "unknown", reason: "Unsupported member access on a native loader promise" };
@@ -253,8 +253,8 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
       const callee = expressionValue(node.expression);
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword || callee?.kind === "require") {
         const name = constantString(node.arguments[0]);
-        // A symbol-bound pathToFileURL result can only select a file module, even when its
-        // filename is dynamic. It cannot select a builtin such as node:child_process.
+        // Preserve the file-module classification of a symbol-bound pathToFileURL result
+        // when its filename is computed dynamically.
         if (name === undefined && node.arguments[0] && expressionValue(node.arguments[0])?.kind === "fileSpecifier") return undefined;
         if (name === undefined) return { kind: "unknown", reason: "Unresolved dynamic module loader can hide child_process" };
         const value = moduleValue(name);
