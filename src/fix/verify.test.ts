@@ -1,9 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { computeGreen, detectorHalfClean, discoverVerifyCommands, runCommand, scrubSecrets, type CommandRun, type DetectorRun } from "./verify.js";
+import { SecretInArgvError } from "../secret-argv.js";
+import { buildVerificationEvidence, extractCiRunSteps, runBaseline } from "./verify-harness.js";
+import { computeGreen, detectorHalfClean, discoverVerifyCommands, observedClientCommandConcurrency, runCommand, scrubSecrets, type CommandRun, type DetectorRun } from "./verify.js";
+
+// Observe the real child's resolved shell argv, not merely the argument handed to Node's wrapper.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+
+beforeEach(() => {
+  vi.mocked(spawn).mockClear();
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const node = process.execPath;
 
@@ -44,6 +59,124 @@ describe("runCommand", () => {
 
     const bad = await runCommand(`${node} -e "process.exit(3)"`, process.cwd());
     expect(bad.exitCode).toBe(3);
+  });
+
+  it("keeps discovered multiline workflow programs in the environment through baseline and fixed checks", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "harvey-command-transport-")));
+    const workflows = join(dir, ".github/workflows");
+    const literal = 'synthetic-client-value-1778: quotes \' " $(printf forbidden-expansion) `printf forbidden-backtick` $PATH \\';
+    const command = [
+      "cat <<'HARVEY_COMMAND_EOF'",
+      literal,
+      "HARVEY_COMMAND_EOF",
+      'printf "cwd=%s\\n" "$PWD"',
+      'printf "parent=%s\\n" "$HARVEY_CLIENT_TEST_PARENT"',
+    ].join("\n");
+    vi.stubEnv("HARVEY_CLIENT_TEST_PARENT", "inherited-parent-value");
+    vi.stubEnv("HARVEY_CLIENT_VERIFY_COMMAND", "stale-parent-program-must-not-run");
+    mkdirSync(workflows, { recursive: true });
+    writeFileSync(join(workflows, "verify.yml"), [
+      "on: pull_request",
+      "jobs:",
+      "  verify:",
+      "    steps:",
+      "      - run: |",
+      ...command.split("\n").map((line) => `          ${line}`),
+      "",
+    ].join("\n"));
+    try {
+      const commands = extractCiRunSteps(workflows);
+      expect(commands).toEqual([{ command, workspace: "", source: "ci-workflow (verify.yml)" }]);
+      const baseline = await runBaseline(commands, dir);
+      const evidence = await buildVerificationEvidence({
+        findingId: "synthetic-transport-fixture",
+        baselineCommit: "synthetic-baseline",
+        worktreeCommit: "synthetic-fixed",
+        detectorBefore: { detectorId: "synthetic-detector", fired: true, output: "fixture" },
+        detectorAfter: { detectorId: "synthetic-detector", fired: false, output: "fixture" },
+        commands,
+        baseline,
+        attempts: 1,
+      }, dir);
+      expect(evidence.green).toBe(true);
+      expect(evidence.clientChecks).toHaveLength(1);
+      for (const run of [...baseline.values(), ...evidence.clientChecks]) {
+        expect(run).toMatchObject({ command, cwd: dir, exitCode: 0 });
+        expect(run.outputTail).toBe(`${literal}\ncwd=${dir}\nparent=inherited-parent-value\n`);
+      }
+      expect(spawn).toHaveBeenCalledTimes(2);
+      for (const result of vi.mocked(spawn).mock.results) {
+        expect(result.type).toBe("return");
+        const child = result.value as ReturnType<typeof spawn>;
+        expect(child.spawnargs).not.toContain(command);
+        expect(child.spawnargs.join("\n")).not.toContain("synthetic-client-value-1778");
+      }
+      for (const call of vi.mocked(spawn).mock.calls) {
+        const options = typeof call[1] === "object" && !Array.isArray(call[1]) ? call[1] : call[2];
+        expect(options).toEqual(expect.objectContaining({
+          cwd: dir,
+          env: expect.objectContaining({
+            HARVEY_CLIENT_VERIFY_COMMAND: command,
+            HARVEY_CLIENT_TEST_PARENT: "inherited-parent-value",
+          }),
+        }));
+      }
+      expect(process.env.HARVEY_CLIENT_VERIFY_COMMAND).toBe("stale-parent-program-must-not-run");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves stdin as an open pipe and preserves caller-supplied bytes and EOF", async () => {
+    const pending = runCommand('IFS= read -r line; if IFS= read -r extra; then exit 12; fi; printf "%s\\n" "$line"', process.cwd());
+    const child = vi.mocked(spawn).mock.results[0]?.value as ReturnType<typeof spawn>;
+    expect(child.stdin).not.toBeNull();
+    expect(child.stdin?.writableEnded).toBe(false);
+    child.stdin?.end("synthetic-stdin-value-1778\n");
+    const result = await pending;
+    expect(result.exitCode).toBe(0);
+    expect(result.outputTail).toBe("synthetic-stdin-value-1778\n");
+  });
+
+  it("refuses a watched command collision before spawning or counting a client command", async () => {
+    const before = observedClientCommandConcurrency();
+    const command = "HARVEY_CLIENT_VERIFY_COMMAND";
+    let refusal: unknown;
+    try {
+      await runCommand(command, process.cwd());
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(SecretInArgvError);
+    expect(String(refusal)).not.toContain(command);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(observedClientCommandConcurrency()).toBe(before);
+  });
+
+  it.each(["", "synthetic-client-value-1778\0hidden"])("refuses an unrepresentable command before spawning (%j)", async (command) => {
+    await expect(async () => runCommand(command, process.cwd())).rejects.toThrow(SecretInArgvError);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses Windows before spawning instead of claiming cmd expansion preserves arbitrary programs", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const command = "echo synthetic-client-value-1778";
+    try {
+      // Local selection proof only: this does not execute or certify a Windows shell.
+      Object.defineProperty(process, "platform", { value: "win32" });
+      let refusal: unknown;
+      try {
+        await runCommand(command, process.cwd());
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(SecretInArgvError);
+      expect(String(refusal)).toContain("Windows");
+      expect(String(refusal)).not.toContain(command);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      if (descriptor !== undefined) Object.defineProperty(process, "platform", descriptor);
+    }
   });
 });
 

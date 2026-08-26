@@ -5,6 +5,7 @@
 // The harness runs commands itself; a subagent *claiming* green is worth nothing.
 
 import { spawn } from "node:child_process";
+import { assertNoSecretInArgv, SecretInArgvError } from "../secret-argv.js";
 
 export interface CommandRun {
   command: string;
@@ -108,6 +109,18 @@ export const observedClientCommandConcurrency = (): number => peakClientCommands
 // loop for its whole duration, so two workers holding that semaphore could never actually overlap
 // and the cap was enforced over a workload that was serial anyway.
 export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): Promise<CommandRun> {
+  if (process.platform === "win32") {
+    throw new SecretInArgvError("client verification: Windows command transport is unavailable; refusing to expose the program in shell argv (#1778).");
+  }
+  if (command.length === 0 || command.includes("\0")) {
+    throw new SecretInArgvError("client verification: refusing an empty or NUL-bearing command before spawning (#1778).");
+  }
+  // Match Node's POSIX shell selection while inspecting the complete argv before it can spawn.
+  // The opaque program can contain target workflow credentials. Keep stdin available to the suite;
+  // commands inside that program still own their arguments, and CommandRun retains the program.
+  const shell = process.platform === "android" ? "/system/bin/sh" : "/bin/sh";
+  const shellArgs = ["-c", 'eval "$HARVEY_CLIENT_VERIFY_COMMAND"'];
+  assertNoSecretInArgv("client verification", [shell, ...shellArgs], [command]);
   const start = Date.now();
   liveClientCommands++;
   peakClientCommands = Math.max(peakClientCommands, liveClientCommands);
@@ -117,7 +130,7 @@ export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COM
     // group while retaining its stdout/stderr fds, and `close` then waits until that descendant
     // exits. The timer below stops waiting, closes Harvey's pipe readers, and settles the evidence
     // row itself, settling the evidence at the timer boundary (#1797).
-    const child = spawn(command, { cwd, shell: true });
+    const child = spawn(shell, shellArgs, { cwd, env: { ...process.env, HARVEY_CLIENT_VERIFY_COMMAND: command } });
     let captured = "";
     let timedOut = false;
     let settled = false;
