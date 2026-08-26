@@ -168,11 +168,29 @@ describe("dependency URL delivery (#1774)", () => {
     ["uppercase", "GIT+HTTPS://canary-user:canary-password@example.invalid/repo?token=canary-query"],
     ["ssh", "ssh://canary-user:canary-password@example.invalid/repo"],
     ["encoded userinfo", "https://canary%2duser:canary%2dpassword@example.invalid/repo"],
+    ["URL-in-path", "https://safe.invalid/path/https://canary-user:canary-password@example.invalid/repo"],
+    ["URL-in-fragment", "https://safe.invalid/repo#https://canary-user:canary-password@example.invalid/repo"],
+    ["URL-in-query", "https://safe.invalid/repo?redirect=https://canary-user:canary-password@example.invalid/repo"],
+    ["prefixed malformed URL", "repository https://canary-user:canary-password?token=canary-query@example.invalid/repo", false],
+    ["embedded URL with tabs", "repository ht\ttps://canary-user:canary-password@example.invalid/repo", false],
+    ["leading C0", "\u0001https://canary-user:canary-password@example.invalid/repo\u001f"],
+    ["embedded CR scheme", "ht\rtps://canary-user:canary-password@example.invalid/repo"],
+    ["scheme relative backslashes", "\\\\canary-user:canary-password@example.invalid/repo"],
+    ["five slashes", "https://///canary-user:canary-password@example.invalid/repo"],
+    ["text-prefixed URL", "repository https://canary-user:canary-password@example.invalid/repo", false],
+    ["quoted URL", '"https://canary-user:canary-password@example.invalid/repo"', false],
+    ["embedded NUL scheme", "ht\u0000tps://canary-user:canary-password@example.invalid/repo", false],
+    ["hosted git shorthand", "github:canary-user:canary-password@example.invalid/repo"],
+    ["credential-free URL-in-path", "https://safe.invalid/path/https://example.invalid/repo", true, false],
+    ["credential-free URL-in-fragment", "https://safe.invalid/repo#https://example.invalid/repo", true, false],
+    ["credential-free text-prefixed URL", "repository https://example.invalid/repo", false, false],
+    ["credential-free quoted URL", '"https://example.invalid/repo"', false, false],
+    ["credential-free hosted git shorthand", "github:owner/repo#abcdef", true, false],
   ] as const;
   const venues = ["tree-range", "direct-range", "owner-version", "owner-name"] as const;
-  const cases = spellings.flatMap(([spelling, value]) => venues.map((venue) => ({ spelling, value, venue })));
+  const cases = spellings.flatMap(([spelling, value, rangeSelected = true, redacted = true]) => venues.map((venue) => ({ spelling, value, venue, rangeSelected, redacted })));
 
-  it.each(cases)("protects $spelling in $venue through parser, registry, assembly, JSON and HTML", async ({ value, venue }) => {
+  it.each(cases)("preserves selection and protects $spelling in $venue through parser, registry, assembly, JSON and HTML", async ({ value, venue, rangeSelected, redacted }) => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-range-url-report-"));
     const pkg: { name: string; dependencies: Record<string, string> } = {
       name: venue === "owner-name" ? value : "range-report",
@@ -192,6 +210,12 @@ describe("dependency URL delivery (#1774)", () => {
       context = new MechanicalScanContext(dir);
       const result = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline dependency URL fixture" }, skipNetworkChecks: true }, "supply");
       const findings = result.findings.filter((finding) => /^SUP-(UNPINNED|NON-REGISTRY)(-TREE)?$/.test(finding.id));
+      // Invalid range prefixes stay outside the detector; the same untrusted text in owner
+      // metadata still reaches a selected, unrelated semver edge and must be protected there.
+      if (field === "range" && !rangeSelected) {
+        expect(findings).toEqual([]);
+        return;
+      }
       const id = `SUP-${field === "range" ? "NON-REGISTRY" : "UNPINNED"}${direct ? "" : "-TREE"}`;
       expect(findings.map((finding) => finding.id)).toEqual([id]);
       const doc = assembleEngagementDocument(RECORDED, ENV, findings, META);
@@ -209,16 +233,20 @@ describe("dependency URL delivery (#1774)", () => {
       const artifact = delivered.findings.find((finding) => finding.id === id)!.dependencyRangeEvidence!;
       expect(artifact).toMatchObject({ examined: 1, matched: 1, distinctSpecifications: 1, displayedSpecifications: 1, edges: [{
         source: direct ? "package.json" : "package-lock.json", format: direct ? "package-json" : "package-lock", sourceVersion: direct ? "unversioned" : "3",
-        ownerPath: direct ? "package.json" : "node_modules/parent", section: "dependencies", direct, redacted: true,
+        ownerPath: direct ? "package.json" : "node_modules/parent", section: "dependencies", direct, redacted,
         name: field === "range" ? "remote" : "child",
       }] });
       expect(artifact.edges[0]?.identity).toMatch(/^[a-f0-9]{64}$/);
       if (field !== "range") expect(artifact.edges[0]?.range).toBe("^1.0.0");
       if (field !== "ownerName") expect(artifact.edges[0]?.ownerName).toBe(direct ? "range-report" : "parent");
       if (field !== "ownerVersion") expect(artifact.edges[0]?.ownerVersion).toBe(direct ? undefined : "1.0.0");
-      // The real validator must also refuse an unsafe nested field restored after projection.
-      artifact.edges[0]![field] = value;
-      expect(validateFindings(delivered).errors).toContainEqual(expect.stringContaining(`dependencyRangeEvidence.edges[0].${field}`));
+      if (redacted) {
+        // The real validator must also refuse an unsafe nested field restored after projection.
+        artifact.edges[0]![field] = value;
+        expect(validateFindings(delivered).errors).toContainEqual(expect.stringContaining(`dependencyRangeEvidence.edges[0].${field}`));
+      } else {
+        expect(artifact.edges[0]![field]).toBe(value);
+      }
     } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
   });
 });

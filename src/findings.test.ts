@@ -38,7 +38,10 @@ describe("validateFindings", () => {
 
 describe("validateFindings — mechanical scan fields", () => {
   it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {
-    for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz"]) {
+    for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz",
+      "repository https://example.invalid", '"https://example.invalid"', "https://safe.invalid/path/https://example.invalid/repo", "https://safe.invalid/repo#https://example.invalid/repo",
+      "https://example.invalid/one and https://other.invalid/two", "gitlab:owner/repo", "bitbucket:owner/repo",
+    ]) {
       expect(redactDependencyRange(range)).toBe(range);
     }
     for (const range of ["\u0000https://fixture-user:fixture-password@example.invalid/repo\u001f", "ht\ttps://fixture-user:fixture-password@example.invalid/repo", "https://example.invalid/repo#token=fixture-token with spaces"]) {

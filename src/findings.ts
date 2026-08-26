@@ -152,8 +152,7 @@ export function normalizeDependencyUrlInput(range: string): string {
   return value.slice(start, end);
 }
 
-/** URL credentials and query values must not enter prose or the nested range artifact. */
-export function redactDependencyRange(range: string): string {
+function redactStandaloneDependencyUrl(range: string): string {
   const normalized = normalizeDependencyUrlInput(range);
   const gitPrefix = /^git\+/i.exec(normalized)?.[0] ?? "";
   let input = normalized.slice(gitPrefix.length);
@@ -185,6 +184,26 @@ export function redactDependencyRange(range: string): string {
   return projected
     .replace(/\?[^#]*/g, "?[redacted]")
     .replace(/#[\s\S]*[=&][\s\S]*/g, "#[redacted]");
+}
+
+/** URL credentials and query values must not enter prose or the nested range artifact. */
+export function redactDependencyRange(range: string): string {
+  const projected = redactStandaloneDependencyUrl(range);
+  // Owner metadata can contain quoted URLs or an outer URL with another URL in its path or
+  // fragment. Inspect every authority, not only the outer URL's username/password. Bound each
+  // candidate to its authority so a safe outer URL cannot consume a later unsafe token.
+  const authorities = /((?<![a-z0-9+.-])(?:git\+)?(?:[a-z][a-z0-9+.-]*:[/\\]+|(?:https?|ssh|git|ftp|ftps|file|github|gitlab|bitbucket):)|git@|[/\\]{2,})([^/\\?#]*)/gi;
+  for (const match of normalizeDependencyUrlInput(projected).matchAll(authorities)) {
+    const prefix = /^(?:github|gitlab|bitbucket):$/i.test(match[1]!) ? "https://" : match[1]!;
+    const authority = match[2]!;
+    // Keep all potential userinfo, including malformed whitespace, but exclude surrounding
+    // prose/quotes after the host. Sanitized [redacted] userinfo stays idempotent on revalidation.
+    const hostStart = authority.lastIndexOf("@") + 1;
+    const end = authority.slice(hostStart).search(/[\s"'<>]/);
+    const candidate = `${prefix}${end < 0 ? authority : authority.slice(0, hostStart + end)}/`;
+    if (redactStandaloneDependencyUrl(candidate) !== candidate) return "[redacted embedded dependency URL]";
+  }
+  return projected;
 }
 
 export interface Finding {
