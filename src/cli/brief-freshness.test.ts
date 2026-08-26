@@ -1,6 +1,6 @@
 // The fail-loud contract of the brief-freshness guard (#678): exit 1 when the vendored copy is
 // behind a target that ships its own catalog, exit 0 when the target ships none.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -168,25 +168,31 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
   // This observer deliberately does not share the production signal helper. A root-only `kill(pid,
   // signal)` can make that helper say "settled" after the parent exits while scanner descendants in
   // its PGID survive; ps proves the actual group has disappeared.
-  function actualOwnedGroupMembers(pgid: number | undefined): number[] {
+  async function actualOwnedGroupMembers(pgid: number | undefined): Promise<number[]> {
     if (pgid === undefined) return [];
-    const observed = spawnSync("ps", ["-Ao", "pid=,ppid=,pgid="], { encoding: "utf8" });
-    if (observed.status !== 0) throw new Error(`cannot inspect owned process group ${pgid}`);
-    return observed.stdout.split("\n").flatMap((line) => {
+    const observer = spawn("ps", ["-Ao", "pid=,ppid=,pgid="], { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    observer.stdout.setEncoding("utf8");
+    observer.stdout.on("data", (chunk: string) => (output += chunk));
+    observer.stderr.resume();
+    const [status] = await once(observer, "close");
+    if (status !== 0 || output.trim() === "") throw new Error(`cannot inspect owned process group ${pgid}`);
+    return output.trim().split("\n").flatMap((line) => {
       const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line);
-      return match !== null && Number(match[3]) === pgid ? [Number(match[1])] : [];
+      if (match === null) throw new Error(`invalid process observation for owned group ${pgid}`);
+      return Number(match[3]) === pgid ? [Number(match[1])] : [];
     });
   }
 
   async function forceReapObservedGroup(pgid: number | undefined): Promise<void> {
-    if (pgid === undefined || actualOwnedGroupMembers(pgid).length === 0) return;
+    if (pgid === undefined || (await actualOwnedGroupMembers(pgid)).length === 0) return;
     try {
       process.kill(-pgid, "SIGKILL");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
     const deadline = Date.now() + GROUP_GRACE_MS;
-    while (actualOwnedGroupMembers(pgid).length > 0) {
+    while ((await actualOwnedGroupMembers(pgid)).length > 0) {
       if (Date.now() >= deadline) throw new Error(`failed to reap observed owned process group ${pgid}`);
       await new Promise((resolveWait) => setTimeout(resolveWait, 25));
     }
@@ -276,7 +282,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     expect(cleanup).toMatchObject({ termSent: true, settled: true });
     if (cleanup === null) throw new Error("fresh audit did not retain its cleanup receipt");
     try {
-      expect(actualOwnedGroupMembers(cleanup.pgid)).toEqual([]);
+      expect(await actualOwnedGroupMembers(cleanup.pgid)).toEqual([]);
     } finally {
       // A physical root-only-signal reversion must fail above, then this test-only guard reaps
       // the observed group so its real scanners cannot leak into a following test run.
@@ -300,7 +306,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
       expect(cleanup).toMatchObject({ pgid: child.pid, termSent: true, killSent: true, settled: true });
       await closed;
       reaped = cleanup.settled;
-      expect(actualOwnedGroupMembers(child.pid)).toEqual([]);
+      expect(await actualOwnedGroupMembers(child.pid)).toEqual([]);
     } finally {
       if (!reaped) {
         signalOwnedGroup(child.pid, "SIGKILL");
