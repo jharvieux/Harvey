@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { checkClosedIssue, closeFailureComment, SELFTEST_WORLD } from "../acceptance-conservation.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "validate-acceptance.ts");
@@ -29,7 +30,7 @@ const REPO = "acme/widgets";
 // returning only the requested fields, and it fails with GitHub's own "could not resolve to an
 // issue" wording for a fixture that is not there, which is the one stderr the CLI is allowed to
 // read as "does not exist".
-const FAKE_GH = `#!/usr/bin/env node
+const FAKE_GH = `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
@@ -38,6 +39,10 @@ const [kind, verb, id] = args;
 // for, which is exactly the seam where the #1696 divergence lived.
 if ((kind === "issue" && ["edit", "comment", "reopen"].includes(verb)) || (kind === "label" && verb === "create")) {
   if (process.env.HARVEY_GH_LOG) fs.appendFileSync(process.env.HARVEY_GH_LOG, JSON.stringify(args) + "\\n");
+  if (kind === "issue" && verb === "comment" && process.env.HARVEY_GH_INPUT_LOG) {
+    fs.writeFileSync(process.env.HARVEY_GH_INPUT_LOG, JSON.stringify({ argv: args, input: fs.readFileSync(0, "utf8") }));
+  }
+  if (kind === "issue" && verb === "edit" && args.includes("--add-label") && process.env.HARVEY_GH_BREAK_COMMENT) fs.chmodSync(process.argv[1], 0o644);
   process.exit(0);
 }
 if (verb !== "view" || (kind !== "issue" && kind !== "pr")) {
@@ -92,9 +97,9 @@ function world(fixtures: Record<string, unknown>): { bin: string; fixtureDir: st
   return { bin, fixtureDir };
 }
 
-function run(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; out: string }> {
+function run(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; out: string; stdout: string; stderr: string }> {
   return new Promise((resolveRun, rejectRun) => {
-    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], {
+    const child = spawn(process.execPath, ["--import", join(REPO_ROOT, "node_modules/tsx/dist/loader.mjs"), CLI, ...args], {
       cwd: REPO_ROOT,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -106,7 +111,7 @@ function run(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; ou
     child.stdout.on("data", (chunk: string) => (stdout += chunk));
     child.stderr.on("data", (chunk: string) => (stderr += chunk));
     child.once("error", rejectRun);
-    child.once("close", (code) => resolveRun({ code: code ?? 1, out: `${stdout}${stderr}` }));
+    child.once("close", (code) => resolveRun({ code: code ?? 1, out: `${stdout}${stderr}`, stdout, stderr }));
   });
 }
 
@@ -326,5 +331,51 @@ describe("validate-acceptance --act — ONE terminal state for a failed close (#
     expect(asked(r.log, "issue", "reopen")).toBe(false);
     expect(asked(r.log, "issue", "comment")).toBe(false);
     expect(asked(r.log, "issue", "edit", "700", "--repo", REPO, "--remove-label")).toBe(true);
+  });
+});
+
+describe("validate-acceptance comment argv boundary (#1778)", () => {
+  const canary = "harvey-acceptance-comment-canary-1778";
+  const failedIssue = {
+    ...ISSUE_700,
+    body: `## Acceptance\n- credential ${canary} with 'quotes', "double quotes" and \\backslash\n`,
+    state: "CLOSED", author: { login: "fixture-reviewer", is_bot: false },
+    labels: [{ name: "acceptance-unaccounted" }],
+  };
+
+  it("delivers the full failed-close comment on stdin while keeping external criterion prose out of gh argv", async () => {
+    const { bin, fixtureDir } = world({ "issue-700": failedIssue });
+    const inputLog = join(fixtureDir, "comment.json");
+    const log = join(fixtureDir, "mutations.log");
+    const result = await run(["--closed-issue", "700", "--repo", REPO, "--act"], {
+      ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_GH_FIXTURES: fixtureDir,
+      HARVEY_GH_INPUT_LOG: inputLog, HARVEY_GH_LOG: log,
+    });
+    expect(result.code).toBe(1);
+    const comment = JSON.parse(readFileSync(inputLog, "utf8")) as { argv: string[]; input: string };
+    expect(comment.argv).toEqual(["issue", "comment", "700", "--repo", REPO, "--body-file", "-"]);
+    const expected = closeFailureComment(checkClosedIssue({ issue: 700, authorIsBot: false }, () => ({ ...failedIssue, state: "CLOSED" }), REPO, SELFTEST_WORLD));
+    expect(comment.input).toBe(expected);
+    expect(comment.input).toContain(`credential ${canary} with 'quotes', "double quotes" and \\backslash`);
+    expect(comment.input).toContain("UNMAPPED");
+    expect(comment.input).toContain("\n");
+    expect(readFileSync(log, "utf8")).not.toContain(canary);
+    expect(readFileSync(log, "utf8")).toContain('["issue","reopen","700"');
+  });
+
+  it("keeps a comment spawn failure diagnostic payload-free without mistaking it for an acceptance verdict", async () => {
+    const { bin, fixtureDir } = world({ "issue-700": failedIssue });
+    const result = await run(["--closed-issue", "700", "--repo", REPO, "--act"], {
+      // No fallback executable is available when the fixture removes its own execute bit.
+      ...process.env, PATH: bin, HARVEY_GH_FIXTURES: fixtureDir,
+      HARVEY_GH_BREAK_COMMENT: "1",
+    });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("could not be run");
+    expect(result.stderr).toContain("EACCES");
+    expect(result.stderr).not.toContain(canary);
+    // The existing report intentionally prints criteria on stdout; this repair does not promise
+    // general output redaction, only that spawn-error diagnostics do not repeat opaque payloads.
+    expect(result.stdout).toContain(canary);
   });
 });

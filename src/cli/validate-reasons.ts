@@ -38,6 +38,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLAIM_BASELINE } from "../unstructured-claims-baseline.js";
 import { parityExemptionReasons } from "../scan/calibration.js";
+import { assertNoSecretInArgv } from "../secret-argv.js";
 import {
   DEFAULT_ROOTS,
   KNOWN_FALSIFIER_TIERS,
@@ -101,7 +102,15 @@ function flagValues(flag: string): string[] {
 }
 
 function runFalsifier(command: string): FalsifierResult {
-  const r = spawnSync("sh", ["-c", command], { cwd: REPO_ROOT, encoding: "utf8", timeout: FALSIFIER_TIMEOUT_MS });
+  // Keep command-string semantics and stdin EOF while moving the expanded program out of argv.
+  // This bounds Harvey's shell launch; commands inside the operator's program own their children.
+  const shellArgs = ["-c", 'eval "$HARVEY_RECORDED_FALSIFIER_PROGRAM"'];
+  const bindings = Object.entries(process.env).filter(([name]) => name.startsWith("HARVEY_FALSIFIER_")).map(([, value]) => value);
+  assertNoSecretInArgv("validate-reasons falsifier", shellArgs, [command, ...bindings]);
+  const r = spawnSync("sh", shellArgs, {
+    cwd: REPO_ROOT, encoding: "utf8", timeout: FALSIFIER_TIMEOUT_MS,
+    env: { ...process.env, HARVEY_RECORDED_FALSIFIER_PROGRAM: command },
+  });
   return { code: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 

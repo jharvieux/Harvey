@@ -49,6 +49,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { recordDeclaredNoOp, recordMeasured } from "../ci-liveness.js";
+import { assertNoSecretInArgv } from "../secret-argv.js";
 import { fileURLToPath } from "node:url";
 import {
   checkAcceptance,
@@ -141,9 +142,10 @@ function evidenceWorld(): EvidenceWorld {
   };
 }
 
-const gh = (ghArgs: string[]): { status: number; stdout: string; stderr: string } => {
-  const r = spawnSync("gh", ghArgs, { encoding: "utf8" });
-  if (r.error) die(`\`gh ${ghArgs.join(" ")}\` could not be run (${r.error.message}). This gate needs an authenticated gh; reporting a pass here would be the silent omission it exists to prevent.`);
+const gh = (ghArgs: string[], input?: string): { status: number; stdout: string; stderr: string } => {
+  assertNoSecretInArgv("validate-acceptance gh", ghArgs, [input]);
+  const r = spawnSync("gh", ghArgs, { encoding: "utf8", input });
+  if (r.error) die(`\`gh ${ghArgs.slice(0, 2).join(" ")}\` could not be run (${(r.error as NodeJS.ErrnoException).code ?? "spawn error"}). This gate needs an authenticated gh; reporting a pass here would be the silent omission it exists to prevent.`);
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 };
 
@@ -261,7 +263,7 @@ if (closedIssueFlag) {
       gh(["label", "create", CLOSE_LABEL, ...repoArgs, "--color", "B60205", "--description", "Closed with an acceptance criterion nothing accounted for (#1341)", "--force"]);
       gh(["issue", "edit", String(issue), ...repoArgs, "--add-label", CLOSE_LABEL]);
     }
-    if (act.comment) gh(["issue", "comment", String(issue), ...repoArgs, "--body", closeFailureComment(closeReport)]);
+    if (act.comment) gh(["issue", "comment", String(issue), ...repoArgs, "--body-file", "-"], closeFailureComment(closeReport));
     if (act.reopen) {
       const reopen = gh(["issue", "reopen", String(issue), ...repoArgs]);
       console.log(reopen.status === 0 ? "\nℹ ACTED: commented, labelled and RE-OPENED — the one terminal state of a failed close (#1696). The gate holds the issue open until a disposition exists." : `\n✗ could not re-open #${issue}: ${reopen.stderr.trim()}`);

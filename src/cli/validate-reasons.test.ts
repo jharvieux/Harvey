@@ -5,13 +5,14 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = "src/cli/validate-reasons.ts";
+const TSX_IMPORT = ["--import", join(REPO_ROOT, "node_modules/tsx/dist/loader.mjs")];
 const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
 
 function plant(files: Record<string, string>): string {
@@ -42,7 +43,7 @@ async function runOk(command: string, args: string[], cwd = REPO_ROOT): Promise<
   return result.out;
 }
 
-const gate = (root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}): Promise<ChildResult> => run("node_modules/.bin/tsx", [CLI, "--root", root, ...args], REPO_ROOT, env);
+const gate = (root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}): Promise<ChildResult> => run(process.execPath, [...TSX_IMPORT, CLI, "--root", root, ...args], REPO_ROOT, env);
 
 /** The per-block validation errors the gate printed, so a control can assert it tripped ONE rule. */
 const errors = (out: string): string[] => [...out.matchAll(/^ *• (.*)$/gm)].map((m) => m[1] ?? "");
@@ -98,6 +99,98 @@ const PLACEHOLDER_REASON = [
   "// FALSIFIER: true <served-target>",
   "// FALSIFIER-TIER: lighthouse",
 ].join("\n");
+
+describe("validate-reasons falsifier argv boundary (#1778)", () => {
+  const SHELL_FIXTURE = `#!/usr/bin/env node
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const receipt = { argv: args, program: process.env.HARVEY_RECORDED_FALSIFIER_PROGRAM, pid: process.pid };
+fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify(receipt));
+if (process.env.HARVEY_SH_MODE === "timeout") setInterval(() => {}, 1000);
+else {
+  const result = spawnSync("/bin/sh", args, { env: process.env, stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", timeout: 2000 });
+  fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify({ ...receipt, status: result.status, stdout: result.stdout, stderr: result.stderr }));
+  process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || "");
+  process.exit(result.status === null ? 127 : result.status);
+}
+`;
+  interface ShellReceipt { argv: string[]; program?: string; pid: number; status?: number; stdout?: string; stderr?: string }
+  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<ChildResult & { receipt?: ShellReceipt; requestedTimeout?: number }> {
+    const dir = plant({ "reason.md": [
+      "REASON: a controlled fixture still describes a blocker",
+      "KIND: empirical", "PROVENANCE: MEASURED 2026-08-26",
+      "FALSIFIER: :; <fixture-program>", "FALSIFIER-TIER: lighthouse",
+    ].join("\n") });
+    const bin = plant({ sh: SHELL_FIXTURE });
+    chmodSync(join(bin, "sh"), 0o755);
+    const receiptPath = join(bin, "shell.json");
+    const timeoutPath = join(bin, "timeout.json");
+    // Exercise the real spawnSync timeout with one bounded child, without waiting two minutes or
+    // changing the production limit. No shell descendant is launched in this fixture mode.
+    const preload = join(bin, "timeout.cjs");
+    writeFileSync(preload, `const cp=require("node:child_process"); const original=cp.spawnSync; cp.spawnSync=function(bin,args,options){ if(bin==="sh"){require("node:fs").writeFileSync(${JSON.stringify(timeoutPath)},JSON.stringify(options.timeout)); options={...options,timeout:300};} return original(bin,args,options); }; require("node:module").syncBuiltinESMExports();`);
+    try {
+      const result = await gate(dir, ["--revalidate", "--tier", "lighthouse"], {
+        ...extraEnv, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_SH_RECEIPT: receiptPath,
+        HARVEY_FALSIFIER_FIXTURE_PROGRAM: program,
+        ...(extraEnv.HARVEY_SH_MODE === "timeout" ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}` } : {}),
+      });
+      return { ...result, receipt: existsSync(receiptPath) ? JSON.parse(readFileSync(receiptPath, "utf8")) as ShellReceipt : undefined,
+        requestedTimeout: existsSync(timeoutPath) ? JSON.parse(readFileSync(timeoutPath, "utf8")) as number : undefined };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  it("delivers the expanded opaque falsifier through environment without exposing its canary in shell argv", async () => {
+    const canary = "harvey-falsifier-argv-canary-1778";
+    const program = `printf '%s\\n' 'https://fixture-user:${canary}@example.invalid/path'; exit 0`;
+    const result = await falsifier(program);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("STALE");
+    expect(result.receipt?.program).toBe(`:; ${program}`);
+    expect(result.receipt?.stdout).toContain(canary);
+    expect(JSON.stringify(result.receipt?.argv)).not.toContain(canary);
+  });
+
+  it("preserves multiline heredocs, literal shell syntax and stdin EOF for falsifiers", async () => {
+    const program = ["if read unexpected; then exit 90; fi", "value=$(cat <<'HARVEY_FIXTURE_EOF'", "literal 'quotes' \"$dollar\" `not-run` \\backslash", "line two", "HARVEY_FIXTURE_EOF", ")", "printf '%s\\n' \"$value\"", "printf 'positional:%s\\n' \"$#\"", "exit 0"].join("\n");
+    const result = await falsifier(program);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("STALE");
+    expect(result.receipt?.program).toBe(`:; ${program}`);
+    expect(result.receipt?.stdout).toBe("literal 'quotes' \"$dollar\" `not-run` \\backslash\nline two\npositional:0\n");
+    expect(result.receipt?.stderr).toBe("");
+  });
+
+  it.each([[7, 0, "no reason has outlived its truth"], [127, 1, "UNVERIFIABLE"]] as const)("preserves falsifier exit %i and its ordinary diagnostics", async (status, gateCode, diagnostic) => {
+    const result = await falsifier(`printf 'ordinary diagnostic\\n' >&2; exit ${status}`);
+    expect(result.code).toBe(gateCode);
+    expect(result.out).toContain(diagnostic);
+    expect(result.receipt?.status).toBe(status);
+    expect(result.receipt?.stderr).toBe("ordinary diagnostic\n");
+  });
+
+  it("reports an actual bounded shell timeout as UNVERIFIABLE without leaving its child alive", async () => {
+    const result = await falsifier("false", { HARVEY_SH_MODE: "timeout" });
+    expect(result.requestedTimeout).toBe(120_000);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("UNVERIFIABLE");
+    expect(result.out).toContain("signal/timeout");
+    expect(result.receipt?.pid).toBeTypeOf("number");
+    expect(() => process.kill(result.receipt!.pid, 0)).toThrow();
+  });
+
+  it("refuses a watched placeholder binding in the fixed shell argv before launching the child", async () => {
+    const result = await falsifier("false", { HARVEY_FALSIFIER_WATCHED: 'eval "$HARVEY_RECORDED_FALSIFIER_PROGRAM"' });
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("refusing to spawn");
+    expect(result.receipt).toBeUndefined();
+    expect(result.out).not.toContain("no reason has outlived its truth");
+  });
+});
 
 describe("validate-reasons CLI", () => {
   it("skips a live-only falsifier offline — disclosed, not run, not a failure — and runs it under --live (#1072)", async () => {
@@ -446,7 +539,7 @@ describe("the claim ratchet's provenance attribution, through the real CLI (#161
   const git = (...args: string[]): Promise<string> => runOk("git", ["-c", "user.email=t@example.com", "-c", "user.name=Test", "-c", "commit.gpgsign=false", ...args], fixture);
 
   /** The real CLI over the fixture as its OWN repo root — no `--root`, so the ratchet scores. */
-  const ratchet = (): Promise<ChildResult> => run("node_modules/.bin/tsx", [join(fixture, CLI)]);
+  const ratchet = (): Promise<ChildResult> => run(process.execPath, [...TSX_IMPORT, join(fixture, CLI)]);
 
   /** The `↳` line the CLI prints under the planted row — the whole point of the attribution. */
   const attribution = (out: string): string => out.split("\n").find((l) => l.includes("↳"))?.trim() ?? "(no attribution line printed)";
@@ -465,7 +558,7 @@ describe("the claim ratchet's provenance attribution, through the real CLI (#161
     await git("commit", "-q", "-m", "fixture base");
     // Rebuild the baseline from the fixture itself, so the ONLY breach below is the planted line
     // whatever state this checkout's committed baseline happens to be in.
-    await runOk("node_modules/.bin/tsx", [join(fixture, CLI), "--update-baseline"]);
+    await runOk(process.execPath, [...TSX_IMPORT, join(fixture, CLI), "--update-baseline"]);
     await git("add", "-A");
     await git("commit", "-q", "--allow-empty", "-m", "fixture baseline");
   }, 120_000);
