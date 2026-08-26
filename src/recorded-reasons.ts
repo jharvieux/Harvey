@@ -205,7 +205,7 @@ const CLAIM_VOCABULARY = new RegExp(
   "i",
 );
 
-export interface UntriagedClaim {
+interface UntriagedClaim {
   file: string;
   line: number;
   text: string;
@@ -244,7 +244,7 @@ export function issueSources(issues: FetchedIssue[]): SourceText[] {
  * claim VERBATIM, so censusing it would match every governed claim against its generated copy and
  * grow in lockstep with the population it is meant to constrain.
  */
-export type CensusScope = "prose" | "comments" | "none";
+type CensusScope = "prose" | "comments" | "none";
 
 const CENSUS_EXCLUDED = new Set(["src/unstructured-claims-baseline.ts"]);
 const COMMENT_LINE: Record<string, RegExp> = {
@@ -258,7 +258,7 @@ export function censusScope(file: string): CensusScope {
   return COMMENT_LINE[file.split(".").pop() ?? ""] ? "comments" : "prose";
 }
 
-export interface ClaimScopeMetrics {
+interface ClaimScopeMetrics {
   /** Claim-shaped lines accepted by the declared prose/comment boundary and outside reason blocks. */
   accepted: UntriagedClaim[];
   /** Matching code lines rejected because source files are deliberately comment-only. */
