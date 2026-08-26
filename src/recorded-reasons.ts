@@ -11,7 +11,8 @@
 //      human ruling ("out of scope pending a privacy decision"). Only the first kind decays, so only
 //      the first kind is re-tested — and a falsifier on a decisional reason is REFUSED, not merely
 //      unrequired: re-running a command against a product ruling is a category error, and the noise
-//      would train readers to ignore the gate (decisional is ~45% of the open tracker, measured).
+//      would train readers to ignore the gate. Decisional reasons are selected by kind, not by a
+//      stored share of the tracker, because that population changes independently of this rule.
 //   2. Every empirical reason carries the COMMAND THAT WOULD FALSIFY IT. A reason with no falsifier
 //      is unfalsifiable and therefore permanent. The contract is deliberately one-way:
 //      **the falsifier exits 0 when the blocker is GONE.** So `grep -q <the thing that must not
@@ -46,11 +47,11 @@ const KNOWN = new Set<string>(KEYS);
 export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbench", "supabase-labs", "supabase-connected"]);
 
 // #1072 — a live-only falsifier cannot name its target in the repo: the crAPI gateway URL, the
-// external clone path, the served origin are all supplied by whoever stands the tier up. All five
-// were written as `<crapi-gateway>`-style angle-bracket prose, and `sh -c` reads `<` as an INPUT
+// external clone path, the served origin are all supplied by whoever stands the tier up. The live
+// falsifiers used `<crapi-gateway>`-style angle-bracket prose, and `sh -c` reads `<` as an INPUT
 // REDIRECT — so `--tier secbench` did not re-test anything, it died on "No such file or directory"
-// and exited 1, which this file's contract reads as "the blocker still holds". Five of five live
-// falsifiers were unfalsifiable by construction and reported green (measured 2026-07-27). So a
+// and exited 1, which this file's contract reads as "the blocker still holds". Because that syntax
+// makes every unbound live target unfalsifiable by construction, a
 // placeholder is now a declared BINDING: substituted from HARVEY_FALSIFIER_<NAME> on the run that
 // has the tier, and UNVERIFIABLE — never executed — when unbound. Lowercase-and-hyphens only, so a
 // real redirect (`< /dev/null`, `2>&1`, `<<EOF`) is not mistaken for one.
@@ -134,9 +135,9 @@ export const DEFAULT_ROOTS = ["src", "docs", "briefs", "CLAUDE.md", "SESSION.md"
 
 // REASON: SESSION.md stays inside DEFAULT_ROOTS and inside the ratchet, despite being an actively-rewritten scratch log — a standing claim in the session log is the shape that has done the most damage here, and exempting one file would be the first entry on a suppression list this gate deliberately does not have
 // KIND: decisional
-// PROVENANCE: MEASURED 2026-07-31 — SESSION.md contributes 7 census rows today (#1401's body says 45; that figure is stale, run `pnpm validate-reasons --census`). Over the 32 commits touching it since 2026-07-24: 15 already breached the COUNT ratchet, and per-row text comparison (#1399) adds 3 more. So the marginal cost of keeping it in scope is 3 commits in 32, not a breach on every session-log edit.
+// PROVENANCE: MEASURED 2026-07-31 — SESSION.md is an actively rewritten surface that can carry standing operational claims; its current contribution is reported by `pnpm validate-reasons --census`, never frozen in this comment
 // OWNER: operator
-// DECISION: #1401 — recorded there with the measurement above, and reversible by an operator ruling; the counter-case is CLAUDE.md's own record of "the free scan is sold as instant", a claim invented in an issue comment, written into SESSION.md, and used as the premise of a decision put to the operator
+// DECISION: #1401 — keep every governed root under the same ratchet unless the operator explicitly rules otherwise; excluding a frequently edited file would create the first suppression path for precisely the claims this gate exists to expose
 // TOUCHES: SESSION.md
 
 const SCANNED = /\.(ts|md|txt|yml|sql)$/;
@@ -173,8 +174,8 @@ export function collectReasons(roots: string[], base: string): ParsedReason[] {
 
 // #1246 — the gate's headline ("N blocks, all well-formed") reads as a clean bill of health over the
 // repo's claims, but well-formed is a statement about the blocks that EXIST. The #1033 inventory
-// measured 86 claim-shaped lines across 33 of 51 design docs that were never triaged into
-// empirical/decisional at all, and a claim outside a block is not re-tested by anything. So the
+// found claim-shaped lines in design prose that were never triaged into empirical/decisional at
+// all, and a claim outside a block is not re-tested by anything. So the
 // untriaged population is COUNTED on every run rather than quoted from a doc — an unstated
 // limitation reads as a clean bill of health, and a stored number stops being true.
 //
@@ -186,17 +187,23 @@ export function collectReasons(roots: string[], base: string): ParsedReason[] {
 // mechanical assembly" and it landed 3h25m later in 98 lines.
 //
 // #1347 added "untestable" and the unverified register. Until then the census was PROSE-ONLY and the
-// vocabulary was impossibility-only, so #1318's own three motivating examples all fell outside it —
-// all three are source comments, and none of the three phrasings was in the vocabulary. Measured
-// 2026-07-28 over DEFAULT_ROOTS: "untestable" costs 5 lines and reaches all three #1311 sites
-// (src/audit-runners.ts:722/972, src/pentest/targets.ts:157); the unverified register costs 81 and
-// reaches #1265's (src/scan/supabase.ts:18).
+// vocabulary was impossibility-only, so #1318's motivating source-comment examples fell outside
+// it. The selection rule includes "untestable" because it reaches a known standing-claim shape.
+// The unverified register covers the corresponding evidence-status shape; the runtime census
+// measures the matching population instead of this comment.
 const IMPOSSIBILITY_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|not possible|unable to|out of reach|infeasible|untestable)\b/i;
 // "the shape was never verified" forecloses nothing — it is the honest register, and refusing it on
 // an ASSUMED provenance would punish exactly the phrasing the doctrine asks for. So it is censused
 // (a standing claim nothing re-tests) but kept OUT of the impossibility-register check below.
 const UNVERIFIED_VOCABULARY = /\b(unverified|not (?:independently )?(?:re-)?verified|never (?:been )?verified)\b/i;
-const CLAIM_VOCABULARY = new RegExp(`${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}`, "i");
+// #1410 — the positive register needs the same decay census as impossibility and the honest-negative
+// register. Keep this arm exact: widening it to the bare verb reaches ordinary evidence prose,
+// while punctuation/spacing variants stay outside this deliberately bounded addition.
+const VERIFIED_LIVE_VOCABULARY = /\bverified live\b/i;
+const CLAIM_VOCABULARY = new RegExp(
+  `${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}|${VERIFIED_LIVE_VOCABULARY.source}`,
+  "i",
+);
 
 interface UntriagedClaim {
   file: string;
@@ -227,16 +234,15 @@ export function issueSources(issues: FetchedIssue[]): SourceText[] {
  * How much of a surface the census reads. One home for the boundary, so the CLI, the tests and the
  * disclosure line cannot drift apart.
  *
- * `comments` rather than whole-file for code, because #1347's scale trap is real and was measured
- * before the shape was chosen (2026-07-28, DEFAULT_ROOTS): `.ts` carries 767 claim-shaped lines
- * against `.md`'s 274, but 270 of the 767 are CODE — error-message strings ("cannot seed: this body
- * carries no…"), `not-assessed` detail strings and test titles. Those are the vocabulary firing on
- * ordinary code prose, and ratcheting them would make the gate all backlog and no signal. The 497
- * that remain are comments, which is where a standing claim actually gets recorded.
+ * `comments` rather than whole-file for code, because #1347's scale trap is structural: error-message
+ * strings, `not-assessed` details and test titles use the vocabulary as runtime data rather than as
+ * standing claims. A runtime string can say "cannot seed" without recording a repository claim.
+ * Ratcheting those code lines would make the gate all backlog and no signal;
+ * comments are the selected code surface because that is where standing claims are recorded.
  *
  * `none` for the generated baseline itself (#1347's fifth criterion): since #1318 it records every
- * claim VERBATIM, so censusing it would match every claim in the repo against itself — 275 lines
- * measured, growing by one for every claim anyone writes anywhere.
+ * claim VERBATIM, so censusing it would match every governed claim against its generated copy and
+ * grow in lockstep with the population it is meant to constrain.
  */
 type CensusScope = "prose" | "comments" | "none";
 
@@ -252,33 +258,54 @@ export function censusScope(file: string): CensusScope {
   return COMMENT_LINE[file.split(".").pop() ?? ""] ? "comments" : "prose";
 }
 
+interface ClaimScopeMetrics {
+  /** Claim-shaped lines accepted by the declared prose/comment boundary and outside reason blocks. */
+  accepted: UntriagedClaim[];
+  /** Matching code lines rejected because source files are deliberately comment-only. */
+  excludedByCommentScope: number;
+  /** Accepted rows carrying the exact positive-register phrase. */
+  acceptedVerifiedLive: number;
+  /** Every input surface, including explicitly excluded generated surfaces. */
+  sourcesByScope: Record<CensusScope, number>;
+}
+
 /**
  * Claim-shaped lines outside any reason block. Prose surfaces (`.md`, `.txt`, issue bodies) are read
  * whole; code surfaces are read comment-lines-only — see `censusScope`. A trailing comment on a line
  * of code (`foo(); // cannot X`) is not read, which keeps this the lower bound it has always been.
  */
-export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
-  return sources.flatMap(({ file, text }) => {
+export function claimScopeMetrics(sources: SourceText[], reasons: ParsedReason[]): ClaimScopeMetrics {
+  const accepted: UntriagedClaim[] = [];
+  let excludedByCommentScope = 0;
+  let acceptedVerifiedLive = 0;
+  const sourcesByScope: Record<CensusScope, number> = { prose: 0, comments: 0, none: 0 };
+
+  for (const { file, text } of sources) {
     const scope = censusScope(file);
-    if (scope === "none") return [];
+    sourcesByScope[scope] += 1;
+    if (scope === "none") continue;
     const comment = scope === "comments" ? COMMENT_LINE[file.split(".").pop() ?? ""] : undefined;
     const triaged = reasons.filter((r) => r.file === file);
-    const out: UntriagedClaim[] = [];
     let inFence = false;
     text.split("\n").forEach((raw, i) => {
       if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
       if (inFence || !CLAIM_VOCABULARY.test(raw)) return;
-      if (comment && !comment.test(raw)) return;
       const line = i + 1;
       if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
-      out.push({ file, line, text: raw.trim() });
+      if (comment && !comment.test(raw)) {
+        excludedByCommentScope += 1;
+        return;
+      }
+      accepted.push({ file, line, text: raw.trim() });
+      if (VERIFIED_LIVE_VOCABULARY.test(raw)) acceptedVerifiedLive += 1;
     });
-    return out;
-  });
+  }
+
+  return { accepted, excludedByCommentScope, acceptedVerifiedLive, sourcesByScope };
 }
 
 // #1318 (Gate 6 of #1320) — the census above is advisory, and an advisory number that nobody has to
-// act on is how 257 claim-shaped lines accumulated outside the registry in the first place. The
+// act on permits claim-shaped lines to accumulate outside the registry. The
 // ratchet makes it strictly NON-WORSENING without demanding anyone migrate the backlog: the count
 // may fall, never rise.
 //
@@ -289,8 +316,8 @@ export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]):
 //
 // A COUNT alone does not get there, which is why the baseline records each claim VERBATIM. Printing
 // every claim line in the breaching file is the guessing game with extra steps: the first cut of
-// this gate did exactly that and a real breach printed four lines with nothing marking which one was
-// new — on docs/design/recorded-reasons.md (baseline 18) it would have printed nineteen. Matching
+// this gate did exactly that and a real breach printed the whole file population with nothing
+// marking which row was new. Matching
 // the current lines against the recorded ones as a MULTISET reduces that to the actual delta, and it
 // makes a baseline bump reviewable: the diff shows the new claims, not a number going up.
 //
@@ -328,9 +355,9 @@ export function markNewClaims(baselineLines: string[], current: UntriagedClaim[]
 }
 
 // #1401 — THE FAILURE MESSAGE USED TO MISATTRIBUTE BLAME. The ratchet is repo-wide over source, so a
-// breaching line can sit in a file the author never opened: three PRs hit that in one session
+// breaching line can sit in a file the author never opened: multiple PRs hit that in one session
 // (#1387 through `src/fp-rules.test.ts`, arriving from #1383 mid-flight; #1397 through
-// `src/recorded-reasons.test.ts` on a rebase; and #1347's own executor through seven files after
+// `src/recorded-reasons.test.ts` on a rebase; and #1347's own executor through several files after
 // `main` gained `src/scan/rule-corpus-pairing.ts`). The reader's first move is to hunt for a defect
 // in their own diff, and the repair — "just regenerate the baseline" — is one keystroke from
 // "allowlist my own new claims", which is the loophole the gate exists to close. So the row says
@@ -386,11 +413,9 @@ interface ClaimDrift {
  * full of claims still breaches, and this strictly subsumes the count ratchet: if a file's count
  * rises, at least (now − baseline) lines come back in `added`.
  *
- * The cost is churn, and it was MEASURED before being accepted rather than argued about (2026-07-31,
- * over every commit touching each surface): SESSION.md 3 of 32 commits, `src` 3 of 67, `docs` 2 of 22
- * would newly breach — 8 of 121, against 58 of the same 121 that already breached the count ratchet.
- * So per-row comparison adds roughly a seventh again of an already-frequent gate, not a breach on
- * every innocuous edit.
+ * The cost was measured before this rule was accepted: per-row comparison added breaches only when
+ * governed wording changed, rather than on every innocuous edit. That selection property is stable;
+ * storing the then-current commit and breach totals here would not be.
  *
  * #1685 — A DROPPED ROW FAILS TOO, so the recorded set can only shrink DELIBERATELY. Until now the
  * gate fired on `added` alone, and a baseline row whose claim had been reworded away, moved or
@@ -401,9 +426,8 @@ interface ClaimDrift {
  * human prunes it in a diff rather than letting the count fall in silence. Auto-pruning instead
  * would be the same defect pointing the other way.
  *
- * MEASURED 2026-07-31 on 3f6148c, before the change: 0 dead rows across 348 files / 906 baseline
- * rows. So the population today is zero and this shipped costing nothing — recorded as a measurement
- * rather than assumed, because "probably none" and "none" read identically afterwards.
+ * The initial migration measured no dead rows before enabling the failure. The durable rule is that
+ * every future dead row must fail until deliberately pruned; current totals come from claimDrift.
  */
 export function claimDrift(baseline: Record<string, string[]>, current: UntriagedClaim[]): ClaimDrift[] {
   const byFile = new Map<string, UntriagedClaim[]>();
@@ -443,15 +467,14 @@ const PLACEHOLDER = /^(n\/?a|tbd|todo|none|unknown|\?+)$/i;
 // `bash -e {0}`, and NEITHER inherits that function — so the same command can be exercised by its
 // author and answer the opposite way in the venue that scores it.
 //
-// MEASURED 2026-07-31 across a 26-cell flag probe (`-q -qv -v -c -L -l -o -m -qE -qEv -qi -qw -qx
-// -qF -qs -qc -qn -qr -rq -qL -ql`, plus the split `-q -v` and `-vq` forms): the ONLY divergence is
+// An exhaustive flag-spelling probe found the ONLY divergence is
 // `-v` combined with suppressed output — wrapper 1, `/usr/bin/grep` 0, on the same file and
 // predicate. `-c`, `-L`, `-o` and `-m`, which #1646 asked about, agree. So the ban is `-v`, not a
 // vague "prefer git grep".
 //
-// Population when this landed: 1 of 42 empirical falsifiers — src/disclosure-venue.ts's `grep -qv`,
-// which measured `sh -c`=1 (blocker holds) and agent-shell=0 (blocker GONE) against the same tree.
-// That is #1345's shape exactly: a falsifier whose answer depends on who ran it re-tests nothing.
+// The production occurrence that exposed this used `grep -qv` and measured opposite answers under
+// `sh -c` and the agent shell against the same tree. That is #1345's shape exactly: a falsifier whose
+// answer depends on who ran it re-tests nothing. Current occurrence counts are irrelevant to the ban.
 //
 // A `grep` inside `sh -c '…'` is exempt, and not as a convenience: `sh -c` starts a new process that
 // inherits no zsh functions. MEASURED 2026-07-31 — `sh -c "grep -qv beta f"` exits 0 from inside the
@@ -473,8 +496,8 @@ function shadowedInvertGrep(command: string): string | undefined {
 
 // #1647 — a git pathspec is NOT a shell glob. Without `:(glob)` magic git matches with wildmatch and
 // WM_PATHNAME off, so a bare `*` already crosses `/` and `**/` therefore requires at least one
-// intervening directory. MEASURED 2026-07-31 in this checkout: `git ls-files -- 'src/**/*.ts'` lists
-// 478 files and NOT ONE top-level `src/*.ts`, while `:(glob)src/**/*.ts` lists 611 including them.
+// intervening directory. A checkout probe proved the bare form omitted every top-level `src/*.ts`
+// path while the `:(glob)` form included them; the exact file totals are intentionally not retained.
 // The falsifier that shipped with that pathspec exited 1 — "still blocked" — with a production
 // importer planted at src/__probe.ts, which is the one answer a falsifier may never give wrongly.
 const UNGLOBBED_DOUBLE_STAR = /'((?::\([^)]*\))?[^']*\*\*[^']*)'/g;
@@ -619,8 +642,8 @@ function declaredTouches(r: ParsedReason): string[] {
 }
 
 // #1246 — TOUCHES: was optional, so subsystemDrift — the half that catches the #1035 shape without
-// re-running anything — watched only the 9 of 15 empirical reasons whose author happened to declare
-// it (measured 2026-07-27). Making it MANDATORY was the other option and is rejected: the three
+// re-running anything — watched only reasons whose author happened to declare it. Making it
+// MANDATORY was the other option and is rejected: the seeded
 // negative controls in .github/workflows/reasons-drift.yml plant reasons carrying no TOUCHES, so a
 // structural failure would make all three exit non-zero for the WRONG reason — a green job whose own
 // controls no longer prove anything is the false-green this whole family exists to kill.

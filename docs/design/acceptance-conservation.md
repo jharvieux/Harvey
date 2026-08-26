@@ -359,8 +359,8 @@ resolve is UNREADABLE, not absent`).
 `REASON:`/`KIND:`/`PROVENANCE:`/`FALSIFIER:` — rather than prose here, so
 `pnpm validate-reasons --revalidate` re-tests it on the daily cadence: the two Gate 4 bounds and the
 semgrep-only scope in `src/disclosure-venue.ts`, Gate 3's `ignoreExportsUsedInFile` blind spot in
-`src/test-only-exports.ts`, Gate 2's cross-linked condition beside `checkRemainder`, #1341's question
-above, and — since #1349 — the `pnpm`-backtick narrowing's cost re-measured over 60 `met` lines,
+`src/test-only-exports.ts`, Gate 2's cross-linked condition beside `checkRemainder`, and — since
+#1349 — the `pnpm`-backtick narrowing's cost re-measured over 60 `met` lines,
 inline above (`src/cli/measure-pnpm-evidence.ts`). Every one was exercised in BOTH directions — run
 as committed, then run again against a state where its blocker is gone — because a falsifier nobody
 has watched exit 0 is indistinguishable from one that cannot. **The remaining bounds are DECISIONAL**
@@ -369,18 +369,13 @@ the unresolvable-closing-reference disclosure, negation-blindness) — re-testin
 command is a category error and the reason gate refuses it, so each is instead a `KIND: decisional`
 block, inline above, naming its `OWNER` (operator) and the `DECISION` record.
 
-`pnpm exec tsx src/cli/validate-reasons.ts --census` reports **8** claim-shaped lines in this file
-outside a block (measured 2026-07-28; an earlier draft of this paragraph said none, which the tool
-contradicts). Each is named here, because a count nobody has triaged is the shape this census exists
-to end. `:57` and `:240` are struck-through text the #1320 audit FALSIFIED, kept visible beside its
-replacement rather than deleted. `:111` and `:201` are prose lead-ins of bounds whose registry blocks
-carry the real claim — `:111`'s is the block immediately below it, `:201`'s sits beside
-`checkRemainder` in `src/acceptance-conservation.ts`. `:43` is motivation in **The mechanism**,
-describing the defect class this gate exists for rather than a bound of it. `:317` sits in the
-paragraph directly above, on the falsifier-exercising rule. `:439` and `:443` state the
-`acceptance-close.yml` trigger bound, which is discharged by running that workflow once and recording
-the run — see **Wiring, and the bound** — so it carries a dispatch command rather than a
-`FALSIFIER:`.
+`pnpm exec tsx src/cli/validate-reasons.ts --census` reports this file's current claim-shaped lines
+outside reason blocks. The population is derived on each run through the same matcher and scope
+exclusions as the ratchet, not a stored count or line-number inventory here. Historical falsified
+text, prose lead-ins and testing doctrine can match the vocabulary too; a census row needs triage,
+not automatic promotion into a live blocker. In particular, #1341's former pre-merge trigger bound
+has been retired by the dated evidence in **Wiring and live proof** below (#1410). It does not become
+a new reason block whose falsifier already succeeds.
 
 Exit codes are three-valued on purpose: `0` pass or green no-op, `1` gate failed, `2` gate could not
 run. A control that accepted any non-zero code would go green on exit 2 — the #1246 shape, where five
@@ -506,7 +501,7 @@ One terminal state for a failed close, whatever failed and however many times (#
 
 | Situation | Action | Demonstrated |
 | --- | --- | --- |
-| Fails — first time or repeat | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | first-failure branch: #1384 went `CLOSED` → commented, labelled, `OPEN` (2026-07-28). Repeat-failure branch: CLI-layer proof against a stub `gh` (`src/cli/validate-acceptance.test.ts`); live workflow drill EXECUTED 2026-07-31: run 30674282482 (gate exit 1, `RE-OPENED` log line, #1348 reopened with label intact) — #1750 |
+| Fails — first time or repeat | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | first-failure branch: #1384 went `CLOSED` → commented, labelled, `OPEN` (2026-07-28). Repeat-failure branch: CLI-layer proof against a stub `gh` (`src/cli/validate-acceptance.test.ts`); live workflow drill EXECUTED 2026-07-31: [run 30674282482](https://github.com/jharvieux/Harvey/actions/runs/30674282482) (gate exit 1, `RE-OPENED` log line, #1348 reopened with label intact) — #1750 |
 | Passes, label present | **remove** the label | label removed, issue stayed `CLOSED`, exit 0 (#1384, 2026-07-28) |
 | Bot-opened issue | `NOT ASSESSED`, with the reason | #1340 (a `ci-heavy-cli-alert` drill) |
 
@@ -529,7 +524,7 @@ Bot-opened issues are the one exemption and it is disclosed, not silent: the #12
 comment on and close a tracking issue under the job token, and seven of the eleven bare-click closes
 measured above were exactly that. They state no criteria and are not work items.
 
-### Wiring, and the bound
+### Wiring and live proof
 
 `.github/workflows/acceptance-close.yml`, `on: issues: [closed]` plus `workflow_dispatch` with an
 `issue` input, so it is re-provable on demand:
@@ -544,10 +539,28 @@ directions, alongside partial, malformed, duplicate, relay-completion and ruled-
 green run therefore means the gate passed **and can still fail** even on a close it had nothing to
 object to. Step 2 runs the check with `--act`.
 
-**The bound, stated because it is the #1287 shape:** a workflow on the `issues` event runs from the
-**default branch only**, so this trigger cannot fire until it is merged and has therefore **never
-fired**. Everything downstream of the trigger is proven on live data — the check on real closes of
-both shapes (#1155 fires, #1384 fires through a real sidebar link, #1318 stays quiet, #1340 is not
-assessed) and all four failure-action branches — but "the `issues: closed` event reaches this
-workflow" is, until the first firing, an unverified claim about GitHub. Prove it with the dispatch
-above, or by closing any issue, and record the run.
+**The former pre-merge trigger bound is retired (#1410).** Its replacement is dated evidence,
+not a new `REASON:` block. The proof chain distinguishes the sidebar lookup, manual dispatch and
+event delivery:
+
+- **2026-07-28 — sidebar lookup:** [issue #1384](https://github.com/jharvieux/Harvey/issues/1384)
+  and [PR #1386](https://github.com/jharvieux/Harvey/pull/1386) establish that a Development-sidebar
+  link populates the closing-reference field without a closing keyword. The issue's gate comments
+  record the linked PR being read; its disposition records the probe's result.
+- **2026-07-31 — live repeat-failure action:** the `workflow_dispatch`
+  [run 30674282482](https://github.com/jharvieux/Harvey/actions/runs/30674282482) exited 1 at the
+  acceptance step, logged `RE-OPENED — the one terminal state of a failed close (#1696)` for #1348,
+  and passed the liveness assertion. [#1750](https://github.com/jharvieux/Harvey/issues/1750)
+  records the post-run issue state and label. This proves the dispatched action path, not the
+  `issues` event transport.
+- **2026-07-31 — scoring receipts:** the successful `workflow_dispatch`
+  [run 30640273614](https://github.com/jharvieux/Harvey/actions/runs/30640273614) emitted measured
+  receipts for both `acceptance-close-selftest` and `acceptance-close`, as recorded in
+  [the gate-liveness design](ci-gate-liveness.md#every-new-gate-id-measured-on-a-real-run-1568-criterion-3).
+- **2026-08-26 UTC — event delivery:** [run 32920912279](https://github.com/jharvieux/Harvey/actions/runs/32920912279)
+  has `event: issues` at `61c51165cd5f9f279140c4253d870baceeac3270`. It assessed the close of #1870,
+  emitted both measured receipts and succeeded. This is direct event-path evidence rather than an
+  inference from a manual dispatch.
+
+These are dated observations, not a promise that every future run passes. The liveness assertion
+continues to distinguish a job that assessed a close from one that only started.

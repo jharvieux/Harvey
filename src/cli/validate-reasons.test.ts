@@ -5,13 +5,14 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = "src/cli/validate-reasons.ts";
+const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
 
 function plant(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "harvey-reasons-"));
@@ -232,6 +233,64 @@ describe("validate-reasons CLI", () => {
     expect(code).toBe(0);
     expect(out).toContain("loader.ts:1  // Harvey cannot analyse Elixir today.");
     expect(out).not.toContain("loader.ts:2");
+  });
+
+  it("derives every disclosed census metric from each shipping CLI population (#1410)", async () => {
+    const populationA = plant({
+      "a.md": `${POSITIVE_REGISTER} against fixture A.\n`,
+      "a.ts": `// ${POSITIVE_REGISTER} in a source comment.\nthrow new Error("${POSITIVE_REGISTER} in code");\n`,
+    });
+    const populationB = plant({
+      "b.md": `${POSITIVE_REGISTER} against fixture B.\n${POSITIVE_REGISTER} against fixture C.\n`,
+      "extra.md": "Ordinary prose still belongs to the examined population.\n",
+      "b.ts": `// ${POSITIVE_REGISTER} in another source comment.\nthrow new Error("${POSITIVE_REGISTER} in code");\nthrow new Error("${POSITIVE_REGISTER} in more code");\n`,
+      "extra.sql": "-- Ordinary source comments also belong to the examined population.\n",
+    });
+
+    const [a, b, generated] = await Promise.all([
+      gate(populationA, ["--census"]),
+      gate(populationB, ["--census"]),
+      gate("src/unstructured-claims-baseline.ts", ["--census"]),
+    ]);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(generated.code).toBe(0);
+    expect(a.out).toContain("Untriaged claim-shaped lines (advisory, LOWER BOUND — a fixed vocabulary): 2");
+    expect(b.out).toContain("Untriaged claim-shaped lines (advisory, LOWER BOUND — a fixed vocabulary): 3");
+    expect(a.out).toContain("CENSUSED WHOLE: 1 prose surface(s)");
+    expect(b.out).toContain("CENSUSED WHOLE: 2 prose surface(s)");
+    expect(a.out).toContain("CENSUSED COMMENTS ONLY: 1 .ts/.yml/.sql surface(s)");
+    expect(b.out).toContain("CENSUSED COMMENTS ONLY: 2 .ts/.yml/.sql surface(s)");
+    expect(a.out).toContain("NOT CENSUSED: 0 file(s)");
+    expect(generated.out).toContain("NOT CENSUSED: 1 file(s)");
+    expect(generated.out).toContain("CENSUSED WHOLE: 0 prose surface(s)");
+    expect(generated.out).toContain("CENSUSED COMMENTS ONLY: 0 .ts/.yml/.sql surface(s)");
+    expect(generated.out).toContain("0 matching code line(s) were excluded");
+    expect(generated.out).toContain("0 accepted row(s) use that phrase");
+    expect(a.out).toContain("1 matching code line(s) were excluded");
+    expect(b.out).toContain("2 matching code line(s) were excluded");
+    expect(a.out).toContain("2 accepted row(s) use that phrase");
+    expect(b.out).toContain("3 accepted row(s) use that phrase");
+  });
+
+  it("includes issue bodies and comments in the disclosed prose population without calling them repository files", async () => {
+    const dir = plant({ "source.md": `${POSITIVE_REGISTER} in repository prose.\n` });
+    const bin = plant({
+      gh: `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify([
+        { number: 1410, body: `${POSITIVE_REGISTER} in issue prose.`, comments: [{ body: "An ordinary comment." }] },
+      ]))});\n`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    try {
+      const { code, out } = await gate(dir, ["--census", "--issues"], { PATH: `${bin}:${process.env.PATH ?? ""}` });
+      expect(code).toBe(0);
+      expect(out).toContain(`CENSUSED WHOLE: 3 prose surface(s) across ${dir} and 2 open-issue body/comment surface(s)`);
+      expect(out).toContain("2 accepted row(s) use that phrase");
+      expect(out).toContain(`issue #1410:1  ${POSITIVE_REGISTER} in issue prose.`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 });
 

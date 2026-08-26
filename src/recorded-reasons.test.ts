@@ -8,6 +8,7 @@ import {
   attributeClaim,
   claimCounts,
   claimDrift,
+  claimScopeMetrics,
   claimTotal,
   collectReasons,
   censusScope,
@@ -18,10 +19,10 @@ import {
   reasonKind,
   revalidateReasons,
   subsystemDrift,
-  untriagedClaims,
   validateRecordedReason,
   watchedPaths,
   type ParsedReason,
+  type SourceText,
 } from "./recorded-reasons.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,6 +51,10 @@ function one(lines: string[], prefix?: string): ParsedReason {
 }
 
 const statuses = (rows: { status: string }[]) => rows.map((r) => r.status);
+const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
+const NEGATIVE_REGISTER = ["un", "verified"].join("");
+
+const untriagedClaims = (sources: SourceText[], reasons: ParsedReason[]) => claimScopeMetrics(sources, reasons).accepted;
 
 describe("parseRecordedReasons", () => {
   it("reads a block out of a TS comment, a Markdown quote and an HTML comment alike", () => {
@@ -172,9 +177,8 @@ describe("a falsifier must not invert a shadowed bare grep (#1646)", () => {
 });
 
 // #1647 — git matches pathspecs with WM_PATHNAME off, so `**/` demands an intervening directory.
-// MEASURED 2026-07-31: `git ls-files -- 'src/**/*.ts'` listed 478 files and no top-level `src/*.ts`,
-// and the falsifier written on it answered "still blocked" with a production importer planted at
-// src/__probe.ts.
+// A checkout probe showed the bare form omitted every top-level `src/*.ts`; the falsifier written on
+// it answered "still blocked" with a production importer planted at src/__probe.ts.
 describe("a `**` git pathspec needs :(glob) magic (#1647)", () => {
   const withFalsifier = (cmd: string) => validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, `FALSIFIER: ${cmd}`])).join();
 
@@ -394,6 +398,62 @@ describe("untriagedClaims — the claims outside every block, counted rather tha
   it("skips fenced code — a sample command is not a claim about the world", () => {
     expect(untriagedClaims(source("```\ngrep -q 'cannot' x\n```\n"), [])).toEqual([]);
   });
+
+  it("adds the exact case-insensitive positive-register phrase without broadening to bare or near variants (#1410)", () => {
+    const text = [
+      `${POSITIVE_REGISTER} against the retained fixture.`,
+      `${POSITIVE_REGISTER.toUpperCase()} against the second fixture.`,
+      "verified against the fixture",
+      "verified-live against the fixture",
+      "verified  live against the fixture",
+      "verified lively against the fixture",
+      `${NEGATIVE_REGISTER} live against the fixture`,
+      "reverified live against the fixture",
+    ].join("\n");
+    const metrics = claimScopeMetrics(source(text), []);
+
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map((row) => row.line)).toEqual([1, 2, 7]);
+  });
+
+  it("reaches the real #1304 source claim through the production source walk", () => {
+    const sources = collectSources(["src/detectors/bundle-stats.ts"], REPO_ROOT);
+    const reasons = sources.flatMap(({ file, text }) => parseRecordedReasons(text, file));
+    const metrics = claimScopeMetrics(sources, reasons);
+
+    expect(metrics.acceptedVerifiedLive).toBeGreaterThan(0);
+    expect(metrics.accepted.filter((row) => row.text.includes("#1304"))).toEqual([
+      expect.objectContaining({ file: "src/detectors/bundle-stats.ts", line: 23 }),
+    ]);
+  });
+
+  it("reports the source boundary and rejected code-line population from the same traversal", () => {
+    const sources = [
+      { file: "docs/x.md", text: `${POSITIVE_REGISTER} in prose.` },
+      { file: "src/x.ts", text: `// ${POSITIVE_REGISTER} in a comment.\nthrow new Error("${POSITIVE_REGISTER} in code");` },
+      { file: "src/unstructured-claims-baseline.ts", text: `// ${POSITIVE_REGISTER} but generated.` },
+    ];
+    const metrics = claimScopeMetrics(sources, []);
+
+    expect(metrics.sourcesByScope).toEqual({ prose: 1, comments: 1, none: 1 });
+    expect(metrics.excludedByCommentScope).toBe(1);
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map((row) => `${row.file}:${row.line}`)).toEqual(["docs/x.md:1", "src/x.ts:1"]);
+  });
+
+  it("excludes reason blocks and fences before measuring either accepted or comment-rejected rows", () => {
+    const sources = [
+      { file: "src/x.ts", text: `/*\nREASON: ${POSITIVE_REGISTER} in a recorded block.\nKIND: empirical\nPROVENANCE: MEASURED 2026-07-25\nFALSIFIER: false\n*/\nconst message = "${POSITIVE_REGISTER} in code";\n// ${POSITIVE_REGISTER} in a comment.` },
+      { file: "docs/x.md", text: `\`\`\`\n${POSITIVE_REGISTER} inside a fence.\n\`\`\`\n${POSITIVE_REGISTER} outside the fence.` },
+    ];
+    const reasons = sources.flatMap(({ file, text }) => parseRecordedReasons(text, file));
+    const metrics = claimScopeMetrics(sources, reasons);
+
+    expect(reasons).toHaveLength(1);
+    expect(metrics.excludedByCommentScope).toBe(1);
+    expect(metrics.acceptedVerifiedLive).toBe(2);
+    expect(metrics.accepted.map(({ file, line }) => `${file}:${line}`)).toEqual(["src/x.ts:8", "docs/x.md:4"]);
+  });
 });
 
 describe("issueSources — a claim recorded outside the repo is still a claim (#1246)", () => {
@@ -511,15 +571,14 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
     expect(row?.added.map((c) => c.text)).toEqual(["// A planted claim: this cannot be measured by any existing tier."]);
   });
 
-  // #1399's criterion 4 against the REAL repo and the REAL committed baseline, not a hand-built one:
-  // take a claim this repo actually has on the baseline, reword it in place, and require the gate to
-  // go red. This is the experiment that used to pass.
+  // #1399's criterion 4 against the REAL repo and the REAL committed baseline: take a claim this
+  // repo actually has on the baseline, reword it in place, and require the gate to go red. An
+  // unchanged source file isolates this mutation while the generated baseline integration is pending.
   it("fires when a real baselined claim is reworded in place in a real repo file", () => {
-    const target = "src/recorded-reasons.ts";
+    const target = "src/disclosure-venue.ts";
     const recorded = CLAIM_BASELINE[target] ?? [];
     expect(recorded.length, `${target} carries baselined claims to reword`).toBeGreaterThan(0);
     const original = recorded[0] as string;
-
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const planted = sources.map((s) => (s.file === target ? { ...s, text: s.text.replace(original, `${original} — reworded in place`) } : s));
     const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
@@ -531,15 +590,13 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   });
 
   // #1685's criterion 3 against the REAL repo and the REAL committed baseline: delete a claim this
-  // repo actually carries and require the gate to go red on the row it leaves behind. This is the
-  // experiment that used to pass — the shape found incidentally during #1675, where a stale row in
-  // src/quick-scan.ts had been carried with no live claim behind it and nothing had flagged it.
+  // repo actually carries and require the gate to go red on the row it leaves behind. An unchanged
+  // source file isolates this mutation from the intentionally pending generated-baseline integration.
   it("fires when a real baselined claim is deleted from a real repo file", () => {
-    const target = "src/recorded-reasons.ts";
+    const target = "src/disclosure-venue.ts";
     const recorded = CLAIM_BASELINE[target] ?? [];
     expect(recorded.length, `${target} carries baselined claims to delete`).toBeGreaterThan(0);
     const original = recorded[0] as string;
-
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const planted = sources.map((s) => (s.file === target ? { ...s, text: s.text.replace(original, "// (claim removed)") } : s));
     const claims = untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
@@ -550,9 +607,9 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
     expect(row?.now).toBe((row?.baseline ?? 0) - 1);
   });
 
-  // The scale trap #1347 asks to decide first: `.ts` carries 767 claim-shaped lines to `.md`'s 274,
-  // but 270 of them are error-message strings and test titles. Pinned by an example of each so a
-  // widening to whole-file `.ts` cannot happen quietly.
+  // The scale trap #1347 asks to decide first: code strings contain runtime messages and test titles,
+  // while comments carry standing claims. Pinned by an example of each so a widening to whole-file
+  // `.ts` cannot happen quietly; the current population is reported by the shipping CLI.
   it("reads a .ts comment but not a .ts code line, so ordinary code prose is not ratcheted", () => {
     const text = ['// this cannot be measured today', 'throw new Error("cannot seed: nothing to drop");'].join("\n");
     expect(untriagedClaims([{ file: "src/x.ts", text }], []).map((c) => c.line)).toEqual([1]);
@@ -562,9 +619,8 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   it("holds the committed baseline over this repo right now", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const claims = untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #"));
-    // Since #1685 this is the standing measurement of the DEAD-row population too: a baseline row
-    // with no live claim behind it comes back in `dropped` and reddens this line. It was 0 across
-    // 348 files / 906 rows when the failing direction landed.
+    // Since #1685 this is the standing measurement of the DEAD-row population too: any baseline row
+    // with no live claim behind it comes back in `dropped` and reddens this line.
     expect(claimDrift(CLAIM_BASELINE, claims)).toEqual([]);
     // A baseline that drifted to zero would pass the line above forever while measuring nothing.
     expect(claimTotal(claimCounts(CLAIM_BASELINE))).toBeGreaterThan(100);
@@ -600,7 +656,7 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
   });
 
   // #1318's third criterion. A breach that reprints every claim in the file is the guessing game it
-  // names: on docs/design/recorded-reasons.md (baseline 18) that is nineteen lines, one of them new.
+  // names: a reviewer needs the unmatched rows, not a changing whole-file population.
   describe("markNewClaims — the breach names the NEW lines, not every line in the file", () => {
     const at = (line: number, text: string) => ({ file: "d.md", line, text });
 
@@ -641,13 +697,13 @@ describe("the claim ratchet (#1318/#1399) — the recorded set may shrink, never
     expect(censusScope("src/unstructured-claims-baseline.ts")).toBe("none");
   });
 
-  // The three sites #1311 recorded were the population #1347's `.ts`-comment widening was BUILT to
-  // reach: "untestable" was not in the vocabulary and `.ts` was not censused, so this test used to
-  // assert the census found all three as untriaged prose. #1311 (2026-07-28) re-tested each claim,
-  // found all three still true (not decayed, contrary to the issue's own premise — see the PR body),
+  // The #1311 sites were the population #1347's `.ts`-comment widening was BUILT to reach:
+  // "untestable" was not in the vocabulary and `.ts` was not censused, so this test used to
+  // assert the census found them as untriaged prose. #1311 re-tested each claim and found them still
+  // true (not decayed, contrary to the issue's own premise — see the PR body),
   // and migrated them into REASON:/KIND:/PROVENANCE:/FALSIFIER: blocks rather than deleting them. So
   // the correct assertion flips: the widening still REACHES these files (proven generically by the
-  // sibling `censusScope` test above), but these three specific lines must no longer read as
+  // sibling `censusScope` test above), but those specific lines must no longer read as
   // untriaged, because they now carry a falsifier `--revalidate` re-tests instead of nobody.
   it("no longer flags #1311's three sites as untriaged — they are REASON blocks now, not bare prose (#1311)", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
