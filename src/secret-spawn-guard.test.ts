@@ -55,6 +55,7 @@ interface PolicyEntry {
 interface SpawnPolicy { schemaVersion: 1; sourceRoot: "src"; entries: PolicyEntry[] }
 type ModuleKind = "child_process" | "util" | "module" | "process" | "url";
 type BoundValue =
+  | { kind: "global" }
   | { kind: "namespace"; module: ModuleKind }
   | { kind: "primitive"; primitive: Primitive }
   | { kind: "promisify" | "require" | "createRequire" | "URL" | "pathToFileURL" | "fileURL" | "fileSpecifier" }
@@ -78,13 +79,14 @@ function productionPaths(root: string): string[] {
 
 function parsedSource(path: string, text: string): { source: ts.SourceFile; checker: ts.TypeChecker; syntaxErrors: readonly ts.Diagnostic[] } {
   const filename = resolve("/spawn-policy-source", path);
-  const options: ts.CompilerOptions = { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, allowJs: true, noLib: true, noResolve: true, types: [] };
-  const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true);
+  // Node files have a module scope, including CommonJS. Script-mode globalThis has a
+  // synthetic TS symbol that otherwise hides a real top-level lexical shadow.
+  const options: ts.CompilerOptions = { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, moduleDetection: ts.ModuleDetectionKind.Force, allowJs: true, noLib: true, noResolve: true, types: [] };
   const host = ts.createCompilerHost(options);
-  host.getSourceFile = (name) => name === filename ? source : undefined;
   host.fileExists = (name) => name === filename;
   host.readFile = (name) => name === filename ? text : undefined;
   const program = ts.createProgram([filename], options, host);
+  const source = program.getSourceFile(filename)!;
   return { source, checker: program.getTypeChecker(), syntaxErrors: program.getSyntacticDiagnostics(source) };
 }
 
@@ -131,19 +133,34 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
   const errors = new Set(syntaxErrors.map((diagnostic) => `${path}: Unparsed source: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, " ")}`));
   const occurrences = new Map<string, number>();
   const childValue = (value: BoundValue | undefined): boolean => value?.kind === "primitive" || value?.kind === "unknown" || ((value?.kind === "namespace" || value?.kind === "promise") && value.module === "child_process");
+  const loaderValue = (value: BoundValue | undefined): boolean => value?.kind === "global" || value?.kind === "require" || value?.kind === "createRequire" || ((value?.kind === "namespace" || value?.kind === "promise") && (value.module === "process" || value.module === "module"));
+  const watchedValue = (value: BoundValue | undefined): boolean => childValue(value) || loaderValue(value);
   const error = (node: ts.Node, message: string): void => { errors.add(`${path}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${message}`); };
   function moduleValue(name: string | undefined): BoundValue | undefined {
     const module = name?.replace(/^node:/, "");
     return ["child_process", "util", "module", "process", "url"].includes(module ?? "") ? { kind: "namespace", module: module as ModuleKind } : undefined;
   }
   function member(value: BoundValue | undefined, name: string | undefined): BoundValue | undefined {
+    if (value?.kind === "global") {
+      if (name === "globalThis" || name === "global") return value;
+      if (name === "process" || name === "module") return { kind: "namespace", module: name };
+      if (name === "require" || name === "URL") return { kind: name };
+      if (name === undefined) return { kind: "unknown", reason: "Unresolved native global member can hide a child_process loader" };
+    }
     if (value?.kind === "namespace") {
       if (value.module === "child_process") return PRIMITIVES.includes(name as Primitive) ? { kind: "primitive", primitive: name as Primitive } : { kind: "unknown", reason: `Unknown child_process member ${name ?? "<dynamic>"}` };
       if (value.module === "util" && name === "promisify") return { kind: "promisify" };
       if (value.module === "module" && name === "createRequire") return { kind: "createRequire" };
       if ((value.module === "module" && name === "require") || (value.module === "process" && name === "getBuiltinModule")) return { kind: "require" };
+      if (value.module === "process" && name === "mainModule") return { kind: "namespace", module: "module" };
+      if (value.module === "module" && ["_load", "Module", "constructor", "prototype"].includes(name ?? "")) return { kind: "unknown", reason: "Unsupported native loader module indirection" };
+      if ((value.module === "process" || value.module === "module") && name === undefined) return { kind: "unknown", reason: "Unresolved native loader member can hide child_process" };
       if (value.module === "url" && (name === "URL" || name === "pathToFileURL")) return { kind: name };
     }
+    // A bound loader's call/apply/bind or dynamic property cannot silently become untracked.
+    // require.resolve returns a module name, not an executable loader value.
+    if ((value?.kind === "require" || value?.kind === "createRequire") && name !== "resolve") return { kind: "unknown", reason: "Unsupported member access on a native loader" };
+    if (value?.kind === "promise" && loaderValue(value)) return { kind: "unknown", reason: "Unsupported member access on a native loader promise" };
     if (value?.kind === "fileURL" && (name === "href" || name === "pathname")) return { kind: "fileSpecifier" };
     if (childValue(value)) return { kind: "unknown", reason: "Unsupported member access on a child_process value" };
     return undefined;
@@ -198,13 +215,13 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
         const owner = declaration.parent.parent;
         if (ts.isVariableDeclaration(owner) && owner.initializer) {
           const original = expressionValue(owner.initializer);
-          value = declaration.dotDotDotToken && childValue(original) ? { kind: "unknown", reason: "Child_process namespace rest binding escapes discovery" } : member(original, propertyName(declaration.propertyName ?? declaration.name));
+          value = declaration.dotDotDotToken && watchedValue(original) ? { kind: "unknown", reason: "Child_process or native loader rest binding escapes discovery" } : member(original, propertyName(declaration.propertyName ?? declaration.name));
         }
       } else if (ts.isShorthandPropertyAssignment(declaration)) {
         value = symbolValue(checker.getShorthandAssignmentValueSymbol(declaration));
       } else if (ts.isExportSpecifier(declaration)) {
         value = symbolValue(checker.getExportSpecifierLocalTargetSymbol(declaration));
-      } else if (ts.isParameter(declaration) && declaration.initializer && childValue(expressionValue(declaration.initializer))) {
+      } else if (ts.isParameter(declaration) && declaration.initializer && watchedValue(expressionValue(declaration.initializer))) {
         value = { kind: "unknown", reason: "Child_process value supplied as an overridable parameter default" };
       }
       if (value) break;
@@ -222,6 +239,7 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
       const unbound = !symbol?.declarations?.length;
       if (unbound && node.text === "require") return { kind: "require" };
       if (unbound && node.text === "URL") return { kind: "URL" };
+      if (unbound && (node.text === "globalThis" || node.text === "global")) return { kind: "global" };
       if (unbound && (node.text === "module" || node.text === "process")) return { kind: "namespace", module: node.text };
       return symbolValue(symbol);
     }
@@ -270,9 +288,14 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
       const statement = parent.parent.parent;
       if (ts.isVariableStatement(statement) && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return false;
       if (ts.isIdentifier(parent.name)) return true;
-      return ts.isObjectBindingPattern(parent.name) && parent.name.elements.every((element) => !element.dotDotDotToken && ts.isIdentifier(element.name) && member(value, propertyName(element.propertyName ?? element.name))?.kind === "primitive");
+      return ts.isObjectBindingPattern(parent.name) && parent.name.elements.every((element) => {
+        if (element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) return false;
+        const name = propertyName(element.propertyName ?? element.name);
+        const selected = member(value, name);
+        return loaderValue(value) ? name !== undefined && selected?.kind !== "unknown" : selected?.kind === "primitive";
+      });
     }
-    return ts.isExpressionStatement(parent) && value.kind === "namespace";
+    return ts.isExpressionStatement(parent) && (value.kind === "namespace" || value.kind === "global");
   }
   function visit(node: ts.Node): void {
     if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference) && childValue(moduleValue(constantString(node.moduleReference.expression))) && node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) error(node, "Child_process re-export escapes discovery");
@@ -296,7 +319,7 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
     if (ts.isExpression(node) && !(ts.isIdentifier(node) && declarationName(node))) {
       const value = expressionValue(node);
       if (value?.kind === "unknown") error(node, value.reason);
-      else if (value && (childValue(value) || value.kind === "require" || value.kind === "createRequire") && !permittedUse(node, value)) error(node, `Child_process ${value.kind} value escapes an audited direct call/alias`);
+      else if (value && watchedValue(value) && !permittedUse(node, value)) error(node, `Child_process ${value.kind} value escapes an audited direct call/alias`);
     }
     ts.forEachChild(node, visit);
   }
@@ -472,6 +495,26 @@ describe("spawn discovery bindings (#1778)", () => {
     ["dynamic file URL import", 'import {pathToFileURL as fileURL} from "node:url"; const local=await import(fileURL(filename).href); local.spawn("ordinary");', []],
     ["builtin URL import", 'import {URL as NativeURL} from "node:url"; const cp=await import(new NativeURL("node:child_process").href); cp.spawn("x",[]);', ["spawn"]],
     ["loader type inspection", 'if(typeof require!=="undefined"){require("child_process").spawn("x",[]);}', ["spawn"]],
+    ["native globalThis loader", 'globalThis.process.getBuiltinModule("node:child_process").spawn("x",[]);', ["spawn"]],
+    ["native bare process loader twin", 'process.getBuiltinModule("node:child_process").spawn("x",[]);', ["spawn"]],
+    ["native global loader", 'global.process.getBuiltinModule("child_process").execFile("x",[]);', ["execFile"]],
+    ["native global object alias", 'const root=globalThis; root.process.getBuiltinModule("child_process").fork("x",[]);', ["fork"]],
+    ["native global process alias", 'const p=global.process; p.getBuiltinModule("child_process").spawnSync("x",[]);', ["spawnSync"]],
+    ["native global process destructuring", 'const {process:p}=globalThis; p.getBuiltinModule("child_process").execSync("x");', ["execSync"]],
+    ["native global loader destructuring", 'const {getBuiltinModule:load}=globalThis.process; load("child_process").execFileSync("x",[]);', ["execFileSync"]],
+    ["native global computed members", 'const key="get"+"BuiltinModule"; globalThis["process"][key]("child_process")["spawn"]("x",[]);', ["spawn"]],
+    ["native global self aliases", 'global.globalThis.global.process.getBuiltinModule("child_process").spawn("x",[]);', ["spawn"]],
+    ["native global optional members", 'globalThis?.process?.getBuiltinModule?.("child_process").spawn("x",[]);', ["spawn"]],
+    ["native global require member", 'globalThis.require("child_process").spawn("x",[]);', ["spawn"]],
+    ["native global createRequire chain", 'globalThis.process.getBuiltinModule("module").createRequire(import.meta.url)("child_process").spawn("x",[]);', ["spawn"]],
+    ["native global mainModule loader", 'globalThis.process.mainModule.require("child_process").spawn("x",[]);', ["spawn"]],
+    ["awaited native process loader", 'const p=await import("node:process");p.getBuiltinModule("child_process").spawn("x",[]);', ["spawn"]],
+    ["native global promisify chain", 'const p=globalThis.process; const cp=p.getBuiltinModule("child_process"); p.getBuiltinModule("util").promisify(cp.execFile)("x",[]);', ["execFile"]],
+    ["native global ordinary properties", 'const root=globalThis; const {env,cwd}=root.process; root.console.log(env,cwd());', []],
+    ["shadowed globalThis parameter", 'function local(globalThis:any){globalThis.process.getBuiltinModule("child_process").spawn("ordinary");}', []],
+    ["shadowed global parameter", 'function local(global:any){const {process:p}=global;p.getBuiltinModule("child_process").spawn("ordinary");}', []],
+    ["shadowed globalThis declaration", 'const globalThis={process:custom};globalThis.process.getBuiltinModule("child_process").spawn("ordinary");', []],
+    ["shadowed global loader alias", 'const load=globalThis.process.getBuiltinModule;function local(load:any){load("child_process").spawn("ordinary");}load("child_process").spawn("native",[]);', ["spawn"]],
     ["shadowed primitive", 'import {spawn} from "child_process"; function local(spawn: Function){spawn("not native");} spawn("x",[]);', ["spawn"]],
     ["shadowed namespace", 'import * as cp from "child_process"; function local(cp:any){cp.spawn("not native");} cp.spawn("x",[]);', ["spawn"]],
     ["sibling lexical aliases", 'import {spawn,exec} from "child_process"; function a(){const run=spawn;run("x",[]);} function b(){const run=exec;run("x");}', ["spawn", "exec"]],
@@ -502,6 +545,24 @@ describe("spawn discovery bindings (#1778)", () => {
     ['import {createRequire} from "node:module"; consume(createRequire);', "escapes"],
     ['function local(URL: any){const cp=await import(new URL("node:child_process").href); cp.spawn("x");}', "Unresolved dynamic module loader"],
     ['function local(pathToFileURL: any){const cp=await import(pathToFileURL(filename).href); cp.spawn("x");}', "Unresolved dynamic module loader"],
+    ['globalThis.process.getBuiltinModule(name).spawn("x",[]);', "Unresolved dynamic module loader"],
+    ['globalThis.process[operation]("child_process").spawn("x",[]);', "native loader"],
+    ['globalThis[property].getBuiltinModule("child_process").spawn("x",[]);', "native global"],
+    ['consume(globalThis);', "escapes"],
+    ['consume(global.process);', "escapes"],
+    ['consume(globalThis.process.getBuiltinModule);', "escapes"],
+    ['function loader(){return globalThis.process.getBuiltinModule;}loader()("child_process").spawn("x",[]);', "escapes"],
+    ['const {...p}=globalThis.process;p.getBuiltinModule("child_process").spawn("x",[]);', "escapes"],
+    ['const {process:{getBuiltinModule:load}}=globalThis;load("child_process").spawn("x",[]);', "escapes"],
+    ['function local(p=globalThis.process){p.getBuiltinModule("child_process").spawn("x",[]);}', "overridable parameter default"],
+    ['export const nativeRoot=globalThis;', "escapes"],
+    ['const load=global.process.getBuiltinModule.bind(global.process);load("child_process").spawn("x",[]);', "native loader"],
+    ['globalThis.process.getBuiltinModule.call(globalThis.process,"child_process").spawn("x",[]);', "native loader"],
+    ['globalThis.process.getBuiltinModule.apply(globalThis.process,["child_process"]).spawn("x",[]);', "native loader"],
+    ['globalThis.process.getBuiltinModule("module")._load("child_process").spawn("x",[]);', "native loader"],
+    ['globalThis.process.mainModule.constructor._load("child_process").spawn("x",[]);', "native loader"],
+    ['import("node:process").then(p=>p.getBuiltinModule("child_process").spawn("x",[]));', "native loader promise"],
+    ['const p=import("node:process");consume(p);', "escapes"],
     ['import {spawn} from "child_process"; spawn("x",[', "Unparsed source"],
   ])("refuses an unresolved or escaping child-process value: %s", (source, message) => {
     expect(scanSource("src/fixture.ts", source).errors.join("\n")).toContain(message);
@@ -596,6 +657,24 @@ describe("spawn policy conservation (#1778)", () => {
 });
 
 describe("spawn source walk (#1778)", () => {
+  it.each(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"])("requires policy for an actual new native-global loader file in .%s", (extension) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-global-spawn-walk-"));
+    const base = 'import {spawn} from "child_process"; spawn("tool",["--version"]);';
+    try {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src/base.ts"), base);
+      const policy = fixturePolicy(discoverProduction(root));
+      const path = `src/added.${extension}`;
+      writeFileSync(join(root, path), 'const cp=globalThis.process.getBuiltinModule("node:child_process"); cp.spawn("tool",[fixtureSecret]);');
+      const current = discoverProduction(root);
+      expect(current.errors).toEqual([]);
+      expect(current.calls.map((call) => call.path)).toContain(path);
+      expect(validatePolicy(current, policy, repositoryReader(root)).join("\n")).toContain(`Missing policy for ${path}#`);
+      writeFileSync(join(root, path), 'function local(globalThis){globalThis.process.getBuiltinModule("child_process").spawn("ordinary");}');
+      expect(validatePolicy(discoverProduction(root), policy, repositoryReader(root))).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("discovers nested production files in every JS/TS extension while excluding only tests, fixtures and declarations", () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-spawn-walk-"));
     const included = ["src/root.ts", "src/new/nested.tsx", "src/module.mts", "src/module.cts", "src/browser.js", "src/view.jsx", "src/heavy-test-plan.mjs", "src/legacy.cjs"];
