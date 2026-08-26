@@ -56,7 +56,7 @@ interface SpawnPolicy { schemaVersion: 1; sourceRoot: "src"; entries: PolicyEntr
 type ModuleKind = "child_process" | "util" | "module" | "process" | "url";
 type BoundValue =
   | { kind: "global" }
-  | { kind: "namespace"; module: ModuleKind }
+  | { kind: "namespace"; module: ModuleKind; esmNamespace?: boolean }
   | { kind: "primitive"; primitive: Primitive }
   | { kind: "promisify" | "require" | "createRequire" | "URL" | "pathToFileURL" | "fileURL" | "fileSpecifier" }
   | { kind: "promise"; module: ModuleKind }
@@ -136,9 +136,9 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
   const loaderValue = (value: BoundValue | undefined): boolean => value?.kind === "global" || value?.kind === "require" || value?.kind === "createRequire" || ((value?.kind === "namespace" || value?.kind === "promise") && (value.module === "process" || value.module === "module"));
   const watchedValue = (value: BoundValue | undefined): boolean => childValue(value) || loaderValue(value);
   const error = (node: ts.Node, message: string): void => { errors.add(`${path}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: ${message}`); };
-  function moduleValue(name: string | undefined): BoundValue | undefined {
+  function moduleValue(name: string | undefined, esmNamespace = false): BoundValue | undefined {
     const module = name?.replace(/^node:/, "");
-    return ["child_process", "util", "module", "process", "url"].includes(module ?? "") ? { kind: "namespace", module: module as ModuleKind } : undefined;
+    return ["child_process", "util", "module", "process", "url"].includes(module ?? "") ? { kind: "namespace", module: module as ModuleKind, esmNamespace } : undefined;
   }
   function member(value: BoundValue | undefined, name: string | undefined): BoundValue | undefined {
     if (value?.kind === "global") {
@@ -148,6 +148,8 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
       if (name === undefined) return { kind: "unknown", reason: "Unresolved native global member can hide a child_process loader" };
     }
     if (value?.kind === "namespace") {
+      // A builtin ESM namespace's default is the CommonJS value, not another ESM namespace.
+      if (name === "default") return value.esmNamespace ? { kind: "namespace", module: value.module } : { kind: "unknown", reason: "Unsupported default member on a CommonJS builtin value" };
       if (value.module === "child_process") return PRIMITIVES.includes(name as Primitive) ? { kind: "primitive", primitive: name as Primitive } : { kind: "unknown", reason: `Unknown child_process member ${name ?? "<dynamic>"}` };
       if (value.module === "util" && name === "promisify") return { kind: "promisify" };
       if (value.module === "module" && name === "createRequire") return { kind: "createRequire" };
@@ -201,12 +203,12 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
     for (const declaration of symbol.declarations ?? []) {
       if (ts.isImportSpecifier(declaration)) {
         const clause = declaration.parent.parent;
-        if (!declaration.isTypeOnly && !clause.isTypeOnly) value = member(moduleValue(constantString(clause.parent.moduleSpecifier)), (declaration.propertyName ?? declaration.name).text);
+        if (!declaration.isTypeOnly && !clause.isTypeOnly) value = member(moduleValue(constantString(clause.parent.moduleSpecifier), true), (declaration.propertyName ?? declaration.name).text);
       } else if (ts.isNamespaceImport(declaration)) {
         const clause = declaration.parent;
-        if (!clause.isTypeOnly) value = moduleValue(constantString(clause.parent.moduleSpecifier));
+        if (!clause.isTypeOnly) value = moduleValue(constantString(clause.parent.moduleSpecifier), true);
       } else if (ts.isImportClause(declaration)) {
-        if (!declaration.isTypeOnly) value = moduleValue(constantString(declaration.parent.moduleSpecifier));
+        if (!declaration.isTypeOnly) value = member(moduleValue(constantString(declaration.parent.moduleSpecifier), true), "default");
       } else if (ts.isImportEqualsDeclaration(declaration) && ts.isExternalModuleReference(declaration.moduleReference)) {
         if (!declaration.isTypeOnly) value = moduleValue(constantString(declaration.moduleReference.expression));
       } else if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
@@ -247,7 +249,7 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
     if (ts.isElementAccessExpression(node)) return member(expressionValue(node.expression), constantString(node.argumentExpression));
     if (ts.isAwaitExpression(node)) {
       const value = expressionValue(node.expression);
-      return value?.kind === "promise" ? { kind: "namespace", module: value.module } : value;
+      return value?.kind === "promise" ? { kind: "namespace", module: value.module, esmNamespace: true } : value;
     }
     if (ts.isCallExpression(node)) {
       const callee = expressionValue(node.expression);
@@ -292,7 +294,7 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
         if (element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name)) return false;
         const name = propertyName(element.propertyName ?? element.name);
         const selected = member(value, name);
-        return loaderValue(value) ? name !== undefined && selected?.kind !== "unknown" : selected?.kind === "primitive";
+        return loaderValue(value) ? name !== undefined && selected?.kind !== "unknown" : selected?.kind === "primitive" || (value.kind === "namespace" && value.esmNamespace === true && name === "default");
       });
     }
     return ts.isExpressionStatement(parent) && (value.kind === "namespace" || value.kind === "global");
@@ -300,7 +302,14 @@ function scanSource(path: string, text: string): { calls: SpawnCall[]; errors: s
   function visit(node: ts.Node): void {
     if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference) && childValue(moduleValue(constantString(node.moduleReference.expression))) && node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) error(node, "Child_process re-export escapes discovery");
     if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) return;
-    if (ts.isExportDeclaration(node) && !node.isTypeOnly && constantString(node.moduleSpecifier as ts.Expression | undefined)?.replace(/^node:/, "") === "child_process") error(node, "Child_process re-export escapes discovery");
+    if (ts.isExportDeclaration(node) && !node.isTypeOnly) {
+      const value = moduleValue(constantString(node.moduleSpecifier as ts.Expression | undefined), true);
+      const clause = node.exportClause;
+      const nativeExport = !clause || ts.isNamespaceExport(clause)
+        ? watchedValue(value)
+        : clause.elements.some((element) => !element.isTypeOnly && watchedValue(member(value, (element.propertyName ?? element.name).text)));
+      if (nativeExport) error(node, "Child_process or native loader re-export escapes discovery");
+    }
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       const value = expressionValue(node.expression);
       if (value?.kind === "primitive" && ts.isCallExpression(node)) {
@@ -472,6 +481,54 @@ function fixturePolicy(census: SpawnCensus): SpawnPolicy {
 }
 
 describe("spawn discovery bindings (#1778)", () => {
+  const defaultConsumers = [
+    ["child_process", 'native.spawn("x",[]);', "spawn"],
+    ["process", 'native.getBuiltinModule("child_process").spawn("x",[]);', "spawn"],
+    ["module", 'native.createRequire(import.meta.url)("child_process").spawn("x",[]);', "spawn"],
+    ["util", 'import {execFile} from "child_process";native.promisify(execFile)("x",[]);', "execFile"],
+    ["url", 'const cp=await import(new native.URL("node:child_process").href);cp.spawn("x",[]);', "spawn"],
+  ] as const;
+  const defaultBindings = [
+    ["default clause", (module: string) => `import native from "node:${module}";`],
+    ["named default", (module: string) => `import {default as native} from "node:${module}";`],
+    ["namespace default", (module: string) => `import * as ns from "node:${module}";const native=ns.default;`],
+    ["computed namespace default", (module: string) => `import * as ns from "node:${module}";const key="def"+"ault";const native=ns[key];`],
+    ["awaited default", (module: string) => `const native=(await import("node:${module}")).default;`],
+    ["destructured default", (module: string) => `const {default:native}=await import("node:${module}");`],
+  ] as const;
+  it.each(defaultConsumers.flatMap(([module, consumer, primitive]) => defaultBindings.map(([form, binding]) => [module, form, binding(module) + consumer, primitive] as const)))("tracks node:%s through its %s export", (_module, _form, source, primitive) => {
+    const result = scanSource("src/default-consumer.ts", source);
+    expect(result.errors).toEqual([]);
+    expect(result.calls.map((call) => call.primitive)).toEqual([primitive]);
+  });
+  it.each(defaultConsumers)("refuses a repeated default on the CommonJS node:%s value", (module, consumer) => {
+    const result = scanSource("src/default-consumer.ts", `import * as ns from "node:${module}";const native=ns.default.default;${consumer}`);
+    expect(result.errors.join("\n")).toContain("default");
+    expect(result.calls).toEqual([]);
+  });
+  const defaultEscapes = [
+    ["promise", 'import * as ns from "node:MODULE";Promise.resolve(ns.default).then(consume);'],
+    ["array", 'import * as ns from "node:MODULE";const values=[ns.default];'],
+    ["object", 'import * as ns from "node:MODULE";const values={native:ns.default};'],
+    ["return", 'import * as ns from "node:MODULE";function select(){return ns.default;}'],
+    ["assignment", 'import * as ns from "node:MODULE";let native;native=ns.default;'],
+    ["export assignment", 'import * as ns from "node:MODULE";export default ns.default;'],
+    ["exported variable", 'import * as ns from "node:MODULE";export const selected=ns.default;'],
+    ["exported alias", 'import * as ns from "node:MODULE";const native=ns.default;export {native};'],
+    ["default re-export", 'export {default} from "node:MODULE";'],
+    ["renamed default re-export", 'export {default as selected} from "node:MODULE";'],
+    ["namespace re-export", 'export * as selected from "node:MODULE";'],
+  ] as const;
+  it.each(["process", "module"].flatMap((module) => defaultEscapes.map(([form, source]) => [module, form, source.replace("MODULE", module)] as const)))("refuses node:%s default %s escapes", (_module, _form, source) => {
+    expect(scanSource("src/default-escape.ts", source).errors.join("\n")).toContain("escapes");
+  });
+  it.each([
+    ['import {default as native} from "node:process";function local(native:any){native.getBuiltinModule("child_process").spawn("ordinary");}'],
+    ['import * as ns from "node:process";function local(ns:any){ns.default.getBuiltinModule("child_process").spawn("ordinary");}'],
+    ['import {default as native} from "other-module";native.getBuiltinModule("child_process").spawn("ordinary");'],
+  ])("preserves a lexical or non-native default lookalike: %s", (source) => {
+    expect(scanSource("src/default-shadow.ts", source)).toEqual({ calls: [], errors: [] });
+  });
   it.each(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"])("binds native CommonJS loaders and their lexical shadows in .%s", (extension) => {
     const source = 'const {spawn:launch}=require("child_process"); launch("x",[]); function local(require){const cp=require("child_process"); cp.spawn("ordinary");}';
     const result = scanSource(`src/fixture.${extension}`, source);
@@ -657,6 +714,24 @@ describe("spawn policy conservation (#1778)", () => {
 });
 
 describe("spawn source walk (#1778)", () => {
+  it.each(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"])("requires policy for an actual new default-loader file in .%s", (extension) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-default-spawn-walk-"));
+    const base = 'import {spawn} from "child_process";spawn("tool",["--version"]);';
+    try {
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src/base.ts"), base);
+      const policy = fixturePolicy(discoverProduction(root));
+      const path = `src/added.${extension}`;
+      writeFileSync(join(root, path), 'async function run(fixtureSecret){const {default:p}=await import("node:process");p.getBuiltinModule("child_process").spawn("tool",[fixtureSecret]);}');
+      const current = discoverProduction(root);
+      expect(current.errors).toEqual([]);
+      expect(current.calls.map((call) => call.path)).toContain(path);
+      expect(validatePolicy(current, policy, repositoryReader(root)).join("\n")).toContain(`Missing policy for ${path}#`);
+      writeFileSync(join(root, path), 'function local(p){p.default.getBuiltinModule("child_process").spawn("ordinary");}');
+      expect(validatePolicy(discoverProduction(root), policy, repositoryReader(root))).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.each(["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"])("requires policy for an actual new native-global loader file in .%s", (extension) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-global-spawn-walk-"));
     const base = 'import {spawn} from "child_process"; spawn("tool",["--version"]);';
