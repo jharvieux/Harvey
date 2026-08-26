@@ -65,6 +65,8 @@ import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js"
 import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
 import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
 import {
+  countedBaselineAggregateLines,
+  countedBaselineDiagnostic,
   EXTERNAL_CORPUS,
   driftExplanationLines,
   FLOOR_CLAIM_TRIAGE,
@@ -80,6 +82,7 @@ import {
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
+  type CountedBaselineDiagnostic,
 } from "../scan/external-corpus.js";
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
@@ -617,6 +620,7 @@ function reportFailedRows(
   priorSnapshotFindingsBySlug: Readonly<Record<string, Finding[]>> | undefined,
   priorSnapshotPath: string | undefined,
 ): void {
+  const countedBaselineDiagnostics: CountedBaselineDiagnostic[] = [];
   for (const r of failed) {
     console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
     if (!r.module) continue;
@@ -627,7 +631,18 @@ function reportFailedRows(
       priorSnapshotFindingsBySlug?.[r.slug],
       priorSnapshotPath,
     )) console.error(line);
+    const diagnostic = countedBaselineDiagnostic({
+      slug: r.slug,
+      module: r.module,
+      pass: r.pass,
+      currentFindings: currentFindingsBySlug[r.slug] ?? [],
+    });
+    if (diagnostic) {
+      countedBaselineDiagnostics.push(diagnostic);
+      for (const line of diagnostic.lines) console.error(line);
+    }
   }
+  for (const line of countedBaselineAggregateLines(countedBaselineDiagnostics)) console.error(line);
 }
 
 function runDiagnosticReplay(path: string): void {

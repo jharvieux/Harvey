@@ -1,0 +1,813 @@
+{
+  "schema": 1,
+  "consumers": [
+    {
+      "consumer": "src/cli/corpus-drift.ts",
+      "runtimeRoots": [
+        "src/cli/corpus-drift.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/corpus-drift.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/corpus-drift.ts at this exact head",
+        "falsifier": "Show that src/cli/corpus-drift.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/corpus-pins.ts",
+      "runtimeRoots": [
+        "src/cli/corpus-pins.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/corpus-pins.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/corpus-pins.ts at this exact head",
+        "falsifier": "Show that src/cli/corpus-pins.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/materialize-current-semgrep.ts",
+      "runtimeRoots": [
+        "src/cli/materialize-current-semgrep.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/materialize-current-semgrep.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/materialize-current-semgrep.ts at this exact head",
+        "falsifier": "Show that src/cli/materialize-current-semgrep.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/mutation-scan.ts",
+      "runtimeRoots": [
+        "src/cli/mutation-scan.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/mutation-scan.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/mutation-scan.ts at this exact head",
+        "falsifier": "Show that src/cli/mutation-scan.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/quality-scan.ts",
+      "runtimeRoots": [
+        "src/cli/quality-scan.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/quality-scan.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/quality-scan.ts at this exact head",
+        "falsifier": "Show that src/cli/quality-scan.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/quick-scan.ts",
+      "runtimeRoots": [
+        "src/cli/quick-scan.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/quick-scan.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/quick-scan.ts at this exact head",
+        "falsifier": "Show that src/cli/quick-scan.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/replay-current-mechanical.ts",
+      "runtimeRoots": [
+        "src/cli/replay-current-mechanical.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/replay-current-mechanical.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/replay-current-mechanical.ts at this exact head",
+        "falsifier": "Show that src/cli/replay-current-mechanical.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/static-detect.ts",
+      "runtimeRoots": [
+        "src/cli/static-detect.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/static-detect.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/static-detect.ts at this exact head",
+        "falsifier": "Show that src/cli/static-detect.ts is not invoked for an excluded target through the production corpus path"
+      }
+    },
+    {
+      "consumer": "src/cli/validate-current-mechanical-readiness.ts",
+      "runtimeRoots": [
+        "src/cli/validate-current-mechanical-readiness.ts"
+      ],
+      "targetSelection": {
+        "targets": [
+          "boxyhq",
+          "carbon",
+          "cravab",
+          "documenso",
+          "effective",
+          "flori-web",
+          "ghostfolio",
+          "inbox-zero",
+          "launch-mvp",
+          "multi-tenant-starter",
+          "mvp-boilerplate",
+          "proposit",
+          "rallly",
+          "saas-lite",
+          "subscription-payments",
+          "supabase-security-labs",
+          "tanstack-com"
+        ],
+        "applicability": "src/cli/validate-current-mechanical-readiness.ts is a production corpus runtime root; changes select every pinned target its real consumer executes against",
+        "provenance": "The ordered runtime-root contract and live pinned-target registry supplied src/cli/validate-current-mechanical-readiness.ts at this exact head",
+        "falsifier": "Show that src/cli/validate-current-mechanical-readiness.ts is not invoked for an excluded target through the production corpus path"
+      }
+    }
+  ],
+  "nonImportInputs": [],
+  "producers": [
+    {
+      "producer": "secrets-history-bundle",
+      "phase": "secrets-history",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-secrets-registry.ts"
+    },
+    {
+      "producer": "osv-advisories",
+      "phase": "dependency-advisory",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "next-curated-cves",
+      "phase": "dependency-advisory",
+      "order": 20,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "dependency-typosquat",
+      "phase": "dependency-advisory",
+      "order": 30,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "dependency-ioc",
+      "phase": "dependency-advisory",
+      "order": 40,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "curated-dependency-cves",
+      "phase": "dependency-advisory",
+      "order": 50,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "dependency-pinning",
+      "phase": "dependency-advisory",
+      "order": 60,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "non-registry-dependency",
+      "phase": "dependency-advisory",
+      "order": 70,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "manifest-install-scripts",
+      "phase": "dependency-advisory",
+      "order": 80,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "resolved-install-scripts",
+      "phase": "dependency-advisory",
+      "order": 90,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "dependency-slopsquat",
+      "phase": "dependency-advisory",
+      "order": 100,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "dependency-license",
+      "phase": "dependency-advisory",
+      "order": 110,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "supply-chain-scope",
+      "phase": "dependency-advisory",
+      "order": 120,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "lockfile-presence",
+      "phase": "dependency-advisory",
+      "order": 130,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-dependency-registry.ts"
+    },
+    {
+      "producer": "semgrep-and-companion-config",
+      "phase": "semgrep",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-semgrep-registry.ts"
+    },
+    {
+      "producer": "architecture-router",
+      "phase": "configuration",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-rls-static",
+      "phase": "configuration",
+      "order": 20,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-rls-bypass",
+      "phase": "configuration",
+      "order": 30,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-rls-command",
+      "phase": "configuration",
+      "order": 40,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-policy-semantics",
+      "phase": "configuration",
+      "order": 50,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-definer-authz",
+      "phase": "configuration",
+      "order": 60,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-definer-anon",
+      "phase": "configuration",
+      "order": 70,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-dynamic-sql",
+      "phase": "configuration",
+      "order": 80,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-rls-initplan",
+      "phase": "configuration",
+      "order": 90,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "migration-storage-buckets",
+      "phase": "configuration",
+      "order": 100,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "unread-sql-surfaces",
+      "phase": "configuration",
+      "order": 110,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "edge-function-jwt",
+      "phase": "configuration",
+      "order": 120,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "open-signup-config",
+      "phase": "configuration",
+      "order": 130,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "web-extension-manifest",
+      "phase": "configuration",
+      "order": 140,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "language-coverage",
+      "phase": "configuration",
+      "order": 150,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "sfc-coverage",
+      "phase": "configuration",
+      "order": 160,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "infrastructure-scope",
+      "phase": "configuration",
+      "order": 170,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "workflow-permissions",
+      "phase": "configuration",
+      "order": 180,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-configuration-registry.ts"
+    },
+    {
+      "producer": "leftover-auth",
+      "phase": "structural-ast",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "counter-race",
+      "phase": "structural-ast",
+      "order": 20,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "bola-owner",
+      "phase": "structural-ast",
+      "order": 30,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "ssrf-wrapper",
+      "phase": "structural-ast",
+      "order": 40,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "pg-idor",
+      "phase": "structural-ast",
+      "order": 50,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "pg-response-exposure",
+      "phase": "structural-ast",
+      "order": 60,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "prisma-tenant-scope",
+      "phase": "structural-ast",
+      "order": 70,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "drizzle-tenant-scope",
+      "phase": "structural-ast",
+      "order": 80,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "client-supplied-tenant",
+      "phase": "structural-ast",
+      "order": 90,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "tenant-guc-scope",
+      "phase": "structural-ast",
+      "order": 100,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "cache-tenant-scope",
+      "phase": "structural-ast",
+      "order": 110,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "storage-tenant-scope",
+      "phase": "structural-ast",
+      "order": 120,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "audit-log-tenant",
+      "phase": "structural-ast",
+      "order": 130,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "webhook-signature",
+      "phase": "structural-ast",
+      "order": 140,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "migration-column-drift",
+      "phase": "structural-ast",
+      "order": 150,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "idempotency",
+      "phase": "structural-ast",
+      "order": 160,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "stale-quota-read",
+      "phase": "structural-ast",
+      "order": 170,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "service-role-literal",
+      "phase": "structural-ast",
+      "order": 180,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "emitter-error",
+      "phase": "structural-ast",
+      "order": 190,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "express-powered-by",
+      "phase": "structural-ast",
+      "order": 200,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "express-security-headers",
+      "phase": "structural-ast",
+      "order": 210,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "raw-body-limit",
+      "phase": "structural-ast",
+      "order": 220,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "ssr-sanitizer",
+      "phase": "structural-ast",
+      "order": 230,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "prop-overshare",
+      "phase": "structural-ast",
+      "order": 240,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "dedup-unique",
+      "phase": "structural-ast",
+      "order": 250,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "bola-cross-file",
+      "phase": "structural-ast",
+      "order": 260,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "job-tenant-scope",
+      "phase": "structural-ast",
+      "order": 270,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "path-scope-disclosure",
+      "phase": "structural-ast",
+      "order": 280,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "secret-rotation",
+      "phase": "structural-ast",
+      "order": 290,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "env-schema",
+      "phase": "structural-ast",
+      "order": 300,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "handrolled-indicators",
+      "phase": "structural-ast",
+      "order": 310,
+      "module": "M6",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m1-exception-flow",
+      "phase": "structural-ast",
+      "order": 320,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m5-exception-flow",
+      "phase": "structural-ast",
+      "order": 330,
+      "module": "M5",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m5-type-escape",
+      "phase": "structural-ast",
+      "order": 340,
+      "module": "M5",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m1-hardcoded-tenant",
+      "phase": "structural-ast",
+      "order": 345,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m5-hardcoded-deployment",
+      "phase": "structural-ast",
+      "order": 350,
+      "module": "M5",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m5-polyglot-quality",
+      "phase": "structural-ast",
+      "order": 360,
+      "module": "M5",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m6-polyglot-coverage",
+      "phase": "structural-ast",
+      "order": 370,
+      "module": "M6",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "m8-vacuous-assertion",
+      "phase": "structural-ast",
+      "order": 380,
+      "module": "M8",
+      "registryFile": "src/scan/mechanical-detector-registry.ts"
+    },
+    {
+      "producer": "dependency-reachability-and-cwe",
+      "phase": "normalization",
+      "order": 10,
+      "module": "M1",
+      "registryFile": "src/scan/mechanical-normalization-registry.ts"
+    }
+  ],
+  "workflowCommandTargetSelection": {
+    "targets": [
+      "boxyhq",
+      "carbon",
+      "cravab",
+      "documenso",
+      "effective",
+      "flori-web",
+      "ghostfolio",
+      "inbox-zero",
+      "launch-mvp",
+      "multi-tenant-starter",
+      "mvp-boilerplate",
+      "proposit",
+      "rallly",
+      "saas-lite",
+      "subscription-payments",
+      "supabase-security-labs",
+      "tanstack-com"
+    ],
+    "applicability": "A literal workflow-command root participates in the required corpus context over the workflow's selected pinned population",
+    "provenance": ".github/workflows/corpus-drift.yml is read from the exact Git tree and supplies literal src/cli/*.ts command roots",
+    "falsifier": "Remove the command from the exact workflow tree or prove its step cannot execute for a selected target"
+  }
+}

@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { findFreshPass, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
@@ -484,13 +484,24 @@ describe("buildM3PassArtifact + write → derive round trip (#1364)", () => {
       readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
       now: Date.parse("2026-07-27T12:00:00Z"),
     };
-    const fresh = findFreshPass(ctx, "M3");
-    expect(fresh.fresh).toBe(true);
-    if (fresh.fresh) {
-      expect(fresh.artifact.hotspots).toEqual(["core/checkout.ts"]);
-      const ran = ranFromPass(fresh.artifact, "mech");
-      expect(ran.status).toBe("ran");
-      expect(ran.findings).toEqual(findings);
+    // Keep both readers on the fixture clock even after the real calendar has moved on.
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2100-01-01T00:00:00Z"));
+    try {
+      const fresh = findFreshPass(ctx, "M3");
+      expect(fresh.fresh).toBe(true);
+      if (fresh.fresh) {
+        expect(fresh.artifact.hotspots).toEqual(["core/checkout.ts"]);
+        const ran = ranFromPass(fresh.artifact, "mech", ctx.now);
+        expect(ran.status).toBe("ran");
+        expect(ran.findings).toEqual(findings);
+
+        // Negative control: the production default still rejects stale findings.
+        const staleDefault = ranFromPass(fresh.artifact, "mech");
+        expect(staleDefault.findings).toBeUndefined();
+        expect(staleDefault.detail).toContain("stale and therefore NOT collected");
+      }
+    } finally {
+      wallClock.mockRestore();
     }
   });
 });

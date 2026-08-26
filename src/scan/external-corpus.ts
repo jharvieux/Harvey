@@ -1747,3 +1747,88 @@ export function driftExplanationLines(module: string, slug: string, current: Fin
   }
   return [header, ...explainRowLines("ADDED", e.added), ...explainRowLines("REMOVED", e.removed)];
 }
+
+// #1742: a failed count is evidence about more than the issue example that happened to expose it.
+// Detector changes commonly move a shared population through matching, loading, resolution,
+// reachability, or invocation. The repair boundary is therefore every pinned target/module that
+// the changed mechanism can affect, not the examples named in the issue or the first red row.
+//
+// Keep this classification separate from scoreExternalBaseline: it changes only the failure
+// guidance, never a baseline, score, row, output artifact, or exit decision. In particular, an
+// incomplete scanner run is not evidence that the detector population moved. The disclosure rows
+// below are the production signals that M4/M5 did not produce a comparable complete measurement;
+// M8-00 is deliberately absent because "no test suite" is a real counted M8 finding (#754), not a
+// setup sentinel.
+const COUNTED_BASELINE_SETUP_GAP_IDS = new Set(["M4-99", "M5-00", "M5-98", "M5-99"]);
+
+export interface CountedBaselineDiagnosticInput {
+  slug: string;
+  module?: string;
+  pass: boolean;
+  currentFindings: Finding[];
+}
+
+export interface CountedBaselineDiagnostic {
+  slug: string;
+  module: string;
+  kind: "population-remeasurement" | "setup-failure";
+  lines: string[];
+}
+
+export function countedBaselineDiagnostic(input: CountedBaselineDiagnosticInput): CountedBaselineDiagnostic | undefined {
+  if (input.pass || !input.module) return undefined;
+  const module = input.module;
+
+  const setupGaps = input.currentFindings
+    .filter((finding) => moduleMatches(finding.taxonomy, module) && COUNTED_BASELINE_SETUP_GAP_IDS.has(finding.id))
+    .map((finding) => finding.id)
+    .filter((id, index, ids) => ids.indexOf(id) === index)
+    .sort();
+
+  if (setupGaps.length > 0) {
+    return {
+      slug: input.slug,
+      module,
+      kind: "setup-failure",
+      lines: [
+        `    SETUP FAILURE: ${setupGaps.join(", ")} says ${input.slug}/${module} did not produce a comparable complete count. Repair setup/coverage and rerun; do not rebaseline this row or infer detector-population movement from it.`,
+      ],
+    };
+  }
+
+  return {
+    slug: input.slug,
+    module,
+    kind: "population-remeasurement",
+    lines: [
+      `    INCOMPLETE POPULATION CHECK: this failed counted baseline makes ${input.slug}/${module} actionable, but this one row is not the affected population boundary.`,
+      "    BLAST-RADIUS REMEASUREMENT: a matching, loading, resolution, reachability, or invocation change requires remeasurement over every pinned target/module the mechanism can affect (its proven blast radius), not only the issue examples.",
+      "    CLASSIFY BEFORE EDITING BASELINES: INCOMPLETE POPULATION → finish that blast-radius measurement; PRECISION FIX → verify the moved rows are intentionally more accurate, then update every affected baseline with measured provenance; REAL REGRESSION → fix the scanner and keep the baseline; SETUP FAILURE → repair setup and rerun without rebaselining. Rule and examples: docs/design/corpus-drift.md.",
+    ],
+  };
+}
+
+export function countedBaselineAggregateLines(diagnostics: readonly CountedBaselineDiagnostic[]): string[] {
+  if (diagnostics.length === 0) return [];
+
+  const population = diagnostics.filter((diagnostic) => diagnostic.kind === "population-remeasurement");
+  const setup = diagnostics.filter((diagnostic) => diagnostic.kind === "setup-failure");
+  const identities = population.map((diagnostic) => `${diagnostic.slug}/${diagnostic.module}`).join(", ");
+  const setupIdentities = setup.map((diagnostic) => `${diagnostic.slug}/${diagnostic.module}`).join(", ");
+
+  if (population.length === 0) {
+    return [
+      "\n──── counted-baseline diagnostic (#1742) ────",
+      `⚠ SETUP-ONLY COUNT FAILURE: ${setup.length} row(s) (${setupIdentities}) produced no trustworthy population conclusion. Repair setup/coverage and rerun; do not change baselines from this run.`,
+    ];
+  }
+
+  return [
+    "\n──── counted-baseline diagnostic (#1742) ────",
+    `✗ COUNTED-BASELINE AGGREGATE FAILURE: ${population.length} failed population row(s) across ${new Set(population.map((diagnostic) => diagnostic.slug)).size} target(s): ${identities}.`,
+    "  ACTION: remeasure the complete proven blast radius of any changed matching/loading/resolution/reachability/invocation mechanism, classify every movement as incomplete population, precision fix, real regression, or setup failure, and only then update affected baselines with measured provenance. See docs/design/corpus-drift.md.",
+    ...(setup.length > 0
+      ? [`  EXCLUDED SETUP FAILURE(S): ${setupIdentities} — repair and rerun; these rows do not support a population-defect claim.`]
+      : []),
+  ];
+}
