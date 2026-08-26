@@ -92,6 +92,7 @@ jobs:
       decision: ${{ steps.route.outputs.decision }}
       closure-digest: ${{ steps.route.outputs.closure-digest }}
       target-count: ${{ steps.route.outputs.target-count }}
+      target-slugs: ${{ steps.route.outputs.target-slugs }}
       scope: ${{ steps.route.outputs.scope }}
     steps:
       - uses: actions/checkout@v4
@@ -116,6 +117,7 @@ jobs:
           receipt="$RUNNER_TEMP/corpus-drift-relevance.json"
           pnpm exec tsx src/cli/corpus-drift-relevance.ts ownership --out "$ownership"
           target_count=$(jq -er '.consumers[0].targetSelection.targets | length | select(. > 0)' "$ownership")
+          target_slugs=$(jq -cer '.consumers[0].targetSelection.targets | sort' "$ownership")
 
           if [ "$EVENT_NAME" = pull_request ] || [ "$EVENT_NAME" = merge_group ]; then
             base="$PR_BASE_SHA"
@@ -135,6 +137,7 @@ jobs:
             else
               relevant=false
               target_count=0
+              target_slugs='[]'
               scope="nothing assessed; exact Git change is disjoint from immutable closure $closure_digest"
             fi
           else
@@ -149,6 +152,7 @@ jobs:
             echo "decision=$decision"
             echo "closure-digest=$closure_digest"
             echo "target-count=$target_count"
+            echo "target-slugs=$target_slugs"
             echo "scope=$scope"
           } >> "$GITHUB_OUTPUT"
           echo "Corpus route: decision=$decision relevant=$relevant target-count=$target_count closure=$closure_digest"
@@ -179,20 +183,20 @@ jobs:
   # job's checks are named `<name> (1)`, `<name> (2)`, ... so the bare name would stop reporting and
   # deadlock every PR (#1107). The `drift` job below keeps that name and gates on these.
   #
-  # SHARD COUNT VARIES BY EVENT. Default-branch pushes use four namespaces and seed their matching
-  # transports. Proven-disjoint PRs and merge groups skip this job before runner allocation; the
-  # required aggregate declares their nothing-assessed no-op. This replaced the single 29m30s main seed that timed out before
+  # SHARD COUNT VARIES BY EVENT. Main pushes and relevant PR/queue runs use four scorers, each
+  # owning one canonical cache namespace. Proven-disjoint PRs/queues allocate no scorer and the
+  # required aggregate declares their nothing-assessed no-op. Four-way execution replaced the main seed that timed out before
   # it could publish a complete trusted transport
   # (runs 31601042773/31602706320).
   # .github/actions/corpus-clone-cache keys on the whole 14-target pin set, and a cache key is
   # IMMUTABLE once written — its `mode: save` therefore writes only when the run holds EVERY pinned
   # clone, a guard that exists because corpus-m8 once wrote a 4-of-14 tree under that key and
   # poisoned it beyond repair by re-running. No shard holds all 17, so a sharded run can never save.
-  #   * push -> 4 shards, each owning an exhaustive slice of the pinned population.
-  #   * relevant pull_request / merge_group -> one all-target shard; declared-no-op -> no shard.
+  #   * push / relevant pull_request / merge_group -> 4 disjoint, exhaustive shards.
+  #   * declared-no-op pull_request / merge_group -> no shard.
   #   * schedule / workflow_dispatch -> ONE shard holding all 17, which still saves the cache and
   #     still writes the canonical `corpus-drift-scorecard` artifact that #1564's prior-snapshot
-  #     fetch reads. The baseline lineage flows through the daily run, never through a PR's shard.
+  #     fetch reads. Sharded runs merge the same complete population into the canonical artifact.
   #
   # Four, re-measured on pinned-toolchain runs 32578027739/32576123221: Carbon is an indivisible
   # 1409s, while the old three-way assignment put 1454 measured seconds plus setup on one runner and
@@ -210,7 +214,7 @@ jobs:
       # it shows everything that moved, not the first thing.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(github.event_name == 'push' && '[1,2,3,4]' || '[1]') }}
+        shard: ${{ fromJSON((github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && '[1,2,3,4]' || '[1]') }}
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138).
     # actions: read (#1564) so `gh run download` can fetch the PRIOR run's own scorecard
     # artifact — see "Fetch prior scorecard" below.
@@ -476,9 +480,9 @@ jobs:
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
           HARVEY_CURRENT_MECHANICAL_READINESS: ${{ github.event_name == 'push' && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
-          # Kept in step with the matrix above: 4 on a main push; 1 on the scheduled/manual or
-          # relevant PR/queue canonical-scorecard lane, which still holds every clone.
-          SHARD_COUNT: ${{ github.event_name == 'push' && 4 || 1 }}
+          # Match the producer matrix: four on push/relevant PR/queue; one on schedule/manual.
+          # A cache miss still recomputes within the same exhaustive partition.
+          SHARD_COUNT: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && 4 || 1 }}
         run: |
           set -euo pipefail
           cold_flag=()
@@ -621,7 +625,7 @@ jobs:
         if: always() && needs.prepare-current-inputs.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event_name == 'push' && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
+          name: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
           path: corpus-drift*.json
           if-no-files-found: warn
 
@@ -787,13 +791,11 @@ jobs:
           mode: assert
           expect: corpus-drift
 
-      # Reassemble the main-push shard parts into the ONE artifact name #1564's prior-snapshot
-      # fetch reads. Only on the sharded path: a scheduled/manual single-shard run already uploaded
-      # that name itself. A relevant PR/merge-group also uses one shard and writes the canonical
-      # artifact directly; a declared no-op produces only the relevance artifact.
+      # Reassemble push/relevant-PR/queue parts into the canonical scorecard. Schedule/manual
+      # already upload that name directly; a proven no-op retains only relevance evidence.
       - name: Collect the shard scorecards
         id: parts
-        if: github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
@@ -812,45 +814,67 @@ jobs:
 
       # The shards are disjoint by construction (src/scan/corpus-shards.ts asserts the partition is
       # exhaustive and non-overlapping), so `rows` concatenates and the `findings` maps merge with no
-      # key collisions. This step is push-only and push is unconditionally full, so zero parts after
-      # successful shards is an artifact/provenance failure, never a valid short-circuit.
+      # key collisions. Validate the exact four files and their complete live target population
+      # before writing any canonical scorecard; a missing artifact is not a valid short-circuit.
       - name: Merge the shard scorecards into corpus-drift.json
         id: merge
-        if: github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        env:
+          EXPECTED_TARGET_SLUGS: ${{ needs.prepare-current-inputs.outputs.target-slugs }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           parts=(parts/corpus-drift-shard*.json)
-          if [ ${#parts[@]} -eq 0 ]; then
-            echo "::error::no shard scorecards were retained after a successful full-corpus push; refusing to skip the merged readiness artifact"
+          expected_parts=(parts/corpus-drift-shard{1..4}.json)
+          if [ "${#parts[@]}" -ne 4 ] || [ "${parts[*]}" != "${expected_parts[*]}" ]; then
+            echo "::error::expected exactly corpus-drift-shard1.json through corpus-drift-shard4.json; refusing an incomplete or extra producer population"
             exit 1
           fi
+          jq -e -s --argjson expected "$EXPECTED_TARGET_SLUGS" '
+            ($expected | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) and
+            (($expected | sort) == ($expected | unique)) and
+            all(.[];
+              (.rows | type == "array" and length > 0) and
+              (.findings | type == "object" and length > 0) and
+              (.detectors | type == "object") and
+              (.mechanicalContexts | type == "object") and
+              (.findings | all(.[]; type == "array")) and
+              (.findings | keys) as $slugs |
+              ([.rows[].slug] | unique) == $slugs and
+              (.detectors | keys) == $slugs and
+              (.mechanicalContexts | keys) == $slugs
+            ) and
+            ([.[].findings | keys[]] | sort) == ($expected | sort)
+          ' "${parts[@]}" > /dev/null || {
+            echo "::error::producer scorecard parts do not preserve the exact live target population and per-target evidence maps"
+            exit 1
+          }
           echo "Merging ${#parts[@]} shard scorecard(s): ${parts[*]}"
           jq -s '{
             rows: (map(.rows) | add),
             findings: (map(.findings) | add),
-            detectors: (map(.detectors // {}) | add),
-            mechanicalContexts: (map(.mechanicalContexts // {}) | add)
+            detectors: (map(.detectors) | add),
+            mechanicalContexts: (map(.mechanicalContexts) | add)
           }' "${parts[@]}" > corpus-drift.json
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
 
       - uses: actions/checkout@v4
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
         with:
           path: source
       - uses: pnpm/action-setup@v4
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
         with:
           package_json_file: source/package.json
       - uses: actions/setup-node@v4
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
         with:
           node-version-file: source/.nvmrc
           cache: pnpm
           cache-dependency-path: source/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        if: steps.merge.outputs.merged == 'true'
+        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
         working-directory: source
       - name: Current registry producer ↔ independent replay equivalence/readiness
         if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
@@ -878,4 +902,4 @@ jobs:
             corpus-drift.json
             current-hosted-producer.json
             current-independent-replay.json
-          if-no-files-found: warn
+          if-no-files-found: error
