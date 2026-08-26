@@ -144,11 +144,13 @@ jobs:
             scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"
           fi
 
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
-          echo "closure-digest=$closure_digest" >> "$GITHUB_OUTPUT"
-          echo "target-count=$target_count" >> "$GITHUB_OUTPUT"
-          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          {
+            echo "relevant=$relevant"
+            echo "decision=$decision"
+            echo "closure-digest=$closure_digest"
+            echo "target-count=$target_count"
+            echo "scope=$scope"
+          } >> "$GITHUB_OUTPUT"
           echo "Corpus route: decision=$decision relevant=$relevant target-count=$target_count closure=$closure_digest"
           mkdir -p .harvey-corpus-relevance
           cp "$ownership" .harvey-corpus-relevance/ownership.json
