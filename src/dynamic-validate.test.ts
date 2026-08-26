@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 import {
@@ -389,12 +389,26 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
       readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
       now: Date.parse(now()),
     };
-    const pass = findFreshPass(ctx, "M2");
-    expect(pass.fresh).toBe(true);
-    if (pass.fresh) {
-      expect(pass.artifact.pass).toBe("dynamic");
-      expect(ranFromPass(pass.artifact, "dynamic pen-test").status).toBe("ran");
-      expect(probeFindings(pass.artifact.findings ?? [])).toHaveLength(1);
+    // Keep both readers on the fixture clock even after the real calendar has moved on.
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2100-01-01T00:00:00Z"));
+    try {
+      const pass = findFreshPass(ctx, "M2");
+      expect(pass.fresh).toBe(true);
+      if (pass.fresh) {
+        expect(pass.artifact.pass).toBe("dynamic");
+        const ran = ranFromPass(pass.artifact, "dynamic pen-test", ctx.now);
+        expect(ran.status).toBe("ran");
+        expect(ran.findings).toEqual(r.findings);
+        expect(probeFindings(ran.findings ?? [])).toEqual([FINDING]);
+
+        // Negative control: run the stale default-clock path.
+        const staleDefault = ranFromPass(pass.artifact, "dynamic pen-test");
+        expect(staleDefault.status).toBe("ran");
+        expect(staleDefault.findings).toBeUndefined();
+        expect(staleDefault.detail).toContain("stale and therefore NOT collected");
+      }
+    } finally {
+      wallClock.mockRestore();
     }
   });
 });
