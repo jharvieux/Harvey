@@ -503,7 +503,12 @@ function rehashExecutionReceipt(receipt: SemgrepFamilyExecutionReceipt, output?:
 }
 
 function plannedReceipt(execution: SemgrepFamilyExecutionReceipt): SemgrepPlannedFamilyReceipt {
-  const { loadedRuleIds: _loadedRuleIds, loadedTaintRuleIds: _loadedTaintRuleIds, taintCoverage: _taintCoverage, status: _status, attempts: _attempts, ...planned } = execution;
+  const planned: SemgrepPlannedFamilyReceipt & Partial<SemgrepFamilyExecutionReceipt> = { ...execution };
+  delete planned.loadedRuleIds;
+  delete planned.loadedTaintRuleIds;
+  delete planned.taintCoverage;
+  delete planned.status;
+  delete planned.attempts;
   return planned;
 }
 

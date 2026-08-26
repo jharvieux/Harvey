@@ -19,6 +19,7 @@ import {
   type SemgrepFamilyCacheOptions,
   type SemgrepFamilyRecord,
   type SemgrepFamilyExecutionReceipt,
+  type SemgrepPlannedFamilyReceipt,
   type SemgrepCommandSemanticReceipt,
 } from "./semgrep-family-cache.js";
 import type { SemgrepOutput } from "./semgrep.js";
@@ -71,7 +72,12 @@ function executed(family: SemgrepFamily, value: SemgrepOutput): { output: Semgre
 }
 
 function planned(execution: SemgrepFamilyExecutionReceipt) {
-  const { loadedRuleIds: _loadedRuleIds, loadedTaintRuleIds: _loadedTaintRuleIds, taintCoverage: _taintCoverage, status: _status, attempts: _attempts, ...receipt } = execution;
+  const receipt: SemgrepPlannedFamilyReceipt & Partial<SemgrepFamilyExecutionReceipt> = { ...execution };
+  delete receipt.loadedRuleIds;
+  delete receipt.loadedTaintRuleIds;
+  delete receipt.taintCoverage;
+  delete receipt.status;
+  delete receipt.attempts;
   return receipt;
 }
 
