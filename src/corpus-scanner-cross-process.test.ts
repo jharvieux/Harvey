@@ -1,11 +1,18 @@
 import { execFile, execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
+import { SecretInArgvError } from "./secret-argv.js";
+
+// Record the production boundary while executing the real quality CLI and its local scanners.
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, execFileSync: vi.fn(original.execFileSync) };
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -24,7 +31,10 @@ interface ProcessResult {
 
 describe("corpus scanner execution across processes and checkout paths (#1871/#1872)", () => {
   const dirs: string[] = [];
-  afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  afterEach(() => {
+    dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+    vi.clearAllMocks();
+  });
 
   it("caches proven zero-test mutation results for both no-package and package-without-suite targets", async () => {
     const fixture = mkdtempSync(join(tmpdir(), "harvey-corpus-zero-mutation-"));
@@ -488,7 +498,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
   }, 45_000);
 
-  it("preserves source-only M5 coverage without executing a rejected provider, and fails loud if that safe tier fails", async () => {
+  it("preserves source-only M5 coverage and the stdin reason without executing a rejected provider, and fails loud if that safe tier fails", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-quality-"));
     const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-partial-cache-"));
     dirs.push(targetDir, cacheDir);
@@ -506,7 +516,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       cacheable: false as const,
       packageManager: "npm" as const,
       packageManagerVersion: "11.12.1",
-      reason: "clean and fallback installs failed after partial materialization",
+      reason: "packageManager canary-quality-\u00e9\ud83d\udea6\"'\\\nclean and fallback installs failed after partial materialization\n",
     };
     const run = (scriptArgs: string[] = [targetDir]) => runCorpusScanner({
       repoRoot: process.cwd(),
@@ -524,9 +534,20 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
       },
     });
     const result = await run();
+    const fullReason = `dependency preparation incomplete: ${incompletePreparation.reason}`;
+    const qualityCalls = vi.mocked(execFileSync).mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === join(process.cwd(), "src", "cli", "quality-scan.ts"));
+    expect(qualityCalls).toHaveLength(1);
+    const [, argv, invocation] = qualityCalls[0]!;
+    expect(argv).toContain("--degraded-knip-reason-stdin");
+    expect(argv).toContain("--degraded-knip-unresolved-dependency-surface");
+    expect(argv).not.toContain("--degraded-knip-reason");
+    expect((argv as string[]).some((arg) => arg.includes(incompletePreparation.reason))).toBe(false);
+    expect(invocation).toMatchObject({ input: fullReason, stdio: ["pipe", "ignore", "inherit"] });
+    expect(Object.values(invocation?.env ?? {}).some((value) => value?.includes(incompletePreparation.reason))).toBe(false);
     expect(result.cacheRecord).toBeUndefined();
+    expect(readdirSync(cacheDir)).toEqual([]);
     expect(result.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
-    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
+    expect(result.findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: `knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points: (repo root): ${fullReason}` }));
     expect(result.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(false);
 
@@ -560,7 +581,35 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     });
     expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
+    const completeInvocation = vi.mocked(execFileSync).mock.calls.at(-1)!;
+    expect(completeInvocation[1]).not.toContain("--degraded-knip-reason-stdin");
+    expect(completeInvocation[2]?.input).toBeUndefined();
+    expect(completeInvocation[2]?.stdio).toEqual(["ignore", "ignore", "inherit"]);
+    expect(completeInvocation[2]?.env).toEqual(invocation?.env);
   }, 60_000);
+
+  it.each([
+    { name: "raw reason", reason: "canary-quality-argv-raw", argument: "canary-quality-argv-raw" },
+    { name: "prefixed reason", reason: "brief", argument: "dependency preparation incomplete: brief" },
+  ])("refuses the $name in quality argv before exec and preserves the typed refusal (#1778)", async ({ reason, argument }) => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-quality-refusal-"));
+    dirs.push(targetDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"quality-refusal","private":true}\n');
+    const events: string[] = [];
+    const result = runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "quality refusal control",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir, `--control=${argument}`],
+      cache: {
+        dir: join(targetDir, "cache"), mode: "read-write", targetRevision: "pin", targetTree: "tree",
+        dependencyPreparation: { status: "incomplete", complete: false, cacheable: false, packageManager: "npm", packageManagerVersion: "fixture", reason },
+      },
+      onEvent: (message) => events.push(message),
+    });
+    await expect(result).rejects.toBeInstanceOf(SecretInArgvError);
+    await expect(result).rejects.not.toThrow(argument);
+    expect(execFileSync).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+  }, 30_000);
 
   it("preserves the nested nextjs M5 scope when a polyglot root has no package manifest", async () => {
     const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-polyglot-quality-"));

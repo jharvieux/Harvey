@@ -11,6 +11,7 @@ import {
 import { buildCorpusScannerCache, corpusQualityEnvironment } from "./corpus-scanner-identity.js";
 import { readCorpusScannerScope } from "./corpus-scanner-scope.js";
 import type { Finding } from "./findings.js";
+import { assertNoSecretInArgv, SecretInArgvError } from "./secret-argv.js";
 
 const QUALITY_FRESH_REASON = "quality-scan executes fresh because no complete reproducible dependency-preparation receipt is available";
 
@@ -51,20 +52,25 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     try {
       const quality = options.scanner === "quality-scan";
       const bin = quality ? join(options.repoRoot, "node_modules", ".bin", "tsx") : "pnpm";
+      const degradedReason = quality && qualityPreparation?.complete === false
+        ? `dependency preparation incomplete: ${qualityPreparation.reason}`
+        : undefined;
       const args = quality
         ? [
             join(options.repoRoot, "src", "cli", "quality-scan.ts"),
             ...options.scriptArgs,
-            ...(qualityPreparation?.complete === false ? ["--degraded-knip-reason", `dependency preparation incomplete: ${qualityPreparation.reason}`] : []),
+            ...(degradedReason === undefined ? [] : ["--degraded-knip-reason-stdin"]),
             ...(qualityPreparation?.complete === false && qualityPreparation.lockfileDigest === undefined
               ? ["--degraded-knip-unresolved-dependency-surface"]
               : []),
             "--out", out, "--scope-out", scopeOut,
           ]
         : [options.script, ...options.scriptArgs, "--out", out, "--scope-out", scopeOut];
+      assertNoSecretInArgv("corpus-scanner-runner.execute", [bin, ...args], [qualityPreparation?.reason, degradedReason]);
       execFileSync(bin, args, {
         cwd: options.repoRoot,
-        stdio: ["ignore", "ignore", "inherit"],
+        stdio: [degradedReason === undefined ? "ignore" : "pipe", "ignore", "inherit"],
+        ...(degradedReason === undefined ? {} : { input: degradedReason }),
         ...(quality ? { env: qualityEnvironment } : {}),
       });
       const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
@@ -74,6 +80,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
         completed: true,
       };
     } catch (error) {
+      if (error instanceof SecretInArgvError) throw error;
       return {
         findings: [],
         scope: { unitsExamined: 0, description: `${options.scanner} emitted no valid scanner-owned scope receipt over ${options.targetConfig}` },
