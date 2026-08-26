@@ -623,9 +623,6 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// no way to know which modules were attempted.",
     "// not the app, and exploitability depends on repo/trigger settings the scan can't see, so they",
   ],
-  "src/cli/run-audit.test.ts": [
-    "// loop, and a blocked worker cannot service the birpc ack for the task update it already sent; that",
-  ],
   "src/cli/run-audit.ts": [
     "// toolExecutionNotifications so a module that did not run cannot vanish into \"no results\" — see",
     "// hand: it enforces bookkeeping discipline, but cannot detect that you skipped M5. This command",

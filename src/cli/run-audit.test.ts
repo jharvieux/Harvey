@@ -14,11 +14,12 @@
 // two-workspace fixture: it is the only shape in which the loss is observable.
 
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ReadinessPlanV1 } from "../audit-readiness.js";
 import type { FindingsDocument, ReportMeta } from "../findings.js";
 
@@ -35,10 +36,6 @@ const CLI = join(REPO_ROOT, "src", "cli", "run-audit.ts");
 let scratch: string;
 let sarifOnly: { runs: { results: unknown[] }[] };
 let engagement: FindingsDocument;
-let readinessEngagement: FindingsDocument;
-let readinessPlan: ReadinessPlanV1;
-let baselineEngagement: FindingsDocument;
-let baselineFindingId: string;
 
 // A two-workspace monorepo with one M7-detectable `<img>` INSIDE an enumerated app and one OUTSIDE
 // any of them. Deliberately tiny: the point is the capture wiring, not detector breadth.
@@ -56,57 +53,126 @@ function buildMonorepo(root: string): void {
   writeFileSync(join(root, "shared", "Widget.tsx"), 'export function Widget() {\n  return <img src="/w.png" alt="w" />;\n}\n');
 }
 
-// #1120: spawn + await, NOT execFileSync. This was the last unfixed instance of the flake and the
-// only one serializing the heavy files did not cure. execFileSync blocks the vitest worker's event
-// loop, and a blocked worker cannot service the birpc ack for the task update it already sent; that
-// ack has a 60s window vitest hardcodes. The beforeAll below is FOUR full ten-module orchestrator
-// runs, each awaited independently; the original two-run block was MEASURED 2026-07-26 at 62s on a
-// GitHub ubuntu runner, over the line, so it failed the run with `Timeout calling "onTaskUpdate"`
-// and ZERO failing tests even
-// with nothing else on the machine. Awaiting a spawned child leaves the loop free, so the ack lands.
-//
-// This is the constraint for every heavy CLI test, not just this one: no single blocking window may
-// approach 60s. The others each block ~15s at most, which is why they were not converted with it.
-const run = (args: string[]): Promise<void> =>
-  new Promise((res, rej) => {
-    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: "ignore" });
-    child.on("error", rej);
-    child.on("close", (code) => (code === 0 ? res() : rej(new Error(`run-audit ${args.join(" ")} exited ${code}`))));
+// #1970: each hook/test owns ONE audit. Four unrelated exports in one 300s beforeAll
+// exhausted that shared budget on main even though the worker was awaiting its children.
+// A child deadline is shorter than its Vitest deadline so the process tree has exited before
+// fixture teardown. Awaited spawn still preserves the worker's RPC-ack window (#1120).
+const CHILD_TIMEOUT_MS = 120_000;
+const CASE_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
+const OUTPUT_TAIL_LENGTH = 128 * 1024;
+
+type ChildResult = { code: number; out: string };
+
+function killChildGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+function startChild(command: string, args: string[]) {
+  // tsx -> run-audit -> pnpm -> scanner all belong to this group. Killing only tsx leaves
+  // scanners writing into a fixture after its suite has failed and begun removing it.
+  const child = spawn(command, args, { cwd: REPO_ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const completion = new Promise<ChildResult>((res, rej) => {
+    let out = "";
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      try {
+        killChildGroup(child.pid);
+      } catch (error) {
+        rej(error);
+      }
+    }, CHILD_TIMEOUT_MS);
+    // Decode across chunk boundaries (#1759), and retain both streams even for successful runs.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    const capture = (chunk: string) => { out = (out + chunk).slice(-OUTPUT_TAIL_LENGTH); };
+    child.stdout.on("data", capture);
+    child.stderr.on("data", capture);
+    child.once("error", (error) => {
+      clearTimeout(deadline);
+      rej(new Error(`${command} ${args.join(" ")} failed to start: ${error.message}`));
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(deadline);
+      // close, not exit: inherited pipes must also have closed before teardown may proceed.
+      if (timedOut) rej(new Error(`${command} ${args.join(" ")} timed out after ${CHILD_TIMEOUT_MS}ms (signal ${signal})\n${out}`));
+      else res({ code: code ?? -1, out });
+    });
+  });
+  return { child, completion };
+}
+
+async function runCapturing(args: string[]): Promise<ChildResult> {
+  const started = performance.now();
+  const result = await startChild("node_modules/.bin/tsx", [CLI, ...args]).completion;
+  console.info(`run-audit ${args.filter((arg) => arg.startsWith("--")).join(" ")}: exit ${result.code} in ${Math.round(performance.now() - started)}ms`);
+  return result;
+}
+
+async function run(args: string[]): Promise<void> {
+  const result = await runCapturing(args);
+  if (result.code !== 0) throw new Error(`run-audit ${args.join(" ")} exited ${result.code}\n${result.out}`);
+}
+
+describe("run-audit child lifecycle", () => {
+  it("retains diagnostics and a nonzero exit without treating it as a timeout", async () => {
+    const result = await startChild(process.execPath, ["-e", 'process.stdout.write("stdout evidence\\n"); process.stderr.write("stderr evidence\\n"); process.exitCode = 7;']).completion;
+    expect(result.code).toBe(7);
+    expect(result.out).toContain("stdout evidence");
+    expect(result.out).toContain("stderr evidence");
   });
 
+  it("kills a timed-out child and its pipe-holding descendant before rejecting", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const running = startChild(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process");
+      const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+      descendant.once("spawn", () => process.stdout.write("child-ready\\n"));
+      setInterval(() => {}, 1000);
+    `]);
+    const settled = running.completion.then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }));
+    try {
+      // Advance only after the child's first byte. Startup speed must not decide whether the
+      // control ever reached its intended hanging state (#1768).
+      const [firstByte] = await once(running.child.stdout, "data", { signal: AbortSignal.timeout(5000) });
+      expect(firstByte).toContain("child-ready");
+      const closed = once(running.child, "close", { signal: AbortSignal.timeout(5000) });
+      await vi.advanceTimersByTimeAsync(CHILD_TIMEOUT_MS);
+      await closed;
+      const result = await settled;
+      expect(result.error).toHaveProperty("message", expect.stringContaining(`timed out after ${CHILD_TIMEOUT_MS}ms`));
+      expect(result.error).toHaveProperty("message", expect.stringContaining("child-ready"));
+      expect(running.child.signalCode).toBe("SIGKILL");
+    } finally {
+      // The negative control must clean up even when the deadline's group kill is
+      // deliberately removed: otherwise its inherited pipe would leave this test pending.
+      killChildGroup(running.child.pid);
+      await settled;
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("run-audit CLI export capture", () => {
-  // 300s: four full ten-module runs of the real orchestrator as child processes.
-  beforeAll(async () => {
+  beforeAll(() => {
     scratch = mkdtempSync(join(tmpdir(), "harvey-run-audit-test-"));
     buildMonorepo(join(scratch, "target"));
+  });
+
+  beforeAll(async () => {
     await run([join(scratch, "target"), "--sarif-out", join(scratch, "only.sarif")]);
-    await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
-    await run([
-      join(scratch, "target"),
-      "--findings-out", join(scratch, "readiness-engagement.json"),
-      // Keep this inside the target: emitting the optional artifact must not perturb the scan that
-      // is running beside it, even when downstream source discovery accepts JSON files.
-      "--readiness-plan-out", join(scratch, "target", "readiness-plan.json"),
-    ]);
     sarifOnly = JSON.parse(readFileSync(join(scratch, "only.sarif"), "utf8"));
+  }, CASE_TIMEOUT_MS);
+
+  beforeAll(async () => {
+    await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
     engagement = JSON.parse(readFileSync(join(scratch, "engagement.json"), "utf8")) as FindingsDocument;
-    readinessEngagement = JSON.parse(readFileSync(join(scratch, "readiness-engagement.json"), "utf8")) as FindingsDocument;
-    readinessPlan = JSON.parse(readFileSync(join(scratch, "target", "readiness-plan.json"), "utf8")) as ReadinessPlanV1;
-    rmSync(join(scratch, "target", "readiness-plan.json"));
-    const baselineFinding = engagement.findings.find((finding) => finding.location.includes("shared/Widget.tsx"));
-    if (!baselineFinding) throw new Error("fixture produced no shared/Widget.tsx finding");
-    baselineFindingId = baselineFinding.id;
-    writeFileSync(
-      join(scratch, "baseline.json"),
-      JSON.stringify({ ...engagement, findings: [{ ...baselineFinding, location: join(scratch, "target", baselineFinding.location) }] }),
-    );
-    await run([
-      join(scratch, "target"),
-      "--findings-out", join(scratch, "baseline-engagement.json"),
-      "--baseline", join(scratch, "baseline.json"),
-    ]);
-    baselineEngagement = JSON.parse(readFileSync(join(scratch, "baseline-engagement.json"), "utf8")) as FindingsDocument;
-  }, 300000);
+  }, CASE_TIMEOUT_MS);
 
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -132,12 +198,34 @@ describe("run-audit CLI export capture", () => {
     expect(m7.some((r) => /detect-static \(code tier\)/.test(r.detail ?? ""))).toBe(true);
   });
 
-  it("passes the target root into baseline identity matching", () => {
-    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFindingId)?.baselineStatus).toBe("persistent");
+  it("passes the target root into baseline identity matching", async () => {
+    const baselineFinding = engagement.findings.find((finding) => finding.location.includes("shared/Widget.tsx"));
+    if (!baselineFinding) throw new Error("fixture produced no shared/Widget.tsx finding");
+    writeFileSync(
+      join(scratch, "baseline.json"),
+      JSON.stringify({ ...engagement, findings: [{ ...baselineFinding, location: join(scratch, "target", baselineFinding.location) }] }),
+    );
+    await run([
+      join(scratch, "target"),
+      "--findings-out", join(scratch, "baseline-engagement.json"),
+      "--baseline", join(scratch, "baseline.json"),
+    ]);
+    const baselineEngagement = JSON.parse(readFileSync(join(scratch, "baseline-engagement.json"), "utf8")) as FindingsDocument;
+    expect(baselineEngagement.findings.find((finding) => finding.id === baselineFinding.id)?.baselineStatus).toBe("persistent");
     expect(baselineEngagement.baseline?.counts.resolved).toBe(0);
-  });
+  }, CASE_TIMEOUT_MS);
 
-  it("emits readiness from the same app inventory without changing M1-M10 execution", () => {
+  it("emits readiness from the same app inventory without changing M1-M10 execution", async () => {
+    await run([
+      join(scratch, "target"),
+      "--findings-out", join(scratch, "readiness-engagement.json"),
+      // Keep this inside the target: emitting the optional artifact must not perturb the scan that
+      // is running beside it, even when downstream source discovery accepts JSON files.
+      "--readiness-plan-out", join(scratch, "target", "readiness-plan.json"),
+    ]);
+    const readinessEngagement = JSON.parse(readFileSync(join(scratch, "readiness-engagement.json"), "utf8")) as FindingsDocument;
+    const readinessPlan = JSON.parse(readFileSync(join(scratch, "target", "readiness-plan.json"), "utf8")) as ReadinessPlanV1;
+    rmSync(join(scratch, "target", "readiness-plan.json"));
     expect(readinessPlan.schemaVersion).toBe(1);
     expect(readinessPlan.workspaceInventory.applicationWorkspaceIds).toEqual([
       "workspace:apps/api",
@@ -154,7 +242,7 @@ describe("run-audit CLI export capture", () => {
     expect(auditedApps).toEqual(readinessPlan.workspaceInventory.applicationWorkspaceIds);
     expect(readinessEngagement.coverage).toEqual(engagement.coverage);
     expect(readinessEngagement.findings).toEqual(engagement.findings);
-  });
+  }, CASE_TIMEOUT_MS);
 });
 
 // #1470 — the run that produced 589 findings and exported nothing.
@@ -169,21 +257,6 @@ describe("run-audit CLI export capture", () => {
 // run whose export is refused, the last word is never a PASS — the DELIVERED NOTHING banner
 // contradicts the ledger explicitly, and the delivery gate leaves no file behind to be mistaken for
 // a deliverable.
-const runCapturing = (args: string[]): Promise<{ code: number; out: string }> =>
-  new Promise((res, rej) => {
-    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    // setEncoding, never `out += <Buffer>.toString()` (#1759): string-concatenating a per-chunk
-    // Buffer decodes THAT CHUNK in isolation, so a multi-byte character straddling a chunk boundary
-    // decodes to U+FFFD on both sides and the assembled string no longer contains it.
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (d: string) => (out += d));
-    child.stderr.on("data", (d: string) => (out += d));
-    child.on("error", rej);
-    child.on("close", (code) => res({ code: code ?? -1, out }));
-  });
-
 describe("run-audit never exits having delivered nothing (#1470)", () => {
   let dupScratch: string;
   let target: string;
@@ -211,13 +284,15 @@ $$;`;
     writeFileSync(join(target, "supabase", "migrations", "0001_initial_schema.sql"), secdef);
     writeFileSync(join(target, "supabase", "migrations", "0002_fix_handle_new_user.sql"), secdef);
     ok = await runCapturing([target, "--findings-out", join(dupScratch, "eng.json"), "--sarif-out", join(dupScratch, "out.sarif")]);
+  }, CASE_TIMEOUT_MS);
 
+  beforeAll(async () => {
     // The negative control: an assembled document that genuinely fails the report schema, via
     // a --meta the operator supplied with a non-string field. Without one, "the banner exists" is a
     // claim about a branch nobody has watched execute.
     writeFileSync(join(dupScratch, "bad-meta.json"), JSON.stringify({ ...m1470Meta, client: 42 }));
     refused = await runCapturing([target, "--meta", join(dupScratch, "bad-meta.json"), "--findings-out", join(dupScratch, "never.json"), "--sarif-out", join(dupScratch, "never.sarif")]);
-  }, 300000);
+  }, CASE_TIMEOUT_MS);
 
   afterAll(() => rmSync(dupScratch, { recursive: true, force: true }));
 
