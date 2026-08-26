@@ -4,6 +4,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { PathScopedClass } from "../scan/path-scope.js";
 import { parse, type SourceInput } from "./common.js";
 
 export const M8_VACUOUS_ASSERTION_TAXONOMY = "M8 — Production-independent assertion";
@@ -465,6 +466,18 @@ function classifyPythonFile(file: SourceInput): VacuousAssertionClassification[]
 export function vacuousAssertionSourceFiles(files: readonly SourceInput[]): SourceInput[] {
   return files.filter((file) => JS_TEST_PATH.test(file.path) || PYTHON_TEST_PATH.test(file.path));
 }
+
+export const M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [{
+  rowId: "M1-PATHSCOPE-M8-VACUOUS-ASSERTION-00",
+  detector: "m8-vacuous-assertion",
+  classId: M8_VACUOUS_ASSERTION_TAXONOMY,
+  ownerFile: "src/detectors/m8-vacuous-assertion.ts",
+  selectorSymbol: "vacuousAssertionSourceFiles",
+  inventory: "identified-sources",
+  convention: "JavaScript/TypeScript test/spec files or __tests__ paths, and Python test directories or test_*.py / *_test.py filenames",
+  select: vacuousAssertionSourceFiles,
+  classes: "a test assertion that can pass without observing production behavior",
+}];
 
 export function classifyVacuousAssertions(files: readonly SourceInput[]): VacuousAssertionClassification[] {
   return vacuousAssertionSourceFiles(files).flatMap((file) => file.path.endsWith(".py") ? classifyPythonFile(file) : classifyJsFile(file));

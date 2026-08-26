@@ -1,12 +1,16 @@
 // #1689 / #1800 — discovery completeness, paired per-class path populations, real structural-scan
 // delivery, and a conservation falsifier for every path-scoped class.
 
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { buildHtml } from "../../report-template/render.mjs";
+import { esc } from "../../report-template/sections.mjs";
 import { assembleEngagementDocument } from "../audit-report.js";
 import { conservationLedger } from "../conservation-ledger.js";
 import type { ReportMeta } from "../findings.js";
@@ -16,6 +20,8 @@ import { MechanicalScanContext } from "./mechanical-context.js";
 import { runRegisteredMechanicalDetectors } from "./mechanical-detector-registry.js";
 import { detectBolaOwnerFindings } from "./bola-owner.js";
 import { detectJobTenantScopeFindings } from "./job-tenant-scope.js";
+import { detectM5TypeEscapeFindings } from "../detectors/m5-type-escape.js";
+import { detectM8VacuousAssertionFindings } from "../detectors/m8-vacuous-assertion.js";
 import {
   ENTRY_POINT_PATH_SCOPE_CLASSES,
   PATH_SCOPE_CLASS_GROUPS,
@@ -153,6 +159,14 @@ const controls: Record<string, SelectorControl> = {
     populated: [vitestManifest, plain],
     zero: [vitestManifest, source("src/orders.test.ts")],
   },
+  "src/detectors/m5-type-escape.ts#m5TypeEscapeSources": {
+    populated: [source("src/types.ts")],
+    zero: [source("src/types.d.ts")],
+  },
+  "src/detectors/m8-vacuous-assertion.ts#vacuousAssertionSourceFiles": {
+    populated: [source("src/orders.test.ts")],
+    zero: [plain],
+  },
 };
 
 function keyFor(row: PathScopedClass): string {
@@ -179,6 +193,54 @@ function discoveredClassGroups(): { ownerFile: string; exportName: string }[] {
     }
   }
   return out.sort((a, b) => `${a.ownerFile}#${a.exportName}`.localeCompare(`${b.ownerFile}#${b.exportName}`));
+}
+
+// Discover source selectors independently of PATH_SCOPE metadata. The one shape outside this
+// inventory is exactly the shared language-extension filter, not a file/name allowlist. A new
+// selector with a path gate therefore cannot hide merely by omitting its metadata export.
+function discoverSourceSelectors(ownerFile: string, text: string): string[] {
+  const sf = ts.createSourceFile(ownerFile, text, ts.ScriptTarget.Latest, true);
+  const selectors: string[] = [];
+  for (const node of sf.statements) {
+    if (!ts.isFunctionDeclaration(node) || !node.name || !node.body) continue;
+    if (!node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if (node.type?.getText(sf).replace(/\s/g, "") !== "SourceInput[]") continue;
+    const parameter = node.parameters[0];
+    if (!parameter?.type?.getText(sf).includes("SourceInput")) continue;
+    const statement = node.body.statements.length === 1 ? node.body.statements[0] : undefined;
+    const returned = statement && ts.isReturnStatement(statement) ? statement.expression : undefined;
+    const callback = returned && ts.isCallExpression(returned) ? returned.arguments[0] : undefined;
+    const predicate = callback && ts.isArrowFunction(callback) ? callback.body : undefined;
+    const filter = returned && ts.isCallExpression(returned) && ts.isPropertyAccessExpression(returned.expression)
+      && returned.expression.name.text === "filter" && returned.expression.expression.getText(sf) === parameter.name.getText(sf);
+    const languageImport = sf.statements.some((entry) => ts.isImportDeclaration(entry)
+      && ts.isStringLiteral(entry.moduleSpecifier) && entry.moduleSpecifier.text.endsWith("/load-sources.js")
+      && entry.importClause?.namedBindings && ts.isNamedImports(entry.importClause.namedBindings)
+      && entry.importClause.namedBindings.elements.some((binding) => binding.name.text === "SOURCE_FILE" && !binding.propertyName));
+    const languageOnly = filter && languageImport && callback && ts.isArrowFunction(callback)
+      && callback.parameters.length === 1 && predicate && ts.isCallExpression(predicate)
+      && predicate.expression.getText(sf) === "SOURCE_FILE.test" && predicate.arguments.length === 1
+      && predicate.arguments[0]!.getText(sf) === `${callback.parameters[0]!.name.getText(sf)}.path`;
+    if (!languageOnly) selectors.push(`${ownerFile}#${node.name.text}`);
+  }
+  return selectors;
+}
+
+function withProductionContext<T>(files: readonly SourceInput[], framework: PathScopeContext["framework"], read: (context: MechanicalScanContext) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-path-scope-delivery-"));
+  let context: MechanicalScanContext | undefined;
+  try {
+    for (const file of files) {
+      mkdirSync(dirname(join(dir, file.path)), { recursive: true });
+      writeFileSync(join(dir, file.path), file.text);
+    }
+    if (framework === "next") writeFileSync(join(dir, "package.json"), '{"dependencies":{"next":"15.0.0"}}\n');
+    context = new MechanicalScanContext(dir);
+    return read(context);
+  } finally {
+    context?.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const reportMeta: ReportMeta = {
@@ -265,6 +327,21 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
     expect(registered).toEqual(discoveredClassGroups());
   });
 
+  it("discovers production source selectors even when their owner declares no class metadata", () => {
+    const discovered = ["scan", "detectors"].flatMap((dir) => sourceFilesUnder(join(REPO_ROOT, "src", dir)))
+      .flatMap((file) => discoverSourceSelectors(relative(REPO_ROOT, file), readFileSync(file, "utf8")));
+    const registered = new Set(PATH_SCOPED_DETECTORS.map(keyFor));
+    expect(discovered.filter((selector) => !registered.has(selector))).toEqual([]);
+    expect(discovered).toContain("src/detectors/m5-type-escape.ts#m5TypeEscapeSources");
+    expect(discovered).toContain("src/detectors/m8-vacuous-assertion.ts#vacuousAssertionSourceFiles");
+    const undeclared = discoverSourceSelectors("src/detectors/new-class.ts", `
+      export function newClassFiles(files: readonly SourceInput[]): SourceInput[] {
+        return files.filter(file => /routes/.test(file.path));
+      }
+    `);
+    expect(undeclared.filter((selector) => !registered.has(selector))).toEqual(["src/detectors/new-class.ts#newClassFiles"]);
+  });
+
   it("has unique row/class identities and selector metadata declared by the owning module", () => {
     expect(new Set(PATH_SCOPED_DETECTORS.map((row) => row.rowId)).size).toBe(PATH_SCOPED_DETECTORS.length);
     expect(new Set(PATH_SCOPED_DETECTORS.map((row) => `${row.detector}\u0000${row.classId}`)).size).toBe(PATH_SCOPED_DETECTORS.length);
@@ -327,31 +404,77 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
     }
   });
 
-  it("delivers a real registry row to the assembled engagement document and conservation fails if it is dropped", () => {
-    const dir = mkdtempSync(join(tmpdir(), "harvey-path-scope-delivery-"));
-    mkdirSync(join(dir, "src"), { recursive: true });
-    writeFileSync(join(dir, "src", "plain.ts"), "export const plain = true;\n");
-    const context = new MechanicalScanContext(dir);
+  it("delivers every class through the shipping registry and assembly, and conserves each dropped row", () => {
+    for (const entry of PATH_SCOPED_DETECTORS) {
+      const control = controls[keyFor(entry)]!;
+      withProductionContext(control.zero, control.context?.framework, (context) => {
+        const produced = runRegisteredMechanicalDetectors(context).findings;
+        const row = produced.find((finding) => finding.id === entry.rowId);
+        expect(row, entry.rowId).toBeDefined();
+        const document = assembleEngagementDocument(
+          [{ module: "M1", status: "ran" }],
+          { connected: false, dynamic: false, llm: false },
+          produced, reportMeta, undefined, {},
+        );
+        expect(document.findings, entry.rowId).toContainEqual(row);
+        const html = buildHtml(document);
+        expect(html, entry.rowId).toContain(esc(entry.rowId));
+        expect(html, `${entry.rowId} rendered reason`).toContain(esc(row!.evidence));
+        expect(conservationLedger(produced, document.findings, { M1: produced }).ok, entry.rowId).toBe(true);
+        const dropped = document.findings.filter((finding) => finding.id !== entry.rowId);
+        const broken = conservationLedger(produced, dropped, { M1: produced });
+        expect(broken.ok, entry.rowId).toBe(false);
+        expect(broken.unaccounted, entry.rowId).toBe(1);
+      });
+      withProductionContext(control.populated, control.context?.framework, (context) => {
+        const produced = runRegisteredMechanicalDetectors(context).findings;
+        expect(produced.some((finding) => finding.id === entry.rowId), `${entry.rowId} populated production input`).toBe(false);
+      });
+    }
+  });
+
+  it("uses the actual M5 and M8 path predicates, including Python-only production inventories", () => {
+    const typeSource = 'const first = input as any;\nconst second = input as unknown as string;\n// @ts-ignore\nconst third: string = 1;\n';
+    expect(detectM5TypeEscapeFindings([source("src/types.ts", typeSource)])).toHaveLength(3);
+    expect(detectM5TypeEscapeFindings([source("src/types.d.ts", typeSource)])).toEqual([]);
+    expect(detectM5TypeEscapeFindings([source("src/types.stories.ts", typeSource)])).toEqual([]);
+    const assertion = 'test("value", () => expect(true).toBe(true));\n';
+    expect(detectM8VacuousAssertionFindings([source("src/example.test.ts", assertion)])).toHaveLength(1);
+    expect(detectM8VacuousAssertionFindings([source("src/example.ts", assertion)])).toEqual([]);
+    const rowId = "M1-PATHSCOPE-M8-VACUOUS-ASSERTION-00";
+    for (const [path, present] of [["test_example.py", false], ["example.py", true]] as const) {
+      withProductionContext([source(path, "def test_example():\n    assert True\n")], undefined, (context) => {
+        expect(context.loadedSources).toEqual([]);
+        const produced = runRegisteredMechanicalDetectors(context).findings;
+        expect(produced.some((finding) => finding.id === rowId)).toBe(present);
+        const census = pathScopeCensus(context.loadedSources, { identifiedSourceFiles: context.identifiedSourceFiles });
+        expect(census.find((row) => row.rowId === rowId)).toMatchObject({
+          inventory: "identified-sources", inputFiles: 1, filesRead: present ? 0 : 1,
+        });
+      });
+    }
+  });
+
+  it("preserves the class rows in the standalone static CLI and suppresses populated Python tests", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-path-scope-static-"));
     try {
-      const produced = runRegisteredMechanicalDetectors(context).findings;
-      const row = produced.find((finding) => finding.id === "M1-PATHSCOPE-ENV-SCHEMA-00")!;
-      expect(row).toBeDefined();
-      const document = assembleEngagementDocument(
-        [{ module: "M1", status: "ran" }],
-        { connected: false, dynamic: false, llm: false },
-        produced,
-        reportMeta,
-        undefined,
-        {},
-      );
-      expect(document.findings).toContainEqual(row);
-      expect(conservationLedger(produced, document.findings, { M1: produced }).ok).toBe(true);
-      const dropped = document.findings.filter((finding) => finding.id !== row.id);
-      const broken = conservationLedger(produced, dropped, { M1: produced });
-      expect(broken.ok).toBe(false);
-      expect(broken.unaccounted).toBe(1);
+      const target = join(dir, "target");
+      mkdirSync(target);
+      writeFileSync(join(target, "types.d.ts"), "declare const value: unknown;\n");
+      const out = join(dir, "findings.json");
+      const run = () => promisify(execFile)(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/static-detect.ts"), target, "--out", out], {
+        cwd: REPO_ROOT, timeout: 20_000, maxBuffer: 1024 * 1024,
+      });
+      await run();
+      const empty = JSON.parse(readFileSync(out, "utf8")) as { id: string }[];
+      const expected = PATH_SCOPED_DETECTORS.filter((entry) => ["m5-type-escape", "m8-vacuous-assertion"].includes(entry.detector));
+      for (const entry of expected) expect(empty.some((finding) => finding.id === entry.rowId), entry.rowId).toBe(true);
+      writeFileSync(join(target, "test_example.py"), "def test_example():\n    assert True\n");
+      await run();
+      const populated = JSON.parse(readFileSync(out, "utf8")) as { id: string }[];
+      expect(populated.some((finding) => finding.id === "M1-PATHSCOPE-M8-VACUOUS-ASSERTION-00")).toBe(false);
+      expect(populated.some((finding) => finding.id.startsWith("M8VAC-"))).toBe(true);
     } finally {
-      context.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   });

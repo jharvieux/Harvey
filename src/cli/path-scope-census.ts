@@ -13,7 +13,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadSources } from "../detectors/load-sources.js";
+import { loadSourceInventory, loadSources } from "../detectors/load-sources.js";
 import { cloneAtPinCached } from "../scan/corpus-clone.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import { detectTargetFramework, type TargetFramework } from "../scan/framework-detect.js";
@@ -55,6 +55,7 @@ const registryReceipt = PATH_SCOPE_CLASS_GROUPS.map((group) => ({
     classId: row.classId,
     ownerFile: row.ownerFile,
     selectorSymbol: row.selectorSymbol,
+    inventory: row.inventory ?? "loaded-sources",
     convention: row.convention,
     hasApplicabilityGate: row.applicable !== undefined,
   })),
@@ -111,8 +112,9 @@ export function runPathScopeCensus(cache?: string): PathScopeCensusReport {
       // loadSources is the production inventory: source, package/config, generated-file, and
       // exclusion semantics must match the real detector inputs rather than a parallel walker.
       const files = loadSources(dir);
+      const identifiedSourceFiles = loadSourceInventory(dir);
       const framework = detectTargetFramework(dir);
-      for (const row of pathScopeCensus(files, { framework })) {
+      for (const row of pathScopeCensus(files, { framework, identifiedSourceFiles })) {
         rows.push({
           target: target.slug,
           repo: target.repo,

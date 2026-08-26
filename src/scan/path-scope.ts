@@ -5,14 +5,15 @@
 // test, framework, or request-entry paths. A zero from that unread population is not a clean scan.
 //
 // Each owner exports its metadata and the selector its production implementation consumes. This
-// module only composes those exports; it never copies a regex. `path-scope.test.ts` discovers every
-// `*_PATH_SCOPE_CLASSES` export under the owned source tree, so adding an owner export without
-// registering it here fails the completeness ratchet. Re-run `src/cli/path-scope-census.ts` for
-// current counts — no historical count is asserted in source.
+// module only composes those exports; it never copies a regex. `path-scope.test.ts` independently
+// discovers source selectors as well as class-metadata exports, and exercises every class through
+// the shipping registry and rendered document. Re-run `src/cli/path-scope-census.ts` for counts.
 
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "../detectors/common.js";
 import type { TargetFramework } from "./framework-detect.js";
+import { M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES, m5TypeEscapeSources } from "../detectors/m5-type-escape.js";
+import { M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES, vacuousAssertionSourceFiles } from "../detectors/m8-vacuous-assertion.js";
 import {
   APP_ROUTER_PATH_SCOPE_CLASSES,
   appRouterClientRootFiles,
@@ -48,6 +49,8 @@ import {
 
 export interface PathScopeContext {
   framework?: TargetFramework;
+  /** Polyglot production inventory; omitted only when the supplied fixture is the inventory. */
+  identifiedSourceFiles?: readonly SourceInput[];
 }
 
 export interface PathScopedClass {
@@ -59,6 +62,8 @@ export interface PathScopedClass {
   /** Owning source export, retained by the census completeness receipt. */
   ownerFile: string;
   selectorSymbol: string;
+  /** Most owners consume loadSources; polyglot owners must use their broader production input. */
+  inventory?: "identified-sources";
   /** What the filter admits, in the words a client reads. */
   convention: string;
   /** THE detector's own exported filter — never a copy of it. */
@@ -110,6 +115,8 @@ export const PATH_SCOPE_CLASS_GROUPS: readonly PathScopeClassGroup[] = [
   { ownerFile: "src/detectors/perf-code.ts", exportName: "PERF_CODE_PATH_SCOPE_CLASSES", classes: PERF_CODE_PATH_SCOPE_CLASSES },
   { ownerFile: "src/detectors/test-intent.ts", exportName: "TEST_INTENT_PATH_SCOPE_CLASSES", classes: TEST_INTENT_PATH_SCOPE_CLASSES },
   { ownerFile: "src/detectors/vitest-intent.ts", exportName: "VITEST_INTENT_PATH_SCOPE_CLASSES", classes: VITEST_INTENT_PATH_SCOPE_CLASSES },
+  { ownerFile: "src/detectors/m5-type-escape.ts", exportName: "M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES", classes: M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES },
+  { ownerFile: "src/detectors/m8-vacuous-assertion.ts", exportName: "M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES", classes: M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES },
 ];
 
 const EXPORTED_SELECTOR_BINDINGS = new Map<string, PathScopedClass["select"]>([
@@ -138,6 +145,8 @@ const EXPORTED_SELECTOR_BINDINGS = new Map<string, PathScopedClass["select"]>([
   ["src/detectors/test-intent.ts#securityCriticalSourceFiles", securityCriticalSourceFiles],
   ["src/detectors/vitest-intent.ts#vitestTestFiles", vitestTestFiles],
   ["src/detectors/vitest-intent.ts#vitestInSourceFiles", vitestInSourceFiles],
+  ["src/detectors/m5-type-escape.ts#m5TypeEscapeSources", m5TypeEscapeSources],
+  ["src/detectors/m8-vacuous-assertion.ts#vacuousAssertionSourceFiles", vacuousAssertionSourceFiles],
 ]);
 
 /** Existing public name retained while its population grows from detectors to per-class rows. */
@@ -157,6 +166,8 @@ export interface PathScopeCensusRow {
   ownerFile: string;
   selectorSymbol: string;
   convention: string;
+  inventory: "loaded-sources" | "identified-sources";
+  inputFiles: number;
   applicable: boolean;
   filesRead: number;
 }
@@ -166,21 +177,22 @@ function selections(
   context: Readonly<PathScopeContext>,
   classes: readonly PathScopedClass[],
   invokeInapplicable = false,
-): Map<PathScopedClass, { applicable: boolean; files: SourceInput[] }> {
+): Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }> {
   const selectorCache = new Map<PathScopedClass["select"], SourceInput[]>();
-  const out = new Map<PathScopedClass, { applicable: boolean; files: SourceInput[] }>();
+  const out = new Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }>();
   for (const entry of classes) {
-    const applicable = entry.applicable?.(files, context) ?? true;
+    const inputs = entry.inventory === "identified-sources" ? (context.identifiedSourceFiles ?? files) : files;
+    const applicable = entry.applicable?.(inputs, context) ?? true;
     if (!applicable && !invokeInapplicable) {
-      out.set(entry, { applicable: false, files: [] });
+      out.set(entry, { applicable: false, files: [], inputFiles: inputs.length });
       continue;
     }
     let selected = selectorCache.get(entry.select);
     if (selected === undefined) {
-      selected = entry.select(files, context);
+      selected = entry.select(inputs, context);
       selectorCache.set(entry.select, selected);
     }
-    out.set(entry, { applicable, files: selected });
+    out.set(entry, { applicable, files: selected, inputFiles: inputs.length });
   }
   return out;
 }
@@ -205,6 +217,8 @@ export function pathScopeCensus(
       ownerFile: entry.ownerFile,
       selectorSymbol: entry.selectorSymbol,
       convention: entry.convention,
+      inventory: entry.inventory ?? "loaded-sources",
+      inputFiles: population.inputFiles,
       applicable: population.applicable,
       filesRead: population.files.length,
     };
@@ -221,7 +235,7 @@ export function pathScopeNotAssessedRows(
   context: Readonly<PathScopeContext> = {},
   classes: readonly PathScopedClass[] = PATH_SCOPED_DETECTORS,
 ): Finding[] {
-  if (files.length === 0) return [];
+  if (files.length === 0 && (context.identifiedSourceFiles?.length ?? 0) === 0) return [];
   const selected = selections(files, context, classes);
   return classes
     .filter((entry) => {
@@ -237,7 +251,7 @@ export function pathScopeNotAssessedRows(
       taxonomy: `Coverage — ${row.detector}/${row.classId} read zero files (its path convention matched nothing)`,
       location: "(repo-wide)",
       status: "Open" as const,
-      evidence: `The ${row.detector} class \`${row.classId}\` invokes its exported production selector \`${row.selectorSymbol}\`, which admits only ${row.convention}. This target supplied ${files.length} source/config file(s) and NONE were admitted, so the class ran over an empty population. Its zero findings are a statement about scope, not about the code.`,
+      evidence: `The ${row.detector} class \`${row.classId}\` invokes its exported production selector \`${row.selectorSymbol}\`, which admits only ${row.convention}. This target supplied ${selected.get(row)!.inputFiles} file(s) in its ${row.inventory ?? "loaded-sources"} inventory and NONE were admitted, so the class ran over an empty population. Its zero findings are a statement about scope, not about the code.`,
       impact: `This check would not have detected ${row.classes} here, wherever such code actually lives in this repo. Recorded so the absence of its findings reads as 'not assessed', not 'assessed and clean'.`,
       fix: "If this repo does hold code of that kind under a different layout, review those files by hand or move them under the convention so the check reaches them. If it holds none, this row records that the class had nothing to examine.",
       value: 1,
