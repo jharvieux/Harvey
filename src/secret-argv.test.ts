@@ -80,7 +80,7 @@ describe("splitPgPassword (#1297)", () => {
     // `password=<value>` is what a generic-password detector fires on, and this repo is scanned by
     // the same class of detector it ships. The string under test is identical either way.
     const pw = "placeholder";
-    expect(splitPgPassword(`host=db user=app password=${pw} dbname=main`)).toEqual({ conninfo: "host=db user=app dbname=main", password: pw });
+    expect(splitPgPassword(`host=db user=app password=${pw} dbname=main`)).toEqual({ conninfo: "host=db user=app dbname=main", password: pw, extractedPasswords: [pw] });
     expect(splitPgPassword(`host=db password='${pw} two' dbname=main`).password).toBe(`${pw} two`);
   });
 
@@ -88,6 +88,82 @@ describe("splitPgPassword (#1297)", () => {
     const conn = "postgresql://app@127.0.0.1:5432/main";
     expect(splitPgPassword(conn)).toEqual({ conninfo: conn });
     expect(splitPgPassword("host=db dbname=main")).toEqual({ conninfo: "host=db dbname=main" });
+  });
+
+  // Golden semantics from parse-only PQconninfoParse, libpq 18.4 (#1778).
+  // No DB is contacted; in particular '+' is not form-decoded and '#' is not a fragment.
+  it.each([
+    ["encoded query key", "postgresql://db/main?pass%77ord=dummy%2Bvalue+tail%23end", "dummy+value+tail#end"],
+    ["query after userinfo", "postgresql://app:dummy-first@db/main?password=dummy-last", "dummy-last"],
+    ["query duplicate", "postgresql://db/main?password=dummy-first&password=dummy-last", "dummy-last"],
+    ["query empty override", "postgresql://app:dummy-first@db/main?password=", ""],
+    ["query empty first", "postgresql://db/main?password=&password=dummy-last", "dummy-last"],
+    ["keyword duplicate", "host=db password=dummy-first password=dummy-last", "dummy-last"],
+    ["keyword empty override", "host=db password=dummy-first password=''", ""],
+    ["keyword empty first", "host=db password='' password=dummy-last", "dummy-last"],
+    ["unquoted escaped space", "host=db password=dummy\\ value dbname=main", "dummy value"],
+    ["unquoted escaped quote", "host=db password=dummy\\'value", "dummy'value"],
+    ["unquoted escaped backslash", "host=db password=dummy\\\\value", "dummy\\value"],
+    ["unquoted terminal backslash", "host=db password=dummy-value\\", "dummy-value"],
+    ["quoted escapes", "host=db password='dummy\\'quote\\\\slash'", "dummy'quote\\slash"],
+    ["userinfo UTF-8", "postgresql://app:dummy-%C3%A9@db/main", "dummy-é"],
+    ["query key surrounding spaces", "postgresql://db/main? password = dummy-last ", "dummy-last"],
+    ["query literal tab", "postgresql://db/main?password=dummy-\tlast", "dummy-\tlast"],
+    ["userinfo space-only password", "postgresql://app:   @db/main", ""],
+    ["adjacent quoted keyword pairs", "password='dummy-first'password=''host=db", ""],
+  ])("preserves libpq password bytes and precedence: %s", (_name, input, password) => {
+    const result = splitPgPassword(input);
+    expect(result.password).toBe(password);
+    expect(result.conninfo).not.toMatch(/dummy|pass%77ord|password/);
+  });
+
+  it("retains every overridden credential for the argv guard", () => {
+    expect(splitPgPassword("postgresql://app:dummy-first@db/main?password=dummy-second&password=")).toMatchObject({
+      password: "", extractedPasswords: ["dummy-first", "dummy-second", ""],
+    });
+    expect(splitPgPassword("host=db password=dummy-first password=dummy-first password=''")).toMatchObject({
+      password: "", extractedPasswords: ["dummy-first", "dummy-first", ""],
+    });
+  });
+
+  it.each([
+    ["postgresql://app:dummy-value@db1:5432,db2:5433/main?target_session_attrs=read-write", "postgresql://app@db1:5432,db2:5433/main?target_session_attrs=read-write"],
+    ["postgresql://app:dummy-value@[2001:db8::1]:5432,[2001:db8::2]:5433/main", "postgresql://app@[2001:db8::1]:5432,[2001:db8::2]:5433/main"],
+    ["postgresql://app:dummy-value@/main?host=/tmp/pg-socket", "postgresql://app@/main?host=/tmp/pg-socket"],
+    ["postgresql://app:dummy-value@%2Ftmp%2Fpg-socket/main", "postgresql://app@%2Ftmp%2Fpg-socket/main"],
+    ["postgresql://app:dummy-value@db:not-a-number/main", "postgresql://app@db:not-a-number/main"],
+    ["postgresql://app:dummy-value@ db1,db2 /main", "postgresql://app@ db1,db2 /main"],
+    ["postgresql://app:dummy-value@db1: 5432,db2:5433 /main", "postgresql://app@db1: 5432,db2:5433 /main"],
+    ["host=db dbname='two  spaces' application_name='line\n two' password=dummy-value", "host=db dbname='two  spaces' application_name='line\n two'"],
+    ["password='dummy-value'host=db", "host=db"],
+  ])("preserves non-password libpq syntax in %s", (input, conninfo) => {
+    expect(splitPgPassword(input)).toMatchObject({ conninfo, password: "dummy-value" });
+  });
+
+  it("does not extract password-shaped text from another option's quoted value", () => {
+    const input = "host=db application_name='example password=dummy-example suffix' user=app";
+    expect(splitPgPassword(input)).toMatchObject({ conninfo: input });
+    expect(splitPgPassword(input).password).toBeUndefined();
+    // libpq ignores empty userinfo passwords, unlike password= in the query/keyword form.
+    expect(splitPgPassword("postgresql://app:@db/main").password).toBeUndefined();
+  });
+
+  it.each([
+    " postgresql://app:dummy-canary@db/main", "POSTGRESQL://app:dummy-canary@db/main",
+    "postgresql://app:dummy-canary@[broken/main", "postgresql://app:dummy-canary@[]/main",
+    "postgresql://db/main?password=dummy-canary%ZZ", "postgresql://db/main?password=dummy-canary%FF",
+    "postgresql://db/main?password=dummy-canary%00tail", "host=db password=dummy-canary\0tail",
+    "postgresql://db/main?password=dummy-canary&bad", "postgresql://db/main?password=dummy-canary=extra",
+    "postgresql://db/main?%2570assword=dummy-canary", "host=db PASSWORD=dummy-canary",
+    "host=db password='dummy-canary", "host=db malformed password=dummy-canary",
+    "postgresql://db/main?sslpassword=dummy-canary", "host=db oauth_client_secret=dummy-canary",
+    "postgresql://db/main?scram_client_key=dummy-canary", "host=db scram_server_key=dummy-canary",
+    "postgresql://app:dummy-canary@db1 ,db2/main", "postgresql://app:dummy-canary@db1, db2/main",
+    "postgresql://app:dummy-canary@db1:5432 ,db2:5433/main", "postgresql://app:dummy-canary@db1:5432,db2: 5433/main",
+    "host=db password=dummy-canary\ud800", "postgresql://db/main?password=dummy-canary\udc00",
+  ])("refuses malformed or unsupported conninfo before transport: %s", (input) => {
+    expect(() => splitPgPassword(input)).toThrow(SecretInArgvError);
+    expect(() => splitPgPassword(input)).not.toThrow(/dummy-canary/);
   });
 });
 

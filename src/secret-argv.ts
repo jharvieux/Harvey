@@ -87,31 +87,175 @@ export class SecretRegistry {
   }
 }
 
-// Split a Postgres connection string into the part safe to pass as an argument and the password,
-// which the caller puts in PGPASSWORD instead. libpq accepts a URI with no password, or no
-// connection argument at all, and reads PGPASSWORD from the environment either way.
-//
-// Two accepted forms: the postgres:// URI and libpq's key=value conninfo. A string carrying neither
-// carries no password to leak, so it is returned unchanged.
-export function splitPgPassword(conninfo: string): { conninfo: string; password?: string } {
-  if (/^postgres(ql)?:\/\//i.test(conninfo)) {
-    let url: URL;
-    try {
-      url = new URL(conninfo);
-    } catch {
-      return { conninfo };
+// PostgreSQL 18 option vocabulary, checked against parse-only PQconninfoParse 18.4 (#1778).
+// Keep this boundary explicit: a new/unknown option needs credential-transport review before use.
+// sslpassword, OAuth client secrets and SCRAM keys have no PGPASSWORD equivalent and are refused.
+const PG_OPTIONS = new Set((
+  "service user password passfile channel_binding connect_timeout dbname host hostaddr port " +
+  "client_encoding options application_name fallback_application_name keepalives keepalives_idle " +
+  "keepalives_interval keepalives_count tcp_user_timeout sslmode sslnegotiation sslcompression " +
+  "sslcert sslkey sslcertmode sslrootcert sslcrl sslcrldir sslsni requirepeer require_auth " +
+  "min_protocol_version max_protocol_version ssl_min_protocol_version ssl_max_protocol_version " +
+  "gssencmode krbsrvname gsslib gssdelegation replication target_session_attrs load_balance_hosts " +
+  "oauth_issuer oauth_client_id oauth_scope sslkeylogfile"
+).split(" "));
+
+interface PgPasswordTransport {
+  conninfo: string;
+  password?: string;
+  extractedPasswords?: string[];
+}
+
+function refusePgConninfo(): never {
+  throw new SecretInArgvError("PostgreSQL credential transport: refusing malformed or unsupported conninfo before spawning; use supported UTF-8 password syntax and environment credentials (#1778).");
+}
+
+function pgUriValue(raw: string): string {
+  // libpq trims literal ASCII spaces around URI components, leaves '+' literal, and decodes once.
+  const trimmed = raw.replace(/^ +| +$/g, "");
+  if (trimmed.includes(" ")) return refusePgConninfo();
+  try {
+    const value = decodeURIComponent(trimmed);
+    if (value.includes("\0")) return refusePgConninfo();
+    return value;
+  } catch { return refusePgConninfo(); }
+}
+
+function pgOption(name: string, value: string, uri: boolean): void {
+  if (!PG_OPTIONS.has(name) && !(uri && name === "ssl" && value === "true")) refusePgConninfo();
+}
+
+function withPgPasswords(conninfo: string, extractedPasswords: string[]): PgPasswordTransport {
+  return extractedPasswords.length ? { conninfo, password: extractedPasswords.at(-1)!, extractedPasswords } : { conninfo };
+}
+
+function splitPgUri(conninfo: string, prefixLength: number): PgPasswordTransport {
+  const passwords: string[] = [];
+  let cursor = prefixLength;
+  let passwordSpan: [number, number] | undefined;
+  let lookahead = cursor;
+  while (lookahead < conninfo.length && conninfo[lookahead] !== "@" && conninfo[lookahead] !== "/") lookahead++;
+  if (conninfo[lookahead] === "@") {
+    const colon = conninfo.indexOf(":", cursor);
+    const hasPassword = colon >= cursor && colon < lookahead;
+    pgUriValue(conninfo.slice(cursor, hasPassword ? colon : lookahead));
+    if (hasPassword) {
+      const raw = conninfo.slice(colon + 1, lookahead);
+      // Empty userinfo is absent in libpq; query/keyword password='' is present and overrides it.
+      if (raw !== "") passwords.push(pgUriValue(raw));
+      passwordSpan = [colon, lookahead];
     }
-    if (!url.password) return { conninfo };
-    // libpq percent-decodes URI components, so PGPASSWORD must carry the decoded value.
-    const password = decodeURIComponent(url.password);
-    url.password = "";
-    return { conninfo: url.toString(), password };
+    cursor = lookahead + 1;
   }
-  const kv = /(^|\s)password\s*=\s*(?:'((?:[^'\\]|\\.)*)'|(\S*))/i.exec(conninfo);
-  if (!kv) return { conninfo };
-  const raw = kv[2] !== undefined ? kv[2].replace(/\\(.)/g, "$1") : (kv[3] ?? "");
-  if (!raw) return { conninfo };
-  return { conninfo: (conninfo.slice(0, kv.index) + " " + conninfo.slice(kv.index + kv[0].length)).replace(/\s+/g, " ").trim(), password: raw };
+
+  // Walk the libpq host list without WHATWG normalization (multiple hosts and Unix sockets).
+  const hosts: string[] = [];
+  const ports: string[] = [];
+  for (;;) {
+    const hostStart = cursor;
+    if (conninfo[cursor] === "[") {
+      const end = conninfo.indexOf("]", cursor + 1);
+      if (end <= cursor + 1) return refusePgConninfo();
+      hosts.push(conninfo.slice(cursor + 1, end));
+      cursor = end + 1;
+      if (cursor < conninfo.length && !":/?,".includes(conninfo[cursor]!)) return refusePgConninfo();
+    } else {
+      while (cursor < conninfo.length && !":/?,".includes(conninfo[cursor]!)) cursor++;
+      hosts.push(conninfo.slice(hostStart, cursor));
+    }
+    if (conninfo[cursor] === ":") {
+      const portStart = ++cursor;
+      while (cursor < conninfo.length && !"/?,".includes(conninfo[cursor]!)) cursor++;
+      ports.push(conninfo.slice(portStart, cursor));
+    } else ports.push("");
+    if (conninfo[cursor] !== ",") break;
+    cursor++;
+  }
+  // libpq decodes the joined buffers: spaces beside an interior comma are not outer whitespace.
+  pgUriValue(hosts.join(","));
+  pgUriValue(ports.join(","));
+  if (conninfo[cursor] === "/") {
+    const dbStart = ++cursor;
+    while (cursor < conninfo.length && conninfo[cursor] !== "?") cursor++;
+    pgUriValue(conninfo.slice(dbStart, cursor));
+  }
+  const queryStart = cursor;
+  const retained: string[] = [];
+  let removedQueryPassword = false;
+  if (conninfo[cursor] === "?") {
+    cursor++;
+    while (cursor < conninfo.length) {
+      const end = conninfo.indexOf("&", cursor);
+      const pair = conninfo.slice(cursor, end === -1 ? conninfo.length : end);
+      const equals = pair.indexOf("=");
+      if (equals < 0 || pair.indexOf("=", equals + 1) !== -1) return refusePgConninfo();
+      const name = pgUriValue(pair.slice(0, equals));
+      const value = pgUriValue(pair.slice(equals + 1));
+      pgOption(name, value, true);
+      if (name === "password") {
+        passwords.push(value);
+        removedQueryPassword = true;
+      } else retained.push(pair);
+      cursor = end === -1 ? conninfo.length : end + 1;
+    }
+  }
+  let base = conninfo.slice(0, queryStart);
+  if (passwordSpan) base = base.slice(0, passwordSpan[0]) + base.slice(passwordSpan[1]);
+  const query = removedQueryPassword ? (retained.length ? `?${retained.join("&")}` : "") : conninfo.slice(queryStart);
+  return withPgPasswords(base + query, passwords);
+}
+
+function splitPgKeywords(conninfo: string): PgPasswordTransport {
+  const passwords: string[] = [];
+  const retained: string[] = [];
+  const space = (c: string | undefined): boolean => c !== undefined && /[ \t\r\n\f\v]/.test(c);
+  let cursor = 0;
+  while (cursor < conninfo.length) {
+    while (space(conninfo[cursor])) cursor++;
+    if (cursor === conninfo.length) break;
+    const start = cursor;
+    while (cursor < conninfo.length && conninfo[cursor] !== "=" && !space(conninfo[cursor])) cursor++;
+    const name = conninfo.slice(start, cursor);
+    while (space(conninfo[cursor])) cursor++;
+    if (conninfo[cursor++] !== "=") return refusePgConninfo();
+    while (space(conninfo[cursor])) cursor++;
+    let value = "";
+    if (conninfo[cursor] === "'") {
+      cursor++;
+      for (;;) {
+        if (cursor >= conninfo.length) return refusePgConninfo();
+        const char = conninfo[cursor++]!;
+        if (char === "'") break;
+        if (char === "\\") {
+          if (cursor >= conninfo.length) return refusePgConninfo();
+          value += conninfo[cursor++]!;
+        } else value += char;
+      }
+    } else {
+      while (cursor < conninfo.length && !space(conninfo[cursor])) {
+        const char = conninfo[cursor++]!;
+        if (char === "\\") {
+          if (cursor < conninfo.length) value += conninfo[cursor++]!;
+        } else value += char;
+      }
+    }
+    pgOption(name, value, false);
+    if (name === "password") passwords.push(value);
+    else retained.push(conninfo.slice(start, cursor));
+  }
+  return withPgPasswords(passwords.length ? retained.join(" ") : conninfo, passwords);
+}
+
+// Remove every libpq password assignment, retaining overridden values for the argv guard.
+// Callers distinguish absent from empty: the final empty assignment must override PGPASSWORD too.
+// Other option values retain their original spans; file/service contents and arbitrary metadata
+// are outside this inline-credential boundary. Parser reference: PostgreSQL 18 libpq fe-connect.c.
+export function splitPgPassword(conninfo: string): PgPasswordTransport {
+  if (conninfo.includes("\0") || [...conninfo].some((c) => c.length === 1 && c.charCodeAt(0) >= 0xd800 && c.charCodeAt(0) <= 0xdfff)) return refusePgConninfo();
+  if (conninfo.startsWith("postgresql://")) return splitPgUri(conninfo, "postgresql://".length);
+  if (conninfo.startsWith("postgres://")) return splitPgUri(conninfo, "postgres://".length);
+  if (!conninfo.includes("=") && !conninfo.includes("://")) return { conninfo };
+  return splitPgKeywords(conninfo);
 }
 
 interface CurlRequest {
