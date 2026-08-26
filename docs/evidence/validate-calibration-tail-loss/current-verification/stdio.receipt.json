@@ -1,0 +1,71 @@
+{
+  "head": "19f8f57c3dd698438d0ee0212daed4b9e48decb3",
+  "argv": [
+    "pnpm",
+    "exec",
+    "vitest",
+    "run",
+    "src/cli/sync-stdio.test.ts",
+    "--reporter=default",
+    "--reporter=json",
+    "--outputFile.json=/private/tmp/harvey-1758-current-19f8f57c-stdio/vitest.json"
+  ],
+  "cwd": "/private/tmp/harvey-sweep-1758",
+  "startedAt": "2026-08-26T06:24:41.439273+00:00",
+  "environment": {
+    "HARVEY_HEAVY_CLI_TESTS": "unset",
+    "pnpm_config_verify_deps_before_run": "false"
+  },
+  "versions": {
+    "node": {
+      "exitCode": 0,
+      "stdout": "v24.19.0",
+      "stderr": ""
+    },
+    "pnpm": {
+      "exitCode": 0,
+      "stdout": "11.1.3",
+      "stderr": ""
+    },
+    "semgrep": {
+      "exitCode": 0,
+      "stdout": "1.173.0",
+      "stderr": ""
+    },
+    "trufflehog": {
+      "exitCode": 0,
+      "stdout": "trufflehog 3.97.0",
+      "stderr": ""
+    },
+    "gitleaks": {
+      "exitCode": 0,
+      "stdout": "gitleaks version 8.30.1",
+      "stderr": ""
+    },
+    "osv-scanner": {
+      "exitCode": 0,
+      "stdout": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a",
+      "stderr": ""
+    }
+  },
+  "sourceSha256": {
+    "src/cli/validate-calibration.test.ts": "aa92938cc6c9c03ffe781bc718658c9ada6d6c62003c87750c7b1a40dc8b63dc",
+    "src/cli/validate-calibration.ts": "837b76ab0ddbacfd134f695821ce9e5f821387d0843955743e678be4882cce63",
+    "src/cli/sync-stdio.ts": "7a401a89dab110a7afa74b118ced57c6b07084063a8d6c874f92ae9846fb99cf",
+    "src/cli/sync-stdio.test.ts": "a8b359565631841332cddddb219b88a1befe6aabc6160bf26ed54340e973bff7"
+  },
+  "pid": 18447,
+  "exitCode": 0,
+  "remainingGroupTerminated": false,
+  "finishedAt": "2026-08-26T06:24:52.441455+00:00",
+  "elapsedSeconds": 6.526112915948033,
+  "logSha256": "d329edd4bd75c9fcb572e7601f0d42326f4d15d7b860d4f5c248c6ec13d32c39",
+  "vitest": {
+    "success": true,
+    "numPassedTests": 4,
+    "numFailedTests": 0,
+    "numPendingTests": 0,
+    "numTotalTests": 4
+  },
+  "vitestSha256": "dfb3e8ddb384087653b02cf368a4b57fe387046315a0c967305fb49c97e444d0"
+}

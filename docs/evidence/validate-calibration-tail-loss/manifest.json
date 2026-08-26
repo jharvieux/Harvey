@@ -1,6 +1,21 @@
 {
   "schemaVersion": 1,
   "package": "#1758 mechanical evidence publication subset",
+  "requalificationEnvironment": {
+    "capturedAt": "2026-08-26T06:27:13Z",
+    "purpose": "Fresh local verification of the publication subset's raw-log digests, ANSI-normalized offsets, source-byte hashes, and first-import proof. These versions describe this requalification only; the historical hosted captures did not retain a collector-version receipt and are not retroactively assigned these versions.",
+    "collector": {
+      "argv": [
+        "node",
+        "/private/tmp/harvey-1758-build-v2.mjs"
+      ],
+      "sha256": "dbcf2fdc726bfbd1de75c742f0bc017e458175429c5783aea9b452bdbe247716",
+      "node": "v26.0.0",
+      "git": "git version 2.50.1 (Apple Git-155)",
+      "jq": "jq-1.7.1-apple",
+      "platform": "Darwin 25.5.0 arm64"
+    }
+  },
   "generatedFrom": [
     {
       "path": "/private/tmp/harvey-1758-r1-4acfe824/packet.json",
@@ -26,6 +41,16 @@
       "path": "/private/tmp/harvey-1758-r1-4acfe824/all-attempt-dispositions.json",
       "bytes": 168870,
       "sha256": "79c23ba9031e60852eaff8d98dfe9f23b8b74e71b0db607aab110fb251719afa"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/qualified-postfix-rows.json",
+      "bytes": 306255,
+      "sha256": "217bc775aa7d657decaffb19cba808e363bbb1bc090e6e7d00bdcc9d4ece8e33"
+    },
+    {
+      "path": "/private/tmp/harvey-1758-r1-4acfe824/checkout-source-qualification.json",
+      "bytes": 71865,
+      "sha256": "fbf41c2efcd1676180bcd7c9a46b1af3135ce4d02ff44b8af4c30dee4f120e51"
     },
     {
       "path": "/private/tmp/harvey-1758-r1-4acfe824/postfix-census-summary.json",
@@ -73,6 +98,10 @@
       "bytes": 878186,
       "sha256": "4f914c58ef5fa3ecbc6d874c601189a87f7735c9d4898ff7992f38633bc7540a"
     },
+    "historical-qualified-supplemental.json": {
+      "bytes": 1990435,
+      "sha256": "51f6d6c982b0f342a9bc2da3f59d09fd6e8c9842a28b2a377fbbe898893fa677"
+    },
     "incident-normalized.json": {
       "bytes": 15949,
       "sha256": "a0020662b05c5cf2cecbbafd4eb4547eaed3d22e4b333c01e90ece4cf59654b2"
@@ -84,6 +113,10 @@
     "reproduction/harvey-1758-replay-census.py": {
       "bytes": 6030,
       "sha256": "0be86b6bd8be6dded801dd629ec2e50ff6b2af1333082992a41b61867ab107e7"
+    },
+    "reproduction/harvey-1758-build-v2.mjs": {
+      "bytes": 8042,
+      "sha256": "dbcf2fdc726bfbd1de75c742f0bc017e458175429c5783aea9b452bdbe247716"
     },
     "failure-tails/failure-91291753249-diagnostic-excerpt.log": {
       "bytes": 9196,
@@ -98,8 +131,36 @@
       "sha256": "df0a0da2a173c42f4e43b7cf8685d212c7331cac92a542f8e06256dee3dbceec"
     },
     "README.md": {
-      "bytes": 2107,
-      "sha256": "15104c3725b5b9971f87dcd17bc52623d0ae17ded596e7009f5b05cd4f0fdec6"
+      "bytes": 3362,
+      "sha256": "1fd8a1074425015c062c78cd3b2cd803e42871c30e5a20a2d2eb526b7dba416b"
+    },
+    "current-verification/calibration.receipt.json": {
+      "bytes": 2111,
+      "sha256": "caa9cb581865f3d48b6dbed01ad18be45954aff68252bc31d1bc7f19a2b4d7ab"
+    },
+    "current-verification/calibration.vitest.json": {
+      "bytes": 1964,
+      "sha256": "7565e1041df938c6871ea7587e98d4403f5c282f7600a64692b5af3042a939d2"
+    },
+    "current-verification/calibration.log.txt": {
+      "bytes": 886,
+      "sha256": "fab82a18676276d7a8554433afdd6bb686356d7d53d65d14fab0edf437decc16"
+    },
+    "current-verification/stdio.receipt.json": {
+      "bytes": 2077,
+      "sha256": "1b55c8d290084a3b37ee158a71d4a8d6db6c7f1ac2cbe06bf3243fa814142668"
+    },
+    "current-verification/stdio.vitest.json": {
+      "bytes": 2162,
+      "sha256": "dfb3e8ddb384087653b02cf368a4b57fe387046315a0c967305fb49c97e444d0"
+    },
+    "current-verification/stdio.log.txt": {
+      "bytes": 1478,
+      "sha256": "d329edd4bd75c9fcb572e7601f0d42326f4d15d7b860d4f5c248c6ec13d32c39"
+    },
+    "reproduction/harvey-1758-run-current.py": {
+      "bytes": 3717,
+      "sha256": "502d6baff448561bfc1dc65f7dac8d26ffaa797a0dbbac532c6756c15f242bc0"
     }
   },
   "claimMap": {
@@ -116,6 +177,13 @@
     "historical_and_late_run_attempt_job_population": [
       "census-normalized.json"
     ],
+    "historical_calibration_pass_lines_and_checkout_guard_proof": [
+      "historical-qualified-supplemental.json"
+    ],
+    "late_calibration_pass_lines_and_checkout_guard_projection_audit": [
+      "historical-qualified-supplemental.json",
+      "census-normalized.json"
+    ],
     "late_step_outcomes_checkout_and_literal_log_offsets": [
       "census-normalized.json"
     ],
@@ -128,7 +196,34 @@
     "original_replay_material": [
       "reproduction/harvey-1758-extend-census.py",
       "reproduction/harvey-1758-replay-census.py"
+    ],
+    "supplemental_requalification_method": [
+      "reproduction/harvey-1758-build-v2.mjs",
+      "historical-qualified-supplemental.json"
+    ],
+    "current_calibration_and_stdio_execution": [
+      "current-verification/calibration.receipt.json",
+      "current-verification/calibration.vitest.json",
+      "current-verification/calibration.log.txt",
+      "current-verification/stdio.receipt.json",
+      "current-verification/stdio.vitest.json",
+      "current-verification/stdio.log.txt",
+      "reproduction/harvey-1758-run-current.py"
     ]
   },
-  "safety": "Raw hosted logs are not retained here. The package retains only the three diagnostic excerpts and literal classified log lines/offsets. Original full-log hashes remain distinct from retained subset hashes."
+  "safety": "Raw hosted logs are not retained here. The package retains only the three diagnostic excerpts and literal classified log lines/offsets. Original full-log hashes remain distinct from retained subset hashes.",
+  "currentVerificationBoundary": {
+    "executedHead": "19f8f57c3dd698438d0ee0212daed4b9e48decb3",
+    "calibration": {
+      "passed": 3,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "stdio": {
+      "passed": 4,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "note": "Heavy selection excluded the light stdio file despite the first command listing both. The separate second command actually executed all four stdio controls. Full gate and hosted checks remain separately required; documentation-only rebind must verify executable and fixture identity."
+  }
 }

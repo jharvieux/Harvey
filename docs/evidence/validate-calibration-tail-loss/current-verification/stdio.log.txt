@@ -1,0 +1,17 @@
+⚠ 12 heavy child-process test files EXCLUDED from this run (#1120): src/cli/run-audit.test.ts, src/fix/calibration-acceptance.test.ts, src/cli/quick-scan.test.ts, src/fix/detector-rerun.test.ts, src/cli/mutation-scan.test.ts, src/cli/quality-scan.test.ts, src/cli/lighthouse-scan.test.ts, src/cli/validate-calibration.test.ts, src/cli/fix-execute.test.ts, src/corpus-scanner-cross-process.test.ts, src/effectiveness-registry.test.ts, src/effectiveness-delivery.test.ts
+  They block a vitest worker for 6-70s each and starve its RPC channel when run alongside the rest of the suite.
+  CI selects them by changed-path ownership on PRs and runs all on merge queue/main/schedule (.github/workflows/ci.yml, job `heavy-cli`).
+  Locally: HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run
+
+ RUN  v3.2.6 /private/tmp/harvey-sweep-1758
+
+ ✓ src/cli/sync-stdio.test.ts (4 tests) 5075ms
+   ✓ sync-stdio — a verdict printed before process.exit() survives a piped stdout (#1758) > NEGATIVE CONTROL: without the guard, the last line before exit is discarded  544ms
+   ✓ sync-stdio — a verdict printed before process.exit() survives a piped stdout (#1758) > with the guard imported, the verdict survives every run  4470ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  01:24:46
+   Duration  5.38s (transform 38ms, setup 19ms, collect 27ms, tests 5.08s, environment 0ms, prepare 52ms)
+
+JSON report written to /private/tmp/harvey-1758-current-19f8f57c-stdio/vitest.json
