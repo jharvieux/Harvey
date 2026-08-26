@@ -95,6 +95,13 @@ describe("checkNonRegistryDependencies", () => {
   it("does not flag registry semver ranges", () => {
     expect(checkNonRegistryDependencies(declaredIn("package.json", { react: "^18.2.0", zod: "3.22.0", next: "~14.2.5" }))).toEqual([]);
   });
+
+  it.each(["\u0000https://fixture-user:fixture-password@example.invalid/repo\u001f", "ht\ttps://fixture-user:fixture-password@example.invalid/repo"])("selects and safely projects URL control characters in %j", (range) => {
+    const findings = checkNonRegistryDependencies(declaredIn("package.json", { remote: range }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.dependencyRangeEvidence).toMatchObject({ matched: 1, edges: [{ range: "https://[redacted]@example.invalid/repo", redacted: true }] });
+    expect(JSON.stringify(findings)).not.toMatch(/fixture-(?:user|password)/);
+  });
 });
 
 describe("checkInstallScripts", () => {

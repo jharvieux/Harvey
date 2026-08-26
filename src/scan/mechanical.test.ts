@@ -365,13 +365,13 @@ describe("npm lockfile range edges (#1774)", () => {
 
   it.each([
     ["npm v2", "package-lock.json", JSON.stringify({ lockfileVersion: 2, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 2, read", "1 admitted third-party range edges"],
-    ["npm v1", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0" } } } }), "package-lock version 1, unsupported", "1 present/unread value(s)"],
+    ["npm v1", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0" } } } }), "package-lock version 1, unsupported", "1 present/unread unit(s)"],
     ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, present-but-unread", "1 importer/root specifier"],
     ["Yarn classic", "yarn.lock", 'child@^2.0.0:\n  version "2.0.0"\n', "yarn version classic v1, present-but-unread", "1 selector range(s)"],
     ["Yarn Berry", "yarn.lock", '__metadata:\n  version: 8\n\n"child@npm:^2.0.0":\n  version: 2.0.0\n', "yarn version Berry 8, present-but-unread", "1 selector range(s)"],
-    ["shrinkwrap", "npm-shrinkwrap.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "npm-shrinkwrap version 3, present-but-unread", "1 present/unread value(s)"],
+    ["shrinkwrap", "npm-shrinkwrap.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "npm-shrinkwrap version 3, present-but-unread", "1 present/unread unit(s)"],
     ["unknown version", "package-lock.json", JSON.stringify({ lockfileVersion: 99, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 99, unsupported", "1 unsupported source schema(s)"],
-    ["malformed", "package-lock.json", "{", "package-lock version unknown, unreadable", "1 present/unread value(s)"],
+    ["malformed", "package-lock.json", "{", "package-lock version unknown, unreadable", "1 present/unread unit(s)"],
   ])("propagates %s parser scope through the real registry disclosure", async (_label, filename, text, version, population) => {
     const root = mkdtempSync(join(tmpdir(), "harvey-range-format-"));
     const pkg = { dependencies: { direct: "1.0.0" } };
@@ -430,7 +430,7 @@ describe("npm lockfile range edges (#1774)", () => {
       for (const secret of ["fixture-user", "fixture-password", "fixture-token"]) expect(serialized).not.toContain(secret);
       const disclosure = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
       expect(disclosure.evidence).toContain("6 admitted third-party range edges");
-      expect(disclosure.evidence).toContain("1 present/unread value(s)");
+      expect(disclosure.evidence).toContain("1 present/unread unit(s)");
       expect(disclosure.evidence).toContain("peer 1");
 
       lock.packages["node_modules/parent"].dependencies.loose = "2.0.0";

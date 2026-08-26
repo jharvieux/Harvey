@@ -205,30 +205,34 @@ function pnpmRanges(text: string): DependencyRangeScope {
     const value: unknown = parseYaml(text);
     if (!isRecord(value)) throw new Error("missing YAML mapping");
     scope.sourceVersion = typeof value.lockfileVersion === "string" || typeof value.lockfileVersion === "number" ? String(value.lockfileVersion) : "unknown";
-    let specifiers = rangeSlots(value.specifiers);
-    const importers = isRecord(value.importers) ? Object.values(value.importers) : [value];
+    let malformedMaps = 0;
+    const mapValues = (map: unknown): unknown[] => {
+      if (map === undefined) return [];
+      if (!isRecord(map)) { malformedMaps++; return []; }
+      return Object.values(map);
+    };
+    let specifiers = mapValues(value.specifiers).length;
+    const importers = value.importers === undefined ? [value] : mapValues(value.importers);
     for (const importer of importers) {
-      if (!isRecord(importer)) { scope.unread++; continue; }
-      specifiers += importer === value ? 0 : rangeSlots(importer.specifiers);
+      if (!isRecord(importer)) { malformedMaps++; continue; }
+      specifiers += importer === value ? 0 : mapValues(importer.specifiers).length;
       for (const section of RANGE_SECTIONS) {
-        if (!isRecord(importer[section])) continue;
-        for (const dependency of Object.values(importer[section])) {
+        for (const dependency of mapValues(importer[section])) {
           if (isRecord(dependency) && Object.hasOwn(dependency, "specifier")) specifiers++;
         }
       }
     }
     let resolvedReferences = 0;
     for (const section of ["packages", "snapshots"]) {
-      if (!isRecord(value[section])) continue;
-      for (const entry of Object.values(value[section])) {
-        if (!isRecord(entry)) { scope.unread++; continue; }
-        resolvedReferences += rangeCount(entry);
-        scope.excluded.peer += rangeSlots(entry.peerDependencies);
+      for (const entry of mapValues(value[section])) {
+        if (!isRecord(entry)) { malformedMaps++; continue; }
+        resolvedReferences += RANGE_SECTIONS.reduce((count, field) => count + mapValues(entry[field]).length, 0);
+        scope.excluded.peer += mapValues(entry.peerDependencies).length;
       }
     }
-    scope.unread += specifiers;
+    scope.unread = specifiers + malformedMaps;
     scope.examined = scope.unread;
-    scope.detail = `pnpm ${scope.sourceVersion}: ${specifiers} importer/root specifier value(s) are present but unread by the lockfile range consumer; root/workspace manifests remain authoritative for direct declarations. ${resolvedReferences} package/snapshot dependency reference(s) were observed, not promoted from resolved identities to declared ranges. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints. No pnpm transitive range edges are admitted.`;
+    scope.detail = `pnpm ${scope.sourceVersion}: ${specifiers} importer/root specifier value(s) are present but unread by the lockfile range consumer; root/workspace manifests remain authoritative for direct declarations. ${malformedMaps} malformed map ${malformedMaps === 1 ? "boundary was" : "boundaries were"} counted as unread input units, not guessed dependency edges. ${resolvedReferences} package/snapshot dependency reference(s) were observed, not promoted from resolved identities to declared ranges. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints. No pnpm transitive range edges are admitted.`;
   } catch {
     scope.status = "unreadable";
     scope.examined = scope.unread = 1;

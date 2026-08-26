@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bftb, validateFindings } from "./findings.js";
+import { bftb, redactDependencyRange, validateFindings } from "./findings.js";
 import { checkNonRegistryDependencies } from "./scan/supply-chain.js";
 
 const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
@@ -37,6 +37,18 @@ describe("validateFindings", () => {
 });
 
 describe("validateFindings — mechanical scan fields", () => {
+  it("preserves credential-free ranges and URL provenance while producing idempotent credential projections", () => {
+    for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz"]) {
+      expect(redactDependencyRange(range)).toBe(range);
+    }
+    for (const range of ["\u0000https://fixture-user:fixture-password@example.invalid/repo\u001f", "ht\ttps://fixture-user:fixture-password@example.invalid/repo", "https://example.invalid/repo#token=fixture-token with spaces"]) {
+      const projected = redactDependencyRange(range);
+      expect(projected).not.toMatch(/fixture-(?:user|password|token)|with spaces/);
+      expect(projected).toContain("[redacted]");
+      expect(redactDependencyRange(projected)).toBe(projected);
+    }
+  });
+
   it("retains and validates the real range artifact while rejecting count, identity, shape and credential regressions", () => {
     const [finding] = checkNonRegistryDependencies([{ manifest: "package.json", name: "fixture", range: "https://fixture-user:fixture-password@example.invalid/pkg.tgz?token=fixture-token" }]);
     const doc = { ...example, findings: [finding] };

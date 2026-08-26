@@ -142,16 +142,49 @@ export interface DependencyRangeEvidence {
   }[];
 }
 
+/** Match consumer trimming and WHATWG's removal of URL tabs/newlines and edge C0 controls. */
+export function normalizeDependencyUrlInput(range: string): string {
+  const value = range.replace(/[\t\r\n]/g, "").trim();
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) start++;
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) end--;
+  return value.slice(start, end);
+}
+
 /** URL credentials and query values must not enter prose or the nested range artifact. */
 export function redactDependencyRange(range: string): string {
-  if (/^(?:git\+)?[a-z][a-z0-9+.-]*:\/\//i.test(range)) {
-    try { new URL(range.replace(/^git\+/i, "")); }
-    catch { return "[redacted malformed dependency URL]"; }
+  const normalized = normalizeDependencyUrlInput(range);
+  const gitPrefix = /^git\+/i.exec(normalized)?.[0] ?? "";
+  let input = normalized.slice(gitPrefix.length);
+  const malformed = "[redacted malformed dependency URL]";
+  // SCP syntax has no URL authority delimiter. Reject ambiguous extra userinfo rather than
+  // treating it as a repository path that can bypass URL credential projection.
+  if (/^git@/i.test(input)) {
+    const scp = /^git@([^/:@?#\s]+):([^@?#]+)([?#].*)?$/i.exec(input);
+    if (!scp) return malformed;
+    input = `ssh://git@${scp[1]}/${scp[2]}${scp[3] ?? ""}`;
   }
-  return range
-    .replace(/((?:git\+)?[a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/gi, "$1[redacted]@")
+  const relative = /^[/\\]{2}/.test(input);
+  let projected = range;
+  if (relative || /^(?:https?|ssh|git|ftp|ftps|file):|^[a-z][a-z0-9+.-]*:[/\\]/i.test(input)) {
+    try {
+      const url = new URL(relative ? `https:${input}` : input);
+      if (!url.host && url.protocol !== "file:") return malformed;
+      const credentials = Boolean(url.username || url.password);
+      if (credentials || url.search || /[=&]/.test(url.hash)) {
+        url.username = "";
+        url.password = "";
+        // Serialize the parsed authority: regex replacement on the input misses WHATWG's
+        // backslash/four-slash normalization and can leave credentials in the host spelling.
+        const safe = credentials ? url.href.replace(`${url.protocol}//`, `${url.protocol}//[redacted]@`) : url.href;
+        projected = relative ? safe.slice(url.protocol.length) : `${gitPrefix}${safe}`;
+      }
+    } catch { return malformed; }
+  }
+  return projected
     .replace(/\?[^#]*/g, "?[redacted]")
-    .replace(/#[^\s]*[=&][^\s]*/g, "#[redacted]");
+    .replace(/#[\s\S]*[=&][\s\S]*/g, "#[redacted]");
 }
 
 export interface Finding {

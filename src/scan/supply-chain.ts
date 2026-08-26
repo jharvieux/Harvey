@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { redactDependencyRange, type DependencyRangeEvidence, type Finding } from "../findings.js";
+import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyRangeEvidence, type Finding } from "../findings.js";
 import { dependencyRangeEdge, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -213,7 +213,7 @@ export function supplyChainScopeFinding(s: {
   const rangeDescription = rangeScopes.length === 0
     ? "No supported lockfile range source was found; only manifest declarations were assessed."
     : rangeScopes.map((scope) => `${scope.source} (${scope.format} version ${scope.sourceVersion}, ${scope.status}): ` +
-      `${scope.edges.length} admitted third-party range edges, ${scope.examined} candidate value(s) examined, ${scope.unread} present/unread value(s), ${scope.unsupported} unsupported source schema(s). ` +
+      `${scope.edges.length} admitted third-party range edges, ${scope.examined} input unit(s) examined, ${scope.unread} present/unread unit(s), ${scope.unsupported} unsupported source schema(s). ` +
       `Excluded copies/constraints: root ${scope.excluded.root}, workspace ${scope.excluded.workspace}, link ${scope.excluded.link}, peer ${scope.excluded.peer}. ${scope.detail}`).join(" ");
   if (s.license.source === "package-lock.json") {
     treeWide.push("SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351)");
@@ -433,13 +433,13 @@ export function checkUnpinnedDependencies(deps: readonly DeclaredDependency[]): 
 // but whether it's a *problem* is a judgment (a private git dep can be intentional), and such a
 // source is unpinned-by-default with no registry integrity/provenance → "review" tier. The
 // vibe-code risk: an AI pastes `npm install some-git-url`, bypassing registry auditing entirely.
-const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:)/i;
+const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:|[/\\]{2})/i;
 
 // The same declared-range population and widening falsifier as checkUnpinnedDependencies apply;
 // a resolved version is never substituted for the parent's raw protocol/range declaration.
 export function checkNonRegistryDependencies(deps: readonly DeclaredDependency[]): Finding[] {
   return declarationPopulations(deps).flatMap(({ direct, declarations }) => {
-    const nonRegistry = declarations.filter(({ range }) => NON_REGISTRY_RANGE.test(range.trim()));
+    const nonRegistry = declarations.filter(({ range }) => NON_REGISTRY_RANGE.test(normalizeDependencyUrlInput(range)));
     if (nonRegistry.length === 0) return [];
     const report = rangeEvidence(declarations, nonRegistry, direct ? "Non-registry" : "Third-party non-registry");
     return [{ ...mechanicalFinding({

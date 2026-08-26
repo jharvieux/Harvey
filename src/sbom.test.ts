@@ -143,6 +143,45 @@ describe("declared lockfile range edges (#1774)", () => {
     expect(parsed.ranges.detail).toContain("1 package/snapshot dependency reference(s)");
   });
 
+  it.each([
+    ["importer map", { importers: "malformed" }],
+    ["null importer map", { importers: null }],
+    ["array importer map", { importers: [] }],
+    ["importer entry", { importers: { ".": "malformed" } }],
+    ["dependency map", { importers: { ".": { dependencies: "malformed" } } }],
+    ["null dependency map", { importers: { ".": { dependencies: null } } }],
+    ["array dependency map", { importers: { ".": { dependencies: [] } } }],
+    ["devDependency map", { importers: { ".": { devDependencies: "malformed" } } }],
+    ["optionalDependency map", { importers: { ".": { optionalDependencies: "malformed" } } }],
+    ["root specifier map", { specifiers: "malformed" }],
+    ["importer specifier map", { importers: { ".": { specifiers: "malformed" } } }],
+    ["package map", { packages: "malformed" }],
+    ["snapshot map", { snapshots: "malformed" }],
+    ["package entry", { packages: { "parent@1.0.0": "malformed" } }],
+    ["resolved dependency map", { snapshots: { "parent@1.0.0": { dependencies: "malformed" } } }],
+    ["peer map", { snapshots: { "parent@1.0.0": { peerDependencies: "malformed" } } }],
+  ])("counts a malformed pnpm %s as an unread boundary, never a guessed edge", (_label, fields) => {
+    const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields }));
+    expect(ranges).toMatchObject({ status: "present-but-unread", edges: [], examined: 1, unread: 1, unsupported: 1, excluded: { peer: 0 } });
+    expect(ranges.detail).toContain("0 importer/root specifier value(s)");
+    expect(ranges.detail).toContain("1 malformed map boundary");
+    expect(ranges.detail).toContain("not guessed dependency edges");
+    expect(ranges.detail).toContain("0 package/snapshot dependency reference(s)");
+  });
+
+  it("distinguishes absent and empty pnpm maps from present specifiers and malformed boundaries", () => {
+    for (const fields of [{}, { importers: {} }, { importers: { ".": { dependencies: {} } } }]) {
+      expect(parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", ...fields })).ranges).toMatchObject({ examined: 0, unread: 0, edges: [] });
+    }
+    const { ranges } = parsePnpmLock(JSON.stringify({ lockfileVersion: "9.0", importers: {
+      ".": { dependencies: { child: { specifier: "^1.0.0", version: "1.0.1" }, untrusted: { specifier: { raw: "unread" } } } },
+      "apps/web": { dependencies: "malformed" },
+    } }));
+    expect(ranges).toMatchObject({ examined: 3, unread: 3, edges: [] });
+    expect(ranges.detail).toContain("2 importer/root specifier value(s)");
+    expect(ranges.detail).toContain("1 malformed map boundary");
+  });
+
   it("keeps classic and Berry selector/dependency ranges visibly present but unread", () => {
     for (const [text, sourceVersion] of [
       ['# yarn lockfile v1\nparent@^1.0.0:\n  version "1.0.0"\n  dependencies:\n    child "^2.0.0"\n  peerDependencies:\n    react "^18.0.0"\n', "classic v1"],
