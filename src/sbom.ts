@@ -30,7 +30,9 @@
 // #1231's deliberately name-only `crossenv` IOC plant), so they cost nothing and require no network.
 
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { collectWorkspaceManifests } from "./workspaces.js";
 
 const SPEC_VERSION = "1.5";
@@ -64,6 +66,7 @@ interface SbomComponent {
 interface ParsedLock {
   components: SbomComponent[];
   unmatched: number;
+  ranges: DependencyRangeScope;
 }
 
 interface DependencySource {
@@ -71,6 +74,196 @@ interface DependencySource {
   source: string; // the file the components came from
   completeness: SbomCompleteness;
   note: string;
+  rangeScopes: DependencyRangeScope[];
+}
+
+export type DependencyRangeSection = "dependencies" | "devDependencies" | "optionalDependencies";
+export type DependencyRangeFormat = "package-json" | "package-lock" | "pnpm" | "yarn" | "npm-shrinkwrap";
+
+/** A declaration edge, not the resolved component at its destination (#1774). */
+export interface DependencyRangeEdge {
+  schemaVersion: 1;
+  identity: string;
+  source: string;
+  format: DependencyRangeFormat;
+  sourceVersion: string;
+  ownerPath: string;
+  ownerName: string;
+  ownerVersion?: string;
+  name: string;
+  range: string;
+  section: DependencyRangeSection;
+  direct: boolean;
+}
+
+export interface DependencyRangeScope {
+  schemaVersion: 1;
+  source: string;
+  format: DependencyRangeFormat;
+  sourceVersion: string;
+  status: "read" | "partial" | "present-but-unread" | "unsupported" | "unreadable";
+  edges: DependencyRangeEdge[];
+  /** Candidate range values, including malformed maps counted as one unread unit. */
+  examined: number;
+  unread: number;
+  /** Unsupported source schemas, not a guessed count of missing dependency edges. */
+  unsupported: number;
+  excluded: { root: number; workspace: number; link: number; peer: number };
+  detail: string;
+}
+
+const RANGE_SECTIONS: readonly DependencyRangeSection[] = ["dependencies", "devDependencies", "optionalDependencies"];
+const PACKAGE_NAME = /^(?:@[a-z0-9_.~-]+\/)?[a-z0-9_.~-]+$/i;
+const validPackageName = (name: string): boolean => PACKAGE_NAME.test(name) && name.split("/").every((part) => part !== "." && part !== "..");
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const rangeSlots = (value: unknown): number => value === undefined ? 0 : isRecord(value) ? Object.keys(value).length : 1;
+const rangeCount = (value: Record<string, unknown>): number => RANGE_SECTIONS.reduce((n, section) => n + rangeSlots(value[section]), 0);
+
+export function dependencyRangeEdge(input: Omit<DependencyRangeEdge, "schemaVersion" | "identity">): DependencyRangeEdge {
+  // The tuple avoids delimiter collisions. Digests keep credentials in arbitrary package metadata
+  // and ranges out of receipt identities; raw values are projected safely for client output.
+  const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+  const identity = JSON.stringify([1, input.source, input.format, input.sourceVersion, input.ownerPath,
+    digest(input.ownerName), input.ownerVersion === undefined ? null : digest(input.ownerVersion), input.section, input.name,
+    digest(input.range), input.direct]);
+  return { schemaVersion: 1, identity, ...input };
+}
+
+function rangeScope(source: string, format: DependencyRangeFormat, sourceVersion: string): DependencyRangeScope {
+  return { schemaVersion: 1, source, format, sourceVersion, status: "read", edges: [], examined: 0,
+    unread: 0, unsupported: 0, excluded: { root: 0, workspace: 0, link: 0, peer: 0 }, detail: "" };
+}
+
+function packageLockRanges(lock: Record<string, unknown>): DependencyRangeScope {
+  const version = typeof lock.lockfileVersion === "number" ? String(lock.lockfileVersion) : "unknown";
+  const scope = rangeScope("package-lock.json", "package-lock", version);
+  const supported = version === "2" || version === "3";
+  if (!supported) {
+    scope.status = "unsupported";
+    scope.unsupported = 1;
+    const walk = (value: unknown): void => {
+      if (!isRecord(value)) return;
+      for (const entry of Object.values(value)) {
+        if (!isRecord(entry)) { scope.unread++; continue; }
+        scope.unread += rangeSlots(entry.requires);
+        walk(entry.dependencies);
+      }
+    };
+    if (isRecord(lock.packages)) for (const value of Object.values(lock.packages)) {
+      if (isRecord(value)) { scope.unread += rangeCount(value); scope.excluded.peer += rangeSlots(value.peerDependencies); }
+      else scope.unread++;
+    }
+    walk(lock.dependencies);
+    scope.examined = scope.unread;
+    scope.detail = `npm lockfile version ${version} is not admitted by the v2/v3 range parser; ${scope.unread} observed range value(s) or malformed record(s) are present but unread. v1 requires maps can retain declared ranges.`;
+    return scope;
+  }
+  if (!isRecord(lock.packages)) {
+    scope.status = "unreadable";
+    scope.examined = scope.unread = 1;
+    scope.detail = "The npm v2/v3 packages map is missing or malformed; declared ranges were not assessed.";
+    return scope;
+  }
+  const workspacePaths = new Set(Object.values(lock.packages).flatMap((entry) =>
+    isRecord(entry) && entry.link === true && typeof entry.resolved === "string" ? [entry.resolved.replace(/^\.\//, "")] : []));
+  for (const [path, value] of Object.entries(lock.packages)) {
+    if (!isRecord(value)) { scope.examined++; scope.unread++; continue; }
+    const count = rangeCount(value);
+    const peers = rangeSlots(value.peerDependencies);
+    scope.excluded.peer += peers;
+    if (path === "") { scope.excluded.root += count; continue; }
+    if (value.link === true) { scope.excluded.link += count; continue; }
+    if (workspacePaths.has(path)) { scope.excluded.workspace += count; continue; }
+    const owners = path.startsWith("node_modules/") ? path.slice("node_modules/".length).split("/node_modules/") : [];
+    const name = owners.length > 0 && owners.every(validPackageName) ? owners.at(-1) : undefined;
+    const ownerValid = name !== undefined && typeof value.version === "string" && value.version.length > 0 &&
+      (value.link === undefined || value.link === false);
+    if (!ownerValid) { scope.examined += Math.max(count, 1); scope.unread += Math.max(count, 1); continue; }
+    for (const section of RANGE_SECTIONS) {
+      const map = value[section];
+      if (map === undefined) continue;
+      if (!isRecord(map)) { scope.examined++; scope.unread++; continue; }
+      for (const [child, raw] of Object.entries(map)) {
+        scope.examined++;
+        if (typeof raw !== "string" || !validPackageName(child)) { scope.unread++; continue; }
+        scope.edges.push(dependencyRangeEdge({ source: scope.source, format: scope.format, sourceVersion: version,
+          ownerPath: path, ownerName: name!, ownerVersion: value.version as string, name: child, range: raw, section, direct: false }));
+      }
+    }
+  }
+  scope.edges.sort((a, b) => a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0);
+  scope.status = scope.unread > 0 ? "partial" : "read";
+  scope.detail = "Read npm v2/v3 third-party dependency, devDependency and optionalDependency declarations. Root/workspace/link copies are excluded because manifests are authoritative; peer ranges are intentionally excluded compatibility constraints.";
+  return scope;
+}
+
+function pnpmRanges(text: string): DependencyRangeScope {
+  const scope = rangeScope("pnpm-lock.yaml", "pnpm", "unknown");
+  scope.status = "present-but-unread";
+  scope.unsupported = 1;
+  try {
+    const value: unknown = parseYaml(text);
+    if (!isRecord(value)) throw new Error("missing YAML mapping");
+    scope.sourceVersion = typeof value.lockfileVersion === "string" || typeof value.lockfileVersion === "number" ? String(value.lockfileVersion) : "unknown";
+    let specifiers = rangeSlots(value.specifiers);
+    const importers = isRecord(value.importers) ? Object.values(value.importers) : [value];
+    for (const importer of importers) {
+      if (!isRecord(importer)) { scope.unread++; continue; }
+      specifiers += importer === value ? 0 : rangeSlots(importer.specifiers);
+      for (const section of RANGE_SECTIONS) {
+        if (!isRecord(importer[section])) continue;
+        for (const dependency of Object.values(importer[section])) {
+          if (isRecord(dependency) && Object.hasOwn(dependency, "specifier")) specifiers++;
+        }
+      }
+    }
+    let resolvedReferences = 0;
+    for (const section of ["packages", "snapshots"]) {
+      if (!isRecord(value[section])) continue;
+      for (const entry of Object.values(value[section])) {
+        if (!isRecord(entry)) { scope.unread++; continue; }
+        resolvedReferences += rangeCount(entry);
+        scope.excluded.peer += rangeSlots(entry.peerDependencies);
+      }
+    }
+    scope.unread += specifiers;
+    scope.examined = scope.unread;
+    scope.detail = `pnpm ${scope.sourceVersion}: ${specifiers} importer/root specifier value(s) are present but unread by the lockfile range consumer; root/workspace manifests remain authoritative for direct declarations. ${resolvedReferences} package/snapshot dependency reference(s) were observed, not promoted from resolved identities to declared ranges. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints. No pnpm transitive range edges are admitted.`;
+  } catch {
+    scope.status = "unreadable";
+    scope.examined = scope.unread = 1;
+    scope.detail = "pnpm YAML is unreadable; declared-range coverage is not assessed, not empty.";
+  }
+  return scope;
+}
+
+function yarnRanges(text: string): DependencyRangeScope {
+  const berry = /^__metadata:/m.test(text) || /^\s+version:/m.test(text);
+  const metadata = /^__metadata:\s*\n((?:[ \t]+[^\n]*\n?)*)/m.exec(text)?.[1] ?? "";
+  const metadataVersion = /^\s{2}version:\s*["']?([\d.]+)/m.exec(metadata)?.[1];
+  const scope = rangeScope("yarn.lock", "yarn", berry ? `Berry ${metadataVersion ?? "unknown"}` : "classic v1");
+  scope.status = "present-but-unread";
+  scope.unsupported = 1;
+  let selectors = 0;
+  let requested = 0;
+  let section = "";
+  for (const line of text.split("\n")) {
+    if (/^\S.*:\s*$/.test(line)) {
+      section = "";
+      if (/^"?(@?[^@"\s][^@"]*)@/.test(line)) selectors += line.replace(/:\s*$/, "").split(/,\s*/).length;
+    }
+    const header = /^\s{2}(dependencies|optionalDependencies|peerDependencies):\s*$/.exec(line);
+    if (header) { section = header[1]!; continue; }
+    if (/^\s{2}\S/.test(line)) section = "";
+    if (section && /^\s{4}\S/.test(line)) {
+      if (section === "peerDependencies") scope.excluded.peer++;
+      else requested++;
+    }
+  }
+  scope.examined = scope.unread = selectors + requested;
+  if (selectors === 0) { scope.status = "unreadable"; scope.examined = scope.unread = 1; }
+  scope.detail = `Yarn ${scope.sourceVersion}: ${selectors} selector range(s) and ${requested} dependency-block value(s) are present but unread by the declared-range consumer; the component line parser discards their declaration provenance. ${scope.excluded.peer} peer range(s) are intentionally excluded compatibility constraints. No Yarn range edges are admitted.`;
+  return scope;
 }
 
 // package-lock.json v2/v3 keys every installed package by its node_modules path; v1 nests them
@@ -88,7 +281,9 @@ export function parsePackageLock(text: string): ParsedLock {
     hasInstallScript?: boolean;
     dependencies?: Record<string, unknown>;
   }
-  const lock = JSON.parse(text) as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
+  const raw: unknown = JSON.parse(text);
+  if (!isRecord(raw)) throw new Error("package-lock.json is not an object");
+  const lock = raw as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
   const out = new Map<string, SbomComponent>();
   let unmatched = 0;
   const licenseId = (raw: unknown): string | undefined => {
@@ -112,7 +307,9 @@ export function parsePackageLock(text: string): ParsedLock {
   for (const [path, meta] of Object.entries(lock.packages ?? {})) {
     // "" is the root project itself, not a dependency; it is the BOM's subject, not a component.
     // A `link: true` entry is a workspace symlink, not a published artifact — also not a component.
-    if (path === "" || meta.link) continue;
+    if (path === "") continue;
+    if (!isRecord(meta)) { unmatched++; continue; }
+    if (meta.link) continue;
     const name = path.replace(/^(?:.*\/)?node_modules\//, "");
     if (!name || !meta.version) {
       unmatched++;
@@ -123,6 +320,7 @@ export function parsePackageLock(text: string): ParsedLock {
 
   const walkV1 = (deps: Record<string, LockEntry>): void => {
     for (const [name, meta] of Object.entries(deps)) {
+      if (!isRecord(meta)) { unmatched++; continue; }
       if (meta.version) add(name, meta);
       else unmatched++;
       if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>);
@@ -130,7 +328,7 @@ export function parsePackageLock(text: string): ParsedLock {
   };
   if (!lock.packages && lock.dependencies) walkV1(lock.dependencies);
 
-  return { components: [...out.values()], unmatched };
+  return { components: [...out.values()], unmatched, ranges: packageLockRanges(raw) };
 }
 
 // pnpm-lock.yaml, `packages:` section only. Three key shapes across lockfile versions:
@@ -170,7 +368,7 @@ export function parsePnpmLock(text: string): ParsedLock {
       unmatched++;
     }
   }
-  return { components: [...out.values()], unmatched };
+  return { components: [...out.values()], unmatched, ranges: pnpmRanges(text) };
 }
 
 // yarn.lock — both the v1 format (`braces@^2.3.1:` / `  version "2.3.2"`) and Berry's
@@ -204,7 +402,7 @@ export function parseYarnLock(text: string): ParsedLock {
     }
   }
   if (name) unmatched++;
-  return { components: [...out.values()], unmatched };
+  return { components: [...out.values()], unmatched, ranges: yarnRanges(text) };
 }
 
 const PARSERS: { file: string; parse: (text: string) => ParsedLock }[] = [
@@ -212,6 +410,27 @@ const PARSERS: { file: string; parse: (text: string) => ParsedLock }[] = [
   { file: "pnpm-lock.yaml", parse: parsePnpmLock },
   { file: "yarn.lock", parse: parseYarnLock },
 ];
+
+function unreadRangeSource(source: string, format: DependencyRangeFormat, detail: string): DependencyRangeScope {
+  return { ...rangeScope(source, format, "unknown"), status: "unreadable", examined: 1, unread: 1, detail };
+}
+
+function unselectedRangeSources(dir: string, selected?: string): DependencyRangeScope[] {
+  const scopes: DependencyRangeScope[] = [];
+  for (const { file, parse } of [...PARSERS, { file: "npm-shrinkwrap.json", parse: parsePackageLock }]) {
+    if (file === selected || !existsSync(join(dir, file))) continue;
+    const format: DependencyRangeFormat = file === "npm-shrinkwrap.json" ? "npm-shrinkwrap" : file === "package-lock.json" ? "package-lock" : file === "pnpm-lock.yaml" ? "pnpm" : "yarn";
+    try {
+      const ranges = parse(readFileSync(join(dir, file), "utf8")).ranges;
+      scopes.push({ ...ranges, source: file, format, status: "present-but-unread", edges: [],
+        examined: ranges.examined, unread: ranges.unread + ranges.edges.length, unsupported: 1,
+        detail: `${file} version ${ranges.sourceVersion} is present but not selected as the dependency source${selected ? ` (${selected} has precedence)` : " (this filename is not supported)"}; ${ranges.edges.length + ranges.unread} observed declaration value(s) remain unread by these checks. ${ranges.excluded.peer} peer range(s) are intentionally excluded compatibility constraints.` });
+    } catch {
+      scopes.push(unreadRangeSource(file, format, `${file} is present but unreadable and contributes no declaration edges.`));
+    }
+  }
+  return scopes;
+}
 
 // The manifest fallback. Direct dependencies only and the declared RANGE rather than a resolved
 // version — a real but plainly-labelled degradation, never presented as the resolved tree.
@@ -232,11 +451,14 @@ export function collectDependencies(dir: string): DependencySource {
     let components: SbomComponent[] = [];
     let unmatched = 0;
     let parseError: string | undefined;
+    let ranges = unreadRangeSource(file, file === "package-lock.json" ? "package-lock" : file === "pnpm-lock.yaml" ? "pnpm" : "yarn",
+      `${file} is present but could not be parsed; its declaration ranges are not assessed.`);
     try {
-      ({ components, unmatched } = parse(readFileSync(path, "utf8")));
+      ({ components, unmatched, ranges } = parse(readFileSync(path, "utf8")));
     } catch (err) {
       parseError = (err as Error).message;
     }
+    const rangeScopes = [ranges, ...unselectedRangeSources(dir, file)];
     if (components.length > 0) {
       // #1079: a parser that resolved SOME entries and skipped others is exactly the
       // partial-presented-as-whole case. Say how many were missed rather than calling it complete
@@ -246,12 +468,13 @@ export function collectDependencies(dir: string): DependencySource {
           components,
           source: file,
           completeness: "incomplete",
+          rangeScopes,
           note:
             `${file} was parsed, but ${unmatched} of ${components.length + unmatched} entries could not be resolved to a name and version and are MISSING from this BOM. ` +
             "Treat the component list as partial: an absent component here means unlisted, not absent from the project.",
         };
       }
-      return { components, source: file, completeness: "complete", note: `Resolved dependency tree parsed from ${file}.` };
+      return { components, source: file, completeness: "complete", note: `Resolved dependency tree parsed from ${file}.`, rangeScopes };
     }
     // A lockfile that is present but yields nothing is the dangerous case: it looks like a clean
     // parse. Degrade to the manifest and say the lockfile was not understood.
@@ -260,6 +483,7 @@ export function collectDependencies(dir: string): DependencySource {
       components: fallback,
       source: "package.json",
       completeness: "incomplete",
+      rangeScopes,
       note:
         `${file} is present but Harvey could not extract components from it${parseError ? ` (${parseError})` : ""}. ` +
         "This BOM lists the manifest's DIRECT dependencies at their declared version RANGES only — the transitive tree is NOT included and the versions are not resolved. Do not treat it as a complete inventory.",
@@ -267,14 +491,21 @@ export function collectDependencies(dir: string): DependencySource {
   }
 
   const fallback = manifestComponents(dir);
+  const rangeScopes = unselectedRangeSources(dir);
+  const unsupportedLockfiles = rangeScopes.length > 0
+    ? `Lockfile source(s) ${rangeScopes.map((scope) => scope.source).join(", ")} are present, but no supported resolved-tree parser selected them.`
+    : undefined;
   if (fallback.length === 0) {
-    return { components: [], source: "(none)", completeness: "unknown", note: "No lockfile and no package.json were found, so no dependency inventory could be built. This is an empty BOM, not a dependency-free project." };
+    return { components: [], source: "(none)", completeness: "unknown", note: unsupportedLockfiles
+      ? `${unsupportedLockfiles} No manifest dependency inventory was available. This is an empty BOM, not a dependency-free project.`
+      : "No lockfile and no package.json were found, so no dependency inventory could be built. This is an empty BOM, not a dependency-free project.", rangeScopes };
   }
   return {
     components: fallback,
     source: "package.json",
     completeness: "incomplete",
-    note: "No lockfile was found. This BOM lists the manifest's DIRECT dependencies at their declared version RANGES only — the transitive tree is NOT included and the versions are not resolved.",
+    note: `${unsupportedLockfiles ?? "No lockfile was found."} This BOM lists the manifest's DIRECT dependencies at their declared version RANGES only — the transitive tree is NOT included and the versions are not resolved.`,
+    rangeScopes,
   };
 }
 
@@ -300,6 +531,7 @@ export interface LicenseScope {
   note: string;
   direct: number;
   transitive: number;
+  rangeScopes: DependencyRangeScope[];
   /** #1232 — how the DECLARED half of the scope was resolved, so a monorepo can say so. */
   declaredFrom: { manifests: number; source: string; unresolvedGlobs: string[]; unreadable: string[] };
 }
@@ -351,6 +583,7 @@ export function licenseScope(dir: string): LicenseScope {
     note: deps.note,
     direct: candidates.filter((c) => c.direct).length,
     transitive: candidates.filter((c) => !c.direct).length,
+    rangeScopes: deps.rangeScopes,
     declaredFrom: {
       manifests: workspace.manifests.length,
       source: workspace.source,

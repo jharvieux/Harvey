@@ -5,7 +5,7 @@
 // (secrets, semgrep) shell out to real binaries and are mocked here purely so this test stays
 // fast and offline like the rest of the suite (matching pnpm verify's own deterministic-offline
 // convention) — they aren't what this test is about.
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -43,6 +43,8 @@ const { runRegisteredDependencyDetectors } = await import("./mechanical-dependen
 const { MECHANICAL_REGISTRY } = await import("./mechanical-engine-registry.js");
 const { mechanicalExaminedUnitDigest } = await import("./mechanical-phase-cache.js");
 const { buildSemgrepCommandSemanticReceipt } = await import("./semgrep-family-cache.js");
+const { buildCoverageMatrix } = await import("./calibration.js");
+const { b2DepsEntries } = await import("./calibration/b2-deps.entries.js");
 
 function stableReceipt(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableReceipt).join(",")}]`;
@@ -326,10 +328,11 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
           { producer: "manifest-install-scripts", kind: "target-path", identity: "packages/zeta/package.json" },
         ]);
         expect(result.records.find((record) => record.detector === "dependency-pinning")?.examinedUnitIdentities).toEqual([
-          { producer: "dependency-pinning", kind: "declared-dependency", identity: "package.json#rootdep" },
-          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/alpha/package.json#alphadep" },
-          { producer: "dependency-pinning", kind: "declared-dependency", identity: "packages/zeta/package.json#zetadep" },
-        ]);
+          ["package.json", "root", "rootdep"],
+          ["packages/alpha/package.json", "alpha", "alphadep"],
+          ["packages/zeta/package.json", "zeta", "zetadep"],
+        ].map(([source, owner, name]) => ({ producer: "dependency-pinning", kind: "declared-dependency",
+          identity: JSON.stringify([1, source, "package-json", "unversioned", source, createHash("sha256").update(owner!).digest("hex"), null, "dependencies", name, createHash("sha256").update("1.0.0").digest("hex"), true]) })));
         expect(result.findings.find((finding) => finding.id === "SUP-SCOPE-00")?.evidence).toContain(
           "2 declared workspace glob(s) matched no package.json and were skipped: ../outside, linked",
         );
@@ -339,6 +342,105 @@ describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
     } finally {
       rmSync(container, { recursive: true, force: true });
     }
+  });
+});
+
+describe("npm lockfile range edges (#1774)", () => {
+  it("scores the natural calibration edge and synthetic twins through the shipping registry", async () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "../../targets/calibration");
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const context = new MechanicalScanContext(root);
+    try {
+      const { findings } = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline range calibration fixture" }, skipNetworkChecks: true }, "supply");
+      const entries = b2DepsEntries.filter((entry) => entry.location === "package-lock.json (third-party declaration ranges)");
+      const matrix = buildCoverageMatrix(findings, entries);
+      expect(matrix.rows.length).toBeGreaterThan(0);
+      expect(matrix.rows.filter((row) => !row.pass)).toEqual([]);
+      const unpinned = findings.find((finding) => finding.id === "SUP-UNPINNED-TREE");
+      expect(unpinned?.dependencyRangeEvidence?.edges).toContainEqual(expect.objectContaining({
+        ownerPath: "node_modules/@supabase/storage-js", name: "iceberg-js", range: "^0.8.1", section: "dependencies", direct: false,
+      }));
+    } finally { context.dispose(); }
+  });
+
+  it.each([
+    ["npm v2", "package-lock.json", JSON.stringify({ lockfileVersion: 2, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 2, read", "1 admitted third-party range edges"],
+    ["npm v1", "package-lock.json", JSON.stringify({ lockfileVersion: 1, dependencies: { parent: { version: "1.0.0", requires: { child: "^2.0.0" } } } }), "package-lock version 1, unsupported", "1 present/unread value(s)"],
+    ["pnpm v9", "pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      child:\n        specifier: ^2.0.0\n        version: 2.0.0\npackages:\n  child@2.0.0:\n", "pnpm version 9.0, present-but-unread", "1 importer/root specifier"],
+    ["Yarn classic", "yarn.lock", 'child@^2.0.0:\n  version "2.0.0"\n', "yarn version classic v1, present-but-unread", "1 selector range(s)"],
+    ["Yarn Berry", "yarn.lock", '__metadata:\n  version: 8\n\n"child@npm:^2.0.0":\n  version: 2.0.0\n', "yarn version Berry 8, present-but-unread", "1 selector range(s)"],
+    ["shrinkwrap", "npm-shrinkwrap.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "npm-shrinkwrap version 3, present-but-unread", "1 present/unread value(s)"],
+    ["unknown version", "package-lock.json", JSON.stringify({ lockfileVersion: 99, packages: { "node_modules/parent": { version: "1.0.0", dependencies: { child: "^2.0.0" } } } }), "package-lock version 99, unsupported", "1 unsupported source schema(s)"],
+    ["malformed", "package-lock.json", "{", "package-lock version unknown, unreadable", "1 present/unread value(s)"],
+  ])("propagates %s parser scope through the real registry disclosure", async (_label, filename, text, version, population) => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-range-format-"));
+    const pkg = { dependencies: { direct: "1.0.0" } };
+    let context: InstanceType<typeof MechanicalScanContext> | undefined;
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(root, filename), text);
+      context = new MechanicalScanContext(root);
+      const result = await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline format fixture" }, skipNetworkChecks: true }, "supply");
+      const scope = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(scope.evidence).toContain(version);
+      expect(scope.evidence).toContain(population);
+      expect(scope.evidence).not.toContain("tree cannot answer");
+    } finally { context?.dispose(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("reaches both real registry consumers, preserves every owner receipt, and clears exact/registry and peer-only twins", async () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-lock-ranges-"));
+    const pkg = { name: "root", workspaces: ["packages/*"], dependencies: { direct: "1.0.0" } };
+    const lock = { lockfileVersion: 3, packages: {
+      "": { version: "1.0.0", dependencies: { direct: "*" } },
+      "node_modules/parent": { version: "1.0.0", dependencies: { loose: "^2.0.0", remote: "git+https://fixture-user:fixture-password@example.invalid/repo.git?token=fixture-token#0123456", malformed: 4 }, optionalDependencies: { fixed: "2.0.0" } },
+      "node_modules/other": { version: "1.0.0", dependencies: { loose: "^2.0.0", fixed: "2.0.0" }, peerDependencies: { compatibility: "*" } },
+      "node_modules/parent/node_modules/other": { version: "2.0.0", dependencies: { loose: "^2.0.0" } },
+      "node_modules/member": { link: true, resolved: "packages/member" },
+      "packages/member": { version: "1.0.0", dependencies: { memberdep: "*" } },
+    } };
+    const scan = async () => {
+      writeFileSync(join(root, "package-lock.json"), JSON.stringify(lock));
+      const context = new MechanicalScanContext(root);
+      try { return await runRegisteredDependencyDetectors({ context, scanDir: root, pkg, osv: { failure: "offline range fixture" }, skipNetworkChecks: true }, "supply"); }
+      finally { context.dispose(); }
+    };
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+      mkdirSync(join(root, "packages/member"), { recursive: true });
+      writeFileSync(join(root, "packages/member/package.json"), JSON.stringify({ name: "member", dependencies: { memberdep: "2.0.0" } }));
+      const result = await scan();
+      for (const detector of ["dependency-pinning", "non-registry-dependency"]) {
+        const receipt = result.records.find((record) => record.detector === detector)!;
+        expect(receipt.unitsExamined).toBe(8);
+        expect(new Set(receipt.examinedUnitIdentities.map((unit) => unit.identity)).size).toBe(8);
+        const identities = receipt.examinedUnitIdentities.map((unit) => JSON.parse(unit.identity) as unknown[]);
+        expect(identities.filter((identity) => identity[10] === true)).toHaveLength(2);
+        expect(identities.filter((identity) => identity[1] === "package-lock.json")).toHaveLength(6);
+        expect(identities.some((identity) => identity[4] === "node_modules/parent/node_modules/other")).toBe(true);
+      }
+      const unpinned = result.findings.find((finding) => finding.id === "SUP-UNPINNED-TREE")!;
+      const nonRegistry = result.findings.find((finding) => finding.id === "SUP-NON-REGISTRY-TREE")!;
+      expect(unpinned?.dependencyRangeEvidence).toMatchObject({ examined: 6, matched: 3, distinctSpecifications: 1 });
+      expect(unpinned.evidence).toContain("3 declarations across 3 owners");
+      expect(unpinned.location).toContain("package-lock.json");
+      expect(nonRegistry?.dependencyRangeEvidence).toMatchObject({ examined: 6, matched: 1 });
+      expect(nonRegistry.dependencyRangeEvidence?.edges[0]).toMatchObject({ ownerPath: "node_modules/parent", section: "dependencies", direct: false, redacted: true });
+      const serialized = JSON.stringify(result);
+      for (const secret of ["fixture-user", "fixture-password", "fixture-token"]) expect(serialized).not.toContain(secret);
+      const disclosure = result.findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(disclosure.evidence).toContain("6 admitted third-party range edges");
+      expect(disclosure.evidence).toContain("1 present/unread value(s)");
+      expect(disclosure.evidence).toContain("peer 1");
+
+      lock.packages["node_modules/parent"].dependencies.loose = "2.0.0";
+      lock.packages["node_modules/parent"].dependencies.remote = "1.0.0";
+      lock.packages["node_modules/other"].dependencies.loose = "2.0.0";
+      lock.packages["node_modules/parent/node_modules/other"].dependencies.loose = "2.0.0";
+      const benign = await scan();
+      expect(benign.findings.filter((finding) => /^SUP-(?:UNPINNED|NON-REGISTRY)(?:-TREE)?$/.test(finding.id))).toEqual([]);
+      expect(benign.findings.find((finding) => finding.id === "SUP-SCOPE-00")?.evidence).toContain("peer 1");
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

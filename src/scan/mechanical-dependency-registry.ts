@@ -1,5 +1,5 @@
 import type { Finding } from "../findings.js";
-import { licenseScope } from "../sbom.js";
+import { dependencyRangeEdge, licenseScope } from "../sbom.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import {
@@ -16,6 +16,7 @@ import {
   slopsquatCoverageFinding,
   supplyChainScopeFinding,
   type DependencyMap,
+  type DeclaredDependency,
 } from "./supply-chain.js";
 import { producerAssurance, type MechanicalEngineEvidence } from "./mechanical-registry-assurance.js";
 import {
@@ -38,7 +39,8 @@ interface DependencyInput {
 }
 
 interface DependencyState extends DependencyInput {
-  declared: { manifest: string; name: string; range: string }[];
+  declared: DeclaredDependency[];
+  rangeDeclarations: DeclaredDependency[];
   declaredNames: string[];
   workspaceInternalNames: string[];
   allNames: string[];
@@ -83,7 +85,7 @@ function definition(input: Pick<DependencyDetectorDefinition, "id" | "order" | "
 
 const population = (description: string, select: (state: DependencyState) => readonly unknown[]): DependencyDetectorDefinition["applicableFiles"] => ({ description, select });
 const manifests = population("root and declared workspace package manifests", ({ context }) => context.workspace.manifests);
-const declaredDependencies = population("dependencies declared by root and workspace manifests", ({ declared }) => declared);
+const declaredRanges = population("root/workspace manifest declarations and admitted npm lockfile declaration edges", ({ rangeDeclarations }) => rangeDeclarations);
 const resolvedDependencies = population("resolved lockfile dependency candidates", ({ license }) => license.candidates);
 
 function targetPathExaminedUnits(producer: string, paths: readonly string[]): MechanicalExaminedUnitIdentity[] {
@@ -103,6 +105,9 @@ function dependencyExaminedUnits(producer: string, selected: readonly unknown[])
     if (typeof value === "string") return semanticExaminedUnits(producer, "dependency-name", [value]);
     if (!value || typeof value !== "object") throw new Error(`${producer}: dependency selector returned a unit with no stable semantic identity`);
     if ("label" in value && typeof value.label === "string") return targetPathExaminedUnits(producer, [value.label]);
+    if ("edge" in value && value.edge && typeof value.edge === "object" && "identity" in value.edge && typeof value.edge.identity === "string") {
+      return semanticExaminedUnits(producer, "declared-dependency", [value.edge.identity]);
+    }
     if ("manifest" in value && typeof value.manifest === "string" && "name" in value && typeof value.name === "string") {
       return semanticExaminedUnits(producer, "declared-dependency", [`${value.manifest}#${value.name}`]);
     }
@@ -117,15 +122,22 @@ function dependencyExaminedUnits(producer: string, selected: readonly unknown[])
 function dependencyState(input: DependencyInput): DependencyState {
   const workspace = input.context.workspace;
   const declared = input.pkg ? workspace.manifests.flatMap((manifest) =>
-    Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).map(([name, range]) => ({ manifest: manifest.label, name, range }))) : [];
+    (["dependencies", "devDependencies"] as const).flatMap((section) => Object.entries(manifest[section] ?? {}).map(([name, range]) => ({
+      manifest: manifest.label, name, range,
+      edge: dependencyRangeEdge({ source: manifest.label, format: "package-json", sourceVersion: "unversioned",
+        ownerPath: manifest.label, ownerName: manifest.name ?? manifest.label, name, range, section, direct: true }),
+    })))) : [];
   const workspaceOwnNames = new Set(workspace.manifests.map((manifest) => manifest.name).filter((name): name is string => typeof name === "string"));
   const isWorkspaceInternal = (dependency: { name: string; range: string }): boolean =>
     workspaceOwnNames.has(dependency.name) || /^(workspace|link|portal):/.test(dependency.range.trim());
   const workspaceInternalNames = [...new Set(declared.filter(isWorkspaceInternal).map((dependency) => dependency.name))];
   const declaredNames = [...new Set(declared.filter((dependency) => !isWorkspaceInternal(dependency)).map((dependency) => dependency.name))];
   const license = licenseScope(input.scanDir);
+  const rangeDeclarations = [...declared, ...license.rangeScopes.flatMap((scope) => scope.edges.map((edge) => ({
+    manifest: edge.source, name: edge.name, range: edge.range, edge,
+  })))];
   const allNames = [...new Set([...declaredNames, ...license.candidates.map((candidate) => candidate.name)])];
-  return { ...input, declared, declaredNames, workspaceInternalNames, allNames, license };
+  return { ...input, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
 }
 
 export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Object.freeze([
@@ -139,13 +151,13 @@ export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Obj
     for (const dependency of declared) dependencies[dependency.name] = dependency.range;
     return checkKnownDependencyCVEs(dependencies, "package.json", context.dependencyTree);
   } }),
-  definition({ id: "dependency-pinning", order: 60, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkUnpinnedDependencies" }, taxonomies: ["Unpinned dependency"], applicableFiles: declaredDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ declared }) => checkUnpinnedDependencies(declared) }),
-  definition({ id: "non-registry-dependency", order: 70, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkNonRegistryDependencies" }, taxonomies: ["Non-registry dependency source"], applicableFiles: declaredDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ declared }) => checkNonRegistryDependencies(declared) }),
+  definition({ id: "dependency-pinning", order: 60, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkUnpinnedDependencies" }, taxonomies: ["Unpinned dependency"], applicableFiles: declaredRanges, invoke: ({ rangeDeclarations }) => checkUnpinnedDependencies(rangeDeclarations) }),
+  definition({ id: "non-registry-dependency", order: 70, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkNonRegistryDependencies" }, taxonomies: ["Non-registry dependency source"], applicableFiles: declaredRanges, invoke: ({ rangeDeclarations }) => checkNonRegistryDependencies(rangeDeclarations) }),
   definition({ id: "manifest-install-scripts", order: 80, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkInstallScripts" }, taxonomies: ["Install lifecycle script"], applicableFiles: manifests, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ context }) => checkInstallScripts(context.workspace.manifests) }),
   definition({ id: "resolved-install-scripts", order: 90, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkDependencyInstallScripts" }, taxonomies: ["Install lifecycle script (dependency)"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license }) => checkDependencyInstallScripts(license.candidates) }),
   definition({ id: "dependency-slopsquat", order: 100, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkSlopsquat" }, additionalImplementations: [{ file: "src/scan/supply-chain.ts", exportName: "slopsquatCoverageFinding" }], taxonomies: ["Slopsquatted/hallucinated dependency", "Coverage — npm-registry existence check not assessed"], applicableFiles: population("declared external registry package names", ({ declaredNames }) => declaredNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ declaredNames, skipNetworkChecks }) => skipNetworkChecks ? [slopsquatCoverageFinding(declaredNames, NETWORK_SKIPPED_REASON)] : checkSlopsquat(declaredNames) }),
   definition({ id: "dependency-license", order: 110, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLicenseCompliance" }, taxonomies: ["Unknown/missing dependency license", "Copyleft license conflict", "Coverage — dependency license not assessed"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license, skipNetworkChecks }) => checkLicenseCompliance(license, { skipRegistry: skipNetworkChecks }) }),
-  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license, declaredNames, workspaceInternalNames, osv }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, workspaceInternalNames, osvRan: osv.failure === undefined })] }),
+  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg, license }) => Boolean(pkg) || license.rangeScopes.length > 0, invoke: ({ license, declared, declaredNames, workspaceInternalNames, osv }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, manifestDeclarations: declared.length, workspaceInternalNames, osvRan: osv.failure === undefined })] }),
   definition({ id: "lockfile-presence", order: 130, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLockfilePresence" }, taxonomies: ["Missing lockfile"], applicableFiles: population("supported lockfile paths", ({ context }) => context.paths.filter((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|npm-shrinkwrap\.json)$/.test(path))), countExaminedUnits: () => 1, examinedUnitIdentities: () => semanticExaminedUnits("lockfile-presence", "semantic-check", ["supported-lockfile-presence"]), invoke: ({ scanDir }) => checkLockfilePresence(scanDir) }),
 ]);
 

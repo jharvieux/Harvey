@@ -34,6 +34,8 @@ import { truffleHogUnavailableFinding } from "./scan/secrets.js";
 import { checkUnreadSourceExtensions } from "./scan/ext-coverage.js";
 import { parseSemgrepFindings, semgrepUnavailableFinding } from "./scan/semgrep.js";
 import { toSarif } from "./sarif.js";
+import { MechanicalScanContext } from "./scan/mechanical-context.js";
+import { runRegisteredDependencyDetectors } from "./scan/mechanical-dependency-registry.js";
 import { renderFidelityBreaches } from "./render-fidelity.js";
 import type { RunContext } from "./audit-runner.js";
 import type { EngagementEnv, ModuleCoverage } from "./audit-coverage.js";
@@ -151,6 +153,40 @@ function deliverable(): FindingsDocument {
 }
 
 describe("#1435 a finding's own words survive the render seam", () => {
+  it("delivers npm range provenance and corrected scope through the real registry, assembly, JSON and N/A evidence fallback (#1774)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-range-report-"));
+    const pkg = { name: "range-report", dependencies: {} };
+    let context: MechanicalScanContext | undefined;
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+        "node_modules/parent": { version: "1.0.0", license: "MIT", dependencies: {
+          child: "^2.0.0", remote: "https://report-user:report-password@example.invalid/pkg.tgz?token=report-token",
+        }, peerDependencies: { compatible: "*" } },
+      } }));
+      context = new MechanicalScanContext(dir);
+      const { findings } = await runRegisteredDependencyDetectors({ context, scanDir: dir, pkg, osv: { failure: "offline report fixture" }, skipNetworkChecks: true }, "supply");
+      const scope = findings.find((finding) => finding.id === "SUP-SCOPE-00")!;
+      expect(scope.evidence).toContain("2 admitted third-party range edges");
+      const doc = assembleEngagementDocument(RECORDED, ENV, findings, META);
+      const html = buildHtml(doc);
+      expect(html).toContain(esc(scope.evidence));
+      expect(html).not.toMatch(/tree cannot answer|range, which only a manifest carries/);
+      expect(renderFidelityBreaches(doc, html)).toEqual([]);
+      const filename = join(dir, "findings.json");
+      writeFileSync(filename, JSON.stringify(doc));
+      const serialized = readFileSync(filename, "utf8");
+      for (const secret of ["report-user", "report-password", "report-token"]) {
+        expect(serialized).not.toContain(secret);
+        expect(html).not.toContain(secret);
+      }
+      const delivered = JSON.parse(serialized) as FindingsDocument;
+      const artifact = delivered.findings.find((finding) => finding.id === "SUP-NON-REGISTRY-TREE")?.dependencyRangeEvidence;
+      expect(artifact).toMatchObject({ examined: 2, matched: 1, edges: [{ source: "package-lock.json", ownerPath: "node_modules/parent", name: "remote", direct: false, redacted: true }] });
+      expect(renderFidelityBreaches(doc, html.replace(esc(scope.evidence), "Not applicable in context."))).not.toEqual([]);
+    } finally { context?.dispose(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   const doc = deliverable();
   const html = buildHtml(doc);
 
