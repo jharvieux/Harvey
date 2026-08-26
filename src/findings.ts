@@ -192,9 +192,10 @@ export function redactDependencyRange(range: string): string {
   // Owner metadata can contain quoted URLs or an outer URL with another URL in its path or
   // fragment. Inspect every authority, not only the outer URL's username/password. Bound each
   // candidate to its authority so a safe outer URL cannot consume a later unsafe token.
-  const authorities = /((?<![a-z0-9+.-])(?:git\+)?(?:[a-z][a-z0-9+.-]*:[/\\]+|(?:https?|ssh|git|ftp|ftps|file|github|gitlab|bitbucket):)|git@|[/\\]{2,})([^/\\?#]*)/gi;
+  const authorities = /((?<![a-z0-9+.-])(?:git\+)*(?:[a-z][a-z0-9+.-]*:[/\\]+|(?:https?|ssh|git|ftp|ftps|file|github|gitlab|bitbucket):)|git@|[/\\]{2,})([^/\\?#]*)/gi;
   for (const match of normalizeDependencyUrlInput(projected).matchAll(authorities)) {
-    const prefix = /^(?:github|gitlab|bitbucket):$/i.test(match[1]!) ? "https://" : match[1]!;
+    const scheme = match[1]!.replace(/^(?:git\+)+/i, "");
+    const prefix = /^(?:github|gitlab|bitbucket):$/i.test(scheme) ? "https://" : match[1]!;
     const authority = match[2]!;
     // Keep all potential userinfo, including malformed whitespace, but exclude surrounding
     // prose/quotes after the host. Sanitized [redacted] userinfo stays idempotent on revalidation.

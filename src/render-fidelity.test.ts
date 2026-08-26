@@ -181,6 +181,13 @@ describe("dependency URL delivery (#1774)", () => {
     ["quoted URL", '"https://canary-user:canary-password@example.invalid/repo"', false],
     ["embedded NUL scheme", "ht\u0000tps://canary-user:canary-password@example.invalid/repo", false],
     ["hosted git shorthand", "github:canary-user:canary-password@example.invalid/repo"],
+    ...["github", "gitlab", "bitbucket"].flatMap((provider) =>
+      ["git+", "GIT+", "git+git+"].map((modifier) =>
+        [`hosted ${modifier}${provider} shorthand`, `${modifier}${provider}:canary-user:canary-password@example.invalid/repo`] as const)),
+    ["hosted text-prefixed shorthand", "repository git+github:canary-user:canary-password@example.invalid/repo", false],
+    ["hosted quoted shorthand", '"git+github:canary-user:canary-password@example.invalid/repo"', false],
+    ["hosted shorthand in URL path", "https://safe.invalid/path/git+github:canary-user:canary-password@example.invalid/repo"],
+    ["hosted shorthand in URL fragment", "https://safe.invalid/repo#git+github:canary-user:canary-password@example.invalid/repo"],
     ["credential-free URL-in-path", "https://safe.invalid/path/https://example.invalid/repo", true, false],
     ["credential-free URL-in-fragment", "https://safe.invalid/repo#https://example.invalid/repo", true, false],
     ["credential-free text-prefixed URL", "repository https://example.invalid/repo", false, false],

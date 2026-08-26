@@ -41,6 +41,7 @@ describe("validateFindings — mechanical scan fields", () => {
     for (const range of ["1.2.3", " ^1.2.3 ", "~2.0.0", "*", "workspace:*", "npm:@scope/package@^1.0.0", "file:../local-pkg", "github:owner/repo#abcdef", "git+https://example.invalid/repo.git#abcdef", "//example.invalid/repo.tgz",
       "repository https://example.invalid", '"https://example.invalid"', "https://safe.invalid/path/https://example.invalid/repo", "https://safe.invalid/repo#https://example.invalid/repo",
       "https://example.invalid/one and https://other.invalid/two", "gitlab:owner/repo", "bitbucket:owner/repo",
+      "npm:package@^1.0.0", "git+github:owner/repo", "GIT+gitlab:owner/repo", "git+git+bitbucket:owner/repo",
     ]) {
       expect(redactDependencyRange(range)).toBe(range);
     }
