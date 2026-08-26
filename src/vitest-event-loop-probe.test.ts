@@ -15,6 +15,18 @@ import { describeBlock, worstBlock } from "./vitest-event-loop-probe.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+// #1813's light-suite population: these files run production CLIs in child processes. The probe
+// measurement below is the lifecycle evidence; this ratchet makes a later replacement of awaited
+// spawn with execFileSync/spawnSync fail during the ordinary light suite rather than rediscovering
+// the file-wide worker stall under CI contention.
+const AWAITED_LIGHT_CLI_TESTS = [
+  "src/cli/validate-reasons.test.ts",
+  "src/cli/validate-acceptance.test.ts",
+  "src/cli/validate-test-only-exports.test.ts",
+  "src/cli/brief-freshness.test.ts",
+  "src/cli/fix-verify-cli.test.ts",
+];
+
 function blockLoopFor(ms: number): void {
   const until = performance.now() + ms;
   while (performance.now() < until) {
@@ -64,6 +76,14 @@ describe("the event-loop probe attributes a blocking window (#1695)", () => {
     const source = readFileSync(join(REPO_ROOT, "src", "vitest-event-loop-probe.ts"), "utf8");
     expect(source).toContain("process.stderr.write(`harvey-eventloop BLOCKED");
     expect(source).not.toContain("console.log");
+  });
+
+  it("keeps the measured light CLI runners awaited, so a file-wide synchronous window cannot return", () => {
+    for (const file of AWAITED_LIGHT_CLI_TESTS) {
+      const source = readFileSync(join(REPO_ROOT, file), "utf8");
+      expect(source, `${file} must await a spawned child process`).toMatch(/\bspawn\(/);
+      expect(source, `${file} must not block its Vitest worker on a child process`).not.toMatch(/\b(?:execFileSync|spawnSync)\s*\(/);
+    }
   });
 
   it("REPORTS: a real vitest run over a blocking test emits the attribution where a human reads it", () => {

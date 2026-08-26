@@ -9,7 +9,7 @@
 //
 // This is the #1407 shape (library proof, unguarded flag parsing) at a fourth site, so it is fixed
 // the same way: spawn the real entry point and assert on what a client would see.
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -49,18 +49,21 @@ const FINDING = {
   safety: 3,
 };
 
-function runCli(args: string[]): { out: string; code: number } {
-  try {
-    const out = execFileSync("node", ["--import", "tsx", join(REPO_ROOT, "src/cli/fix-verify.ts"), ...args], {
+function runCli(args: string[]): Promise<{ out: string; code: number }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn("node", ["--import", "tsx", join(REPO_ROOT, "src/cli/fix-verify.ts"), ...args], {
       cwd: REPO_ROOT,
-      encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { out, code: 0 };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; status?: number };
-    return { out: `${e.stdout ?? ""}${e.stderr ?? ""}`, code: e.status ?? 1 };
-  }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", rejectRun);
+    child.once("close", (code) => resolveRun({ out: `${stdout}${stderr}`, code: code ?? 1 }));
+  });
 }
 
 beforeAll(() => {
@@ -108,8 +111,8 @@ beforeAll(() => {
 // assertion. Restored: green. src/cli/fix-verify.test.ts's four writebackGate unit tests passed in
 // BOTH states — that is the gap this file closes.
 describe("fix-verify CLI applies the paid-rescan gate it parses (#1546)", () => {
-  it("WITHOUT --paid, an additional rescan still emits the full diagnostic report but withholds write-back", () => {
-    const { out } = runCli([findingsPath, "--target", target, "--prior", priorPath, "--out", join(dir, "unpaid.json")]);
+  it("WITHOUT --paid, an additional rescan still emits the full diagnostic report but withholds write-back", async () => {
+    const { out } = await runCli([findingsPath, "--target", target, "--prior", priorPath, "--out", join(dir, "unpaid.json")]);
 
     // The diagnostic half is NOT the chargeable half and must be delivered in full — withholding it
     // would be a shakedown, which is the posture #824/#1357 both refuse.
@@ -124,15 +127,15 @@ describe("fix-verify CLI applies the paid-rescan gate it parses (#1546)", () => 
     expect(report.counts.resolved).toBe(1);
   });
 
-  it("WITH --paid, the same run unlocks the write-back plan", () => {
-    const { out } = runCli([findingsPath, "--target", target, "--prior", priorPath, "--paid", "--out", join(dir, "paid.json")]);
+  it("WITH --paid, the same run unlocks the write-back plan", async () => {
+    const { out } = await runCli([findingsPath, "--target", target, "--prior", priorPath, "--paid", "--out", join(dir, "paid.json")]);
     expect(out).toContain("[dry-run] ticket write-back plan");
     expect(out).toContain("close  ticket of F-01");
     expect(out).not.toContain("ADDITIONAL rescan");
   });
 
-  it("WITHOUT --prior — the one rescan the base engagement includes — write-back is not withheld", () => {
-    const { out } = runCli([findingsPath, "--target", target, "--out", join(dir, "first.json")]);
+  it("WITHOUT --prior — the one rescan the base engagement includes — write-back is not withheld", async () => {
+    const { out } = await runCli([findingsPath, "--target", target, "--out", join(dir, "first.json")]);
     expect(out).toContain("[dry-run] ticket write-back plan");
     expect(out).not.toContain("ADDITIONAL rescan");
   });
@@ -142,16 +145,16 @@ describe("fix-verify CLI applies the paid-rescan gate it parses (#1546)", () => 
   // a client is told their rescan ran. Asserting the process produced OUTPUT is what makes a silent
   // no-op fail. (Verified by replacing the guard's condition with `false`: exit 0, empty stdout,
   // this test red on the length assertion.)
-  it("the main guard actually fires — a silent exit-0 no-op is a failure, not a pass", () => {
-    const { out, code } = runCli([findingsPath, "--target", target, "--out", join(dir, "guard.json")]);
+  it("the main guard actually fires — a silent exit-0 no-op is a failure, not a pass", async () => {
+    const { out, code } = await runCli([findingsPath, "--target", target, "--out", join(dir, "guard.json")]);
     expect(code).toBe(0);
     expect(out.length).toBeGreaterThan(0);
     expect(out).toContain("Fix-verification gate");
   });
 
-  it("uses the target root to collapse relative, absolute, and symlink finding identities", () => {
+  it("uses the target root to collapse relative, absolute, and symlink finding identities", async () => {
     const reportPath = join(dir, "alias-report.json");
-    const { out, code } = runCli([aliasFindingsPath, "--target", target, "--out", reportPath]);
+    const { out, code } = await runCli([aliasFindingsPath, "--target", target, "--out", reportPath]);
     const report = JSON.parse(readFileSync(reportPath, "utf8")) as GateReport;
 
     expect(code).toBe(0);
