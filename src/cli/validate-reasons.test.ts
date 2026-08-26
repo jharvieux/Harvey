@@ -638,4 +638,66 @@ describe("the claim ratchet's provenance attribution, through the real CLI (#161
     expect(attribution(out)).toContain("↳ provenance unavailable: no commit range against the base branch");
     expect(out).toContain("0 row(s) AUTHORED on this branch, 0 INHERITED from the base branch, 1 unattributable.");
   });
+
+  async function driftFixture(localBody: string, issueBody = "", comments: string[] = []): Promise<ChildResult & { calls: { argv: string[]; input?: string; status: number; stdout: string }[] }> {
+    const root = plant({ "reason.md": localBody });
+    const bin = plant({
+      "observe.cjs": `const cp=require("node:child_process"), fs=require("node:fs"); const original=cp.spawnSync;
+cp.spawnSync=function(file,args,options){const result=original(file,args,options); if(file==="git" && args[0]==="log" && args.some(a=>a.startsWith("--since="))) fs.appendFileSync(process.env.HARVEY_DRIFT_RECEIPT,JSON.stringify({argv:args,input:options.input,status:result.status,stdout:result.stdout})+"\\n"); return result;}; require("node:module").syncBuiltinESMExports();`,
+      "issue.json": JSON.stringify({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ number: 1778, body: issueBody,
+        comments: { totalCount: comments.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: comments.map((body) => ({ body })) } }] } } } }),
+      gh: `#!/usr/bin/env node
+if(process.argv[2]==="repo") process.stdout.write("fixture/reasons\\n");
+else process.stdout.write(require("node:fs").readFileSync(process.env.HARVEY_DRIFT_ISSUE,"utf8"));`,
+    });
+    chmodSync(join(bin, "gh"), 0o755);
+    const receipt = join(bin, "calls.jsonl");
+    try {
+      const result = await run(process.execPath, [...TSX_IMPORT, join(fixture, CLI), "--root", root, ...(issueBody ? ["--issues"] : [])], REPO_ROOT, {
+        PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_DRIFT_RECEIPT: receipt, HARVEY_DRIFT_ISSUE: join(bin, "issue.json"),
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${join(bin, "observe.cjs")}`,
+      });
+      return { ...result, calls: existsSync(receipt) ? readFileSync(receipt, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [] };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  it("keeps file and issue TOUCHES out of git argv while preserving native path history (#1778)", async () => {
+    const canary = "harvey-touches-argv-canary-1778";
+    const paths = [`src/${canary}-é.ts`, `"${canary}-\\quote.ts`, `--${canary}.ts`];
+    for (const path of paths) {
+      writeFileSync(join(fixture, path), "export const fixtureValue = 1;\n");
+      await git("add", "--", path);
+      await git("commit", "-q", "-m", "add a path-history fixture");
+    }
+    writeFileSync(join(fixture, paths[0]!), "export const fixtureValue = 2;\n");
+    await git("add", "--", paths[0]!);
+    await git("commit", "-q", "-m", "move one path-history fixture");
+    const expected = await Promise.all(paths.map((path) => git("log", "--since=2020-01-01 23:59:59", "--format=%h", "--", path)));
+    expect(new Set(expected).size).toBe(3);
+    const empirical = (path: string): string => `REASON: controlled path-history observation\nKIND: empirical\nPROVENANCE: MEASURED 2020-01-01\nFALSIFIER: false\nTOUCHES: ${path}`;
+    const decisional = empirical(paths[1]!).replace("KIND: empirical", "KIND: decisional").replace("FALSIFIER: false", "OWNER: operator\nDECISION: issue #1778");
+    const malformed = empirical(paths[2]!).replace("FALSIFIER: false\n", "");
+    const result = await driftFixture([empirical(paths[0]!), decisional, malformed].join("\n\n"), empirical(paths[0]!), [decisional, malformed]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("2 malformed reason block(s)");
+    expect(result.out.match(/SUBSYSTEM MOVED/g)).toHaveLength(6);
+    expect(result.calls).toHaveLength(6);
+    expect(result.calls.map((call) => call.stdout)).toEqual([...expected, ...expected]);
+    for (const call of result.calls) {
+      expect(call.status).toBe(0);
+      expect(JSON.stringify(call.argv)).not.toContain(canary);
+      expect(call.argv).toEqual(["log", "--since=2020-01-01 23:59:59", "--format=%h", "--stdin"]);
+      expect(call.input).toMatch(/^--\n.+\n$/s);
+    }
+  });
+
+  it.each(["--format=%h", "invalid\0path"])("refuses untransportable or argv-colliding TOUCHES before git: %s", async (path) => {
+    const result = await driftFixture(`REASON: controlled path-history observation\nKIND: empirical\nPROVENANCE: MEASURED 2020-01-01\nFALSIFIER: false\nTOUCHES: ${path}`);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("refusing");
+    expect(result.calls).toEqual([]);
+  });
 });
