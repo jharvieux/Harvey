@@ -36,7 +36,7 @@
 #     whole family exists to prevent.
 #
 # No new permission is needed for it: the job already holds `issues: write` for its tracking issue,
-# which subsumes the read `gh issue list` does. It does need GH_TOKEN in the step env.
+# which subsumes the GitHub API read. It does need GH_TOKEN in the step env.
 #
 # The four live tiers are NOT exercised anywhere in CI: every FALSIFIER-TIER command targets
 # something no CI job stands up (a live crAPI gateway, a served target URL, an external
@@ -231,8 +231,8 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$out"
-          if ! printf '%s\n' "$out" | grep -qF 'gh issue list'; then
-            echo "::error::--issues exited non-zero, but not for the unauthenticated-gh reason this control plants. A control that passes on any failure is not a control."
+          if ! printf '%s\n' "$out" | grep -qF 'Reporting zero issue-recorded claims here would be the silent pass this gate exists to prevent.'; then
+            echo "::error::--issues exited non-zero, but did not report that it refused to treat an unread tracker as zero issue-recorded claims. A control that passes on any failure is not a control."
             exit 1
           fi
 
@@ -255,4 +255,4 @@ jobs:
           drill: ${{ inputs.alert_drill }}
           token: ${{ github.token }}
           repo: ${{ github.repository }}
-          body: "The scheduled `reasons-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either a reason block is malformed — **in the repo OR in an open issue's body/comment, which `--issues` now folds in (#1246); the log names the row as `issue #N`** — or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or `gh issue list` could not read the tracker (the issue surface went ungated; fix the credential, do not drop the flag), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
+          body: "The scheduled `reasons-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either a reason block is malformed — **in the repo OR in an open issue's body/comment, which `--issues` now folds in (#1246); the log names the row as `issue #N`** — or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or GitHub API access could not read the tracker (the issue surface went ungated; fix the credential, do not drop the flag), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
