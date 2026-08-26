@@ -195,9 +195,8 @@ function discoveredClassGroups(): { ownerFile: string; exportName: string }[] {
   return out.sort((a, b) => `${a.ownerFile}#${a.exportName}`.localeCompare(`${b.ownerFile}#${b.exportName}`));
 }
 
-// Discover source selectors independently of PATH_SCOPE metadata. The one shape outside this
-// inventory is exactly the shared language-extension filter, not a file/name allowlist. A new
-// selector with a path gate therefore cannot hide merely by omitting its metadata export.
+// Discover exported SourceInput[] selector declarations independently of class metadata.
+// Classify only a direct shared SOURCE_FILE predicate as language-only.
 function discoverSourceSelectors(ownerFile: string, text: string): string[] {
   const sf = ts.createSourceFile(ownerFile, text, ts.ScriptTarget.Latest, true);
   const selectors: string[] = [];
