@@ -1,0 +1,54 @@
+427: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7489562Z    ^[[33m^[[2m✓^[[22m^[[39m validate-calibration exits 1 on a review-tier recall regression (#1628)^[[2m > ^[[22mexits 2 and renders NO recall table when semgrep crashes instead of completing (#1664) ^[[33m 7809^[[2mms^[[22m^[[39m
+428: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7564954Z 
+429: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7565683Z ^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m^[[1m^[[41m Failed Tests 1 ^[[49m^[[22m^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m
+430: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7566162Z 
+431: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7569572Z ^[[41m^[[1m FAIL ^[[22m^[[49m src/cli/validate-calibration.test.ts^[[2m > ^[[22mvalidate-calibration exits 1 on a review-tier recall regression (#1628)^[[2m > ^[[22mexits 1 when one caught review-tier positive is darkened, naming the row
+432: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7586666Z ^[[31m^[[1mAssertionError^[[22m: the gate exited 1 without printing a "GATE FAIL — review-tier positives not caught by any rule (#1628)" line at all — it did not reach its verdict. Last 2000 chars of its output:
+433: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7588658Z LPGSQL-SQLI-ROOT-SCHEMA review  caught at review [severity Critical ✓]
+434: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7589764Z   PASS  P-SECDEF-ANON-GRANT-ROOT-SCHEMA review  caught at review [severity High ✓]
+435: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7590970Z   PASS  P-STORAGE-BUCKET-PUBLIC-ROOT-SCHEMA review  caught at review [severity High ✓]
+436: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7592133Z   PASS  P-STORAGE-ANON-READ-ROOT-SCHEMA review  caught at review [severity High ✓]
+437: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7593038Z   PASS  P-PLPGSQL-SQLI-CONCAT  review  caught at review
+438: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7593708Z   PASS  P-DEFINER-ANON-DUMP    review  caught at review
+439: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7594359Z   PASS  P-OPEN-SIGNUP-STATIC   review  caught at review
+440: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7595167Z   PASS  P-EMAIL-CONFIRM-OFF-STATIC review  caught at review
+441: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7596160Z   PASS  P-RLS-DISABLE-NOT-REVERTED high    caught at high [severity Critical ✓]
+442: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7597292Z   PASS  P-RLS-DISABLE-SCOPE-CONTROL high    caught at high [severity Critical ✓]
+443: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7598173Z   PASS  P-CLIENT-PRIV-HEADER   review  caught at review
+444: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7599557Z   PASS  P-CLIENT-AUTHZ-ALLOWLIST review  caught at review
+445: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7600254Z   PASS  P-CLIENT-PAYMENT-AMOUNT review  caught at review
+446: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7600904Z   PASS  P-WEBHOOK-NO-SIG       review  caught at review
+447: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7601563Z   PASS  P-SENSITIVE-CONSOLE-LOG review  caught at review
+448: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7602186Z   PASS  P-UPLOAD-NO-LIMIT      review  caught at review
+449: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7602923Z   PASS  P-CLIENT-AUTHZ-STORAGE review  caught at review
+450: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7603319Z   PASS  P-CLIENT-AUTHZ-USER    review  caught at review
+451: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7604103Z {"level":"info-0","ts":"2026-08-01T00:09:17Z","logger":"trufflehog","msg":"running source","source_manager_worker_id":"nvXLO","with_units":true}
+452: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7605511Z {"level":"info-0","ts":"2026-08-01T00:09:17Z","logger":"trufflehog","msg":"scanning repo","source_manager_worker_id":"nvXLO","unit_kind":"dir","unit":"/tmp/trufflehog-5233-2154262095","repo":"file:///tmp/harvey-git-history-secret-EnIMKL"}
+453: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7607571Z {"level":"info-0","ts":"2026-08-01T00:09:17Z","logger":"trufflehog","msg":"finished scanning","chunks":6,"bytes":483,"verified_secrets":0,"unverified_secrets":1,"scan_duration":"27.804179ms","trufflehog_version":"3.96.0","verification_caching":{"Hits":0,"Misses":0,"HitsWasted":0,"AttemptsSaved":0,"VerificationTimeSpentMS":0}}
+454: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7609734Z harvey-liveness gate=calibration-gate status=measured units=719 scope=corpus entries scored against a real mechanical scan
+455: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7610826Z : expected 'Scoring 719/965 corpus entries agains…' to contain 'GATE FAIL — review-tier positives not…'^[[39m
+456: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7611238Z 
+457: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7611382Z ^[[32m- Expected^[[39m
+458: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7611661Z ^[[31m+ Received^[[39m
+459: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7611791Z 
+460: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7612230Z ^[[32m- GATE FAIL — review-tier positives not caught by any rule (#1628)^[[39m
+461: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7614212Z ^[[31m+ Scoring 719/965 corpus entries against runMechanicalScan (M1 mechanical); 246 module-tagged entries are excluded by design — see the per-module census below for where each is gated instead.^[[39m
+462: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7615936Z ^[[31m+ {"level":"info-0","ts":"2026-08-01T00:09:00Z","logger":"trufflehog","msg":"running source","source_manager_worker_id":"zu6XJ","with_units":true}^[[39m
+463: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7617985Z ^[[31m+ {"level":"info-0","ts":"2026-08-01T00:09:00Z","logger":"trufflehog","msg":"finished scanning","chunks":724,"bytes":1280607,"verified_secrets":0,"unverified_secrets":0,"scan_duration":"184.767787ms","trufflehog_version":"3.96.0","verification_caching":{"Hits":0,"Misses":12,"HitsWasted":0,"AttemptsSaved":0,"VerificationTimeSpentMS":533}}^[[39m
+464: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7619704Z ^[[31m+^[[39m
+465: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7619949Z ^[[31m+     ○^[[39m
+466: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7620212Z ^[[31m+     │╲^[[39m
+467: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7620465Z ^[[31m+     │ ○^[[39m
+468: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7620708Z ^[[31m+     ○ ░^[[39m
+469: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7621107Z ^[[31m+     ░    gitleaks^[[39m
+470: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7621413Z ^[[31m+^[[39m
+471: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7621922Z ^[[31m+ ^[[90m12:09AM^[[0m ^[[32mINF^[[0m ^[[1mscanned ~789642 bytes (789.64 KB) in 384ms^[[0m^[[39m
+472: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7622505Z ^[[31m+ ^[[90m12:09AM^[[0m ^[[33mWRN^[[0m ^[[1mleaks found: 82^[[0m^[[39m
+473: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7622952Z ^[[31m+ Starting filesystem walk for root: /^[[39m
+474: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7623630Z ^[[31m+ Scanned /tmp/harvey-scan-scope-sDwYm8/package-lock.json file and found 397 packages^[[39m
+475: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7624520Z ^[[31m+ End status: 0 dirs visited, 1 inodes visited, 1 Extract calls, 6.650857ms elapsed, 6.650927ms wall time^[[39m
+476: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7625743Z ^[[31m+ [00.05][WARNING]: !!! You're using one or more options starting with '--x-'. These options are not part of the semgrep API. They will change or will be removed without notice !!! ^[[39m
+477: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7626541Z ^[[31m+ running 842 rules from 16 configs^[[39m
+478: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7626869Z ^[[31m+ Rules:^[[39m
+479: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7627323Z ^[[31m+ <SKIPPED DATA (too many entries; use --max-log-list-entries)>^[[39m
+480: heavy CLI tests (shard 2/3, real binaries)	UNKNOWN STEP	2026-08-01T00:09:25.7627741Z ^[[31m+                ^[[39m
