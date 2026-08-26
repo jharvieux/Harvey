@@ -1,6 +1,7 @@
 // The fail-loud contract of the brief-freshness guard (#678): exit 1 when the vendored copy is
 // behind a target that ships its own catalog, exit 0 when the target ships none.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -164,6 +165,33 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     return signalOwnedGroup(pid, 0);
   }
 
+  // This observer deliberately does not share the production signal helper. A root-only `kill(pid,
+  // signal)` can make that helper say "settled" after the parent exits while scanner descendants in
+  // its PGID survive; ps proves the actual group has disappeared.
+  function actualOwnedGroupMembers(pgid: number | undefined): number[] {
+    if (pgid === undefined) return [];
+    const observed = spawnSync("ps", ["-Ao", "pid=,ppid=,pgid="], { encoding: "utf8" });
+    if (observed.status !== 0) throw new Error(`cannot inspect owned process group ${pgid}`);
+    return observed.stdout.split("\n").flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s*$/.exec(line);
+      return match !== null && Number(match[3]) === pgid ? [Number(match[1])] : [];
+    });
+  }
+
+  async function forceReapObservedGroup(pgid: number | undefined): Promise<void> {
+    if (pgid === undefined || actualOwnedGroupMembers(pgid).length === 0) return;
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+    const deadline = Date.now() + GROUP_GRACE_MS;
+    while (actualOwnedGroupMembers(pgid).length > 0) {
+      if (Date.now() >= deadline) throw new Error(`failed to reap observed owned process group ${pgid}`);
+      await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    }
+  }
+
   async function waitForOwnedGroupExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (ownedGroupExists(pid)) {
@@ -173,18 +201,18 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     return true;
   }
 
-  async function terminateAndReapOwnedGroup(pid: number | undefined): Promise<{ termSent: boolean; killSent: boolean; settled: boolean }> {
+  async function terminateAndReapOwnedGroup(pid: number | undefined): Promise<{ pgid: number | undefined; termSent: boolean; killSent: boolean; settled: boolean }> {
     const termSent = signalOwnedGroup(pid, "SIGTERM");
-    if (await waitForOwnedGroupExit(pid, GROUP_GRACE_MS)) return { termSent, killSent: false, settled: true };
+    if (await waitForOwnedGroupExit(pid, GROUP_GRACE_MS)) return { pgid: pid, termSent, killSent: false, settled: true };
     const killSent = signalOwnedGroup(pid, "SIGKILL");
-    return { termSent, killSent, settled: await waitForOwnedGroupExit(pid, GROUP_GRACE_MS) };
+    return { pgid: pid, termSent, killSent, settled: await waitForOwnedGroupExit(pid, GROUP_GRACE_MS) };
   }
 
   // Bounded on purpose. The bootstrap check runs BEFORE any module, so a stale brief exits in about
   // a second; a fresh one goes on to a ten-module audit that has no business inside this suite. The
   // bound is therefore also the assertion for the passing direction: still running at the cap means
   // the check let the run through.
-  function runAudit(target: string): Promise<{ status: number | null; out: string; timedOut: boolean; cleanup: { termSent: boolean; killSent: boolean; settled: boolean } | null }> {
+  function runAudit(target: string): Promise<{ status: number | null; out: string; timedOut: boolean; cleanup: { pgid: number | undefined; termSent: boolean; killSent: boolean; settled: boolean } | null }> {
     return new Promise((resolveRun, rejectRun) => {
       const child = spawn("node_modules/.bin/tsx", [join(REPO_ROOT, "src", "cli", "run-audit.ts"), target], {
         cwd: REPO_ROOT,
@@ -200,7 +228,7 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
       child.stdout.on("data", (chunk: string) => (stdout += chunk));
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
       let timedOut = false;
-      let cleanup: Promise<{ termSent: boolean; killSent: boolean; settled: boolean }> | null = null;
+      let cleanup: Promise<{ pgid: number | undefined; termSent: boolean; killSent: boolean; settled: boolean }> | null = null;
       const timeout = setTimeout(() => {
         timedOut = true;
         cleanup = terminateAndReapOwnedGroup(child.pid);
@@ -246,6 +274,39 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
     expect(status).not.toBe(1);
     expect(timedOut).toBe(true);
     expect(cleanup).toMatchObject({ termSent: true, settled: true });
+    if (cleanup === null) throw new Error("fresh audit did not retain its cleanup receipt");
+    try {
+      expect(actualOwnedGroupMembers(cleanup.pgid)).toEqual([]);
+    } finally {
+      // A physical root-only-signal reversion must fail above, then this test-only guard reaps
+      // the observed group so its real scanners cannot leak into a following test run.
+      await forceReapObservedGroup(cleanup.pgid);
+    }
+  });
+
+  it("escalates an owned TERM-resistant child before its pipe-holding close event", async () => {
+    const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);'], {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (child.pid === undefined) throw new Error("TERM-resistant child has no process-group leader");
+    child.stdout.setEncoding("utf8");
+    child.stderr.resume();
+    const closed = once(child, "close");
+    let reaped = false;
+    try {
+      await once(child.stdout, "data", { signal: AbortSignal.timeout(2_000) });
+      const cleanup = await terminateAndReapOwnedGroup(child.pid);
+      expect(cleanup).toMatchObject({ pgid: child.pid, termSent: true, killSent: true, settled: true });
+      await closed;
+      reaped = cleanup.settled;
+      expect(actualOwnedGroupMembers(child.pid)).toEqual([]);
+    } finally {
+      if (!reaped) {
+        signalOwnedGroup(child.pid, "SIGKILL");
+        await waitForOwnedGroupExit(child.pid, GROUP_GRACE_MS);
+      }
+    }
   });
 });
 
