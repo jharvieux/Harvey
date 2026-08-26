@@ -140,16 +140,182 @@ function branchCommits(): Set<string> | undefined {
 const inRepo = (path: string): boolean => existsSync(resolve(REPO_ROOT, path));
 const recordedInIssue = (r: ParsedReason): boolean => r.file.startsWith("issue #");
 
+const GH_OUTPUT_LIMIT = 64 * 1024 * 1024;
+
+const OPEN_ISSUES_QUERY = `query($owner:String!,$name:String!,$after:String) {
+  repository(owner:$owner,name:$name) {
+    issues(first:100,states:[OPEN],after:$after,orderBy:{field:CREATED_AT,direction:ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number body
+        comments(first:100) { totalCount pageInfo { hasNextPage endCursor } nodes { body } }
+      }
+    }
+  }
+}`;
+
+const ISSUE_COMMENTS_QUERY = `query($owner:String!,$name:String!,$number:Int!,$after:String) {
+  repository(owner:$owner,name:$name) {
+    issue(number:$number) {
+      comments(first:100,after:$after) { totalCount pageInfo { hasNextPage endCursor } nodes { body } }
+    }
+  }
+}`;
+
+interface PageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface FetchedComments {
+  totalCount: number;
+  pageInfo: PageInfo;
+  nodes: { body: string | null }[];
+}
+
+interface FetchedIssueNode {
+  number: number;
+  body: string | null;
+  comments: FetchedComments;
+}
+
+function issueFetchFailure(args: string[], r: ReturnType<typeof spawnSync>, detail?: string): never {
+  const error = r.error as NodeJS.ErrnoException | undefined;
+  const outcome = error?.code === "ENOBUFS"
+    ? `exceeded the ${GH_OUTPUT_LIMIT / 1024 / 1024} MiB stdout limit`
+    : error
+      ? `could not be started (${error.message})`
+      : r.signal
+        ? `was terminated by signal ${r.signal}`
+        : `exited ${r.status ?? "without an exit status"}`;
+  console.error(
+    `✗ --issues: \`gh ${args.join(" ")}\` ${outcome}${detail ? `: ${detail}` : ""}. ` +
+    "Reporting zero issue-recorded claims here would be the silent pass this gate exists to prevent.\n" +
+    (r.stderr ?? "").toString().trim(),
+  );
+  process.exit(1);
+}
+
+function malformedIssueResponse(detail: string): never {
+  console.error(`✗ --issues: ${detail}. Reporting zero issue-recorded claims here would be the silent pass this gate exists to prevent.`);
+  process.exit(1);
+}
+
+function ghOutput(args: string[], detail: string): string {
+  // Each page is capped independently. A tracker can grow without making one child process retain
+  // an unbounded aggregate response; if one page itself exceeds this cap, fail rather than omit it.
+  const r = spawnSync("gh", args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: GH_OUTPUT_LIMIT });
+  if (r.status !== 0 || r.error || r.signal) issueFetchFailure(args, r, detail);
+  return (r.stdout ?? "").toString();
+}
+
+function ghJson<T>(args: string[], detail: string): T {
+  const stdout = ghOutput(args, detail);
+  try {
+    return JSON.parse(stdout) as T;
+  } catch (error) {
+    malformedIssueResponse(`${detail}; returned invalid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
+function pageInfo(value: unknown, what: string): PageInfo {
+  if (
+    typeof value !== "object" || value === null ||
+    typeof (value as PageInfo).hasNextPage !== "boolean" ||
+    !Object.hasOwn(value, "endCursor")
+  ) {
+    malformedIssueResponse(`${what} returned no usable pageInfo`);
+  }
+  const info = value as PageInfo;
+  if (info.endCursor !== null && typeof info.endCursor !== "string") {
+    malformedIssueResponse(`${what} returned a non-string page cursor`);
+  }
+  if (info.hasNextPage && !info.endCursor) {
+    malformedIssueResponse(`${what} says another page exists but supplied no cursor`);
+  }
+  return info;
+}
+
+function comments(value: unknown, what: string): FetchedComments {
+  if (typeof value !== "object" || value === null) {
+    malformedIssueResponse(`${what} returned no comment connection`);
+  }
+  const result = value as FetchedComments;
+  if (!Number.isInteger(result.totalCount) || result.totalCount < 0 || !Array.isArray(result.nodes)) {
+    malformedIssueResponse(`${what} returned malformed comment data`);
+  }
+  pageInfo(result.pageInfo, `${what} comments`);
+  if (result.nodes.some((node) => typeof node?.body !== "string" && node?.body !== null)) {
+    malformedIssueResponse(`${what} returned a comment without text`);
+  }
+  return result;
+}
+
+function parseOpenIssuesPage(value: unknown): { pageInfo: PageInfo; nodes: FetchedIssueNode[] } {
+  const issues = (value as { data?: { repository?: { issues?: unknown } } }).data?.repository?.issues;
+  if (typeof issues !== "object" || issues === null || !Array.isArray((issues as { nodes?: unknown }).nodes)) {
+    malformedIssueResponse("open-issue query returned no issue page");
+  }
+  const page = issues as { pageInfo: unknown; nodes: unknown[] };
+  const nodes = page.nodes.map((node, index) => {
+    if (typeof node !== "object" || node === null || !Number.isInteger((node as FetchedIssueNode).number)) {
+      malformedIssueResponse(`open-issue query returned malformed issue ${index + 1}`);
+    }
+    const issue = node as FetchedIssueNode;
+    if (typeof issue.body !== "string" && issue.body !== null) {
+      malformedIssueResponse(`issue #${issue.number} returned a non-text body`);
+    }
+    return { ...issue, comments: comments(issue.comments, `issue #${issue.number}`) };
+  });
+  return { pageInfo: pageInfo(page.pageInfo, "open-issue query"), nodes };
+}
+
+function parseCommentsPage(value: unknown, number: number): FetchedComments {
+  const result = (value as { data?: { repository?: { issue?: { comments?: unknown } | null } } }).data?.repository?.issue?.comments;
+  return comments(result, `issue #${number}`);
+}
+
 // Closed issues are out of scope BY DECISION: a blocker on a closed issue no longer steers work, and
 // the population is unbounded. Said here rather than left silent — an unstated limit reads as
 // coverage (#1246).
 function fetchOpenIssues(): SourceText[] {
-  const r = spawnSync("gh", ["issue", "list", "--state", "open", "--limit", "300", "--json", "number,body,comments"], { cwd: REPO_ROOT, encoding: "utf8" });
-  if (r.status !== 0) {
-    console.error(`✗ --issues: \`gh issue list\` failed (exit ${r.status ?? "signal"}) — it needs an authenticated gh. Reporting zero issue-recorded claims here would be the silent pass this gate exists to prevent.\n${(r.stderr ?? "").trim()}`);
-    process.exit(1);
+  const repo = ghOutput(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], "could not resolve the current repository").trim();
+  const [owner, name, extra] = repo.split("/");
+  if (!owner || !name || extra) {
+    malformedIssueResponse(`current repository name was not owner/name: ${JSON.stringify(repo)}`);
   }
-  return issueSources(JSON.parse(r.stdout) as FetchedIssue[]);
+
+  const fetched: FetchedIssue[] = [];
+  let after: string | undefined;
+  const issueCursors = new Set<string>();
+  for (;;) {
+    const args = ["api", "graphql", "-f", `query=${OPEN_ISSUES_QUERY}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
+    if (after !== undefined) args.push("-F", `after=${after}`);
+    const page = parseOpenIssuesPage(ghJson<unknown>(args, "could not read an open-issue page"));
+    for (const issue of page.nodes) {
+      const allComments = [...issue.comments.nodes];
+      let commentsPage = issue.comments;
+      const commentCursors = new Set<string>();
+      while (commentsPage.pageInfo.hasNextPage) {
+        const cursor = commentsPage.pageInfo.endCursor;
+        if (!cursor || commentCursors.has(cursor)) malformedIssueResponse(`issue #${issue.number} repeated a comment-page cursor`);
+        commentCursors.add(cursor);
+        const commentArgs = ["api", "graphql", "-f", `query=${ISSUE_COMMENTS_QUERY}`, "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${issue.number}`, "-F", `after=${cursor}`];
+        commentsPage = parseCommentsPage(ghJson<unknown>(commentArgs, `could not read a comment page for issue #${issue.number}`), issue.number);
+        allComments.push(...commentsPage.nodes);
+      }
+      if (allComments.length !== issue.comments.totalCount) {
+        malformedIssueResponse(`issue #${issue.number} reported ${issue.comments.totalCount} comments but returned ${allComments.length}`);
+      }
+      fetched.push({ number: issue.number, body: issue.body ?? "", comments: allComments.map((comment) => ({ body: comment.body ?? "" })) });
+    }
+    if (!page.pageInfo.hasNextPage) break;
+    const cursor = page.pageInfo.endCursor;
+    if (!cursor || issueCursors.has(cursor)) malformedIssueResponse("open-issue query repeated a page cursor");
+    issueCursors.add(cursor);
+    after = cursor;
+  }
+  return issueSources(fetched);
 }
 
 const roots = flagValues("--root");
