@@ -304,11 +304,6 @@ export function claimScopeMetrics(sources: SourceText[], reasons: ParsedReason[]
   return { accepted, excludedByCommentScope, acceptedVerifiedLive, sourcesByScope };
 }
 
-/** Compatibility surface for existing ratchet consumers; the shared traversal owns the population. */
-export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
-  return claimScopeMetrics(sources, reasons).accepted;
-}
-
 // #1318 (Gate 6 of #1320) — the census above is advisory, and an advisory number that nobody has to
 // act on permits claim-shaped lines to accumulate outside the registry. The
 // ratchet makes it strictly NON-WORSENING without demanding anyone migrate the backlog: the count

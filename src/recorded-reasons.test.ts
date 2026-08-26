@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import { CLAIM_BASELINE } from "./unstructured-claims-baseline.js";
 import {
   DEFAULT_ROOTS,
@@ -20,10 +19,10 @@ import {
   reasonKind,
   revalidateReasons,
   subsystemDrift,
-  untriagedClaims,
   validateRecordedReason,
   watchedPaths,
   type ParsedReason,
+  type SourceText,
 } from "./recorded-reasons.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,49 +53,8 @@ function one(lines: string[], prefix?: string): ParsedReason {
 const statuses = (rows: { status: string }[]) => rows.map((r) => r.status);
 const POSITIVE_REGISTER = ["Verified", "live"].join(" ");
 const NEGATIVE_REGISTER = ["un", "verified"].join("");
-const IMPOSSIBILITY_REGISTER = ["can", "not"].join(" ");
 
-function hasExactUntriagedClaimDelegation(text: string): boolean {
-  const source = ts.createSourceFile("recorded-reasons.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const declaration = source.statements.find(
-    (statement): statement is ts.FunctionDeclaration =>
-      ts.isFunctionDeclaration(statement) && statement.name?.text === "untriagedClaims",
-  );
-  if (!declaration?.body || declaration.body.statements.length !== 1) return false;
-  const [statement] = declaration.body.statements;
-  if (!statement || !ts.isReturnStatement(statement) || !statement.expression || !ts.isPropertyAccessExpression(statement.expression)) return false;
-  const property = statement.expression;
-  if (property.name.text !== "accepted" || !ts.isCallExpression(property.expression)) return false;
-  const call = property.expression;
-  const [sourcesArgument, reasonsArgument] = call.arguments;
-  return (
-    ts.isIdentifier(call.expression) &&
-    call.expression.text === "claimScopeMetrics" &&
-    call.arguments.length === 2 &&
-    sourcesArgument !== undefined &&
-    ts.isIdentifier(sourcesArgument) &&
-    sourcesArgument.text === "sources" &&
-    reasonsArgument !== undefined &&
-    ts.isIdentifier(reasonsArgument) &&
-    reasonsArgument.text === "reasons"
-  );
-}
-
-function restoreIndependentUntriagedLoop(text: string): string {
-  const source = ts.createSourceFile("recorded-reasons.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const declaration = source.statements.find(
-    (statement): statement is ts.FunctionDeclaration =>
-      ts.isFunctionDeclaration(statement) && statement.name?.text === "untriagedClaims",
-  );
-  if (!declaration?.body) throw new Error("untriagedClaims declaration not found");
-  const oldBody = `{
-  return sources.flatMap(({ file, text }) => {
-    const triaged = reasons.filter((reason) => reason.file === file);
-    return text.length > 0 && triaged.length === 0 ? [{ file, line: 1, text }] : [];
-  });
-}`;
-  return `${text.slice(0, declaration.body.getStart(source))}${oldBody}${text.slice(declaration.body.end)}`;
-}
+const untriagedClaims = (sources: SourceText[], reasons: ParsedReason[]) => claimScopeMetrics(sources, reasons).accepted;
 
 describe("parseRecordedReasons", () => {
   it("reads a block out of a TS comment, a Markdown quote and an HTML comment alike", () => {
@@ -483,12 +441,6 @@ describe("untriagedClaims — the claims outside every block, counted rather tha
     expect(metrics.accepted.map((row) => `${row.file}:${row.line}`)).toEqual(["docs/x.md:1", "src/x.ts:1"]);
   });
 
-  it("keeps untriagedClaims as an exact delegation to the shared accepted population", () => {
-    const sources = [{ file: "doc.md", text: `${POSITIVE_REGISTER} here.\nThis ${IMPOSSIBILITY_REGISTER} run there.` }];
-    const reasons: ParsedReason[] = [];
-    expect(untriagedClaims(sources, reasons)).toEqual(claimScopeMetrics(sources, reasons).accepted);
-  });
-
   it("excludes reason blocks and fences before measuring either accepted or comment-rejected rows", () => {
     const sources = [
       { file: "src/x.ts", text: `/*\nREASON: ${POSITIVE_REGISTER} in a recorded block.\nKIND: empirical\nPROVENANCE: MEASURED 2026-07-25\nFALSIFIER: false\n*/\nconst message = "${POSITIVE_REGISTER} in code";\n// ${POSITIVE_REGISTER} in a comment.` },
@@ -501,19 +453,6 @@ describe("untriagedClaims — the claims outside every block, counted rather tha
     expect(metrics.excludedByCommentScope).toBe(1);
     expect(metrics.acceptedVerifiedLive).toBe(2);
     expect(metrics.accepted.map(({ file, line }) => `${file}:${line}`)).toEqual(["src/x.ts:8", "docs/x.md:4"]);
-  });
-});
-
-describe("untriagedClaims has one structural owner (#1410)", () => {
-  const production = readFileSync(resolve(REPO_ROOT, "src/recorded-reasons.ts"), "utf8");
-
-  it("is exactly one return of claimScopeMetrics(sources, reasons).accepted", () => {
-    expect(hasExactUntriagedClaimDelegation(production)).toBe(true);
-  });
-
-  it("rejects a disposable restoration of the independent source loop", () => {
-    expect(hasExactUntriagedClaimDelegation(restoreIndependentUntriagedLoop(production))).toBe(false);
-    expect(hasExactUntriagedClaimDelegation(production)).toBe(true);
   });
 });
 
