@@ -1,6 +1,6 @@
 // The fail-loud contract of the brief-freshness guard (#678): exit 1 when the vendored copy is
 // behind a target that ships its own catalog, exit 0 when the target ships none.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -30,29 +30,33 @@ function targetWithCatalog(md: string): string {
   return target;
 }
 
-function run(args: string[]): { status: number; stdout: string; stderr: string } {
-  try {
-    const stdout = execFileSync("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
-    return { status: 0, stdout, stderr: "" };
-  } catch (e) {
-    const err = e as { status?: number; stdout?: string; stderr?: string };
-    return { status: err.status ?? 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
-  }
+function run(args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.on("data", (chunk: string) => (stderr += chunk));
+    child.once("error", rejectRun);
+    child.once("close", (code) => resolveRun({ status: code ?? 1, stdout, stderr }));
+  });
 }
 
 describe("brief-freshness CLI fail-loud contract (#678)", () => {
-  it("exits 1 and names the missing class when the vendored copy is behind", () => {
+  it("exits 1 and names the missing class when the vendored copy is behind", async () => {
     const vendored = targetWithCatalog("## 1. Stub-shaped code\n");
     const target = targetWithCatalog("## 1. Stub-shaped code\n### 2. Brand-new class the vendored brief lacks\n");
-    const r = run([target, "--vendored", join(vendored, "docs", "runbooks", "anti-patterns.md")]);
+    const r = await run([target, "--vendored", join(vendored, "docs", "runbooks", "anti-patterns.md")]);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("brand-new class the vendored brief lacks");
   });
 
-  it("exits 0 when the target ships no D-091 catalog", () => {
+  it("exits 0 when the target ships no D-091 catalog", async () => {
     const target = mkdtempSync(join(tmpdir(), "harvey-brief-nocatalog-"));
     dirs.push(target);
-    const r = run([target]);
+    const r = await run([target]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("nothing to diff");
   });
@@ -146,17 +150,32 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
   // a second; a fresh one goes on to a ten-module audit that has no business inside this suite. The
   // bound is therefore also the assertion for the passing direction: still running at the cap means
   // the check let the run through.
-  function runAudit(target: string): { status: number | null; out: string } {
-    const r = spawnSync("node_modules/.bin/tsx", [join(REPO_ROOT, "src", "cli", "run-audit.ts"), target], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      timeout: 4_000,
+  function runAudit(target: string): Promise<{ status: number | null; out: string }> {
+    return new Promise((resolveRun, rejectRun) => {
+      const child = spawn("node_modules/.bin/tsx", [join(REPO_ROOT, "src", "cli", "run-audit.ts"), target], {
+        cwd: REPO_ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => (stdout += chunk));
+      child.stderr.on("data", (chunk: string) => (stderr += chunk));
+      const timeout = setTimeout(() => child.kill("SIGTERM"), 4_000);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        rejectRun(error);
+      });
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        resolveRun({ status: code, out: `${stdout}${stderr}` });
+      });
     });
-    return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   }
 
-  it("exits 1 and names the class before a single module runs", () => {
-    const { status, out } = runAudit(targetShippingCatalog("\n### 99. Brand-new class the vendored brief lacks\n"));
+  it("exits 1 and names the class before a single module runs", async () => {
+    const { status, out } = await runAudit(targetShippingCatalog("\n### 99. Brand-new class the vendored brief lacks\n"));
     expect(status).toBe(1);
     expect(out).toContain("BRIEF STALE");
     expect(out).toContain("brand-new class the vendored brief lacks");
@@ -168,8 +187,8 @@ describe("run-audit refuses to start on a stale brief (#678 criterion 1, CLI wir
   // Both directions on the SAME target shape: the identical tree with a catalog the vendored copy
   // does cover must get past the check. Without this the test above passes for a bad reason
   // (anything that makes run-audit exit 1) instead of for the stale brief.
-  it("gets past the check on the same tree when the catalog holds no new class", () => {
-    const { status, out } = runAudit(targetShippingCatalog(""));
+  it("gets past the check on the same tree when the catalog holds no new class", async () => {
+    const { status, out } = await runAudit(targetShippingCatalog(""));
     expect(out).toContain("vendored brief covers every class the target catalogues");
     expect(out).not.toContain("BRIEF STALE");
     // It ran ON past the check rather than refusing: the run was still going when the cap killed it.
