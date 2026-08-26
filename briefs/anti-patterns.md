@@ -488,13 +488,24 @@ instead of becoming a permanent decline.
   `raw-body-limit`, `gha-permissions` and item 10's own `dedupBeforeDispatch`. Reach was never what
   decided it.
 
-  What the rule actually costs is recorded instead of guessed. MEASURED 2026-07-31 over all 17
-  pinned corpus repos (13,113 source files): 61,346 candidate functions, 176 with an event-derived
-  `.update`/`.upsert`, 6 of those in a webhook path, and **zero** whose parameter carries an
-  ordering field — no false positives and no true positives, so its FIELD precision is undefined
-  rather than clean, and the finding's own evidence says so. The measurement also earned a
-  narrowing before the rule shipped: 2 of the 6 were `crypto.createHmac(…).update(body)`, so the
-  write must resolve to a Supabase `.from(…)` table or a prisma-style model call.
+  The production predicate has **NO webhook-path prefilter**. Across the shipping TS/JS sources
+  admitted by `detectIdempotencyFindings`, it finds a function whose first identifier parameter
+  declares or reads an ordering field, whose event-derived argument reaches a Supabase/Prisma
+  `.update`, `.updateMany`, or `.upsert`, and whose function body contains no relational comparison.
+  A bare `.update` such as `crypto.createHmac(…).update(body)` is not a database write. Comparisons
+  in another module or a database trigger remain outside this function-body check; the emitted
+  finding states that limit.
+
+  The retained production measurement is historical: **MEASURED 2026-08-15** with
+  `pnpm corpus-drift --install --shard N/3 --json corpus-drift-shardN.json --baseline-findings prior-drift/corpus-drift.json`
+  for N=1,2,3 in [Actions run 31873008063](https://github.com/jharvieux/Harvey/actions/runs/31873008063).
+  The production `idempotency` detector ledger recorded **13,104 `unitsExamined` source units across
+  17 pinned targets and zero findings**. These are the registry's examined units, not an unexplained
+  count from a different loader. The retained `corpus-drift.json` SHA-256 is
+  `5eaeb965920aacf2e83c1f78def674691b2f214935990d8ffb85b3d7f73311ff`.
+  Zero firings leave field precision unmeasured and the false-positive rate undefined, not zero;
+  they do not establish a clean field reading. The earlier webhook-path funnel did not measure
+  the shipped predicate and is superseded by this production-registry receipt.
 
   Item 20 (`WEBHOOK-REPLAY`, #353/#425) remains an LLM-tier gap on its own merits; 27 shipping
   ahead of it is not an inconsistency, because the two ask different questions.
