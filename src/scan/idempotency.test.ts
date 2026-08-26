@@ -2,6 +2,7 @@
 // corresponding finding recommends, so a rule that fired on one would be recommending its own
 // false positive.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { detectIdempotencyFindings } from "./idempotency.js";
 import { MECHANICAL_DETECTORS } from "./mechanical-detector-registry.js";
@@ -1433,6 +1434,33 @@ describe("webhook-ordering (item 27)", () => {
     expect(out[0]!.evidence).toContain("pnpm corpus-drift --install --shard N/3");
     expect(out[0]!.evidence).toContain("13,104 source units across 17 pinned targets");
     expect(out[0]!.evidence).toContain("5eaeb965920aacf2e83c1f78def674691b2f214935990d8ffb85b3d7f73311ff");
+  });
+
+  it("keeps all three recorded rationales aligned with the path-independent production predicate (#1787)", () => {
+    const text = `export async function apply(event: { created: number; status: string }) {
+      await prisma.subscription.update({ data: { status: event.status } });
+    }`;
+    for (const path of ["src/app/api/webhooks/stripe/route.ts", "src/services/subscriptions.ts"]) {
+      const findings = scan(text, path);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.taxonomy).toBe("Webhook state applied without an ordering guard");
+    }
+
+    const detector = readFileSync(new URL("./idempotency.ts", import.meta.url), "utf8");
+    const calibration = readFileSync(new URL("./calibration/b23-d091-gaps.entries.ts", import.meta.url), "utf8");
+    const brief = readFileSync(new URL("../../briefs/anti-patterns.md", import.meta.url), "utf8");
+    const venues = [
+      detector.slice(detector.indexOf("// (27) WEBHOOK-ORDERING —"), detector.indexOf("const ORDERING_FIELD")),
+      calibration.slice(calibration.indexOf('id: "P-D091-WEBHOOK-ORDERING"')),
+      brief.slice(brief.indexOf("- Item 27 (webhook state-application ordering)"), brief.indexOf("  Item 20 (`WEBHOOK-REPLAY`")),
+    ];
+    for (const venue of venues) {
+      expect(venue).toContain("NO webhook-path prefilter");
+      expect(venue).toContain("pnpm corpus-drift --install --shard N/3");
+      expect(venue).toContain("unitsExamined");
+      expect(venue).toContain("undefined");
+      expect(venue).not.toMatch(/61,346|13,113|14,876|6 of those in a webhook path/);
+    }
   });
 
   it("is silent when the handler compares the event's ordering field against stored state", () => {
