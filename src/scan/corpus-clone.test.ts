@@ -3,11 +3,12 @@
 // path is proven to skip the network entirely by pointing its "repo" at one that does not exist —
 // a real fetch attempt would throw, so a clean copy proves the network was never touched.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readNamesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { cloneAtPinCached, isFreshClone } from "./corpus-clone.js";
 
 const dirs: string[] = [];
@@ -17,6 +18,7 @@ function tmp(prefix: string): string {
   return d;
 }
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -32,6 +34,60 @@ function commitOneFile(dir: string): string {
   git(dir, "add", "marker.txt");
   git(dir, "commit", "-q", "-m", "pin");
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"]).toString().trim();
+}
+
+function gitOutput(dir: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+function offlineOrigin(): { repo: string; source: string; pin: string; tree: string } {
+  vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+  vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+  const source = tmp("clone-origin-");
+  const repo = "harvey-offline-fixture/corpus-clone";
+  const config = [
+    [`url.${pathToFileURL(source).href}.insteadOf`, `https://github.com/${repo}`],
+    ["fetch.unpackLimit", "1"],
+    ["gc.autoDetach", "false"],
+    ["maintenance.autoDetach", "false"],
+  ];
+  vi.stubEnv("GIT_CONFIG_COUNT", String(config.length));
+  for (const [index, [key, value]] of config.entries()) {
+    vi.stubEnv(`GIT_CONFIG_KEY_${index}`, key);
+    vi.stubEnv(`GIT_CONFIG_VALUE_${index}`, value);
+  }
+  commitOneFile(source);
+  symlinkSync("marker.txt", join(source, "link.txt"));
+  git(source, "add", "link.txt");
+  git(source, "commit", "-q", "-m", "pinned relative link");
+  const pin = gitOutput(source, "rev-parse", "HEAD");
+  const tree = gitOutput(source, "rev-parse", "HEAD^{tree}");
+  writeFileSync(join(source, "marker.txt"), "newer upstream content\n");
+  git(source, "commit", "-q", "-am", "advance upstream beyond pin");
+  return { repo, source, pin, tree };
+}
+
+function gitSnapshot(dir: string): Array<[string, string]> {
+  const gitDir = join(dir, ".git");
+  return readRecursiveSafe(gitDir).sort()
+    .filter((path) => lstatSync(join(gitDir, path)).isFile())
+    .map((path) => [path, readFileSync(join(gitDir, path)).toString("base64")]);
+}
+
+interface GitTraceEvent {
+  event: string;
+  argv?: string[];
+}
+
+function readGitTrace(path: string): GitTraceEvent[] {
+  return readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as GitTraceEvent);
+}
+
+function expectNoMaintenance(trace: GitTraceEvent[]): void {
+  const maintenance = trace.filter((event) => event.event === "child_start"
+    && event.argv?.some((arg) => /(?:^|[\\/])(?:git-)?(?:maintenance|gc|repack)(?:\.exe)?$/.test(arg)));
+  expect(maintenance.map((event) => event.argv)).toEqual([]);
 }
 
 describe("isFreshClone", () => {
@@ -100,14 +156,72 @@ describe("cloneAtPinCached", () => {
   });
 
   it("fails rather than trusting a cached clone when its declared GitHub origin no longer serves the pin", () => {
+    const { repo, source, pin } = offlineOrigin();
     const cacheDir = tmp("cache-root-");
-    const repo = "definitely-not-a-real-org/definitely-not-a-real-repo-xyz";
     const cached = join(cacheDir, repo.replace(/\//g, "__"));
-    mkdirSync(cached, { recursive: true });
-    const sha = commitOneFile(cached);
+    cloneAtPinCached(repo, pin, tmp("cache-seed-"), cacheDir);
+    // The cached origin still serves the pin; the declared URL now points at an empty repo.
+    git(cached, "remote", "set-url", "origin", pathToFileURL(source).href);
+    const emptyOrigin = tmp("empty-origin-");
+    git(emptyOrigin, "init", "-q");
+    vi.stubEnv("GIT_CONFIG_KEY_0", `url.${pathToFileURL(emptyOrigin).href}.insteadOf`);
     const into = tmp("work-");
+    const before = gitSnapshot(cached);
 
-    expect(() => cloneAtPinCached(repo, sha, into, cacheDir, true)).toThrow();
+    expect(() => cloneAtPinCached(repo, pin, into, cacheDir, true)).toThrow();
+    expect(gitSnapshot(cached)).toEqual(before);
+  });
+});
+
+describe("helper-owned fetch maintenance policy (#1870)", () => {
+  it.each(["no-cache", "cold-cache", "warm-cache+verify"] as const)("suppresses maintenance on the %s path", (mode) => {
+    const { repo, pin, tree } = offlineOrigin();
+    const cacheDir = mode === "no-cache" ? undefined : tmp("fetch-cache-");
+    const cached = cacheDir ? join(cacheDir, repo.replace(/\//g, "__")) : undefined;
+    if (mode === "warm-cache+verify") {
+      cloneAtPinCached(repo, pin, tmp("cache-seed-"), cacheDir);
+      // Verification must use the declared URL, not this deliberately unavailable cached origin.
+      git(cached!, "remote", "set-url", "origin", pathToFileURL(join(tmp("missing-origin-"), "absent.git")).href);
+    }
+    const before = mode === "warm-cache+verify" ? gitSnapshot(cached!) : undefined;
+    const into = tmp("fetch-work-");
+    const traceFile = join(tmp("fetch-trace-"), "git.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", traceFile);
+
+    cloneAtPinCached(repo, pin, into, cacheDir, mode !== "no-cache");
+
+    const trace = readGitTrace(traceFile);
+    expectNoMaintenance(trace);
+    const fetches = trace.filter((event) => event.event === "start" && event.argv?.includes("fetch"))
+      .map((event) => event.argv);
+    const gitExecutable = expect.stringMatching(/(?:^|[\\/])git(?:\.exe)?$/);
+    const initial = [gitExecutable, "-C", cached ?? into, "fetch", "--no-auto-maintenance", "-q", "--depth", "1", "origin", pin];
+    const verify = [gitExecutable, "-C", into, "fetch", "--no-auto-maintenance", "-q", "--depth", "1", `https://github.com/${repo}`, pin];
+    expect(fetches).toEqual(mode === "no-cache" ? [initial] : mode === "cold-cache" ? [initial, verify] : [verify]);
+    expect(gitOutput(into, "rev-parse", "HEAD")).toBe(pin);
+    expect(gitOutput(into, "rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(gitOutput(into, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(gitOutput(into, "rev-list", "HEAD")).toBe(pin);
+    expect(gitOutput(into, "status", "--porcelain")).toBe("");
+    expect(readFileSync(join(into, "marker.txt"), "utf8")).toBe("pinned content\n");
+    expect(readlinkSync(join(into, "link.txt"))).toBe("marker.txt");
+    git(into, "fsck", "--full");
+    // fetch.unpackLimit=1 exercises normal fetch-created packs independently of maintenance.
+    expect(readNamesSafe(join(into, ".git", "objects", "pack")).filter((path) => path.endsWith(".pack")).length).toBeGreaterThan(0);
+    if (cached) {
+      expect(isFreshClone(cached, pin)).toBe(true);
+      expect(gitOutput(cached, "rev-list", "HEAD")).toBe(gitOutput(into, "rev-list", "HEAD"));
+      const copiedObjects = gitSnapshot(into).filter(([path]) => path.startsWith("objects/"));
+      expect(copiedObjects).toEqual(expect.arrayContaining(gitSnapshot(cached).filter(([path]) => path.startsWith("objects/"))));
+      if (before) expect(gitSnapshot(cached)).toEqual(before);
+    }
+  });
+
+  it.each([false, true])("fails loud for an unavailable pin with cache=%s", (cache) => {
+    const { repo, pin } = offlineOrigin();
+    const into = tmp("missing-pin-");
+    expect(() => cloneAtPinCached(repo, "0".repeat(40), into, cache ? tmp("missing-pin-cache-") : undefined)).toThrow();
+    expect(isFreshClone(into, pin)).toBe(false);
   });
 });
 

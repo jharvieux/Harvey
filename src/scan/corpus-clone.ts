@@ -10,11 +10,15 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
+// Copying and scanning read the fetched object store immediately. Suppress automatic
+// maintenance at both fetch sites to avoid detached object-store writers (#1870).
+const PINNED_FETCH_ARGS = ["fetch", "--no-auto-maintenance", "-q", "--depth", "1"] as const;
+
 export function cloneAtPin(repo: string, commit: string, into: string): void {
   const git = (...a: string[]): void => void execFileSync("git", ["-C", into, ...a], { stdio: ["ignore", "ignore", "pipe"] });
   execFileSync("git", ["init", "-q", into], { stdio: "inherit" });
   git("remote", "add", "origin", `https://github.com/${repo}`);
-  git("fetch", "-q", "--depth", "1", "origin", commit);
+  git(...PINNED_FETCH_ARGS, "origin", commit);
   git("checkout", "-q", "FETCH_HEAD");
 }
 
@@ -49,11 +53,8 @@ export function cloneAtPinCached(repo: string, commit: string, into: string, cac
   if (verifyRemote) {
     // A cache proves only that we fetched this commit once. Corpus drift must also prove the
     // declared origin still serves it, otherwise a deleted/private upstream can look healthy.
-    // Fetch in the DISPOSABLE copy, never in the shared cache: `git fetch` may trigger an auto
-    // maintenance/repack after returning, and CI observed that process removing
-    // `.git/objects/pack` while cpSync copied the cache for the next target. The cache is a
-    // read-only input on every scoring path; only the cache action's dedicated save path writes it.
-    execFileSync("git", ["-C", into, "fetch", "-q", "--depth", "1", `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
+    // Fetch in the disposable copy to keep the shared cache read-only during scoring.
+    execFileSync("git", ["-C", into, ...PINNED_FETCH_ARGS, `https://github.com/${repo}`, commit], { stdio: ["ignore", "ignore", "pipe"] });
   }
 }
 
