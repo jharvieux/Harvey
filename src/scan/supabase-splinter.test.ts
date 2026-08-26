@@ -146,10 +146,15 @@ describe("parseSplinterOutput -> parseAdvisorFindings — recorded connected-tie
 describe("runSplinter argv (#1297)", () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
+  const syntheticKeywordPassword = ["dummy", "pg", "\u0120\u2020é"].join("-");
+  const syntheticUriPassword = ["dummy", "pg", "\u00a0\u0120\u2020é"].join("-");
+
   it.each([
     ["postgresql://app:dummy-pg-first@db1:5432,db2:5433/main?password=dummy-pg-second&password=", "postgresql://app@db1:5432,db2:5433/main", ""],
     ["host=db password=dummy-pg-first password=dummy-pg-second", "host=db", "dummy-pg-second"],
     ["postgresql:///main?host=%2Ftmp%2Fpg-socket&pass%77ord=dummy-pg-second", "postgresql:///main?host=%2Ftmp%2Fpg-socket", "dummy-pg-second"],
+    [`host='db\u00a0' password='${syntheticKeywordPassword}'`, "host='db\u00a0'", syntheticKeywordPassword],
+    [`postgresql://db/main?password=${syntheticUriPassword}`, "postgresql://db/main", syntheticUriPassword],
   ])("uses password transport at the shipping exec binding (#1778): %s", (input, clean, password) => {
     vi.stubEnv("PGPASSWORD", "dummy-inherited-pg");
     vi.mocked(execFileSync).mockClear().mockReturnValue("");
@@ -170,6 +175,12 @@ describe("runSplinter argv (#1297)", () => {
     "postgresql://db/main?password=dummy-canary%00",
     "host=db password='dummy-canary",
     "host=db oauth_client_secret=dummy-canary",
+    "host=db\u00a0password=dummy-canary",
+    "host=db\u0120password=dummy-canary",
+    "host=db\u2020password=dummy-canary",
+    "host=db\\\u00a0password=dummy-canary",
+    "host=db\\\u0120password=dummy-canary",
+    "host=db\\\u2020password=dummy-canary",
   ])("refuses malformed or still-exposed overridden credentials before exec (#1778): %s", (input) => {
     vi.mocked(execFileSync).mockClear();
     expect(() => runSplinter(input)).toThrow(SecretInArgvError);

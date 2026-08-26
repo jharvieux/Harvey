@@ -238,6 +238,9 @@ function splitPgKeywords(conninfo: string): PgPasswordTransport {
           if (cursor < conninfo.length) value += conninfo[cursor++]!;
         } else value += char;
       }
+      // libpq's unquoted lexer uses locale-dependent byte whitespace. Require quoted UTF-8
+      // here instead of interpreting a continuation byte as part of a different option.
+      if ([...conninfo.slice(start, cursor)].some((char) => char.charCodeAt(0) > 0x7f)) return refusePgConninfo();
     }
     pgOption(name, value, false);
     if (name === "password") passwords.push(value);

@@ -148,6 +148,19 @@ describe("splitPgPassword (#1297)", () => {
     expect(splitPgPassword("postgresql://app:@db/main").password).toBeUndefined();
   });
 
+  it.each(["\u00a0", "\u0120", "\u2020", "é"])("requires quotes for non-ASCII keyword values: %s", (value) => {
+    for (const input of [`host=db${value}password=dummy-canary`, `host=db\\${value}password=dummy-canary`, `host=db password=dummy-${value}`]) {
+      expect(() => splitPgPassword(input)).toThrow(SecretInArgvError);
+      expect(() => splitPgPassword(input)).not.toThrow(/dummy-canary/);
+    }
+    expect(splitPgPassword(`host='db${value}' password='dummy-${value}'`)).toEqual({
+      conninfo: `host='db${value}'`, password: `dummy-${value}`, extractedPasswords: [`dummy-${value}`],
+    });
+    expect(splitPgPassword(`postgresql://db/main?password=dummy-${value}`)).toEqual({
+      conninfo: "postgresql://db/main", password: `dummy-${value}`, extractedPasswords: [`dummy-${value}`],
+    });
+  });
+
   it.each([
     " postgresql://app:dummy-canary@db/main", "POSTGRESQL://app:dummy-canary@db/main",
     "postgresql://app:dummy-canary@[broken/main", "postgresql://app:dummy-canary@[]/main",
