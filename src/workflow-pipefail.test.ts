@@ -143,6 +143,16 @@ function realWorkflows(): { name: string; text: string }[] {
 }
 
 describe("a piped CI step keeps its first stage's exit code (#1422)", () => {
+  it("keeps the reasons-drift unusable-token control tied to its fail-loud semantic, not a gh subcommand", () => {
+    const workflow = realWorkflows().find((file) => file.name === "workflows/reasons-drift.yml");
+    const control = stepGroups(workflow?.text ?? "")
+      .flatMap(({ steps }) => steps)
+      .find((step) => step.name === "Negative control — an --issues fetch with no usable credential must FAIL, not report zero");
+    expect(control?.run).toContain("pnpm validate-reasons --issues 2>&1");
+    expect(control?.run).toContain("Reporting zero issue-recorded claims here would be the silent pass this gate exists to prevent.");
+    expect(control?.run).not.toContain("grep -qF 'gh issue list'");
+  });
+
   it("no workflow or composite-action step pipes a command without pipefail or PIPESTATUS", () => {
     expect(unguardedPipedSteps(realWorkflows()).map((s) => `${s.workflow} / ${s.job} / ${s.step}: ${s.line}`)).toEqual([]);
   });
