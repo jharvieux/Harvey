@@ -13,13 +13,16 @@
 // surface of the app it is auditing. The helpers here are the sanctioned ways to hand a secret to a
 // child: the child's environment, or its stdin.
 //
-// SCOPE — this invariant covers ARGV ONLY, deliberately (criterion 6 of #1413). "On disk" and "in a
-// log" are real secret surfaces but a different class: argv is world-readable by every local account
-// for the child's lifetime with no action required, whereas Harvey's disk writes go to operator-owned
-// temp dirs and its report output is already redaction-gated. Those two surfaces are not covered by
-// the argv rail below and are NOT claimed to be; extending the same structural treatment to them is
-// tracked as the #1413 remainder. Recording the boundary here so a reader does not mistake an
-// argv-clean run for a whole-secret-lifecycle guarantee.
+// REASON: #1778's structural policy covers only child-process argv; all disk, log, environment, evidence, report, and descendant surfaces are excluded and uncertified.
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-08-26
+// OWNER: repository operator
+// DECISION: #1778
+//
+// Reopen or split this boundary if a production path writes a target-derived secret before redaction,
+// exposes one outside the intended operator account, forwards one into a descendant's argv, or if the
+// product requires a broader whole-lifecycle guarantee. These are reopening conditions for the product
+// ruling, not an empirical falsifier. #1413 remains separate and is not closed by this decision.
 
 // Values that are never secrets even though they flow through the same call sites. A guard that
 // fires on the empty string (or on a placeholder a stand-up provisions as a non-secret) would be
