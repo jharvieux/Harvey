@@ -116,6 +116,7 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   if?: string;
+  "timeout-minutes"?: string | number;
   outputs?: Record<string, string>;
   strategy?: { matrix: { shard: string | number[] } };
   steps: WorkflowStep[];
@@ -210,6 +211,9 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
   for (const shard of active(shardJob, ctx) ? matrix as number[] : []) {
     ctx.matrix.shard = shard;
     const owners = sharded ? [shard] : [1, 2, 3, 4];
+    const selectedTargets = sharded ? partitionTargets(liveSlugs, 4)[shard - 1]! : liveSlugs;
+    expect(expression(shardJob["timeout-minutes"]!, ctx), `${event}/${shard}: cold Carbon budget`)
+      .toBe(sharded && selectedTargets.includes("carbon") ? 45 : 30);
     expect(active(score, ctx)).toBe(true);
     expect(expression(score.env!.SHARD!, ctx)).toBe(shard);
     expect(active(upload, ctx)).toBe(true);
