@@ -14,7 +14,8 @@
       "git": "git version 2.50.1 (Apple Git-155)",
       "jq": "jq-1.7.1-apple",
       "platform": "Darwin 25.5.0 arm64"
-    }
+    },
+    "retainedCollectorNote": "The executed collector receipt above identifies the original collector bytes. The retained reproduction replaces its ANSI CSI regular expression with Node stripVTControlCharacters for lint compatibility; the two normalizers produce identical bytes on all 263 retained-source calibration logs. The retainedFiles digest identifies this revised reproduction, not the earlier executed collector."
   },
   "generatedFrom": [
     {
@@ -115,8 +116,8 @@
       "sha256": "0be86b6bd8be6dded801dd629ec2e50ff6b2af1333082992a41b61867ab107e7"
     },
     "reproduction/harvey-1758-build-v2.mjs": {
-      "bytes": 8042,
-      "sha256": "dbcf2fdc726bfbd1de75c742f0bc017e458175429c5783aea9b452bdbe247716"
+      "bytes": 8077,
+      "sha256": "664a1c002df9b9afbf296f54b40f35da985aa4e91d116284b2c1acd4bfe2d79b"
     },
     "failure-tails/failure-91291753249-diagnostic-excerpt.log": {
       "bytes": 9196,

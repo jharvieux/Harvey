@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 const historicalRoot = "/private/tmp/harvey-1758-r1-4acfe824";
 const lateRoot = "/private/tmp/harvey-1758-late-27718611";
@@ -8,8 +9,7 @@ const outputRoot = "/private/tmp/harvey-1758-publication-v2";
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
-const ansiNormalize = (text) => text
-  .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+const ansiNormalize = (text) => stripVTControlCharacters(text)
   .replace(/\r\n/g, "\n")
   .replace(/\r/g, "\n");
 
