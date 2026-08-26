@@ -196,10 +196,10 @@ export const MECHANICAL_DETECTORS: readonly MechanicalDetectorDefinition[] = Obj
   detector({
     id: "path-scope-disclosure", order: 280, module: "M1", implementation: { file: "src/scan/path-scope.ts", exportName: "pathScopeNotAssessedRows" }, findingIds: ["M1-PATHSCOPE-*"], taxonomies: ["Coverage — *"],
     populationClass: "disclosure-only",
-    applicableFiles: { description: "shared loaded and identified sources; each class consumes its declared production inventory", select: (context) => [...new Map([...context.loadedSources, ...context.identifiedSourceFiles].map((file) => [file.path, file])).values()] },
+    applicableFiles: { description: "union of the actual caller inventories; each class consumes its declared production input", select: (context) => [...new Map([...context.loadedSources, ...context.identifiedSourceFiles, ...context.sourceFiles, ...context.envSourceFiles].map((file) => [file.path, file])).values()] },
     positiveFixture: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: zero-population paths emit their counted disclosure controls."),
     benignTwin: registryEvidence("src/scan/path-scope.test.ts", "path-scope-disclosure: non-zero populations suppress the disclosure twin."),
-    invoke: (context) => pathScopeNotAssessedRows(context.loadedSources, { framework: context.framework, identifiedSourceFiles: context.identifiedSourceFiles }),
+    invoke: (context) => pathScopeNotAssessedRows(context.loadedSources, context),
   }),
   detector({ id: "secret-rotation", order: 290, module: "M1", implementation: { file: "src/scan/secret-rotation.ts", exportName: "detectSecretRotationFindings" }, findingIds: ["SECRET-rotation-pair-*"], taxonomies: ["Static secret verified with no rotation-pair acceptance window"], invoke: (_context, selected) => detectSecretRotationFindings([...selected]) }),
   detector({

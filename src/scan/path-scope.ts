@@ -11,6 +11,7 @@
 
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "../detectors/common.js";
+import { NON_PRODUCT } from "../detectors/load-sources.js";
 import type { TargetFramework } from "./framework-detect.js";
 import { M5_TYPE_ESCAPE_PATH_SCOPE_CLASSES, m5TypeEscapeSources } from "../detectors/m5-type-escape.js";
 import { M8_VACUOUS_ASSERTION_PATH_SCOPE_CLASSES, vacuousAssertionSourceFiles } from "../detectors/m8-vacuous-assertion.js";
@@ -49,9 +50,13 @@ import {
 
 export interface PathScopeContext {
   framework?: TargetFramework;
-  /** Polyglot production inventory; omitted only when the supplied fixture is the inventory. */
+  /** Exact caller inventories; omitted only when the supplied in-memory fixture is the inventory. */
   identifiedSourceFiles?: readonly SourceInput[];
+  sourceFiles?: readonly SourceInput[];
+  envSourceFiles?: readonly SourceInput[];
 }
+
+type PathScopeInventory = "loaded-sources" | "identified-sources" | "source-files" | "env-source-files" | "product-loaded-sources";
 
 export interface PathScopedClass {
   /** Row id emitted when this class's filter admits nothing. */
@@ -62,8 +67,8 @@ export interface PathScopedClass {
   /** Owning source export, retained by the census completeness receipt. */
   ownerFile: string;
   selectorSymbol: string;
-  /** Most owners consume loadSources; polyglot owners must use their broader production input. */
-  inventory?: "identified-sources";
+  /** The caller's input before this class's exported selector runs. */
+  inventory?: Exclude<PathScopeInventory, "loaded-sources">;
   /** What the filter admits, in the words a client reads. */
   convention: string;
   /** THE detector's own exported filter — never a copy of it. */
@@ -80,6 +85,7 @@ export const ENTRY_POINT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "bola-owner",
     classId: "Request-supplied owner id trusted by an authenticated Pages Router handler",
     ownerFile: "src/scan/bola-owner.ts",
+    inventory: "source-files",
     selectorSymbol: "bolaOwnerScannedFiles",
     convention: "Next.js Pages Router API routes (`pages/api/**`, excluding test/example trees)",
     select: bolaOwnerScannedFiles,
@@ -90,6 +96,7 @@ export const ENTRY_POINT_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "job-tenant-scope",
     classId: "Service-role query in a background-job path with no tenant predicate",
     ownerFile: "src/scan/job-tenant-scope.ts",
+    inventory: "source-files",
     selectorSymbol: "jobTenantScopeScannedFiles",
     convention: "conventional background-job directories (`inngest/`, `jobs/`, `queues/`, `workers/`, `app/api/cron/`)",
     select: jobTenantScopeScannedFiles,
@@ -166,7 +173,7 @@ export interface PathScopeCensusRow {
   ownerFile: string;
   selectorSymbol: string;
   convention: string;
-  inventory: "loaded-sources" | "identified-sources";
+  inventory: PathScopeInventory;
   inputFiles: number;
   applicable: boolean;
   filesRead: number;
@@ -178,19 +185,32 @@ function selections(
   classes: readonly PathScopedClass[],
   invokeInapplicable = false,
 ): Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }> {
-  const selectorCache = new Map<PathScopedClass["select"], SourceInput[]>();
+  const inventories: Record<PathScopeInventory, readonly SourceInput[]> = {
+    "loaded-sources": files,
+    "identified-sources": context.identifiedSourceFiles ?? files,
+    "source-files": context.sourceFiles ?? files,
+    "env-source-files": context.envSourceFiles ?? files,
+    "product-loaded-sources": files.filter((file) => !NON_PRODUCT.test(file.path)),
+  };
+  const selectorCache = new Map<PathScopeInventory, Map<PathScopedClass["select"], SourceInput[]>>();
   const out = new Map<PathScopedClass, { applicable: boolean; files: SourceInput[]; inputFiles: number }>();
   for (const entry of classes) {
-    const inputs = entry.inventory === "identified-sources" ? (context.identifiedSourceFiles ?? files) : files;
+    const inventory = entry.inventory ?? "loaded-sources";
+    const inputs = inventories[inventory];
     const applicable = entry.applicable?.(inputs, context) ?? true;
     if (!applicable && !invokeInapplicable) {
       out.set(entry, { applicable: false, files: [], inputFiles: inputs.length });
       continue;
     }
-    let selected = selectorCache.get(entry.select);
+    let cache = selectorCache.get(inventory);
+    if (!cache) {
+      cache = new Map();
+      selectorCache.set(inventory, cache);
+    }
+    let selected = cache.get(entry.select);
     if (selected === undefined) {
       selected = entry.select(inputs, context);
-      selectorCache.set(entry.select, selected);
+      cache.set(entry.select, selected);
     }
     out.set(entry, { applicable, files: selected, inputFiles: inputs.length });
   }
@@ -227,15 +247,15 @@ export function pathScopeCensus(
 
 /**
  * One counted not-assessed row per applicable path-gated class whose production selector admitted
- * no file. Deliberately silent when the target has no source files at all: M1-EXT-00 owns the whole
- * scan absence and the mechanical registry does not invoke this producer for an empty inventory.
+ * no file. M1-EXT-00 owns whole-scan absence; an entirely empty input emits no class-specific rows.
  */
 export function pathScopeNotAssessedRows(
   files: readonly SourceInput[],
   context: Readonly<PathScopeContext> = {},
   classes: readonly PathScopedClass[] = PATH_SCOPED_DETECTORS,
 ): Finding[] {
-  if (files.length === 0 && (context.identifiedSourceFiles?.length ?? 0) === 0) return [];
+  if ([files, context.identifiedSourceFiles, context.sourceFiles, context.envSourceFiles]
+    .every((inventory) => !inventory?.length)) return [];
   const selected = selections(files, context, classes);
   return classes
     .filter((entry) => {

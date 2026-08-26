@@ -17,7 +17,7 @@ import type { ReportMeta } from "../findings.js";
 import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "../detectors/common.js";
 import { MechanicalScanContext } from "./mechanical-context.js";
-import { runRegisteredMechanicalDetectors } from "./mechanical-detector-registry.js";
+import { MECHANICAL_DETECTORS, runRegisteredMechanicalDetectors } from "./mechanical-detector-registry.js";
 import { detectBolaOwnerFindings } from "./bola-owner.js";
 import { detectJobTenantScopeFindings } from "./job-tenant-scope.js";
 import { detectM5TypeEscapeFindings } from "../detectors/m5-type-escape.js";
@@ -451,6 +451,72 @@ describe("#1800 discovery-backed path-scoped class registry", () => {
           inventory: "identified-sources", inputFiles: 1, filesRead: present ? 0 : 1,
         });
       });
+    }
+  });
+
+  it("counts each M1 owner's actual input when loadedSources excludes an admitted path", () => {
+    const fixtures = [
+      ["leftover-auth", "out/app/admin/route.ts", "export function GET() { return Response.json({ok:true}); }"],
+      ["env-schema", "out/env.mts", "export const schema = { TOKEN: true };"],
+      ["idempotency", "out/jobs/send.ts", 'export async function send() { await fetch("https://example.invalid"); }'],
+      ["bola-cross-file", "out/app/api/route.ts", "export function GET() { return Response.json({ok:true}); }"],
+      ["job-tenant-scope", "out/jobs/send.ts", "export const value = 1;"],
+      ["bola-owner", "out/pages/api/get.ts", "export const value = 1;"],
+    ] as const;
+    for (const [detector, path, text] of fixtures) {
+      withProductionContext([source(path, text)], undefined, (context) => {
+        expect(context.loadedSources, detector).toEqual([]);
+        const definition = MECHANICAL_DETECTORS.find((entry) => entry.id === detector)!;
+        const actualInputs = definition.applicableFiles.select(context);
+        expect(actualInputs, detector).toHaveLength(1);
+        const classes = PATH_SCOPED_DETECTORS.filter((entry) => entry.detector === detector);
+        const census = pathScopeCensus(context.loadedSources, context, classes);
+        const execution = runRegisteredMechanicalDetectors(context);
+        const produced = execution.findings;
+        expect(execution.records.find((record) => record.detector === "path-scope-disclosure"), detector)
+          .toMatchObject({ status: "ran", unitsExamined: 1 });
+        for (const entry of classes) {
+          const actualCount = entry.select(actualInputs, context).length;
+          expect(census.find((row) => row.rowId === entry.rowId)?.filesRead, entry.rowId).toBe(actualCount);
+          expect(produced.some((finding) => finding.id === entry.rowId), entry.rowId).toBe(actualCount === 0);
+        }
+        if (detector === "leftover-auth") expect(produced.some((finding) => finding.id.startsWith("AUTH-sensitive-route"))).toBe(true);
+        if (detector === "env-schema") expect(produced.some((finding) => finding.id.startsWith("ENV-unused-declaration-TOKEN"))).toBe(true);
+      });
+    }
+  });
+
+  it("matches the static CLI's product-only M7 input for stories, tests, and the product twin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-path-scope-product-"));
+    try {
+      const classes = PATH_SCOPED_DETECTORS.filter((entry) => entry.detector === "perf-code");
+      for (const name of ["card.stories.tsx", "card.test.tsx", "card.tsx"]) {
+        const target = join(dir, name);
+        mkdirSync(target);
+        writeFileSync(join(target, name), 'export const Card = () => <img src="/card.png" />;\n');
+        writeFileSync(join(target, ".babelrc"), compilerConfig.text);
+        const out = join(dir, `${name}.json`);
+        await promisify(execFile)(process.execPath, ["--import", "tsx", join(REPO_ROOT, "src/cli/static-detect.ts"), target, "--out", out], {
+          cwd: REPO_ROOT, timeout: 20_000, maxBuffer: 1024 * 1024,
+        });
+        const produced = JSON.parse(readFileSync(out, "utf8")) as { id: string; taxonomy: string }[];
+        const context = new MechanicalScanContext(target);
+        try {
+          const census = pathScopeCensus(context.loadedSources, context, classes);
+          const productTwin = name === "card.tsx";
+          for (const row of census) {
+            if (!row.applicable) continue;
+            expect(produced.some((finding) => finding.id === row.rowId), `${name}: ${row.rowId}`).toBe(row.filesRead === 0);
+            if (!productTwin) expect(row.filesRead, `${name}: ${row.rowId}`).toBe(0);
+          }
+          expect(produced.some((finding) => finding.taxonomy === "M7 — Raw <img> instead of next/image")).toBe(productTwin);
+          expect(produced.some((finding) => finding.id === "M1-PATHSCOPE-M7-RAW-IMG-00")).toBe(!productTwin);
+        } finally {
+          context.dispose();
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

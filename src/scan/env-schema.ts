@@ -54,6 +54,7 @@ export const ENV_SCHEMA_PATH_SCOPE_CLASSES: readonly PathScopedClass[] = [
     detector: "env-schema",
     classId: "Environment schema completeness diff",
     ownerFile: "src/scan/env-schema.ts",
+    inventory: "env-source-files",
     selectorSymbol: "envSchemaModuleCandidates",
     convention: "product schema modules named `env.*`, calling `createEnv(...)`, or parsing the whole runtime env object",
     select: envSchemaModuleCandidates,
