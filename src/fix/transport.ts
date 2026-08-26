@@ -2,7 +2,8 @@
 // NETWORK-WRITING CODE PATH IN THE REPO. Every git push and every gh call goes through the one wrapped
 // client below, where the push-ref and protected-branch rails are enforced at the WRAPPER, not left to
 // a caller to remember (§3.1 rule 1). The only PR-affecting command the pipeline may issue is
-// `gh pr create --draft`; there is NO merge, ready-for-review, or repo-settings call anywhere in this
+// the fixed pull-request creation endpoint with draft=true; there is NO merge, ready-for-review,
+// or repo-settings call anywhere in this
 // module — absent, not merely unused (§6 Phase 1). Outbound operations run only when a caller invokes
 // them explicitly; nothing here touches git or the network at import time. A draft PR is opened ONLY on
 // a verified-green result, and `--dry-run` (the default) withholds every push.
@@ -19,12 +20,19 @@ import type { VerificationEvidence } from "./verify.js";
 
 // Injectable so tests never shell out to real git/gh, and so a refusal can be proven to happen BEFORE
 // any command is issued (the fake records calls; the refusal tests assert it was never called).
-export type CommandRunner = (file: "git" | "gh", args: string[], cwd: string) => string;
+export type CommandRunner = (file: "git" | "gh", args: string[], cwd: string, input?: string) => string;
 
-const defaultRunner: CommandRunner = (file, args, cwd) => {
+const defaultRunner: CommandRunner = (file, args, cwd, input) => {
   // git is scoped with -C so it acts on the client checkout; gh reads the repo from cwd.
   const full = file === "git" ? ["-C", cwd, ...args] : args;
-  return execFileSync(file, full, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  try {
+    return execFileSync(file, full, { cwd, encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"] }).trim();
+  } catch (error) {
+    if (file !== "gh") throw error;
+    // The remote may echo the submitted body. Do not retain the original error or its streams.
+    const status = error !== null && typeof error === "object" && "status" in error && typeof error.status === "number" ? `exit ${error.status}` : "spawn failure";
+    throw new Error(`gh transport failed (${status}); output withheld (verify the remote before retrying)`);
+  }
 };
 
 interface GitGhClient {
@@ -99,12 +107,24 @@ export function openDraftPr(client: GitGhClient, input: DraftPrInput): { url?: s
   assertRefPushable(client, input.head);
   if (client.dryRun) return { opened: false, reason: "--dry-run: draft PR withheld" };
   assertNotHarveyItself(client);
-  const url = client.run(
+  // The CLI's --title flag has no stdin form. The fixed draft-create API accepts the complete
+  // title/body as JSON stdin without placing either value in argv or another process environment.
+  const reply = client.run(
     "gh",
-    ["pr", "create", "--draft", "--base", input.base, "--head", input.head, "--title", input.title, "--body", input.body],
+    ["api", "--method", "POST", "repos/{owner}/{repo}/pulls", "--input", "-", "--jq", "{url: .html_url, draft: .draft}"],
     client.targetDir,
+    JSON.stringify({ base: input.base, head: input.head, title: input.title, body: input.body, draft: true, maintainer_can_modify: true }),
   );
-  return { url: url || undefined, opened: true };
+  try {
+    const result: unknown = JSON.parse(reply);
+    if (result !== null && typeof result === "object" && "draft" in result && result.draft === true && "url" in result && typeof result.url === "string") {
+      const url = new URL(result.url);
+      if (url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && /^\/[^/]+\/[^/]+\/pull\/[1-9]\d*$/.test(url.pathname)) {
+        return { url: result.url, opened: true };
+      }
+    }
+  } catch { /* An invalid reply is not proof that creation succeeded; never echo its payload. */ }
+  throw new Error("gh draft PR creation returned an invalid draft response; output withheld (verify the remote before retrying)");
 }
 
 // §7 rollback paragraph must be TRUE for every PR opened (enforcement mirror of §3.1 rule 6): no
