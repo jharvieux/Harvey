@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+
+// Operational probe: this comment intentionally exercises disclosure-workflow path relevance.
 import {
   BOUNDED_RULES,
   BOUND_TRIAGE,
