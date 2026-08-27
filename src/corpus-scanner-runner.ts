@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,13 +42,64 @@ interface CorpusScannerRunResult {
   cacheRecord?: CorpusScannerRecord;
 }
 
+function waitForScannerChild(bin: string, args: string[], options: SpawnOptions, input?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, options);
+    let settled = false;
+    let stdinError: Error | undefined;
+    const cleanup = (): void => {
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      child.stdin?.removeListener("error", onStdinError);
+    };
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = (error: Error): void => {
+      if (stdinError === undefined) finish(error);
+    };
+    const onStdinError = (error: Error): void => {
+      stdinError ??= error;
+      if (!child.killed) {
+        try {
+          child.kill();
+        } catch {
+          // The stdin failure remains primary; close is the process-lifecycle boundary.
+        }
+      }
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (stdinError !== undefined) finish(stdinError);
+      else if (signal !== null) finish(new Error(`${bin} was killed by signal ${signal}`));
+      else if (code !== 0) finish(new Error(`${bin} exited with code ${code ?? "unknown"}`));
+      else finish();
+    };
+    child.on("error", onError);
+    child.once("close", onClose);
+    if (input !== undefined) {
+      const stdin = child.stdin as ChildProcess["stdin"];
+      if (!stdin) {
+        if (!child.killed) child.kill();
+        finish(new Error(`${bin} did not expose the requested stdin pipe`));
+        return;
+      }
+      stdin.once("error", onStdinError);
+      stdin.end(input);
+    }
+  });
+}
+
 export async function runCorpusScanner(options: CorpusScannerRunOptions): Promise<CorpusScannerRunResult> {
   const outputDir = mkdtempSync(join(tmpdir(), "harvey-corpus-"));
   const out = join(outputDir, "findings.json");
   const scopeOut = join(outputDir, "scope.json");
   const qualityPreparation = options.cache?.dependencyPreparation;
   const qualityEnvironment = corpusQualityEnvironment();
-  const execute = (): { findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string } => {
+  const execute = async (): Promise<{ findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string }> => {
     try {
       const quality = options.scanner === "quality-scan";
       const bin = quality ? join(options.repoRoot, "node_modules", ".bin", "tsx") : "pnpm";
@@ -67,12 +118,11 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
           ]
         : [options.script, ...options.scriptArgs, "--out", out, "--scope-out", scopeOut];
       assertNoSecretInArgv("corpus-scanner-runner.execute", [bin, ...args], [qualityPreparation?.reason, degradedReason]);
-      execFileSync(bin, args, {
+      await waitForScannerChild(bin, args, {
         cwd: options.repoRoot,
         stdio: [degradedReason === undefined ? "ignore" : "pipe", "ignore", "inherit"],
-        ...(degradedReason === undefined ? {} : { input: degradedReason }),
         ...(quality ? { env: qualityEnvironment } : {}),
-      });
+      }, degradedReason);
       const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
       return {
         findings: Array.isArray(parsed) ? parsed : [parsed.finding],
@@ -94,7 +144,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
     ? Boolean(qualityPreparation?.complete === true && qualityPreparation.cacheable && qualityPreparation.key)
     : qualityPreparation?.sourceTreeCacheable !== false;
   if (!options.cache || !cacheAllowed) {
-    const value = execute();
+    const value = await execute();
     const qualityFreshReason = qualityPreparation
       ? `quality-scan executes fresh because ${qualityPreparation.reason}`
       : QUALITY_FRESH_REASON;
@@ -122,7 +172,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
       onEvent: options.onEvent,
     });
   } catch (error) {
-    const value = execute();
+    const value = await execute();
     const reason = `scanner implementation closure is non-cacheable: ${error instanceof Error ? error.message : String(error)}`;
     options.onEvent?.(`SCANNER ${options.scanner} — ${value.completed ? "fresh" : "incomplete"}; ${value.scope.unitsExamined} unit(s); ${reason}`);
     return { findings: value.findings };

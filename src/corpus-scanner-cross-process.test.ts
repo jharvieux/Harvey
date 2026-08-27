@@ -1,4 +1,5 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -6,13 +7,25 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
+import { digestObservedPaths } from "./corpus-scanner-scope.js";
 import { readNamesSafe } from "./fs-walk.js";
 import { SecretInArgvError } from "./secret-argv.js";
+
+const spawnState = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
 
 // Record the production boundary while executing the real quality CLI and its local scanners.
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
-  return { ...original, execFileSync: vi.fn(original.execFileSync) };
+  return {
+    ...original,
+    spawn: vi.fn((command: string, args: readonly string[], options: Parameters<typeof original.spawn>[2]) => {
+      const child = original.spawn(command, args, options);
+      spawnState.active += 1;
+      spawnState.maxActive = Math.max(spawnState.maxActive, spawnState.active);
+      child.once("close", () => { spawnState.active -= 1; });
+      return child;
+    }),
+  };
 });
 
 const execFileAsync = promisify(execFile);
@@ -30,11 +43,202 @@ interface ProcessResult {
   events: string[];
 }
 
+type SyntheticScanner = "detect-static" | "quality-scan" | "mutation-detect-only";
+
+function syntheticScope(scanner: SyntheticScanner): Record<string, unknown> {
+  const pathsDigest = digestObservedPaths(["unit.ts"]);
+  const common = { schema: 1, scanner, unitsExamined: 1, description: `synthetic ${scanner} scope after child close` };
+  if (scanner === "detect-static") {
+    return { ...common, observation: { scanner, loadedSources: { count: 1, pathsDigest }, ancillary: { productSources: 1, configSources: 0, testStorySources: 0 } } };
+  }
+  if (scanner === "quality-scan") {
+    return {
+      ...common,
+      observation: {
+        scanner,
+        productSources: { count: 1, pathsDigest },
+        jscpd: { status: "completed", comparedLines: 1 },
+        knip: { discovered: [], completed: [], reduced: [], incomplete: [] },
+        divergedClones: { securityPathSources: 0, wholeRepoEnabled: false, complementSources: 0 },
+      },
+    };
+  }
+  return {
+    ...common,
+    observation: {
+      scanner,
+      testSources: { count: 1, pathsDigest },
+      suiteSignals: { packageManifest: true, strykerConfig: true, ancestorWorkspaceSuite: null, childWorkspaceSuites: [] },
+    },
+  };
+}
+
+function mockScannerChild(options: {
+  scanner: SyntheticScanner;
+  delayMs?: number;
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  malformedOutput?: boolean;
+}): void {
+  vi.mocked(spawn).mockImplementationOnce(((command: string, args: readonly string[]) => {
+    const child = new EventEmitter() as ChildProcess;
+    Object.defineProperty(child, "stdin", { value: null });
+    Object.defineProperty(child, "killed", { value: false, writable: true });
+    Object.defineProperty(child, "kill", { value: () => { Reflect.set(child, "killed", true); return true; } });
+    spawnState.active += 1;
+    spawnState.maxActive = Math.max(spawnState.maxActive, spawnState.active);
+    child.once("close", () => { spawnState.active -= 1; });
+    setTimeout(() => {
+      const code = options.code === undefined ? 0 : options.code;
+      const signal = options.signal ?? null;
+      if (code === 0 && signal === null) {
+        const outIndex = args.indexOf("--out");
+        const scopeIndex = args.indexOf("--scope-out");
+        if (outIndex < 0 || scopeIndex < 0) throw new Error(`${command}: synthetic child received no output paths`);
+        writeFileSync(args[outIndex + 1]!, options.malformedOutput ? "{" : "[]\n");
+        writeFileSync(args[scopeIndex + 1]!, `${JSON.stringify(syntheticScope(options.scanner))}\n`);
+      }
+      child.emit("close", code, signal);
+    }, options.delayMs ?? 10);
+    return child;
+  }) as typeof spawn);
+}
+
+function mockStdinFailureChild(options: {
+  primaryError: Error;
+  cleanupError: Error;
+  closeDelayMs?: number;
+}): void {
+  vi.mocked(spawn).mockImplementationOnce((() => {
+    const child = new EventEmitter() as ChildProcess;
+    const stdin = new EventEmitter() as NonNullable<ChildProcess["stdin"]>;
+    Object.defineProperty(stdin, "end", {
+      value: () => { queueMicrotask(() => stdin.emit("error", options.primaryError)); },
+    });
+    Object.defineProperty(child, "stdin", { value: stdin });
+    Object.defineProperty(child, "killed", { value: false, writable: true });
+    Object.defineProperty(child, "kill", {
+      value: () => {
+        Reflect.set(child, "killed", true);
+        child.emit("error", options.cleanupError);
+        setTimeout(() => child.emit("close", null, "SIGTERM"), options.closeDelayMs ?? 30);
+        return true;
+      },
+    });
+    spawnState.active += 1;
+    spawnState.maxActive = Math.max(spawnState.maxActive, spawnState.active);
+    child.once("close", () => { spawnState.active -= 1; });
+    return child;
+  }) as typeof spawn);
+}
+
 describe("corpus scanner execution across processes and checkout paths (#1871/#1872)", () => {
   const dirs: string[] = [];
   afterEach(() => {
     dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
     vi.clearAllMocks();
+    spawnState.active = 0;
+    spawnState.maxActive = 0;
+  });
+
+  it("yields the worker before the first scanner event and reads delayed output only after child close (#1996)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-async-close-"));
+    dirs.push(targetDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"async-close-control","private":true}\n');
+    const events: string[] = [];
+    mockScannerChild({ scanner: "mutation-detect-only", delayMs: 40 });
+    const timer = setTimeout(() => events.push("timer-serviced"), 0);
+    const result = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "async close control",
+      script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"],
+      onEvent: (message) => events.push(message),
+    });
+    clearTimeout(timer);
+
+    expect(events[0]).toBe("timer-serviced");
+    expect(events[1]).toContain("SCANNER mutation-detect-only — fresh; 1 unit(s)");
+    expect(result.findings).toEqual([]);
+    expect(spawnState).toMatchObject({ active: 0, maxActive: 1 });
+  });
+
+  it("does not overlap scanner variants when each awaited call starts after the prior child closes (#1996)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-sequential-"));
+    dirs.push(targetDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"sequential-control","private":true}\n');
+    for (const scanner of ["detect-static", "quality-scan", "mutation-detect-only"] as const) {
+      mockScannerChild({ scanner, delayMs: 20 });
+      const invocation = scanner === "detect-static"
+        ? { script: "detect-static" as const, scanner, scriptArgs: [targetDir] }
+        : scanner === "quality-scan"
+          ? { script: "quality-scan" as const, scanner, scriptArgs: [targetDir] }
+          : { script: "mutation-scan" as const, scanner, scriptArgs: [targetDir, "--detect-only"] };
+      await runCorpusScanner({ repoRoot: process.cwd(), targetDir, targetConfig: `${scanner} sequential control`, ...invocation });
+    }
+    expect(spawnState).toMatchObject({ active: 0, maxActive: 1 });
+  });
+
+  it("waits for close after a stdin failure, preserves that primary error, and does not overlap the next scanner (#1996)", async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-stdin-close-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-stdin-close-cache-"));
+    dirs.push(targetDir, cacheDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"stdin-close-control","private":true}\n');
+    const events: string[] = [];
+    const primaryError = new Error("synthetic stdin write failed");
+    const cleanupError = new Error("synthetic kill cleanup failed");
+    mockStdinFailureChild({ primaryError, cleanupError, closeDelayMs: 40 });
+
+    const failed = await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "stdin failure close control",
+      script: "quality-scan", scanner: "quality-scan", scriptArgs: [targetDir],
+      cache: {
+        dir: cacheDir, mode: "read-write", targetRevision: "stdin-failure-pin", targetTree: "stdin-failure-tree",
+        dependencyPreparation: {
+          status: "incomplete", complete: false, cacheable: false, packageManager: "npm", packageManagerVersion: "fixture",
+          reason: "synthetic dependency preparation failure",
+        },
+      },
+      onEvent: (message) => events.push(message),
+    });
+
+    expect(failed.findings).toEqual([]);
+    expect(events.join("\n")).toContain(primaryError.message);
+    expect(events.join("\n")).not.toContain(cleanupError.message);
+    expect(spawnState.active).toBe(0);
+
+    mockScannerChild({ scanner: "mutation-detect-only", delayMs: 10 });
+    await runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "post-stdin-failure overlap control",
+      script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"],
+    });
+    expect(spawnState).toMatchObject({ active: 0, maxActive: 1 });
+  });
+
+  it.each([
+    { name: "nonzero exit", code: 7, signal: null, malformedOutput: false, reason: "exited with code 7" },
+    { name: "signal", code: null, signal: "SIGTERM" as const, malformedOutput: false, reason: "killed by signal SIGTERM" },
+    { name: "malformed output", code: 0, signal: null, malformedOutput: true, reason: "incomplete output was not stored" },
+  ])("keeps a $name incomplete and non-cacheable, then retries it as a miss (#1996)", async ({ code, signal, malformedOutput, reason }) => {
+    const targetDir = mkdtempSync(join(tmpdir(), "harvey-corpus-child-failure-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "harvey-corpus-child-failure-cache-"));
+    dirs.push(targetDir, cacheDir);
+    writeFileSync(join(targetDir, "package.json"), '{"name":"child-failure-control","private":true}\n');
+    const events: string[] = [];
+    const run = () => runCorpusScanner({
+      repoRoot: process.cwd(), targetDir, targetConfig: "child failure control",
+      script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [targetDir, "--detect-only"],
+      cache: { dir: cacheDir, mode: "read-write", targetRevision: "failure-pin", targetTree: "failure-tree" },
+      onEvent: (message) => events.push(message),
+    });
+
+    mockScannerChild({ scanner: "mutation-detect-only", code, signal, malformedOutput });
+    const failed = await run();
+    expect(failed.findings).toEqual([]);
+    expect(failed.cacheRecord).toMatchObject({ cache: "non-cacheable", scope: { unitsExamined: 0 } });
+    expect(events.join("\n")).toContain(reason);
+
+    mockScannerChild({ scanner: "mutation-detect-only" });
+    const retry = await run();
+    expect(retry.cacheRecord?.cache).toBe("miss");
   });
 
   it("caches proven zero-test mutation results for both no-package and package-without-suite targets", async () => {
@@ -536,14 +740,14 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     });
     const result = await run();
     const fullReason = `dependency preparation incomplete: ${incompletePreparation.reason}`;
-    const qualityCalls = vi.mocked(execFileSync).mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === join(process.cwd(), "src", "cli", "quality-scan.ts"));
+    const qualityCalls = vi.mocked(spawn).mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === join(process.cwd(), "src", "cli", "quality-scan.ts"));
     expect(qualityCalls).toHaveLength(1);
     const [, argv, invocation] = qualityCalls[0]!;
     expect(argv).toContain("--degraded-knip-reason-stdin");
     expect(argv).toContain("--degraded-knip-unresolved-dependency-surface");
     expect(argv).not.toContain("--degraded-knip-reason");
     expect((argv as string[]).some((arg) => arg.includes(incompletePreparation.reason))).toBe(false);
-    expect(invocation).toMatchObject({ input: fullReason, stdio: ["pipe", "ignore", "inherit"] });
+    expect(invocation).toMatchObject({ stdio: ["pipe", "ignore", "inherit"] });
     expect(Object.values(invocation?.env ?? {}).some((value) => value?.includes(incompletePreparation.reason))).toBe(false);
     expect(result.cacheRecord).toBeUndefined();
     expect(readNamesSafe(cacheDir)).toEqual([]);
@@ -582,9 +786,8 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     });
     expect(completeResult.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(targetDir, "partial-provider-consumed"))).toBe(true);
-    const completeInvocation = vi.mocked(execFileSync).mock.calls.at(-1)!;
+    const completeInvocation = vi.mocked(spawn).mock.calls.at(-1)!;
     expect(completeInvocation[1]).not.toContain("--degraded-knip-reason-stdin");
-    expect(completeInvocation[2]?.input).toBeUndefined();
     expect(completeInvocation[2]?.stdio).toEqual(["ignore", "ignore", "inherit"]);
     expect(completeInvocation[2]?.env).toEqual(invocation?.env);
   }, 60_000);
@@ -608,7 +811,7 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     });
     await expect(result).rejects.toBeInstanceOf(SecretInArgvError);
     await expect(result).rejects.not.toThrow(argument);
-    expect(execFileSync).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
     expect(events).toEqual([]);
   }, 30_000);
 
