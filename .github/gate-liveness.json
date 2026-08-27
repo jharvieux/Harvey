@@ -226,6 +226,11 @@
       "workflow": ".github/workflows/site-ci.yml",
       "measures": "Builds and lints `site/` on any PR that touches it — `next build` catches what `tsc --noEmit` does not.",
       "whyDistinguishable": "It reports on the PR that caused it, so a run that dies in setup is a RED check the author sees before merging. There is no cadence over which its silence could accumulate unread, and no in-job filter that could make a dead build green."
+    },
+    {
+      "workflow": ".github/workflows/issue-1799-hosted-preflight.yml",
+      "measures": "Manually proves one hosted macOS ARM64 VM exposes the exact owned-process-group ps census and inherited deny-network bind behavior required for a later feasibility decision.",
+      "whyDistinguishable": "The workflow is manual-only with no matrix, filter, no-op arm, retry, or continue-on-error; no pass receipt exists until measurement and teardown finish, so setup, probe, validation, or cleanup death leaves a red run rather than a quiet green result."
     }
   ]
 }
