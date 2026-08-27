@@ -323,6 +323,19 @@ describe("the registry — a new gate job cannot join without a liveness assert"
     }
   });
 
+  it("binds the two newly retired hatches to their exact main liveness drills", () => {
+    const accepted = {
+      ".github/workflows/supervised-declines.yml": "33033969989",
+      ".github/workflows/genai-census.yml": "33033974828",
+    } as const;
+    for (const [workflow, run] of Object.entries(accepted)) {
+      expect(registry.gates.find((gate) => gate.workflow === workflow)?.provenBy).toEqual({
+        run: `https://github.com/jharvieux/Harvey/actions/runs/${run}`,
+        at: "2026-08-27",
+      });
+    }
+  });
+
   // The liveness drill deliberately fails the job; the alert path fires on a workflow_dispatch
   // failure. Wired naively, DRILLING THE GUARD OPENS A REAL ALARM — #1586's criterion 4 sat
   // unproven for exactly that reason. Each drill must switch the other's machinery off.
