@@ -157,8 +157,11 @@ only exist on the branch being dispatched (#1333, 2026-07-31) — but the workfl
 default branch, and that half reproduces: `gh api
 repos/jharvieux/Harvey/actions/workflows/supervised-declines.yml/dispatches -f
 ref=feature/sweep-ci-1545` returned **HTTP 404** on 2026-07-31 while ten sibling drills dispatched
-from that same branch the same hour all ran. `supervised-declines` therefore lands with a
-`pendingProof` tracked by #1688; every other gate is proven.
+from that same branch the same hour all ran. Those workflow-file hatches are now retired. Exact-main
+`liveness_drill=true` runs `33033969989` (`supervised-declines`) and `33033974828`
+(`genai-admission-census`) each skipped the measuring and alert paths and failed only at the
+gate-liveness assertion, naming the expected ids as `NEVER REACHED`. Their registry rows now carry
+`provenBy`; neither retains `pendingProof`.
 
 ## Every new gate id, MEASURED on a real run (#1568 criterion 3)
 
@@ -181,12 +184,23 @@ run column is therefore per row, resolved from each job id via
 | `acceptance-close-selftest` | 8 hermetic cases | — | 30640273614 |
 | `acceptance-close` | 1 closed issue over 3 surfaces | — | 30640273614 |
 
-`supervised-declines-selftest` scored **9** on that run and scores **20** after the precision fix
-below — MEASURED from the receipt of run 30643557209, not counted by hand; the run in the table is
-cited for what it measured on the day, not as the current count.
+The two former hatches have separate exact-main negative liveness evidence. These rows prove that a
+job which never reaches its measuring phase fails loud; they are not positive unit measurements:
 
-`supervised-declines` (the live scan) is the one id with no MEASURED run: it runs on no
-`pull_request`, and its workflow cannot be dispatched until the file is on `main`. Tracked by #1688.
+| gate id | expected id(s) reported `NEVER REACHED` | run | sole failing substantive step |
+| --- | --- | --- | --- |
+| `supervised-declines` | `supervised-declines-selftest`, `supervised-declines` | 33033969989 | `Gate liveness — did this job actually read anything?` |
+| `genai-admission-census` | `genai-admission-census` | 33033974828 | `Gate liveness — did this job actually census any repo?` |
+
+`supervised-declines-selftest` scored **9** on run `30639491925` and scores **20** after the precision
+fix below — MEASURED from the receipt of run `30643557209`, not counted by hand; the `30639491925`
+row is cited for what it measured on the day, not as the current count.
+
+`supervised-declines`' exact-main liveness drill is deliberately not a positive scan receipt: the
+scan was skipped so the assertion could prove the missing-measurement direction. Its alert path was
+proved separately by alert drill run `33033182089`, which created and self-cleaned drill issue
+`#1993`; `genai-census`' alert path was likewise proved by run `33033184981` and drill issue `#1994`.
+Do not relabel either alert drill as evidence that the scan or census produced units.
 
 **The first attempt at this table failed, and the failure is the useful part.** All five newly-wired
 jobs went RED on PR #1697's first run while scoring perfectly: `recordMeasured` writes nothing when
@@ -213,8 +227,10 @@ runs now take that path regardless of changed files, and the workflow contract t
 return to diff-based external-corpus routing. A green PR context must still be read as "intentionally
 deferred", never as evidence that the corpus was scored.
 
-**`supervised-declines` is unproven in both of its paths** until its workflow file is on `main` —
-see #1688, which carries the 404 that makes it unprovable before the merge.
+**The former `supervised-declines` and `genai-census` proof hatches are closed.** Their exact-main
+liveness drills prove the fail-closed direction, and their separate alert drills prove marker → issue
+delivery and cleanup. These receipts do not prove positive scan/census output; the distinction is
+why the negative and alert evidence remain separate above.
 
 **The exemption check is a floor, not a proof.** It refuses the one shape it can recognise — a
 conditional scoring step — and takes the rest of `whyDistinguishable` on the prose. A workflow that

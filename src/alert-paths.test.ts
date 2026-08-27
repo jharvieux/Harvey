@@ -249,45 +249,32 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
     expect(facts_.flatMap((f) => f.alertSteps.map((s) => s.marker)).sort()).toEqual(reg.paths.map((p) => p.marker).sort());
   });
 
-  // The hatch is a named list, not a category that grows: any unproven path has to edit this line,
-  // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
-  // retired the same day once its drill ran (run 30376371298, issue #1430). site-smoke-alert
-  // (#1509/#1543) occupied it the same way and was retired 2026-07-31 once site-smoke.yml landed on
-  // main and its drill ran (run 30595915001, issue #1598).
-  //
-  // #1333 (2026-07-31) retired two more, and the reason matters more than the count. Both
-  // ci-free-recall-alert (#1185/#1536) and ci-semantic-freshness-alert (#1270/#1611) cited the same
-  // circularity — "a drill only dispatches against a workflow already on the DEFAULT branch" — which
-  // was true the day each was written and had since expired unread: both files had long since
-  // merged, so nothing was blocking either drill except nobody re-reading the reason. They drilled
-  // first try (runs 30605913478 / 30605914742). The comment that stood here also asserted the
-  // circularity was "about what the default branch can RUN, not about which file exists"; that was
-  // MEASURED FALSE the same day — a workflow_dispatch run executes the copy on the ref you name, so
-  // a job or input present only on a branch is dispatchable from it (see .github/alert-paths.json's
-  // `_why`). ci-main-red-alert (#1507/#1612) was the last occupant whose reason was neither the
-  // circularity nor a missing file, and it was BORN STALE: its `why` said "NOT ATTEMPTED this round"
-  // while the attempt sat two entries above it in the same file. Run 30607143343 — recorded there as
-  // ci-heavy-cli-alert's proof — is a `-f alert_drill=true` dispatch whose job list ends `a red main
-  // raises an alarm  success`, and it opened drill issue #1642 under the ci-main-red-alert marker.
-  // One dispatch proves both of ci.yml's paths, which is what the workflow's own comment says; only
-  // the second half went unrecorded. #1612 (2026-07-31) re-drilled at a known sha (run 30664857256,
-  // issue #1729) and priced the hatch's other claim — "a full red ci.yml run" during a merge train —
-  // at under four minutes. Drilled, `provenBy` recorded, hatch dropped, which is the shape every
-  // retirement takes. `pendingProof`'s own behaviour stays covered by the fixture tests above, so
-  // naming the current occupants here does not un-test the mechanism.
-  it("names the current unproven alert path(s) explicitly — the hatch is a named exception, not a silent default", () => {
-    // TWO occupants as of 2026-07-31, each a NAMED exception with its own tracker, never a silent
-    // default — and both are now the SAME kind, the one case #1333's narrowing left the hatch for.
-    // `ci-supervised-declines-alert` (#1688, from #1545) and `ci-genai-census-alert` (#1711, from
-    // #1691) both joined the same day because their workflow FILE is not yet on the default branch,
-    // and GitHub refuses workflow_dispatch for one that is not. Both are ATTEMPTED rather than
-    // assumed — each `why` quotes the verbatim 404 from the dispatch API. This list is meant to
-    // SHRINK; both retire with one command once their files land.
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker).sort()).toEqual([
-      "ci-genai-census-alert",
-      "ci-supervised-declines-alert",
-    ]);
+  // The two remaining hatches were retired only after their workflow files landed on main and the
+  // hosted drills exercised the shared production find-or-update path under the real job token.
+  // `pendingProof` itself remains covered by the fixture tests above; this assertion keeps the live
+  // registry honest when the named temporary population reaches zero.
+  it("has no current unproven alert path after the supervised-declines and genai drills", () => {
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual([]);
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
+  });
+
+  it("binds the six accepted drill results to their exact hosted runs and issues", () => {
+    const accepted = {
+      "ci-reasons-alert": [33033169720, 1989],
+      "ci-owasp-watch-alert": [33033172907, 1990],
+      "ci-secbench-alert": [33033175943, 1991],
+      "site-smoke-alert": [33033178730, 1992],
+      "ci-supervised-declines-alert": [33033182089, 1993],
+      "ci-genai-census-alert": [33033184981, 1994],
+    } as const;
+    for (const [marker, [run, issue]] of Object.entries(accepted)) {
+      expect(reg.paths.find((p) => p.marker === marker)?.provenBy).toEqual({
+        run: `https://github.com/jharvieux/Harvey/actions/runs/${run}`,
+        issue,
+        at: "2026-08-27",
+        sourceSha: "28592aadd7ca1fac693fd60a1e920af5b53eddee",
+      });
+    }
   });
 
   it("expects a marker label for the inlined owasp-ack path too, not only the drilled ones", () => {
