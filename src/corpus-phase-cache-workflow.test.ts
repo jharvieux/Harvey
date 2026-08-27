@@ -117,6 +117,7 @@ interface WorkflowStep {
 interface WorkflowJob {
   if?: string;
   "timeout-minutes"?: string | number;
+  permissions?: Record<string, string>;
   outputs?: Record<string, string>;
   strategy?: { matrix: { shard: string | number[] } };
   steps: WorkflowStep[];
@@ -427,7 +428,38 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       for (const step of document.jobs.shard!.steps.filter((step) => step.uses === "actions/cache/save@v4" || step.name === "Record corpus phase-cache transport provenance")) expect(active(step, ctx)).toBe(false);
       expect(active(named(document, "shard", "Gate liveness — did this job actually score anything?"), ctx)).toBe(drill === "liveness_drill");
       ctx.status = "failure";
-      expect(active(named(document, "shard", "Open or update the drift tracking issue"), ctx)).toBe(drill === "alert_drill");
+      expect(active(named(document, "drift", "Open or update the drift tracking issue"), ctx)).toBe(drill === "alert_drill");
+    }
+  });
+
+  it("gives exactly one aggregate alert to genuine schedules and isolated alert drills", () => {
+    const alertSteps = Object.entries(document.jobs).flatMap(([job, value]) =>
+      value.steps.filter((step) => step.name === "Open or update the drift tracking issue").map((step) => ({ job, step })),
+    );
+    expect(alertSteps).toHaveLength(1);
+    expect(alertSteps[0]!.job).toBe("drift");
+
+    const alert = alertSteps[0]!.step;
+    expect(document.jobs.drift!.permissions).toMatchObject({ contents: "read", issues: "write" });
+    for (const [event, drill, liveness, preparation, expected] of [
+      ["schedule", false, false, "failure", true],
+      ["schedule", false, false, "success", true],
+      ["workflow_dispatch", true, false, "failure", true],
+      ["workflow_dispatch", true, false, "success", true],
+      ["workflow_dispatch", false, false, "failure", false],
+      ["workflow_dispatch", false, false, "success", false],
+      ["workflow_dispatch", true, true, "failure", false],
+      ["push", false, false, "failure", false],
+      ["pull_request", false, false, "failure", false],
+      ["merge_group", false, false, "failure", false],
+    ] as const) {
+      const ctx = context(event);
+      ctx.inputs.alert_drill = drill;
+      ctx.inputs.liveness_drill = liveness;
+      ctx.needs["prepare-current-inputs"].result = preparation;
+      ctx.needs.shard.result = preparation === "success" ? "failure" : "skipped";
+      ctx.status = "failure";
+      expect(active(alert, ctx), `${event} alert=${drill} liveness=${liveness} prepare=${preparation}`).toBe(expected);
     }
   });
 

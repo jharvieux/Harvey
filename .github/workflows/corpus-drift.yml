@@ -643,29 +643,6 @@ jobs:
           mode: assert
           expect: corpus-drift
 
-      # Scheduled runs go red on a branch nobody watches (#1128/#1138). On a scheduled failure,
-      # find-or-update ONE tracking issue by the marker label. Still never fires on PR/push — those
-      # failures are already visible on the PR — but `workflow_dispatch` is now permanently in the
-      # condition (#1287), because this path had never executed once and a cron-only alert cannot be
-      # proven to work.
-      #
-      # EXCLUDED on a liveness drill (#1586 criterion 4, #1569). The two drills each switch off the
-      # other's machinery: `alert_drill` skips the liveness assert above, and `liveness_drill` skips
-      # this alert. Without this clause, proving the liveness guard under `workflow_dispatch` opens a
-      # REAL `ci-corpus-drift-alert` issue — a false alarm indistinguishable from a genuine corpus
-      # failure — which is why #1586's criterion 4 was left unproven rather than dispatched.
-      - name: Open or update the drift tracking issue
-        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-        uses: ./.github/actions/alert-issue
-        with:
-          marker: ci-corpus-drift-alert
-          label-description: Auto-opened when the scheduled corpus-drift CI run fails
-          title: corpus-drift scheduled run failing
-          drill: ${{ inputs.alert_drill }}
-          token: ${{ github.token }}
-          repo: ${{ github.repository }}
-          body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A counted drift or setup failure needs classification before any baseline edit: remeasure the complete matching/loading/resolution/reachability/invocation blast radius, then distinguish incomplete population, precision fix, real regression, and setup failure. See the corpus-drift-scorecard artifact and docs/design/corpus-drift.md; close this issue once the owning fix and full-population rerun are green."
-
   # A separate post-merge process and clone/preparation path. It consumes the exact pack artifact
   # but no hosted phase artifacts, so the final comparison is not the scorecard comparing with
   # itself. It runs beside the main-push producer matrix; PR and merge-group events skip it.
@@ -732,6 +709,7 @@ jobs:
       HARVEY_LIVENESS_RECEIPT: /tmp/harvey-gate-liveness.receipt
     permissions:
       contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - name: Shared preparation and relevance classification must have succeeded
@@ -790,6 +768,23 @@ jobs:
         with:
           mode: assert
           expect: corpus-drift
+
+      # The always-running aggregate is the single alert owner. Keeping this after both the shared
+      # preparation guard and the shard-result guard means a genuine schedule reports setup failures
+      # as well as counted drift, without duplicate comments from matrix legs. Ordinary manual runs
+      # are evidence campaigns, not scheduled alarms; only the isolated alert drill may exercise the
+      # workflow_dispatch path. A liveness drill never opens either namespace.
+      - name: Open or update the drift tracking issue
+        if: failure() && !inputs.liveness_drill && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.alert_drill))
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-corpus-drift-alert
+          label-description: Auto-opened when the scheduled corpus-drift CI run fails
+          title: corpus-drift scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A counted drift or setup failure needs classification before any baseline edit: remeasure the complete matching/loading/resolution/reachability/invocation blast radius, then distinguish incomplete population, precision fix, real regression, and setup failure. See the corpus-drift-scorecard artifact and docs/design/corpus-drift.md; close this issue once the owning fix and full-population rerun are green."
 
       # Reassemble push/relevant-PR/queue parts into the canonical scorecard. Schedule/manual
       # already upload that name directly; a proven no-op retains only relevance evidence.
