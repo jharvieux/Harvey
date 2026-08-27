@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SecretInArgvError } from "../secret-argv.js";
 import { parseAdvisorFindings } from "./supabase-advisors.js";
 import { parseSplinterOutput, parseSplinterPipeText, runSplinter, splinterRowsToAdvisorLints } from "./supabase-splinter.js";
 
@@ -143,6 +144,50 @@ describe("parseSplinterOutput -> parseAdvisorFindings — recorded connected-tie
 });
 
 describe("runSplinter argv (#1297)", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  const syntheticKeywordPassword = ["dummy", "pg", "\u0120\u2020é"].join("-");
+  const syntheticUriPassword = ["dummy", "pg", "\u00a0\u0120\u2020é"].join("-");
+
+  it.each([
+    ["postgresql://app:dummy-pg-first@db1:5432,db2:5433/main?password=dummy-pg-second&password=", "postgresql://app@db1:5432,db2:5433/main", ""],
+    ["host=db password=dummy-pg-first password=dummy-pg-second", "host=db", "dummy-pg-second"],
+    ["postgresql:///main?host=%2Ftmp%2Fpg-socket&pass%77ord=dummy-pg-second", "postgresql:///main?host=%2Ftmp%2Fpg-socket", "dummy-pg-second"],
+    [`host='db\u00a0' password='${syntheticKeywordPassword}'`, "host='db\u00a0'", syntheticKeywordPassword],
+    [`postgresql://db/main?password=${syntheticUriPassword}`, "postgresql://db/main", syntheticUriPassword],
+  ])("uses password transport at the shipping exec binding (#1778): %s", (input, clean, password) => {
+    vi.stubEnv("PGPASSWORD", "dummy-inherited-pg");
+    vi.mocked(execFileSync).mockClear().mockReturnValue("");
+    expect(runSplinter(input).failure).toBeUndefined();
+    const [file, argv, options] = vi.mocked(execFileSync).mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(file).toBe("psql");
+    expect(argv[0]).toBe(clean);
+    expect(options.env.PGPASSWORD).toBe(password);
+    expect(argv[argv.indexOf("-v") + 1]).toBe("ON_ERROR_STOP=1");
+    expect(argv[argv.indexOf("-f") + 1]).toMatch(/splinter\.sql$/);
+    expect(process.env.PGPASSWORD).toBe("dummy-inherited-pg");
+  });
+
+  it.each([
+    "postgresql://app:dummy-canary@db/main?password=dummy-second&application_name=dummy-canary",
+    "host=db password=dummy-canary password='' application_name=dummy-canary",
+    "postgresql://db/main?password=dummy-canary%FF",
+    "postgresql://db/main?password=dummy-canary%00",
+    "host=db password='dummy-canary",
+    "host=db oauth_client_secret=dummy-canary",
+    "host=db\u00a0password=dummy-canary",
+    "host=db\u0120password=dummy-canary",
+    "host=db\u2020password=dummy-canary",
+    "host=db\\\u00a0password=dummy-canary",
+    "host=db\\\u0120password=dummy-canary",
+    "host=db\\\u2020password=dummy-canary",
+  ])("refuses malformed or still-exposed overridden credentials before exec (#1778): %s", (input) => {
+    vi.mocked(execFileSync).mockClear();
+    expect(() => runSplinter(input)).toThrow(SecretInArgvError);
+    expect(() => runSplinter(input)).not.toThrow(/dummy-canary/);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
   it("keeps the client's database password out of argv and hands it to libpq via PGPASSWORD", () => {
     vi.mocked(execFileSync).mockReturnValue("");
     runSplinter("postgresql://postgres:not-a-real-db-password@db.abcxyz.supabase.co:5432/postgres");

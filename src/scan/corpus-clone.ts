@@ -9,12 +9,22 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { SecretInArgvError } from "../secret-argv.js";
 
 // Copying and scanning read the fetched object store immediately. Suppress automatic
 // maintenance at both fetch sites to avoid detached object-store writers (#1870).
 const PINNED_FETCH_ARGS = ["fetch", "--no-auto-maintenance", "-q", "--depth", "1"] as const;
 
+function assertCorpusRepoSlug(repo: string): void {
+  // CLI URL normalization and cache callers share this boundary before logging or Git I/O.
+  const name = repo.slice(repo.indexOf("/") + 1);
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repo) || name === "." || name === "..") {
+    throw new SecretInArgvError("corpus clone: expected a bare GitHub owner/repository slug; URL credentials and suffixes are refused");
+  }
+}
+
 export function cloneAtPin(repo: string, commit: string, into: string): void {
+  assertCorpusRepoSlug(repo);
   const git = (...a: string[]): void => void execFileSync("git", ["-C", into, ...a], { stdio: ["ignore", "ignore", "pipe"] });
   execFileSync("git", ["init", "-q", into], { stdio: "inherit" });
   git("remote", "add", "origin", `https://github.com/${repo}`);
@@ -36,6 +46,7 @@ export function cloneAtPin(repo: string, commit: string, into: string): void {
 // (corpus-clone-cache's verify step) already hard-fails on this shape before any target is
 // scored; this check is what keeps a direct/local use of the cache dir just as safe.
 export function cloneAtPinCached(repo: string, commit: string, into: string, cacheDir?: string, verifyRemote = false): void {
+  assertCorpusRepoSlug(repo);
   if (!cacheDir) {
     cloneAtPin(repo, commit, into);
     return;

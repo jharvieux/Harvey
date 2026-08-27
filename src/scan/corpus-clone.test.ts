@@ -3,13 +3,14 @@
 // path is proven to skip the network entirely by pointing its "repo" at one that does not exist —
 // a real fetch attempt would throw, so a clean copy proves the network was never touched.
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readNamesSafe, readRecursiveSafe } from "../fs-walk.js";
-import { cloneAtPinCached, isFreshClone } from "./corpus-clone.js";
+import { SecretInArgvError } from "../secret-argv.js";
+import { cloneAtPin, cloneAtPinCached, isFreshClone } from "./corpus-clone.js";
 
 const dirs: string[] = [];
 function tmp(prefix: string): string {
@@ -89,6 +90,75 @@ function expectNoMaintenance(trace: GitTraceEvent[]): void {
     && event.argv?.some((arg) => /(?:^|[\\/])(?:git-)?(?:maintenance|gc|repack)(?:\.exe)?$/.test(arg)));
   expect(maintenance.map((event) => event.argv)).toEqual([]);
 }
+
+function recordingCloneGit(pin: string): { calls: () => string[][]; root: string } {
+  const root = tmp("clone-argv-boundary-");
+  const log = join(root, "argv.jsonl");
+  writeFileSync(log, "");
+  writeFileSync(join(root, "git"), `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+if (args.includes("rev-parse")) process.stdout.write(${JSON.stringify(pin)});
+if (args.includes("remote") || args.includes("fetch")) process.exitCode = 23;
+`, { mode: 0o700 });
+  vi.stubEnv("PATH", `${root}${delimiter}${process.env.PATH ?? ""}`);
+  return { root, calls: () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]) };
+}
+
+describe("clone repository input boundary (#1778)", () => {
+  const pin = "a".repeat(40);
+  const canary = "CLONE_ARGV_1778_CANARY";
+  const invalid = [
+    `owner/repo?access_token=${canary}`, `owner/repo#${canary}`,
+    `https://user:${canary}@github.com/owner/repo`, `user:${canary}@owner/repo`,
+    `owner/repo%3Ftoken%3D${canary}`, `owner/repo\\${canary}`,
+    `owner/repo\n${canary}`, "owner/repo ", "owner/.", "owner/..", "owner/repo/extra",
+    "owner/repo\n", "owner/repo\r", "owner/repo\r\n", "owner/repo\u2028", "owner/repo\u2029",
+  ];
+  const modes = ["direct", "uncached", "cold-cache", "warm-cache+verify"] as const;
+
+  it.each(modes.flatMap((mode) => invalid.map((repo, index) => ({ mode, repo, index }))))(
+    "refuses unsafe repository $index on $mode before any Git or cache mutation",
+    ({ mode, repo }) => {
+      const fixture = recordingCloneGit(mode === "cold-cache" ? "0".repeat(40) : pin);
+      const cacheDir = tmp("clone-unsafe-cache-");
+      const cached = join(cacheDir, repo.replace(/\//g, "__"));
+      mkdirSync(join(cached, ".git"), { recursive: true });
+      writeFileSync(join(cached, "marker"), "retain cached bytes");
+      const into = tmp("clone-unsafe-output-");
+      const run = () => mode === "direct" ? cloneAtPin(repo, pin, into)
+        : cloneAtPinCached(repo, pin, into, mode === "uncached" ? undefined : cacheDir, mode === "warm-cache+verify");
+      let failure: unknown;
+      try { run(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(SecretInArgvError);
+      expect(String(failure)).toContain("expected a bare GitHub owner/repository slug");
+      expect(String(failure)).not.toContain(canary);
+      expect(fixture.calls()).toEqual([]);
+      expect(readFileSync(join(cached, "marker"), "utf8")).toBe("retain cached bytes");
+      expect(existsSync(join(into, "marker"))).toBe(false);
+    },
+  );
+
+  it.each([
+    `https://user:${canary}@github.com/owner/repo`,
+    `https://github.com/owner/repo?token=${canary}`,
+    `git@github.com:owner/repo#${canary}`,
+  ])("the actual dynamic-validation CLI refuses credential-bearing repo URLs before Git (%#)", (url) => {
+    const fixture = recordingCloneGit(pin);
+    const cli = fileURLToPath(new URL("../cli/dynamic-validate.ts", import.meta.url));
+    const result = spawnSync(process.execPath, ["--import", "tsx", cli, url, "--pin", pin], {
+      encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, TMPDIR: fixture.root },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("SecretInArgvError");
+    expect(result.stderr).toContain("expected a bare GitHub owner/repository slug");
+    expect(result.stdout + result.stderr).not.toContain(canary);
+    expect(fixture.calls()).toEqual([]);
+  });
+});
 
 describe("isFreshClone", () => {
   it("is true for a clean checkout at the pinned commit", () => {

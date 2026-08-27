@@ -146,13 +146,13 @@ export function parseSplinterOutput(raw: string): AdvisorsResponse {
 export function runSplinter(connectionString: string): AdvisorsResponse {
   // #1297 — the connection string is the CLIENT's, so its password is a real credential of the
   // database being audited. libpq reads it from PGPASSWORD, keeping it out of the world-readable argv.
-  const { conninfo, password } = splitPgPassword(connectionString);
+  const { conninfo, password, extractedPasswords = [] } = splitPgPassword(connectionString);
   const argv = [conninfo, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", FIELD_SEP, "-f", SPLINTER_SQL_PATH];
-  assertNoSecretInArgv("runSplinter", argv, [password]);
+  assertNoSecretInArgv("runSplinter", argv, extractedPasswords);
   try {
     const out = execFileSync("psql", argv, {
       encoding: "utf8",
-      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
+      env: password !== undefined ? { ...process.env, PGPASSWORD: password } : process.env,
       maxBuffer: 1024 * 1024 * 64,
     });
     return parseSplinterOutput(out);

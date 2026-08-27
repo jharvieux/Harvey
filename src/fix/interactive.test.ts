@@ -67,9 +67,9 @@ function corpus(files: Record<string, string>): MaterializedCorpus {
 // Recording git/gh runner (mirrors transport.test.ts): the transport never touches a real remote, and a
 // draft PR can be proven to open without a network.
 function recorder(responses: Record<string, string> = {}) {
-  const calls: { file: string; args: string[] }[] = [];
-  const run: CommandRunner = (file, args) => {
-    calls.push({ file, args });
+  const calls: { file: string; args: string[]; input?: string }[] = [];
+  const run: CommandRunner = (file, args, _cwd, input) => {
+    calls.push({ file, args, input });
     const key = `${file} ${args.join(" ")}`;
     for (const [prefix, out] of Object.entries(responses)) if (key.startsWith(prefix)) return out;
     return "";
@@ -112,7 +112,7 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     expect(ingest.rejected).toBe(false);
 
     // Only a green ingest reaches the transport — and it opens a DRAFT PR, nothing more.
-    const { calls, run } = recorder({ "gh pr create": "https://github.com/acme/app/pull/1" });
+    const { calls, run } = recorder({ "gh api --method POST repos/{owner}/{repo}/pulls": JSON.stringify({ url: "https://github.com/acme/app/pull/1", draft: true }) });
     const client = createClient({ targetDir: c.dir, dryRun: false, run });
     const delivered = deliverFix(client, {
       finding, plan, evidence: ingest.evidence, operator: "op", baseBranch: "main", summary: finding.title, tiersUsed: ["cheap"],
@@ -120,7 +120,7 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     expect(delivered.outcome).toBe("pr-opened");
     expect(delivered.prUrl).toBe("https://github.com/acme/app/pull/1");
     const gh = calls.find((x) => x.file === "gh");
-    expect(gh?.args).toContain("--draft"); // draft only — the operator flips it to ready
+    expect(JSON.parse(gh!.input!).draft).toBe(true); // draft only — the operator flips it to ready
     expect(gh?.args.includes("merge")).toBe(false);
   });
 

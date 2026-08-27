@@ -95,7 +95,8 @@ const scopeOutPath = scopeOutIdx >= 0 ? args[scopeOutIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
 const degradedKnipIdx = args.indexOf("--degraded-knip-reason");
-const degradedKnipReason = degradedKnipIdx >= 0 ? args[degradedKnipIdx + 1] : undefined;
+let degradedKnipReason = degradedKnipIdx >= 0 ? args[degradedKnipIdx + 1] : undefined;
+const degradedKnipReasonStdin = args.includes("--degraded-knip-reason-stdin");
 const degradedKnipUnresolvedDependencySurface = args.includes("--degraded-knip-unresolved-dependency-surface");
 // #809: opt-in whole-codebase Type-3 near-miss pass, on top of the always-on security-path pass —
 // see the header comment above securityPathFiles for why this stays opt-in (noisier, no security
@@ -110,13 +111,29 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   console.error("--timeout must be a positive number of seconds");
   process.exit(2);
 }
+if (degradedKnipReasonStdin && degradedKnipIdx >= 0) {
+  console.error("choose only one degraded Knip reason source");
+  process.exit(2);
+}
 if (degradedKnipIdx >= 0 && (!degradedKnipReason || degradedKnipReason.startsWith("--"))) {
   console.error("--degraded-knip-reason requires a non-empty reason");
   process.exit(2);
 }
-if (degradedKnipUnresolvedDependencySurface && degradedKnipIdx < 0) {
-  console.error("--degraded-knip-unresolved-dependency-surface requires --degraded-knip-reason");
+if (degradedKnipUnresolvedDependencySurface && degradedKnipIdx < 0 && !degradedKnipReasonStdin) {
+  console.error("--degraded-knip-unresolved-dependency-surface requires --degraded-knip-reason or --degraded-knip-reason-stdin");
   process.exit(2);
+}
+if (degradedKnipReasonStdin) {
+  try {
+    degradedKnipReason = readFileSync(0, "utf8");
+  } catch {
+    console.error("--degraded-knip-reason-stdin could not read stdin");
+    process.exit(2);
+  }
+  if (!degradedKnipReason.trim()) {
+    console.error("--degraded-knip-reason-stdin requires a non-empty reason");
+    process.exit(2);
+  }
 }
 const TIMEOUT_MS = timeoutSeconds * 1000;
 

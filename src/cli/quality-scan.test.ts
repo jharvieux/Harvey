@@ -64,22 +64,27 @@ function monorepoFixture(): string {
 // and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
 // here are ~0.7-1.7s each on this hardware, well under the ceiling either way, but the standing
 // constraint is "no single blocking window may approach 60s" for every heavy CLI test.
-function spawnCli(binPath: string, args: string[], cwd: string): Promise<void> {
+function spawnCli(binPath: string, args: string[], cwd: string, input?: string | null): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn(binPath, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(binPath, args, {
+      cwd, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
+      ...(input === undefined ? {} : { timeout: 20_000, killSignal: "SIGKILL" as const }),
+    });
+    if (input !== null) child.stdin?.end(input);
+    child.stdin?.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") rej(error); });
     let stderr = "";
     // setEncoding, never `stderr += <Buffer>` (#1759): string-concatenating a Buffer decodes THAT
     // CHUNK in isolation, so a multi-byte character straddling a chunk boundary decodes to U+FFFD.
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (d: string) => (stderr += d));
+    child.stderr!.setEncoding("utf8");
+    child.stderr!.on("data", (d: string) => (stderr += d));
     child.on("error", rej);
-    child.on("close", (code) => (code === 0 ? res() : rej(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`))));
+    child.on("close", (code) => (code === 0 ? res() : rej(Object.assign(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`), { exitCode: code, stderr }))));
   });
 }
 
-async function runCli(repo: string, args: string[] = []): Promise<Finding[]> {
+async function runCli(repo: string, args: string[] = [], input?: string | null): Promise<Finding[]> {
   const outPath = join(repo, "quality-out.json");
-  await spawnCli("node_modules/.bin/tsx", [CLI, repo, ...args, "--out", outPath], REPO_ROOT);
+  await spawnCli("node_modules/.bin/tsx", [CLI, repo, ...args, "--out", outPath], REPO_ROOT, input);
   return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
 }
 
@@ -394,11 +399,38 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
 
   it("starts directly in the source-only tier when dependency preparation rejected the installed tree", async () => {
     const repo = noNodeModulesViteFixture();
-    const findings = await runCli(repo, ["--degraded-knip-reason", "dependency preparation incomplete: clean install failed"]);
+    const findings = await runCli(repo, ["--degraded-knip-reason", "dependency preparation incomplete: clean install failed"], "canary-quality-unrequested-stdin");
     expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-01", location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
     expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("dependency preparation incomplete") }));
+    expect(findings.find((finding) => finding.id === "M5-98")?.evidence).not.toContain("canary-quality-unrequested-stdin");
     expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
+  it("preserves an explicit stdin reason byte-for-byte in M5-98 without executing the target provider (#1778)", async () => {
+    const repo = noNodeModulesViteFixture();
+    const reason = "  dependency preparation incomplete: canary-quality-\u00e9\ud83d\udea6\"'\\\nsecond line\n";
+    const findings = await runCli(repo, ["--degraded-knip-reason-stdin", "--degraded-knip-unresolved-dependency-surface"], reason);
+    expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: `knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points: (repo root): ${reason}` }));
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-01", location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
+    expect(findings.find((finding) => finding.id === "M5-00")).toBeUndefined();
+  }, 30000);
+
+  it.each([
+    { args: ["--degraded-knip-reason-stdin"], input: "", diagnostic: "--degraded-knip-reason-stdin requires a non-empty reason" },
+    { args: ["--degraded-knip-reason-stdin"], input: " \t\n", diagnostic: "--degraded-knip-reason-stdin requires a non-empty reason" },
+    { args: ["--degraded-knip-reason-stdin", "--degraded-knip-reason", "canary-quality-conflict"], input: null, diagnostic: "choose only one degraded Knip reason source" },
+    { args: ["--degraded-knip-unresolved-dependency-surface"], input: "canary-quality-unrequested", diagnostic: "--degraded-knip-unresolved-dependency-surface requires --degraded-knip-reason or --degraded-knip-reason-stdin" },
+  ])("rejects invalid reason sources before scanning: $args / $input (#1778)", async ({ args, input, diagnostic }) => {
+    const repo = noNodeModulesViteFixture();
+    await expect(runCli(repo, args, input)).rejects.toMatchObject({ exitCode: 2, stderr: `${diagnostic}\n` });
+    expect(existsSync(join(repo, "quality-out.json"))).toBe(false);
+    expect(existsSync(join(repo, "target-provider-consumed"))).toBe(false);
+  }, 30000);
+
+  it("checks usage before reading a requested stdin reason (#1778)", async () => {
+    await expect(spawnCli("node_modules/.bin/tsx", [CLI, "--degraded-knip-reason-stdin"], REPO_ROOT, null)).rejects.toMatchObject({ exitCode: 2, stderr: expect.stringMatching(/^usage: /) });
   }, 30000);
 
   it("reconstructs framework-contract route entries without executing rejected React Router config", async () => {

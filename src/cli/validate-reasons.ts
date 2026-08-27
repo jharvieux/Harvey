@@ -38,6 +38,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLAIM_BASELINE } from "../unstructured-claims-baseline.js";
 import { parityExemptionReasons } from "../scan/calibration.js";
+import { assertNoSecretInArgv, SecretInArgvError } from "../secret-argv.js";
 import {
   DEFAULT_ROOTS,
   KNOWN_FALSIFIER_TIERS,
@@ -101,7 +102,15 @@ function flagValues(flag: string): string[] {
 }
 
 function runFalsifier(command: string): FalsifierResult {
-  const r = spawnSync("sh", ["-c", command], { cwd: REPO_ROOT, encoding: "utf8", timeout: FALSIFIER_TIMEOUT_MS });
+  // Keep command-string semantics and stdin EOF while moving the expanded program out of argv.
+  // This bounds Harvey's shell launch; commands inside the operator's program own their children.
+  const shellArgs = ["-c", 'eval "$HARVEY_RECORDED_FALSIFIER_PROGRAM"'];
+  const bindings = Object.entries(process.env).filter(([name]) => name.startsWith("HARVEY_FALSIFIER_")).map(([, value]) => value);
+  assertNoSecretInArgv("validate-reasons falsifier", shellArgs, [command, ...bindings]);
+  const r = spawnSync("sh", shellArgs, {
+    cwd: REPO_ROOT, encoding: "utf8", timeout: FALSIFIER_TIMEOUT_MS,
+    env: { ...process.env, HARVEY_RECORDED_FALSIFIER_PROGRAM: command },
+  });
   return { code: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
@@ -110,7 +119,13 @@ function runFalsifier(command: string): FalsifierResult {
 // what it looks like — git resolves it against now and skips same-day commits — so the time is
 // explicit here rather than implied.
 function commitsSince(paths: string[], since: string): string[] {
-  const r = spawnSync("git", ["log", `--since=${since} 23:59:59`, "--format=%h", "--", ...paths], { cwd: REPO_ROOT, encoding: "utf8" });
+  if (paths.some((path) => path.includes("\0") || path.includes("\n") || path.includes("\r"))) {
+    throw new SecretInArgvError("validate-reasons drift: refusing a path outside Git's line-delimited stdin transport (#1778).");
+  }
+  const args = ["log", `--since=${since} 23:59:59`, "--format=%h", "--stdin"];
+  assertNoSecretInArgv("validate-reasons drift", args, paths);
+  // Git reads literal pathspec lines after the stdin separator, including quotes and backslashes.
+  const r = spawnSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", input: `--\n${paths.join("\n")}\n` });
   return (r.stdout ?? "").split("\n").filter(Boolean);
 }
 
