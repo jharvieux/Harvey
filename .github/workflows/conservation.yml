@@ -179,6 +179,7 @@ jobs:
               src/cli/fixture-drift.ts|src/cli/osv-fixture-drift.ts) relevant=true; drift=true ;;
               src/scan/fixture-drift-contracts.ts) relevant=true; drift=true ;;
               src/scan/__fixtures__/*|src/__fixtures__/*) relevant=true; drift=true ;;
+              .github/actions/mechanical-binaries/*) relevant=true; drift=true ;;
               .github/workflows/conservation.yml) relevant=true; drift=true ;;
             esac
           done <<< "$files"

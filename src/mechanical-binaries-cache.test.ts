@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { readFileSync } from "node:fs";
 import { readNamesSafe } from "./fs-walk.js";
+import { TRUFFLEHOG_PINNED_VERSION } from "./scan/fixture-drift-contracts.js";
 
 const ACTION_DIR = join(process.cwd(), ".github", "actions", "mechanical-binaries");
 const SCRIPT = join(ACTION_DIR, "assert-complete.sh");
@@ -180,5 +181,37 @@ describe("#1516 the action's blast radius, enumerated rather than recalled", () 
         expect(m[2], `${f} passes something to mechanical-binaries`).not.toBe("w");
       }
     }
+  });
+});
+
+describe("#1978 the TruffleHog fixture gate installs the version it can vouch for", () => {
+  const manifest = parse(readFileSync(join(ACTION_DIR, "action.yml"), "utf8")) as { runs: { steps: Record<string, unknown>[] } };
+  const steps = manifest.runs.steps;
+  const runFor = (predicate: (step: Record<string, unknown>) => boolean): string =>
+    String(steps.find(predicate)?.["run"] ?? "");
+  const versions = runFor((step) => step["id"] === "versions");
+  const install = runFor((step) => step["name"] === "Install (cache miss only)");
+  const executableProof = runFor((step) => step["name"] === "Put them on PATH and PROVE they run");
+
+  it("uses the captured fixture version for the cache and installer identity", () => {
+    expect(versions).toContain(`TRUFFLEHOG=${TRUFFLEHOG_PINNED_VERSION}`);
+    expect(versions).not.toContain("TRUFFLEHOG=head");
+    expect(versions).toContain("th$TRUFFLEHOG");
+  });
+
+  it("downloads an exact release instead of the mutable main-branch installer", () => {
+    const release = "releases/download/v${{ steps.versions.outputs.trufflehog }}/trufflehog_${{ steps.versions.outputs.trufflehog }}_linux_amd64.tar.gz";
+    expect(install).toContain(release);
+    expect(install).not.toContain("raw.githubusercontent.com/trufflesecurity/trufflehog/main");
+  });
+
+  it("rejects a cached or downloaded binary that reports a different identity", () => {
+    expect(executableProof).toContain('trufflehog_version=$("$HOME/.local/bin/trufflehog" --version 2>&1)');
+    expect(executableProof).toContain('"trufflehog ${{ steps.versions.outputs.trufflehog }}"');
+  });
+
+  it("routes an installer-contract change through conservation's live drift tier", () => {
+    const conservation = readFileSync(join(process.cwd(), ".github", "workflows", "conservation.yml"), "utf8");
+    expect(conservation).toMatch(/\.github\/actions\/mechanical-binaries\/\*\) relevant=true; drift=true/);
   });
 });
