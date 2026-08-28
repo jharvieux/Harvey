@@ -43,7 +43,7 @@ name: corpus-drift
 on:
   schedule:
     - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
-    - cron: "37 18 28 8 *" # TEMPORARY #1883 recovery retry on 2026-08-28 after 17:13 never enqueued; remove after accepted genuine schedule evidence
+    - cron: "13,28,43,58 19 28 8 *" # TEMPORARY #1883 propagation recovery after 17:13 and 18:37 never enqueued; remove after accepted genuine schedule evidence
   workflow_dispatch:
     inputs:
       alert_drill:
