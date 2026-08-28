@@ -51,7 +51,7 @@ name: corpus-m8
 
 on:
   schedule:
-    - cron: "0 8 1 * *" # 1st of the month, 08:00 UTC — after corpus-drift's daily 07:17 UTC slot
+    - cron: "0 8 1 * *" # 1st of the month, 08:00 UTC — after corpus-drift's daily 07:23 UTC slot
   workflow_dispatch:
     inputs:
       alert_drill:

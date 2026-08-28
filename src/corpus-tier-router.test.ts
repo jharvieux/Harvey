@@ -50,10 +50,11 @@ describe("corpus hosted relevance router", () => {
     expect(script).toContain('scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"');
   });
 
-  it("keeps the daily corpus schedule away from minute zero (#1883)", () => {
+  it("keeps one daily corpus schedule at the recovery time and away from minute zero (#1883)", () => {
     const yaml = readFileSync(WORKFLOW, "utf8");
-    const cron = yaml.match(/^\s*-\s*cron:\s*"([^"]+)"/m)?.[1];
-    expect(cron, "GitHub can delay or drop minute-zero schedules under high Actions load").toBe("17 7 * * *");
+    const crons = [...yaml.matchAll(/^\s*-\s*cron:\s*"([^"]+)"/gm)].map((match) => match[1]);
+    expect(crons, "the recovery must not add duplicate daily corpus runs").toEqual(["23 7 * * *"]);
+    expect(crons[0]?.split(" ")[0], "GitHub can delay or drop minute-zero schedules under high Actions load").not.toBe("0");
   });
 
   it("allocates shards only for relevant receipts and keeps required-context liveness explicit", () => {

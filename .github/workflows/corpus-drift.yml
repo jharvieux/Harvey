@@ -42,7 +42,7 @@ name: corpus-drift
 
 on:
   schedule:
-    - cron: "17 7 * * *" # daily 07:17 UTC (#1883: moved off minute zero; #1138: was weekly "0 7 * * 1")
+    - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
   workflow_dispatch:
     inputs:
       alert_drill:
