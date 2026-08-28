@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { describeBlock, worstBlock } from "./vitest-event-loop-probe.js";
+import { assertBlockBelow, describeBlock, enforcedBlockLimit, MAX_ENFORCED_BLOCK_MS, worstBlock } from "./vitest-event-loop-probe.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -53,6 +53,16 @@ describe("the event-loop probe attributes a blocking window (#1695)", () => {
     expect(describeBlock(30_000, "x")).toContain("50% of vitest's 60000ms RPC-ack window");
     expect(describeBlock(61_000, "src/cli/run-audit.test.ts > y")).toContain("102%");
     expect(describeBlock(61_000, "src/cli/run-audit.test.ts > y")).toContain("during: src/cli/run-audit.test.ts > y");
+  });
+
+  it("freezes the measured #1813 population below 25% of the 60s ack window in both directions", () => {
+    expect(MAX_ENFORCED_BLOCK_MS).toBe(15_000);
+    for (const file of [...AWAITED_LIGHT_CLI_TESTS, "src/fix/detector-rerun.test.ts"]) {
+      expect(enforcedBlockLimit(`/checkout/${file}`), file).toBe(15_000);
+    }
+    expect(enforcedBlockLimit("/checkout/src/some-other.test.ts")).toBeUndefined();
+    expect(() => assertBlockBelow(14_999, "fixture > below", "fixture.test.ts")).not.toThrow();
+    expect(() => assertBlockBelow(15_000, "fixture > at threshold", "fixture.test.ts")).toThrow("exceeded its 15000ms event-loop budget");
   });
 
   it("says how many tests a window spanned — the fact that turns 'which test' into 'which file'", () => {
@@ -101,5 +111,18 @@ describe("the event-loop probe attributes a blocking window (#1695)", () => {
     // The floor is a floor: the same run must NOT narrate every scheduling hiccup, or the signal
     // this exists to surface arrives buried.
     expect(out.split("harvey-eventloop BLOCKED").length - 1).toBeLessThan(5);
+  });
+
+  it("ENFORCES: a real guarded file retains its measured maximum and frozen limit", () => {
+    const child = spawnSync("node_modules/.bin/vitest", ["run", "src/cli/fix-verify-cli.test.ts"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    const out = `${child.stdout ?? ""}${child.stderr ?? ""}`;
+    expect(child.status, out).toBe(0);
+    expect(out).toContain("harvey-eventloop ENFORCED max");
+    expect(out).toContain("limit: <15000ms");
+    expect(out).toContain("src/cli/fix-verify-cli.test.ts");
   });
 });

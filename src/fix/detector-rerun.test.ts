@@ -4,12 +4,11 @@
 // hermetic (no external binary). detectorBefore fires; after the mechanical fix (drop the unused
 // param) the scoped re-run is clean.
 
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 // #1272: the detector half is now a named function. These assertions are ABOUT that half, and
 // computeGreen with an empty clientChecks would be asserting a green nothing earned.
@@ -26,22 +25,9 @@ afterEach(() => {
 
 // #1134/#1792: the in-process AST detector branch remains synchronous, while the Semgrep branches
 // now await src/scan/semgrep.ts's execFile-backed async path and yield to the event loop. This file
-// still belongs in the heavy suite because its repeated real Semgrep rule loads require the external
-// binary and take ~26s for the file (src/heavy-cli-tests.ts), not because each test is one blocking
-// window. The per-test ceiling remains a drift guard: it measures the AST branch's blocking window
-// directly; for Semgrep it measures wall time only, because the async wait does not starve Vitest's
-// worker-RPC channel (see vitest.config.ts's HEAVY_CLI_TESTS comment).
-const BLOCKING_WINDOW_MS = 30_000;
-let __blockingWindowStart = 0;
-beforeEach(() => {
-  __blockingWindowStart = performance.now();
-});
-afterEach(() => {
-  const elapsed = performance.now() - __blockingWindowStart;
-  expect(elapsed, `test blocked the vitest worker's event loop for ${Math.round(elapsed)}ms (#1134 guard, threshold ${BLOCKING_WINDOW_MS}ms)`).toBeLessThan(
-    BLOCKING_WINDOW_MS,
-  );
-});
+// still belongs in the heavy suite because its repeated real Semgrep rule loads take ~26s of wall
+// time (src/heavy-cli-tests.ts). The registered setup probe reads the worker heartbeat instead of
+// mistaking per-test wall time for an uninterrupted event-loop window.
 
 function scratch(rel: string, body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "harvey-rerun-"));
@@ -120,12 +106,15 @@ describe("rerunDetector — §2.3 against targets/calibration", async () => {
 // matching src/cli/quick-scan.test.ts's convention. The honesty tests below (semgrep-absent ⇒
 // notRun) run unconditionally, because those are the ones that must never regress silently.
 function hasBinary(name: string): boolean {
-  try {
-    execFileSync("which", [name], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    try {
+      accessSync(join(dir, name), constants.X_OK);
+      return true;
+    } catch {
+      // Keep searching PATH; absence is the ordinary skip case on light CI runners.
+    }
   }
+  return false;
 }
 const SEMGREP_PRESENT = hasBinary("semgrep");
 // Each semgrep invocation loads the whole rule directory and takes seconds, comfortably over
