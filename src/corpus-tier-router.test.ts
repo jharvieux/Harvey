@@ -55,10 +55,10 @@ describe("corpus hosted relevance router", () => {
     const crons = [...yaml.matchAll(/^\s*-\s*cron:\s*"([^"]+)"/gm)].map((match) => match[1]!);
     expect(crons, "the sooner recovery must retain exactly one steady daily trigger and one temporary trigger").toEqual([
       "23 7 * * *",
-      "13 17 28 8 *",
+      "37 18 28 8 *",
     ]);
     expect(crons.every((cron) => cron.split(" ")[0] !== "0"), "GitHub can delay or drop minute-zero schedules under high Actions load").toBe(true);
-    expect(yaml).toContain("TEMPORARY #1883 recovery on 2026-08-28; remove immediately after accepted genuine schedule evidence");
+    expect(yaml).toContain("TEMPORARY #1883 recovery retry on 2026-08-28 after 17:13 never enqueued; remove after accepted genuine schedule evidence");
   });
 
   it("allocates shards only for relevant receipts and keeps required-context liveness explicit", () => {
