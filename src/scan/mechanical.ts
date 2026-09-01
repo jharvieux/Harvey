@@ -10,7 +10,12 @@ import { runOsvScanner, type OsvScanResult } from "./dependencies.js";
 import { resolveScanScope } from "./scan-scope.js";
 import type { TenancyOverride } from "./supabase-static.js";
 import type { DependencyMap } from "./supply-chain.js";
-import { canonicalizeCorpusOsvInput } from "../corpus-advisory-snapshot.js";
+import {
+  canonicalizeCorpusOsvInput,
+  compareCorpusAdvisoryState,
+  CorpusAdvisoryFindingChangeError,
+  type CorpusAdvisoryComparisonReceipt,
+} from "../corpus-advisory-snapshot.js";
 import {
   MECHANICAL_PHASES,
   assertMechanicalCacheVerification,
@@ -72,6 +77,7 @@ interface MechanicalScanOptions {
   phaseCache?: MechanicalPhaseCacheOptions;
   advisorySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string; expiresAt: string; osvScannerVersion: string };
   advisoryParitySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string };
+  onAdvisoryObservation?: (receipt: CorpusAdvisoryComparisonReceipt) => void;
   secretCandidateIdentity?: string;
 }
 
@@ -82,6 +88,7 @@ interface MechanicalScanResult {
   context: MechanicalContextMetrics;
   semgrepDiagnostics: SemgrepDiagnosticEvidence;
   semgrepExecution?: SemgrepExecutionPlanReceipt;
+  advisoryObservation?: CorpusAdvisoryComparisonReceipt;
 }
 
 export interface MechanicalProducerPhaseOwnership {
@@ -169,11 +176,40 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     const observedOsv = advisorySnapshot ? { result: advisorySnapshot.result } : runOsvScanner(scanDir);
     context.recordToolResult("osv", observedOsv);
     const osv = context.toolResult<typeof observedOsv>("osv")!;
-    if (advisoryParitySnapshot && !osv.failure && JSON.stringify(canonicalizeCorpusOsvInput(osv.result)) !== JSON.stringify(canonicalizeCorpusOsvInput(advisoryParitySnapshot.result))) {
-      throw new Error(`live OSV advisory state differs from committed corpus snapshot ${advisoryParitySnapshot.digest} captured ${advisoryParitySnapshot.capturedAt}; scheduled freshness detected external-state drift`);
+    let advisoryObservation: CorpusAdvisoryComparisonReceipt | undefined;
+    if (advisoryParitySnapshot && osv.failure) {
+      throw new Error(`live OSV advisory verification did not complete: ${osv.failure}`);
     }
-    const dependencyInput = { context, scanDir, pkg, osv, skipNetworkChecks };
+    const parityLiveRaw = advisoryParitySnapshot && !osv.failure ? canonicalizeCorpusOsvInput(osv.result) : undefined;
+    const dependencyInput = {
+      context,
+      scanDir,
+      pkg,
+      osv: parityLiveRaw ? { result: parityLiveRaw } : osv,
+      skipNetworkChecks,
+    };
     const earlyDependency = await runRegisteredDependencyDetectors(dependencyInput, "early");
+    if (advisoryParitySnapshot && !osv.failure) {
+      const liveRaw = parityLiveRaw!;
+      const snapshotRaw = canonicalizeCorpusOsvInput(advisoryParitySnapshot.result);
+      const snapshotDependency = await runRegisteredDependencyDetectors({
+        ...dependencyInput,
+        osv: { result: snapshotRaw },
+      }, "early");
+      advisoryObservation = compareCorpusAdvisoryState({
+        liveRaw,
+        snapshotRaw,
+        liveFindings: earlyDependency.findingsByDetector["osv-advisories"] ?? [],
+        snapshotFindings: snapshotDependency.findingsByDetector["osv-advisories"] ?? [],
+      });
+      opts.onAdvisoryObservation?.(advisoryObservation);
+      if (advisoryObservation.status === "finding-change") {
+        throw new CorpusAdvisoryFindingChangeError(
+          `live OSV findings differ from committed corpus snapshot ${advisoryParitySnapshot.digest} captured ${advisoryParitySnapshot.capturedAt}; scheduled freshness detected a delivered-finding change`,
+          advisoryObservation,
+        );
+      }
+    }
     const dependencyFindings = stablePaths(earlyDependency.findings);
     findings.push(...dependencyFindings);
 
@@ -273,7 +309,15 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     const semgrepDiagnostics = semgrepPhase.evidence?.semgrepDiagnostics;
     if (!semgrepDiagnostics) throw new Error("Semgrep phase did not retain complete diagnostic evidence");
     const semgrepExecution = semgrepPhase.evidence?.semgrepExecution;
-    return { findings: normalized.findings, phases, detectors: detectorRecords, context: context.metrics(), semgrepDiagnostics, ...(semgrepExecution ? { semgrepExecution } : {}) };
+    return {
+      findings: normalized.findings,
+      phases,
+      detectors: detectorRecords,
+      context: context.metrics(),
+      semgrepDiagnostics,
+      ...(semgrepExecution ? { semgrepExecution } : {}),
+      ...(advisoryObservation ? { advisoryObservation } : {}),
+    };
   } finally {
     ownedContext?.dispose();
     cleanup();
