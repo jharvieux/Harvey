@@ -3,138 +3,138 @@
   "targets": {
     "proposit": {
       "file": "proposit.osv.json.gz",
-      "sha256": "0391ed9413267a61ab2fa8b61d9cc4e01be4884b2788cf26c3d68796843d0f45",
+      "sha256": "69c53005e79f33eb6d02c6a8574a03197922fb04467138d88610d0624f487f67",
       "targetCommit": "82838cef3606a176c4bca0af0587c5ea6b08d3a0",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "subscription-payments": {
       "file": "subscription-payments.osv.json.gz",
-      "sha256": "2509d9f236b5d859cba5906c60642ca2135db54bf402b12c47c4abf5399b5b4e",
+      "sha256": "e54ca5d9ed6ea0ee61276dcaa7fb460a0024bcec82fbfa77831fa1f048b6d630",
       "targetCommit": "bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "boxyhq": {
       "file": "boxyhq.osv.json.gz",
-      "sha256": "1b02b106adfe7ac8b01c85c79e792eb29e80ec15ad6c86a318eefc3f1f8ca5cd",
+      "sha256": "097f6540d08f196d53aef29ae5249f9539910fb6dc4d98117aad9032fdb42c24",
       "targetCommit": "abc9b686823cbfb4973c79bc36fea37a3244be6c",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "multi-tenant-starter": {
       "file": "multi-tenant-starter.osv.json.gz",
       "sha256": "ade9160c02662012bfb70dcfccc8622477a74dcde5f4cfac20e3992eb0ad4119",
       "targetCommit": "dcc147c0f945737f69df79e8aa544dc09e84ccbb",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "launch-mvp": {
       "file": "launch-mvp.osv.json.gz",
-      "sha256": "c9725335598a74df3d1101d5da269bdbe96a340ee1e3581ae1bd6b52c270fe2f",
+      "sha256": "5fb4cf6efa8a270280958e6112f3b5bd38154cdec54fde49b890c23544110252",
       "targetCommit": "513a8f0ca6e405725dcf98eab1fc5cd6468b5f10",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "mvp-boilerplate": {
       "file": "mvp-boilerplate.osv.json.gz",
       "sha256": "ade9160c02662012bfb70dcfccc8622477a74dcde5f4cfac20e3992eb0ad4119",
       "targetCommit": "2aac5c2fcb45c35aa4a5f5eb9eb66645f0f84e70",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "saas-lite": {
       "file": "saas-lite.osv.json.gz",
-      "sha256": "f525da06a571d94482360b44924afd7b7d8e6cfd76f38daeeff9230cf2be8f9f",
+      "sha256": "f26973cf670068b954d232ded336e2026447fb0ad3b86d91a9a338233205e9b3",
       "targetCommit": "63892cee72ffc9885bd5bf366ed6f4be78aab1ea",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "ghostfolio": {
       "file": "ghostfolio.osv.json.gz",
-      "sha256": "4c41627c00e20d75a8995fd0b1df6e28dae1346b43439d3f69d94c43c32a28fa",
+      "sha256": "99a7814781adac95eb0bcb75dd838f2cb07cd1b5195fdd14df01a31ea627cd69",
       "targetCommit": "7bd6ca6d48a2b88d454218dc1497536708e38c57",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "rallly": {
       "file": "rallly.osv.json.gz",
-      "sha256": "cf56de298795e89b1c97cb65d2c3135e8a533b55ae1ea56655315f4c679cec43",
+      "sha256": "c582699f3d343d4ec99eee35a4decc546997102e45ac2093e4b7812dc82e3a65",
       "targetCommit": "a680798c542ec9613f68b7a05a639db8419500d9",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "inbox-zero": {
       "file": "inbox-zero.osv.json.gz",
-      "sha256": "1bed77e78734629b8a7274d8f55e6d964009b306aea7bcc00608661c9da66767",
+      "sha256": "05a64d86478f0daa81f6b6671deb2a65940cc2e6ab6144d46c5854a4e036e4cc",
       "targetCommit": "2b78f2b38576b7e69c77e5acf76676ff75fac75a",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "documenso": {
       "file": "documenso.osv.json.gz",
-      "sha256": "02ab9965dcb87bff60b7b4ff4704cf3f17f8009d344222c5b472bd240b650db1",
+      "sha256": "af8d99c5d4153c99d2323a9754de220351202f2376cbf13d9cadcfcfc2b80db0",
       "targetCommit": "c02dfaba1a89f346db785879d39d35a04ec3450b",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "carbon": {
       "file": "carbon.osv.json.gz",
-      "sha256": "01b009c0c317d79060ad3056ced63a15b8bf46c907981b1174c6116b5ef11c31",
+      "sha256": "b60bf8e0df717251b37ac3ce6850dd8543ab08c235c349b16a9c70a82233558c",
       "targetCommit": "92e19c04417e7023a38264315d7846449fd5c4a1",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "tanstack-com": {
       "file": "tanstack-com.osv.json.gz",
-      "sha256": "cae556d2f951a06e78f24f4b9a5c97ebf3358ec29f6000e70903b4d674cbb160",
+      "sha256": "043456569b27861132ff046fef9dc3f1b931b75c8d1a4fd859dc365d8aafc74f",
       "targetCommit": "6b61f4dcc19a950fe15f8b610925a4b74091313e",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "supabase-security-labs": {
       "file": "supabase-security-labs.osv.json.gz",
       "sha256": "ade9160c02662012bfb70dcfccc8622477a74dcde5f4cfac20e3992eb0ad4119",
       "targetCommit": "c8ac29b9c19c1064212bd296c3712909924f9b22",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "cravab": {
       "file": "cravab.osv.json.gz",
-      "sha256": "e014383ce4ff99423ce9d7f49663358461375505ab3e12081058670401aab9e5",
+      "sha256": "beebfe0d8a06a3ae423287b612fceec529805459a65129e83fc0f7b0a6da916d",
       "targetCommit": "f0b355fe5e082b9f67bacf3593393e763f50acea",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "flori-web": {
       "file": "flori-web.osv.json.gz",
-      "sha256": "38265b9594f7d2b7a9cb789bb915523b17c84a947b5d709d1670cad79dda625c",
+      "sha256": "3aac315e24be9593dac6ff1faedad9255fc55e1177ddc868631348eda4a069a4",
       "targetCommit": "908eaff6fcf598c0fe1043faaaecb6a4083c90d5",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "effective": {
       "file": "effective.osv.json.gz",
-      "sha256": "19e64782cc51a9d7e3d480c73995effb6a5630e79a3a130f33bc9f46ad1dc454",
+      "sha256": "98a285f5702f226521a4bb829e12470a8fa44f629fe758d9ecf47a5f1570cc16",
       "targetCommit": "6c86752d118e262fa15e8c46d3f4d38f9b53b5ce",
-      "capturedAt": "2026-09-01T04:33:19.870Z",
-      "expiresAt": "2026-09-08T04:33:19.870Z",
+      "capturedAt": "2026-09-01T12:52:02.251Z",
+      "expiresAt": "2026-09-08T12:52:02.251Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     }
   }
