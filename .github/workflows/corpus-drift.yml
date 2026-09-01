@@ -45,7 +45,7 @@ on:
     - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
     # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-01
     # event=schedule attempt on the final merged main SHA. The spaced slots avoid overlap/cancellation.
-    - cron: "13 13,15,17 1 9 *"
+    - cron: "13 19,20,21 1 9 *"
   workflow_dispatch:
     inputs:
       alert_drill:
