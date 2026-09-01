@@ -34,6 +34,12 @@ function transportWorkflowErrors(text: string, cli = corpusCli): string[] {
   if (text.includes("corpus-phase-run-v5-") || text.includes("corpus-phase-main-v5-")) errors.push("legacy v5 fallback");
   if ((text.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length < 12) errors.push("schedule four-owner activation");
   if (!/name: Upload drift scorecard\n\s+if: always\(\)/.test(text)) errors.push("scorecard failure delivery");
+  if (!/name: Upload live advisory observation\n\s+if: always\(\).*github\.event_name == 'schedule'.*github\.event_name == 'workflow_dispatch'/.test(text)) errors.push("live advisory failure delivery");
+  const advisoryUpload = artifactUploads(text).find((step) => step.with.name === "corpus-advisory-observation");
+  if (advisoryUpload?.uses !== "actions/upload-artifact@v4") errors.push("live advisory action version");
+  if (advisoryUpload?.with.path !== "corpus-advisory-observation.json") errors.push("live advisory exact path");
+  if (advisoryUpload?.with["if-no-files-found"] !== "error") errors.push("live advisory missing evidence");
+  if (!advisoryUpload?.if?.includes("!inputs.liveness_drill") || !advisoryUpload.if.includes("!inputs.alert_drill")) errors.push("live advisory drill isolation");
   if (!/name: Gate liveness — did this job actually score anything\?\n\s+if: always\(\)/.test(text)) errors.push("liveness failure delivery");
   if (!cli.includes("corpusCacheNamespaceForTarget") || (cli.match(/cacheDir: targetPhaseCacheDir/g) ?? []).length !== 6 || (cli.match(/cacheDir: targetPhaseCacheDir!/g) ?? []).length !== 1) errors.push("target owner routing");
   return errors;
@@ -208,6 +214,7 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
   expect(expression(score.env!.SHARD_COUNT!, ctx)).toBe(sharded ? 4 : 1);
   expect(expression(score.env!.HARVEY_CURRENT_MECHANICAL_READINESS!, ctx)).toBe(event === "push" ? "1" : "0");
   const upload = named(doc, "shard", "Upload drift scorecard");
+  const advisoryUpload = named(doc, "shard", "Upload live advisory observation");
   const artifactNames: string[] = [];
   for (const shard of active(shardJob, ctx) ? matrix as number[] : []) {
     ctx.matrix.shard = shard;
@@ -218,6 +225,13 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
     expect(active(score, ctx)).toBe(true);
     expect(expression(score.env!.SHARD!, ctx)).toBe(shard);
     expect(active(upload, ctx)).toBe(true);
+    expect(active(advisoryUpload, ctx)).toBe(event === "schedule" || event === "workflow_dispatch");
+    expect(advisoryUpload.uses).toBe("actions/upload-artifact@v4");
+    expect(advisoryUpload.with).toMatchObject({
+      name: "corpus-advisory-observation",
+      path: "corpus-advisory-observation.json",
+      "if-no-files-found": "error",
+    });
     artifactNames.push(render(String(upload.with!.name), ctx));
     expect(artifactNames.at(-1)).toBe(sharded ? `corpus-drift-scorecard-part-${shard}` : "corpus-drift-scorecard");
     for (const n of [1, 2, 3, 4]) {
@@ -410,6 +424,8 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       ctx.steps.score!.outcome = result;
       for (const step of document.jobs.shard!.steps.filter((step) => step.uses === "actions/cache/save@v4" || step.name === "Record corpus phase-cache transport provenance")) expect(active(step, ctx)).toBe(false);
       expect(active(named(document, "shard", "Upload drift scorecard"), ctx)).toBe(true);
+      expect(active(named(document, "shard", "Upload live advisory observation"), ctx))
+        .toBe(event === "schedule" || event === "workflow_dispatch");
       expect(active(named(document, "shard", "Gate liveness — did this job actually score anything?"), ctx)).toBe(true);
     }
   });
@@ -425,6 +441,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
         ctx.status = "failure";
       }
       expect(active(named(document, "shard", "Score the corpus against its baselines"), ctx)).toBe(false);
+      expect(active(named(document, "shard", "Upload live advisory observation"), ctx)).toBe(false);
       for (const step of document.jobs.shard!.steps.filter((step) => step.uses === "actions/cache/save@v4" || step.name === "Record corpus phase-cache transport provenance")) expect(active(step, ctx)).toBe(false);
       expect(active(named(document, "shard", "Gate liveness — did this job actually score anything?"), ctx)).toBe(drill === "liveness_drill");
       ctx.status = "failure";
@@ -649,6 +666,9 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     ["shared parent path", workflow.replace("path: .harvey-corpus-phase-cache/shard3", "path: .harvey-corpus-phase-cache")],
     ["scheduled single transport", workflow.replaceAll(" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "")],
     ["scorecard success-only", workflow.replace("name: Upload drift scorecard\n        if: always()", "name: Upload drift scorecard\n        if: success()")],
+    ["advisory observation success-only", workflow.replace("name: Upload live advisory observation\n        if: always()", "name: Upload live advisory observation\n        if: success()")],
+    ["advisory observation missing file is tolerated", workflow.replace("name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: error", "name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: warn")],
+    ["advisory observation includes alert drills", workflow.replace(" && !inputs.alert_drill", "")],
   ] as const)("turns red under the disposable %s workflow reversion", (_name, reverted) => {
     expect(transportWorkflowErrors(reverted)).not.toEqual([]);
   });

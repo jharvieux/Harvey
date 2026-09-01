@@ -3,7 +3,7 @@
 // free-tier calibration invariant (#261). Layer 1 (src/scan/external-corpus.test.ts) proves the
 // scorers in `pnpm verify` with no network; this is the pass that actually re-measures real repos.
 //
-//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--baseline-findings <path>] [--install] [--m8]
+//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--baseline-findings <path>] [--advisory-observation <path>] [--install] [--m8]
 //   pnpm corpus-drift --diagnostic-replay <path>
 //
 // --install (#251) installs each clone's own dependency tree before the scanners — with the package
@@ -63,7 +63,11 @@ import type { DetectorExecutionRecord } from "../scan/mechanical-detector-regist
 import type { MechanicalContextMetrics } from "../scan/mechanical-context.js";
 import { buildMechanicalPhaseCache } from "../scan/mechanical-phase-identity.js";
 import { binaryVersion, digestFiles, digestParts } from "../scan/mechanical-phase-cache.js";
-import { loadCorpusAdvisorySnapshot } from "../corpus-advisory-snapshot.js";
+import {
+  loadCorpusAdvisorySnapshot,
+  writeCorpusAdvisoryObservation,
+  type CorpusAdvisoryObservationArtifact,
+} from "../corpus-advisory-snapshot.js";
 import {
   countedBaselineAggregateLines,
   countedBaselineDiagnostic,
@@ -155,6 +159,7 @@ const registrySnapshotDir = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_DIR
   : undefined;
 const registrySnapshotMode = process.env.HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE ?? "refresh";
 const externalStateMode = process.env.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? "live";
+const advisoryObservationPath = flag("--advisory-observation") ?? (externalStateMode === "live-verify" ? "corpus-advisory-observation.json" : undefined);
 const currentReadiness = process.env.HARVEY_CURRENT_MECHANICAL_READINESS === "1";
 if (!(["refresh", "reuse", "unavailable"] as const).includes(registrySnapshotMode as "refresh" | "reuse" | "unavailable")) {
   console.error(`HARVEY_SEMGREP_REGISTRY_SNAPSHOT_MODE must be refresh, reuse, or unavailable; got ${registrySnapshotMode}`);
@@ -178,6 +183,10 @@ if (forceColdCache && !phaseCacheDir) {
 }
 if (!["live", "snapshot", "live-verify"].includes(externalStateMode)) {
   console.error(`HARVEY_CORPUS_EXTERNAL_STATE_MODE must be live, snapshot, or live-verify; got ${externalStateMode}`);
+  process.exit(2);
+}
+if (advisoryObservationPath && externalStateMode !== "live-verify") {
+  console.error("--advisory-observation is valid only in live-verify mode; snapshot/live runs must not emit a parity receipt");
   process.exit(2);
 }
 
@@ -664,6 +673,20 @@ const rows: Row[] = [];
 const findingsBySlug: Record<string, Finding[]> = {};
 const detectorRecordsBySlug: Record<string, DetectorExecutionRecord[]> = {};
 const mechanicalContextBySlug: Record<string, MechanicalContextMetrics> = {};
+const advisoryObservation: CorpusAdvisoryObservationArtifact | undefined = advisoryObservationPath ? {
+  schema: 1,
+  mode: "live-verify",
+  startedAt: new Date().toISOString(),
+  completedAt: null,
+  populationComplete: false,
+  liveOsvScannerVersion: binaryVersion("osv-scanner"),
+  expectedTargets: targets.map(({ slug, repo, commit }) => ({ slug, repo, pin: commit })),
+  targets: {},
+} : undefined;
+const persistAdvisoryObservation = (): void => {
+  if (advisoryObservationPath && advisoryObservation) writeCorpusAdvisoryObservation(advisoryObservationPath, advisoryObservation);
+};
+persistAdvisoryObservation();
 
 for (const target of targets) {
   const targetRoot = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
@@ -674,6 +697,16 @@ for (const target of targets) {
   // intervals in one run's log. Printing each target's real elapsed time means any run re-measures
   // them directly, so a weight that has gone stale is visible rather than inferred.
   const startedAt = Date.now();
+  if (advisoryObservation) {
+    advisoryObservation.targets[target.slug] = {
+      slug: target.slug,
+      repo: target.repo,
+      pin: target.commit,
+      startedAt: new Date(startedAt).toISOString(),
+      status: "started",
+    };
+    persistAdvisoryObservation();
+  }
   phaseTarget = target.slug;
   phaseSeconds[target.slug] = {};
   const targetPhaseCacheDir = phaseCacheDir
@@ -696,6 +729,15 @@ for (const target of targets) {
     const targetTreeIdentity = `${prepared!.checkoutTree}:${JSON.stringify(target.vendoredSubtrees ?? [])}:${prepared!.preparedTreeSha256}`;
     const scanDir = prepared!.scanDir;
     const snapshot = externalStateMode !== "live" ? loadCorpusAdvisorySnapshot(target.slug, target.commit) : undefined;
+    if (advisoryObservation && snapshot) {
+      advisoryObservation.targets[target.slug]!.snapshot = {
+        artifactSha256: snapshot.digest,
+        capturedAt: snapshot.capturedAt,
+        expiresAt: snapshot.expiresAt,
+        osvScannerVersion: snapshot.osvScannerVersion,
+      };
+      persistAdvisoryObservation();
+    }
     const deterministicSnapshot = externalStateMode === "snapshot" ? snapshot : undefined;
     const skipNetworkChecks = externalStateMode === "snapshot";
     const secretCandidateIdentity = deterministicSnapshot ? digestParts([
@@ -722,6 +764,15 @@ for (const target of targets) {
       skipBundleScan: true,
       advisorySnapshot: deterministicSnapshot,
       advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
+      onAdvisoryObservation: advisoryObservation ? (comparison) => {
+        advisoryObservation.targets[target.slug] = {
+          ...advisoryObservation.targets[target.slug]!,
+          observedAt: new Date().toISOString(),
+          status: comparison.status,
+          comparison,
+        };
+        persistAdvisoryObservation();
+      } : undefined,
       secretCandidateIdentity,
       phaseCache: currentPlan?.phaseCache ?? (targetPhaseCacheDir ? buildMechanicalPhaseCache({
         repoRoot,
@@ -914,6 +965,18 @@ for (const target of targets) {
       (phaseSeconds[phaseTarget] ??= {})["free-tier report"] = (Date.now() - reportAt) / 1000;
       rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
     }
+  } catch (error) {
+    if (advisoryObservation) {
+      const current = advisoryObservation.targets[target.slug]!;
+      advisoryObservation.targets[target.slug] = {
+        ...current,
+        observedAt: current.observedAt ?? new Date().toISOString(),
+        status: current.status === "finding-change" ? "finding-change" : "failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
+      persistAdvisoryObservation();
+    }
+    throw error;
   } finally {
     const total = (Date.now() - startedAt) / 1000;
     const phases = phaseSeconds[target.slug] ?? {};
@@ -929,6 +992,12 @@ for (const target of targets) {
     if (keep) console.error(`  (kept target workspace: ${targetRoot})`);
     else rmSync(targetRoot, { recursive: true, force: true });
   }
+}
+
+if (advisoryObservation) {
+  advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every(({ slug }) => ["equal", "metadata-only"].includes(advisoryObservation.targets[slug]?.status ?? ""));
+  advisoryObservation.completedAt = new Date().toISOString();
+  persistAdvisoryObservation();
 }
 
 if (!m8) {

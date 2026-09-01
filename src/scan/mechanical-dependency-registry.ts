@@ -161,13 +161,19 @@ export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Obj
   definition({ id: "lockfile-presence", order: 130, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLockfilePresence" }, taxonomies: ["Missing lockfile"], applicableFiles: population("supported lockfile paths", ({ context }) => context.paths.filter((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|npm-shrinkwrap\.json)$/.test(path))), countExaminedUnits: () => 1, examinedUnitIdentities: () => semanticExaminedUnits("lockfile-presence", "semantic-check", ["supported-lockfile-presence"]), invoke: ({ scanDir }) => checkLockfilePresence(scanDir) }),
 ]);
 
-export async function runRegisteredDependencyDetectors(input: DependencyInput, stage: DependencyDetectorDefinition["stage"]): Promise<{ findings: Finding[]; records: MechanicalProducerRecord[] }> {
+export async function runRegisteredDependencyDetectors(input: DependencyInput, stage: DependencyDetectorDefinition["stage"]): Promise<{
+  findings: Finding[];
+  findingsByDetector: Record<string, Finding[]>;
+  records: MechanicalProducerRecord[];
+}> {
   const state = dependencyState(input);
   const findings: Finding[] = [];
+  const findingsByDetector: Record<string, Finding[]> = {};
   const records: MechanicalProducerRecord[] = [];
   for (const detector of DEPENDENCY_DETECTORS) {
     if (detector.stage !== stage) continue;
     if (!(detector.enabled?.(state) ?? true)) {
+      findingsByDetector[detector.id] = [];
       records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities: [], findings: 0, durationMs: 0, status: "not-applicable" }));
       continue;
     }
@@ -178,8 +184,9 @@ export async function runRegisteredDependencyDetectors(input: DependencyInput, s
     const started = performance.now();
     const emitted = await detector.invoke(state);
     assertProducerTaxonomyOwnership(detector, emitted);
+    findingsByDetector[detector.id] = emitted;
     findings.push(...emitted);
     records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
   }
-  return { findings, records };
+  return { findings, findingsByDetector, records };
 }

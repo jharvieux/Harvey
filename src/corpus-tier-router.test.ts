@@ -50,15 +50,17 @@ describe("corpus hosted relevance router", () => {
     expect(script).toContain('scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"');
   });
 
-  it("keeps the daily corpus schedule plus date-bounded propagation recovery windows (#1883)", () => {
+  it("keeps the steady schedule plus the bounded #1883 live-OSV acceptance window", () => {
     const yaml = readFileSync(WORKFLOW, "utf8");
     const crons = [...yaml.matchAll(/^\s*-\s*cron:\s*"([^"]+)"/gm)].map((match) => match[1]!);
-    expect(crons, "the sooner recovery must retain exactly one steady daily trigger and one temporary trigger").toEqual([
+    expect(crons, "the repair must retain daily coverage and only the approved 2026-09-01 acceptance slots").toEqual([
       "23 7 * * *",
-      "13,28,43,58 19 28 8 *",
+      "13 13,15,17 1 9 *",
     ]);
     expect(crons.every((cron) => cron.split(" ")[0] !== "0"), "GitHub can delay or drop minute-zero schedules under high Actions load").toBe(true);
-    expect(yaml).toContain("TEMPORARY #1883 propagation recovery after 17:13 and 18:37 never enqueued; remove after accepted genuine schedule evidence");
+    expect(yaml).not.toContain("13,28,43,58 19 28 8 *");
+    expect(yaml).toContain("TEMPORARY #1883 live-OSV repair acceptance");
+    expect(yaml).toContain("remove after the first accepted 2026-09-01");
   });
 
   it("allocates shards only for relevant receipts and keeps required-context liveness explicit", () => {

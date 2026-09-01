@@ -1027,6 +1027,36 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-vcc3-ghjq-m6fr-decode-uri-component@0.2.2",
+    "title": "decode-uri-component@0.2.2: decode-uri-component: Denial of service via exponential decoding of malformed percent-encoded input (fixed in 0.5.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (decode-uri-component@0.2.2)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-vcc3-ghjq-m6fr (aliases: CVE-2026-45822) against decode-uri-component@0.2.2. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 0.5.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-45822.",
+    "impact": "decode-uri-component: Denial of service via exponential decoding of malformed percent-encoded input",
+    "fix": "Upgrade decode-uri-component to 0.5.0 or later (see GHSA-vcc3-ghjq-m6fr).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1176",
+      "CWE-400",
+      "CWE-405",
+      "CWE-407"
+    ],
+    "dependency": "decode-uri-component",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "decode-uri-component is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-OSV-GHSA-848j-6mx2-7j84-elliptic@6.6.1",
     "title": "elliptic@6.6.1: Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
     "severity": "Low",

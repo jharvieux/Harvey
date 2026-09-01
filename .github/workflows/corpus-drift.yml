@@ -43,7 +43,9 @@ name: corpus-drift
 on:
   schedule:
     - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
-    - cron: "13,28,43,58 19 28 8 *" # TEMPORARY #1883 propagation recovery after 17:13 and 18:37 never enqueued; remove after accepted genuine schedule evidence
+    # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-01
+    # event=schedule attempt on the final merged main SHA. The spaced slots avoid overlap/cancellation.
+    - cron: "13 13,15,17 1 9 *"
   workflow_dispatch:
     inputs:
       alert_drill:
@@ -501,6 +503,17 @@ jobs:
           baseline_flag=()
           [ -f prior-drift/corpus-drift.json ] && baseline_flag=(--baseline-findings prior-drift/corpus-drift.json)
           pnpm corpus-drift --install --shard "$SHARD/$SHARD_COUNT" --json "$out" "${baseline_flag[@]}" "${cold_flag[@]}"
+
+      # Live-provider parity is intentionally fail-closed, but its raw and semantic observation is
+      # what makes a scheduled/manual failure diagnosable. Retain it even when scoring exits red;
+      # drill paths never contact the provider and must not manufacture an observation artifact.
+      - name: Upload live advisory observation
+        if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-advisory-observation
+          path: corpus-advisory-observation.json
+          if-no-files-found: error
 
       - name: Measure content-addressed cache size
         if: always() && steps.phase-cache-scopes.outcome == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill

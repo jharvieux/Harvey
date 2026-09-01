@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -143,5 +143,21 @@ describe("corpus-drift failed-row diagnostic replay (#1580)", () => {
     expect(result.stderr).not.toContain("INCOMPLETE POPULATION CHECK");
     expect(result.stderr).not.toContain("COUNTED-BASELINE AGGREGATE FAILURE");
     expect(existsSync(result.livenessReceipt)).toBe(false);
+  });
+});
+
+describe("corpus advisory observation retention (#1883)", () => {
+  it("initializes the live-verify artifact and persists the callback before propagating failure", () => {
+    const source = readFileSync(CLI, "utf8");
+    expect(source).toContain('externalStateMode === "live-verify" ? "corpus-advisory-observation.json"');
+    expect(source).toContain("writeCorpusAdvisoryObservation(advisoryObservationPath, advisoryObservation)");
+    const callback = source.indexOf("onAdvisoryObservation: advisoryObservation ? (comparison) => {");
+    const callbackWrite = source.indexOf("persistAdvisoryObservation();", callback);
+    const failureCatch = source.indexOf("} catch (error) {", callback);
+    expect(callback).toBeGreaterThan(-1);
+    expect(callbackWrite).toBeGreaterThan(callback);
+    expect(callbackWrite).toBeLessThan(failureCatch);
+    expect(source.slice(failureCatch, source.indexOf("} finally {", failureCatch))).toContain("persistAdvisoryObservation();");
+    expect(source).toContain("advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every");
   });
 });
