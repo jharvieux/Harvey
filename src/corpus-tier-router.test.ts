@@ -55,7 +55,7 @@ describe("corpus hosted relevance router", () => {
     const crons = [...yaml.matchAll(/^\s*-\s*cron:\s*"([^"]+)"/gm)].map((match) => match[1]!);
     expect(crons, "the repair must retain daily coverage and only the approved 2026-09-01 acceptance slots").toEqual([
       "23 7 * * *",
-      "13 19,20,21 1 9 *",
+      "43 22,23 1 9 *",
     ]);
     expect(crons.every((cron) => cron.split(" ")[0] !== "0"), "GitHub can delay or drop minute-zero schedules under high Actions load").toBe(true);
     expect(yaml).not.toContain("13,28,43,58 19 28 8 *");
