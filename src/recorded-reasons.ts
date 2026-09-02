@@ -520,9 +520,9 @@ function unglobbedPathspec(command: string): string | undefined {
 // name where the operator was actually asked. A DECISION with no issue ref and no path is a relay
 // with no venue, which is the silent close wearing a field name.
 //
-// The path list mirrors CLAUDE.md's "Sensitive paths — never auto-change" section, which is the
-// authority; package.json/pnpm-lock.yaml are deliberately absent (operator ruling 2026-07-27 — a
-// folk belief that they were supervised was blocking five separate pieces of work).
+// The path list mirrors AGENTS.md's sensitive-path policy, which is the current authority. Since
+// #2018 it includes package manifests, lockfiles, and runtime/version constraint files: dependency
+// state requires the same explicit operator authorization as the other supervised paths.
 //
 // A supervised path appears in a reason two ways and only one of them is a blocker. "…the operator
 // ruling behind it is recorded in docs/design/infrastructure-out-of-scope.md" CITES the path;
@@ -532,7 +532,11 @@ function unglobbedPathspec(command: string): string | undefined {
 // ("<path> is supervised", "<path>, which needs an operator ruling", "the <path> file is
 // protected"), or the OBJECT of a prohibition ("cannot edit <path>", "a supervised path like
 // <path>"). A path that is merely named, cited or described stays untouched.
-const SUPERVISED_PATH = String.raw`(?:\.github/workflows[\w./-]*|CLAUDE\.md|report-template/findings\.[\w.-]*|docs/[\w./-]*\.md)`;
+const DEPENDENCY_LOCKFILE = String.raw`(?:[\w.-]+(?:-|\.)lock(?:file)?(?:\.(?:json|ya?ml|toml|hcl))?|[\w.-]+\.lockb|lockfile|Package\.resolved|Cartfile\.resolved|npm-shrinkwrap\.json|go\.(?:sum|work\.sum)|\.terraform\.lock\.hcl)`;
+const DEPENDENCY_MANIFEST = String.raw`(?:package\.json|pnpm-workspace\.ya?ml|lerna\.json|rush\.json|bower\.json|deno\.jsonc?|jsr\.json|elm\.json|haxelib\.json|Package\.swift|pubspec\.ya?ml|go\.(?:mod|work)|Cargo\.toml|pyproject\.toml|Pipfile|pylock\.toml|pixi\.toml|requirements(?:-[\w.-]+)?\.(?:txt|in|ya?ml)|constraints(?:-[\w.-]+)?\.(?:txt|in)|setup\.(?:py|cfg)|environment\.ya?ml|meta\.ya?ml|tox\.ini|Gemfile|gems\.rb|[\w.-]+\.gemspec|composer\.json|mix\.exs|rebar\.config|gleam\.toml|shard\.ya?ml|DESCRIPTION|[\w.-]+\.nimble|pom\.xml|build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?|build\.sbt|build\.sc|ivy\.xml|build\.xml|deps\.edn|project\.clj|bb\.edn|shadow-cljs\.edn|stack\.ya?ml|cabal\.project|package\.ya?ml|[\w.-]+\.cabal|[\w.-]+\.(?:csproj|fsproj|vbproj)|Directory\.(?:Build|Packages)\.(?:props|targets)|packages\.config|project\.assets\.json|paket\.(?:dependencies|references)|vcpkg(?:-configuration)?\.json|conanfile\.(?:txt|py)|CMakeLists\.txt|meson\.build|[\w.-]+\.wrap|Podfile|Cartfile|Brewfile|Mintfile|Berksfile|Puppetfile|Policyfile\.rb|spack\.ya?ml|build\.zig\.zon|dub\.(?:json|sdl)|v\.mod|dune-project|[\w.-]+\.opam|cpanfile|Makefile\.PL|Build\.PL|[\w.-]+\.rockspec|devbox\.json|MODULE\.bazel|WORKSPACE(?:\.bazel)?|\.buckconfig|pants\.toml|flake\.nix|Project\.toml|Manifest\.toml|(?:versions|providers|required_providers)\.tf(?:\.json)?|\.gitmodules|package\.xml|Chart\.ya?ml|metadata\.(?:json|rb)|galaxy\.ya?ml|debian/control|[\w.-]+\.spec|APKBUILD|PKGBUILD|Packages/manifest\.json)`;
+const VERSION_CONSTRAINT_FILE = String.raw`(?:libs\.versions\.toml|global\.json|\.nvmrc|\.pre-commit-config\.ya?ml|\.(?:node|python|ruby|java|terraform)-version|\.tool-versions|\.sdkmanrc|\.bazelversion|rust-toolchain(?:\.toml)?|mise\.toml|gradle\.properties|(?:gradle|maven)-wrapper\.properties)`;
+const DEPENDENCY_POLICY_PATH = String.raw`(?:[\w@.-]+/)*(?:${DEPENDENCY_LOCKFILE}|${DEPENDENCY_MANIFEST}|${VERSION_CONSTRAINT_FILE})`;
+const SUPERVISED_PATH = String.raw`(?:\.github/workflows[\w./-]*|CLAUDE\.md|report-template/findings\.[\w.-]*|docs/[\w./-]*\.md|${DEPENDENCY_POLICY_PATH})`;
 const SUPERVISED_STATE = String.raw`(?:supervised|sensitive|protected|human-owned|off-limits|never auto-change)`;
 const OPERATOR_RULING = String.raw`operator (?:approval|sign-?off|ruling|permission)`;
 // Up to three words of noun between the path and its predicate: "<path> file is supervised".

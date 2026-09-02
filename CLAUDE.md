@@ -116,8 +116,12 @@ Automated agents (issue-sweep or any batch pipeline) must never modify these wit
 - `report-template/findings.*.json` — engagement findings (client data).
 - `.github/workflows/` — CI definitions.
 - `CLAUDE.md` — this file.
+- `package.json`, lockfiles, dependency manifests, and version constraints — dependency state and
+  runtime compatibility inputs.
 
-**`package.json` and `pnpm-lock.yaml` are NOT on this list** (operator ruling 2026-07-27). Five documents had come to assert they were, and that folk constraint was blocking at least five separate pieces of work (#802's JWT verifier, #199-201's LLM adjudicator, Chrome provisioning, a pnpm script alias, #1304's bundle-analyzer verification). Adding a dependency is an ordinary change; justify it on the merits, not on a path restriction that does not exist.
+The current repository-wide authority is `AGENTS.md`: changing dependency state requires an explicit
+human request naming the scope. #2018 aligns this doctrine with that policy after the earlier
+2026-07-27 ruling was superseded by the 2026-08-08 always-on instruction update.
 
 ## Model-tier labels
 
