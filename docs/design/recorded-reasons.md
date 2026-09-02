@@ -138,8 +138,8 @@ with no venue, which is the silent close wearing a field name. The venue test st
 the negative control that now pins it is `no-venue.ts` in `src/cli/validate-reasons.test.ts`.
 
 Both halves must match before the rule fires: the claim names a supervised path (`.github/workflows`,
-`CLAUDE.md`, `report-template/findings.*`, `docs/**/*.md` — mirroring CLAUDE.md's *Sensitive paths*
-list, which is the authority) **and** cites supervision as the reason. A claim that merely *mentions*
+`CLAUDE.md`, `report-template/findings.*`, `docs/**/*.md`, package manifests, lockfiles, or version
+constraints — mirroring the current `AGENTS.md` sensitive-path policy) **and** cites supervision as the reason. A claim that merely *mentions*
 `.github/workflows/ci.yml` is describing CI, which is what both reasons at the head of
 `src/cli/validate-conservation.test.ts` legitimately do.
 
@@ -154,9 +154,10 @@ is protected"*) or the object of a prohibition (*"cannot edit `<path>`"*, *"a su
 negative control at the unit and child-process levels — the citation above is asserted to PASS, and
 `.github/workflows/ci.yml is supervised` to fail.
 
-`package.json` and `pnpm-lock.yaml` are deliberately **absent** from that list — operator ruling
-2026-07-27, after a folk belief that they were supervised was found blocking five separate pieces of
-work. Adding a dependency is an ordinary change.
+`package.json`, lockfiles, dependency manifests, and version constraints are included in that list.
+The 2026-08-08 always-on `AGENTS.md` policy superseded the earlier 2026-07-27 ruling; #2018 aligns the
+production relay gate and governed doctrine copies by routing dependency-path authorization questions
+through a decisional relay.
 
 The rest of the doctrine — that a supervised-path blocker is a `relayed` disposition on the issue
 rather than a closed criterion — is enforced by Gate 1 (#1315), not here. This gate only reaches the

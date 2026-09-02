@@ -227,6 +227,7 @@ describe("a budget limit must not borrow impossibility's vocabulary (#1319)", ()
 // and the DECISION must say where the human was asked.
 describe("a supervised path produces a relay, not a silent close (#1319)", () => {
   const BLOCKED = "REASON: the CI wiring is not done because .github/workflows/ is supervised and needs operator approval";
+  const DEPENDENCY_BLOCKED = "REASON: package.json is sensitive and requires operator approval";
 
   it("REFUSES the blocker as empirical — no command re-tests whether the operator approved", () => {
     expect(validateRecordedReason(one([BLOCKED, EMPIRICAL_KIND, PROVENANCE, FALSIFIER])).join()).toContain("produces a RELAY, never a silent stop");
@@ -270,6 +271,117 @@ describe("a supervised path produces a relay, not a silent close (#1319)", () =>
     const named = "REASON: the CI wiring is not done because the .github/workflows/ci.yml job is supervised";
     expect(validateRecordedReason(one([named, EMPIRICAL_KIND, PROVENANCE, FALSIFIER])).join()).toContain("produces a RELAY, never a silent stop");
   });
+
+  it.each([
+    "package.json",
+    "packages/api/package.json",
+    "pnpm-lock.yaml",
+    "requirements-prod.txt",
+    ".nvmrc",
+    ".pre-commit-config.yaml",
+    "uv.lock",
+    "deno.lock",
+    "deno.json",
+    "Package.swift",
+    "Package.resolved",
+    "pubspec.yaml",
+    "pubspec.lock",
+    "go.work",
+    "go.work.sum",
+    "gradle/libs.versions.toml",
+    "deps.edn",
+    "flake.lock",
+    "pnpm-workspace.yaml",
+    "epic-builder-web/pnpm-workspace.yaml",
+    "environment.yml",
+    "setup.py",
+    "setup.cfg",
+    "build.sbt",
+    "Podfile",
+    "Cartfile",
+    "Cartfile.resolved",
+    "paket.dependencies",
+    "paket.references",
+    "Project.toml",
+    "Manifest.toml",
+    "pylock.toml",
+    ".terraform.lock.hcl",
+    "gradle/wrapper/gradle-wrapper.properties",
+    "constraints-prod.txt",
+    "stack.yaml",
+    "cabal.project",
+    "package.yaml",
+    "service.cabal",
+    "versions.tf",
+    "providers.tf",
+    "elm.json",
+    "shard.yml",
+    "rebar.config",
+    "build.zig.zon",
+    "Brewfile",
+    "Mintfile",
+    "gleam.toml",
+    "dune-project",
+    "service.opam",
+    "cpanfile",
+    "Makefile.PL",
+    "service-1.0.rockspec",
+    "devbox.json",
+    "dub.sdl",
+    "v.mod",
+    "project.assets.json",
+    "gradle.properties",
+    "DESCRIPTION",
+    "service.nimble",
+    "haxelib.json",
+    "CMakeLists.txt",
+    "meson.build",
+    "subprojects/codec.wrap",
+    "Packages/manifest.json",
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "service.gemspec",
+    "tox.ini",
+    "meta.yaml",
+    ".gitmodules",
+    "package.xml",
+    "Chart.yaml",
+    "metadata.rb",
+    "Berksfile",
+    "Puppetfile",
+    "Policyfile.rb",
+    "spack.yaml",
+    "galaxy.yml",
+    "debian/control",
+    "service.spec",
+    "APKBUILD",
+    "PKGBUILD",
+    ".buckconfig",
+    "pants.toml",
+  ])(
+    "REFUSES an empirical dependency-policy blocker for %s (#2018)",
+    (path) => {
+      const blocked = `REASON: ${path} is sensitive and requires operator approval`;
+      expect(validateRecordedReason(one([blocked, EMPIRICAL_KIND, PROVENANCE, FALSIFIER])).join()).toContain("produces a RELAY, never a silent stop");
+    },
+  );
+
+  it("accepts the package blocker as a decisional relay with a findable venue (#2018)", () => {
+    expect(validateRecordedReason(one([DEPENDENCY_BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: #2018"]))).toEqual([]);
+  });
+
+  it("leaves a measured reason that merely cites a package file alone (#2018)", () => {
+    const cites = "REASON: the measured resolver reads package.json; the operator approval policy is recorded in AGENTS.md";
+    expect(validateRecordedReason(one([cites, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+  });
+
+  it.each(["src/lock-manager.ts", "public/manifest.json", "src/versioning.md"])(
+    "does not classify a similarly named non-dependency path as dependency policy: %s",
+    (path) => {
+      const ordinary = `REASON: ${path} is sensitive and requires operator approval`;
+      expect(validateRecordedReason(one([ordinary, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+    },
+  );
 });
 
 describe("revalidateReasons — seeded proof that the gate fires on a reason whose blocker is gone", () => {

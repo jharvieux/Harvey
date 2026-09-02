@@ -280,6 +280,26 @@ describe("validate-reasons CLI", () => {
     expect(errors(out)).toEqual([expect.stringContaining("produces a RELAY, never a silent stop")]);
   });
 
+  it("fails when a package.json authorization blocker is recorded as empirical (#2018)", async () => {
+    const planted = LIVE_REASON.replace("the blocker this one describes really is still standing", "package.json is sensitive and requires operator approval");
+    const { code, out } = await gate(plant({ "dependency-policy.ts": planted }));
+    expect(code).toBe(1);
+    expect(errors(out)).toEqual([expect.stringContaining("produces a RELAY, never a silent stop")]);
+  });
+
+  it("passes the package.json blocker once it is relayed to a findable venue (#2018)", async () => {
+    const planted = [
+      "// REASON: package.json is sensitive and requires operator approval",
+      "// KIND: decisional",
+      "// PROVENANCE: MEASURED 2026-09-02",
+      "// OWNER: operator",
+      "// DECISION: #2018",
+    ].join("\n");
+    const { code, out } = await gate(plant({ "dependency-relay.ts": planted }));
+    expect(errors(out)).toEqual([]);
+    expect(code).toBe(0);
+  });
+
   // The venue rule shipped as /#\d+|\//, where any slash satisfied it. A relay with no findable venue
   // is the silent close wearing a field name, so a bare "go/no-go" must not buy one.
   it("fails on a supervised-path relay whose DECISION names no findable venue (#1319)", async () => {
@@ -306,6 +326,16 @@ describe("validate-reasons CLI", () => {
       "the source loader does not read .svelte files; the scope rationale and the operator ruling behind it are recorded in docs/design/infrastructure-out-of-scope.md",
     );
     const { code, out } = await gate(plant({ "cites.ts": planted }));
+    expect(errors(out)).toEqual([]);
+    expect(code).toBe(0);
+  });
+
+  it("passes a measured reason that merely cites package.json (#2018)", async () => {
+    const planted = LIVE_REASON.replace(
+      "the blocker this one describes really is still standing",
+      "the measured resolver reads package.json; the operator approval policy is recorded in AGENTS.md",
+    );
+    const { code, out } = await gate(plant({ "dependency-citation.ts": planted }));
     expect(errors(out)).toEqual([]);
     expect(code).toBe(0);
   });
