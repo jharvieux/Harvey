@@ -147,7 +147,7 @@ describe("corpus-drift failed-row diagnostic replay (#1580)", () => {
 });
 
 describe("corpus advisory observation retention (#1883)", () => {
-  it("initializes the live-verify artifact and persists the callback before propagating failure", () => {
+  it("persists every material parity result and fails only after the complete live population", () => {
     const source = readFileSync(CLI, "utf8");
     expect(source).toContain('externalStateMode === "live-verify" ? "corpus-advisory-observation.json"');
     expect(source).toContain("writeCorpusAdvisoryObservation(advisoryObservationPath, advisoryObservation)");
@@ -158,6 +158,22 @@ describe("corpus advisory observation retention (#1883)", () => {
     expect(callbackWrite).toBeGreaterThan(callback);
     expect(callbackWrite).toBeLessThan(failureCatch);
     expect(source.slice(failureCatch, source.indexOf("} finally {", failureCatch))).toContain("persistAdvisoryObservation();");
-    expect(source).toContain("advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every");
+    expect(source).toContain('advisoryFindingChangeDisposition: externalStateMode === "live-verify" ? "record" : "throw"');
+    expect(source).toContain('if (comparison.status === "finding-change")');
+    expect(source).toContain('check: "live OSV advisory parity"');
+    const populationFinalized = source.indexOf("advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every");
+    const completedAt = source.indexOf("advisoryObservation.completedAt = new Date().toISOString();", populationFinalized);
+    const parityRows = source.indexOf("for (const change of advisoryFindingChanges) rows.push", completedAt);
+    const missingMechanical = source.indexOf("const missingMechanicalTargets", parityRows);
+    const record = source.indexOf('recordMeasured("corpus-drift"', missingMechanical);
+    const json = source.indexOf("if (jsonOut) writeFileSync", record);
+    const failed = source.indexOf("const failed = rows.filter", json);
+    expect(populationFinalized).toBeGreaterThan(failureCatch);
+    expect(completedAt).toBeGreaterThan(populationFinalized);
+    expect(parityRows).toBeGreaterThan(completedAt);
+    expect(missingMechanical).toBeGreaterThan(parityRows);
+    expect(record).toBeGreaterThan(missingMechanical);
+    expect(json).toBeGreaterThan(record);
+    expect(failed).toBeGreaterThan(json);
   });
 });

@@ -2771,6 +2771,61 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-4mjr-xmp4-gh2g-qs@6.15.3",
+    "title": "qs@6.15.3: qs: Denial of Service via Attacker Controlled isBuffer (fixed in 6.16.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (qs@6.15.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-4mjr-xmp4-gh2g (aliases: CVE-2026-82417) against qs@6.15.3. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 6.16.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-82417.",
+    "impact": "qs: Denial of Service via Attacker Controlled isBuffer — `qs.stringify()` calls `utils.isBuffer()` on every value it serializes, and `utils.isBuffer()` invokes `obj.constructor.isBuffer(obj)` without checking that it is callable. A value whose own `constructor.isBuffer` is a non-function makes `qs` call a non-callable and throw `TypeError`. Such a value is produced **by `qs.parse` itself** from an untrusted query string when `plainObjects: true` or `allowPrototypes: true` is set, so a pure-`qs` `parse` → `stringify` round-trip — no `JSON.parse` — turns an unauthenticated query string into an uncaught throw.",
+    "fix": "Upgrade qs to 6.16.0 or later (see GHSA-4mjr-xmp4-gh2g).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-248",
+      "CWE-703"
+    ],
+    "dependency": "qs",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "qs is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-x5fp-wj9c-mxmx-qs@6.15.3",
+    "title": "qs@6.15.3: qs array-limit bypass via bracket-key comma parsing (fixed in 6.16.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (qs@6.15.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-x5fp-wj9c-mxmx (aliases: CVE-2026-82562) against qs@6.15.3. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 6.16.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-82562.",
+    "impact": "qs array-limit bypass via bracket-key comma parsing — `qs` `v6.15.3` allows bracket-key input to bypass `arrayLimit` and `throwOnLimitExceeded` when `comma: true`. The input `a[]=1,2,3,4` succeeds with `arrayLimit: 3`, while the equivalent plain-key input is rejected.",
+    "fix": "Upgrade qs to 6.16.0 or later (see GHSA-x5fp-wj9c-mxmx).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
+    "dependency": "qs",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "qs is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq-serialize-javascript@4.0.0",
     "title": "serialize-javascript@4.0.0: Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString() (fixed in 7.0.3)",
     "severity": "High",
