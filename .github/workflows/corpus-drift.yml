@@ -43,9 +43,9 @@ name: corpus-drift
 on:
   schedule:
     - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
-    # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-01
-    # event=schedule attempt on the final merged main SHA. The spaced slots avoid overlap/cancellation.
-    - cron: "43 22,23 1 9 *"
+    # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-02
+    # event=schedule attempt on the final merged main SHA.
+    - cron: "7,17,27,37,47,57 0,1,2,3 2 9 *"
   workflow_dispatch:
     inputs:
       alert_drill:
@@ -71,14 +71,11 @@ on:
   # nothing-assessed no-op or runs the full corpus; the resulting main push is always full again.
   merge_group:
 
-# A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
-# newer run is the interesting one. Safe on a required check: a cancellation here is only ever
-# caused by a NEWER run on the same `github.ref` — for a PR that is `refs/pull/N/merge`, so the
-# superseding run reports against the newer head commit, which is the commit branch protection
-# actually evaluates. A `cancelled` conclusion is therefore never the latest result for the head
-# SHA and cannot strand a merge. (Same posture dry-run-drift.yml and ci.yml already take.)
+# Recovery schedules need unique groups: a complete corpus run can exceed the temporary ten-minute
+# cadence, so grouping scheduled runs by ref would cancel each run before it can prove acceptance.
+# Other events keep the ref group: a newer PR/push run supersedes an older run for the same ref.
 concurrency:
-  group: corpus-drift-${{ github.ref }}
+  group: corpus-drift-${{ github.event_name == 'schedule' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 permissions:
