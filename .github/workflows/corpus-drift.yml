@@ -223,10 +223,13 @@ jobs:
       contents: read
       issues: write
       actions: read
-    # Run 32940913828 hit 30m on the Carbon-only shard after a 1365.7s cold Semgrep phase.
-    # Allow 45m for that four-way arm; retain 30m for the other shards and the distinct
-    # schedule/manual all-target arm. Complete cold scoring and liveness still gate success.
-    timeout-minutes: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && matrix.shard == 1 && 45 || 30 }}
+    # Run 32940913828 hit 30m on the Carbon-only shard after a 1365.7s cold Semgrep phase,
+    # so that four-way arm retains 45m while the other partitioned shards retain 30m.
+    # Run 33633121239 then proved the distinct schedule/manual all-target arm needs its own
+    # serial budget: it was cancelled at 30m after completing only 10/17 advisory observations.
+    # The run's observed first-nine time plus measured remaining weights projects about 84m before
+    # post-score persistence, so 120m leaves a bounded completion margin. Liveness still gates success.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 120 || (matrix.shard == 1 && 45 || 30) }}
     # The receipt both the gate CLI and .github/actions/gate-liveness read. A literal path, not
     # ${{ runner.temp }}: the `runner` context is not available in a job-level `env:` block, and
     # producer and asserter agreeing on ONE path is the whole point.

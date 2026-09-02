@@ -73,6 +73,10 @@ function contractErrors(
     if (eventExpression(score?.env?.SHARD_COUNT, event) !== count) errors.push(`${event}: producer count`);
     if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (event === "push" ? "1" : "0")) errors.push(`${event}: producer readiness`);
     if (eventExpression(workflow.jobs["current-replay"].if, event) !== (event === "push")) errors.push(`${event}: replay activation`);
+    const expectedTimeouts = count === 1 ? [120] : [45, 30, 30, 30];
+    for (const [index, expectedTimeout] of expectedTimeouts.entries()) {
+      if (eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1) !== expectedTimeout) errors.push(`${event}: shard ${index + 1} timeout`);
+    }
   }
   if (JSON.stringify(workflow.jobs["current-replay"].strategy.matrix.shard) !== "[1,2,3,4]") errors.push("post-merge replay matrix is not fixed at four");
   if (replay?.env?.SHARD_COUNT !== 4) errors.push("post-merge replay count is not fixed at four");
@@ -196,6 +200,10 @@ describe("corpus workflow four-shard production contract", () => {
         expect(load(members) + 5 * 60).toBeLessThan(minutes * 60);
       }
     }
+    for (const event of ["schedule", "workflow_dispatch"]) {
+      const minutes = Number(eventExpression(workflow.jobs.shard["timeout-minutes"], event));
+      expect(load(SLUGS) + 10 * 60).toBeLessThan(minutes * 60);
+    }
   });
 
   it.each([
@@ -205,6 +213,7 @@ describe("corpus workflow four-shard production contract", () => {
     ["producer/replay mismatch", WORKFLOW_TEXT.replace("SHARD_COUNT: 4", "SHARD_COUNT: 2"), SLUGS, EXPECTED_WEIGHTS],
     ["readiness moved off main", WORKFLOW_TEXT.replace("github.event_name == 'push' && '1' || '0'", "github.event_name == 'pull_request' && '1' || '0'"), SLUGS, EXPECTED_WEIGHTS],
     ["replay allowed on PR", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'", "needs.prepare-current-inputs.result == 'success'"), SLUGS, EXPECTED_WEIGHTS],
+    ["schedule/manual timeout restored to 30m", WORKFLOW_TEXT.replace("&& 120 ||", "&& 30 ||"), SLUGS, EXPECTED_WEIGHTS],
     ["dropped target", WORKFLOW_TEXT, SLUGS.slice(1), EXPECTED_WEIGHTS],
     ["duplicated target", WORKFLOW_TEXT, [...SLUGS, SLUGS[0]!], EXPECTED_WEIGHTS],
     ["PR/queue matrix alone reverted", WORKFLOW_TEXT.replace("fromJSON((github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')", "fromJSON((github.event_name == 'push')"), SLUGS, EXPECTED_WEIGHTS],
