@@ -11,6 +11,30 @@ confirmed on this date. The report itself flags **F-03, F-04, F-11** as **manual
 access-control findings ("a scanner sees syntactically valid code and cannot know an ownership
 predicate is missing") — those especially test Harvey's dynamic M2 tier.
 
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`104b81dfd54b86b441124c7e12fdf0a9e96bd55c` at the repository root. Generate the effective policy
+with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement semantic-recall --slug
+superredhat --repo <clone-root> --out <policy-file>`, then invoke the `vuln-scan` skill with
+`briefs/scan-extras.txt` and the `triage` skill with three fresh votes.
+The policy waives only the blanket intended-demo exclusion for this exact corpus identity. Fake
+credentials, unreachable helpers, missing deployment configuration, and every other technical
+precision rule remain grounds for rejection. Preserve the completed `TRIAGE.json` unchanged and
+feed it directly to `record-pass`; do not force a candidate to satisfy the historical 12-row key.
+
+### Fresh #1947 result — 2026-09-03
+
+The pinned scan produced 22 candidates. Fresh triage conserved all 66 independent ballots and
+classified 14 true positives and 8 false positives. The generated M1 receipt scores **9/12**
+against the unchanged key and clears F-N1. F-08, F-10, and F-11 remain missed: the token helper is
+unreachable, wildcard CORS lacks a credentialed exploit path, and the claimed CSRF/rate-limit row
+does not survive the active precision rules. Keep the 12-row baseline and #1947 open; these measured
+dispositions may not be rewritten to manufacture full recall.
+The completed attempt is retained as `semantic-corpus-passes/superredhat.2026-09-03.triage.json`
+(SHA-256 `ec995caf1bacfc8ccc69de1781850ef1d323e6dafd5996831f3afacb187014fa`); its generated but
+unaccepted M1 receipt has SHA-256 `292219a15bca907b55ed95ae090028c63e5346476534ef4fe52b1d95dd2d9ffb`.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 
@@ -30,7 +54,7 @@ Isolated Docker (`project_id srh-rescore`, DB ports 65360-65366, app 65367); sta
 | Tier | Findings it caught | vs prior |
 |------|--------------------|----------|
 | **Mechanical** (`quick-scan` + `detect-static` + `pii-classify --schema`) | **11** — F-01,02,03,04,05,06,07,08,09(1 of 3 facets),10,12. Miss: **F-11** (no static CSRF/rate-limit detector). | 6 → 11 |
-| **Semantic (LLM)** (manual `/vuln-scan`-style review of source, triaged vs `fp-rules.txt`) | **12** — all findings incl. all 3 facets of F-09; independently confirms the manual F-03/F-04/F-11. | new tier |
+| **Semantic (LLM)** (manual `vuln-scan` skill review of source, triaged vs `fp-rules.txt`) | **12** — all findings incl. all 3 facets of F-09; independently confirms the manual F-03/F-04/F-11. | new tier |
 | **Dynamic (M2)** (`dynamic-validate --execute`, autonomous stand-up) | **4 proven live** — F-02, F-03, F-04, F-11. | 0 → 4 |
 | **Union (a finding = caught if any tier caught it)** | **12 / 12** | 6 → 12 |
 
@@ -269,4 +293,3 @@ XSS, crypto, vuln-deps) caught in both, but here the request-taint authz/injecti
 (App Router sources, #570) and the whole M2 tier went dark (per-user + custom auth, #571). Recall on
 this repo is a function of how closely the target matches the org-tenant/Supabase-Auth/Express shapes
 Harvey's rules were written against.
-

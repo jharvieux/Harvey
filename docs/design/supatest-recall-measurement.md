@@ -12,6 +12,30 @@ the four client components. The migration's own header brags the whole point:
 logiques"* — i.e. the app is specifically engineered so the **mechanical linter tier sees nothing**;
 the flaws are disguised `USING(true)` tautologies and per-user `USING(true)` reads.
 
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`38da50608433ec114cf555f5692a478952aae8b1` at the repository root. Generate the effective policy
+with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement semantic-recall --slug
+supatest --repo <clone-root> --out <policy-file>`, then invoke the `vuln-scan` skill with
+`briefs/scan-extras.txt` and the `triage` skill with three fresh votes.
+The policy waives only the blanket intended-demo exclusion for this exact corpus identity. A source
+claim about dashboard-only Auth, Realtime, storage, or other absent configuration is still
+config-to-verify rather than a proven vulnerability. Preserve the completed `TRIAGE.json` unchanged
+and feed it directly to `record-pass`; do not lower or manufacture the nine-row answer key.
+
+### Fresh #1947 result — 2026-09-03
+
+The pinned scan produced 14 candidates. Fresh triage preserved 33/33 independent ballots and
+classified 5 true positives, 6 false positives, and 3 duplicates. The generated M1 receipt scores
+**5/9** against the unchanged key, with F4, F6, F7, and F8 missed and F-N1 correctly cleared. That
+5/9 is an upper bound: the scorer also credits loose migration/keyword overlaps, while the
+mechanism-faithful mapping is 4/9. Preserve the 9-row baseline and keep #1947 open; neither duplicate
+inflation nor absent deployment configuration may be used to manufacture a pass.
+The completed attempt is retained as `semantic-corpus-passes/supatest.2026-09-03.triage.json`
+(SHA-256 `617c8b7c3033666429d963b7ba9287200cbf1dc1410ca0158e2515340669a859`); its generated but
+unaccepted M1 receipt has SHA-256 `67d97411c9282f2fa63e5c2aa1e3c2a2994380dd63f6a916a7cc9d506b6819aa`.
+
 This is a MEASUREMENT — every caught / missed below is grounded in an actual Harvey run's output
 observed on this date, not recall. No Harvey source was changed. All three tiers were run:
 mechanical, semantic (LLM), and dynamic (M2 autonomous stand-up).

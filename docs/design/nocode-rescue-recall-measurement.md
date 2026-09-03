@@ -9,6 +9,29 @@ Cloned to `/private/tmp` (ephemeral, deleted after).
 authoritative fix-for-fix key (`after/supabase/migrations/0002_rls.sql` = the RLS fixes;
 `after/.env.example` = the secret split; `after/app/api/triage/route.ts` = the server-side LLM move).
 
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`81350ee96e1aa223f0ce55e5ea91b6b1ffde1595` and scope `before/`. Clone that exact commit, generate
+the effective policy with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement
+semantic-recall --slug nocode-rescue --repo <clone-root> --scope before --out <policy-file>`, then invoke the `vuln-scan`
+skill with `briefs/scan-extras.txt` and the `triage` skill with three fresh votes over `<clone-root>/before`. The generated policy
+waives only the blanket intended-demo exclusion for this exact corpus identity. It leaves every
+technical precision rule active. Preserve the completed `TRIAGE.json` unchanged and pass it directly
+to `record-pass`; do not restamp the historical July findings or hand-author the M1 receipt.
+
+### Fresh #1947 result — 2026-09-03
+
+The pinned scan produced 10 candidates. Fresh three-vote triage conserved all 30 ballots and
+classified 6 true positives and 4 false positives. The generated M1 receipt scores **6/8** against
+the unchanged key: NR-2 through NR-6 and NR-8 pass; NR-1 and NR-7 fail. NR-1's checked-in value is an
+invalid placeholder rather than a proven service-role credential, and the fresh semantic pass did
+not retain a prompt-injection finding for NR-7. This is a measured regression, not permission to
+rewrite the key: keep the 8-row baseline and #1947 open until the semantic pass satisfies it.
+The completed attempt is retained as `semantic-corpus-passes/nocode-rescue.2026-09-03.triage.json`
+(SHA-256 `a64bab2608ec08e6da069c35294c53901c10fdcd550afd2e5370ab38d9d7eca8`); its generated but
+unaccepted M1 receipt has SHA-256 `81046e31697b22741906ed708c41c6a6806428ef81f9972e5390f7a2001c601a`.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 

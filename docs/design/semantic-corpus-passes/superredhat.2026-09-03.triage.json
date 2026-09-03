@@ -1,0 +1,883 @@
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-fresh-20260903/superredhat",
+    "findings_path": "/private/tmp/harvey-1947-fresh-20260903/superredhat/VULN-FINDINGS.json",
+    "fresh": true,
+    "source_commit": "104b81dfd54b86b441124c7e12fdf0a9e96bd55c",
+    "source_tree": "ee487cc9d395060f61f43f2bac3a47ed66c1e735",
+    "fp_rules_path": "/private/tmp/harvey-1947-policies-7a20/superredhat.txt",
+    "fp_rules_sha256": "597861569ce99b0a4087265f664fafae670a0739112e958d0061e0c2c0d8b5a0"
+  },
+  "summary": {
+    "input_count": 22,
+    "duplicates": 0,
+    "false_positives": 8,
+    "true_positives": 14,
+    "needs_manual_test": 3,
+    "by_severity": {
+      "HIGH": 1,
+      "MEDIUM": 13,
+      "LOW": 0
+    }
+  },
+  "findings": [
+    {
+      "id": "f006",
+      "scanner_id": "F-006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Unauthenticated request templates execute as EJS on the server",
+      "file": "app/api/render/route.ts",
+      "line": 8,
+      "category": "server-side-template-injection",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The public POST handler immediately reads `template` from attacker-controlled JSON at app/api/render/route.ts:6-7, with no authentication or fixed-template selection. It passes that string unchanged as EJS source at app/api/render/route.ts:8 and returns the evaluated result at app/api/render/route.ts:9-10; `String(...)` is coercion, not validation, escaping, or sandboxing. The repository declares EJS as a runtime dependency at package.json:13-16, and the #1947 policy prevents the demo label from excluding this reachable vulnerability.\n\nAny remote attacker can submit arbitrary EJS template source through the public POST endpoint. The server evaluates it without authentication, sandboxing, or an allowlist, enabling server-process code execution with no additional preconditions.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/render/route.ts:7",
+        "app/api/render/route.ts:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f019",
+      "scanner_id": "F-019",
+      "source": "VULN-FINDINGS.json#18",
+      "title": "POST trusts a client-supplied note owner",
+      "file": "app/api/notes/route.ts",
+      "line": 29,
+      "category": "mass-assignment",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 5,
+      "preconditions": [
+        "Attacker has a valid authenticated account.",
+        "Target victim has an existing profile UUID, obtainable through the unguarded admin endpoint."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable POST handler parses untrusted JSON without a schema or field allowlist, then explicitly prefers `body.owner_id` over the authenticated subject (app/api/notes/route.ts:20,25,29). The foreign key only requires an existing profile and does not bind ownership to the caller (supabase/migrations/0001_init.sql:15); valid profile UUIDs are exposed to any authenticated caller by app/api/admin/users/route.ts:8-14. Notes RLS is disabled and the route uses the service-role client, while the victim’s GET query selects by that assigned owner, so the injected note enters the victim’s collection (app/api/notes/route.ts:12-16).\n\nThe privileged insert trusts a client-supplied owner_id, allowing an authenticated attacker to create notes attributed to another user. The exposed profile IDs make victim selection practical, and the victim’s listing displays the forged note; two prerequisites and authenticated access cap severity at MEDIUM.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f002",
+      "scanner_id": "F-002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "Unauthenticated avatar proxy returns arbitrary internal HTTP responses",
+      "file": "app/api/avatar/route.ts",
+      "line": 6,
+      "category": "ssrf",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -1,
+      "preconditions": [
+        "Server has outbound reachability to a security-relevant private, loopback, or link-local destination",
+        "Destination exposes useful data or a GET-triggered action without additional authentication, or trusts the server’s network identity"
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The public profile UI forwards a user-editable avatar URL to `/api/avatar` at app/profile/page.tsx:15-29, while the route itself is directly callable and performs no authentication at app/api/avatar/route.ts:5-10. The handler passes the raw query parameter to `fetchRemote` at app/api/avatar/route.ts:6-7; that helper performs a redirect-following fetch with no destination validation at lib/fetchUrl.ts:5-8. The fetched response body is returned to the requester at app/api/avatar/route.ts:8-10, enabling response-bearing SSRF against HTTP(S) loopback, private, link-local, metadata, and redirect destinations. The #1947 exception prevents the demo labeling from excluding this technically reachable vulnerability.\n\nAny remote attacker can make the server fetch an arbitrary URL, follow redirects, and return the response body. Exploitation requires a reachable, useful internal target with suitable access semantics, so the two environmental preconditions lower the rubric result from HIGH to MEDIUM.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/profile/page.tsx:29",
+        "app/api/avatar/route.ts:5",
+        "app/api/avatar/route.ts:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f003",
+      "scanner_id": "F-003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Authenticated users can read any note by ID",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 15,
+      "category": "idor-read",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -1,
+      "preconditions": [
+        "Valid authenticated bearer session",
+        "Correct UUID of another user’s note"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable GET accepts attacker-controlled `params.id` and checks only for a valid bearer session, never comparing `user.sub` with the note’s owner or consulting shares (`app/api/notes/[id]/route.ts:7-16`). It returns every column through a service-role client that bypasses RLS (`lib/supabaseAdmin.ts:11-20`), while the migration explicitly disables RLS and defines both ownership and private status (`supabase/migrations/0001_init.sql:13-20`, `supabase/migrations/0001_init.sql:35-41`). UUID entropy is not an authorization control, and the organization’s service-role exclusion does not apply because untrusted URL input directly selects the privileged query.\n\nThe service-role query returns the complete note without checking ownership or sharing authorization. Exploitation requires authentication and a victim note UUID, yielding MEDIUM under both the access and precondition rubrics. UUID entropy limits discovery but does not mitigate access once the identifier is known.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:7"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "scanner_id": "F-010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "Authenticated users can delete any note by ID",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 42,
+      "category": "idor-delete",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -1,
+      "preconditions": [
+        "Possess any valid bearer-session credential",
+        "Know or obtain the victim note UUID"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable DELETE handler verifies only that some bearer-session user exists, then ignores that principal and deletes the note selected solely by URL-controlled `params.id` (`app/api/notes/[id]/route.ts:37-43`). The query uses a service-role client documented to bypass RLS (`lib/supabaseAdmin.ts:11-19`), while the shipped migration also disables RLS and defines note ownership and recipient-specific shares without enforcing either on deletion (`supabase/migrations/0001_init.sql:13-25`, `supabase/migrations/0001_init.sql:35-46`). UUID typing and random generation limit blind guessing but do not authorize deletion once a valid victim note ID is obtained.\n\nAny authenticated user can delete another user’s note by supplying its UUID because the service-role operation bypasses RLS without an ownership or sharing check. The required session and target identifier make MEDIUM consistent with the stated rubric, one level below the claimed HIGH.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:37"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f011",
+      "scanner_id": "F-011",
+      "source": "VULN-FINDINGS.json#10",
+      "title": "Public fallback secret permits forged application sessions",
+      "file": "lib/jwt.ts",
+      "line": 6,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -1,
+      "preconditions": [
+        "The deployment starts without `JWT_SECRET` configured."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "`JWT_SECRET` silently defaults to the source-visible signing key `notevault-dev-secret`, and both signing and verification use that key without restricting algorithms, issuer, audience, or claim shape (`lib/jwt.ts:6-23`). The environment template leaves `JWT_SECRET` empty (`.env.example:9-10`), so the fallback is a plausible shipped configuration rather than dead code. `getUser` accepts the verified claims as identity (`lib/session.ts:4-8`), and externally reachable routes use that identity to authorize privileged operations, including unrestricted profile enumeration (`app/api/admin/users/route.ts:7-14`) and note access keyed by forged `sub` claims (`app/api/notes/route.ts:7-16`).\n\nAn unauthenticated remote attacker can forge tokens with arbitrary identity and role claims whenever the deployment uses the public fallback secret. This enables authentication and authorization bypass, but the exploit depends on runtime configuration that static analysis cannot confirm, so the configuration precondition lowers the derived severity to MEDIUM and requires deployment testing.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "lib/session.ts:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: lib/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "scanner_id": "F-004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "PATCH permits ownership and immutable-field tampering",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 29,
+      "category": "mass-assignment",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable PATCH handler accepts authenticated request JSON and spreads it directly into the update at app/api/notes/[id]/route.ts:26-30. Authentication only establishes that some user exists; the query never constrains `owner_id` to `user.sub`, and `supabaseAdmin` uses a service-role key that bypasses RLS at lib/supabaseAdmin.ts:11-19. The schema makes `owner_id`, `is_private`, and `created_at` ordinary mutable columns at supabase/migrations/0001_init.sql:13-20, while RLS is explicitly disabled at supabase/migrations/0001_init.sql:35-41.\n\nAny authenticated user can submit arbitrary fields to the update operation, and the note ID is the only record filter. Authentication caps the derived severity at MEDIUM, so the claimed HIGH rating is overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:21"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "scanner_id": "F-007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Public page fetches any private note through the service-role client",
+      "file": "app/notes/[id]/page.tsx",
+      "line": 5,
+      "category": "unauthenticated-object-access",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker must obtain or discover a valid private-note UUID"
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the committed Next.js app is deployed normally, the dynamic page receives URL-controlled `params.id` and queries the complete note through `supabaseAdmin` using that ID alone (`app/notes/[id]/page.tsx:4-9`), then renders its title and body (`app/notes/[id]/page.tsx:15-22`). The path performs no session, owner, `is_private`, or share-recipient check, despite the schema defining ownership, private status, and explicit shares (`supabase/migrations/0001_init.sql:13-26`). The client uses a service-role key documented to bypass RLS (`lib/supabaseAdmin.ts:11-20`), and the migration also disables RLS on notes (`supabase/migrations/0001_init.sql:35-41`). Random UUID generation reduces blind enumeration but provides no authorization once a UUID is obtained.\n\nAn unauthenticated remote attacker with a valid note UUID can retrieve the complete private note because the service-role query performs no authorization or privacy check. UUID entropy materially limits opportunistic discovery, creating one meaningful precondition and reducing the finding from the claimed HIGH severity to MEDIUM.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/notes/[id]/page.tsx:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "scanner_id": "F-008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Unsanitized note bodies are rendered as executable HTML",
+      "file": "app/notes/[id]/page.tsx",
+      "line": 21,
+      "category": "stored-xss",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker has a valid authenticated session permitting note creation or modification.",
+        "Victim opens the attacker-controlled public note URL."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Untrusted request JSON is accepted and persisted wholesale, including `body`, at app/api/notes/route.ts:25-29; PATCH provides the same path at app/api/notes/[id]/route.ts:26-30. The public note page retrieves that stored value and injects it through `dangerouslySetInnerHTML` at app/notes/[id]/page.tsx:5-9 and app/notes/[id]/page.tsx:21, bypassing React autoescaping with no sanitizer. No authentication or ownership check protects the page, and next.config.mjs:2-7 defines no CSP that would mitigate event-handler payloads.\n\nThe stored payload executes in the application origin when a victim visits the public note page, and no CSP mitigates execution. Authentication plus victim navigation are two meaningful preconditions, so the derived rubric assigns MEDIUM rather than the claimed HIGH.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/route.ts:25",
+        "app/api/notes/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f005",
+      "scanner_id": "F-005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "Authenticated users can update any note by ID",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 30,
+      "category": "idor-update",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -3,
+      "preconditions": [
+        "Attacker must obtain or discover the victim note's UUID."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable PATCH handler accepts request JSON and only verifies that some bearer-token user exists before updating the row selected solely by URL-controlled `params.id` (app/api/notes/[id]/route.ts:21-32). The privileged client uses a service-role key that bypasses RLS (lib/supabaseAdmin.ts:11-19), while the migration independently disables RLS on `notes` and defines no protective policy (supabase/migrations/0001_init.sql:35-41). Although a `shares` table exists, this path never checks it or constrains `owner_id` to `user.sub`; UUID typing limits malformed IDs but does not prevent alteration when a victim’s valid ID is known (supabase/migrations/0001_init.sql:13-25).\n\nExploitation requires one meaningful precondition beyond access: obtaining the victim note UUID. Because the attacker must also be authenticated, the prescribed rubric assigns MEDIUM severity, so the claimed HIGH rating is overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:21"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "scanner_id": "F-009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "Remote-note import reads and persists arbitrary internal responses",
+      "file": "app/api/import/route.ts",
+      "line": 13,
+      "category": "ssrf",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker has a valid bearer-authenticated session.",
+        "Application server can reach the attacker-selected destination."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The exported POST handler requires only any verified bearer session, then reads the caller-controlled `url` from JSON without a role check or URL validation (`app/api/import/route.ts:8-15`, `lib/session.ts:4-8`). `fetchRemote` sends that value to server-side `fetch` with automatic redirects and no scheme, hostname, resolved-IP, or redirect-hop restrictions, then reads the response body (`lib/fetchUrl.ts:5-8`). The handler persists that body under the caller through the service-role client and returns the selected row (`app/api/import/route.ts:16-21`, `lib/supabaseAdmin.ts:11-20`); no repository configuration supplies outbound restrictions.\n\nAny authenticated user can trigger redirect-following server requests to arbitrary destinations, enabling access to services reachable from the application server. Authentication and network reachability are two meaningful preconditions, so the prescribed rubric caps the finding at MEDIUM rather than the claimed HIGH.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/import/route.ts:8",
+        "app/api/import/route.ts:13"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f001",
+      "scanner_id": "F-001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "Any authenticated user can enumerate all profiles through the admin API",
+      "file": "app/api/admin/users/route.ts",
+      "line": 12,
+      "category": "missing-authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -3,
+      "preconditions": [
+        "Possess any valid low-privilege user bearer token"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Assuming a standard Next.js deployment, the exported GET handler is an externally reachable route (`app/api/admin/users/route.ts:7`). It rejects only callers without a verified token (`app/api/admin/users/route.ts:8-11`), ignores the authenticated user’s role, and returns every profile through the service-role client (`app/api/admin/users/route.ts:13-14`). The sole admin check is client-controlled localStorage logic before the UI fetch (`app/admin/page.tsx:18-25`), so it cannot authorize direct API requests.\n\nAny authenticated user can directly invoke the externally reachable endpoint and obtain all profile fields because the handler performs no server-side role check. The single authentication precondition and authenticated access cap severity at MEDIUM under the supplied rubric, so the claimed HIGH rating is overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/admin/page.tsx:25",
+        "app/api/admin/users/route.ts:7"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: app/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f014",
+      "scanner_id": "F-014",
+      "source": "VULN-FINDINGS.json#13",
+      "title": "RLS is disabled on every tenant-data table exposed through Supabase",
+      "file": "supabase/migrations/0001_init.sql",
+      "line": 38,
+      "category": "missing-rls",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -1,
+      "preconditions": [
+        "The migration is applied to a remotely reachable Supabase project whose Data API exposes the `public` schema.",
+        "The `anon` role retains privileges on at least one affected tenant table."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "A reachable Client Component imports the anon client (`app/login/page.tsx:1-4`), which is instantiated from browser-public Supabase configuration (`lib/supabaseClient.ts:10-14`). The sole migration creates sensitive tenant tables in `public` and explicitly disables RLS on all four, while its only policies are comments (`supabase/migrations/0001_init.sql:4-46`). No later migration, grant revocation, or exposed-schema restriction compensates for this; under the organization’s explicit rule that RLS-off with no policy is exposed, standard Supabase public-schema privileges permit cross-tenant reads and writes, though deployed privilege revocation would falsify impact.\n\nAn unauthenticated caller using the public anon credentials could access cross-tenant rows because the exposed tables have RLS disabled and no policies. Impact could include broad disclosure or modification, but deployed schema exposure and role grants require runtime confirmation. With two meaningful preconditions, the rubric caps severity at MEDIUM.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 0,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "lib/supabaseClient.ts:14",
+        "app/login/page.tsx:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: supabase/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f013",
+      "scanner_id": "F-013",
+      "source": "VULN-FINDINGS.json#12",
+      "title": "Committed Supabase service-role JWT is used as the live fallback",
+      "file": "lib/supabaseAdmin.ts",
+      "line": 13,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The referenced Supabase project still accepts the committed service-role JWT."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The committed fallback JWT decodes to `role: service_role`, is explicitly described as bypassing RLS, and is passed to `createClient` (`lib/supabaseAdmin.ts:11-20`). The documented variable is `SUPABASE_SERVICE_ROLE_KEY` (`.env.example:6-7`), while the code reads `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY`, so following the configuration example selects the fallback (`lib/supabaseAdmin.ts:13-15`). Current remote validity cannot be proven statically, but the organization policy assesses Supabase JWTs by decoded role and treats committed credentials as presence-based without requiring caller reachability.\n\nOnce accepted, the bearer JWT permits unauthenticated remote access with RLS-bypassing privileges. Its current acceptance requires manual verification, especially because the signature appears malformed; that single precondition caps severity at MEDIUM.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 1,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "misread_code"
+      ],
+      "exclusion_rule": "org rule",
+      "first_links": [
+        "not applicable"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "component: lib/; no CODEOWNERS entry; top committer: SuperRedHat (1/1 recent commits)",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f012",
+      "scanner_id": "F-012",
+      "source": "VULN-FINDINGS.json#11",
+      "title": "Service-role module lacks a server-only boundary guard",
+      "file": "lib/supabaseAdmin.ts",
+      "line": 1,
+      "category": "missing-server-only-boundary",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The module lacks `server-only` and reads a public-prefixed variable with a committed fallback (`lib/supabaseAdmin.ts:1-15`), but no current client-side path imports it. Its complete importer set consists of four route handlers (`app/api/import/route.ts:1-2`, `app/api/notes/route.ts:1-2`, `app/api/admin/users/route.ts:1-2`, `app/api/notes/[id]/route.ts:1-2`) and the default Server Component at `app/notes/[id]/page.tsx:1-4`; the actual Client Components import no admin module (`app/login/page.tsx:1-4`, `app/profile/page.tsx:1-3`, `app/admin/page.tsx:1-3`). The claimed browser bundling requires a hypothetical future refactor, so the missing poison pill is hardening without a current exploit path under exclusion 13; the committed fallback credential is a separate presence-based issue.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "implausible_trigger",
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f015",
+      "scanner_id": "F-015",
+      "source": "VULN-FINDINGS.json#14",
+      "title": "Import reports success without checking whether the note was stored",
+      "file": "app/api/import/route.ts",
+      "line": 16,
+      "category": "unchecked-supabase-mutation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The authenticated POST handler is externally reachable and discards Supabase’s `error`, so a rejected insert can produce the default HTTP 200 response with `note: null` (`app/api/import/route.ts:8-21`); database constraints provide plausible failure triggers (`supabase/migrations/0001_init.sql:13-19`). However, the null body exposes the failed result, and the omission creates no distinct authorization bypass, disclosure, cross-tenant mutation, or availability impact. Any SSRF occurs before persistence and exists independently of this error handling (`app/api/import/route.ts:13-18`), leaving F-015 as a correctness and hardening gap without a concrete security exploit path.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/import/route.ts:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f016",
+      "scanner_id": "F-016",
+      "source": "VULN-FINDINGS.json#15",
+      "title": "PATCH ignores database errors and zero-row updates",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 27,
+      "category": "unchecked-supabase-mutation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.3,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The externally reachable PATCH route discards Supabase’s `error` and returns HTTP 200 with `{note:null}` after constraint or zero-row failures (app/api/notes/[id]/route.ts:21-33; supabase/migrations/0001_init.sql:13-19). No in-repository client calls this endpoint or treats its status as security-sensitive state, and the response body exposes the null result. Misleading the requesting client about its own failed update is a correctness/reliability defect without a distinct authorization bypass, disclosure, cross-tenant mutation, or availability impact; those authorization flaws exist independently.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/notes/[id]/route.ts:21"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f017",
+      "scanner_id": "F-017",
+      "source": "VULN-FINDINGS.json#16",
+      "title": "DELETE reports success without checking the mutation",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 42,
+      "category": "unchecked-supabase-mutation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The externally reachable DELETE handler does discard the Supabase result and unconditionally return HTTP 200 with `{ok:true}` (`app/api/notes/[id]/route.ts:37-43`). However, no in-repository client calls this endpoint or removes local state, and a valid unmatched UUID already identifies no row. Remaining database or transport failures can be misreported, but that is correctness/reliability with no demonstrated security impact distinct from the separately reported IDOR.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/notes/[id]/route.ts:37",
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f018",
+      "scanner_id": "F-018",
+      "source": "VULN-FINDINGS.json#17",
+      "title": "Note listing has no explicit pagination bound",
+      "file": "app/api/notes/route.ts",
+      "line": 14,
+      "category": "unbounded-query",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The reachable GET authenticates the caller and constrains the query to `owner_id = user.sub`, so any truncation affects only that caller’s notes (`app/api/notes/route.ts:7-16`). The repository contains no PostgREST row-cap configuration or security-sensitive consumer. An incomplete self-owned result is a correctness defect, with no demonstrated confidentiality breach, unauthorized integrity change, or service-wide availability impact, so the missing pagination is hardening without a concrete security exploit path.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/notes/route.ts:7"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f020",
+      "scanner_id": "F-020",
+      "source": "VULN-FINDINGS.json#19",
+      "title": "POST exposes raw database error messages",
+      "file": "app/api/notes/route.ts",
+      "line": 33,
+      "category": "error-information-disclosure",
+      "claimed_severity": "LOW",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The authenticated POST route accepts arbitrary JSON and returns `error.message` after a failed insert, so malformed UUIDs, null titles, or invalid foreign keys can plausibly trigger database messages (app/api/notes/route.ts:20-33; supabase/migrations/0001_init.sql:13-19). However, it returns only the message—not Supabase’s details, hint, code, query, stack, credentials, or database contents—and the likely disclosed names and types describe fields already accepted by this endpoint. The repository establishes no concrete security impact from learning those schema details, so replacing them with generic errors is hardening without a demonstrated exploit path.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/notes/route.ts:20",
+        "app/api/notes/route.ts:25"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f021",
+      "scanner_id": "F-021",
+      "source": "VULN-FINDINGS.json#20",
+      "title": "Application session tokens never expire",
+      "file": "lib/jwt.ts",
+      "line": 17,
+      "category": "insufficient-session-expiration",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.7,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "`signSession` is only declared at `lib/jwt.ts:15-17`; the current tree contains no importer or caller that issues its non-expiring tokens. The sole login flow creates a Supabase session at `app/login/page.tsx:17-18` and never converts it into the custom JWT, while `getUser` merely verifies caller-supplied bearer values at `lib/session.ts:4-8`. Thus the claimed stolen-token replay after logout or Supabase expiry has no implemented issuance path; the separate public-secret forgery is not caused or mitigated by token expiration.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "implausible_trigger"
+      ],
+      "exclusion_rule": "2",
+      "first_links": [
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f022",
+      "scanner_id": "F-022",
+      "source": "VULN-FINDINGS.json#21",
+      "title": "API token helper combines Math.random with fast MD5 hashing",
+      "file": "lib/tokens.ts",
+      "line": 8,
+      "category": "weak-token-generation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Both exports are declarations only; no source imports or calls `generateApiToken` or `hashToken` (`lib/tokens.ts:8`, `lib/tokens.ts:18`). The active bearer path sends tokens to JWT verification instead (`lib/session.ts:4-8`, `lib/jwt.ts:21-23`), while `api_tokens` is merely declared in the schema with no application query (`supabase/migrations/0001_init.sql:28-32`). `Math.random` would be security-sensitive if this helper were used, but currently MD5 reaches no verifier sink and the hypothetical exploit is dead code under rule 2.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "implausible_trigger"
+      ],
+      "exclusion_rule": "2",
+      "first_links": [
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}

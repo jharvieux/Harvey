@@ -8,6 +8,30 @@ internship training lab. Cloned to `/private/tmp` (ephemeral, deleted after).
 from source (the repo ships no scored report), each with an expected tier. CX-21 (fake outdated deps)
 and README module 12 (report writing) are **advertised-but-not-real** and score N/A.
 
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`b6f0d9d7fa1e956ef91903f11d7dddcc628ba869` at the repository root. Generate the effective policy
+with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement semantic-recall --slug
+cipherx --repo <clone-root> --out <policy-file>`, then invoke the `vuln-scan` skill with
+`briefs/scan-extras.txt` and the `triage` skill with three fresh votes.
+The policy waives only the blanket intended-demo exclusion for this exact corpus identity. Mock CVE
+data, public anon keys, placeholder credentials, missing hardening, unreachable code, and every other
+technical precision rule remain active. Preserve the completed `TRIAGE.json` unchanged and feed it
+directly to `record-pass`; do not force findings to meet the historical 20-positive floor.
+
+### Fresh #1947 result — 2026-09-03
+
+The pinned scan produced 32 candidates. Fresh triage conserved all 93 independent ballots across
+31 deduplicated candidates and classified 15 true positives, 16 false positives, and 1 duplicate.
+The generated M1 receipt scores **7/20** against the unchanged key and clears both CX-21 and CX-22.
+CX-02, CX-11, CX-12, and CX-15 through CX-18 pass; the other 13 positive rows remain missed. Keep
+the 20-row baseline and #1947 open. Findings rejected for missing grants, absent runtime exposure,
+or hardening-only impact may not be restored merely to improve recall.
+The completed attempt is retained as `semantic-corpus-passes/cipherx.2026-09-03.triage.json`
+(SHA-256 `032bc8927bc61d57ef556a448c1346881a758795cbbe101998ee610d35ade7cd`); its generated but
+unaccepted M1 receipt has SHA-256 `804e1a91400705d63d9dedbef0b42af84e075e8f761c9fff832d9a8cf62193cd`.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output observed
 on this date, across **all three tiers** (mechanical, semantic-LLM, dynamic). No Harvey source was
 changed. Isolated Docker (autonomous M2 self-provisions a fresh local Supabase in its own temp workdir;
@@ -26,7 +50,7 @@ not a real vulnerability and was correctly **not** flagged (osv-scanner found no
 | Tier | Real findings it caught | Notes |
 |------|-------------------------|-------|
 | **Mechanical** (`quick-scan` + static RLS/config + `detect-static` + `pii-classify --schema`) | **7 outright** — CX-02, CX-03, CX-04, CX-05, CX-06, CX-09, CX-16. Plus **7 partial/disclosed** — CX-01, CX-07, CX-11, CX-15, CX-18, CX-19, CX-20. | The static permissive-`USING(true)` RLS pass caught CX-05/06/09; `harvey-ssrf-fetch` fired live (CX-16). |
-| **Semantic (LLM)** (rigorous `/vuln-scan`-style manual review of source, triaged vs `fp-rules.txt`) | **20** — every real finding CX-01..CX-20, incl. all 8 the mechanical tier missed or only partially caught. | Carries CX-08, CX-10, CX-12, CX-13, CX-14, CX-17 outright, and completes CX-01/07/11/15/18/19/20. |
+| **Semantic (LLM)** (rigorous `vuln-scan` skill review of source, triaged vs `fp-rules.txt`) | **20** — every real finding CX-01..CX-20, incl. all 8 the mechanical tier missed or only partially caught. | Carries CX-08, CX-10, CX-12, CX-13, CX-14, CX-17 outright, and completes CX-01/07/11/15/18/19/20. |
 | **Dynamic (M2)** (`dynamic-validate --execute`, autonomous stand-up) | **0 CX findings proven live** + **1 real M2 provisioning finding** (`M2-PROVISION-MIGRATE`). | Recognized the org-tenant model and Supabase Auth (further than SuperRedHat), but the two-tenant seed collided with the target's `handle_new_user` profile trigger before the live matrix — recorded loud, not skipped (#598). |
 | **Union** | **20 / 20 real (20/21)** | Semantic is the tier that clears the board. |
 
@@ -77,7 +101,7 @@ The dynamic tier could not add live proof for any of them because the stand-up s
 - **M10:** `pnpm pii-classify --schema <t>/supabase/migrations` — `employee_records → High (5.6): NAME,
   EMAIL, US_SSN`; `internal_credentials → High: STORED_PASSWORD`; `profiles → Medium: EMAIL, NAME,
   PHOTO`. Corroborates the PII sensitivity behind CX-08/CX-09.
-- **Semantic (LLM):** manual `/vuln-scan`-style review of every `src/app/api/**/route.ts`, the RLS/RPC
+- **Semantic (LLM):** manual `vuln-scan` skill review of every `src/app/api/**/route.ts`, the RLS/RPC
   migrations, storage/bucket config, role-gating (`src/lib/roles.ts`, `admin.ts`), and the seed scripts;
   each finding grounded in a re-read file:line; triaged against `briefs/fp-rules.txt` (which is what keeps
   CX-21 out — a mock CVE list is not a dependency finding).
