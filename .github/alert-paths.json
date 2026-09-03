@@ -64,20 +64,20 @@
       "workflow": ".github/workflows/conservation.yml",
       "marker": "ci-conservation-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607129629",
-        "issue": 1634,
-        "at": "2026-07-31",
-        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/33043551990",
+        "issue": 2000,
+        "at": "2026-08-27",
+        "sourceSha": "28592aadd7ca1fac693fd60a1e920af5b53eddee"
       }
     },
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "marker": "ci-corpus-drift-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607137067",
-        "issue": 1635,
-        "at": "2026-07-31",
-        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/33735786918",
+        "issue": 2027,
+        "at": "2026-09-03",
+        "sourceSha": "28592aadd7ca1fac693fd60a1e920af5b53eddee"
       }
     },
     {
@@ -94,10 +94,10 @@
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-heavy-cli-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30607143343",
-        "issue": 1639,
-        "at": "2026-07-31",
-        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/33040858858",
+        "issue": 1997,
+        "at": "2026-08-27",
+        "sourceSha": "28592aadd7ca1fac693fd60a1e920af5b53eddee"
       }
     },
     {
@@ -152,10 +152,10 @@
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-main-red-alert",
       "provenBy": {
-        "run": "https://github.com/jharvieux/Harvey/actions/runs/30664857256",
-        "issue": 1729,
-        "at": "2026-07-31",
-        "sourceSha": "63d6c33cf215081498b0ef3c7f4c7cdc8f84e645"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/33040858858",
+        "issue": 1998,
+        "at": "2026-08-27",
+        "sourceSha": "28592aadd7ca1fac693fd60a1e920af5b53eddee"
       }
     },
     {
