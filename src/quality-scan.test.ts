@@ -346,7 +346,7 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     return files;
   }
 
-  it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
+  it("catches every planted M4 positive and stays silent on every M4 negative", () => {
     const securityFiles = widenedSecurityFiles(dupDir);
     const wideFiles = wideRepoFiles(join(dupDir, "wide"));
     const findings = [
