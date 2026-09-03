@@ -179,6 +179,12 @@ describe("completed TRIAGE.json adapter (#1947)", () => {
     ["vote total mismatch", completed([triageFinding({ vote_breakdown: { true_positive: 2, false_positive: 0, cannot_verify: 0 } })]), /totals 2, expected 3/],
     ["verdict without majority", completed([triageFinding({ vote_breakdown: { true_positive: 1, false_positive: 1, cannot_verify: 1 } })]), /no true-positive majority/],
     ["duplicate without canonical", completed([triageFinding({ verdict: "duplicate", duplicate_of: null })]), /duplicate_of/],
+    ["duplicate with unknown canonical", completed([triageFinding({ verdict: "duplicate", duplicate_of: "missing" })]), /unknown canonical finding/],
+    ["duplicate chain", completed([
+      triageFinding(),
+      triageFinding({ id: "f002", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001" }),
+      triageFinding({ id: "f003", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f002" }),
+    ]), /must name a non-duplicate canonical finding/],
     ["duplicate ids", completed([triageFinding(), triageFinding()]), /duplicate finding id/],
   ])("fails closed on %s", (_label, input, message) => {
     expect(() => findingsFromCompletedTriage(input)).toThrow(message as RegExp);

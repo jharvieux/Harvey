@@ -170,6 +170,17 @@ export function findingsFromCompletedTriage(raw: unknown): Finding[] {
     if (ids.has(finding.id)) throw new Error(`completed triage input has duplicate finding id: ${finding.id}`);
     ids.add(finding.id);
   }
+  const byId = new Map(parsed.map((finding) => [finding.id, finding]));
+  for (const finding of parsed) {
+    if (finding.verdict !== "duplicate") continue;
+    const canonical = byId.get(finding.duplicate_of as string);
+    if (!canonical) {
+      throw new Error(`${finding.id}.duplicate_of names an unknown canonical finding: ${finding.duplicate_of}`);
+    }
+    if (canonical.verdict === "duplicate") {
+      throw new Error(`${finding.id}.duplicate_of must name a non-duplicate canonical finding: ${finding.duplicate_of}`);
+    }
+  }
 
   const translated = parsed
     .filter((finding) => finding.verdict === "true_positive")
