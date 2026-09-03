@@ -37,4 +37,11 @@ Rendering a report additionally needs `pnpm exec playwright install chromium`, t
 ```bash
 node report-template/render.mjs <findings.json> [outDir]
 ```
+
+## License
+
+Harvey is proprietary software. Copyright (c) 2026 John Harvieux. All rights
+reserved. Public availability does not make it open source; the only exception
+is the limited license required by the GitHub Terms of Service for public
+repositories. See [LICENSE](LICENSE).
 # Harvey
