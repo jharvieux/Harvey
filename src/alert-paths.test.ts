@@ -258,20 +258,24 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
     expect(reg.paths.filter((p) => !p.pendingProof).every((p) => p.provenBy?.run)).toBe(true);
   });
 
-  it("binds the six accepted drill results to their exact hosted runs and issues", () => {
+  it("binds the ten accepted current-action drill results to their exact hosted runs and issues", () => {
     const accepted = {
-      "ci-reasons-alert": [33033169720, 1989],
-      "ci-owasp-watch-alert": [33033172907, 1990],
-      "ci-secbench-alert": [33033175943, 1991],
-      "site-smoke-alert": [33033178730, 1992],
-      "ci-supervised-declines-alert": [33033182089, 1993],
-      "ci-genai-census-alert": [33033184981, 1994],
+      "ci-conservation-alert": [33043551990, 2000, "2026-08-27"],
+      "ci-corpus-drift-alert": [33735786918, 2027, "2026-09-03"],
+      "ci-reasons-alert": [33033169720, 1989, "2026-08-27"],
+      "ci-heavy-cli-alert": [33040858858, 1997, "2026-08-27"],
+      "ci-owasp-watch-alert": [33033172907, 1990, "2026-08-27"],
+      "ci-secbench-alert": [33033175943, 1991, "2026-08-27"],
+      "site-smoke-alert": [33033178730, 1992, "2026-08-27"],
+      "ci-main-red-alert": [33040858858, 1998, "2026-08-27"],
+      "ci-supervised-declines-alert": [33033182089, 1993, "2026-08-27"],
+      "ci-genai-census-alert": [33033184981, 1994, "2026-08-27"],
     } as const;
-    for (const [marker, [run, issue]] of Object.entries(accepted)) {
+    for (const [marker, [run, issue, at]] of Object.entries(accepted)) {
       expect(reg.paths.find((p) => p.marker === marker)?.provenBy).toEqual({
         run: `https://github.com/jharvieux/Harvey/actions/runs/${run}`,
         issue,
-        at: "2026-08-27",
+        at,
         sourceSha: "28592aadd7ca1fac693fd60a1e920af5b53eddee",
       });
     }
