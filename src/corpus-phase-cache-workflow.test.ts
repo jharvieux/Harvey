@@ -146,7 +146,7 @@ function context(event: string, relevant = true, shard = 1) {
     github: { event_name: event, ref: "refs/heads/main", sha: "a".repeat(40), run_id: "123", run_attempt: "1", event: { repository: { default_branch: "main" } } },
     needs: {
       "prepare-current-inputs": { result: "success", outputs: route },
-      shard: { result: "success" }, "current-replay": { result: event === "push" ? "success" : "skipped" },
+      shard: { result: "success" }, "current-replay": { result: ["push", "pull_request", "merge_group"].includes(event) ? "success" : "skipped" },
     },
     steps: {
       score: { outcome: "success" }, targets: { outputs: { scope: "all" } }, merge: { outputs: { merged: "true" } },
@@ -215,7 +215,7 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
   expect(active(shardJob, ctx)).toBe(relevant);
   const score = named(doc, "shard", "Score the corpus against its baselines");
   expect(expression(score.env!.SHARD_COUNT!, ctx)).toBe(sharded ? 4 : 1);
-  expect(expression(score.env!.HARVEY_CURRENT_MECHANICAL_READINESS!, ctx)).toBe(event === "push" ? "1" : "0");
+  expect(expression(score.env!.HARVEY_CURRENT_MECHANICAL_READINESS!, ctx)).toBe(sharded ? "1" : "0");
   const upload = named(doc, "shard", "Upload drift scorecard");
   const advisoryUpload = named(doc, "shard", "Upload live advisory observation");
   const artifactNames: string[] = [];
@@ -283,20 +283,20 @@ function assertTopology(doc: WorkflowDocument, event: string, relevant = true, e
     }
   }
   expect(new Set(artifactNames).size).toBe(artifactNames.length);
-  expect(active(doc.jobs["current-replay"]!, ctx)).toBe(event === "push");
+  expect(active(doc.jobs["current-replay"]!, ctx)).toBe(relevant && sharded);
   expect(doc.jobs["current-replay"]!.strategy!.matrix.shard).toEqual([1, 2, 3, 4]);
   expect(named(doc, "current-replay", "Execute the independent exact-head replay").env!.SHARD_COUNT).toBe(4);
   for (const name of ["Collect the shard scorecards", "Merge the shard scorecards into corpus-drift.json"]) {
     expect(active(named(doc, "drift", name), ctx), name).toBe(relevant && sharded);
   }
   expect(named(doc, "drift", "Collect the shard scorecards").with).toMatchObject({ pattern: "corpus-drift-scorecard-part-*", "merge-multiple": true, path: "parts" });
-  expect(active(named(doc, "drift", "Collect the independent replay parts"), ctx)).toBe(event === "push");
+  expect(active(named(doc, "drift", "Collect the independent replay parts"), ctx)).toBe(relevant && sharded);
   const mergeIndex = doc.jobs.drift!.steps.findIndex((step) => step.id === "merge");
   const setup = doc.jobs.drift!.steps.slice(mergeIndex + 1, mergeIndex + 5);
   expect(setup.map((step) => step.uses ?? step.run)).toEqual(["actions/checkout@v4", "pnpm/action-setup@v4", "actions/setup-node@v4", "pnpm install --frozen-lockfile"]);
   const readiness = named(doc, "drift", "Current registry producer ↔ independent replay equivalence/readiness");
   for (const step of [...setup, readiness]) {
-    expect(active(step, ctx)).toBe(event === "push");
+    expect(active(step, ctx)).toBe(relevant && sharded);
     const unmerged = structuredClone(ctx);
     unmerged.steps.merge!.outputs!.merged = "false";
     expect(active(step, unmerged)).toBe(false);
@@ -420,7 +420,7 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
       expect(shell(required, ctx).status).toBe(1);
       ctx.needs.shard.result = "success";
       ctx.needs["current-replay"].result = result;
-      expect(shell(required, ctx).status).toBe(event === "push" ? 1 : 0);
+      expect(shell(required, ctx).status).toBe(["push", "pull_request", "merge_group"].includes(event) ? 1 : 0);
       ctx.status = "failure";
       expect(active(named(document, "drift", "Record the measured full-population outcome"), ctx)).toBe(false);
       expect(active(named(document, "drift", "Gate liveness — did this required context declare its outcome?"), ctx)).toBe(true);
@@ -599,10 +599,9 @@ describe("#1870 actual corpus workflow event and artifact topology", () => {
     for (const event of ["pull_request", "merge_group"]) expect(() => assertTopology(changed, event)).toThrow();
   });
 
-  it("detects readiness setup accidentally expanding to PR/queue", () => {
+  it("detects producer/replay proof disappearing from a relevant PR or queue head", () => {
     const changed = structuredClone(document);
-    const setup = changed.jobs.drift!.steps.find((step) => step.with?.path === "source")!;
-    setup.if = setup.if!.replace(" && github.event_name == 'push'", "");
+    changed.jobs["current-replay"]!.if = changed.jobs["current-replay"]!.if!.replace(" || github.event_name == 'pull_request' || github.event_name == 'merge_group'", "");
     for (const event of ["pull_request", "merge_group"]) expect(() => assertTopology(changed, event)).toThrow();
   });
 
@@ -702,7 +701,7 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("Gate liveness — did this required context declare its outcome?");
     expect(workflow).toContain("nothing assessed; exact Git change is disjoint from immutable closure");
     for (const event of ["pull_request", "merge_group"]) assertTopology(document, event, false);
-    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
   });
 
   it("restores and saves the content-addressed directory without making a cache miss fatal or clean", () => {
@@ -735,8 +734,8 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toContain("--event '${{ github.event_name }}'");
     expect(workflow).toContain("--ref '${{ github.ref }}'");
     assertTopology(document, "push");
-    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'");
-    expect(workflow).toContain("if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
+    expect(workflow).toContain("if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')");
     expect(workflow.match(/Save successful main-shard corpus phase results — owner [1-4]/g)).toHaveLength(4);
     expect(workflow).toContain("key: corpus-phase-main-v6-${{ runner.os }}-shard4-scope${{ steps.phase-cache-scopes.outputs.scope4 }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}");
     expect(workflow).not.toContain("Save shard2 main-visible corpus phase results");

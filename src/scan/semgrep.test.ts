@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { readNamesSafe } from "../fs-walk.js";
@@ -30,7 +30,7 @@ import {
   type SemgrepOutput,
   type SemgrepResult,
 } from "./semgrep.js";
-import { assertSuccessfulSemgrepExecutionReceipt, comparePosixRelativePaths, type SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
+import { assertSuccessfulSemgrepExecutionReceipt, comparePosixRelativePaths, semgrepRoutedCapsuleIdentity, type SemgrepExecutionPlanReceipt } from "./semgrep-family-cache.js";
 
 const CACHE_REGISTRY_PACKS = ["p/typescript", "p/react", "p/nextjs", "p/owasp-top-ten", "p/secrets", "p/security-audit"];
 
@@ -121,7 +121,11 @@ function captured(suffix: string): SemgrepResult {
 // other execFileSync call (there are none elsewhere in this file) would pass through untouched.
 // #1710: the thrown code is hoisted state so the invocation-pin tests below can exercise a
 // non-ENOENT failure too; every test leaves it at "ENOENT".
-const semgrepMock = vi.hoisted(() => ({ errCode: "ENOENT", outputs: [] as string[] }));
+const semgrepMock = vi.hoisted(() => ({
+  errCode: "ENOENT",
+  outputs: [] as string[],
+  handler: undefined as undefined | ((args: string[], opts: unknown) => string | undefined),
+}));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -137,6 +141,8 @@ vi.mock("node:child_process", async (importOriginal) => {
     }),
     execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
       if (bin === "semgrep") {
+        const handled = semgrepMock.handler?.(args, opts);
+        if (handled !== undefined) return handled;
         const output = semgrepMock.outputs.shift();
         if (output !== undefined) return output;
         const err = new Error(`spawnSync semgrep ${semgrepMock.errCode}`) as NodeJS.ErrnoException;
@@ -651,7 +657,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(receipt.schema).toBe(8);
       expect(receipt.timeoutPolicy).toBe("fixpoint-family-not-assessed-v1");
       const injection = receipt.families.find((family) => family.id === "local-injection");
-      expect(injection?.topology).toBe("rule-and-size-routed-file-isolation-v1");
+      expect(injection?.topology).toBe("rule-and-size-routed-file-capsule-v2");
       expect(injection?.mergeAlgorithm).toBe("canonical-routed-semgrep-family-output-v1");
       expect(injection?.verification).toBe("paired-topology-exact");
       expect(injection?.selector).toEqual({ extensions: ["js", "jsx", "ts", "tsx"], lowerExclusiveBytes: 81920, upperExclusiveBytes: 1000000, excludedDirectories: [".git", "node_modules"], order: "posix-relative-path" });
@@ -669,6 +675,16 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         { id: "log-file-002", ordinal: 2, component: "log-isolated-file", target: "<SEMGREP_TARGET_ROOT>/src/selected-b.js", count: 1 },
         { id: "complement", ordinal: 3, component: "complement", target: "<SEMGREP_TARGET_ROOT>", count: 29 },
       ]);
+      const isolated = injection!.partitions.filter((partition) => partition.component === "log-isolated-file");
+      expect(isolated.every((partition) => partition.capsule?.policy === "content-addressed-target-config-v1"
+        && partition.capsule.identitySha256 === semgrepRoutedCapsuleIdentity(partition.configSha256, partition.route!)
+        && partition.argv.includes(partition.capsule.config)
+        && partition.argv.includes(partition.capsule.target))).toBe(true);
+      expect(injection?.partitions.filter((partition) => partition.component !== "log-isolated-file").every((partition) => partition.capsule === undefined)).toBe(true);
+      expect(semgrepRoutedCapsuleIdentity(isolated[0]!.configSha256, isolated[0]!.route!))
+        .not.toBe(semgrepRoutedCapsuleIdentity("f".repeat(64), isolated[0]!.route!));
+      expect(semgrepRoutedCapsuleIdentity(isolated[0]!.configSha256, isolated[0]!.route!))
+        .not.toBe(semgrepRoutedCapsuleIdentity(isolated[0]!.configSha256, { ...isolated[0]!.route!, contentSha256: "f".repeat(64) }));
       expect(injection?.partitions[0]?.ownedRuleIds).toEqual(["harvey-log-injection"]);
       expect([...new Set(injection?.partitions.flatMap((partition) => partition.ownedRuleIds))].sort()).toEqual(injection?.ownedRuleIds);
       expect(injection?.partitions.every((partition) => partition.argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1" && partition.argv.join(" ").includes("--timeout 0") && !partition.argv.includes("--exclude"))).toBe(true);
@@ -710,6 +726,82 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       )).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives byte-identical isolated target and config argv to unrelated producer and replay roots", () => {
+    const producer = mkdtempSync(join(tmpdir(), "harvey-semgrep-producer-root-"));
+    const replay = mkdtempSync(join(tmpdir(), "harvey-semgrep-replay-root-"));
+    const relativePath = "packages/database/supabase/functions/post-shipment/index.ts";
+    const calls: Array<{ argv: string[]; cwd?: string }> = [];
+    const seedTarget = (parent: string): { target: string; registry: string[] } => {
+      const target = join(parent, "target");
+      mkdirSync(dirname(join(target, relativePath)), { recursive: true });
+      writeFileSync(join(target, relativePath), Buffer.alloc(113_846, "x"));
+      return { target, registry: seedRegistrySnapshot(parent).files };
+    };
+    const left = seedTarget(producer);
+    const right = seedTarget(replay);
+    semgrepMock.handler = (argv, opts) => {
+      const target = argv.at(-1)!;
+      const configPaths = argv.flatMap((arg, index) => arg === "--config" ? [argv[index + 1]!] : []);
+      const ruleIds = [...new Set(configPaths.flatMap((config) => [...readFileSync(config, "utf8").matchAll(/^\s*-\s*id:\s*([\w.-]+)\s*$/gm)].map((match) => match[1]!)))].sort();
+      const isolated = target.includes("harvey-semgrep-routed-capsules-v1") && /\.(?:js|jsx|ts|tsx)$/.test(target);
+      if (isolated) calls.push({ argv: [...argv], cwd: (opts as { cwd?: string } | undefined)?.cwd });
+      const lines = isolated ? (target.includes("replay-root") ? [1] : [1, 2]) : [];
+      return JSON.stringify({
+        version: "1.173.0",
+        results: lines.map((line) => ({ check_id: "harvey-log-injection", path: target, start: { line } })),
+        errors: isolated ? [{ type: "Syntax error", path: target, message: `diagnostic target ${target}; config ${configPaths[0]}` }] : [],
+        skipped_rules: [],
+        paths: { scanned: [target], skipped: isolated ? [{ path: target, reason: `config ${configPaths[0]}` }] : [] },
+        time: { rules: ruleIds, fixpoint_timeouts: [] },
+      });
+    };
+    try {
+      const producerRun = runSemgrep(left.target, left.registry);
+      expect(producerRun.failure).toBeUndefined();
+      expect(() => assertSuccessfulSemgrepExecutionReceipt(producerRun.executionPlan)).not.toThrow();
+      const tamperedCapsule = structuredClone(producerRun.executionPlan!);
+      tamperedCapsule.families.find((family) => family.id === "local-injection")!.partitions
+        .find((partition) => partition.component === "log-isolated-file")!.capsule!.identitySha256 = "f".repeat(64);
+      expect(() => assertSuccessfulSemgrepExecutionReceipt(tamperedCapsule)).toThrow(/malformed/);
+      const legacyTopology = structuredClone(producerRun.executionPlan!) as unknown as { families: Array<{ id: string; topology: string }> };
+      legacyTopology.families.find((family) => family.id === "local-injection")!.topology = "rule-and-size-routed-file-isolation-v1";
+      expect(() => assertSuccessfulSemgrepExecutionReceipt(legacyTopology)).toThrow(/malformed/);
+      expect(calls).toHaveLength(2);
+      const stagedConfig = calls[0]!.argv[calls[0]!.argv.indexOf("--config") + 1]!;
+      const stagedTarget = calls[0]!.argv.at(-1)!;
+      expect(calls[0]).toEqual(calls[1]);
+      expect(calls[0]!.cwd).toBe(dirname(stagedConfig));
+      expect(JSON.stringify(producerRun)).not.toContain("harvey-semgrep-routed-capsules-v1");
+
+      writeFileSync(stagedConfig, "corrupt\n");
+      writeFileSync(stagedTarget, "corrupt\n");
+      const replayRun = runSemgrep(right.target, right.registry);
+      expect(replayRun.failure).toBeUndefined();
+      expect(calls).toHaveLength(4);
+      expect(calls.slice(0, 2)).toEqual(calls.slice(2, 4));
+      expect(createHash("sha256").update(readFileSync(stagedTarget)).digest("hex"))
+        .toBe(createHash("sha256").update(readFileSync(join(left.target, relativePath))).digest("hex"));
+      expect(createHash("sha256").update(readFileSync(stagedConfig)).digest("hex"))
+        .toBe(producerRun.executionPlan?.families.find((family) => family.id === "local-injection")?.partitions.find((partition) => partition.component === "log-isolated-file")?.configSha256);
+      expect(stableReceipt(producerRun.executionPlan)).toBe(stableReceipt(replayRun.executionPlan));
+      expect(JSON.stringify(replayRun)).not.toContain("harvey-semgrep-routed-capsules-v1");
+
+      const changed = readFileSync(join(right.target, relativePath));
+      changed[0] = "y".charCodeAt(0);
+      writeFileSync(join(right.target, relativePath), changed);
+      const changedRun = runSemgrep(right.target, right.registry);
+      expect(changedRun.failure).toBeUndefined();
+      expect(calls).toHaveLength(6);
+      expect(calls[4]!.argv.at(-1)).not.toBe(stagedTarget);
+      expect(calls[4]!.argv[calls[4]!.argv.indexOf("--config") + 1]).not.toBe(stagedConfig);
+    } finally {
+      semgrepMock.handler = undefined;
+      semgrepMock.outputs.length = 0;
+      rmSync(producer, { recursive: true, force: true });
+      rmSync(replay, { recursive: true, force: true });
     }
   });
 
@@ -781,7 +873,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, upperPath)], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(output(partition.ownedRuleIds));
         } else {
           const envelope = output(family.ruleIds);
@@ -829,7 +921,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       });
       const queue = (families: readonly typeof plan.families[number][]): void => {
         for (const family of families) {
-          if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
             for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(envelope(partition.ownedRuleIds));
           } else {
             const value = envelope(family.ruleIds);
@@ -1002,7 +1094,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         version: "1.173.0", results: [], errors: [], paths: { scanned: [join(target, "a.ts")], skipped: [] }, time: { rules: ruleIds, fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(output(partition.ownedRuleIds));
         } else {
           const envelope = output(family.ruleIds);
@@ -1019,11 +1111,14 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(run.executionPlan?.families.map((family) => Object.fromEntries(Object.entries(family).filter(([key]) => !["loadedRuleIds", "loadedTaintRuleIds", "taintCoverage", "status", "attempts"].includes(key))))).toEqual(plan.families);
       expect(plan.families.find((family) => family.id === "local-injection")?.partitions.map((partition) => partition.ownedRuleIds.length)).toEqual([1, 1, 29]);
       const calls = semgrepArgvs();
-      const injection = calls.filter((argv) => argv.some((arg) => arg.includes("local-injection-")));
+      const injection = calls.filter((argv) => argv.some((arg) => arg.includes("local-injection-") || arg.includes("harvey-semgrep-routed-capsules-v1")));
       expect(injection).toHaveLength(6);
       expect(injection.every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1" && !argv.includes("--exclude"))).toBe(true);
-      expect(injection.map((argv) => argv.find((arg) => arg.includes("local-injection-"))?.match(/local-injection-(log|complement)-/)?.[1])).toEqual(["log", "log", "complement", "log", "log", "complement"]);
-      expect(injection.filter((argv) => argv.at(-1) === join(target, "a.ts"))).toHaveLength(2);
+      expect(injection.map((argv) => argv.some((arg) => arg.includes("harvey-semgrep-routed-capsules-v1")) ? "log" : argv.find((arg) => arg.includes("local-injection-"))?.match(/local-injection-(log|complement)-/)?.[1])).toEqual(["log", "log", "complement", "log", "log", "complement"]);
+      const isolated = injection.filter((argv) => argv.at(-1)?.endsWith("/target/a.ts"));
+      expect(isolated).toHaveLength(2);
+      expect(isolated[0]).toEqual(isolated[1]);
+      expect(isolated[0]?.[isolated[0]!.indexOf("--config") + 1]).toBe(isolated[1]?.[isolated[1]!.indexOf("--config") + 1]);
       const xss = calls.filter((argv) => argv.some((arg) => arg.endsWith("/xss.yml")));
       expect(xss).toHaveLength(2);
       expect(xss[0]).toEqual(xss[1]);
@@ -1035,7 +1130,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       expect(createHash("sha256").update(readFileSync(typescriptConfig)).digest("hex"))
         .toBe(plan.families.find((family) => family.sourceId === "p/typescript")?.configSha256);
       expect(typescript.every((argv) => argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 1")).toBe(true);
-      expect(calls.filter((argv) => !argv.some((arg) => arg.includes("local-injection-") || arg.endsWith("/xss.yml") || /registry-0-[a-f0-9]{64}\.yml$/.test(arg))).every((argv) =>
+      expect(calls.filter((argv) => !argv.some((arg) => arg.includes("local-injection-") || arg.includes("harvey-semgrep-routed-capsules-v1") || arg.endsWith("/xss.yml") || /registry-0-[a-f0-9]{64}\.yml$/.test(arg))).every((argv) =>
         argv.slice(0, 4).join(" ") === "--x-ignore-semgrepignore-files --x-parmap -j 9"
       )).toBe(true);
     } finally {
@@ -1071,7 +1166,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         time: { rules: [...ruleIds], fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
           continue;
         }
@@ -1113,7 +1208,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         time: { rules: [...ruleIds], fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
           continue;
         }
@@ -1184,7 +1279,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
         time: { rules: [...ruleIds], fixpoint_timeouts: [] },
       });
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+        if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
           continue;
         }
@@ -1260,7 +1355,7 @@ describe("runSemgrep pins the deterministic invocation (#1710)", () => {
       });
       const xss = plan.families.find((family) => family.id === "local-xss")!;
       for (const family of plan.families) {
-        if (family.topology === "rule-and-size-routed-file-isolation-v1") {
+          if (family.topology === "rule-and-size-routed-file-capsule-v2") {
           for (let attempt = 0; attempt < 2; attempt += 1) for (const partition of family.partitions) semgrepMock.outputs.push(JSON.stringify(envelope(partition.ownedRuleIds)));
         } else {
           const first = JSON.stringify(family.id === "local-xss" ? invalid(family.ruleIds[0]!) : envelope(family.ruleIds));

@@ -40,6 +40,7 @@ import {
   localSemgrepConfigYardstick,
   mergeSemgrepFamilyOutputs,
   rejectUnregisteredSemgrepFamilyArtifacts,
+  semgrepRoutedCapsuleIdentity,
   type SemgrepFamily,
   type SemgrepFamilyCacheOptions,
   type SemgrepExecutionPlanReceipt,
@@ -51,6 +52,7 @@ import {
   type SemgrepRoutingManifestEntry,
   type SemgrepRoutingManifestReceipt,
   type SemgrepRoutingSelectorReceipt,
+  type SemgrepRoutedCapsuleReceipt,
   type SemgrepFamilyExecutionFailure,
   type SemgrepFamilyExecutionReceipt,
   type SemgrepFamilyRecord,
@@ -476,9 +478,9 @@ let liveAsyncSemgrepCommands = 0;
 let peakAsyncSemgrepCommands = 0;
 export const observedSemgrepCommandConcurrency = (): number => peakAsyncSemgrepCommands;
 
-export function execSemgrep(argv: string[], maxBufferMb = 128): SemgrepExec {
+export function execSemgrep(argv: string[], maxBufferMb = 128, cwd?: string): SemgrepExec {
   try {
-    return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * maxBufferMb }) };
+    return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * maxBufferMb, ...(cwd ? { cwd } : {}) }) };
   } catch (err) {
     return semgrepFailure(err as SemgrepExecError);
   }
@@ -644,6 +646,51 @@ const LOCAL_INJECTION_SELECTOR: SemgrepRoutingSelectorReceipt = {
   excludedDirectories: [".git", "node_modules"],
   order: "posix-relative-path",
 };
+// #1883: producer and independent replay once returned 2/2 versus 1/1 findings for the same
+// Carbon log-injection component. Their logical receipts were identical, but the actual target
+// and derived-config argv lived under different random roots. Give every isolated component one
+// immutable absolute identity derived only from its config, relative path, and content. This
+// removes that hidden input without retrying, unioning, or weakening the strict comparison.
+const SEMGREP_ROUTED_CAPSULE_TOKEN = "<SEMGREP_ROUTED_CAPSULE>";
+const SEMGREP_ROUTED_CAPSULE_ROOT = join("/tmp", "harvey-semgrep-routed-capsules-v1");
+
+function materializeExactCapsuleFile(path: string, body: Buffer, expectedSha256: string): void {
+  const exact = (): boolean => existsSync(path) && sha256(readFileSync(path)) === expectedSha256;
+  if (exact()) return;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${sha256(path).slice(0, 12)}.tmp`;
+  try {
+    writeFileSync(temporary, body, { mode: 0o600 });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  if (!exact()) throw new Error("content-addressed Semgrep capsule failed exact byte verification");
+}
+
+function materializeRoutedCapsule(
+  targetRoot: string,
+  partition: NonNullable<OwnedSemgrepFamily["partitions"]>[number],
+): { root: string; targetRoot: string; target: string; config: string } {
+  if (!partition.route || !partition.capsule) throw new Error(`${partition.id}: routed capsule identity is missing`);
+  const sourceTarget = join(targetRoot, partition.route.path);
+  const targetBody = readFileSync(sourceTarget);
+  if (targetBody.length !== partition.route.bytes || sha256(targetBody) !== partition.route.contentSha256) {
+    throw new Error(`${partition.id}: routed source bytes changed before capsule materialization`);
+  }
+  const configBody = readFileSync(partition.configPath);
+  if (sha256(configBody) !== partition.configSha256
+    || partition.capsule.identitySha256 !== semgrepRoutedCapsuleIdentity(partition.configSha256, partition.route)) {
+    throw new Error(`${partition.id}: routed config or capsule identity changed before materialization`);
+  }
+  const root = join(SEMGREP_ROUTED_CAPSULE_ROOT, partition.capsule.identitySha256);
+  const stagedTargetRoot = join(root, "target");
+  const target = join(stagedTargetRoot, partition.route.path);
+  const config = join(root, "config.yml");
+  materializeExactCapsuleFile(config, configBody, partition.configSha256);
+  materializeExactCapsuleFile(target, targetBody, partition.route.contentSha256);
+  return { root, targetRoot: stagedTargetRoot, target, config };
+}
 
 function regularFilesOutsideRoutingExclusions(root: string): Array<{ path: string; relative: string; bytes: number }> {
   const files: Array<{ path: string; relative: string; bytes: number }> = [];
@@ -795,7 +842,7 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
       const component = (input: Omit<SemgrepPartitionPlanReceipt, "ordinal" | "argv"> & { configPath: string }, ordinal: number): NonNullable<OwnedSemgrepFamily["partitions"]>[number] => ({
         ...input,
         ordinal,
-        argv: [...SEMGREP_VERIFIED_PREFIX, "--config", `<SEMGREP_CONFIG_SHA256:${input.configSha256}>`, ...SEMGREP_ROUTED_FAMILY_TAIL, input.target],
+        argv: [...SEMGREP_VERIFIED_PREFIX, "--config", input.capsule?.config ?? `<SEMGREP_CONFIG_SHA256:${input.configSha256}>`, ...SEMGREP_ROUTED_FAMILY_TAIL, input.capsule?.target ?? input.target],
       });
       partitions = [
         component({ id: "log-remainder", component: "log-remainder", target: "<SEMGREP_ROUTING_VIEW:remainder>", configPath: logConfig.path, configSha256: logConfig.sha256, ownedRuleIds: [LOG_INJECTION_RULE], ownedTaintRuleIds: log.filter((rule) => rule.mode === "taint").map((rule) => rule.id) }, 0),
@@ -808,6 +855,12 @@ function prepareOwnedSemgrepFamilies(registryConfigs: readonly string[], derived
           ownedRuleIds: [LOG_INJECTION_RULE],
           ownedTaintRuleIds: log.filter((rule) => rule.mode === "taint").map((rule) => rule.id),
           route,
+          capsule: {
+            policy: "content-addressed-target-config-v1",
+            identitySha256: semgrepRoutedCapsuleIdentity(logConfig.sha256, route),
+            config: `${SEMGREP_ROUTED_CAPSULE_TOKEN}/config.yml` as SemgrepRoutedCapsuleReceipt["config"],
+            target: `${SEMGREP_ROUTED_CAPSULE_TOKEN}/target/${route.path}`,
+          },
         }, index + 1)),
         component({
           id: "complement",
@@ -867,9 +920,9 @@ function plannedFamilyReceipt(family: OwnedSemgrepFamily, ordinal: number): Semg
     argv: family.partitions
       ? [`<SEMGREP_ROUTED_SEQUENCE:${family.partitions.map((partition) => partition.id).join(",")}>`, "<SEMGREP_MERGE:canonical-routed-semgrep-family-output-v1>"]
       : [...policy.prefix, "--config", `<SEMGREP_CONFIG_SHA256:${family.configSha256}>`, ...SEMGREP_FAMILY_TAIL, "<SEMGREP_TARGET_ROOT>"],
-    topology: family.partitions ? "rule-and-size-routed-file-isolation-v1" : "single-command-v1",
+    topology: family.partitions ? "rule-and-size-routed-file-capsule-v2" : "single-command-v1",
     mergeAlgorithm: family.partitions ? "canonical-routed-semgrep-family-output-v1" : "single-command-v1",
-    partitions: (family.partitions ?? []).map(({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, route }) => ({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, ...(route ? { route } : {}) })),
+    partitions: (family.partitions ?? []).map(({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, route, capsule }) => ({ ordinal: partitionOrdinal, id, component, target, configSha256, ownedRuleIds, ownedTaintRuleIds, argv, ...(route ? { route } : {}), ...(capsule ? { capsule } : {}) })),
     verification: policy.verification,
   };
 }
@@ -1030,7 +1083,7 @@ function runRoutedLocalInjection(
 ): FamilyRun {
   if (!family.partitions || !family.selector || !family.routingManifest
     || family.partitions.length !== family.routingManifest.entries.length + 2
-    || planned.topology !== "rule-and-size-routed-file-isolation-v1") {
+    || planned.topology !== "rule-and-size-routed-file-capsule-v2") {
     return { result: {}, failure: `${family.id}: routed topology is missing` };
   }
   const routingManifest = family.routingManifest;
@@ -1047,17 +1100,20 @@ function runRoutedLocalInjection(
       remainderView = materializeLocalInjectionRemainderView(dir, routingManifest);
       for (const [ordinal, partition] of family.partitions!.entries()) {
         const plan = planned.partitions[ordinal]!;
-        const target = partition.component === "log-remainder"
-          ? remainderView
-          : partition.component === "log-isolated-file"
-            ? join(dir, partition.route!.path)
-            : dir;
-        const args = ["--config", partition.configPath, ...SEMGREP_ROUTED_FAMILY_TAIL, target];
-        const run = execSemgrep([...SEMGREP_VERIFIED_PREFIX, ...args]);
+        const capsule = partition.component === "log-isolated-file" ? materializeRoutedCapsule(dir, partition) : undefined;
+        const target = partition.component === "log-remainder" ? remainderView : capsule?.target ?? dir;
+        const config = capsule?.config ?? partition.configPath;
+        const args = ["--config", config, ...SEMGREP_ROUTED_FAMILY_TAIL, target];
+        const run = execSemgrep([...SEMGREP_VERIFIED_PREFIX, ...args], 128, capsule?.root);
         if ("failure" in run) return { failure: `${family.id}/${partition.id}: ${run.failure}` };
         const parsed = parseEnvelope(run.out);
         if (parsed.failure) return { failure: `${family.id}/${partition.id}: ${parsed.failure}` };
-        const routed = partition.component === "log-remainder" ? replaceRoot(parsed.result, remainderView, dir) : parsed.result;
+        let routed = partition.component === "log-remainder" ? replaceRoot(parsed.result, remainderView, dir) : parsed.result;
+        if (capsule) {
+          routed = replaceRoot(routed, capsule.targetRoot, dir);
+          routed = replaceRoot(routed, capsule.config, `<SEMGREP_CONFIG_SHA256:${partition.configSha256}>`);
+          routed = replaceRoot(routed, capsule.root, dir);
+        }
         routed.results ??= [];
         routed.errors ??= [];
         routed.paths ??= {};
@@ -1088,6 +1144,7 @@ function runRoutedLocalInjection(
             ownedRuleIds: partition.ownedRuleIds,
             ownedTaintRuleIds: partition.ownedTaintRuleIds,
             ...(partition.route ? { route: partition.route } : {}),
+            ...(partition.capsule ? { capsule: partition.capsule } : {}),
             status: base.status,
             ...partitionSemantic,
             semanticSha256: sha256(stable(partitionSemantic)),

@@ -52,8 +52,9 @@ interface CorpusWorkflow {
 function eventExpression(value: unknown, event: string, shard = 1): unknown {
   if (typeof value !== "string") return value;
   return runInNewContext(value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-    .replaceAll("needs.prepare-current-inputs.result", "preparationResult"), {
-    github: { event_name: event }, matrix: { shard }, preparationResult: "success", fromJSON: JSON.parse,
+    .replaceAll("needs.prepare-current-inputs.result", "preparationResult")
+    .replaceAll("needs.prepare-current-inputs.outputs.relevant", "relevant"), {
+    github: { event_name: event }, matrix: { shard }, preparationResult: "success", relevant: "true", fromJSON: JSON.parse,
   });
 }
 
@@ -71,8 +72,8 @@ function contractErrors(
     const expected = Array.from({ length: count }, (_, index) => index + 1);
     if (JSON.stringify(eventExpression(workflow.jobs.shard.strategy.matrix.shard, event)) !== JSON.stringify(expected)) errors.push(`${event}: producer matrix`);
     if (eventExpression(score?.env?.SHARD_COUNT, event) !== count) errors.push(`${event}: producer count`);
-    if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (event === "push" ? "1" : "0")) errors.push(`${event}: producer readiness`);
-    if (eventExpression(workflow.jobs["current-replay"].if, event) !== (event === "push")) errors.push(`${event}: replay activation`);
+    if (eventExpression(score?.env?.HARVEY_CURRENT_MECHANICAL_READINESS, event) !== (count === 4 ? "1" : "0")) errors.push(`${event}: producer readiness`);
+    if (eventExpression(workflow.jobs["current-replay"].if, event) !== (count === 4)) errors.push(`${event}: replay activation`);
     const expectedTimeouts = count === 1 ? [120] : [45, 30, 30, 30];
     for (const [index, expectedTimeout] of expectedTimeouts.entries()) {
       if (eventExpression(workflow.jobs.shard["timeout-minutes"], event, index + 1) !== expectedTimeout) errors.push(`${event}: shard ${index + 1} timeout`);
@@ -188,7 +189,7 @@ describe("the weight table tracks the corpus (#1586)", () => {
 });
 
 describe("corpus workflow four-shard production contract", () => {
-  it("keeps push/PR/queue four-way, schedule/manual single, and replay push-only", () => {
+  it("keeps push/PR/queue producer and replay four-way while schedule/manual stay single", () => {
     expect(contractErrors()).toEqual([]);
   });
 
@@ -211,8 +212,8 @@ describe("corpus workflow four-shard production contract", () => {
     ["producer 4→3", WORKFLOW_TEXT.replace("'[1,2,3,4]'", "'[1,2,3]'").replace("&& 4 || 1", "&& 3 || 1"), SLUGS, EXPECTED_WEIGHTS],
     ["replay 4→3", WORKFLOW_TEXT.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]").replace("SHARD_COUNT: 4", "SHARD_COUNT: 3"), SLUGS, EXPECTED_WEIGHTS],
     ["producer/replay mismatch", WORKFLOW_TEXT.replace("SHARD_COUNT: 4", "SHARD_COUNT: 2"), SLUGS, EXPECTED_WEIGHTS],
-    ["readiness moved off main", WORKFLOW_TEXT.replace("github.event_name == 'push' && '1' || '0'", "github.event_name == 'pull_request' && '1' || '0'"), SLUGS, EXPECTED_WEIGHTS],
-    ["replay allowed on PR", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'", "needs.prepare-current-inputs.result == 'success'"), SLUGS, EXPECTED_WEIGHTS],
+    ["readiness restricted to push", WORKFLOW_TEXT.replace("(github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0'", "github.event_name == 'push' && '1' || '0'"), SLUGS, EXPECTED_WEIGHTS],
+    ["replay restricted to push", WORKFLOW_TEXT.replace("needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')", "needs.prepare-current-inputs.outputs.relevant == 'true' && github.event_name == 'push'"), SLUGS, EXPECTED_WEIGHTS],
     ["schedule/manual timeout restored to 30m", WORKFLOW_TEXT.replace("&& 120 ||", "&& 30 ||"), SLUGS, EXPECTED_WEIGHTS],
     ["dropped target", WORKFLOW_TEXT, SLUGS.slice(1), EXPECTED_WEIGHTS],
     ["duplicated target", WORKFLOW_TEXT, [...SLUGS, SLUGS[0]!], EXPECTED_WEIGHTS],

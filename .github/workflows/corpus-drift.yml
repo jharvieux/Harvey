@@ -481,7 +481,10 @@ jobs:
           # compares live OSV bytes with the committed snapshot;
           # client audit CLIs do not set this corpus-only variable and keep their live defaults.
           HARVEY_CORPUS_EXTERNAL_STATE_MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'live-verify' || 'snapshot' }}
-          HARVEY_CURRENT_MECHANICAL_READINESS: ${{ github.event_name == 'push' && '1' || '0' }}
+          # Relevant PR and queue heads must prove the same fresh producer/replay equality before
+          # merge; waiting for the main push would let a determinism regression land behind a green
+          # required context.
+          HARVEY_CURRENT_MECHANICAL_READINESS: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && '1' || '0' }}
           SHARD: ${{ matrix.shard }}
           # Match the producer matrix: four on push/relevant PR/queue; one on schedule/manual.
           # A cache miss still recomputes within the same exhaustive partition.
@@ -657,12 +660,13 @@ jobs:
           mode: assert
           expect: corpus-drift
 
-  # A separate post-merge process and clone/preparation path. It consumes the exact pack artifact
+  # A separate process and clone/preparation path. It consumes the exact pack artifact
   # but no hosted phase artifacts, so the final comparison is not the scorecard comparing with
-  # itself. It runs beside the main-push producer matrix; PR and merge-group events skip it.
+  # itself. Relevant PR and merge-group heads run it too: the protected aggregate must prove the
+  # determinism boundary before merge, not discover a row loss on the subsequent main push.
   current-replay:
     needs: prepare-current-inputs
-    if: needs.prepare-current-inputs.result == 'success' && github.event_name == 'push'
+    if: needs.prepare-current-inputs.result == 'success' && needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
     name: current independent replay ${{ matrix.shard }}
     runs-on: ubuntu-latest
     strategy:
@@ -759,7 +763,8 @@ jobs:
             echo "::error::corpus-drift: the shard matrix reported '$result'. A baseline drifted, or a shard errored before it could score. Open the individual 'corpus shard N' jobs and the corpus-drift-scorecard artifact. For a counted drift, remeasure the complete matching/loading/resolution/reachability/invocation blast radius before changing baselines; see docs/design/corpus-drift.md."
             exit 1
           fi
-          if [ '${{ github.event_name }}' = 'push' ] \
+          if [ '${{ github.event_name }}' != 'schedule' ] \
+            && [ '${{ github.event_name }}' != 'workflow_dispatch' ] \
             && [ '${{ needs.current-replay.result }}' != 'success' ]; then
             echo "::error::the independent current replay matrix did not succeed"
             exit 1
@@ -814,7 +819,7 @@ jobs:
 
       - name: Collect the independent replay parts
         id: replay-parts
-        if: github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         uses: actions/download-artifact@v4
         with:
           pattern: current-mechanical-replay-part-*
@@ -869,24 +874,24 @@ jobs:
           echo "Merged scorecard: $(jq '.rows | length' corpus-drift.json) rows over $(jq '.findings | keys | length' corpus-drift.json) target(s)."
 
       - uses: actions/checkout@v4
-        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         with:
           path: source
       - uses: pnpm/action-setup@v4
-        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         with:
           package_json_file: source/package.json
       - uses: actions/setup-node@v4
-        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         with:
           node-version-file: source/.nvmrc
           cache: pnpm
           cache-dependency-path: source/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         working-directory: source
       - name: Current registry producer ↔ independent replay equivalence/readiness
-        if: steps.merge.outputs.merged == 'true' && github.event_name == 'push'
+        if: needs.prepare-current-inputs.outputs.relevant == 'true' && steps.merge.outputs.merged == 'true' && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group')
         run: |
           set -euo pipefail
           producer_parts=(../parts/corpus-drift-shard*.json)

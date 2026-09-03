@@ -1920,6 +1920,27 @@ rules:
     pattern-sources:
       - *request_source
     pattern-sanitizers:
+      # #1883: a request value used to SELECT database rows does not taint the returned row bytes.
+      # Semgrep's conservative call-return propagation treated it as though it did on Carbon's
+      # post-shipment function: the second Supabase result in two Promise.all calls flowed into
+      # internal job IDs at log lines 1114/1691. Those rows moved across byte-identical hosted/local
+      # executions and pushed the taint engine over its fixpoint bound; the direct request log at
+      # line 40 never moved. The same false provenance also reached create/index.ts:1431 when it
+      # logged the returned trackedEntities object; its direct request log at line 1407 remains.
+      # Bind the result to the matching SECOND query position explicitly.
+      # A generic `[..., $RESULT, ...]` pair would be unsound: its two ellipses can select different
+      # positions and could clear an actual request promise merely because another promise queried
+      # the database. The executable probe keeps that mixed case live and this exact stored-result
+      # case silent.
+      - by-side-effect: true
+        patterns:
+          - pattern: |
+              const [$FIRST, $DB_RESULT, ...] = await Promise.all([
+                $FIRST_PROMISE,
+                <... $CLIENT.from($TABLE).select(...) ...>,
+                ...
+              ]);
+          - focus-metavariable: $DB_RESULT
       # #1027: #989 shipped the (a2) guard sanitizer on 11 taint rules and left this one out. It was
       # then MEASURED (2026-07-25, BenchProctor JS/Express quicktest 2026.07.22) to carry the largest
       # modelable-guard false-positive population of every rule that was skipped — 43 of its FPs are
