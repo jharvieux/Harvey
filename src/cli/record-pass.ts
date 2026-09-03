@@ -27,6 +27,7 @@ import { AUDIT_MODULES, type AuditModule } from "../audit-coverage.js";
 import { buildPassArtifact, type PassArtifact, writePassArtifact } from "../audit-pass-artifact.js";
 import type { Finding } from "../findings.js";
 import { assertUniqueProducerExecutionReceipts, type ProducerExecutionReceipt } from "../producer-execution-receipt.js";
+import { findingsFromRecordPassInput } from "../triage-findings.js";
 
 const args = process.argv.slice(2);
 const flag = (name: string): string | undefined => {
@@ -49,7 +50,7 @@ const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
 const hotspotsPath = flag("--hotspots");
 
 if (!module || !target || !pass || !out) {
-  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--execution-receipts receipts.json] [--require-effectiveness-receipts]");
+  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings Finding[].json|TRIAGE.json] [--execution-receipts receipts.json] [--require-effectiveness-receipts]");
   process.exit(2);
 }
 if (!AUDIT_MODULES.includes(module as AuditModule)) {
@@ -63,12 +64,16 @@ if (findingsPath) {
     console.error(`--findings file not found: ${findingsPath}`);
     process.exit(1);
   }
-  const parsed = JSON.parse(readFileSync(findingsPath, "utf8"));
-  if (!Array.isArray(parsed)) {
-    console.error(`--findings must be a JSON array of report-schema findings: ${findingsPath}`);
+  const parsed = JSON.parse(readFileSync(findingsPath, "utf8")) as unknown;
+  try {
+    // The interactive triage skill writes a completed object so every dropped/duplicate candidate
+    // remains auditable. The pass contains only its confirmed true positives; the legacy bare-array
+    // path remains for mechanical/live producers that already emit report-schema findings.
+    findings = findingsFromRecordPassInput(parsed);
+  } catch (error) {
+    console.error(`--findings is neither a report-schema Finding[] nor a completed TRIAGE.json: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
   }
-  findings = parsed as Finding[];
 }
 
 let hotspots: string[] | undefined;
