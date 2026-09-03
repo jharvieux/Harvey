@@ -50,17 +50,14 @@ describe("corpus hosted relevance router", () => {
     expect(script).toContain('scope="all $target_count pinned targets; $EVENT_NAME bypasses PR relevance classification"');
   });
 
-  it("keeps the steady schedule plus the bounded #1883 live-OSV acceptance window", () => {
+  it("keeps only the steady schedule after #1883 acceptance", () => {
     const yaml = readFileSync(WORKFLOW, "utf8");
     const crons = [...yaml.matchAll(/^\s*-\s*cron:\s*"([^"]+)"/gm)].map((match) => match[1]!);
-    expect(crons, "the repair must retain daily coverage and only the approved 2026-09-03 acceptance slots").toEqual([
-      "23 7 * * *",
-      "7,17,27,37,47,57 0-23 3 9 *",
-    ]);
+    expect(crons, "the accepted repair must retain daily coverage without a recurring temporary window").toEqual(["23 7 * * *"]);
     expect(crons.every((cron) => cron.split(" ")[0] !== "0"), "GitHub can delay or drop minute-zero schedules under high Actions load").toBe(true);
     expect(yaml).not.toContain("13,28,43,58 19 28 8 *");
-    expect(yaml).toContain("TEMPORARY #1883 live-OSV repair acceptance");
-    expect(yaml).toContain("remove after the first accepted 2026-09-03");
+    expect(yaml).not.toContain("TEMPORARY #1883 live-OSV repair acceptance");
+    expect(yaml).not.toContain("7,17,27,37,47,57 0-23 3 9 *");
     expect(yaml).toContain("group: corpus-drift-${{ github.event_name == 'schedule' && github.run_id || github.ref }}");
   });
 
