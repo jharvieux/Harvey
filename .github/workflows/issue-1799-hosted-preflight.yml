@@ -534,6 +534,8 @@ jobs:
           udp(socket.AF_INET, ("127.0.0.1", 0), "udp4LoopbackSend")
           udp(socket.AF_INET6, ("::1", 0), "udp6LoopbackSend")
           unix_path = os.path.join(root, "allow.sock")
+          if len(os.fsencode(unix_path)) >= 104:
+              raise SystemExit(1)
           server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           accepted = None
@@ -720,9 +722,9 @@ jobs:
           runner_temp = os.path.dirname(root)
           if os.environ["TMPDIR"] != root or os.path.dirname(staging) != runner_temp:
               raise SystemExit(1)
-          if not re.fullmatch(r"harvey-1799-preflight\.[0-9]+\.[0-9]+\.[0-9a-f]{32}", os.path.basename(root)):
+          if not re.fullmatch(r"h1799r\.[0-9a-f]{32}", os.path.basename(root)):
               raise SystemExit(1)
-          if not re.fullmatch(r"harvey-1799-candidate\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.json", os.path.basename(staging)):
+          if not re.fullmatch(r"h1799c\.[0-9a-f]{32}\.json", os.path.basename(staging)):
               raise SystemExit(1)
           control_complete = purge(root + ".p5-control")
           root_complete = purge(root)
@@ -979,10 +981,21 @@ jobs:
           [[ "$profile_sha256" == "$EXPECTED_DENY_NETWORK_PROFILE_SHA256" ]]
           readonly RANDOM_HEX="$(/usr/bin/od -An -N16 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')"
           [[ "$RANDOM_HEX" =~ ^[0-9a-f]{32}$ ]]
-          readonly ROOT="${RUNNER_TEMP%/}/harvey-1799-preflight.${HARVEY_RUN_ID}.${HARVEY_RUN_ATTEMPT}.${RANDOM_HEX}"
-          readonly STAGING="${RUNNER_TEMP%/}/harvey-1799-candidate.${HARVEY_RUN_ID}.${HARVEY_RUN_ATTEMPT}.${RANDOM_HEX}.json"
+          # Darwin sockaddr_un.sun_path is 104 bytes including its terminating NUL.
+          # GitHub's /Users/runner/work/_temp plus the former descriptive basename
+          # made allow.sock exactly 104 bytes, so the synthetic control failed before
+          # Seatbelt was exercised. Keep the random identity but budget the actual path.
+          readonly ROOT="${RUNNER_TEMP%/}/h1799r.${RANDOM_HEX}"
+          readonly STAGING="${RUNNER_TEMP%/}/h1799c.${RANDOM_HEX}.json"
+          readonly ALLOW_SOCKET_PATH_BYTES="$(LC_ALL=C printf '%s' "$ROOT/allow.sock" | /usr/bin/wc -c | /usr/bin/tr -d ' ')"
+          [[ "$ALLOW_SOCKET_PATH_BYTES" =~ ^[0-9]+$ ]]
+          if (( ALLOW_SOCKET_PATH_BYTES >= 104 )); then
+            printf '#1799-preflight-stage=path-budget status=1\n' >&3
+            exit 1
+          fi
           umask 077
           /bin/mkdir -m 0700 "$ROOT"
+          STAGE='materialize'
 
           cleanup_on_exit() {
             readonly primary_status=$?
@@ -995,7 +1008,12 @@ jobs:
               "$PYTHON" -I -S -c "$CLEANUP_SOURCE"
             readonly cleanup_status=$?
             if [[ "$cleanup_status" != '0' ]]; then
+              printf '#1799-preflight-stage=cleanup status=%s prior-stage=%s prior-status=%s\n' \
+                "$cleanup_status" "$STAGE" "$primary_status" >&3
               exit "$cleanup_status"
+            fi
+            if [[ "$primary_status" != '0' ]]; then
+              printf '#1799-preflight-stage=%s status=%s\n' "$STAGE" "$primary_status" >&3
             fi
             exit "$primary_status"
           }
@@ -1016,6 +1034,7 @@ jobs:
             "$ROOT/publisher.py" "$ROOT/cleanup.py"
           /bin/chmod 0400 "$ROOT/deny-network.sb" "$ROOT/deny-ps.sb"
 
+          STAGE='allow-control'
           "$ENV_BIN" -i \
             "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
             'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
@@ -1023,6 +1042,7 @@ jobs:
             "$PYTHON" -I -S "$ROOT/network-allow.py" >"$ROOT/allow-control.json" 3>&-
           /bin/chmod 0400 "$ROOT/allow-control.json"
 
+          STAGE='controller'
           "$ENV_BIN" -i \
             "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
             'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
@@ -1036,11 +1056,14 @@ jobs:
             "$PYTHON" -I -S "$ROOT/controller.py" 3>&-
           [[ ! -e "$ROOT" && ! -e "$ROOT.p5-control" && -f "$STAGING" ]]
 
+          STAGE='publisher'
           "$SANDBOX_EXEC" -p "$DENY_NETWORK_PROFILE" "$ENV_BIN" -i \
             "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
             'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
             "HARVEY_ROOT=$ROOT" "HARVEY_STAGING=$STAGING" \
             "HARVEY_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" \
             "$PYTHON" -I -S -c "$PUBLISHER_SOURCE" >&3
+          STAGE='postconditions'
           [[ ! -e "$ROOT" && ! -e "$ROOT.p5-control" && ! -e "$STAGING" ]]
+          STAGE='complete'
           trap - EXIT HUP INT TERM

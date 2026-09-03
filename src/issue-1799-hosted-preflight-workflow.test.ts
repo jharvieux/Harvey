@@ -78,6 +78,11 @@ function workflowErrors(text: string): string[] {
   if (!text.includes("errno.EPERM, errno.EACCES")) errors.push("strict denied errno set");
   if (!allow.includes("socket.AF_INET6") || !allow.includes("socket.AF_UNIX") || !allow.includes("sendto")) errors.push("local allow twins");
   if (!allow.includes('mdns.connect("/private/var/run/mDNSResponder")')) errors.push("exact mDNS allow twin");
+  if (!allow.includes('len(os.fsencode(unix_path)) >= 104')) errors.push("embedded Darwin Unix path budget");
+  if (!script.includes('readonly ROOT="${RUNNER_TEMP%/}/h1799r.${RANDOM_HEX}"')) errors.push("compact AF_UNIX-safe root identity");
+  if (!script.includes('readonly STAGING="${RUNNER_TEMP%/}/h1799c.${RANDOM_HEX}.json"')) errors.push("compact staging identity");
+  if (!script.includes('if (( ALLOW_SOCKET_PATH_BYTES >= 104 )); then')) errors.push("runtime Darwin Unix path budget");
+  if (!script.includes("#1799-preflight-stage=path-budget status=1") || !script.includes("#1799-preflight-stage=%s status=%s")) errors.push("bounded failure stage telemetry");
   if ((text.match(/"networkConnectAttemptsByAuditedPrograms": 11/g) ?? []).length < 2) errors.push("truthful network attempt total");
   if (child.includes('os.path.join(root, "missing.sock")')) errors.push("nonexistent Unix endpoint");
   if (!text.includes('"remoteEndpointsAttempted": 4')) errors.push("truthful remote attempt total");
@@ -146,6 +151,29 @@ describe("#1799 hosted ARM64 egress preflight", () => {
       '"mdnsUnixConnect": denied(socket.AF_UNIX, socket.SOCK_STREAM, os.path.join(root, "missing.sock"), "connect")',
     );
     expect(workflowErrors(mutant)).toContain("nonexistent Unix endpoint");
+  });
+
+  it("keeps the owned Unix control below Darwin's hosted-runner path limit", () => {
+    const runnerTemp = "/Users/runner/work/_temp";
+    const random = "0".repeat(32);
+    const former = `${runnerTemp}/harvey-1799-preflight.33785227101.1.${random}/allow.sock`;
+    const current = `${runnerTemp}/h1799r.${random}/allow.sock`;
+    expect(Buffer.byteLength(former)).toBe(104);
+    expect(Buffer.byteLength(current)).toBeLessThan(104);
+
+    const longRootMutant = workflow.replace(
+      'readonly ROOT="${RUNNER_TEMP%/}/h1799r.${RANDOM_HEX}"',
+      'readonly ROOT="${RUNNER_TEMP%/}/harvey-1799-preflight.${HARVEY_RUN_ID}.${HARVEY_RUN_ATTEMPT}.${RANDOM_HEX}"',
+    );
+    expect(workflowErrors(longRootMutant)).toContain("compact AF_UNIX-safe root identity");
+  });
+
+  it("fails a workflow that hides its bounded failure stage", () => {
+    const mutant = workflow.replace(
+      "printf '#1799-preflight-stage=%s status=%s\\n' \"$STAGE\" \"$primary_status\" >&3",
+      ":",
+    );
+    expect(workflowErrors(mutant)).toContain("bounded failure stage telemetry");
   });
 
   it("fails the Apple Python shim and an undeclared injected runtime key", () => {
