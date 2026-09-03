@@ -369,6 +369,74 @@ describe("canonical request-taint source block (#1221)", () => {
     });
   });
 
+  describe.skipIf(!SEMGREP_PRESENT)("log injection distinguishes request data from request-selected database rows (#1883)", () => {
+    let matched: Set<string>;
+    let fixpointTimeouts: unknown[];
+
+    beforeAll(() => {
+      const dir = mkdtempSync(join(tmpdir(), "harvey-log-database-boundary-probe-"));
+      probeDirs.push(dir);
+      writeFileSync(
+        join(dir, "direct.ts"),
+        "declare function serve(handler: (req: Request) => Promise<void>): void;\n" +
+          "serve(async (req: Request) => {\n" +
+          "  const payload = await req.json();\n" +
+          "  console.log(payload.userId);\n" +
+          "});\n",
+      );
+      writeFileSync(
+        join(dir, "database.ts"),
+        "declare const client: any;\n" +
+          "declare function serve(handler: (req: Request) => Promise<void>): void;\n" +
+          "serve(async (req: Request) => {\n" +
+          "  const payload = await req.json();\n" +
+          "  const [metadata, rows] = await Promise.all([\n" +
+          "    Promise.resolve({ source: 'server' }),\n" +
+          "    client.from('shipmentLine').select('*').eq('id', payload.shipmentId),\n" +
+          "  ]);\n" +
+          "  console.log(rows.data[0].id);\n" +
+          "  console.log(payload.userId);\n" +
+          "});\n",
+      );
+
+      const doc = parse(readFileSync(join(RULES_DIR, "injection.yml"), "utf8")) as { rules?: Array<Record<string, unknown>> };
+      const logRule = doc.rules?.find((rule) => rule.id === "harvey-log-injection");
+      expect(logRule, "injection.yml no longer declares harvey-log-injection").toBeDefined();
+      const rulePath = join(dir, "log-rule.yml");
+      writeFileSync(rulePath, stringify({ rules: [logRule] }));
+      const out = execFileSync(
+        "semgrep",
+        ["--config", rulePath, "--metrics=off", "--no-git-ignore", "--json", "--time", "-j", "1", "--timeout", "0", dir],
+        { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
+      );
+      const parsed = JSON.parse(out) as {
+        results: Array<{ path: string; start: { line: number } }>;
+        errors: unknown[];
+        time?: { fixpoint_timeouts?: unknown[] };
+      };
+      expect(parsed.errors, "the boundary probe did not complete cleanly").toEqual([]);
+      matched = new Set(parsed.results.map((result) => `${result.path.split("/").pop()}:${result.start.line}`));
+      fixpointTimeouts = parsed.time?.fixpoint_timeouts ?? [];
+    });
+
+    it("keeps direct request values as log-injection findings", () => {
+      expect(matched).toEqual(new Set(["database.ts:10", "direct.ts:4"]));
+    });
+
+    it("does not taint stored row bytes merely because a request chose the query", () => {
+      expect(matched.has("database.ts:9")).toBe(false);
+      expect(fixpointTimeouts).toEqual([]);
+    });
+
+    it("binds the sanitizer to the corresponding Promise.all position instead of every .data value", () => {
+      const logRule = parseRules("injection.yml").find((rule) => rule.id === "harvey-log-injection")!;
+      const exact = "const [$FIRST, $DB_RESULT, ...] = await Promise.all([\n  $FIRST_PROMISE,\n  <... $CLIENT.from($TABLE).select(...) ...>,\n  ...\n]);\n";
+      const matchingSanitizers = logRule.sanitizers.filter((sanitizer) => patternStrings(sanitizer).includes(exact));
+      expect(matchingSanitizers).toHaveLength(1);
+      expect(patternStrings(matchingSanitizers[0])).toEqual([exact]);
+    });
+  });
+
   it("is used by every server-side taint rule that is not narrow by design", () => {
     const offenders = ruleFiles()
       .flatMap(parseRules)
