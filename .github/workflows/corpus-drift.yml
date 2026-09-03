@@ -43,9 +43,9 @@ name: corpus-drift
 on:
   schedule:
     - cron: "23 7 * * *" # daily 07:23 UTC (#1883: re-register after 2026-08-28 07:17 never enqueued; keep off minute zero)
-    # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-02
-    # event=schedule attempt on the final merged main SHA; every 10 minutes from 04:07 through 23:57 UTC.
-    - cron: "7,17,27,37,47,57 4-23 2 9 *"
+    # TEMPORARY #1883 live-OSV repair acceptance: remove after the first accepted 2026-09-03
+    # event=schedule attempt on the final merged main SHA; every 10 minutes from 00:07 through 23:57 UTC.
+    - cron: "7,17,27,37,47,57 0-23 3 9 *"
   workflow_dispatch:
     inputs:
       alert_drill:
