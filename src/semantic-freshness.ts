@@ -4,9 +4,9 @@
 // (`/vuln-scan` → `/triage`) with no CLI a job could attach to. Whether a cadence could ever produce
 // that input is a RECORDED claim with a falsifier `--revalidate` re-tests, not one restated here —
 // see the REASON block in src/scored-gates.ts. So the repo's answer for every other gate ("give it a
-// cadence", #1288) does not reach this one, and what a schedule CAN answer is the question one level
-// up: **is the recorded semantic number still inside the window that makes it evidence about the
-// present?**
+// cadence", #1288) does not reach this one. What a schedule CAN do is validate and score a pass that
+// was recorded interactively, then answer whether that semantic evidence is still inside the window
+// that makes it evidence about the present.
 //
 // `MAX_PASS_AGE_MS` already answers that for every other out-of-orchestrator pass: a pass artifact
 // older than 30 days describes a prior state of the target, so it is not evidence that the module
@@ -21,7 +21,13 @@
 // clean bill of health" shape, so the row names its source and the summary counts the fallbacks.
 
 import { MAX_PASS_AGE_MS } from "./audit-pass-artifact.js";
-import { SEMANTIC_CORPUS } from "./scan/semantic-corpus.js";
+import {
+  SEMANTIC_CORPUS,
+  loadSemanticPass,
+  scoreSemanticPass,
+  type SemanticTarget,
+  type SemanticTargetResult,
+} from "./scan/semantic-corpus.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,9 +47,68 @@ interface SemanticFreshnessRow {
 interface SemanticFreshness {
   rows: SemanticFreshnessRow[];
   stale: SemanticFreshnessRow[];
-  /** Targets with no recorded pass artifact at all — running on the measurement doc's date alone. */
+  /** Targets with no accepted semantic artifact — running on the measurement doc's date alone. */
   withoutArtifact: number;
   windowDays: number;
+}
+
+type SemanticArtifactAssessment =
+  | { ok: true; generatedAt: string; score: SemanticTargetResult }
+  | { ok: false; reason: string; score?: SemanticTargetResult };
+
+/**
+ * Selects the semantic member of an accumulated M1 slot, applies the semantic pass's own freshness
+ * validation, and scores its findings against the target's answer key. A fresh connected/live pass
+ * above stale or regressed semantic evidence must not make the semantic freshness alarm green.
+ */
+export function assessSemanticArtifact(
+  raw: unknown,
+  target: SemanticTarget,
+  path: string,
+  now: number,
+): SemanticArtifactAssessment {
+  let loaded: ReturnType<typeof loadSemanticPass>;
+  try {
+    loaded = loadSemanticPass(raw, target, path, now);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `${path} is not a valid accumulated M1 pass slot (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  if (!loaded.ok) return loaded;
+
+  // loadSemanticPass rejects an absent findings field. Check the runtime shape too: JSON can carry
+  // any truthy value, and handing a non-array to scoreSemanticPass would crash the scheduled gate.
+  if (!Array.isArray(loaded.artifact.findings)) {
+    return { ok: false, reason: `${path}'s semantic pass carries a non-array findings value — re-record with --findings <triage.json>` };
+  }
+
+  let score: SemanticTargetResult;
+  try {
+    score = scoreSemanticPass(target, loaded.artifact.findings, loaded.artifact.generatedAt);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `${path}'s semantic findings cannot be scored (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  if (score.regressed) {
+    return {
+      ok: false,
+      reason: `${path}'s semantic pass regressed below the recorded recall floor (${score.positivesCaught} < ${score.recordedCaught})`,
+      score,
+    };
+  }
+  const falsePositives = score.rows.filter((row) => row.kind === "negative" && !row.pass);
+  if (falsePositives.length > 0) {
+    return {
+      ok: false,
+      reason: `${path}'s semantic pass reported recorded non-vulnerabilities: ${falsePositives.map((row) => row.id).join(", ")}`,
+      score,
+    };
+  }
+  return { ok: true, generatedAt: loaded.artifact.generatedAt, score };
 }
 
 /**
