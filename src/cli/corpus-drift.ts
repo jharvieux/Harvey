@@ -683,6 +683,7 @@ const advisoryObservation: CorpusAdvisoryObservationArtifact | undefined = advis
   expectedTargets: targets.map(({ slug, repo, commit }) => ({ slug, repo, pin: commit })),
   targets: {},
 } : undefined;
+const advisoryFindingChanges: { slug: string; detail: string }[] = [];
 const persistAdvisoryObservation = (): void => {
   if (advisoryObservationPath && advisoryObservation) writeCorpusAdvisoryObservation(advisoryObservationPath, advisoryObservation);
 };
@@ -764,6 +765,7 @@ for (const target of targets) {
       skipBundleScan: true,
       advisorySnapshot: deterministicSnapshot,
       advisoryParitySnapshot: externalStateMode === "live-verify" ? snapshot : undefined,
+      advisoryFindingChangeDisposition: externalStateMode === "live-verify" ? "record" : "throw",
       onAdvisoryObservation: advisoryObservation ? (comparison) => {
         advisoryObservation.targets[target.slug] = {
           ...advisoryObservation.targets[target.slug]!,
@@ -772,6 +774,12 @@ for (const target of targets) {
           comparison,
         };
         persistAdvisoryObservation();
+        if (comparison.status === "finding-change") {
+          advisoryFindingChanges.push({
+            slug: target.slug,
+            detail: `live OSV findings differ from committed snapshot ${snapshot!.digest} captured ${snapshot!.capturedAt}; ${comparison.semantic.added.length} added, ${comparison.semantic.removed.length} removed, ${comparison.semantic.changed.length} changed`,
+          });
+        }
       } : undefined,
       secretCandidateIdentity,
       phaseCache: currentPlan?.phaseCache ?? (targetPhaseCacheDir ? buildMechanicalPhaseCache({
@@ -995,10 +1003,17 @@ for (const target of targets) {
 }
 
 if (advisoryObservation) {
-  advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every(({ slug }) => ["equal", "metadata-only"].includes(advisoryObservation.targets[slug]?.status ?? ""));
+  advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every(({ slug }) => ["equal", "metadata-only", "finding-change"].includes(advisoryObservation.targets[slug]?.status ?? ""));
   advisoryObservation.completedAt = new Date().toISOString();
   persistAdvisoryObservation();
 }
+
+for (const change of advisoryFindingChanges) rows.push({
+  slug: change.slug,
+  check: "live OSV advisory parity",
+  pass: false,
+  detail: change.detail,
+});
 
 if (!m8) {
   const missingMechanicalTargets = targets.map((target) => target.slug).filter((slug) => !(slug in detectorRecordsBySlug));

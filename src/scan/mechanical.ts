@@ -77,6 +77,7 @@ interface MechanicalScanOptions {
   phaseCache?: MechanicalPhaseCacheOptions;
   advisorySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string; expiresAt: string; osvScannerVersion: string };
   advisoryParitySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string };
+  advisoryFindingChangeDisposition?: "throw" | "record";
   onAdvisoryObservation?: (receipt: CorpusAdvisoryComparisonReceipt) => void;
   secretCandidateIdentity?: string;
 }
@@ -203,7 +204,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
         snapshotFindings: snapshotDependency.findingsByDetector["osv-advisories"] ?? [],
       });
       opts.onAdvisoryObservation?.(advisoryObservation);
-      if (advisoryObservation.status === "finding-change") {
+      if (advisoryObservation.status === "finding-change" && opts.advisoryFindingChangeDisposition !== "record") {
         throw new CorpusAdvisoryFindingChangeError(
           `live OSV findings differ from committed corpus snapshot ${advisoryParitySnapshot.digest} captured ${advisoryParitySnapshot.capturedAt}; scheduled freshness detected a delivered-finding change`,
           advisoryObservation,

@@ -81,4 +81,22 @@ describe("mechanical live advisory parity (#1883)", () => {
       semantic: { equal: false, added: [], removed: [], changed: [{ fields: expect.arrayContaining(["title"]) }] },
     }]);
   });
+
+  it("returns the live findings and receipt when the corpus caller records a complete population", async () => {
+    const observations: unknown[] = [];
+    const scan = await runMechanicalScanDetailed({
+      dir,
+      skipNetworkChecks: true,
+      advisorySnapshot: {
+        result: parityInput(undefined, "changed advisory"),
+        digest: "a".repeat(64), capturedAt: "2026-08-28T00:00:00Z", expiresAt: "2026-09-04T00:00:00Z", osvScannerVersion: "2.3.8",
+      },
+      advisoryParitySnapshot: { result: parityInput(), digest: "b".repeat(64), capturedAt: "2026-08-27T00:00:00Z" },
+      advisoryFindingChangeDisposition: "record",
+      onAdvisoryObservation: (receipt) => observations.push(receipt),
+    });
+    expect(scan.advisoryObservation?.status).toBe("finding-change");
+    expect(observations).toEqual([scan.advisoryObservation]);
+    expect(scan.findings.some((finding) => finding.id === "DEP-OSV-GHSA-fixture-fixture-dep@1.0.0")).toBe(true);
+  });
 });

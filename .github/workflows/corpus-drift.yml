@@ -636,12 +636,12 @@ jobs:
       # run (schedule/dispatch) writes that canonical name directly, so nothing about the
       # prior-snapshot lineage changes on the path that feeds it.
       - name: Upload drift scorecard
-        if: always() && needs.prepare-current-inputs.outputs.relevant == 'true'
+        if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill
         uses: actions/upload-artifact@v4
         with:
           name: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && format('corpus-drift-scorecard-part-{0}', matrix.shard) || 'corpus-drift-scorecard' }}
           path: corpus-drift*.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
       # #1509: this job failed at SETUP for days (the poisoned pipx cache) and reported nothing a
       # reader could tell apart from "ran and found no drift", while PR #1447 merged on three green

@@ -34,6 +34,9 @@ function transportWorkflowErrors(text: string, cli = corpusCli): string[] {
   if (text.includes("corpus-phase-run-v5-") || text.includes("corpus-phase-main-v5-")) errors.push("legacy v5 fallback");
   if ((text.match(/github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/g) ?? []).length < 12) errors.push("schedule four-owner activation");
   if (!/name: Upload drift scorecard\n\s+if: always\(\)/.test(text)) errors.push("scorecard failure delivery");
+  const scorecardUpload = artifactUploads(text).find((step) => String(step.with.name).includes("corpus-drift-scorecard"));
+  if (scorecardUpload?.with["if-no-files-found"] !== "error") errors.push("scorecard missing evidence");
+  if (!scorecardUpload?.if?.includes("!inputs.liveness_drill") || !scorecardUpload.if.includes("!inputs.alert_drill")) errors.push("scorecard drill isolation");
   if (!/name: Upload live advisory observation\n\s+if: always\(\).*github\.event_name == 'schedule'.*github\.event_name == 'workflow_dispatch'/.test(text)) errors.push("live advisory failure delivery");
   const advisoryUpload = artifactUploads(text).find((step) => step.with.name === "corpus-advisory-observation");
   if (advisoryUpload?.uses !== "actions/upload-artifact@v4") errors.push("live advisory action version");
@@ -666,6 +669,15 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     ["shared parent path", workflow.replace("path: .harvey-corpus-phase-cache/shard3", "path: .harvey-corpus-phase-cache")],
     ["scheduled single transport", workflow.replaceAll(" || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'", "")],
     ["scorecard success-only", workflow.replace("name: Upload drift scorecard\n        if: always()", "name: Upload drift scorecard\n        if: success()")],
+    ["scorecard missing file is tolerated", workflow.replace("path: corpus-drift*.json\n          if-no-files-found: error", "path: corpus-drift*.json\n          if-no-files-found: warn")],
+    ["scorecard includes alert drills", workflow.replace(
+      "if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill",
+      "if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill",
+    )],
+    ["scorecard includes liveness drills", workflow.replace(
+      "if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.liveness_drill && !inputs.alert_drill",
+      "if: always() && needs.prepare-current-inputs.outputs.relevant == 'true' && !inputs.alert_drill",
+    )],
     ["advisory observation success-only", workflow.replace("name: Upload live advisory observation\n        if: always()", "name: Upload live advisory observation\n        if: success()")],
     ["advisory observation missing file is tolerated", workflow.replace("name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: error", "name: corpus-advisory-observation\n          path: corpus-advisory-observation.json\n          if-no-files-found: warn")],
     ["advisory observation includes alert drills", workflow.replace(" && !inputs.alert_drill", "")],
@@ -750,7 +762,12 @@ describe("#1864 corpus phase-cache workflow contract", () => {
     expect(workflow).toMatch(/name: Upload drift scorecard\n\s+if: always\(\)/);
     expect(workflow).toMatch(/name: Gate liveness — did this job actually score anything\?\n\s+if: always\(\)/);
     expect(workflow).toContain(`if [ "$result" != "success" ]`);
-    expect(workflow).toContain("if-no-files-found: warn");
+    const scorecardUpload = artifactUploads(workflow).find((step) => String(step.with.name).includes("corpus-drift-scorecard"));
+    expect(scorecardUpload).toMatchObject({
+      if: expect.stringContaining("!inputs.liveness_drill"),
+      with: { "if-no-files-found": "error" },
+    });
+    expect(scorecardUpload?.if).toContain("!inputs.alert_drill");
   });
 
   it("materializes one exact Semgrep input and makes every producer and replay reuse it", () => {
