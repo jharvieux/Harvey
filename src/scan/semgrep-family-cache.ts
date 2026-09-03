@@ -60,6 +60,7 @@ export interface SemgrepPartitionPlanReceipt {
   ownedTaintRuleIds: string[];
   argv: string[];
   route?: SemgrepRoutingManifestEntry;
+  capsule?: SemgrepRoutedCapsuleReceipt;
 }
 
 export interface SemgrepPartitionSemanticReceipt extends Omit<SemgrepCommandSemanticReceipt, "attempt" | "components" | "loadedTaintRuleIds" | "taintCoverage"> {
@@ -71,6 +72,22 @@ export interface SemgrepPartitionSemanticReceipt extends Omit<SemgrepCommandSema
   ownedRuleIds: string[];
   ownedTaintRuleIds: string[];
   route?: SemgrepRoutingManifestEntry;
+  capsule?: SemgrepRoutedCapsuleReceipt;
+}
+
+export interface SemgrepRoutedCapsuleReceipt {
+  policy: "content-addressed-target-config-v1";
+  identitySha256: string;
+  config: "<SEMGREP_ROUTED_CAPSULE>/config.yml";
+  target: string;
+}
+
+export function semgrepRoutedCapsuleIdentity(configSha256: string, route: SemgrepRoutingManifestEntry): string {
+  return digest({
+    policy: "content-addressed-target-config-v1",
+    configSha256,
+    route: { path: route.path, bytes: route.bytes, contentSha256: route.contentSha256 },
+  });
 }
 
 export interface SemgrepRoutingSelectorReceipt {
@@ -118,7 +135,7 @@ export interface SemgrepFamilyExecutionReceipt {
   selector?: SemgrepRoutingSelectorReceipt;
   routingManifest?: SemgrepRoutingManifestReceipt;
   argv: string[];
-  topology: "single-command-v1" | "rule-and-size-routed-file-isolation-v1";
+  topology: "single-command-v1" | "rule-and-size-routed-file-capsule-v2";
   mergeAlgorithm: "single-command-v1" | "canonical-routed-semgrep-family-output-v1";
   partitions: SemgrepPartitionPlanReceipt[];
   verification: "single" | "paired-cold-exact" | "paired-topology-exact";
@@ -345,7 +362,7 @@ function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: s
     || !/^[a-f0-9]{64}$/.test(receipt.configSha256 ?? "") || !/^[a-f0-9]{64}$/.test(receipt.sourceConfigSha256 ?? "")
     || (receipt.semanticObjectSha256 !== undefined && !/^[a-f0-9]{64}$/.test(receipt.semanticObjectSha256))
     || !Array.isArray(receipt.argv) || receipt.argv.length === 0
-    || (receipt.topology !== "single-command-v1" && receipt.topology !== "rule-and-size-routed-file-isolation-v1")
+    || (receipt.topology !== "single-command-v1" && receipt.topology !== "rule-and-size-routed-file-capsule-v2")
     || (receipt.mergeAlgorithm !== "single-command-v1" && receipt.mergeAlgorithm !== "canonical-routed-semgrep-family-output-v1")
     || !Array.isArray(receipt.partitions)
     || (receipt.verification !== "single" && receipt.verification !== "paired-cold-exact" && receipt.verification !== "paired-topology-exact")
@@ -381,7 +398,8 @@ function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: s
     if (receipt.routingManifest.sha256 !== digest({ selector, entries })
       || entries.some((entry, ordinal) => entry.ordinal !== ordinal || entry.component !== `log-file-${String(ordinal + 1).padStart(3, "0")}`
         || !selector.extensions.includes(entry.type) || entry.bytes <= selector.lowerExclusiveBytes || entry.bytes >= selector.upperExclusiveBytes
-        || !/^[a-f0-9]{64}$/.test(entry.contentSha256) || entry.path.startsWith("/") || entry.path.split("/").some((part) => selector.excludedDirectories.includes(part as ".git" | "node_modules")))
+        || !/^[a-f0-9]{64}$/.test(entry.contentSha256) || entry.path.startsWith("/")
+        || entry.path.split("/").some((part) => part.length === 0 || part === ".." || selector.excludedDirectories.includes(part as ".git" | "node_modules")))
       || new Set(entries.map((entry) => entry.path)).size !== entries.length
       || stable(entries.map((entry) => entry.path)) !== stable(entries.map((entry) => entry.path).sort(comparePosixRelativePaths))) {
       throw new Error("artifact routed manifest identity/order is malformed");
@@ -395,7 +413,13 @@ function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: s
       || complement.target !== "<SEMGREP_TARGET_ROOT>" || complement.ownedRuleIds.length !== 29 || complement.ownedRuleIds.includes("harvey-log-injection")
       || isolated.some((component, index) => component.ordinal !== index + 1 || component.id !== entries[index]!.component
         || component.component !== "log-isolated-file" || component.target !== `<SEMGREP_TARGET_ROOT>/${entries[index]!.path}`
-        || stable(component.route) !== stable(entries[index]) || stable(component.ownedRuleIds) !== stable(["harvey-log-injection"]))
+        || stable(component.route) !== stable(entries[index]) || stable(component.ownedRuleIds) !== stable(["harvey-log-injection"])
+        || component.capsule?.policy !== "content-addressed-target-config-v1"
+        || component.capsule.identitySha256 !== semgrepRoutedCapsuleIdentity(component.configSha256, entries[index]!)
+        || component.capsule.config !== "<SEMGREP_ROUTED_CAPSULE>/config.yml"
+        || component.capsule.target !== `<SEMGREP_ROUTED_CAPSULE>/target/${entries[index]!.path}`
+        || stable(component.argv) !== stable(["--x-ignore-semgrepignore-files", "--x-parmap", "-j", "1", "--config", component.capsule.config, "--disable-nosem", "--timeout", "0", "--json", "--verbose", "--time", component.capsule.target]))
+      || remainder?.capsule !== undefined || complement?.capsule !== undefined
       || [...receipt.partitions].some((partition) => !/^[a-f0-9]{64}$/.test(partition.configSha256) || !Array.isArray(partition.argv) || !Array.isArray(partition.ownedTaintRuleIds)
         || partition.ownedTaintRuleIds.some((id) => !partition.ownedRuleIds.includes(id))
         || partition.argv.includes("--exclude") || partition.argv.slice(0, 4).join(" ") !== "--x-ignore-semgrepignore-files --x-parmap -j 1")) {
@@ -415,7 +439,7 @@ function assertSuccessfulSemgrepFamilyExecutionReceipt(value: unknown, family: s
         const plan = receipt.partitions[ordinal]!;
         assertSemanticReceipt({ ...component, attempt: attempt.attempt }, undefined, true);
         if (component.ordinal !== ordinal || component.id !== plan.id || component.component !== plan.component || component.target !== plan.target
-          || component.configSha256 !== plan.configSha256 || stable(component.route) !== stable(plan.route)
+          || component.configSha256 !== plan.configSha256 || stable(component.route) !== stable(plan.route) || stable(component.capsule) !== stable(plan.capsule)
         || stable(component.ownedRuleIds) !== stable(plan.ownedRuleIds) || stable(component.ownedTaintRuleIds) !== stable(plan.ownedTaintRuleIds)
         || stable(component.argv) !== stable(plan.argv)) {
           throw new Error("artifact routed component receipt differs from its bound topology");
