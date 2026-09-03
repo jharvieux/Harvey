@@ -1925,7 +1925,9 @@ rules:
       # post-shipment function: the second Supabase result in two Promise.all calls flowed into
       # internal job IDs at log lines 1114/1691. Those rows moved across byte-identical hosted/local
       # executions and pushed the taint engine over its fixpoint bound; the direct request log at
-      # line 40 never moved. Bind the result to the matching SECOND query position explicitly.
+      # line 40 never moved. The same false provenance also reached create/index.ts:1431 when it
+      # logged the returned trackedEntities object; its direct request log at line 1407 remains.
+      # Bind the result to the matching SECOND query position explicitly.
       # A generic `[..., $RESULT, ...]` pair would be unsound: its two ellipses can select different
       # positions and could clear an actual request promise merely because another promise queried
       # the database. The executable probe keeps that mixed case live and this exact stored-result

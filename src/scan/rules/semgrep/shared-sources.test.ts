@@ -395,6 +395,7 @@ describe("canonical request-taint source block (#1221)", () => {
           "    client.from('shipmentLine').select('*').eq('id', payload.shipmentId),\n" +
           "  ]);\n" +
           "  console.log(rows.data[0].id);\n" +
+          "  console.log({ rows });\n" +
           "  console.log(payload.userId);\n" +
           "});\n",
       );
@@ -420,11 +421,12 @@ describe("canonical request-taint source block (#1221)", () => {
     });
 
     it("keeps direct request values as log-injection findings", () => {
-      expect(matched).toEqual(new Set(["database.ts:10", "direct.ts:4"]));
+      expect(matched).toEqual(new Set(["database.ts:11", "direct.ts:4"]));
     });
 
     it("does not taint stored row bytes merely because a request chose the query", () => {
       expect(matched.has("database.ts:9")).toBe(false);
+      expect(matched.has("database.ts:10")).toBe(false);
       expect(fixpointTimeouts).toEqual([]);
     });
 
