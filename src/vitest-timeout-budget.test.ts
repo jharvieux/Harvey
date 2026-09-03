@@ -13,19 +13,86 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { HEAVY_CLI_TESTS } from "./heavy-cli-tests.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// vitest's per-test / per-hook timeout is the trailing numeric argument of `it`/`test`/`describe`/
-// `beforeAll`, i.e. a `}` closing the callback followed by `, <number>)`. Deliberately NOT
-// `timeout:` — that spelling belongs to execFileSync/spawnSync options in half these files, and a
-// pattern that conflated the two would fail on child-process budgets this rule has no opinion about.
-const TRAILING_TIMEOUT = /\n[ \t]*\}\s*,\s*([\d_]+)\s*\)\s*;/g;
+// Vitest accepts both a trailing positional timeout (`it(name, fn, 30_000)`) and an options object
+// (`it(name, { timeout: 30_000 }, fn)`). A text pattern for the former missed the latter and let 12
+// redundant central-value overrides accumulate. Parse each discovered test file instead: Vitest
+// import identity excludes child-process/VM options and includes aliased APIs plus vi.setConfig;
+// direct numeric literals keep the ratchet scoped to ad-hoc constants.
+const VITEST_TIMEOUT_CALLS = new Set(["it", "test", "describe", "beforeAll", "beforeEach", "afterAll", "afterEach"]);
+const VITEST_CONFIG_TIMEOUTS = new Set(["testTimeout", "hookTimeout"]);
+
+function expressionPath(expression: ts.Expression): string[] | undefined {
+  if (ts.isIdentifier(expression)) return [expression.text];
+  if (ts.isCallExpression(expression)) return expressionPath(expression.expression);
+  if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isNonNullExpression(expression)) return expressionPath(expression.expression);
+  if (ts.isPropertyAccessExpression(expression)) {
+    const parent = expressionPath(expression.expression);
+    return parent ? [...parent, expression.name.text] : undefined;
+  }
+  if (ts.isElementAccessExpression(expression) && expression.argumentExpression && ts.isStringLiteralLike(expression.argumentExpression)) {
+    const parent = expressionPath(expression.expression);
+    return parent ? [...parent, expression.argumentExpression.text] : undefined;
+  }
+  return undefined;
+}
+
+function propertyName(name: ts.PropertyName): string | undefined {
+  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+}
 
 function timeoutLiteralsIn(source: string): string[] {
-  return [...source.matchAll(TRAILING_TIMEOUT)].map((m) => m[1] ?? "");
+  const file = ts.createSourceFile("candidate.test.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const calls = new Set<string>();
+  const configApis = new Set<string>();
+  const namespaces = new Set<string>();
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== "vitest") continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+      continue;
+    }
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (VITEST_TIMEOUT_CALLS.has(imported)) calls.add(element.name.text);
+      if (imported === "vi") configApis.add(element.name.text);
+    }
+  }
+
+  const literals: string[] = [];
+  const addNumeric = (node: ts.Expression): void => {
+    if (ts.isNumericLiteral(node)) literals.push(node.getText(file));
+  };
+  const addObjectProperties = (node: ts.Expression, names: ReadonlySet<string>): void => {
+    if (!ts.isObjectLiteralExpression(node)) return;
+    for (const member of node.properties) {
+      if (ts.isPropertyAssignment(member) && names.has(propertyName(member.name) ?? "")) addNumeric(member.initializer);
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const path = expressionPath(node.expression);
+      const importedCall = path && (calls.has(path[0] ?? "") || (namespaces.has(path[0] ?? "") && VITEST_TIMEOUT_CALLS.has(path[1] ?? "")));
+      if (importedCall) {
+        for (const argument of node.arguments) {
+          addNumeric(argument);
+          addObjectProperties(argument, new Set(["timeout"]));
+        }
+      }
+      const setConfig = path && ((configApis.has(path[0] ?? "") && path[1] === "setConfig") || (namespaces.has(path[0] ?? "") && path[1] === "vi" && path[2] === "setConfig"));
+      if (setConfig) for (const argument of node.arguments) addObjectProperties(argument, VITEST_CONFIG_TIMEOUTS);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return literals;
 }
 
 /**
@@ -83,6 +150,7 @@ describe("the light suite has one measured timeout, not a literal per incident (
     const config = readFileSync(join(REPO_ROOT, "vitest.config.ts"), "utf8");
     const declared = /const TIMEOUT_MS = ([\d_]+);/.exec(config)?.[1];
     expect(declared, "vitest.config.ts no longer declares a single TIMEOUT_MS — #1715's whole point is that the number lives in exactly one place, with its measurement beside it").toBeDefined();
+    expect(declared, "#1715's measured central timeout changed — remeasure the light suite before changing its 30s test/hook budget").toBe("30_000");
     expect(config).toContain("testTimeout: TIMEOUT_MS");
     expect(config).toContain("hookTimeout: TIMEOUT_MS");
     // Inside #1120's standing ceiling: no single blocking window may approach vitest's hardcoded
@@ -90,13 +158,14 @@ describe("the light suite has one measured timeout, not a literal per incident (
     expect(Number((declared ?? "0").replaceAll("_", ""))).toBeLessThan(60_000);
   });
 
-  it("NEGATIVE CONTROL: the detector reads a real literal, and is not satisfied by its absence", () => {
-    // The same function the assertions above run, against sources whose answer is known — so a
-    // matcher that stopped matching (or one that matched everything) fails here rather than turning
-    // the ratchet above into a green no-op.
-    expect(timeoutLiteralsIn("it('x', async () => {\n  await go();\n}, 30_000);\n")).toEqual(["30_000"]);
-    expect(timeoutLiteralsIn("it('x', () => {\n  expect(1).toBe(1);\n});\n")).toEqual([]);
-    // A child-process budget is not a test timeout and must not be counted as one.
+  it("NEGATIVE CONTROL: the AST detector covers positional and object timeout literals without matching unrelated options", () => {
+    expect(timeoutLiteralsIn("import { it } from 'vitest';\nit('x', async () => {\n  await go();\n}, 30_000);\n")).toEqual(["30_000"]);
+    expect(timeoutLiteralsIn("import { test as spec } from 'vitest';\nspec('x', { timeout: 30_000 }, async () => {\n  await go();\n});\n")).toEqual(["30_000"]);
+    expect(timeoutLiteralsIn("import * as Vitest from 'vitest';\nVitest.describe('x', { timeout: 30_000 }, () => {});\n")).toEqual(["30_000"]);
+    expect(timeoutLiteralsIn("import { vi as runtime } from 'vitest';\nruntime.setConfig({ testTimeout: 30_000, hookTimeout: 60_000 });\n")).toEqual(["30_000", "60_000"]);
+    expect(timeoutLiteralsIn("import { describe } from 'vitest';\ndescribe('x', { retry: 2, concurrent: true }, () => {});\n")).toEqual([]);
+    expect(timeoutLiteralsIn("import { it } from './fixture.js';\nit('x', () => {}, 30_000);\n")).toEqual([]);
     expect(timeoutLiteralsIn("execFileSync('sh', ['-c', c], { timeout: 60_000 });\n")).toEqual([]);
+    expect(timeoutLiteralsIn("runInNewContext(source, context, { timeout: 1_000 });\n")).toEqual([]);
   });
 });

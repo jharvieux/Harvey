@@ -181,7 +181,7 @@ describe("dry-run-scorecard reads the recorded pen-test scorecard through its ow
 
   const written = () => JSON.parse(readFileSync(join(dir, "scorecard.json"), "utf8")) as { bugs: { id: string; status: string; tier?: string; note?: string }[] };
 
-  it("resolves the M2 rows against the scorecard the flag names, and says which run they came from", { timeout: 30_000 }, () => {
+  it("resolves the M2 rows against the scorecard the flag names, and says which run they came from", () => {
     const card: DynamicScorecard = {
       target: "http://127.0.0.1:9999",
       generatedAt: "2026-07-31T00:00:00.000Z",
@@ -203,7 +203,7 @@ describe("dry-run-scorecard reads the recorded pen-test scorecard through its ow
 
   // The other direction: a named-but-missing file is a hard error, never a silent fall back to
   // requires-live-run — which would read as "no live run has happened yet" when one just did.
-  it("exits non-zero when the named scorecard does not exist", { timeout: 30_000 }, () => {
+  it("exits non-zero when the named scorecard does not exist", () => {
     try {
       run(["--dynamic-scorecard", join(dir, "absent.json")]);
       throw new Error("expected a non-zero exit");
