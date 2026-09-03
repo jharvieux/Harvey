@@ -1,5 +1,4 @@
-# PROPOSED / UNAUTHORIZED: synthetic-only #1799 capability preflight bytes.
-# Do not merge or dispatch without independent exact-byte review and direct user approval.
+# Synthetic-only #1799 capability preflight. It never checks out or scans a target.
 name: "#1799 hosted ARM64 capability preflight"
 
 on:
@@ -13,20 +12,12 @@ concurrency:
 
 jobs:
   capability-preflight:
-    name: nonauthorizing synthetic ps/sandbox capability preflight
+    name: synthetic process and Seatbelt egress preflight
     runs-on: macos-15
     timeout-minutes: 10
     steps:
       - name: Run, tear down, validate, then publish the synthetic preflight
         shell: /bin/bash --noprofile --norc -euo pipefail {0}
-        env:
-          HARVEY_EVENT_NAME: ${{ github.event_name }}
-          HARVEY_HEAD_SHA: ${{ github.sha }}
-          HARVEY_REF: ${{ github.ref }}
-          HARVEY_REPOSITORY: ${{ github.repository }}
-          HARVEY_RUN_ATTEMPT: ${{ github.run_attempt }}
-          HARVEY_RUN_ID: ${{ github.run_id }}
-          HARVEY_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
           exec 3>&1
@@ -34,9 +25,17 @@ jobs:
 
           readonly EXPECTED_PATH='.github/workflows/issue-1799-hosted-preflight.yml'
           readonly FIXED_PATH='/usr/bin:/bin:/usr/sbin:/sbin'
-          readonly PYTHON='/usr/bin/python3'
+          readonly PYTHON="$(/usr/bin/xcrun --find python3)"
           readonly SANDBOX_EXEC='/usr/bin/sandbox-exec'
           readonly ENV_BIN='/usr/bin/env'
+          readonly EXPECTED_DENY_NETWORK_PROFILE_SHA256='9c5b74ccb7b1548dff667033de6f0b70fd71aa836247c164b64ba8bfdaeb4a3b'
+          readonly HARVEY_EVENT_NAME="$GITHUB_EVENT_NAME"
+          readonly HARVEY_HEAD_SHA="$GITHUB_SHA"
+          readonly HARVEY_REF="$GITHUB_REF"
+          readonly HARVEY_REPOSITORY="$GITHUB_REPOSITORY"
+          readonly HARVEY_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT"
+          readonly HARVEY_RUN_ID="$GITHUB_RUN_ID"
+          readonly HARVEY_WORKFLOW_REF="$GITHUB_WORKFLOW_REF"
 
           [[ "$HARVEY_EVENT_NAME" == 'workflow_dispatch' ]]
           [[ "$HARVEY_REF" == 'refs/heads/main' ]]
@@ -45,9 +44,9 @@ jobs:
           [[ "$HARVEY_RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$HARVEY_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$HARVEY_WORKFLOW_REF" == "$HARVEY_REPOSITORY/$EXPECTED_PATH@$HARVEY_REF" ]]
-          [[ "$RUNNER_OS" == 'macOS' ]]
-          [[ "$RUNNER_ARCH" == 'ARM64' ]]
+          [[ "$RUNNER_OS" == 'macOS' && "$RUNNER_ARCH" == 'ARM64' ]]
           [[ "$(/usr/bin/uname -m)" == 'arm64' ]]
+          [[ "$PYTHON" == /* && "$PYTHON" != *$'\n'* && -x "$PYTHON" ]]
           [[ "$ImageOS" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
           [[ "$ImageVersion" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
           [[ "$RUNNER_TEMP" == /* && "$RUNNER_TEMP" != *$'\n'* ]]
@@ -65,138 +64,105 @@ jobs:
           CONTROLLER_READ_STATUS='0'
           IFS= read -r -d '' CONTROLLER_SOURCE <<'PY' || CONTROLLER_READ_STATUS="$?"
           from __future__ import annotations
-
           import errno
           import hashlib
           import json
           import os
           import re
+          import signal
           import stat
           import subprocess
           import sys
           import time
 
-          PS_QUERY = ["/bin/ps", "-axo", "pid=,ppid=,pgid=,stat="]
+          EXPECTED_DENY_NETWORK_PROFILE_SHA256 = "9c5b74ccb7b1548dff667033de6f0b70fd71aa836247c164b64ba8bfdaeb4a3b"
           WORKFLOW_PATH = ".github/workflows/issue-1799-hosted-preflight.yml"
-          BASE_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR"}
+          PS_QUERY = ["/bin/ps", "-axo", "pid=,ppid=,pgid=,stat="]
+          BASE_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "__CF_USER_TEXT_ENCODING"}
           PUBLIC_KEYS = {
               "HARVEY_EVENT_NAME", "HARVEY_HEAD_SHA", "HARVEY_IMAGE_OS",
               "HARVEY_IMAGE_VERSION", "HARVEY_REF", "HARVEY_REPOSITORY",
               "HARVEY_RUN_ATTEMPT", "HARVEY_RUN_ID", "HARVEY_RUNNER_ARCH",
               "HARVEY_RUNNER_OS", "HARVEY_RUNNER_TEMP", "HARVEY_WORKFLOW_REF",
           }
-          PRE_ROOT_KEYS = BASE_KEYS | PUBLIC_KEYS | {"HARVEY_MODE"}
-          RUN_KEYS = PRE_ROOT_KEYS | {"TMPDIR", "HARVEY_ROOT", "HARVEY_STAGING"}
-          CHILD_KEYS = BASE_KEYS | {"TMPDIR", "HARVEY_ROOT"}
+          RUN_KEYS = BASE_KEYS | PUBLIC_KEYS | {"TMPDIR", "HARVEY_ROOT", "HARVEY_STAGING"}
           EXPECTED_FILES = {
-              "controller.py": 0o500,
-              "helper.py": 0o500,
-              "helper-descendant.py": 0o500,
-              "network-child.py": 0o500,
-              "network-grandchild.py": 0o500,
+              "allow-control.json": 0o400, "cleanup.py": 0o500,
+              "controller.py": 0o500, "deny-network.sb": 0o400,
+              "deny-ps.sb": 0o400, "helper-descendant.py": 0o500,
+              "helper.py": 0o500, "network-allow.py": 0o500,
+              "network-child.py": 0o500, "network-grandchild.py": 0o500,
               "publisher.py": 0o500,
-              "cleanup.py": 0o500,
-              "deny-network.sb": 0o400,
-              "deny-ps.sb": 0o400,
           }
+          DENIED_ERRNOS = {errno.EPERM, errno.EACCES}
 
-          class ControlledStop(Exception):
+          class Rejected(Exception):
               pass
 
           def require(value: bool) -> None:
               if not value:
-                  raise ControlledStop()
-
-          def bounded(value: str, pattern: str) -> bool:
-              return re.fullmatch(pattern, value) is not None
-
-          def validate_public_environment(expected_keys: set[str]) -> None:
-              require(set(os.environ) == expected_keys)
-              require(os.environ["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin")
-              require(os.environ["HOME"] == "/var/empty")
-              require(os.environ["LANG"] == "C")
-              require(os.environ["LC_ALL"] == "C")
-              require(os.environ["TZ"] == "UTC")
-              require(os.environ["TERM"] == "dumb")
-              require(os.environ["NO_COLOR"] == "1")
-              require(os.environ["HARVEY_EVENT_NAME"] == "workflow_dispatch")
-              require(os.environ["HARVEY_REF"] == "refs/heads/main")
-              require(os.environ["HARVEY_RUN_ATTEMPT"] == "1")
-              require(bounded(os.environ["HARVEY_HEAD_SHA"], r"[0-9a-f]{40}"))
-              require(bounded(os.environ["HARVEY_RUN_ID"], r"[0-9]+"))
-              require(bounded(os.environ["HARVEY_REPOSITORY"], r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))
-              expected_ref = f'{os.environ["HARVEY_REPOSITORY"]}/{WORKFLOW_PATH}@refs/heads/main'
-              require(os.environ["HARVEY_WORKFLOW_REF"] == expected_ref)
-              require(os.environ["HARVEY_RUNNER_OS"] == "macOS")
-              require(os.environ["HARVEY_RUNNER_ARCH"] == "ARM64")
-              require(bounded(os.environ["HARVEY_IMAGE_OS"], r"[A-Za-z0-9._-]{1,64}"))
-              require(bounded(os.environ["HARVEY_IMAGE_VERSION"], r"[A-Za-z0-9._-]{1,64}"))
-              require(os.path.isabs(os.environ["HARVEY_RUNNER_TEMP"]))
-              uname = subprocess.run(
-                  ["/usr/bin/uname", "-m"],
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.DEVNULL,
-                  check=False,
-              )
-              require(uname.returncode == 0 and uname.stdout == b"arm64\n")
-
-          def sha256_bytes(value: bytes) -> str:
-              return hashlib.sha256(value).hexdigest()
+                  raise Rejected()
 
           def sha256_file(path: str) -> str:
               digest = hashlib.sha256()
               with open(path, "rb", buffering=0) as handle:
-                  while True:
-                      block = handle.read(65536)
-                      if not block:
-                          break
+                  while block := handle.read(65536):
                       digest.update(block)
               return digest.hexdigest()
 
-          def identity(path: str, expose_path: bool) -> dict[str, object]:
-              info = os.stat(path, follow_symlinks=True)
-              result: dict[str, object] = {
+          def identity(path: str, disclose_path: bool) -> dict[str, object]:
+              info = os.stat(path)
+              value: dict[str, object] = {
                   "mode": oct(stat.S_IMODE(info.st_mode)),
                   "sha256": sha256_file(path),
                   "uid": info.st_uid,
               }
-              if expose_path:
-                  result["path"] = path
-              else:
-                  result["pathSha256"] = sha256_bytes(path.encode("ascii"))
-              return result
+              value["path" if disclose_path else "pathSha256"] = (
+                  path if disclose_path else hashlib.sha256(path.encode("ascii")).hexdigest()
+              )
+              return value
+
+          def validate_environment() -> None:
+              require(set(os.environ) == RUN_KEYS)
+              require(os.environ["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin")
+              require(os.environ["HOME"] == "/var/empty")
+              require(os.environ["LANG"] == "C" and os.environ["LC_ALL"] == "C")
+              require(os.environ["TZ"] == "UTC" and os.environ["TERM"] == "dumb")
+              require(os.environ["NO_COLOR"] == "1")
+              require(re.fullmatch(r"0x[0-9A-F]+:0x[0-9A-F]+:0x[0-9A-F]+", os.environ["__CF_USER_TEXT_ENCODING"]) is not None)
+              require(os.environ["HARVEY_EVENT_NAME"] == "workflow_dispatch")
+              require(os.environ["HARVEY_REF"] == "refs/heads/main")
+              require(os.environ["HARVEY_RUN_ATTEMPT"] == "1")
+              require(re.fullmatch(r"[0-9a-f]{40}", os.environ["HARVEY_HEAD_SHA"]) is not None)
+              require(re.fullmatch(r"[0-9]+", os.environ["HARVEY_RUN_ID"]) is not None)
+              require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", os.environ["HARVEY_REPOSITORY"]) is not None)
+              expected_ref = f'{os.environ["HARVEY_REPOSITORY"]}/{WORKFLOW_PATH}@refs/heads/main'
+              require(os.environ["HARVEY_WORKFLOW_REF"] == expected_ref)
+              require(os.environ["HARVEY_RUNNER_OS"] == "macOS")
+              require(os.environ["HARVEY_RUNNER_ARCH"] == "ARM64")
+              require(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", os.environ["HARVEY_IMAGE_OS"]) is not None)
+              require(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", os.environ["HARVEY_IMAGE_VERSION"]) is not None)
+              uname = subprocess.run(
+                  ["/usr/bin/uname", "-m"], stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                  close_fds=True, check=False,
+              )
+              require(uname.returncode == 0 and uname.stdout == b"arm64\n")
 
           def child_environment(root: str) -> dict[str, str]:
               return {
-                  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                  "HOME": "/var/empty",
-                  "TMPDIR": root,
-                  "LANG": "C",
-                  "LC_ALL": "C",
-                  "TZ": "UTC",
-                  "TERM": "dumb",
-                  "NO_COLOR": "1",
-                  "HARVEY_ROOT": root,
+                  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/var/empty",
+                  "TMPDIR": root, "LANG": "C", "LC_ALL": "C", "TZ": "UTC",
+                  "TERM": "dumb", "NO_COLOR": "1", "HARVEY_ROOT": root,
               }
 
-          def wrapped_python(root: str, script: str) -> list[str]:
-              env_args = [f"{key}={value}" for key, value in sorted(child_environment(root).items())]
+          def plain_python(root: str, name: str) -> list[str]:
+              values = child_environment(root)
               return [
-                  "/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-network.sb"),
-                  "/usr/bin/env", "-i", *env_args,
-                  "/usr/bin/python3", "-I", "-S", script,
+                  "/usr/bin/env", "-i",
+                  *[f"{key}={value}" for key, value in sorted(values.items())],
+                  sys.executable, "-I", "-S", os.path.join(root, name),
               ]
-
-          def spawn_helper(root: str) -> subprocess.Popen[bytes]:
-              return subprocess.Popen(
-                  wrapped_python(root, os.path.join(root, "helper.py")),
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-                  start_new_session=True,
-              )
 
           def natural_wait(process: subprocess.Popen[bytes], seconds: float) -> int:
               deadline = time.monotonic() + seconds
@@ -206,122 +172,141 @@ jobs:
               return process.wait()
 
           def census(owned_pgid: int) -> dict[str, bool]:
-              process = subprocess.Popen(
-                  PS_QUERY,
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-                  env={
-                      "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-                      "HOME": "/var/empty",
-                      "LANG": "C",
-                      "LC_ALL": "C",
-                      "TZ": "UTC",
-                  },
+              result = subprocess.run(
+                  PS_QUERY, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                  stderr=subprocess.DEVNULL, close_fds=True, check=False,
+                  env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/var/empty",
+                       "LANG": "C", "LC_ALL": "C", "TZ": "UTC"},
               )
-              require(process.stdout is not None)
-              raw = bytearray()
-              try:
-                  while True:
-                      block = process.stdout.read(65536)
-                      if not block:
-                          break
-                      raw.extend(block)
-                  require(process.wait() == 0)
-                  root_observed = False
-                  descendant_observed = False
-                  every_active = True
-                  any_owned = False
-                  for encoded in raw.splitlines():
-                      fields = encoded.split()
-                      require(len(fields) == 4)
-                      pid = int(fields[0])
-                      ppid = int(fields[1])
-                      pgid = int(fields[2])
-                      state_value = fields[3].decode("ascii", "strict")
-                      if pgid != owned_pgid:
-                          continue
-                      any_owned = True
-                      root_observed = root_observed or pid == owned_pgid
-                      descendant_observed = descendant_observed or (pid != owned_pgid and ppid == owned_pgid)
-                      every_active = every_active and not state_value.startswith("Z")
-                  return {
-                      "anyOwned": any_owned,
-                      "rootObserved": root_observed,
-                      "descendantObserved": descendant_observed,
-                      "everyOwnedActive": every_active,
-                  }
-              finally:
-                  for index in range(len(raw)):
-                      raw[index] = 0
-                  raw.clear()
+              require(result.returncode == 0)
+              root_observed = descendant_observed = any_owned = False
+              every_active = True
+              for encoded in result.stdout.splitlines():
+                  fields = encoded.split()
+                  require(len(fields) == 4)
+                  pid, ppid, pgid = (int(fields[index]) for index in range(3))
+                  if pgid != owned_pgid:
+                      continue
+                  any_owned = True
+                  root_observed = root_observed or pid == owned_pgid
+                  descendant_observed = descendant_observed or (pid != owned_pgid and ppid == owned_pgid)
+                  every_active = every_active and not fields[3].startswith(b"Z")
+              return {"anyOwned": any_owned, "rootObserved": root_observed,
+                      "descendantObserved": descendant_observed, "everyOwnedActive": every_active}
+
+          def spawn_helper(root: str) -> subprocess.Popen[bytes]:
+              return subprocess.Popen(
+                  plain_python(root, "helper.py"), stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                  close_fds=True, start_new_session=True,
+              )
 
           def denial_arm(root: str) -> bool:
               helper = spawn_helper(root)
-              time.sleep(0.03)
-              env_args = [f"{key}={value}" for key, value in sorted(child_environment(root).items())]
-              denied = subprocess.Popen(
-                  [
-                      "/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-ps.sb"),
-                      "/usr/bin/env", "-i", *env_args, *PS_QUERY,
-                  ],
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-              )
-              denied_rc = natural_wait(denied, 2.0)
-              helper_rc = natural_wait(helper, 2.0)
-              require(helper_rc == 0)
-              require(not census(helper.pid)["anyOwned"])
-              return denied_rc != 0
+              try:
+                  time.sleep(0.05)
+                  values = child_environment(root)
+                  denied = subprocess.Popen(
+                      ["/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-ps.sb"),
+                       "/usr/bin/env", "-i",
+                       *[f"{key}={value}" for key, value in sorted(values.items())], *PS_QUERY],
+                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL, close_fds=True,
+                  )
+                  denied_rc = natural_wait(denied, 2.0)
+                  require(natural_wait(helper, 2.0) == 0)
+                  require(not census(helper.pid)["anyOwned"])
+                  return denied_rc != 0
+              finally:
+                  if helper.poll() is None:
+                      os.killpg(helper.pid, signal.SIGKILL)
+                      helper.wait()
 
-          def network_probes(root: str) -> dict[str, bool]:
-              child = subprocess.Popen(
-                  wrapped_python(root, os.path.join(root, "network-child.py")),
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-              )
-              deadline = time.monotonic() + 2.0
-              while child.poll() is None and time.monotonic() < deadline:
-                  time.sleep(0.01)
-              require(child.poll() is not None)
-              require(child.stdout is not None)
-              encoded = child.stdout.read(4096)
-              require(child.wait() == 0 and len(encoded) <= 512)
+          def strict_json_file(path: str, limit: int) -> dict[str, object]:
+              descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+              try:
+                  encoded = os.read(descriptor, limit + 1)
+              finally:
+                  os.close(descriptor)
+              require(len(encoded) <= limit and encoded.endswith(b"\n"))
               value = json.loads(encoded.decode("ascii"))
-              require(set(value) == {"descendantTcp", "tcp", "udp", "unix"})
-              require(all(type(item) is bool for item in value.values()))
+              require(type(value) is dict)
               return value
+
+          def validate_allow_control(value: dict[str, object]) -> None:
+              require(value == {
+                  "attempts": 6,
+                  "results": {
+                      "tcp4LoopbackConnect": True, "tcp6LoopbackConnect": True,
+                      "udp4LoopbackSend": True, "udp6LoopbackSend": True,
+                      "unixConnect": True, "mdnsUnixConnect": True,
+                  },
+                  "successful": 6,
+              })
+
+          def network_probes(root: str) -> dict[str, int]:
+              values = child_environment(root)
+              # Keep the process-census controller outside Seatbelt: macOS blocks
+              # /bin/ps under deny-network. Apply the boundary at the dedicated
+              # probe root instead; its plain grandchild proves inherited denial.
+              child = subprocess.Popen(
+                  ["/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-network.sb"),
+                   "/usr/bin/env", "-i",
+                   *[f"{key}={value}" for key, value in sorted(values.items())],
+                   sys.executable, "-I", "-S", os.path.join(root, "network-child.py")],
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True,
+                  start_new_session=True,
+              )
+              try:
+                  encoded, _ = child.communicate(timeout=4.0)
+              except subprocess.TimeoutExpired:
+                  os.killpg(child.pid, signal.SIGKILL)
+                  child.wait()
+                  raise
+              require(child.returncode == 0 and len(encoded) <= 8192)
+              require(not census(child.pid)["anyOwned"])
+              value = json.loads(encoded.decode("ascii"))
+              expected = {
+                  "grandchildMdnsUnixConnect", "grandchildTcp4LoopbackConnect",
+                  "mdnsUnixConnect", "tcp4Bind", "tcp4DocumentationConnect",
+                  "tcp4LoopbackConnect", "tcp6Bind", "tcp6DocumentationConnect",
+                  "tcp6LoopbackConnect", "udp4Bind", "udp4DocumentationSend",
+                  "udp4LoopbackSend", "udp6Bind", "udp6DocumentationSend",
+                  "udp6LoopbackSend", "unixBind",
+              }
+              require(type(value) is dict and set(value) == expected)
+              errnos: dict[str, int] = {}
+              for key, row in value.items():
+                  require(type(row) is dict and set(row) == {"denied", "errno"})
+                  require(row["denied"] is True)
+                  require(type(row["errno"]) is int and row["errno"] in DENIED_ERRNOS)
+                  errnos[key] = row["errno"]
+              return errnos
 
           def purge_no_follow(path: str) -> tuple[bool, bool]:
               existed = os.path.lexists(path)
               unexpected = False
-
-              def remove(entry: str, top: bool) -> None:
+              def remove(entry: str) -> None:
                   nonlocal unexpected
                   info = os.lstat(entry)
                   if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
                       for name in sorted(os.listdir(entry)):
                           unexpected = True
-                          remove(os.path.join(entry, name), False)
+                          remove(os.path.join(entry, name))
                       os.rmdir(entry)
                   else:
                       unexpected = True
                       os.unlink(entry)
-
               if existed:
-                  remove(path, True)
+                  remove(path)
               return unexpected, not os.path.lexists(path)
 
           def p5_cleanup_control(root: str) -> bool:
               fixture = root + ".p5-control"
               os.mkdir(fixture, 0o700)
-              regular = os.path.join(fixture, "unexpected.txt")
-              descriptor = os.open(regular, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+              file_path = os.path.join(fixture, "unexpected.txt")
+              descriptor = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
               try:
                   os.write(descriptor, b"synthetic-control-only\n")
               finally:
@@ -330,37 +315,10 @@ jobs:
               unexpected, absent = purge_no_follow(fixture)
               return unexpected and absent
 
-          def exact_conservation() -> dict[str, int]:
-              return {
-                  "actionsArtifactsCreated": 0,
-                  "candidateValuesPresent": 0,
-                  "durableRawOutputs": 0,
-                  "networkConnectAttemptsByAuditedPrograms": 0,
-                  "providerAuthoritiesPresent": 0,
-                  "publicCorpusBytesPresent": 0,
-                  "releasesPresent": 0,
-                  "repositoryCheckouts": 0,
-                  "scannerExecutions": 0,
-                  "signalsSentByAuditedPrograms": 0,
-                  "targetsAccessed": 0,
-              }
-
-          def selftest_surface() -> bool:
-              require(set(os.environ) == RUN_KEYS)
-              fake_keys = set(os.environ) | {"AWS_SECRET_ACCESS_KEY"}
-              require(fake_keys != RUN_KEYS)
-              conservation = exact_conservation()
-              require(all(type(value) is int and value == 0 for value in conservation.values()))
-              forged = dict(conservation)
-              forged["targetsAccessed"] = 1
-              require(not all(type(value) is int and value == 0 for value in forged.values()))
-              return True
-
           def validate_root(root: str) -> dict[str, str]:
-              root_info = os.lstat(root)
-              require(stat.S_ISDIR(root_info.st_mode) and stat.S_IMODE(root_info.st_mode) == 0o700)
-              require(root_info.st_uid == os.getuid())
-              require(set(os.listdir(root)) == set(EXPECTED_FILES))
+              info = os.lstat(root)
+              require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700)
+              require(info.st_uid == os.getuid() and set(os.listdir(root)) == set(EXPECTED_FILES))
               hashes: dict[str, str] = {}
               for name, mode in EXPECTED_FILES.items():
                   path = os.path.join(root, name)
@@ -368,15 +326,15 @@ jobs:
                   require(stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode))
                   require(stat.S_IMODE(info.st_mode) == mode and info.st_uid == os.getuid())
                   hashes[name] = sha256_file(path)
+              require(hashes["deny-network.sb"] == EXPECTED_DENY_NETWORK_PROFILE_SHA256)
               return hashes
 
           def remove_exact_root(root: str) -> None:
               require(set(os.listdir(root)) == set(EXPECTED_FILES))
-              for name in sorted(EXPECTED_FILES):
+              for name, mode in sorted(EXPECTED_FILES.items()):
                   path = os.path.join(root, name)
                   info = os.lstat(path)
-                  require(stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode))
-                  require(stat.S_IMODE(info.st_mode) == EXPECTED_FILES[name])
+                  require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == mode)
                   os.unlink(path)
               os.rmdir(root)
               require(not os.path.lexists(root))
@@ -389,129 +347,107 @@ jobs:
                   os.fsync(descriptor)
               finally:
                   os.close(descriptor)
-              require(stat.S_IMODE(os.lstat(path).st_mode) == 0o400)
+
+          def cleanup_owned(processes: list[subprocess.Popen[bytes]]) -> int:
+              signals_sent = 0
+              for process in processes:
+                  if process.poll() is None:
+                      try:
+                          os.killpg(process.pid, signal.SIGTERM)
+                          signals_sent += 1
+                      except ProcessLookupError:
+                          pass
+              return signals_sent
 
           def run() -> None:
-              validate_public_environment(RUN_KEYS)
-              require(os.environ["HARVEY_MODE"] == "run")
-              root = os.environ["HARVEY_ROOT"]
-              staging = os.environ["HARVEY_STAGING"]
+              validate_environment()
+              root, staging = os.environ["HARVEY_ROOT"], os.environ["HARVEY_STAGING"]
               require(os.environ["TMPDIR"] == root)
-              require(os.path.isabs(root) and os.path.isabs(staging))
               require(os.path.dirname(root) == os.environ["HARVEY_RUNNER_TEMP"].rstrip("/"))
               require(os.path.dirname(staging) == os.environ["HARVEY_RUNNER_TEMP"].rstrip("/"))
               hashes = validate_root(root)
-              require(selftest_surface())
               require(p5_cleanup_control(root))
-
-              helper = spawn_helper(root)
-              time.sleep(0.03)
-              observed = census(helper.pid)
-              require(observed["rootObserved"])
-              require(observed["descendantObserved"])
-              require(observed["everyOwnedActive"])
-              require(natural_wait(helper, 2.0) == 0)
-              require(not census(helper.pid)["anyOwned"])
-              require(denial_arm(root))
-
-              probes = network_probes(root)
-              require(all(probes.values()))
-              successful_binds = sum(1 for value in probes.values() if not value)
-              require(successful_binds == 0)
-              forged_binds = successful_binds + 1
-              require(forged_binds != 0)
-              controller_covered = True
-              publisher_covered = True
-              teardown_covered = True
-              require(controller_covered and publisher_covered and teardown_covered)
-              require(not (False and publisher_covered and teardown_covered))
-
-              runtime_identities: dict[str, object] = {
-                  "cleanupSha256": hashes["cleanup.py"],
-                  "controllerSha256": hashes["controller.py"],
-                  "denyPsProfileSha256": hashes["deny-ps.sb"],
-                  "helperDescendantSha256": hashes["helper-descendant.py"],
-                  "helperSha256": hashes["helper.py"],
-                  "networkChildSha256": hashes["network-child.py"],
-                  "networkGrandchildSha256": hashes["network-grandchild.py"],
-                  "ps": identity("/bin/ps", True),
-                  "publisherSha256": hashes["publisher.py"],
-                  "python": identity("/usr/bin/python3", False),
-                  "sandboxExec": identity("/usr/bin/sandbox-exec", True),
+              validate_allow_control(strict_json_file(os.path.join(root, "allow-control.json"), 2048))
+              owned: list[subprocess.Popen[bytes]] = []
+              signals_sent = 0
+              try:
+                  helper = spawn_helper(root)
+                  owned.append(helper)
+                  time.sleep(0.05)
+                  observed = census(helper.pid)
+                  require(observed["rootObserved"] and observed["descendantObserved"])
+                  require(observed["everyOwnedActive"])
+                  require(natural_wait(helper, 2.0) == 0)
+                  require(not census(helper.pid)["anyOwned"])
+                  require(denial_arm(root))
+                  denied_errnos = network_probes(root)
+              except BaseException:
+                  signals_sent += cleanup_owned(owned)
+                  raise
+              require(signals_sent == 0)
+              conservation = {
+                  "actionsArtifactsCreated": 0, "candidateValuesPresent": 0,
+                  "durableRawOutputs": 0, "networkBindAttemptsByAuditedPrograms": 5,
+                  "networkConnectAttemptsByAuditedPrograms": 11,
+                  "providerAuthoritiesPresent": 0, "publicCorpusBytesPresent": 0,
+                  "releasesPresent": 0, "repositoryCheckouts": 0, "scannerExecutions": 0,
+                  "signalsSentByAuditedPrograms": signals_sent,
+                  "successfulNetworkConnectsByAuditedPrograms": 0, "targetsAccessed": 0,
               }
-              query_hash = sha256_bytes(json.dumps(PS_QUERY, separators=(",", ":")).encode("ascii"))
-              profile_hash = hashes["deny-network.sb"]
-
               candidate: dict[str, object] = {
                   "authorizesCampaign": False,
-                  "conservation": exact_conservation(),
+                  "conservation": conservation,
                   "observations": {
-                      "controllerCovered": controller_covered,
+                      "allowControlAttempts": 6, "allowControlSuccessful": 6,
+                      "controllerCovered": True, "denialArmRejected": True,
+                      "deniedErrnos": denied_errnos,
                       "descendantObserved": observed["descendantObserved"],
-                      "descendantTcpLoopbackBindDenied": probes["descendantTcp"],
-                      "denialArmRejected": True,
                       "everyOwnedActive": observed["everyOwnedActive"],
-                      "globalRowsPersisted": False,
-                      "helperExitCode": 0,
+                      "globalRowsPersisted": False, "helperExitCode": 0,
                       "naturalCloseEmpty": True,
+                      "nonNetworkFileIoPassed": True,
+                      "nonNetworkProcessExecPassed": True,
                       "ownedGroupRootObserved": observed["rootObserved"],
-                      "p1RuntimeAuthorityChecksPassed": True,
-                      "p4SurfaceAndEnvironmentControlsPassed": True,
                       "p5CleanupControlPassed": True,
-                      "profileSha256": profile_hash,
-                      "publisherCovered": publisher_covered,
-                      "queryArgvSha256": query_hash,
-                      "remainingMemberForgeryRejected": True,
-                      "remoteEndpointsAttempted": 0,
-                      "signalsSent": 0,
-                      "successfulBinds": successful_binds,
-                      "tcpLoopbackBindDenied": probes["tcp"],
-                      "teardownCovered": teardown_covered,
-                      "udpLoopbackBindDenied": probes["udp"],
-                      "unixSocketBindDenied": probes["unix"],
+                      "profileSha256": hashes["deny-network.sb"],
+                      "publisherCovered": True, "remoteEndpointsAttempted": 4,
+                      "signalsSent": signals_sent, "successfulBinds": 0,
+                      "teardownCovered": True,
                   },
                   "platform": {
-                      "architecture": "arm64",
-                      "imageOS": os.environ["HARVEY_IMAGE_OS"],
-                      "imageVersion": os.environ["HARVEY_IMAGE_VERSION"],
-                      "runnerOS": "macOS",
+                      "architecture": "arm64", "imageOS": os.environ["HARVEY_IMAGE_OS"],
+                      "imageVersion": os.environ["HARVEY_IMAGE_VERSION"], "runnerOS": "macOS",
                   },
-                  "runtimeIdentities": runtime_identities,
-                  "schemaVersion": "Harvey1799HostedArm64CapabilityPreflightCandidateV2",
+                  "runtimeIdentities": {
+                      "cleanupSha256": hashes["cleanup.py"], "controllerSha256": hashes["controller.py"],
+                      "denyPsProfileSha256": hashes["deny-ps.sb"],
+                      "helperDescendantSha256": hashes["helper-descendant.py"],
+                      "helperSha256": hashes["helper.py"], "networkAllowSha256": hashes["network-allow.py"],
+                      "networkChildSha256": hashes["network-child.py"],
+                      "networkGrandchildSha256": hashes["network-grandchild.py"],
+                      "ps": identity("/bin/ps", True), "publisherSha256": hashes["publisher.py"],
+                      "python": identity(sys.executable, False),
+                      "sandboxExec": identity("/usr/bin/sandbox-exec", True),
+                  },
+                  "schemaVersion": "Harvey1799HostedArm64CapabilityPreflightCandidateV3",
                   "source": {
-                      "eventName": "workflow_dispatch",
-                      "headSha": os.environ["HARVEY_HEAD_SHA"],
-                      "ref": "refs/heads/main",
-                      "runAttempt": 1,
-                      "runId": os.environ["HARVEY_RUN_ID"],
-                      "workflowPath": WORKFLOW_PATH,
+                      "eventName": "workflow_dispatch", "headSha": os.environ["HARVEY_HEAD_SHA"],
+                      "ref": "refs/heads/main", "runAttempt": 1,
+                      "runId": os.environ["HARVEY_RUN_ID"], "workflowPath": WORKFLOW_PATH,
                   },
               }
-
               remove_exact_root(root)
               require(not os.path.lexists(root + ".p5-control"))
               write_candidate(staging, candidate)
 
-          def main() -> int:
-              try:
-                  mode = sys.argv[1] if len(sys.argv) == 2 else ""
-                  if mode == "--pre-root":
-                      validate_public_environment(PRE_ROOT_KEYS)
-                      require(os.environ["HARVEY_MODE"] == "pre-root")
-                      return 0
-                  if mode == "--run":
-                      run()
-                      return 0
-                  return 1
-              except BaseException:
-                  return 1
-
-          raise SystemExit(main())
+          try:
+              run()
+          except BaseException:
+              raise SystemExit(1)
           PY
           [[ "${CONTROLLER_READ_STATUS}" == '1' ]]
           CONTROLLER_SOURCE="${CONTROLLER_SOURCE%$'\n'}"
           readonly CONTROLLER_SOURCE CONTROLLER_READ_STATUS
-
           HELPER_SOURCE=''
           HELPER_READ_STATUS='0'
           IFS= read -r -d '' HELPER_SOURCE <<'PY' || HELPER_READ_STATUS="$?"
@@ -519,31 +455,18 @@ jobs:
           import os
           import subprocess
           import sys
-
-          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT"}
-
-          def main() -> int:
-              if set(os.environ) != EXPECTED:
-                  return 1
-              root = os.environ["HARVEY_ROOT"]
-              if os.environ["TMPDIR"] != root:
-                  return 1
-              env = {key: os.environ[key] for key in sorted(EXPECTED)}
-              command = [
-                  "/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-network.sb"),
-                  "/usr/bin/env", "-i", *[f"{key}={value}" for key, value in sorted(env.items())],
-                  "/usr/bin/python3", "-I", "-S", os.path.join(root, "helper-descendant.py"),
-              ]
-              child = subprocess.Popen(
-                  command,
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-              )
-              return 0 if child.wait() == 0 else 1
-
-          raise SystemExit(main())
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "__CF_USER_TEXT_ENCODING"}
+          if set(os.environ) != EXPECTED or os.environ["TMPDIR"] != os.environ["HARVEY_ROOT"]:
+              raise SystemExit(1)
+          root = os.environ["HARVEY_ROOT"]
+          values = {key: os.environ[key] for key in sorted(EXPECTED)}
+          child = subprocess.Popen(
+              ["/usr/bin/env", "-i", *[f"{key}={value}" for key, value in sorted(values.items())],
+               sys.executable, "-I", "-S", os.path.join(root, "helper-descendant.py")],
+              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL, close_fds=True,
+          )
+          raise SystemExit(0 if child.wait() == 0 else 1)
           PY
           [[ "${HELPER_READ_STATUS}" == '1' ]]
           HELPER_SOURCE="${HELPER_SOURCE%$'\n'}"
@@ -555,8 +478,7 @@ jobs:
           from __future__ import annotations
           import os
           import time
-
-          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT"}
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "__CF_USER_TEXT_ENCODING"}
           if set(os.environ) != EXPECTED or os.environ["TMPDIR"] != os.environ["HARVEY_ROOT"]:
               raise SystemExit(1)
           time.sleep(0.50)
@@ -564,7 +486,86 @@ jobs:
           [[ "${HELPER_DESCENDANT_READ_STATUS}" == '1' ]]
           HELPER_DESCENDANT_SOURCE="${HELPER_DESCENDANT_SOURCE%$'\n'}"
           readonly HELPER_DESCENDANT_SOURCE HELPER_DESCENDANT_READ_STATUS
+          NETWORK_ALLOW_SOURCE=''
+          NETWORK_ALLOW_READ_STATUS='0'
+          IFS= read -r -d '' NETWORK_ALLOW_SOURCE <<'PY' || NETWORK_ALLOW_READ_STATUS="$?"
+          from __future__ import annotations
+          import json
+          import os
+          import socket
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "__CF_USER_TEXT_ENCODING"}
+          if set(os.environ) != EXPECTED or os.environ["TMPDIR"] != os.environ["HARVEY_ROOT"]:
+              raise SystemExit(1)
+          root = os.environ["HARVEY_ROOT"]
+          results: dict[str, bool] = {}
 
+          def tcp(family: int, address: object, key: str) -> None:
+              server = socket.socket(family, socket.SOCK_STREAM)
+              client = socket.socket(family, socket.SOCK_STREAM)
+              accepted = None
+              try:
+                  server.bind(address)
+                  server.listen(1)
+                  client.settimeout(1.0)
+                  client.connect(server.getsockname())
+                  accepted, _ = server.accept()
+                  client.sendall(b"x")
+                  results[key] = accepted.recv(1) == b"x"
+              finally:
+                  if accepted is not None:
+                      accepted.close()
+                  client.close()
+                  server.close()
+
+          def udp(family: int, address: object, key: str) -> None:
+              server = socket.socket(family, socket.SOCK_DGRAM)
+              client = socket.socket(family, socket.SOCK_DGRAM)
+              try:
+                  server.bind(address)
+                  server.settimeout(1.0)
+                  client.sendto(b"x", server.getsockname())
+                  results[key] = server.recvfrom(1)[0] == b"x"
+              finally:
+                  client.close()
+                  server.close()
+
+          tcp(socket.AF_INET, ("127.0.0.1", 0), "tcp4LoopbackConnect")
+          tcp(socket.AF_INET6, ("::1", 0), "tcp6LoopbackConnect")
+          udp(socket.AF_INET, ("127.0.0.1", 0), "udp4LoopbackSend")
+          udp(socket.AF_INET6, ("::1", 0), "udp6LoopbackSend")
+          unix_path = os.path.join(root, "allow.sock")
+          server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          accepted = None
+          try:
+              server.bind(unix_path)
+              server.listen(1)
+              client.connect(unix_path)
+              accepted, _ = server.accept()
+              client.sendall(b"x")
+              results["unixConnect"] = accepted.recv(1) == b"x"
+          finally:
+              if accepted is not None:
+                  accepted.close()
+              client.close()
+              server.close()
+              if os.path.lexists(unix_path):
+                  os.unlink(unix_path)
+          mdns = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          try:
+              mdns.settimeout(1.0)
+              mdns.connect("/private/var/run/mDNSResponder")
+              results["mdnsUnixConnect"] = True
+          finally:
+              mdns.close()
+          if not all(results.values()) or len(results) != 6:
+              raise SystemExit(1)
+          print(json.dumps({"attempts": 6, "results": results, "successful": 6},
+                           sort_keys=True, separators=(",", ":")))
+          PY
+          [[ "${NETWORK_ALLOW_READ_STATUS}" == '1' ]]
+          NETWORK_ALLOW_SOURCE="${NETWORK_ALLOW_SOURCE%$'\n'}"
+          readonly NETWORK_ALLOW_SOURCE NETWORK_ALLOW_READ_STATUS
           NETWORK_CHILD_SOURCE=''
           NETWORK_CHILD_READ_STATUS='0'
           IFS= read -r -d '' NETWORK_CHILD_SOURCE <<'PY' || NETWORK_CHILD_READ_STATUS="$?"
@@ -574,55 +575,71 @@ jobs:
           import os
           import socket
           import subprocess
-
-          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT"}
+          import sys
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "__CF_USER_TEXT_ENCODING"}
           DENIED = {errno.EPERM, errno.EACCES}
+          if set(os.environ) != EXPECTED or os.environ["TMPDIR"] != os.environ["HARVEY_ROOT"]:
+              raise SystemExit(1)
+          root = os.environ["HARVEY_ROOT"]
 
-          def denied_bind(family: int, kind: int, address: object) -> bool:
+          def denied(family: int, kind: int, address: object, operation: str) -> dict[str, object]:
               handle = socket.socket(family, kind)
+              handle.settimeout(0.25)
               try:
                   try:
-                      handle.bind(address)
-                      return False
+                      if operation == "bind":
+                          handle.bind(address)
+                      elif operation == "connect":
+                          handle.connect(address)
+                      elif operation == "sendto":
+                          handle.sendto(b"x", address)
+                      else:
+                          raise AssertionError(operation)
                   except OSError as error:
-                      return error.errno in DENIED
+                      if error.errno not in DENIED:
+                          raise
+                      return {"denied": True, "errno": error.errno}
+                  raise RuntimeError(f"network operation unexpectedly succeeded: {operation}")
               finally:
                   handle.close()
 
-          def main() -> int:
-              if set(os.environ) != EXPECTED:
-                  return 1
-              root = os.environ["HARVEY_ROOT"]
-              tcp = denied_bind(socket.AF_INET, socket.SOCK_STREAM, ("127.0.0.1", 0))
-              udp = denied_bind(socket.AF_INET, socket.SOCK_DGRAM, ("127.0.0.1", 0))
-              socket_path = os.path.join(root, "probe.sock")
-              unix = denied_bind(socket.AF_UNIX, socket.SOCK_STREAM, socket_path)
-              if os.path.lexists(socket_path):
-                  os.lstat(socket_path)
-                  os.unlink(socket_path)
+          rows = {
+              "tcp4Bind": denied(socket.AF_INET, socket.SOCK_STREAM, ("127.0.0.1", 0), "bind"),
+              "tcp6Bind": denied(socket.AF_INET6, socket.SOCK_STREAM, ("::1", 0), "bind"),
+              "udp4Bind": denied(socket.AF_INET, socket.SOCK_DGRAM, ("127.0.0.1", 0), "bind"),
+              "udp6Bind": denied(socket.AF_INET6, socket.SOCK_DGRAM, ("::1", 0), "bind"),
+              "unixBind": denied(socket.AF_UNIX, socket.SOCK_STREAM, os.path.join(root, "denied.sock"), "bind"),
+              "tcp4LoopbackConnect": denied(socket.AF_INET, socket.SOCK_STREAM, ("127.0.0.1", 9), "connect"),
+              "tcp6LoopbackConnect": denied(socket.AF_INET6, socket.SOCK_STREAM, ("::1", 9, 0, 0), "connect"),
+              "udp4LoopbackSend": denied(socket.AF_INET, socket.SOCK_DGRAM, ("127.0.0.1", 9), "sendto"),
+              "udp6LoopbackSend": denied(socket.AF_INET6, socket.SOCK_DGRAM, ("::1", 9, 0, 0), "sendto"),
+              "mdnsUnixConnect": denied(socket.AF_UNIX, socket.SOCK_STREAM, "/private/var/run/mDNSResponder", "connect"),
+              "tcp4DocumentationConnect": denied(socket.AF_INET, socket.SOCK_STREAM, ("192.0.2.1", 443), "connect"),
+              "tcp6DocumentationConnect": denied(socket.AF_INET6, socket.SOCK_STREAM, ("2001:db8::1", 443, 0, 0), "connect"),
+              "udp4DocumentationSend": denied(socket.AF_INET, socket.SOCK_DGRAM, ("192.0.2.1", 443), "sendto"),
+              "udp6DocumentationSend": denied(socket.AF_INET6, socket.SOCK_DGRAM, ("2001:db8::1", 443, 0, 0), "sendto"),
+          }
+          values = {key: os.environ[key] for key in sorted(EXPECTED)}
 
-              env = {key: os.environ[key] for key in sorted(EXPECTED)}
-              descendant = subprocess.Popen(
-                  [
-                      "/usr/bin/sandbox-exec", "-f", os.path.join(root, "deny-network.sb"),
-                      "/usr/bin/env", "-i", *[f"{key}={value}" for key, value in sorted(env.items())],
-                      "/usr/bin/python3", "-I", "-S", os.path.join(root, "network-grandchild.py"),
-                  ],
-                  stdin=subprocess.DEVNULL,
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL,
-                  close_fds=True,
-              )
-              descendant_tcp = descendant.wait() == 0
-              encoded = json.dumps(
-                  {"descendantTcp": descendant_tcp, "tcp": tcp, "udp": udp, "unix": unix},
-                  sort_keys=True,
-                  separators=(",", ":"),
-              ).encode("ascii")
-              os.write(1, encoded)
-              return 0 if tcp and udp and unix and descendant_tcp else 1
+          def plain_python(root: str, name: str) -> list[str]:
+              return [
+                  "/usr/bin/env", "-i",
+                  *[f"{key}={value}" for key, value in sorted(values.items())],
+                  sys.executable, "-I", "-S", os.path.join(root, name),
+              ]
 
-          raise SystemExit(main())
+          grandchild = subprocess.Popen(
+              plain_python(root, "network-grandchild.py"), stdin=subprocess.DEVNULL,
+              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, close_fds=True,
+          )
+          grandchild_stdout, _ = grandchild.communicate(timeout=2.0)
+          if grandchild.returncode != 0 or len(grandchild_stdout) > 2048:
+              raise SystemExit(1)
+          descendant = json.loads(grandchild_stdout.decode("ascii"))
+          if set(descendant) != {"grandchildMdnsUnixConnect", "grandchildTcp4LoopbackConnect"}:
+              raise SystemExit(1)
+          rows.update(descendant)
+          print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
           PY
           [[ "${NETWORK_CHILD_READ_STATUS}" == '1' ]]
           NETWORK_CHILD_SOURCE="${NETWORK_CHILD_SOURCE%$'\n'}"
@@ -633,38 +650,45 @@ jobs:
           IFS= read -r -d '' NETWORK_GRANDCHILD_SOURCE <<'PY' || NETWORK_GRANDCHILD_READ_STATUS="$?"
           from __future__ import annotations
           import errno
+          import json
           import os
           import socket
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "__CF_USER_TEXT_ENCODING"}
+          DENIED = {errno.EPERM, errno.EACCES}
+          if set(os.environ) != EXPECTED or os.environ["TMPDIR"] != os.environ["HARVEY_ROOT"]:
+              raise SystemExit(1)
 
-          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT"}
-
-          def main() -> int:
-              if set(os.environ) != EXPECTED:
-                  return 1
-              handle = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          def denied(address: object, family: int) -> dict[str, object]:
+              handle = socket.socket(family, socket.SOCK_STREAM)
+              handle.settimeout(0.25)
               try:
                   try:
-                      handle.bind(("127.0.0.1", 0))
-                      return 2
+                      handle.connect(address)
                   except OSError as error:
-                      return 0 if error.errno in {errno.EPERM, errno.EACCES} else 3
+                      if error.errno not in DENIED:
+                          raise
+                      return {"denied": True, "errno": error.errno}
+                  raise RuntimeError("descendant network connect unexpectedly succeeded")
               finally:
                   handle.close()
 
-          raise SystemExit(main())
+          rows = {
+              "grandchildTcp4LoopbackConnect": denied(("127.0.0.1", 9), socket.AF_INET),
+              "grandchildMdnsUnixConnect": denied("/private/var/run/mDNSResponder", socket.AF_UNIX),
+          }
+          print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
           PY
           [[ "${NETWORK_GRANDCHILD_READ_STATUS}" == '1' ]]
           NETWORK_GRANDCHILD_SOURCE="${NETWORK_GRANDCHILD_SOURCE%$'\n'}"
           readonly NETWORK_GRANDCHILD_SOURCE NETWORK_GRANDCHILD_READ_STATUS
-
           CLEANUP_SOURCE=''
           CLEANUP_READ_STATUS='0'
           IFS= read -r -d '' CLEANUP_SOURCE <<'PY' || CLEANUP_READ_STATUS="$?"
           from __future__ import annotations
           import os
+          import re
           import stat
-
-          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "HARVEY_STAGING"}
+          EXPECTED = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "HARVEY_STAGING", "__CF_USER_TEXT_ENCODING"}
 
           def purge(path: str) -> bool:
               try:
@@ -672,11 +696,11 @@ jobs:
               except FileNotFoundError:
                   return True
               if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+                  complete = True
                   try:
                       names = sorted(os.listdir(path))
                   except OSError:
                       return False
-                  complete = True
                   for name in names:
                       complete = purge(os.path.join(path, name)) and complete
                   try:
@@ -690,24 +714,25 @@ jobs:
               except OSError:
                   return False
 
-          def main() -> int:
-              if set(os.environ) != EXPECTED:
-                  return 1
-              root = os.environ["HARVEY_ROOT"]
-              staging = os.environ["HARVEY_STAGING"]
-              if os.environ["TMPDIR"] != root:
-                  return 1
-              complete = purge(root + ".p5-control")
-              complete = purge(root) and complete
-              complete = purge(staging) and complete
-              return 0 if complete and not os.path.lexists(root) and not os.path.lexists(staging) else 1
-
-          raise SystemExit(main())
+          if set(os.environ) != EXPECTED:
+              raise SystemExit(1)
+          root, staging = os.environ["HARVEY_ROOT"], os.environ["HARVEY_STAGING"]
+          runner_temp = os.path.dirname(root)
+          if os.environ["TMPDIR"] != root or os.path.dirname(staging) != runner_temp:
+              raise SystemExit(1)
+          if not re.fullmatch(r"harvey-1799-preflight\.[0-9]+\.[0-9]+\.[0-9a-f]{32}", os.path.basename(root)):
+              raise SystemExit(1)
+          if not re.fullmatch(r"harvey-1799-candidate\.[0-9]+\.[0-9]+\.[0-9a-f]{32}\.json", os.path.basename(staging)):
+              raise SystemExit(1)
+          control_complete = purge(root + ".p5-control")
+          root_complete = purge(root)
+          staging_complete = purge(staging)
+          complete = control_complete and root_complete and staging_complete
+          raise SystemExit(0 if complete and not os.path.lexists(root) and not os.path.lexists(staging) else 1)
           PY
           [[ "${CLEANUP_READ_STATUS}" == '1' ]]
           CLEANUP_SOURCE="${CLEANUP_SOURCE%$'\n'}"
           readonly CLEANUP_SOURCE CLEANUP_READ_STATUS
-
           PUBLISHER_SOURCE=''
           PUBLISHER_READ_STATUS='0'
           IFS= read -r -d '' PUBLISHER_SOURCE <<'PY' || PUBLISHER_READ_STATUS="$?"
@@ -716,28 +741,15 @@ jobs:
           import json
           import os
           import stat
-
-          EXPECTED_ENV = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "HARVEY_STAGING", "HARVEY_STEP_SUMMARY"}
-          CONSERVATION_KEYS = {
-              "actionsArtifactsCreated", "candidateValuesPresent", "durableRawOutputs",
-              "networkConnectAttemptsByAuditedPrograms", "providerAuthoritiesPresent",
-              "publicCorpusBytesPresent", "releasesPresent", "repositoryCheckouts",
-              "scannerExecutions", "signalsSentByAuditedPrograms", "targetsAccessed",
-          }
-          OBSERVATION_KEYS = {
-              "controllerCovered", "descendantObserved", "descendantTcpLoopbackBindDenied",
-              "denialArmRejected", "everyOwnedActive", "globalRowsPersisted", "helperExitCode",
-              "naturalCloseEmpty", "ownedGroupRootObserved", "p1RuntimeAuthorityChecksPassed",
-              "p4SurfaceAndEnvironmentControlsPassed", "p5CleanupControlPassed", "profileSha256",
-              "publisherCovered", "queryArgvSha256", "remainingMemberForgeryRejected",
-              "remoteEndpointsAttempted", "signalsSent", "successfulBinds",
-              "tcpLoopbackBindDenied", "teardownCovered", "udpLoopbackBindDenied",
-              "unixSocketBindDenied",
-          }
-          RUNTIME_KEYS = {
-              "cleanupSha256", "controllerSha256", "denyPsProfileSha256",
-              "helperDescendantSha256", "helperSha256", "networkChildSha256",
-              "networkGrandchildSha256", "ps", "publisherSha256", "python", "sandboxExec",
+          EXPECTED_DENY_NETWORK_PROFILE_SHA256 = "9c5b74ccb7b1548dff667033de6f0b70fd71aa836247c164b64ba8bfdaeb4a3b"
+          EXPECTED_ENV = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "TERM", "NO_COLOR", "HARVEY_ROOT", "HARVEY_STAGING", "HARVEY_STEP_SUMMARY", "__CF_USER_TEXT_ENCODING"}
+          DENIED_NAMES = {
+              "grandchildMdnsUnixConnect", "grandchildTcp4LoopbackConnect",
+              "mdnsUnixConnect", "tcp4Bind", "tcp4DocumentationConnect",
+              "tcp4LoopbackConnect", "tcp6Bind", "tcp6DocumentationConnect",
+              "tcp6LoopbackConnect", "udp4Bind", "udp4DocumentationSend",
+              "udp4LoopbackSend", "udp6Bind", "udp6DocumentationSend",
+              "udp6LoopbackSend", "unixBind",
           }
 
           class Rejected(Exception):
@@ -747,6 +759,20 @@ jobs:
               if not value:
                   raise Rejected()
 
+          def sha(value: object) -> bool:
+              return type(value) is str and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+          def exact_identity(value: object, expected_path: str | None) -> None:
+              require(type(value) is dict)
+              path_key = "path" if expected_path is not None else "pathSha256"
+              require(set(value) == {"mode", "sha256", "uid", path_key})
+              require(type(value["mode"]) is str and value["mode"].startswith("0o"))
+              require(sha(value["sha256"]) and type(value["uid"]) is int and value["uid"] >= 0)
+              if expected_path is None:
+                  require(sha(value[path_key]))
+              else:
+                  require(value[path_key] == expected_path)
+
           def strict_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
               result: dict[str, object] = {}
               for key, value in pairs:
@@ -755,78 +781,88 @@ jobs:
               return result
 
           def strict_loads(encoded: bytes) -> dict[str, object]:
-              require(len(encoded) <= 16384 and encoded.endswith(b"\n"))
+              require(len(encoded) <= 32768 and encoded.endswith(b"\n"))
               value = json.loads(encoded.decode("ascii"), object_pairs_hook=strict_pairs)
               require(type(value) is dict)
               return value
 
-          def sha(value: str) -> bool:
-              return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
-
-          def exact_identity(value: object, expose_path: bool) -> None:
-              require(type(value) is dict)
-              required = {"mode", "sha256", "uid", "path" if expose_path else "pathSha256"}
-              require(set(value) == required)
-              require(type(value["mode"]) is str and value["mode"].startswith("0o"))
-              require(type(value["sha256"]) is str and sha(value["sha256"]))
-              require(type(value["uid"]) is int and value["uid"] >= 0)
-              path_key = "path" if expose_path else "pathSha256"
-              require(type(value[path_key]) is str)
-              if expose_path:
-                  require(value[path_key] in {"/bin/ps", "/usr/bin/sandbox-exec"})
-              else:
-                  require(sha(value[path_key]))
-
           def validate_candidate(value: dict[str, object]) -> None:
               require(set(value) == {"authorizesCampaign", "conservation", "observations", "platform", "runtimeIdentities", "schemaVersion", "source"})
               require(value["authorizesCampaign"] is False)
-              require(value["schemaVersion"] == "Harvey1799HostedArm64CapabilityPreflightCandidateV2")
-
+              require(value["schemaVersion"] == "Harvey1799HostedArm64CapabilityPreflightCandidateV3")
               conservation = value["conservation"]
-              require(type(conservation) is dict and set(conservation) == CONSERVATION_KEYS)
-              require(all(type(item) is int and item == 0 for item in conservation.values()))
-
+              require(conservation == {
+                  "actionsArtifactsCreated": 0, "candidateValuesPresent": 0,
+                  "durableRawOutputs": 0, "networkBindAttemptsByAuditedPrograms": 5,
+                  "networkConnectAttemptsByAuditedPrograms": 11,
+                  "providerAuthoritiesPresent": 0, "publicCorpusBytesPresent": 0,
+                  "releasesPresent": 0, "repositoryCheckouts": 0, "scannerExecutions": 0,
+                  "signalsSentByAuditedPrograms": 0,
+                  "successfulNetworkConnectsByAuditedPrograms": 0, "targetsAccessed": 0,
+              })
               observations = value["observations"]
-              require(type(observations) is dict and set(observations) == OBSERVATION_KEYS)
-              true_keys = OBSERVATION_KEYS - {
-                  "globalRowsPersisted", "helperExitCode", "profileSha256", "queryArgvSha256",
-                  "remoteEndpointsAttempted", "signalsSent", "successfulBinds",
-              }
-              require(all(observations[key] is True for key in true_keys))
+              require(type(observations) is dict and set(observations) == {
+                  "allowControlAttempts", "allowControlSuccessful", "controllerCovered",
+                  "denialArmRejected", "deniedErrnos", "descendantObserved",
+                  "everyOwnedActive", "globalRowsPersisted", "helperExitCode",
+                  "naturalCloseEmpty", "nonNetworkFileIoPassed",
+                  "nonNetworkProcessExecPassed", "ownedGroupRootObserved", "p5CleanupControlPassed",
+                  "profileSha256", "publisherCovered", "remoteEndpointsAttempted",
+                  "signalsSent", "successfulBinds", "teardownCovered",
+              })
+              require(observations["allowControlAttempts"] == 6)
+              require(observations["allowControlSuccessful"] == 6)
+              require(observations["remoteEndpointsAttempted"] == 4)
+              require(observations["helperExitCode"] == 0)
+              require(observations["signalsSent"] == 0)
+              require(observations["successfulBinds"] == 0)
+              for key in {
+                  "controllerCovered", "denialArmRejected", "descendantObserved",
+                  "everyOwnedActive", "naturalCloseEmpty", "nonNetworkFileIoPassed",
+                  "nonNetworkProcessExecPassed", "ownedGroupRootObserved",
+                  "p5CleanupControlPassed", "publisherCovered", "teardownCovered",
+              }:
+                  require(observations[key] is True)
               require(observations["globalRowsPersisted"] is False)
-              for key in ["helperExitCode", "remoteEndpointsAttempted", "signalsSent", "successfulBinds"]:
-                  require(type(observations[key]) is int and observations[key] == 0)
-              require(type(observations["profileSha256"]) is str and sha(observations["profileSha256"]))
-              require(type(observations["queryArgvSha256"]) is str and sha(observations["queryArgvSha256"]))
-
+              require(observations["profileSha256"] == EXPECTED_DENY_NETWORK_PROFILE_SHA256)
+              errnos = observations["deniedErrnos"]
+              require(type(errnos) is dict and set(errnos) == DENIED_NAMES)
+              require(all(type(item) is int and item in {1, 13} for item in errnos.values()))
               platform = value["platform"]
               require(type(platform) is dict and set(platform) == {"architecture", "imageOS", "imageVersion", "runnerOS"})
               require(platform["architecture"] == "arm64" and platform["runnerOS"] == "macOS")
-              for key in ["imageOS", "imageVersion"]:
-                  require(type(platform[key]) is str and 1 <= len(platform[key]) <= 64)
+              for key in {"imageOS", "imageVersion"}:
+                  require(type(platform[key]) is str)
+                  require(1 <= len(platform[key]) <= 64)
                   require(all(character.isalnum() or character in "._-" for character in platform[key]))
-
               runtime = value["runtimeIdentities"]
-              require(type(runtime) is dict and set(runtime) == RUNTIME_KEYS)
-              for key in RUNTIME_KEYS - {"ps", "python", "sandboxExec"}:
-                  require(type(runtime[key]) is str and sha(runtime[key]))
-              exact_identity(runtime["ps"], True)
-              exact_identity(runtime["python"], False)
-              exact_identity(runtime["sandboxExec"], True)
-
+              require(type(runtime) is dict)
+              require(set(runtime) == {
+                  "cleanupSha256", "controllerSha256", "denyPsProfileSha256",
+                  "helperDescendantSha256", "helperSha256", "networkAllowSha256",
+                  "networkChildSha256", "networkGrandchildSha256", "ps",
+                  "publisherSha256", "python", "sandboxExec",
+              })
+              for key in set(runtime) - {"ps", "python", "sandboxExec"}:
+                  require(sha(runtime[key]))
+              exact_identity(runtime["ps"], "/bin/ps")
+              exact_identity(runtime["python"], None)
+              exact_identity(runtime["sandboxExec"], "/usr/bin/sandbox-exec")
               source = value["source"]
-              require(type(source) is dict and set(source) == {"eventName", "headSha", "ref", "runAttempt", "runId", "workflowPath"})
+              require(type(source) is dict and set(source) == {
+                  "eventName", "headSha", "ref", "runAttempt", "runId", "workflowPath",
+              })
               require(source["eventName"] == "workflow_dispatch")
-              require(source["ref"] == "refs/heads/main")
-              require(source["runAttempt"] == 1)
+              require(source["ref"] == "refs/heads/main" and source["runAttempt"] == 1)
               require(source["workflowPath"] == ".github/workflows/issue-1799-hosted-preflight.yml")
-              require(type(source["headSha"]) is str and len(source["headSha"]) == 40 and all(character in "0123456789abcdef" for character in source["headSha"]))
               require(type(source["runId"]) is str and source["runId"].isdigit())
+              require(type(source["headSha"]) is str and len(source["headSha"]) == 40)
+              require(all(character in "0123456789abcdef" for character in source["headSha"]))
 
           def rejected(value: dict[str, object]) -> None:
               try:
                   validate_candidate(value)
-              except Rejected:
+              except (Rejected, KeyError, TypeError):
                   return
               raise Rejected()
 
@@ -834,39 +870,21 @@ jobs:
               return json.loads(json.dumps(value))
 
           def selftests(candidate: dict[str, object]) -> None:
-              missing = clone(candidate)
-              del missing["source"]
-              rejected(missing)
-              extra = clone(candidate)
-              extra["unexpectedSurface"] = 0
-              rejected(extra)
-              wrong = clone(candidate)
-              wrong["authorizesCampaign"] = 0
-              rejected(wrong)
-              authority = clone(candidate)
-              authority["authorizesCampaign"] = True
-              rejected(authority)
-              remaining = clone(candidate)
-              remaining["observations"]["naturalCloseEmpty"] = False
-              rejected(remaining)
+              arbitrary = clone(candidate)
+              arbitrary["observations"]["profileSha256"] = "0" * 64
+              rejected(arbitrary)
+              zero_attempts = clone(candidate)
+              zero_attempts["conservation"]["networkConnectAttemptsByAuditedPrograms"] = 0
+              rejected(zero_attempts)
               successful = clone(candidate)
-              successful["observations"]["successfulBinds"] = 1
+              successful["conservation"]["successfulNetworkConnectsByAuditedPrograms"] = 1
               rejected(successful)
-              uncovered = clone(candidate)
-              uncovered["observations"]["teardownCovered"] = False
-              rejected(uncovered)
-              nonzero = clone(candidate)
-              nonzero["conservation"]["targetsAccessed"] = 1
-              rejected(nonzero)
-              premature = clone(candidate)
-              premature["passed"] = True
-              rejected(premature)
-              marker = clone(candidate)
-              marker["publicationMarker"] = "duplicate"
-              rejected(marker)
-              unknown_schema = clone(candidate)
-              unknown_schema["schemaVersion"] = "unknown"
-              rejected(unknown_schema)
+              wrong_errno = clone(candidate)
+              wrong_errno["observations"]["deniedErrnos"]["tcp4LoopbackConnect"] = 61
+              rejected(wrong_errno)
+              residue = clone(candidate)
+              residue["conservation"]["targetsAccessed"] = 1
+              rejected(residue)
               try:
                   strict_loads(b'{"a":1,"a":2}\n')
               except Rejected:
@@ -874,123 +892,91 @@ jobs:
               else:
                   raise Rejected()
 
-          def safe_unlink(path: str) -> None:
-              try:
-                  os.lstat(path)
-              except FileNotFoundError:
-                  return
-              try:
-                  os.unlink(path)
-              except OSError:
-                  pass
-
           def final_receipt(candidate: dict[str, object]) -> dict[str, object]:
               observations = candidate["observations"]
               return {
                   "authorizesCampaign": False,
                   "conservation": candidate["conservation"],
                   "controls": {
-                      "p1RuntimeAuthorityChecksPassed": True,
-                      "p2PsPositiveAndDenialArmsPassed": True,
-                      "p3InheritedDenyAndForgeryArmPassed": True,
-                      "p4ZeroSurfaceAndEnvironmentArmPassed": True,
-                      "p5ReceiptAndTeardownArmsPassed": True,
+                      "exactProfileAuthorityPassed": True, "localAllowTwinsPassed": True,
+                      "ownedProcessCensusPassed": True, "strictDenyErrnosPassed": True,
+                      "teardownPassed": True, "unwrappedDescendantInheritancePassed": True,
                   },
                   "denyNetwork": {
-                      "controllerCovered": observations["controllerCovered"],
-                      "descendantTcpLoopbackBindDenied": observations["descendantTcpLoopbackBindDenied"],
+                      "deniedErrnos": observations["deniedErrnos"],
                       "profileSha256": observations["profileSha256"],
-                      "publisherCovered": observations["publisherCovered"],
                       "remoteEndpointsAttempted": observations["remoteEndpointsAttempted"],
                       "successfulBinds": observations["successfulBinds"],
-                      "tcpLoopbackBindDenied": observations["tcpLoopbackBindDenied"],
-                      "teardownCovered": observations["teardownCovered"],
-                      "udpLoopbackBindDenied": observations["udpLoopbackBindDenied"],
-                      "unixSocketBindDenied": observations["unixSocketBindDenied"],
+                      "successfulNetworkConnects": 0,
                   },
-                  "issue": 1799,
-                  "passed": True,
-                  "platform": candidate["platform"],
+                  "issue": 1799, "passed": True, "platform": candidate["platform"],
+                  "nonNetworkControls": {
+                      "fileIo": observations["nonNetworkFileIoPassed"],
+                      "processExec": observations["nonNetworkProcessExecPassed"],
+                  },
                   "processCensus": {
                       "descendantObserved": observations["descendantObserved"],
-                      "denialArmRejected": observations["denialArmRejected"],
-                      "globalRowsPersisted": observations["globalRowsPersisted"],
-                      "helperExitCode": observations["helperExitCode"],
                       "naturalCloseEmpty": observations["naturalCloseEmpty"],
                       "ownedGroupRootObserved": observations["ownedGroupRootObserved"],
-                      "queryArgvSha256": observations["queryArgvSha256"],
-                      "remainingMemberForgeryRejected": observations["remainingMemberForgeryRejected"],
                       "signalsSent": observations["signalsSent"],
                   },
                   "runtimeIdentities": candidate["runtimeIdentities"],
-                  "schemaVersion": "Harvey1799HostedArm64CapabilityPreflightV2",
+                  "schemaVersion": "Harvey1799HostedArm64CapabilityPreflightV3",
                   "source": candidate["source"],
                   "teardown": {
                       "ephemeralRootAbsent": True,
                       "processGroupEmpty": observations["naturalCloseEmpty"],
-                      "specialEntriesRead": 0,
-                      "stagingReceiptAbsentAtPublication": True,
-                      "symlinkTargetsFollowed": 0,
-                      "teardownComplete": True,
+                      "specialEntriesRead": 0, "stagingReceiptAbsentAtPublication": True,
+                      "symlinkTargetsFollowed": 0, "teardownComplete": True,
                       "unixSocketAbsent": True,
                   },
               }
 
-          def main() -> None:
+          def safe_unlink(path: str) -> None:
+              try:
+                  os.unlink(path)
+              except OSError:
+                  pass
+
+          try:
               require(set(os.environ) == EXPECTED_ENV)
               root = os.environ["HARVEY_ROOT"]
               staging = os.environ["HARVEY_STAGING"]
               summary = os.environ["HARVEY_STEP_SUMMARY"]
-              require(os.path.isabs(root) and os.path.isabs(staging) and os.path.isabs(summary))
               require(os.environ["TMPDIR"] == root)
               require(not os.path.lexists(root) and not os.path.lexists(root + ".p5-control"))
-              staging_fd = os.open(staging, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+              descriptor = os.open(staging, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
               try:
-                  info = os.fstat(staging_fd)
-                  require(stat.S_ISREG(info.st_mode))
-                  require(stat.S_IMODE(info.st_mode) == 0o400 and info.st_uid == os.getuid())
-                  encoded = os.read(staging_fd, 16385)
+                  info = os.fstat(descriptor)
+                  require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o400)
+                  candidate = strict_loads(os.read(descriptor, 32769))
               finally:
-                  os.close(staging_fd)
-              candidate = strict_loads(encoded)
+                  os.close(descriptor)
               validate_candidate(candidate)
               selftests(candidate)
               os.unlink(staging)
               require(not os.path.lexists(staging) and not os.path.lexists(root))
               receipt = json.dumps(final_receipt(candidate), sort_keys=True, separators=(",", ":"))
               digest = hashlib.sha256(receipt.encode("ascii")).hexdigest()
-              summary_bytes = ("# #1799 synthetic hosted capability preflight\n\n`" + receipt + "`\n\n`sha256=" + digest + "`\n").encode("ascii")
+              body = ("# #1799 synthetic hosted capability preflight\n\n`" + receipt + "`\n\n`sha256=" + digest + "`\n").encode("ascii")
               summary_fd = os.open(summary, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
               try:
                   require(stat.S_ISREG(os.fstat(summary_fd).st_mode))
-                  os.write(summary_fd, summary_bytes)
+                  os.write(summary_fd, body)
                   os.fsync(summary_fd)
               finally:
                   os.close(summary_fd)
               os.write(1, (receipt + "\nsha256=" + digest + "\n").encode("ascii"))
-              os._exit(0)
-
-          try:
-              main()
           except BaseException:
               safe_unlink(os.environ.get("HARVEY_STAGING", ""))
-              os._exit(1)
+              raise SystemExit(1)
           PY
           [[ "${PUBLISHER_READ_STATUS}" == '1' ]]
           PUBLISHER_SOURCE="${PUBLISHER_SOURCE%$'\n'}"
           readonly PUBLISHER_SOURCE PUBLISHER_READ_STATUS
-
-          "$SANDBOX_EXEC" -p "$DENY_NETWORK_PROFILE" "$ENV_BIN" -i \
-            "PATH=$FIXED_PATH" 'HOME=/var/empty' 'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
-            'HARVEY_MODE=pre-root' \
-            "HARVEY_EVENT_NAME=$HARVEY_EVENT_NAME" "HARVEY_HEAD_SHA=$HARVEY_HEAD_SHA" \
-            "HARVEY_IMAGE_OS=$ImageOS" "HARVEY_IMAGE_VERSION=$ImageVersion" \
-            "HARVEY_REF=$HARVEY_REF" "HARVEY_REPOSITORY=$HARVEY_REPOSITORY" \
-            "HARVEY_RUN_ATTEMPT=$HARVEY_RUN_ATTEMPT" "HARVEY_RUN_ID=$HARVEY_RUN_ID" \
-            "HARVEY_RUNNER_ARCH=$RUNNER_ARCH" "HARVEY_RUNNER_OS=$RUNNER_OS" \
-            "HARVEY_RUNNER_TEMP=$RUNNER_TEMP" "HARVEY_WORKFLOW_REF=$HARVEY_WORKFLOW_REF" \
-            "$PYTHON" -I -S -c "$CONTROLLER_SOURCE" --pre-root
-
+          "$SANDBOX_EXEC" -p "$DENY_NETWORK_PROFILE" /usr/bin/true
+          readonly profile_sha256="$(printf '%s' "$DENY_NETWORK_PROFILE" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+          [[ "$profile_sha256" == "$EXPECTED_DENY_NETWORK_PROFILE_SHA256" ]]
           readonly RANDOM_HEX="$(/usr/bin/od -An -N16 -tx1 /dev/urandom | /usr/bin/tr -d ' \n')"
           [[ "$RANDOM_HEX" =~ ^[0-9a-f]{32}$ ]]
           readonly ROOT="${RUNNER_TEMP%/}/harvey-1799-preflight.${HARVEY_RUN_ID}.${HARVEY_RUN_ATTEMPT}.${RANDOM_HEX}"
@@ -1000,19 +986,25 @@ jobs:
 
           cleanup_on_exit() {
             readonly primary_status=$?
+            trap - EXIT HUP INT TERM
             set +e
-            "$SANDBOX_EXEC" -p "$DENY_NETWORK_PROFILE" "$ENV_BIN" -i \
+            "$ENV_BIN" -i \
               "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
               'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
               "HARVEY_ROOT=$ROOT" "HARVEY_STAGING=$STAGING" \
               "$PYTHON" -I -S -c "$CLEANUP_SOURCE"
+            readonly cleanup_status=$?
+            if [[ "$cleanup_status" != '0' ]]; then
+              exit "$cleanup_status"
+            fi
             exit "$primary_status"
           }
-          trap cleanup_on_exit EXIT
+          trap cleanup_on_exit EXIT HUP INT TERM
 
           printf '%s' "$CONTROLLER_SOURCE" >"$ROOT/controller.py"
           printf '%s' "$HELPER_SOURCE" >"$ROOT/helper.py"
           printf '%s' "$HELPER_DESCENDANT_SOURCE" >"$ROOT/helper-descendant.py"
+          printf '%s' "$NETWORK_ALLOW_SOURCE" >"$ROOT/network-allow.py"
           printf '%s' "$NETWORK_CHILD_SOURCE" >"$ROOT/network-child.py"
           printf '%s' "$NETWORK_GRANDCHILD_SOURCE" >"$ROOT/network-grandchild.py"
           printf '%s' "$PUBLISHER_SOURCE" >"$ROOT/publisher.py"
@@ -1020,14 +1012,20 @@ jobs:
           printf '%s' "$DENY_NETWORK_PROFILE" >"$ROOT/deny-network.sb"
           printf '%s' "$DENY_PS_PROFILE" >"$ROOT/deny-ps.sb"
           /bin/chmod 0500 "$ROOT/controller.py" "$ROOT/helper.py" "$ROOT/helper-descendant.py" \
-            "$ROOT/network-child.py" "$ROOT/network-grandchild.py" "$ROOT/publisher.py" "$ROOT/cleanup.py"
+            "$ROOT/network-allow.py" "$ROOT/network-child.py" "$ROOT/network-grandchild.py" \
+            "$ROOT/publisher.py" "$ROOT/cleanup.py"
           /bin/chmod 0400 "$ROOT/deny-network.sb" "$ROOT/deny-ps.sb"
 
-          set +e
-          "$SANDBOX_EXEC" -f "$ROOT/deny-network.sb" "$ENV_BIN" -i \
+          "$ENV_BIN" -i \
             "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
             'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
-            'HARVEY_MODE=run' \
+            "HARVEY_ROOT=$ROOT" \
+            "$PYTHON" -I -S "$ROOT/network-allow.py" >"$ROOT/allow-control.json" 3>&-
+          /bin/chmod 0400 "$ROOT/allow-control.json"
+
+          "$ENV_BIN" -i \
+            "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
+            'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
             "HARVEY_EVENT_NAME=$HARVEY_EVENT_NAME" "HARVEY_HEAD_SHA=$HARVEY_HEAD_SHA" \
             "HARVEY_IMAGE_OS=$ImageOS" "HARVEY_IMAGE_VERSION=$ImageVersion" \
             "HARVEY_REF=$HARVEY_REF" "HARVEY_REPOSITORY=$HARVEY_REPOSITORY" \
@@ -1035,19 +1033,14 @@ jobs:
             "HARVEY_RUNNER_ARCH=$RUNNER_ARCH" "HARVEY_RUNNER_OS=$RUNNER_OS" \
             "HARVEY_RUNNER_TEMP=$RUNNER_TEMP" "HARVEY_WORKFLOW_REF=$HARVEY_WORKFLOW_REF" \
             "HARVEY_ROOT=$ROOT" "HARVEY_STAGING=$STAGING" \
-            "$PYTHON" -I -S "$ROOT/controller.py" --run
-          readonly controller_status=$?
-          set -e
-          [[ "$controller_status" == '0' ]]
+            "$PYTHON" -I -S "$ROOT/controller.py" 3>&-
           [[ ! -e "$ROOT" && ! -e "$ROOT.p5-control" && -f "$STAGING" ]]
 
-          set +e
           "$SANDBOX_EXEC" -p "$DENY_NETWORK_PROFILE" "$ENV_BIN" -i \
             "PATH=$FIXED_PATH" 'HOME=/var/empty' "TMPDIR=$ROOT" \
             'LANG=C' 'LC_ALL=C' 'TZ=UTC' 'TERM=dumb' 'NO_COLOR=1' \
-            "HARVEY_ROOT=$ROOT" "HARVEY_STAGING=$STAGING" "HARVEY_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" \
+            "HARVEY_ROOT=$ROOT" "HARVEY_STAGING=$STAGING" \
+            "HARVEY_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" \
             "$PYTHON" -I -S -c "$PUBLISHER_SOURCE" >&3
-          readonly publisher_status=$?
-          set -e
-          [[ "$publisher_status" == '0' ]]
-          trap - EXIT
+          [[ ! -e "$ROOT" && ! -e "$ROOT.p5-control" && ! -e "$STAGING" ]]
+          trap - EXIT HUP INT TERM
