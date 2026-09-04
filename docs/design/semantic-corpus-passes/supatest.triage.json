@@ -1,146 +1,503 @@
-[
-  {
-    "id": "SEM-ST-01",
-    "title": "Broken RLS: articles UPDATE policy guarded by an always-true tautology",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20250201000000_initial_vulnblog.sql:76",
-    "status": "Open",
-    "evidence": "Policy \"Authors can update articles\" FOR UPDATE USING (author_id IS NOT NULL OR author_id IS NULL) — the predicate is a tautology (always true), so any user rewrites any article. Passes the Supabase linter because it is not the literal `true`.",
-    "impact": "Any authenticated or anon caller can modify every article (defacement).",
-    "fix": "USING (auth.uid() = author_id).",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-rerun-20260904-lane-b/targets/SupatestVibeDemo"
   },
-  {
-    "id": "SEM-ST-02",
-    "title": "Broken RLS: articles DELETE policy guarded by the same always-true tautology",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20250201000000_initial_vulnblog.sql:81",
-    "status": "Open",
-    "evidence": "Policy \"Authors can delete articles\" FOR DELETE USING (author_id IS NOT NULL OR author_id IS NULL) — same tautology; any caller destroys any article.",
-    "impact": "Any caller can delete every article.",
-    "fix": "USING (auth.uid() = author_id).",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
+  "summary": {
+    "input_count": 13,
+    "duplicates": 3,
+    "false_positives": 1,
+    "true_positives": 9,
+    "needs_manual_test": 0,
+    "by_severity": {
+      "HIGH": 6,
+      "MEDIUM": 3,
+      "LOW": 0
+    }
   },
-  {
-    "id": "SEM-ST-03",
-    "title": "Unpublished draft articles readable by anon — SELECT USING(true) with a client-only published filter",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/components/ArticleList.tsx:48",
-    "status": "Open",
-    "evidence": "articles SELECT policy is USING(true); ArticleList gates drafts only client-side via .eq('published', true) at ArticleList.tsx:48. A direct anon PostgREST query without that filter returns unpublished drafts.",
-    "impact": "Anon reads every unpublished draft directly via the anon key.",
-    "fix": "Enforce published/ownership in the SELECT policy, not the client query.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-04",
-    "title": "Public avatars storage bucket — uploaded files world-readable",
-    "severity": "High",
-    "confidence": "Likely",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/components/Profile.tsx:74",
-    "status": "Open",
-    "evidence": "handleAvatarUpload uploads to the 'avatars' storage bucket then calls getPublicUrl (Profile.tsx:74-81). A public bucket makes every uploaded object world-readable by URL.",
-    "impact": "Any uploaded avatar (and anything else placed in the bucket) is readable by anyone.",
-    "fix": "Make the bucket private and serve via signed URLs, or scope object read policies.",
-    "value": 4,
-    "ease": 3,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-05",
-    "title": "User enumeration via an unrestricted SECURITY DEFINER RPC (get_user_by_email)",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20250201000000_initial_vulnblog.sql:90",
-    "status": "Open",
-    "evidence": "get_user_by_email(user_email) is SECURITY DEFINER and returns id/username/email/avatar for ANY email with no auth.uid() caller check — an enumeration oracle. Reinforced by differential login-vs-signup error messages in Auth.tsx:58-60.",
-    "impact": "Any caller enumerates registered users and harvests their emails by guessing addresses.",
-    "fix": "Add an in-function caller check or drop the RPC; use SECURITY INVOKER.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-06",
-    "title": "Unauthenticated Realtime subscription streams every article change",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/components/ArticleList.tsx:18",
-    "status": "Open",
-    "evidence": "ArticleList subscribes to postgres_changes on 'articles' with the anon client (.channel().on('postgres_changes',{table:'articles'}).subscribe(), ArticleList.tsx:18-28). Because the SELECT policy is USING(true), Realtime authorization streams every row change to any anon holder of the anon key.",
-    "impact": "Anon clients receive a live feed of all article inserts/updates/deletes.",
-    "fix": "Tighten the SELECT RLS policy that backs Realtime authorization.",
-    "value": 3,
-    "ease": 3,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-07",
-    "title": "Weak password policy — minLength 6, no complexity, no leaked-password protection",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/components/Auth.tsx:127",
-    "status": "Open",
-    "evidence": "The password input enforces only minLength=6 (Auth.tsx:127); no complexity check and HIBP/leaked-password protection is a project Auth-config setting to confirm.",
-    "impact": "Accounts protected by trivially weak passwords.",
-    "fix": "Enable leaked-password protection and a stronger policy in project Auth config.",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-08",
-    "title": "Open self-service signup with auto-confirm",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/components/Auth.tsx:34",
-    "status": "Open",
-    "evidence": "supabase.auth.signUp is open to anyone (Auth.tsx:34-55) and the UI reports the account is immediately usable ('Vous pouvez maintenant vous connecter'), indicating auto-confirm. Account creation is unrestricted.",
-    "impact": "Anyone can create accounts at will (abuse, spam, enumeration surface).",
-    "fix": "Require email confirmation and/or invite-gate signup in Auth config.",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-ST-09",
-    "title": "profiles policies expose every email and allow any edit or removal",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20250201000000_initial_vulnblog.sql:43",
-    "status": "Open",
-    "evidence": "profiles SELECT policy is USING(true) (line 43-45), exposing every user's email. The write policies (lines 53-60) use an always-true predicate (id IS NOT NULL OR id IS NULL), so anyone can alter or remove any profile row.",
-    "impact": "Full breach of the profiles table — every email exposed; any row alterable/removable by any caller.",
-    "fix": "Scope SELECT to the owner/authorized roles; use auth.uid() = id for writes.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  }
-]
+  "findings": [
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "Public article policy discloses every unpublished draft",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 68,
+      "category": "Broken Access Control / Confidential Data Exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The browser uses the public anon client created at src/lib/supabase.ts:6-13 to select article rows at src/components/ArticleList.tsx:37-52, establishing an externally reachable read path. RLS is enabled, but the SELECT policy at supabase/migrations/20250201000000_initial_vulnblog.sql:68-69 applies an unconditional USING (true), with no published or author restriction; the home page\u2019s client-side published filter at src/components/ArticleList.tsx:48-50 does not protect direct API access. The unauthenticated article route also fetches all fields by attacker-supplied ID without checking publication status at src/pages/ArticlePage.tsx:27-47 and src/App.tsx:113-117, confirming there is no authentication or authorization gate protecting draft content.\n\nThe public anonymous client in `src/lib/supabase.ts:6-13` can read article rows, while the RLS policy at `supabase/migrations/20250201000000_initial_vulnblog.sql:68-69` unconditionally permits every SELECT. The published-only condition in `src/components/ArticleList.tsx:48-50` is client-side, and `src/pages/ArticlePage.tsx:27-47` reads all fields without a publication or authentication check, so remote unauthenticated disclosure of any stored draft is realistic.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/ArticleList.tsx:37",
+        "src/components/ArticleList.tsx:38"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f001"
+      ],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Tautological RLS policy allows anonymous editing and reassignment of every article",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 76,
+      "category": "Broken Access Control / Unauthorized Modification",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The shipped client performs an articles UPDATE at src/pages/ArticlePage.tsx:61, while src/lib/supabase.ts:6-13 configures the browser client with the public anon key, so the Supabase API is an externally reachable untrusted boundary. The policy at supabase/migrations/20250201000000_initial_vulnblog.sql:76-78 has no role restriction and uses an exhaustive null tautology, authorizing every existing row and, through the implicit check, every resulting row. The ownership comparison at src/pages/ArticlePage.tsx:21 only controls whether buttons render at src/pages/ArticlePage.tsx:240 and supplies no database-side authorization against a direct client/API update.\n\nThe UPDATE policy at supabase/migrations/20250201000000_initial_vulnblog.sql:76-78 applies without a role restriction and its tautological USING expression authorizes every article row, with the same condition implicitly governing resulting rows. The public browser client at src/lib/supabase.ts:6-13 reaches this boundary with the anon key, while src/pages/ArticlePage.tsx:21 and :240 only hide UI controls and do not enforce database authorization for the update at :61.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/ArticlePage.tsx:61"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "Tautological RLS policy permits unauthenticated modification of any profile",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 53,
+      "category": "Broken Access Control / Unauthorized Modification",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The browser creates its Supabase client with the public anon key at src/lib/supabase.ts:6-13, and the application reaches the profiles update operation at src/components/Profile.tsx:45. Although RLS is enabled at supabase/migrations/20250201000000_initial_vulnblog.sql:20, the UPDATE policy at supabase/migrations/20250201000000_initial_vulnblog.sql:53-55 has no role restriction and uses a tautology without an ownership check or separate WITH CHECK. The UI passes the current user's ID at src/pages/Dashboard.tsx:64, but that client-side restriction does not protect the externally reachable Data API, allowing an anon or authenticated caller to modify another row's writable profile fields.\n\nThe public client uses the anon key at src/lib/supabase.ts:6-13, while the profiles SELECT policy at supabase/migrations/20250201000000_initial_vulnblog.sql:43-45 exposes rows needed to identify a target. The UPDATE policy at lines 53-55 applies without a role restriction and authorizes every row through a tautology, so the client-side user-ID constraint in src/components/Profile.tsx:45-51 does not prevent unauthenticated remote modification through a deployed Data API.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/Profile.tsx:45"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f002"
+      ],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "Tautological DELETE policy lets anonymous callers erase users and their articles",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 58,
+      "category": "Broken Access Control / Destructive Action",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the standard externally reachable Supabase/PostgREST boundary, anonymous callers are untrusted and use the browser-exposed anon client configured at src/lib/supabase.ts:13. The DELETE policy defaults to PUBLIC and has a tautological USING clause at supabase/migrations/20250201000000_initial_vulnblog.sql:58, while the public SELECT policy at line 43 exposes victim identifiers. Deleting a profile triggers the explicit ON DELETE CASCADE on articles.author_id at line 30, so the impact is feasible cross-user data destruction.\n\nThe DELETE policy at `supabase/migrations/20250201000000_initial_vulnblog.sql:58` has no role restriction and its tautological `USING` expression permits anonymous deletion of any profile exposed by the public SELECT policy at line 43. The browser client uses the public anon credentials at `src/lib/supabase.ts:13`, and deleting a victim profile cascades to that user\u2019s articles through the foreign key at line 30, enabling unauthenticated cross-user data destruction.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/lib/supabase.ts:13",
+        "supabase/migrations/20250201000000_initial_vulnblog.sql:58"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "Public RLS policy exposes every user's email address",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 43,
+      "category": "Broken Access Control / Sensitive Data Exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The shipped browser client uses the public anon configuration at src/lib/supabase.ts:6-13, and src/components/Profile.tsx:23-27 confirms direct client-side `profiles` reads with `select('*')`. The table stores email with each profile at supabase/migrations/20250201000000_initial_vulnblog.sql:11-16, while its SELECT policy omits a role restriction and unconditionally permits every row at supabase/migrations/20250201000000_initial_vulnblog.sql:43-45. The UI\u2019s authenticated dashboard gate at src/App.tsx:118-123 does not constrain direct requests to the externally reachable Supabase API, and no repository grant restriction or narrower SELECT policy protects anon callers.\n\nThe browser client exposes the public Supabase configuration at src/lib/supabase.ts:6-13, while the profiles SELECT policy unconditionally permits every row at supabase/migrations/20250201000000_initial_vulnblog.sql:43-45. Because profiles include email at migration lines 11-16 and the client directly selects all profile fields at src/components/Profile.tsx:23-27, an unauthenticated remote caller can access sensitive profile data without an additional exploitation precondition; the dashboard gate at src/App.tsx:118-123 does not protect the API.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/Profile.tsx:23"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f008"
+      ],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Tautological RLS policy permits anonymous deletion of all articles",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 81,
+      "category": "Broken Access Control / Destructive Action",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The shipped delete call begins at src/pages/ArticlePage.tsx:80 and applies the route-derived article ID at src/pages/ArticlePage.tsx:83; its author check at src/pages/ArticlePage.tsx:240 only hides the client button. The browser uses the public anon client at src/lib/supabase.ts:4-13, while supabase/migrations/20250201000000_initial_vulnblog.sql:81-83 defines a PUBLIC DELETE policy whose condition is tautologically true, with no authentication or ownership constraint. Assuming the documented standard Supabase deployment at README.md:39-55 and its default public-table grants, an anonymous caller can delete arbitrary article rows, and no protective REVOKE or narrower policy exists in the repository.\n\nAssuming the documented standard Supabase deployment and unchanged default public-table grants, the public anon client in src/lib/supabase.ts:4-13 can reach the destructive operation without authentication. The DELETE policy at supabase/migrations/20250201000000_initial_vulnblog.sql:81-83 has a tautological condition and no ownership check, while the author check around src/pages/ArticlePage.tsx:240 only hides the UI control and does not protect the database operation at lines 80-83.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/ArticlePage.tsx:80",
+        "src/pages/ArticlePage.tsx:81",
+        "src/pages/ArticlePage.tsx:82"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Article ownership is enforced only by hidden UI controls",
+      "file": "src/pages/ArticlePage.tsx",
+      "line": 61,
+      "category": "insecure-direct-object-reference",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -3,
+      "preconditions": [
+        "A valid authenticated user account and session.",
+        "Knowledge of an article UUID belonging to another user, exposed through the public article listing and route."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The externally reachable `/article/:id` route supplies attacker-controlled `id` to `ArticlePage` (src/App.tsx:114, src/pages/ArticlePage.tsx:10), and the save and delete handlers mutate by that ID alone (src/pages/ArticlePage.tsx:61, src/pages/ArticlePage.tsx:80). `isAuthor` only controls rendered buttons (src/pages/ArticlePage.tsx:21, src/pages/ArticlePage.tsx:240), while the deployed UPDATE and DELETE RLS predicates are tautologies with no `auth.uid() = author_id` ownership check (supabase/migrations/20250201000000_initial_vulnblog.sql:76, supabase/migrations/20250201000000_initial_vulnblog.sql:81). Assuming the public route and browser Supabase client cross an untrusted-user boundary, an authenticated user can modify or delete another author's row, causing feasible integrity and data-loss impact.\n\n`ArticlePage` takes the route-controlled ID and uses it alone for updates and deletes at `src/pages/ArticlePage.tsx:61-64` and `:80-83`; the ownership check at line 21 only hides controls at line 240. Assuming the deployed backend uses the checked-in migration, its tautological UPDATE and DELETE policies at `supabase/migrations/20250201000000_initial_vulnblog.sql:76-83` provide no server-side owner check. Two realistic preconditions and authenticated access both derive MEDIUM, so the scanner\u2019s HIGH rating is overstated by one band.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/ArticlePage.tsx:177"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f012",
+      "source": "VULN-FINDINGS.json#11",
+      "title": "Stored avatar URLs make visitors' browsers request attacker-chosen hosts",
+      "file": "src/components/Profile.tsx",
+      "line": 117,
+      "category": "client-side-request-forgery",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 5,
+      "preconditions": [
+        "Attacker has an authenticated account with a profile and published article visible in the public feed.",
+        "A visitor loads the affected feed while their browser can reach the attacker-controlled HTTPS image host."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Authenticated users reach the profile editor through `src/pages/Dashboard.tsx:64`; browser-controlled input at `src/components/Profile.tsx:162`\u2013`165` is persisted unchanged by `handleSave` at `src/components/Profile.tsx:45`\u2013`51` and rendered as an image URL at `src/components/Profile.tsx:117`. The same stored value reaches unauthenticated visitors through the public home feed (`src/pages/Home.tsx:15`, `src/components/ArticleList.tsx:100`\u2013`103`), while the database permits public profile reads at `supabase/migrations/20250201000000_initial_vulnblog.sql:42`\u2013`45`. No origin or scheme restriction covers the path; `type=\"url\"` does not constrain destination hosts, so an attacker-controlled HTTPS image host can receive visitor requests and metadata even where browser policy blocks some private-network or mixed-content destinations.\n\n`Profile.tsx:45`\u2013`51` persists the user-controlled avatar URL without origin restriction, and `ArticleList.tsx:100`\u2013`103` renders it for public-feed visitors under the public-read policy at migration lines 42\u201345. This permits an authenticated attacker\u2019s image host to receive visitor requests and associated metadata; no named deployed control mitigates the path.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:64"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f011",
+      "source": "VULN-FINDINGS.json#10",
+      "title": "Public SECURITY DEFINER RPC exposes a caller-unscoped email lookup oracle",
+      "file": "supabase/migrations/20250201000000_initial_vulnblog.sql",
+      "line": 93,
+      "category": "Security Definer Authorization Bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 2,
+      "preconditions": [
+        "The migration is deployed on an externally reachable RPC path with PUBLIC/anonymous execution unchanged.",
+        "A profile exists for an email address the caller can supply or guess."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The migration creates an externally callable function taking caller-controlled email text and marks it `SECURITY DEFINER` at supabase/migrations/20250201000000_initial_vulnblog.sql:90-94. Its only predicate compares the supplied email directly and returns identifiers and email data, with no `auth.uid()`, JWT-claim, or role check at supabase/migrations/20250201000000_initial_vulnblog.sql:95-100. The permissive profile policy at supabase/migrations/20250201000000_initial_vulnblog.sql:42-45 does not protect this path and instead confirms that anonymous callers currently face no data-access gate; under the measurement exception, the intentional-vulnerability labels do not exclude it.\n\nThe `SECURITY DEFINER` function at lines 90-100 accepts caller-controlled email text and returns profile identifiers and email data without an identity or role check. The migration shows no execution restriction, while the policy at lines 42-45 also supplies no protective data-access gate. With two preconditions but unauthenticated remote access, the required lower-result rule yields MEDIUM, making the claimed HIGH one tier too severe.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "supabase/migrations/20250201000000_initial_vulnblog.sql:90"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Yoan Bernabeu (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "Dashboard exposes every user's unpublished drafts",
+      "file": "src/components/ArticleList.tsx",
+      "line": 48,
+      "category": "broken-access-control",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f005 by fresh semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f005",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "Any authenticated user can overwrite another user's profile",
+      "file": "src/components/Profile.tsx",
+      "line": 45,
+      "category": "insecure-direct-object-reference",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f009 by fresh semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f009",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Public profile reads expose every user's email address",
+      "file": "src/components/Profile.tsx",
+      "line": 25,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f004 by fresh semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f004",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f013",
+      "source": "VULN-FINDINGS.json#12",
+      "title": "Article listing silently truncates as the table grows",
+      "file": "src/components/ArticleList.tsx",
+      "line": 39,
+      "category": "unbounded-query",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The public route renders `ArticleList` through `src/pages/Home.tsx:15`, and `src/components/ArticleList.tsx:37-52` does omit explicit pagination while refetching after Realtime events at `src/components/ArticleList.tsx:23-25`. However, visitors cannot control the query shape, and growing the table requires authenticated inserts constrained by `supabase/migrations/20250201000000_initial_vulnblog.sql:72-73`; the claimed security effect therefore depends on request/row volume and falls under the volumetric-DoS exclusion.",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 2,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "1",
+      "first_links": [
+        "src/pages/Home.tsx:15",
+        "src/components/ArticleList.tsx:15"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}

@@ -5,12 +5,14 @@
 (#1275)** — §§1 and 4 still carry their 2026-07-26 dates and have NOT been re-run since; read every
 number here against the date beside it.
 
-**#1947 denominator update (2026-09-03):** the four shared semantic/free target keys were audited
-against unchanged exact commits and fresh three-vote triage, reducing their positive denominator
-from 49 to **35** (5 Nocode, 9 SuperRedHat, 5 Supatest, 16 CipherX) while retaining all four semantic
-precision negatives. The dated failed semantic attempts remain evidence and no fresh accepted pass
-is claimed. Because the free corpus imports these rows, every §2/§5 free-count below remains a
-historical pre-audit measurement until `pnpm validate:free-recall` is rerun over all pinned clones.
+**#1947 denominator update (audited 2026-09-03; semantic rerun accepted 2026-09-04):** the four
+shared semantic/free target keys were audited against unchanged exact commits and fresh three-vote
+triage, reducing their positive denominator from 49 to **35** (5 Nocode, 9 SuperRedHat, 5 Supatest,
+16 CipherX) while retaining all four semantic precision negatives. A complete September 4 semantic
+rerun now scores 35/35 and clears all four negatives; the dated failed attempts remain immutable
+evidence. This does not remeasure the free tier: because the free corpus imports these rows, every
+§2/§5 free-count below remains a historical pre-audit measurement until `pnpm validate:free-recall`
+is rerun over all pinned clones.
 
 This is the free-tier-only recall figure #868 asked for: the FREE (mechanical, source-only) tier's
 recall, reported as its own number and **never blended** with the paid semantic tier that carries

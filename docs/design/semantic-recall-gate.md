@@ -111,19 +111,20 @@ accepted pass artifact.
 
 It is deliberately **not** wired into `pnpm verify`: like `validate:calibration` (which needs the
 mechanical binaries), it needs an input `pnpm verify` cannot manufacture. The scoring logic is unit
-tested in `src/scan/semantic-corpus.test.ts`, and all four dated completed triage artifacts are
-carried in `docs/design/semantic-corpus-passes/*.2026-09-03.triage.json` and re-scored through the
-production adapter in
-`src/scan/semantic-corpus-passes.test.ts` — both run in verify, so a corpus edit that drops a
-planted-flaw match or weakens a precision negative fails there without needing a live pass.
+tested in `src/scan/semantic-corpus.test.ts`. The four failed September 3 completed triage artifacts
+remain in `docs/design/semantic-corpus-passes/*.2026-09-03.triage.json`, and the accepted September 4
+objects are the undated `*.triage.json` files in the same directory. Both sets are re-scored through
+the production adapter in `src/scan/semantic-corpus-passes.test.ts`, so a corpus edit that drops a
+planted-flaw match or weakens a precision negative fails in verify without another live pass.
 
-## Current #1947 status — reconciled key, fresh pass still required
+## Current #1947 status — accepted fresh pass, 2026-09-04
 
-The four 2026-09-03 failed attempts remain retained with their ballot evidence and receipt hashes.
-They justified the audited key reconciliation but have not been installed as live accepted
-`reports/semantic-recall/<slug>/M1.pass.json` artifacts. Run the complete four-target sequence at the
-unchanged pins, record the completed triage objects through the owner command, and require both
-semantic scoring and semantic-member freshness to pass before claiming a current green gate.
+All four targets were scanned and triaged again at their unchanged exact pins. Their completed
+triage objects were recorded through the owner command as
+`reports/semantic-recall/<slug>/M1.pass.json`. The production semantic validator scores **35/35**
+positives and clears **4/4** precision negatives; the semantic-member freshness validator reports
+all four pass artifacts fresh with zero artifact problems. The September 3 failed attempts remain
+immutable evidence rather than being replaced or restamped.
 
 ## Historical live validation — 2026-07-23 (pre-audit denominator)
 

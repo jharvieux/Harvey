@@ -291,6 +291,31 @@ describe("the shipped corpus", () => {
     }
   });
 
+  it("scores the fresh CipherX anchors without accepting adjacent mechanisms", () => {
+    const corpusTarget = SEMANTIC_CORPUS.find((entry) => entry.slug === "cipherx")!;
+    const cases: Array<[string, string, string]> = [
+      ["public/.htaccess:14", "Backup artifacts are served publicly with an admin account password", "CX-01"],
+      ["src/app/api/search/route.ts:15", "Anonymous search invokes search_lab_data", "CX-24"],
+      ["src/app/api/invoices/[id]/route.ts:21", "Triage duplicate: invoice RPC procedures bypass tenant ownership", "CX-26"],
+      ["supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:63", "Debug invoice RPC discloses another tenant's bill", "CX-27"],
+      ["supabase/migrations/20260101000004_fix_auth_trigger.sql:10", "Signup trigger persists caller-controlled role metadata", "CX-28"],
+    ];
+    for (const [location, title, id] of cases) {
+      expect(scoreSemanticPass(corpusTarget, [finding(location, title)]).rows.find((row) => row.id === id)?.pass).toBe(true);
+    }
+
+    const wrongMechanisms: Array<[string, string, string]> = [
+      ["public/.htaccess:14", "Admin account password policy is documented for operators", "CX-01"],
+      ["src/app/api/search/route.ts:15", "Search response has no pagination", "CX-24"],
+      ["src/app/api/invoices/[id]/route.ts:21", "Invoice route omits a tenant predicate", "CX-26"],
+      ["supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:63", "Invoice table has an unbounded query", "CX-27"],
+      ["supabase/migrations/20260101000004_fix_auth_trigger.sql:10", "Signup trigger omits an audit timestamp", "CX-28"],
+    ];
+    for (const [location, title, id] of wrongMechanisms) {
+      expect(scoreSemanticPass(corpusTarget, [finding(location, title)]).rows.find((row) => row.id === id)?.pass).toBe(false);
+    }
+  });
+
   it("records a baseline no larger than the planted positives it is a baseline for", () => {
     for (const t of SEMANTIC_CORPUS) {
       const positives = t.entries.filter((e) => e.kind === "positive").length;

@@ -1,194 +1,514 @@
-[
-  {
-    "id": "SEM-SRH-01",
-    "title": "Hardcoded Supabase service-role key, NEXT_PUBLIC-exposed to the browser",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "lib/supabaseAdmin.ts:15",
-    "status": "Open",
-    "evidence": "SERVICE_ROLE_KEY is a hardcoded service_role JWT fallback (decoded role:service_role) read from NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY — the NEXT_PUBLIC_ prefix bundles this credential into the browser. It bypasses all RLS.",
-    "impact": "Anyone loading the app obtains a full-RLS-bypass credential to the database.",
-    "fix": "Never prefix service-role with NEXT_PUBLIC_; keep it server-only and rotate.",
-    "value": 5,
-    "ease": 5,
-    "safety": 5
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-rerun-20260904-lane-b/targets/secure-code-review-demo"
   },
-  {
-    "id": "SEM-SRH-02",
-    "title": "Row Level Security disabled on every table",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/0001_init.sql:38",
-    "status": "Open",
-    "evidence": "alter table ... disable row level security on profiles/notes/shares/api_tokens (0001_init.sql:38-41). With RLS off and no policies, every row is reachable via the anon key.",
-    "impact": "Complete cross-tenant exposure of all four tables via PostgREST.",
-    "fix": "Enable RLS and add owner-scoped policies on each table.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
+  "summary": {
+    "input_count": 13,
+    "duplicates": 0,
+    "false_positives": 0,
+    "true_positives": 13,
+    "needs_manual_test": 1,
+    "by_severity": {
+      "HIGH": 3,
+      "MEDIUM": 10,
+      "LOW": 0
+    }
   },
-  {
-    "id": "SEM-SRH-03",
-    "title": "IDOR — notes read/updated/deleted by id with no ownership predicate",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/api/notes/[id]/route.ts:15",
-    "status": "Open",
-    "evidence": "GET/PATCH/DELETE each call getUser (so the caller is authenticated) then query the service-role client with .eq('id', params.id) and no owner_id check (lines 15, 30, 42) — broken object-level authorization; any signed-in user reaches any note by id.",
-    "impact": "Cross-user read/modify/delete of arbitrary notes.",
-    "fix": "Add .eq('owner_id', user.sub) to every by-id query, or enforce via RLS.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-04",
-    "title": "Admin authorization enforced in the UI only (broken function-level authz / BFLA)",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/api/admin/users/route.ts:13",
-    "status": "Open",
-    "evidence": "GET /api/admin/users authenticates via getUser but performs NO server-side role check before returning every profile (line 13, comment 'The admin dashboard only renders this for admins'). The only admin gate is client-side localStorage role in app/admin/page.tsx. It is authenticated-but-unauthorized, not unauthenticated.",
-    "impact": "Any signed-in non-admin user lists all users by calling the endpoint directly.",
-    "fix": "Assert the caller's role server-side in the handler (function-level authorization).",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-05",
-    "title": "SSRF via user-supplied URL in the avatar proxy and note import",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "lib/fetchUrl.ts:7",
-    "status": "Open",
-    "evidence": "fetchRemote(url) fetches whatever URL it is given (lib/fetchUrl.ts:7). It is reached with request-controlled input from /api/avatar?url= (avatar/route.ts:6) and the /api/import body (import/route.ts:13) with no host allow-list — SSRF to cloud metadata / internal hosts.",
-    "impact": "Server-side requests to attacker-chosen internal/metadata endpoints.",
-    "fix": "Validate scheme + resolve and deny RFC1918/link-local hosts before fetching.",
-    "value": 4,
-    "ease": 3,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-06",
-    "title": "Stored XSS via dangerouslySetInnerHTML on the note body",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/notes/[id]/page.tsx:21",
-    "status": "Open",
-    "evidence": "note.body is rendered with dangerouslySetInnerHTML (app/notes/[id]/page.tsx:21) — stored, attacker-controlled HTML executes in the viewer's browser.",
-    "impact": "Session/credential theft against any user who views a malicious note.",
-    "fix": "Render as text or sanitize with DOMPurify before injecting.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-07",
-    "title": "Mass assignment / over-posting on note writes",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/api/notes/route.ts:29",
-    "status": "Open",
-    "evidence": "POST insert({ ...body, owner_id: body.owner_id ?? user.sub }) (notes/route.ts:29) and PATCH update({ ...body }) (notes/[id]/route.ts:29) spread the raw parsed request body with no field whitelist — the client can set arbitrary columns, including owner_id, enabling over-posting.",
-    "impact": "Callers write attacker-chosen columns and can reassign note ownership.",
-    "fix": "Pick an explicit allow-list of writable fields; never spread req.json().",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-08",
-    "title": "Weak API-token randomness (Math.random) plus MD5 hashing",
-    "severity": "Medium",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "lib/tokens.ts:12",
-    "status": "Open",
-    "evidence": "generateApiToken builds the token from Math.random() (tokens.ts:12) — not cryptographically random — and hashToken stores MD5(token) (tokens.ts:19), a broken hash for a security token.",
-    "impact": "API tokens are predictable and their stored hashes are weak.",
-    "fix": "Use crypto.randomBytes and a strong keyed hash (e.g. SHA-256/HMAC).",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-09",
-    "title": "Insecure JWT — no expiry, unpinned algorithm, hardcoded fallback secret",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "lib/jwt.ts:6",
-    "status": "Open",
-    "evidence": "signSession calls jwt.sign with no expiresIn (jwt.ts:17); verifySession calls jwt.verify with no algorithms allow-list (jwt.ts:23); and JWT_SECRET falls back to the hardcoded 'notevault-dev-secret' (jwt.ts:6). Three facets: non-expiring tokens, algorithm confusion, and a guessable signing secret.",
-    "impact": "Forgeable, never-expiring session tokens.",
-    "fix": "Set expiresIn, pin algorithms:['HS256'], and require a real secret (no fallback).",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-10",
-    "title": "Wildcard CORS on the authenticated API",
-    "severity": "Medium",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "lib/cors.ts:4",
-    "status": "Open",
-    "evidence": "CORS_HEADERS sets Access-Control-Allow-Origin:'*' (object literal, cors.ts:4) and is applied to every note/admin API response.",
-    "impact": "Any origin can script authenticated cross-origin calls against the API.",
-    "fix": "Reflect only an explicit allow-list of origins; never '*' with credentials.",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-11",
-    "title": "No CSRF protection and no rate limiting on mutating and auth routes",
-    "severity": "Medium",
-    "confidence": "Likely",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/api/notes/route.ts:20",
-    "status": "Open",
-    "evidence": "State-changing POST/PATCH/DELETE handlers under app/api/notes accept cross-origin requests with no CSRF/same-origin guard, and there is no rate limiting on the import or auth-adjacent paths (app/api/import/route.ts).",
-    "impact": "CSRF against mutating endpoints and unbounded brute-force/abuse.",
-    "fix": "Add CSRF defenses for cookie-auth paths and a shared-store rate limiter.",
-    "value": 3,
-    "ease": 3,
-    "safety": 5
-  },
-  {
-    "id": "SEM-SRH-12",
-    "title": "SSTI via ejs.render on a user template plus a vulnerable ejs dependency",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "app/api/render/route.ts:8",
-    "status": "Open",
-    "evidence": "POST /api/render calls ejs.render(String(template ?? ''), { note }) with template taken from req.json() (render/route.ts:8) — server-side template injection. The declared dependency ejs@3.1.6 (package.json) is itself known-vulnerable (SSTI/RCE advisories).",
-    "impact": "Remote code execution via a crafted EJS template.",
-    "fix": "Do not render user-supplied templates; upgrade ejs and use a sandboxed renderer.",
-    "value": 5,
-    "ease": 3,
-    "safety": 5
-  }
-]
+  "findings": [
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Unauthenticated user-controlled EJS template enables server-side template injection",
+      "file": "app/api/render/route.ts",
+      "line": 8,
+      "category": "template-injection",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the deployed Next.js API route is externally reachable, `POST` is the first call boundary and parses attacker-controlled JSON without authentication at app/api/render/route.ts:6-7. The supplied `template` becomes EJS program source at app/api/render/route.ts:8, while `note` is merely data, so template directives execute during server-side rendering. No validation, fixed-template selection, sanitization, or authorization protects this path; the repository\u2019s available authentication pattern in app/api/notes/route.ts:20-23 is absent here.\n\nThe unauthenticated POST handler parses attacker-controlled JSON at app/api/render/route.ts:6-7 and passes `template` directly to `ejs.render` as program source at line 8. No validation, fixed-template selection, or authorization protects this server-side rendering boundary, so the scanner\u2019s HIGH severity aligns fully.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/render/route.ts:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Unrestricted server-side fetch permits SSRF",
+      "file": "lib/fetchUrl.ts",
+      "line": 7,
+      "category": "ssrf",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the deployed Next.js route is externally reachable, app/api/avatar/route.ts:6 reads an untrusted query parameter and passes the complete URL directly to fetchRemote at app/api/avatar/route.ts:7 without authentication or validation. lib/fetchUrl.ts:7 performs the server-side request and follows redirects without restricting scheme, host, resolved address, or redirect destinations, so attacker control is broader than path-only SSRF. The authenticated path independently passes a JSON-supplied URL at app/api/import/route.ts:13-15, and no protection covers either source path.\n\n`app/api/avatar/route.ts:6-7` accepts a complete URL from an unauthenticated query parameter and passes it directly to `fetchRemote`. `lib/fetchUrl.ts:7` performs the server-side request with redirects enabled and no scheme, host, resolved-address, or redirect-destination restrictions, allowing broad SSRF from the externally reachable route.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/avatar/route.ts:7"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "RLS is disabled across profiles, notes, shares, and API tokens",
+      "file": "supabase/migrations/0001_init.sql",
+      "line": 38,
+      "category": "tenant-isolation",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The migration creates tables containing profile identity/role data, private note content, sharing records, and token hashes at supabase/migrations/0001_init.sql:4, supabase/migrations/0001_init.sql:13, supabase/migrations/0001_init.sql:22, and supabase/migrations/0001_init.sql:28, then explicitly disables RLS for all four at supabase/migrations/0001_init.sql:38. The application constructs a browser-side Supabase client from public URL and anon-key configuration at lib/supabaseClient.ts:10 and lib/supabaseClient.ts:14, so the trust-boundary assumption is that the configured Supabase Data API is externally reachable by untrusted clients. No active policy or later migration protects these tables; the only policies are commented examples at supabase/migrations/0001_init.sql:43, so application-layer ownership filters cannot enforce isolation against direct database API access.\n\nThe migration stores tenant identity, private notes, sharing relationships, and token hashes in public tables, then explicitly disables RLS on all four at supabase/migrations/0001_init.sql:38-41. The browser client uses the public Supabase URL and anon key at lib/supabaseClient.ts:10-14, allowing an unauthenticated remote client to reach the data boundary directly. No active policy in the sole migration provides a deployed isolation control.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "lib/supabaseClient.ts:14",
+        "lib/supabaseClient.ts:13"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f011",
+      "source": "VULN-FINDINGS.json#10",
+      "title": "PATCH permits unrestricted mutation of note security metadata",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 29,
+      "category": "mass-assignment",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 5,
+      "preconditions": [
+        "A valid authenticated session accepted by `getUser`",
+        "A valid existing note identifier"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Assuming the deployed Next.js API is externally reachable, an authenticated caller controls both the request JSON parsed at app/api/notes/[id]/route.ts:26 and the note identifier used at app/api/notes/[id]/route.ts:30. The entire body reaches the update unchanged at app/api/notes/[id]/route.ts:29, while the only gate checks for any valid session at app/api/notes/[id]/route.ts:22-25 and never constrains fields or ownership. This permits mutation of security-relevant columns defined at supabase/migrations/0001_init.sql:14-19, and neither the service-role client at lib/supabaseAdmin.ts:18 nor the disabled RLS at supabase/migrations/0001_init.sql:39 supplies a downstream boundary.\n\nThe PATCH handler passes the caller-controlled JSON body directly into the database update at `app/api/notes/[id]/route.ts:26-30`, allowing changes to fields such as `owner_id` and `is_private` defined at `supabase/migrations/0001_init.sql:15-19`. Authentication is required, but ownership and field authorization are absent, while the service-role client at `lib/supabaseAdmin.ts:18` and disabled RLS at `supabase/migrations/0001_init.sql:39` provide no downstream restriction.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:21"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f012",
+      "source": "VULN-FINDINGS.json#11",
+      "title": "Note creation accepts client-controlled ownership and protected fields",
+      "file": "app/api/notes/route.ts",
+      "line": 29,
+      "category": "mass-assignment",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 5,
+      "preconditions": [
+        "A valid authenticated session.",
+        "Knowledge of an existing target profile identifier that satisfies the owner_id foreign key."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Assuming the exported Next.js POST handler is externally reachable, an authenticated but otherwise untrusted caller controls the JSON parsed at app/api/notes/route.ts:25. The insert spreads that entire object and preserves a supplied owner_id at app/api/notes/route.ts:29; the authentication check at app/api/notes/route.ts:21-24 does not bind protected fields to the verified user. The foreign key at supabase/migrations/0001_init.sql:15 only requires an existing profile, while RLS is disabled at supabase/migrations/0001_init.sql:35-40 and the service-role client used by the route bypasses RLS as documented at lib/supabaseAdmin.ts:11-18, so no downstream protection prevents unauthorized ownership or other protected-field assignment.\n\nAssuming the deployed POST route is externally reachable, `app/api/notes/route.ts:21-29` authenticates the caller but preserves a caller-supplied `owner_id` instead of binding it to `user.sub`. The foreign key at `supabase/migrations/0001_init.sql:15` only requires an existing profile, while disabled RLS and the service-role client leave no downstream ownership control, so an authenticated caller can assign protected note fields or ownership without authorization.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "Single-note endpoints omit ownership checks",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 15,
+      "category": "authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 2,
+      "preconditions": [
+        "A valid bearer session for any user account",
+        "Knowledge or acquisition of another user\u2019s note ID"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The exported HTTP handlers accept attacker-controlled `params.id` at app/api/notes/[id]/route.ts:7, :21, and :37, while `getUser` only verifies that some bearer token is valid (lib/session.ts:4-8). Each handler queries by note ID without constraining `owner_id` (app/api/notes/[id]/route.ts:12-16, :27-32, :42), and the client uses a service-role credential that bypasses RLS (lib/supabaseAdmin.ts:11-19); the schema also disables RLS on notes (supabase/migrations/0001_init.sql:35-40). Assuming these route handlers are externally reachable under standard Next.js routing, any authenticated caller who supplies another note\u2019s ID can read, alter, or delete it, whereas the collection route demonstrates the missing protection by filtering on `owner_id = user.sub` at app/api/notes/route.ts:12-15.\n\nThe GET, PATCH, and DELETE handlers authenticate the caller but constrain database operations only by attacker-controlled `params.id`, without matching `owner_id` to `user.sub` (`app/api/notes/[id]/route.ts:7-16`, `:21-32`, `:37-42`). The admin client bypasses RLS (`lib/supabaseAdmin.ts:11-19`), and the schema disables RLS for notes (`supabase/migrations/0001_init.sql:35-40`), so no named deployed control mitigates cross-user access. Authentication and possession of a target note ID make the derived severity MEDIUM, so the scanner\u2019s HIGH rating overstates severity by one tier.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/[id]/route.ts:7"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "Public note page bypasses private-note ownership controls",
+      "file": "app/notes/[id]/page.tsx",
+      "line": 8,
+      "category": "authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The deployed note page is externally reachable.",
+        "The caller can obtain or correctly identify a valid note ID."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the Next.js page is externally reachable, its route parameter enters at app/notes/[id]/page.tsx:4 and directly selects a note by ID at app/notes/[id]/page.tsx:5 without authentication, ownership, sharing, or privacy checks. The query uses the service-role client at lib/supabaseAdmin.ts:18, while the schema defaults notes to private at supabase/migrations/0001_init.sql:18 and disables notes RLS at supabase/migrations/0001_init.sql:39. The complete record, including its body, is rendered at app/notes/[id]/page.tsx:15, so an untrusted caller who supplies a note ID can cross the intended ownership boundary.\n\nAt `app/notes/[id]/page.tsx:4-9`, an unauthenticated route parameter directly selects a note through the service-role client defined at `lib/supabaseAdmin.ts:18`, with no ownership, sharing, or privacy check. The page renders the selected note\u2019s title and body at `app/notes/[id]/page.tsx:15-22`, while `supabase/migrations/0001_init.sql:18,39` makes notes private by default but disables their RLS. Two exploitation preconditions produce MEDIUM under the required lower-result rule, so the scanner\u2019s claimed HIGH is moderately overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/notes/[id]/page.tsx:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "Stored note body is rendered as executable HTML",
+      "file": "app/notes/[id]/page.tsx",
+      "line": 21,
+      "category": "xss",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -3,
+      "preconditions": [
+        "Attacker possesses a valid authentication token accepted by the notes API.",
+        "A browser user loads the public note page for the attacker-controlled or modified note ID."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "An externally reachable authenticated caller can submit arbitrary JSON at app/api/notes/route.ts:20-29, and `body` is persisted without validation or sanitization; the PATCH path likewise writes arbitrary fields at app/api/notes/[id]/route.ts:21-30. The public note page retrieves the stored record by route-controlled id at app/notes/[id]/page.tsx:4-9 and injects `note.body` into `dangerouslySetInnerHTML` at app/notes/[id]/page.tsx:21. Authentication at app/api/notes/route.ts:21-24 restricts writes to token holders but does not make their note content trusted, while next.config.mjs:2-7 defines no compensating CSP or sanitizer.\n\nThe authenticated POST and PATCH handlers persist arbitrary `body` content without validation or sanitization at `app/api/notes/route.ts:20-29` and `app/api/notes/[id]/route.ts:21-30`. The public page then inserts that stored value into `dangerouslySetInnerHTML` at `app/notes/[id]/page.tsx:21`, while `next.config.mjs:2-7` supplies no named compensating CSP or sanitizer; the required authentication and victim page load derive MEDIUM severity, so the claimed HIGH is overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Service-role credential is exposed through public configuration and source",
+      "file": "lib/supabaseAdmin.ts",
+      "line": 14,
+      "category": "secret-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The associated Supabase project is remotely reachable.",
+        "The committed service-role JWT remains valid and unrevoked."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "`lib/supabaseAdmin.ts:13-15` selects a public-prefixed environment value or a committed JWT fallback whose decoded payload declares `role: service_role`, which the organization rule classifies as a credential rather than a benign anon key. `lib/supabaseAdmin.ts:18` passes that value directly to `createClient`, with no validation or protection. A caller link is not applicable because committed credentials are presence-based findings under the supplied policy.\n\n`lib/supabaseAdmin.ts:13-15` selects either a publicly prefixed environment value or a committed service-role JWT, and line 18 supplies it directly to the Supabase client. The credential is explicitly privileged and no deployed control or validation limits its use; however, exploitation depends on the referenced service remaining reachable and accepting the unrotated key, yielding MEDIUM under the required lower-result rubric.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Predictable JWT fallback secret permits session forgery",
+      "file": "lib/jwt.ts",
+      "line": 6,
+      "category": "authentication",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "JWT_SECRET is absent at runtime, activating the hardcoded fallback secret.",
+        "The attacker knows or obtains the repository-known fallback secret."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Assuming the Next.js API routes are externally reachable, the Authorization header is untrusted at lib/session.ts:5-8 and its Bearer token reaches verifySession at the first actual call site, lib/session.ts:8. lib/jwt.ts:6 falls back to the repository-known secret when JWT_SECRET is absent, while lib/jwt.ts:23 accepts claims based solely on verification with that secret and applies no claim bounds or expiration requirement. app/api/admin/users/route.ts:8-14 then treats any non-null claims as the sole authorization gate before returning privileged profile data, so the fallback enables feasible authentication bypass when deployment configuration omits JWT_SECRET.\n\nAssuming the deployed admin route is externally reachable, an unauthenticated remote caller can supply a Bearer token through `lib/session.ts:5-8`. If runtime configuration omits `JWT_SECRET` and the caller knows the fallback at `lib/jwt.ts:6`, verification at `lib/jwt.ts:23` accepts attacker-controlled claims, and `app/api/admin/users/route.ts:8-14` treats any such claims as sufficient authorization; the two exploitation preconditions reduce the derived severity to MEDIUM, while deployment configuration requires runtime confirmation.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "lib/session.ts:8",
+        "app/api/admin/users/route.ts:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f013",
+      "source": "VULN-FINDINGS.json#12",
+      "title": "Raw Supabase errors are returned to clients",
+      "file": "app/api/notes/route.ts",
+      "line": 33,
+      "category": "error-disclosure",
+      "claimed_severity": "LOW",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Possess a valid authenticated user session.",
+        "Submit a request body that causes Supabase/PostgREST to return an informative database error."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The exported POST handler is an externally reachable entry point, and any authenticated caller is untrusted beyond the identity check at app/api/notes/route.ts:20-25. The complete request body is spread into the Supabase insert without schema validation at app/api/notes/route.ts:25-31, while the notes table has typed and required columns at supabase/migrations/0001_init.sql:13-19 that can cause database or PostgREST errors. The handler copies `error.message` directly into the client response at app/api/notes/route.ts:32-33; authentication at app/api/notes/route.ts:21-24 limits access but provides no error sanitization.\n\nThe authenticated POST handler spreads unvalidated client data into the notes insert at app/api/notes/route.ts:25-30, making typed-column or constraint errors realistically triggerable. It returns the resulting backend message verbatim at app/api/notes/route.ts:32-33, so authentication limits access but does not sanitize the disclosure; the claimed LOW severity understates the derived MEDIUM rating by one tier.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/api/notes/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "PATCH and DELETE report success without checking database errors",
+      "file": "app/api/notes/[id]/route.ts",
+      "line": 27,
+      "category": "integrity",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 5,
+      "preconditions": [
+        "A valid authenticated session",
+        "A PATCH or DELETE mutation that the database rejects or that affects no row"
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "Assuming deployed Next.js routes are externally reachable, authenticated HTTP input reaches PATCH at app/api/notes/[id]/route.ts:21 and DELETE at app/api/notes/[id]/route.ts:37; the only gate checks for a valid session at lines 22-25 and 38-41. PATCH discards the Supabase error result at lines 27-32 and unconditionally returns HTTP 200 at line 33, while DELETE discards the complete mutation response at line 42 and always reports `ok: true` at line 43. No affected-row or error check covers either path, so rejected mutations or silent no-ops can be represented as successful, including deletion attempts that leave data retained.\n\nThe session checks at lines 22-25 and 38-41 limit access to authenticated users. PATCH ignores the Supabase error state and returns HTTP 200 at lines 27-33, while DELETE discards the mutation result and reports success at lines 42-43, allowing failed or no-op mutations to be represented as successful. Two preconditions and authenticated access both independently yield MEDIUM severity, matching the scanner\u2019s claim.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 1,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "app/api/notes/[id]/route.ts:21"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "Authenticated non-admin users can list every profile",
+      "file": "app/api/admin/users/route.ts",
+      "line": 13,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The deployed application issues a valid signed session to an ordinary non-admin user."
+      ],
+      "access_level": "authenticated",
+      "threat_match": null,
+      "rationale": "The first repository caller is the dashboard fetch at `app/admin/page.tsx:25`, but its `localStorage` role check at `app/admin/page.tsx:18-24` is only a client-side UI gate and does not protect the externally reachable API trust boundary. Server authentication at `app/api/admin/users/route.ts:8-11` accepts any valid session, even though `lib/jwt.ts:8-12` provides a role claim, and the route performs no admin authorization before the service-role `select(\"*\")` at `app/api/admin/users/route.ts:13`. Assuming deployments issue valid signed sessions to ordinary users, this exposes every profile row and its sensitive fields to authenticated non-admin callers.\n\n`app/api/admin/users/route.ts:8-13` checks only for a valid session and performs no server-side role authorization before selecting every profile through the service-role client. The role check at `app/admin/page.tsx:18-25` controls only dashboard rendering and does not protect the API boundary. One authentication precondition and authenticated access both yield MEDIUM under the supplied scoring rules, so the scanner\u2019s HIGH rating is overstated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "app/admin/page.tsx:25"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: SuperRedHat (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}

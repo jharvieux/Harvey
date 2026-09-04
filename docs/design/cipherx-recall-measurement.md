@@ -38,6 +38,20 @@ The failed dated receipt remains evidence, not an accepted pass. A complete exac
 three-vote triage, `record-pass`, and both semantic validators must pass before the live artifact is
 replaced.
 
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 56 raw candidates, retained 55 after one exact scan duplicate,
+and preserved 55/55 independent confidence reviews. Triage deduplicated 14 rows, conserved all 123
+votes across 41 canonical candidates, and recorded 36 true positives, 5 false positives, and 14
+duplicates. The accepted completed triage object is
+`semantic-corpus-passes/cipherx.triage.json` (SHA-256
+`b0528bd53f7b6b23e23e97dabab3716a13273b94725cbe62a49fee857220d551`). The owner-generated
+`reports/semantic-recall/cipherx/M1.pass.json` has SHA-256
+`37f738f9d93004f6ab71685cd3f1dc362b22aac9ee7f2c0b7cf564c00993927b` and scores **16/16**
+positives while clearing CX-21 and CX-22. The matcher accepts the fresh, source-specific wording for
+the five independently confirmed mechanisms without accepting adjacent wrong-mechanism controls.
+The dated September 3 attempt above remains immutable failed-run evidence.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output observed
 on this date, across **all three tiers** (mechanical, semantic-LLM, dynamic). No Harvey source was
 changed. Isolated Docker (autonomous M2 self-provisions a fresh local Supabase in its own temp workdir;

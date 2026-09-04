@@ -1,16 +1,17 @@
 # Harvey answer key — thecipherxpro/cipherx-vulnerability-lab
 
 **Original reconstruction:** 2026-07-18. **Audited semantic reconciliation:** 2026-09-03 (#1947).
+**Accepted exact-pin semantic rerun:** 2026-09-04.
 **Target:** `thecipherxpro/cipherx-vulnerability-lab` ("CipherX Vulnerability Lab"), a deliberately-
 vulnerable Next.js 16 App Router + Supabase (Auth / PostgreSQL / RLS / RPC / Storage, role-based)
 internship training lab. Cloned to `/private/tmp` (ephemeral, deleted after this run).
 
-**This is an ANSWER KEY, not a fresh-pass claim.** The repo ships **no scored report** — only a fake
-placeholder (`public/reports/pentest-draft-demo.md`) whose "findings" are lorem-ipsum for a
-file-discovery exercise. The ground truth below was **reconstructed from source**: every entry cites
-a real file:line. The 2026-09-03 audit reconciled those claims against the unchanged pinned source
-and three-vote triage; the table below is the **denominator** for the next semantic pass. It does not
-promote the retained failed receipt or assert that a fresh pass is green. Mirrors the structure of
+**This is an ANSWER KEY backed by the accepted 2026-09-04 fresh pass.** The repo ships **no scored
+report** — only a fake placeholder (`public/reports/pentest-draft-demo.md`) whose "findings" are
+lorem-ipsum for a file-discovery exercise. The ground truth below was **reconstructed from source**:
+every entry cites a real file:line. The 2026-09-03 audit reconciled those claims against the unchanged
+pinned source and three-vote triage; the table below is the **denominator** used by the accepted
+September 4 pass. The retained September 3 failure remains historical evidence. Mirrors the structure of
 `docs/design/vandyand-recall-measurement.md` and `docs/design/superredhat-recall-measurement.md`.
 
 The README advertises **"12 vulnerability training modules"** and a "Vulnerable Endpoints" table.
@@ -101,13 +102,12 @@ source-proven portions under the rows above, splits independently exploitable RP
 grant-dependent, decoy, no-consumer, and hardening-only claims. M12 remains a deliverable rather
 than a vulnerability; CX-21 records the fake dependency list as a precision negative.
 
-## Fresh semantic rerun required
+## Accepted fresh semantic rerun
 
-This reconciliation changes the denominator but does not claim a current passing receipt. Run the
-exact-pin policy generator, `vuln-scan`, three-vote `triage`, and `record-pass`; then require both
-`pnpm validate:semantic --artifacts-dir reports/semantic-recall` and
-`pnpm validate:semantic-freshness --artifacts-dir reports/semantic-recall` to pass before replacing
-the accepted CipherX artifact. Preserve the dated failed triage and receipt as provenance.
+The 2026-09-04 exact-pin run completed the policy generator, `vuln-scan`, three-vote `triage`, and
+`record-pass` sequence. The resulting CipherX artifact scores **16/16** positives and clears both
+precision negatives under `validate:semantic`; the four-target freshness validator also passes.
+The dated September 3 failed triage and receipt remain preserved as provenance.
 
 ## Stand-up guide
 

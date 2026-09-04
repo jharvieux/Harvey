@@ -37,6 +37,19 @@ unaccepted M1 receipt has SHA-256 `292219a15bca907b55ed95ae090028c63e5346476534e
 That failed receipt is retained, not promoted. Re-run the complete owner-command sequence and both
 semantic validators at this exact pin before installing a new accepted pass artifact.
 
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 13 candidates, preserved 13/13 independent confidence
+reviews, and conserved all 39 triage ballots. The final dispositions are 13 true positives, 0 false
+positives, and 0 duplicates; one of the 39 votes rejected an error-reporting-only candidate, without
+changing its majority. The accepted completed triage object is
+`semantic-corpus-passes/superredhat.triage.json` (SHA-256
+`599f48f46cf163e1fad8107f9ed5c8ae353178e290e41bf9a368cce7fc01207e`). The owner-generated
+`reports/semantic-recall/superredhat/M1.pass.json` has SHA-256
+`d4645f072d4548582db4486ff0f5f8a3c98cf9b601b2177a66f557a2b0cb1cea` and scores **9/9**
+positives while clearing F-N1. The dated September 3 attempt above remains immutable failed-run
+evidence.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 

@@ -40,6 +40,18 @@ unaccepted M1 receipt has SHA-256 `67d97411c9282f2fa63e5c2aa1e3c2a2994380dd63f6a
 The failed dated receipt remains evidence and is not a fresh accepted pass. Run all four owner
 commands again and require both semantic validators to pass before replacing accepted artifacts.
 
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 13 candidates and conserved all 30 ballots across 10
+canonical candidates. Final triage recorded 9 true positives, 1 false positive, and 3 duplicates.
+The accepted completed triage object is `semantic-corpus-passes/supatest.triage.json` (SHA-256
+`0b9aced7d8dc589845dbc3d931e2e77e2e4c375164bfbed2af6b153582574424`). The owner-generated
+`reports/semantic-recall/supatest/M1.pass.json` has SHA-256
+`ef8b7572b9745ace97589ddf033ca9ceb078510694aa6c3f9589412282cb8676` and scores **5/5** positives
+while clearing F-N1. Its canonical article UPDATE finding carries the validated DELETE duplicate
+provenance needed to score F2 without emitting an extra true positive. The dated September 3 attempt
+above remains immutable failed-run evidence.
+
 This is a MEASUREMENT — every caught / missed below is grounded in an actual Harvey run's output
 observed on this date, not recall. No Harvey source was changed. All three tiers were run:
 mechanical, semantic (LLM), and dynamic (M2 autonomous stand-up).

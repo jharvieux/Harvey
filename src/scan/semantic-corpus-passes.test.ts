@@ -19,6 +19,11 @@ const loadPass = (slug: string): Finding[] =>
     readFileSync(join(passesDir, `${slug}.2026-09-03.triage.json`), "utf8"),
   ));
 
+const loadCurrentPass = (slug: string): Finding[] =>
+  findingsFromCompletedTriage(JSON.parse(
+    readFileSync(join(passesDir, `${slug}.triage.json`), "utf8"),
+  ));
+
 const RESCORED: Record<string, number> = {
   "nocode-rescue": 5,
   superredhat: 9,
@@ -105,4 +110,19 @@ describe("2026-09-03 audited semantic corpus (#1947) — completed triage scored
     ]);
     expect(cxRes.rows.find((r) => r.id === "CX-22")?.pass).toBe(false);
   });
+});
+
+describe("2026-09-04 accepted semantic corpus (#1947) — fresh completed triage scored in verify", () => {
+  for (const [slug, expectedCaught] of Object.entries(RESCORED)) {
+    const target = SEMANTIC_CORPUS.find((candidate) => candidate.slug === slug);
+    if (!target) throw new Error(`corpus target ${slug} missing — the fresh re-score lock cannot run`);
+
+    it(`${slug}: catches the complete audited key and clears every precision negative`, () => {
+      const result = scoreSemanticPass(target, loadCurrentPass(slug));
+      expect(result.positivesCaught).toBe(expectedCaught);
+      expect(result.positivesCaught).toBe(result.positivesTotal);
+      expect(result.negativesCleared).toBe(result.negativesTotal);
+      expect(result.regressed).toBe(false);
+    });
+  }
 });

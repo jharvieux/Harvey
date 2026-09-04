@@ -35,6 +35,17 @@ unaccepted M1 receipt has SHA-256 `81046e31697b22741906ed708c41c6a6806428ef81f99
 Re-run `vuln-scan`, three-vote `triage`, `record-pass`, `validate:semantic`, and
 `validate:semantic-freshness` at the exact pin before replacing any accepted artifact.
 
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 5 candidates and conserved all 15 independent triage
+ballots. Four candidates were confirmed and the inert service-role marker was rejected 0/3 under
+the ordinary credential-validity rule. The accepted completed triage object is
+`semantic-corpus-passes/nocode-rescue.triage.json` (SHA-256
+`fc708c18404a889d4b817310d0ca83e5d0c7cc3fa59d2b8fa5ed8d08187114a8`). The owner-generated
+`reports/semantic-recall/nocode-rescue/M1.pass.json` has SHA-256
+`5228e7453f2d9f8b21508afe7858261b9b9dc1e92bbcfce60daa63044bbc9c3f` and scores **5/5** against
+the reconciled key. The dated September 3 attempt above remains immutable failed-run evidence.
+
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 
