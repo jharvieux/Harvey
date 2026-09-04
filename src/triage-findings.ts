@@ -218,21 +218,24 @@ export function findingsFromCompletedTriage(raw: unknown): Finding[] {
 
   const translated = parsed
     .filter((finding) => finding.verdict === "true_positive")
-    .map((finding) => {
-      const translatedFinding = translateTruePositive(finding);
-      const duplicateProvenance = duplicatesByCanonical.get(finding.id)?.evidence ?? [];
-      if (duplicateProvenance.length > 0) {
-        translatedFinding.evidence = [translatedFinding.evidence, ...duplicateProvenance].join("\n\n");
-      }
-      return translatedFinding;
-    })
-    .sort((a, b) => a.id.localeCompare(b.id) || semanticKey(a).localeCompare(semanticKey(b)));
-  const seen = new Set<string>();
-  return translated.filter((finding) => {
-    const key = semanticKey(finding);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+    .map((finding) => ({ finding: translateTruePositive(finding), canonicalId: finding.id }))
+    .sort((a, b) => a.canonicalId.localeCompare(b.canonicalId) || semanticKey(a.finding).localeCompare(semanticKey(b.finding)));
+  const groups = new Map<string, { finding: Finding; canonicalIds: string[] }>();
+  for (const translatedFinding of translated) {
+    const key = semanticKey(translatedFinding.finding);
+    const group = groups.get(key);
+    if (group) {
+      group.canonicalIds.push(translatedFinding.canonicalId);
+    } else {
+      groups.set(key, { finding: translatedFinding.finding, canonicalIds: [translatedFinding.canonicalId] });
+    }
+  }
+  return [...groups.values()].map(({ finding, canonicalIds }) => {
+    const duplicateProvenance = [...new Set(canonicalIds.flatMap((canonicalId) => duplicatesByCanonical.get(canonicalId)?.evidence ?? []))];
+    if (duplicateProvenance.length > 0) {
+      finding.evidence = [finding.evidence, ...duplicateProvenance].join("\n\n");
+    }
+    return finding;
   });
 }
 

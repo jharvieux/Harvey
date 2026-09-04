@@ -201,6 +201,28 @@ describe("completed TRIAGE.json adapter (#1947)", () => {
     expect(findingsFromCompletedTriage(completed([b, a])).map((finding) => finding.id)).toEqual(["f002"]);
   });
 
+  it("merges duplicate provenance attached to a semantically deduplicated canonical", () => {
+    const retained = triageFinding({ id: "f001" });
+    const discarded = triageFinding({ id: "f002" });
+    const duplicate = triageFinding({
+      id: "f003", title: "Invoice export repeats the cross-tenant path",
+      file: "src/app/api/invoices/export/route.ts", line: 44,
+      rationale: "The export reaches the same unscoped invoice query.", verdict: "duplicate",
+      severity: null, verify_verdict: null, duplicate_of: "f002",
+    });
+    for (const input of [[retained, discarded, duplicate], [duplicate, discarded, retained]]) {
+      const findings = findingsFromCompletedTriage(completed(input));
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.id).toBe("f001");
+      expect(findings[0]?.evidence).toBe(
+        "route.ts:21 selects an arbitrary invoice id without checking company_id.\n\n"
+        + "Triage duplicate f003: Invoice export repeats the cross-tenant path "
+        + "(src/app/api/invoices/export/route.ts:44). The export reaches the same unscoped invoice query.",
+      );
+      expect(findings[0]?.evidence.match(/Triage duplicate f003/g)).toHaveLength(1);
+    }
+  });
+
   it("retains the legacy bare report-schema Finding[] interface", () => {
     const finding = { id: "legacy" } as Finding;
     expect(findingsFromRecordPassInput([finding])).toEqual([finding]);
