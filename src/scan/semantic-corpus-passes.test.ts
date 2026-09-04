@@ -1,26 +1,32 @@
-// #912 — regression lock for the three corpus targets whose semantic tier was re-scored on
-// 2026-07-24 (superredhat 12/12, supatest 9/9, cipherx 20/20). validate-semantic.ts needs a live
 // pass artifact it cannot manufacture, so it is out of `pnpm verify`; this test carries the recorded
-// pass FINDINGS (docs/design/semantic-corpus-passes/*.triage.json — the exact triage output that was
-// scored) and re-scores them here, in verify. It fails if a corpus edit drops a planted-flaw match
-// (recall regression) or weakens a precision negative (an FP that should fail no longer would).
+// completed-triage evidence instead.
+// Regression lock for the four completed 2026-09-03 triage artifacts audited in #1947. The test
+// drives those skill-native objects through the production completed-triage adapter before scoring,
+// so duplicate provenance and the 35-row answer key are tested at the same seam record-pass uses.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
+import { findingsFromCompletedTriage } from "../triage-findings.js";
 import { SEMANTIC_CORPUS, scoreSemanticPass } from "./semantic-corpus.js";
 
 const passesDir = join(dirname(fileURLToPath(import.meta.url)), "../../docs/design/semantic-corpus-passes");
 
 const loadPass = (slug: string): Finding[] =>
-  JSON.parse(readFileSync(join(passesDir, `${slug}.triage.json`), "utf8")) as Finding[];
+  findingsFromCompletedTriage(JSON.parse(
+    readFileSync(join(passesDir, `${slug}.2026-09-03.triage.json`), "utf8"),
+  ));
 
-// slug → the count the 2026-07-24 re-score measured (== the corpus recordedCaught it must not fall below).
-const RESCORED: Record<string, number> = { superredhat: 12, supatest: 9, cipherx: 20 };
+const RESCORED: Record<string, number> = {
+  "nocode-rescue": 5,
+  superredhat: 9,
+  supatest: 5,
+  cipherx: 16,
+};
 
-describe("2026-07-24 semantic re-score (#912) — committed pass findings, scored in verify", () => {
+describe("2026-09-03 audited semantic corpus (#1947) — completed triage scored in verify", () => {
   for (const [slug, expectedCaught] of Object.entries(RESCORED)) {
     const target = SEMANTIC_CORPUS.find((t) => t.slug === slug);
     if (!target) throw new Error(`corpus target ${slug} missing — the re-score lock cannot run`);
@@ -39,14 +45,26 @@ describe("2026-07-24 semantic re-score (#912) — committed pass findings, score
     });
   }
 
-  it("gates precision: at least 4 recorded non-vulnerabilities across the scored corpus", () => {
-    // Before #912 the corpus carried ONE negative (cipherx CX-21), so validate-semantic printed a
-    // 'precision essentially ungated' caveat. #912 added one per re-scored target. If this drops back
-    // to <=1 that caveat returns — this asserts precision stays gated.
+  it("gates precision with exactly four recorded non-vulnerabilities", () => {
     const negatives = SEMANTIC_CORPUS.filter((t) => RESCORED[t.slug] !== undefined).flatMap((t) =>
       t.entries.filter((e) => e.kind === "negative"),
     );
-    expect(negatives.length).toBeGreaterThanOrEqual(4);
+    expect(negatives).toHaveLength(4);
+  });
+
+  it("needs Supatest's validated article-DELETE duplicate provenance to satisfy F2", () => {
+    const target = SEMANTIC_CORPUS.find((candidate) => candidate.slug === "supatest")!;
+    const completed = JSON.parse(readFileSync(
+      join(passesDir, "supatest.2026-09-03.triage.json"),
+      "utf8",
+    ));
+    const withDuplicate = scoreSemanticPass(target, findingsFromCompletedTriage(completed));
+    expect(withDuplicate.rows.find((row) => row.id === "F2")?.pass).toBe(true);
+
+    completed.findings = completed.findings.filter((finding: { id: string }) => finding.id !== "f006");
+    const withoutDuplicate = scoreSemanticPass(target, findingsFromCompletedTriage(completed));
+    expect(withoutDuplicate.rows.find((row) => row.id === "F2")?.pass).toBe(false);
+    expect(withoutDuplicate.rows.find((row) => row.id === "F1")?.pass).toBe(true);
   });
 
   it("the precision negatives actually TRIP on the false positive they guard against", () => {

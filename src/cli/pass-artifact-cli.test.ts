@@ -27,7 +27,7 @@ import { readNamesSafe } from "../fs-walk.js";
 import type { RunContext } from "../audit-runner.js";
 import type { AuditModule } from "../audit-coverage.js";
 import { createProducerExecutionReceipt } from "../producer-execution-receipt.js";
-import { SEMANTIC_CORPUS } from "../scan/semantic-corpus.js";
+import { SEMANTIC_CORPUS, scoreSemanticPass } from "../scan/semantic-corpus.js";
 import { SEMANTIC_TARGET_COMMITS } from "../semantic-triage.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -261,7 +261,12 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
       findings: [
         triageFinding(),
         triageFinding({ id: "f002", verdict: "false_positive", severity: null, verify_verdict: null, vote_breakdown: { true_positive: 0, false_positive: 3, cannot_verify: 0 } }),
-        triageFinding({ id: "f003", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001" }),
+        triageFinding({
+          id: "f003", title: "Export repeats the cross-tenant invoice read",
+          file: "src/app/api/invoices/export/route.ts", line: 44,
+          rationale: "The export reaches the same unscoped invoice query.",
+          verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001",
+        }),
       ],
     }));
 
@@ -278,6 +283,31 @@ describe("record-pass accepts only completed triage true positives (#1947)", () 
         location: "src/app/api/invoices/[id]/route.ts:21",
       }),
     ]);
+    expect(stored.findings[0].evidence).toContain(
+      "Triage duplicate f003: Export repeats the cross-tenant invoice read "
+      + "(src/app/api/invoices/export/route.ts:44).",
+    );
+  });
+
+  it("records the real Supatest completed triage and preserves the DELETE duplicate for scoring", () => {
+    const out = join(dir, "semantic-supatest-duplicate-provenance");
+    const input = join(REPO_ROOT, "docs/design/semantic-corpus-passes/supatest.2026-09-03.triage.json");
+    runCli("src/cli/record-pass.ts", [
+      "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
+    ]);
+    const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
+    expect(stored.findings.map((finding: { id: string }) => finding.id)).toEqual([
+      "f001", "f002", "f004", "f005", "f007",
+    ]);
+    expect(stored.findings.find((finding: { id: string }) => finding.id === "f005").evidence)
+      .toContain("Triage duplicate f006: Tautological article DELETE policy permits arbitrary deletion");
+
+    const supatest = SEMANTIC_CORPUS.find((candidate) => candidate.slug === "supatest");
+    if (!supatest) throw new Error("supatest semantic target missing");
+    const result = scoreSemanticPass(supatest, stored.findings);
+    expect(result.rows.find((row) => row.id === "F1")?.pass).toBe(true);
+    expect(result.rows.find((row) => row.id === "F2")?.pass).toBe(true);
+    expect(result.positivesCaught).toBe(5);
   });
 
   it.each([

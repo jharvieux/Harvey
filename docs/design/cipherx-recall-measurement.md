@@ -20,17 +20,23 @@ data, public anon keys, placeholder credentials, missing hardening, unreachable 
 technical precision rule remain active. Preserve the completed `TRIAGE.json` unchanged and feed it
 directly to `record-pass`; do not force findings to meet the historical 20-positive floor.
 
-### Fresh #1947 result — 2026-09-03
+### #1947 audited reconciliation — 2026-09-03
 
 The pinned scan produced 32 candidates. Fresh triage conserved all 93 independent ballots across
 31 deduplicated candidates and classified 15 true positives, 16 false positives, and 1 duplicate.
-The generated M1 receipt scores **7/20** against the unchanged key and clears both CX-21 and CX-22.
-CX-02, CX-11, CX-12, and CX-15 through CX-18 pass; the other 13 positive rows remain missed. Keep
-the 20-row baseline and #1947 open. Findings rejected for missing grants, absent runtime exposure,
-or hardening-only impact may not be restored merely to improve recall.
+A row-level source/grant audit freezes **16 positives** and retains CX-21/CX-22 as the two precision
+negatives. CX-01/02/04/10/12/15/16/17/18 remain with narrower mechanisms. Retired compound CX-11
+becomes CX-23/24/25 for the three independently proven anon definer RPCs; retired app-route CX-13
+becomes CX-26/27 for the two explicitly granted definer invoice IDORs. CX-28 records the signup
+role-metadata escalation and CX-29 the authenticated secret-dump RPC. CX-03, CX-05..09, CX-14,
+CX-19, and CX-20 are retired because the pin shows decoys, absent grants/exposure, no reset consumer,
+or hardening-only impact. No retired ID was silently reused, and the pin is unchanged.
 The completed attempt is retained as `semantic-corpus-passes/cipherx.2026-09-03.triage.json`
 (SHA-256 `032bc8927bc61d57ef556a448c1346881a758795cbbe101998ee610d35ade7cd`); its generated but
 unaccepted M1 receipt has SHA-256 `804e1a91400705d63d9dedbef0b42af84e075e8f761c9fff832d9a8cf62193cd`.
+The failed dated receipt remains evidence, not an accepted pass. A complete exact-pin scan,
+three-vote triage, `record-pass`, and both semantic validators must pass before the live artifact is
+replaced.
 
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output observed
 on this date, across **all three tiers** (mechanical, semantic-LLM, dynamic). No Harvey source was
@@ -41,7 +47,7 @@ cloud `.env` (CX-02) was **never** used — the dynamic tier stood up a local st
 
 ---
 
-## Tally: 20 caught / 20 real findings (CX-21 = N/A) — 20/21
+## Historical tally: 20 caught / 20 pre-audit claims (CX-21 = N/A) — 20/21
 
 A finding = caught if **any** tier caught it. Every real finding (CX-01..CX-20) was caught; CX-21 is
 not a real vulnerability and was correctly **not** flagged (osv-scanner found nothing planted — the

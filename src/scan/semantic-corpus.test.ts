@@ -171,6 +171,51 @@ describe("summarizeSemantic — an unscored target is reported, not dropped", ()
 });
 
 describe("the shipped corpus", () => {
+  it("locks the audited 35-positive key and all four precision negatives", () => {
+    const expected = {
+      "nocode-rescue": ["NR-2", "NR-3", "NR-4", "NR-5", "NR-6"],
+      superredhat: ["F-01", "F-02", "F-03", "F-04", "F-05", "F-06", "F-07", "F-09", "F-12"],
+      supatest: ["F1", "F2", "F3", "F5", "F9"],
+      cipherx: ["CX-01", "CX-02", "CX-04", "CX-10", "CX-12", "CX-15", "CX-16", "CX-17", "CX-18", "CX-23", "CX-24", "CX-25", "CX-26", "CX-27", "CX-28", "CX-29"],
+    } as const;
+    const expectedNegatives = {
+      "nocode-rescue": [],
+      superredhat: ["F-N1"],
+      supatest: ["F-N1"],
+      cipherx: ["CX-21", "CX-22"],
+    } as const;
+    const positives = SEMANTIC_CORPUS.flatMap((candidate) =>
+      candidate.entries.filter((entry) => entry.kind === "positive"),
+    );
+    const negatives = SEMANTIC_CORPUS.flatMap((candidate) =>
+      candidate.entries.filter((entry) => entry.kind === "negative"),
+    );
+    expect(positives).toHaveLength(35);
+    expect(negatives).toHaveLength(4);
+    for (const candidate of SEMANTIC_CORPUS) {
+      expect(candidate.entries.filter((entry) => entry.kind === "positive").map((entry) => entry.id))
+        .toEqual([...expected[candidate.slug as keyof typeof expected]]);
+      expect(candidate.entries.filter((entry) => entry.kind === "negative").map((entry) => entry.id))
+        .toEqual([...expectedNegatives[candidate.slug as keyof typeof expectedNegatives]]);
+      expect(candidate.recordedCaught).toBe(expected[candidate.slug as keyof typeof expected].length);
+    }
+  });
+
+  it("rejects audited right-file wrong-mechanism findings", () => {
+    const score = (slug: string, candidate: Finding, id: string) => {
+      const corpusTarget = SEMANTIC_CORPUS.find((entry) => entry.slug === slug);
+      if (!corpusTarget) throw new Error(`missing semantic target ${slug}`);
+      expect(scoreSemanticPass(corpusTarget, [candidate]).rows.find((row) => row.id === id)?.pass).toBe(false);
+    };
+    score("nocode-rescue", finding("src/lib/ai.ts:8", "Prompt injection reaches the OpenAI request"), "NR-2");
+    score("nocode-rescue", finding("src/pages/Dashboard.tsx:14", "Authentication is enforced only in localStorage"), "NR-5");
+    score("superredhat", finding("lib/jwt.ts:6", "JWT lacks an explicit expiry but uses a deployment secret"), "F-09");
+    score("supatest", finding("supabase/migrations/0001.sql:53", "Tautological profile UPDATE policy"), "F1");
+    score("supatest", finding("supabase/migrations/0001.sql:76", "Tautological article UPDATE policy"), "F2");
+    score("cipherx", finding("supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:104", "plpgsql SQL injection through EXECUTE"), "CX-10");
+    score("cipherx", finding("src/app/api/tickets/search/route.ts:10", "Reflected credentialed CORS"), "CX-17");
+  });
+
   it("records a baseline no larger than the planted positives it is a baseline for", () => {
     for (const t of SEMANTIC_CORPUS) {
       const positives = t.entries.filter((e) => e.kind === "positive").length;

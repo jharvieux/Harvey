@@ -5,6 +5,13 @@
 (#1275)** — §§1 and 4 still carry their 2026-07-26 dates and have NOT been re-run since; read every
 number here against the date beside it.
 
+**#1947 denominator update (2026-09-03):** the four shared semantic/free target keys were audited
+against unchanged exact commits and fresh three-vote triage, reducing their positive denominator
+from 49 to **35** (5 Nocode, 9 SuperRedHat, 5 Supatest, 16 CipherX) while retaining all four semantic
+precision negatives. The dated failed semantic attempts remain evidence and no fresh accepted pass
+is claimed. Because the free corpus imports these rows, every §2/§5 free-count below remains a
+historical pre-audit measurement until `pnpm validate:free-recall` is rerun over all pinned clones.
+
 This is the free-tier-only recall figure #868 asked for: the FREE (mechanical, source-only) tier's
 recall, reported as its own number and **never blended** with the paid semantic tier that carries
 the 100% headlines. Every number below is either (a) from a gate re-run in the foreground on this
@@ -76,7 +83,7 @@ These are the recall figures against keys **other people wrote** (each target's 
 CASE-STUDY / README / REMEDIATION-REPORT). They are the honest free-tier number, and they are
 materially lower and highly **target-shape-dependent**.
 
-### 2a. RE-SCORED 2026-07-30 (#1185) — the current number, and it is now one command
+### 2a. RE-SCORED 2026-07-30 (#1185) — historical pre-audit denominator
 
 Everything in §2b below was `recorded — not re-run here`, dated **2026-07-18**, and stayed that way
 across the Vite and App-Router coverage campaigns that were expected to have moved it. #1185
@@ -219,12 +226,12 @@ is now three commands (`secbench-tree` twice — default and `--mode source` —
 
 ---
 
-## 4. The paid SEMANTIC tier — for contrast only (`recorded — not re-run here`)
+## 4. The paid SEMANTIC tier — historical contrast (`recorded — not re-run here`)
 
 `validate-semantic.ts` needs recorded manual LLM pass artifacts (`M1.pass.json` per target, via
 `record-pass`). None are checked in, so the semantic gate could only print its corpus on this date,
 not score a run — the semantic tier is a manual LLM review, not an automated gate re-runnable here.
-The recorded semantic tallies (from the same measurement docs) are:
+The following tallies used the retired pre-audit denominator and remain only as historical evidence:
 
 | Target | Semantic tier | Recorded on |
 |---|---|---|
@@ -237,6 +244,9 @@ The recorded semantic tallies (from the same measurement docs) are:
 **This is the split #868 is about: every 100% / near-100% union headline is the SEMANTIC tier
 clearing the board. The FREE mechanical tier lands the §2 range underneath it.**
 
+The reconciled 35-positive key requires a new four-target semantic run and new owner-generated pass
+artifacts before any current paid-tier tally is published.
+
 ---
 
 ## 5. The honest split, in one place
@@ -245,7 +255,7 @@ clearing the board. The FREE mechanical tier lands the §2 range underneath it.*
   SOURCE subset is **97.4% surfaced as any-tier indicator, 20.5% (8/39) at high-confidence
   free-count**. High internal recall is inflated by the non-source tiers and by counting review-tier
   indicators.
-- **Independent answer keys (RE-MEASURED 2026-07-30, `pnpm validate:free-recall`, §2a):** what the
+- **Independent answer keys (historical 2026-07-30 pre-audit denominator, §2a):** what the
   free scan GRADES is **0/9 to 6/12 per target, 15/57 (26.3%) blended**; what it SURFACES as a
   lower-confidence indicator is **4/9 to 11/12, 44/57 (77.2%)**. Still target-shape-dependent —
   report the range, the shape-dependence, and WHICH of the two columns you mean. The 2026-07-18
@@ -253,7 +263,8 @@ clearing the board. The FREE mechanical tier lands the §2 range underneath it.*
 - **Real-CVE SecBench.js (RE-RUN 2026-07-30, §3):** **72.9%** dependency-CVE (SCA) recall;
   **1/600** request-sourced; **152/583 (26.1%)** library-internal source over the full corpus. Three
   different tiers, never one number.
-- **Paid semantic tier (recorded):** carries the 8/8, 9/9, 12/12, 20/20 union headlines.
+- **Paid semantic tier (historical recorded claims):** carried the 8/8, 9/9, 12/12, 20/20 union
+  headlines before the 35-row reconciliation; a current claim awaits the complete rerun.
 
 The blended "100%" hides the mechanical number precisely because it is a **union across tiers** with
 the semantic (paid) tier doing the clearing. Stated as a free-tier-only number, the mechanical tier

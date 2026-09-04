@@ -86,6 +86,12 @@ function parseTriageFinding(value: unknown, index: number, expectedVotes: number
   const finding: TriageFinding = { ...(value as unknown as TriageFinding), id: value.id, verdict: value.verdict as TriageVerdict };
   if (finding.verdict === "duplicate") {
     if (!nonEmpty(finding.duplicate_of)) throw new Error(`${at}.duplicate_of must name the canonical finding`);
+    for (const field of ["title", "file", "rationale"] as const) {
+      if (!nonEmpty(finding[field])) throw new Error(`${at}.${field} must be a non-empty string for a duplicate`);
+    }
+    if (!Number.isInteger(finding.line) || (finding.line as number) < 1) {
+      throw new Error(`${at}.line must be a positive integer for a duplicate`);
+    }
     return finding;
   }
   const votes = parseVoteBreakdown(finding.vote_breakdown, at, expectedVotes);
@@ -149,6 +155,10 @@ function translateTruePositive(finding: TriageFinding): Finding {
   };
 }
 
+function duplicateEvidence(finding: TriageFinding): string {
+  return `Triage duplicate ${finding.id}: ${finding.title} (${finding.file}:${finding.line}). ${finding.rationale}`;
+}
+
 /**
  * Convert the triage skill's completed object into the report-schema Finding[] consumed by
  * record-pass. False positives and explicit duplicates remain in TRIAGE.json as the audit trail;
@@ -177,14 +187,45 @@ export function findingsFromCompletedTriage(raw: unknown): Finding[] {
     if (!canonical) {
       throw new Error(`${finding.id}.duplicate_of names an unknown canonical finding: ${finding.duplicate_of}`);
     }
-    if (canonical.verdict === "duplicate") {
-      throw new Error(`${finding.id}.duplicate_of must name a non-duplicate canonical finding: ${finding.duplicate_of}`);
+    if (canonical.verdict !== "true_positive") {
+      throw new Error(`${finding.id}.duplicate_of must name a true-positive canonical finding: ${finding.duplicate_of}`);
     }
+  }
+
+  const duplicatesByCanonical = new Map<string, { seen: Set<string>; evidence: string[] }>();
+  const duplicates = parsed
+    .filter((finding) => finding.verdict === "duplicate")
+    .sort((a, b) =>
+      (a.duplicate_of as string).localeCompare(b.duplicate_of as string)
+      || (a.file as string).localeCompare(b.file as string)
+      || (a.line as number) - (b.line as number)
+      || (a.title as string).localeCompare(b.title as string)
+      || (a.rationale as string).localeCompare(b.rationale as string)
+      || a.id.localeCompare(b.id));
+  for (const duplicate of duplicates) {
+    const canonicalId = duplicate.duplicate_of as string;
+    const provenanceKey = [duplicate.file, duplicate.line, duplicate.title, duplicate.rationale]
+      .map((part) => String(part).trim().toLowerCase())
+      .join("\u0000");
+    const evidence = duplicateEvidence(duplicate);
+    const existing = duplicatesByCanonical.get(canonicalId) ?? { seen: new Set<string>(), evidence: [] };
+    if (!existing.seen.has(provenanceKey)) {
+      existing.seen.add(provenanceKey);
+      existing.evidence.push(evidence);
+    }
+    duplicatesByCanonical.set(canonicalId, existing);
   }
 
   const translated = parsed
     .filter((finding) => finding.verdict === "true_positive")
-    .map(translateTruePositive)
+    .map((finding) => {
+      const translatedFinding = translateTruePositive(finding);
+      const duplicateProvenance = duplicatesByCanonical.get(finding.id)?.evidence ?? [];
+      if (duplicateProvenance.length > 0) {
+        translatedFinding.evidence = [translatedFinding.evidence, ...duplicateProvenance].join("\n\n");
+      }
+      return translatedFinding;
+    })
     .sort((a, b) => a.id.localeCompare(b.id) || semanticKey(a).localeCompare(semanticKey(b)));
   const seen = new Set<string>();
   return translated.filter((finding) => {

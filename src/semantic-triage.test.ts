@@ -133,13 +133,25 @@ describe("semantic-recall triage policy scope (#1947)", () => {
 
 describe("completed TRIAGE.json adapter (#1947)", () => {
   it("selects only true positives and translates the triage schema without losing scoring evidence", () => {
+    const duplicate = triageFinding({
+      id: "f003",
+      title: "Invoice export repeats the cross-tenant path",
+      file: "src/app/api/invoices/export/route.ts",
+      line: 44,
+      rationale: "The export reaches the same unscoped invoice query.",
+      verdict: "duplicate",
+      severity: null,
+      verify_verdict: null,
+      duplicate_of: "f001",
+    });
     const input = completed([
       triageFinding(),
       triageFinding({ id: "f002", verdict: "false_positive", severity: null, verify_verdict: null, vote_breakdown: { true_positive: 0, false_positive: 3, cannot_verify: 0 } }),
-      triageFinding({ id: "f003", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001" }),
+      duplicate,
     ]);
 
-    expect(findingsFromCompletedTriage(input)).toEqual([
+    const findings = findingsFromCompletedTriage(input);
+    expect(findings).toEqual([
       expect.objectContaining({
         id: "f001",
         title: "Cross-tenant invoice read",
@@ -148,13 +160,38 @@ describe("completed TRIAGE.json adapter (#1947)", () => {
         category: "Security",
         taxonomy: "idor",
         location: "src/app/api/invoices/[id]/route.ts:21",
-        evidence: "route.ts:21 selects an arbitrary invoice id without checking company_id.",
         fix: "Filter by the authenticated company id.",
         value: 3,
         ease: 3,
         safety: 3,
       }),
     ]);
+    expect(findings[0]?.evidence).toBe(
+      "route.ts:21 selects an arbitrary invoice id without checking company_id.\n\n"
+      + "Triage duplicate f003: Invoice export repeats the cross-tenant path "
+      + "(src/app/api/invoices/export/route.ts:44). The export reaches the same unscoped invoice query.",
+    );
+  });
+
+  it("orders and deduplicates duplicate provenance independently of input order", () => {
+    const canonical = triageFinding();
+    const first = triageFinding({
+      id: "f002", title: "Article DELETE policy", file: "supabase/migrations/0001.sql", line: 81,
+      rationale: "DELETE repeats the same policy defect.", verdict: "duplicate", severity: null,
+      verify_verdict: null, duplicate_of: "f001",
+    });
+    const sameProvenance = { ...first, id: "f009" };
+    const later = triageFinding({
+      id: "f004", title: "Article archive DELETE policy", file: "supabase/migrations/0001.sql", line: 91,
+      rationale: "The archive path repeats the same defect.", verdict: "duplicate", severity: null,
+      verify_verdict: null, duplicate_of: "f001",
+    });
+    const evidence = (input: unknown[]) => findingsFromCompletedTriage(completed(input))[0]?.evidence;
+    expect(evidence([later, sameProvenance, canonical, first])).toBe(evidence([canonical, first, later, sameProvenance]));
+    expect(evidence([canonical, first, later, sameProvenance])?.match(/Article DELETE policy/g)).toHaveLength(1);
+    expect(evidence([canonical, first, later])?.indexOf("f002")).toBeLessThan(
+      evidence([canonical, first, later])?.indexOf("f004") ?? -1,
+    );
   });
 
   it("deduplicates identical true positives deterministically regardless of input order", () => {
@@ -179,12 +216,18 @@ describe("completed TRIAGE.json adapter (#1947)", () => {
     ["vote total mismatch", completed([triageFinding({ vote_breakdown: { true_positive: 2, false_positive: 0, cannot_verify: 0 } })]), /totals 2, expected 3/],
     ["verdict without majority", completed([triageFinding({ vote_breakdown: { true_positive: 1, false_positive: 1, cannot_verify: 1 } })]), /no true-positive majority/],
     ["duplicate without canonical", completed([triageFinding({ verdict: "duplicate", duplicate_of: null })]), /duplicate_of/],
+    ["duplicate without evidence", completed([triageFinding(), triageFinding({ id: "f002", verdict: "duplicate", title: "", duplicate_of: "f001" })]), /title must be a non-empty string for a duplicate/],
+    ["duplicate without location", completed([triageFinding(), triageFinding({ id: "f002", verdict: "duplicate", line: 0, duplicate_of: "f001" })]), /line must be a positive integer for a duplicate/],
     ["duplicate with unknown canonical", completed([triageFinding({ verdict: "duplicate", duplicate_of: "missing" })]), /unknown canonical finding/],
     ["duplicate chain", completed([
       triageFinding(),
       triageFinding({ id: "f002", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001" }),
       triageFinding({ id: "f003", verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f002" }),
-    ]), /must name a non-duplicate canonical finding/],
+    ]), /must name a true-positive canonical finding/],
+    ["duplicate of false positive", completed([
+      triageFinding({ verdict: "false_positive", vote_breakdown: { true_positive: 0, false_positive: 3, cannot_verify: 0 } }),
+      triageFinding({ id: "f002", verdict: "duplicate", duplicate_of: "f001" }),
+    ]), /must name a true-positive canonical finding/],
     ["duplicate ids", completed([triageFinding(), triageFinding()]), /duplicate finding id/],
   ])("fails closed on %s", (_label, input, message) => {
     expect(() => findingsFromCompletedTriage(input)).toThrow(message as RegExp);

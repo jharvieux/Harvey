@@ -4,12 +4,12 @@
 **Target:** `SuperRedHat/secure-code-review-demo` ("NoteVault"), a deliberately-vulnerable
 multi-tenant Supabase/Next.js (App Router) notes app. Cloned to `/private/tmp` (ephemeral,
 deleted after).
-**Answer key:** the repo's `report/REMEDIATION-REPORT.md` enumerates **12 findings (F-01..F-12)**
+**Upstream claims:** the repo's `report/REMEDIATION-REPORT.md` enumerates **12 findings (F-01..F-12)**
 with file:line, OWASP-2021, CWE, and CVSS vectors. The authoritative fix-for-fix key is the
 `vulnerable → hardened` branch diff — **one fix commit per finding** (`git log origin/vulnerable..origin/hardened`),
 confirmed on this date. The report itself flags **F-03, F-04, F-11** as **manual / scanner-invisible**
 access-control findings ("a scanner sees syntactically valid code and cannot know an ownership
-predicate is missing") — those especially test Harvey's dynamic M2 tier.
+predicate is missing"). The #1947 source-and-triage audit retains **9** rows in the semantic key.
 
 ## Reproducible semantic re-score identity (#1947)
 
@@ -23,24 +23,26 @@ credentials, unreachable helpers, missing deployment configuration, and every ot
 precision rule remain grounds for rejection. Preserve the completed `TRIAGE.json` unchanged and
 feed it directly to `record-pass`; do not force a candidate to satisfy the historical 12-row key.
 
-### Fresh #1947 result — 2026-09-03
+### #1947 audited reconciliation — 2026-09-03
 
 The pinned scan produced 22 candidates. Fresh triage conserved all 66 independent ballots and
-classified 14 true positives and 8 false positives. The generated M1 receipt scores **9/12**
-against the unchanged key and clears F-N1. F-08, F-10, and F-11 remain missed: the token helper is
-unreachable, wildcard CORS lacks a credentialed exploit path, and the claimed CSRF/rate-limit row
-does not survive the active precision rules. Keep the 12-row baseline and #1947 open; these measured
-dispositions may not be rewritten to manufacture full recall.
+classified 14 true positives and 8 false positives. The row audit freezes **9 positives**: F-01
+through F-07, F-09, and F-12. It retires F-08 because the helper is dead and unimported (0/3), F-10
+because wildcard ACAO has no source-defined credentialed browser path (0/3), and F-11 because the
+CSRF premise is false and the rate-limit claim is hardening without a candidate (0/3). F-09 now
+matches only the proven fallback-secret forgery path. The pin is unchanged and F-N1 remains intact.
 The completed attempt is retained as `semantic-corpus-passes/superredhat.2026-09-03.triage.json`
 (SHA-256 `ec995caf1bacfc8ccc69de1781850ef1d323e6dafd5996831f3afacb187014fa`); its generated but
 unaccepted M1 receipt has SHA-256 `292219a15bca907b55ed95ae090028c63e5346476534ef4fe52b1d95dd2d9ffb`.
+That failed receipt is retained, not promoted. Re-run the complete owner-command sequence and both
+semantic validators at this exact pin before installing a new accepted pass artifact.
 
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 
 ---
 
-# 2026-07-18 RE-SCORE — full three tiers incl. the SEMANTIC (LLM) tier
+# Historical 2026-07-18 re-score — pre-audit 12-claim denominator
 
 **This section supersedes the 6/12 body below.** The original measurement scored only the mechanical
 and dynamic tiers and predated the Vite / App-Router coverage campaign. This re-score runs **all three
@@ -126,7 +128,7 @@ probes ran and are reported as *not proven live here* rather than silently dropp
 - **M9/M7:** `pnpm detect-static <target>` — App Router / performance AST detectors.
 - **M10:** `pnpm pii-classify --schema <target>/supabase/migrations`.
 
-## The answer key (12 findings)
+## Historical upstream answer key (12 claims; current semantic key retains 9)
 
 | # | Finding | Class | Location (vulnerable) | Manual? |
 |---|---------|-------|------------------------|---------|

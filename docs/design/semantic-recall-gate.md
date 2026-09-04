@@ -3,8 +3,7 @@
 The mechanical tier has a scored gate (`pnpm validate:calibration`). The M7/M8 heuristics have one
 (`pnpm exec tsx src/cli/validate-precision.ts`). The **paid semantic pass** — the `vuln-scan` skill
 with `briefs/scan-extras.txt`, followed by the `triage` skill with `briefs/fp-rules.txt` — had **none**, and the answer-keyed
-measurements say it is the tier carrying the product: it is the difference between 1/8 and 8/8 on
-nocode-rescue, 6/12 and 12/12 on SuperRedHat, and 100% of the catch on SupatestVibeDemo. A brief
+historical measurements showed it can carry findings the mechanical tier misses. A brief
 edit, a model change or an `fp-rules.txt` tweak could degrade it and nothing would fail.
 
 This is that gate. It does not run the LLM — it **scores the artifact a semantic pass leaves**.
@@ -16,15 +15,20 @@ measured against a published key, transcribed from the per-finding tables of the
 
 | slug | repo | key | positives | negatives |
 |------|------|-----|-----------|-----------|
-| `nocode-rescue` | `yagaMI-Reverse/nocode-rescue` (`before/`) | `docs/design/nocode-rescue-recall-measurement.md` | 8 | 0 |
-| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 12 | 1 |
-| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 9 | 1 |
-| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 20 | 2 |
+| `nocode-rescue` | `yagaMI-Reverse/nocode-rescue` (`before/`) | `docs/design/nocode-rescue-recall-measurement.md` | 5 | 0 |
+| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 9 | 1 |
+| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 5 | 1 |
+| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 16 | 2 |
 
 Counts are the corpus as committed — print the current key with
 `pnpm exec tsx src/cli/validate-semantic.ts --corpus` rather than quoting this table.
 
-Each entry carries a **location anchor** and **mechanism keywords**, so a right-file/wrong-mechanism
+The #1947 source-and-triage audit reduced the frozen positive denominator from 49 to **35** without
+changing any of the four exact commits. It removed claims defeated by placeholders, dead code,
+absent grants/configuration, no-consumer paths, or hardening-only impact; it split compound CipherX
+RPC rows into independently discriminating entries. All four precision negatives remain.
+
+Each entry carries a **location anchor** and **mechanism phrases**, so a right-file/wrong-mechanism
 finding (the "partial" those docs record for the mechanical tier) does not score as a catch.
 
 The negatives are recorded semantic FP traps — reporting one means the pass believed appearance over
@@ -74,8 +78,11 @@ The generated exception changes only the blanket "intentional demo" disposition 
 semantic-recall measurement. It does not excuse fake credentials, missing configuration, unreachable
 code, mock CVE data, public anon keys, or any other technical precision rule. The generator refuses
 ordinary measurements and a wrong repository, commit, or scope. `record-pass` refuses an incomplete
-or malformed triage object, inconsistent vote totals, and an invalid finding; it deterministically
-deduplicates confirmed true positives while preserving the complete triage object separately.
+or malformed triage object, inconsistent vote totals, and an invalid finding. A duplicate must name
+a canonical true positive and carry validated title/file/line/rationale provenance; that provenance
+is deterministically deduplicated and appended to the one canonical report finding. False positives
+and duplicate rows never become additional TPs, while distinct mechanisms such as Supatest article
+UPDATE and DELETE remain scoreable from the conserved triage evidence.
 
 If the fresh receipt scores below the frozen floor, do not replace the currently accepted undated
 triage artifact or install that receipt as the live `reports/semantic-recall/<slug>/M1.pass.json`.
@@ -98,18 +105,27 @@ accepted pass artifact.
   zero would read as "the tier found nothing" instead of "nobody looked". Unscored targets are
   excluded from the ratio's *denominator* too, so the headline percentage never quietly averages in
   work that was never done.
-- **Generous matching, disclosed.** Location+keyword matching means one broad finding can satisfy
-  two adjacent entries (three of supatest's nine sit in one migration file). The tool counts those
-  findings and prints the caveat next to the number.
+- **Mechanism-discriminating matching.** Location plus a specific mechanism phrase prevents an
+  adjacent same-file finding from scoring the wrong row. The tool still counts the rare case where
+  one evidence-bearing finding proves two distinct impacts.
 
 It is deliberately **not** wired into `pnpm verify`: like `validate:calibration` (which needs the
 mechanical binaries), it needs an input `pnpm verify` cannot manufacture. The scoring logic is unit
-tested in `src/scan/semantic-corpus.test.ts`, and the three re-scored passes' actual findings are
-carried in `docs/design/semantic-corpus-passes/*.triage.json` and re-scored in
+tested in `src/scan/semantic-corpus.test.ts`, and all four dated completed triage artifacts are
+carried in `docs/design/semantic-corpus-passes/*.2026-09-03.triage.json` and re-scored through the
+production adapter in
 `src/scan/semantic-corpus-passes.test.ts` — both run in verify, so a corpus edit that drops a
 planted-flaw match or weakens a precision negative fails there without needing a live pass.
 
-## Live validation — 2026-07-23
+## Current #1947 status — reconciled key, fresh pass still required
+
+The four 2026-09-03 failed attempts remain retained with their ballot evidence and receipt hashes.
+They justified the audited key reconciliation but have not been installed as live accepted
+`reports/semantic-recall/<slug>/M1.pass.json` artifacts. Run the complete four-target sequence at the
+unchanged pins, record the completed triage objects through the owner command, and require both
+semantic scoring and semantic-member freshness to pass before claiming a current green gate.
+
+## Historical live validation — 2026-07-23 (pre-audit denominator)
 
 Proven end-to-end on one target, not just unit tested. `yagaMI-Reverse/nocode-rescue` was cloned to
 a scratch dir, a semantic pass was run over `before/` (5 files, 155 lines) guided by
@@ -119,7 +135,7 @@ generous-match caveat firing on 2 findings that each satisfied two entries. The 
 printed as `NOT SCORED` with their reasons and stayed out of the ratio, which is the behaviour that
 matters most here.
 
-## Live re-score — 2026-07-24 (#912)
+## Historical live re-score — 2026-07-24 (#912; pre-audit denominator)
 
 The other three targets were cloned (`superredhat` at the `vulnerable` branch, `supatest` and
 `cipherx` at `main`), a semantic pass was run over each target's shipped source + migrations guided by
