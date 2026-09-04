@@ -1,0 +1,397 @@
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-fresh-20260903/nocode-rescue/before",
+    "findings_path": "/private/tmp/harvey-1947-fresh-20260903/nocode-rescue/before/VULN-FINDINGS.json",
+    "fp_rules": "/private/tmp/harvey-1947-policies-7a20/nocode-rescue.txt",
+    "fp_rules_sha256": "f88c886edad0a2b82a00d5c1ab6e8c001164e754d4abc58e4951152de6aee58b",
+    "fresh": true
+  },
+  "summary": {
+    "input_count": 10,
+    "duplicates": 0,
+    "false_positives": 4,
+    "true_positives": 6,
+    "needs_manual_test": 0,
+    "by_severity": {
+      "HIGH": 5,
+      "MEDIUM": 1,
+      "LOW": 0
+    }
+  },
+  "findings": [
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "RLS is disabled on workspaces, profiles, and tickets",
+      "file": "schema.sql",
+      "line": 2,
+      "category": "missing-rls",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The schema creates all three public tables at schema.sql:4, schema.sql:12, and schema.sql:20 without any ENABLE ROW LEVEL SECURITY; the only RLS statement is a commented-out example at schema.sql:31. The shipped browser page first queries tickets without a tenant predicate at src/pages/Dashboard.tsx:26, using the browser-bundled service-role client created at src/lib/supabaseClient.ts:20, and tenant filtering happens only afterward in client code at src/pages/Dashboard.tsx:27. The localStorage redirect is not a database authorization boundary, and an attacker can extract the exposed service-role credential and directly read or mutate all three tables.\n\nAny remote visitor can use the browser-delivered database endpoint and credential without authentication to read or mutate sensitive rows across all tenants. Client-side workspace filtering occurs only after the complete ticket result reaches the browser and does not protect direct API access, so both confidentiality and integrity impact are immediate.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:26"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "OpenAI credential is shipped to the browser with dangerouslyAllowBrowser",
+      "file": "src/lib/ai.ts",
+      "line": 8,
+      "category": "client-side-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "src/lib/ai.ts:9 reads the credential from a VITE_ environment variable, which is intended for browser bundling, and dangerouslyAllowBrowser: true at src/lib/ai.ts:10 explicitly enables client-side OpenAI requests. The reachable call at src/pages/Dashboard.tsx:34 sends visitor-controlled ticket text through that client, so the deployed credential must be available to browser code and can be extracted for unauthorized provider usage. The localStorage-only guard at src/pages/Dashboard.tsx:14-19 does not protect the bundled secret or establish trusted server execution.\n\nAny remote visitor can recover the OpenAI credential from the delivered frontend bundle because the VITE_ value is used by a browser-enabled SDK without a server proxy. The attacker can then submit arbitrary provider requests under the application’s account, creating direct credential-compromise and billing impact without authentication or another prerequisite.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:34"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Authentication is enforced only by forgeable localStorage state",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 13,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The effect at src/pages/Dashboard.tsx:18-20 calls loadTickets() even after requesting a redirect, while identity comes solely from attacker-editable localStorage at src/pages/Dashboard.tsx:14. A visitor can forge user.id and user.workspace_id, pass the presence check, and drive reads and inserts at src/pages/Dashboard.tsx:26 and src/pages/Dashboard.tsx:35 without any Supabase session validation. Those operations use the browser-exposed service-role client from src/lib/supabaseClient.ts:20, so no server-side authorization layer repairs the bypass.\n\nAn unauthenticated remote visitor can create the expected localStorage identity values and pass the only client-side presence check. The forged identifiers then reach unrestricted ticket reads and inserts through the browser’s privileged database client, with no trusted session or server-side authentication boundary.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:20",
+        "src/pages/Dashboard.tsx:14"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "Client-controlled role and workspace authorize cross-tenant operations",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 14,
+      "category": "authorization-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The insert reached at src/pages/Dashboard.tsx:35-41 takes workspace_id and created_by directly from the attacker-controlled localStorage object parsed at src/pages/Dashboard.tsx:14. Separately, localStorage supplies the admin decision at src/pages/Dashboard.tsx:16, while deletion at src/pages/Dashboard.tsx:48 constrains only the ticket ID and performs no ownership or workspace check. Both operations use the browser service-role client exported at src/lib/supabaseClient.ts:20, so neither database authorization nor a trusted server-side identity blocks cross-tenant mutation.\n\nAn unauthenticated visitor can forge workspace, user, and admin values in localStorage, then obtain ticket identifiers from the unrestricted browser query. Those claims flow directly into cross-tenant inserts and deletes through the service-role client without an ownership check or trusted authorization boundary.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:35",
+        "src/pages/Dashboard.tsx:14"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Dashboard downloads the entire growing tickets table without pagination",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 26,
+      "category": "unbounded-query",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 2,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "The dashboard invokes loadTickets() on mount at src/pages/Dashboard.tsx:20, and its query at src/pages/Dashboard.tsx:26 requests every column and row without a tenant predicate, ordering, range, or limit. Workspace filtering occurs only after the cross-tenant result has reached browser code at src/pages/Dashboard.tsx:27-29, so it cannot protect response data and the result can become incomplete when the backend applies a response cap. This is a concrete confidentiality and correctness failure, not merely volumetric denial of service.\n\nThe browser receives cross-tenant ticket rows immediately, before local filtering, so disclosure requires neither authentication nor database growth. Silent truncation is a separate correctness impact that additionally requires the total result set to exceed the backend response cap; that conditional impact does not reduce the severity of the already exploitable disclosure.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "Stored ticket body is rendered through dangerouslySetInnerHTML",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 61,
+      "category": "xss",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker stores a crafted executable ticket body in the target workspace.",
+        "Another dashboard user loads and renders that stored ticket."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": null,
+      "rationale": "Attacker-controlled textarea content enters component state at src/pages/Dashboard.tsx:55 and is stored unchanged as the ticket body at src/pages/Dashboard.tsx:35-41. loadTickets retrieves that stored body at src/pages/Dashboard.tsx:26, and src/pages/Dashboard.tsx:61 passes it directly to dangerouslySetInnerHTML. No sanitizer, encoding step, or constant-content restriction exists on this path, so a feasible event-handler payload executes when another user views the ticket.\n\nForgeable localStorage and the privileged browser client let a remote unauthenticated attacker store the payload. Exploitation still requires a second user to render the stored ticket, so the two-precondition rating lowers the result to MEDIUM despite potentially significant execution in the application origin.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:55"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Browser-direct AI calls lack enforceable limits while billing identifiers are public",
+      "file": "src/lib/ai.ts",
+      "line": 15,
+      "category": "billing-abuse",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The reachable OpenAI call at src/pages/Dashboard.tsx:34 does create billable work through the exposed browser credential configured at src/lib/ai.ts:8-10, but that is precisely the client-side-secret vulnerability already represented by f002. The stripe_customer_id exposure at schema.sql:8 is likewise an impact of the missing-RLS/public-database vulnerability already represented by f001. This candidate combines the impacts of those two findings without identifying an independent vulnerability or protection failure.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/pages/Dashboard.tsx:34"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Untrusted ticket text directly controls the LLM triage prompt",
+      "file": "src/lib/ai.ts",
+      "line": 23,
+      "category": "prompt-injection",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The reachable call at src/pages/Dashboard.tsx:34 intentionally passes the submitted ticket body to the categorization model, with that text correctly isolated as a user-role message at src/lib/ai.ts:23. The returned fields are stored only as category and urgency metadata at src/pages/Dashboard.tsx:38-39; they do not reach an authorization decision, tool call, secret-bearing context, or other privileged sink. Under exclusion rule 6, user input appearing in an LLM prompt is not itself a reportable vulnerability.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "intentional_behavior",
+        "misread_code",
+        "not_actionable"
+      ],
+      "exclusion_rule": "6",
+      "first_links": [
+        "src/pages/Dashboard.tsx:34"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "Browser bundle embeds and actively uses a Supabase service-role credential",
+      "file": "src/lib/supabaseClient.ts",
+      "line": 16,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Dashboard does reach the client through its query at src/pages/Dashboard.tsx:26, but the checked-in value at src/lib/supabaseClient.ts:16-17 is synthetic text rather than a valid Supabase JWT: its payload does not contain a decoded role: service_role claim and its signature is only the placeholder xxx. The variable name and comments cannot establish that this value is a credential, and no environment-backed production service-role value flows into createClient at src/lib/supabaseClient.ts:20. Under the organization’s credential rule, a secret cannot be reported from its label or an invalid placeholder alone.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "doesnt_exist",
+        "misread_code"
+      ],
+      "exclusion_rule": "org rule",
+      "first_links": [
+        "src/pages/Dashboard.tsx:26",
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "Ticket insert and delete silently ignore Supabase mutation errors",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 35,
+      "category": "unchecked-supabase-mutation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.7,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The submit button at src/pages/Dashboard.tsx:56 reaches the unchecked insert at src/pages/Dashboard.tsx:35-41, after which a rejection can clear only the submitting user’s unsaved textarea at src/pages/Dashboard.tsx:42. The delete path at src/pages/Dashboard.tsx:48-49 reloads authoritative database state, so a rejected deletion remains visible rather than corrupting stored data. Missing error feedback is a UX and reliability defect, but no attacker-controlled path turns a rejected mutation into unauthorized modification, integrity loss, or security-relevant data loss.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "12",
+      "first_links": [
+        "src/pages/Dashboard.tsx:56"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}

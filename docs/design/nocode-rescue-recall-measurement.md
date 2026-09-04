@@ -4,10 +4,47 @@
 **Target:** `yagaMI-Reverse/nocode-rescue` ("FeedbackHQ"), a representative multi-tenant
 Supabase feedback-triage SaaS the way it comes out of a no-code builder (Lovable/Bolt/v0).
 Cloned to `/private/tmp` (ephemeral, deleted after).
-**Answer key:** the repo's `CASE-STUDY.md` documents exactly **8 planted findings** (3 Critical /
-4 High / 1 Medium) with before-file locations, and the `before/` vs `after/` directory diff is the
-authoritative fix-for-fix key (`after/supabase/migrations/0002_rls.sql` = the RLS fixes;
+**Upstream claims:** the repo's `CASE-STUDY.md` documents **8 claimed findings** (3 Critical /
+4 High / 1 Medium) with before-file locations. The #1947 source-and-triage audit retains **5** as
+the frozen semantic scoring key; the disposition below explains why three claims are not scored.
+The `before/` vs `after/` directory diff remains useful evidence (`after/supabase/migrations/0002_rls.sql` = the RLS fixes;
 `after/.env.example` = the secret split; `after/app/api/triage/route.ts` = the server-side LLM move).
+
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`81350ee96e1aa223f0ce55e5ea91b6b1ffde1595` and scope `before/`. Clone that exact commit, generate
+the effective policy with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement
+semantic-recall --slug nocode-rescue --repo <clone-root> --scope before --out <policy-file>`, then invoke the `vuln-scan`
+skill with `briefs/scan-extras.txt` and the `triage` skill with three fresh votes over `<clone-root>/before`. The generated policy
+waives only the blanket intended-demo exclusion for this exact corpus identity. It leaves every
+technical precision rule active. Preserve the completed `TRIAGE.json` unchanged and pass it directly
+to `record-pass`; do not restamp the historical July findings or hand-author the M1 receipt.
+
+### #1947 audited reconciliation — 2026-09-03
+
+The pinned scan produced 10 candidates. Fresh three-vote triage conserved all 30 ballots and
+classified 6 true positives and 4 false positives. A row-by-row source audit then froze a **5-row**
+key: NR-2 through NR-6. NR-1 is an invalid placeholder (0/3), NR-7 is a nonprivileged user-role
+prompt with no privileged sink (0/3), and NR-8 combines non-distinct impacts and has no independent
+3/0/0 finding. The pin and scope are unchanged. The failed dated attempt remains evidence; it is not
+an accepted current pass.
+The completed attempt is retained as `semantic-corpus-passes/nocode-rescue.2026-09-03.triage.json`
+(SHA-256 `a64bab2608ec08e6da069c35294c53901c10fdcd550afd2e5370ab38d9d7eca8`); its generated but
+unaccepted M1 receipt has SHA-256 `81046e31697b22741906ed708c41c6a6806428ef81f9972e5390f7a2001c601a`.
+Re-run `vuln-scan`, three-vote `triage`, `record-pass`, `validate:semantic`, and
+`validate:semantic-freshness` at the exact pin before replacing any accepted artifact.
+
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 5 candidates and conserved all 15 independent triage
+ballots. Four candidates were confirmed and the inert service-role marker was rejected 0/3 under
+the ordinary credential-validity rule. The accepted completed triage object is
+`semantic-corpus-passes/nocode-rescue.triage.json` (SHA-256
+`fc708c18404a889d4b817310d0ca83e5d0c7cc3fa59d2b8fa5ed8d08187114a8`). The owner-generated
+`reports/semantic-recall/nocode-rescue/M1.pass.json` has SHA-256
+`5228e7453f2d9f8b21508afe7858261b9b9dc1e92bbcfce60daa63044bbc9c3f` and scores **5/5** against
+the reconciled key. The dated September 3 attempt above remains immutable failed-run evidence.
 
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
@@ -35,18 +72,19 @@ from genuine static-tier **gaps**.
   M9 App-Router detectors do not apply to a Vite SPA — recorded as N/A-tier, see below.
 - **M10:** `pnpm pii-classify --schema before/schema.sql` — direct-on-`.sql` data classification.
 
-## The answer key (8 planted findings, from CASE-STUDY.md)
+## Audited semantic answer key (5 positives)
 
-| # | Sev | Finding | Class | Location (before) |
+| ID | Sev | Finding | Class | Location (before) |
 |---|-----|---------|-------|-------------------|
-| 1 | 🔴 | `service_role` key hardcoded in the browser client | Secret exposure / full RLS bypass | `src/lib/supabaseClient.ts`, `.env` |
-| 2 | 🔴 | OpenAI key via `VITE_OPENAI_API_KEY` + `dangerouslyAllowBrowser` | Client-side secret / browser LLM | `src/lib/ai.ts`, `.env` |
-| 3 | 🔴 | No RLS on `tickets`/`profiles`/`workspaces` | RLS-off tables (anon read/write all tenants) | `schema.sql` |
-| 4 | 🟠 | Client-only auth (`if(!user) navigate('/login')`) | Auth enforced in client, data layer open | `src/pages/Dashboard.tsx:20` |
-| 5 | 🟠 | Client-side authz (`localStorage.role === 'admin'`) | Privilege from the client | `src/pages/Dashboard.tsx:16` |
-| 6 | 🟠 | Stored XSS (`dangerouslySetInnerHTML={{__html: t.body}}`) | Stored XSS | `src/pages/Dashboard.tsx:61` |
-| 7 | 🟠 | Prompt injection + no input validation | LLM prompt injection | `src/lib/ai.ts` |
-| 8 | 🟡 | No rate limit on AI call + billing secret (`stripe_customer_id`) in a public-readable table | Cost-bomb + excessive exposure | `src/lib/ai.ts`, `schema.sql` (`workspaces`) |
+| NR-2 | 🔴 | OpenAI key via `VITE_OPENAI_API_KEY` + `dangerouslyAllowBrowser` | Client-side secret / browser LLM | `src/lib/ai.ts`, `.env` |
+| NR-3 | 🔴 | No RLS on `tickets`/`profiles`/`workspaces` | RLS-off tables (anon read/write all tenants) | `schema.sql` |
+| NR-4 | 🟠 | Client-only auth (`if(!user) navigate('/login')`) | Auth enforced in client, data layer open | `src/pages/Dashboard.tsx:20` |
+| NR-5 | 🟠 | Client-side authz (`localStorage.role === 'admin'`) | Privilege from the client | `src/pages/Dashboard.tsx:16` |
+| NR-6 | 🟠 | Stored XSS (`dangerouslySetInnerHTML={{__html: t.body}}`) | Stored XSS | `src/pages/Dashboard.tsx:61` |
+
+Retired rows: NR-1 (invalid placeholder, 0/3), NR-7 (no privileged sink, 0/3), and NR-8
+(compound/non-distinct impacts, 0/3). Historical sections below retain the original eight-claim
+measurement for provenance; they are not the current semantic gate denominator.
 
 ## Score — 1 caught / 8, +3 partial, 4 missed (3 genuine static gaps + 1 N/A-tier)
 

@@ -4,19 +4,58 @@
 **Target:** `SuperRedHat/secure-code-review-demo` ("NoteVault"), a deliberately-vulnerable
 multi-tenant Supabase/Next.js (App Router) notes app. Cloned to `/private/tmp` (ephemeral,
 deleted after).
-**Answer key:** the repo's `report/REMEDIATION-REPORT.md` enumerates **12 findings (F-01..F-12)**
+**Upstream claims:** the repo's `report/REMEDIATION-REPORT.md` enumerates **12 findings (F-01..F-12)**
 with file:line, OWASP-2021, CWE, and CVSS vectors. The authoritative fix-for-fix key is the
 `vulnerable → hardened` branch diff — **one fix commit per finding** (`git log origin/vulnerable..origin/hardened`),
 confirmed on this date. The report itself flags **F-03, F-04, F-11** as **manual / scanner-invisible**
 access-control findings ("a scanner sees syntactically valid code and cannot know an ownership
-predicate is missing") — those especially test Harvey's dynamic M2 tier.
+predicate is missing"). The #1947 source-and-triage audit retains **9** rows in the semantic key.
+
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`104b81dfd54b86b441124c7e12fdf0a9e96bd55c` at the repository root. Generate the effective policy
+with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement semantic-recall --slug
+superredhat --repo <clone-root> --out <policy-file>`, then invoke the `vuln-scan` skill with
+`briefs/scan-extras.txt` and the `triage` skill with three fresh votes.
+The policy waives only the blanket intended-demo exclusion for this exact corpus identity. Fake
+credentials, unreachable helpers, missing deployment configuration, and every other technical
+precision rule remain grounds for rejection. Preserve the completed `TRIAGE.json` unchanged and
+feed it directly to `record-pass`; do not force a candidate to satisfy the historical 12-row key.
+
+### #1947 audited reconciliation — 2026-09-03
+
+The pinned scan produced 22 candidates. Fresh triage conserved all 66 independent ballots and
+classified 14 true positives and 8 false positives. The row audit freezes **9 positives**: F-01
+through F-07, F-09, and F-12. It retires F-08 because the helper is dead and unimported (0/3), F-10
+because wildcard ACAO has no source-defined credentialed browser path (0/3), and F-11 because the
+CSRF premise is false and the rate-limit claim is hardening without a candidate (0/3). F-09 now
+matches only the proven fallback-secret forgery path. The pin is unchanged and F-N1 remains intact.
+The completed attempt is retained as `semantic-corpus-passes/superredhat.2026-09-03.triage.json`
+(SHA-256 `ec995caf1bacfc8ccc69de1781850ef1d323e6dafd5996831f3afacb187014fa`); its generated but
+unaccepted M1 receipt has SHA-256 `292219a15bca907b55ed95ae090028c63e5346476534ef4fe52b1d95dd2d9ffb`.
+That failed receipt is retained, not promoted. Re-run the complete owner-command sequence and both
+semantic validators at this exact pin before installing a new accepted pass artifact.
+
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 13 candidates, preserved 13/13 independent confidence
+reviews, and conserved all 39 triage ballots. The final dispositions are 13 true positives, 0 false
+positives, and 0 duplicates; one of the 39 votes rejected an error-reporting-only candidate, without
+changing its majority. The accepted completed triage object is
+`semantic-corpus-passes/superredhat.triage.json` (SHA-256
+`599f48f46cf163e1fad8107f9ed5c8ae353178e290e41bf9a368cce7fc01207e`). The owner-generated
+`reports/semantic-recall/superredhat/M1.pass.json` has SHA-256
+`d4645f072d4548582db4486ff0f5f8a3c98cf9b601b2177a66f557a2b0cb1cea` and scores **9/9**
+positives while clearing F-N1. The dated September 3 attempt above remains immutable failed-run
+evidence.
 
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 
 ---
 
-# 2026-07-18 RE-SCORE — full three tiers incl. the SEMANTIC (LLM) tier
+# Historical 2026-07-18 re-score — pre-audit 12-claim denominator
 
 **This section supersedes the 6/12 body below.** The original measurement scored only the mechanical
 and dynamic tiers and predated the Vite / App-Router coverage campaign. This re-score runs **all three
@@ -30,7 +69,7 @@ Isolated Docker (`project_id srh-rescore`, DB ports 65360-65366, app 65367); sta
 | Tier | Findings it caught | vs prior |
 |------|--------------------|----------|
 | **Mechanical** (`quick-scan` + `detect-static` + `pii-classify --schema`) | **11** — F-01,02,03,04,05,06,07,08,09(1 of 3 facets),10,12. Miss: **F-11** (no static CSRF/rate-limit detector). | 6 → 11 |
-| **Semantic (LLM)** (manual `/vuln-scan`-style review of source, triaged vs `fp-rules.txt`) | **12** — all findings incl. all 3 facets of F-09; independently confirms the manual F-03/F-04/F-11. | new tier |
+| **Semantic (LLM)** (manual `vuln-scan` skill review of source, triaged vs `fp-rules.txt`) | **12** — all findings incl. all 3 facets of F-09; independently confirms the manual F-03/F-04/F-11. | new tier |
 | **Dynamic (M2)** (`dynamic-validate --execute`, autonomous stand-up) | **4 proven live** — F-02, F-03, F-04, F-11. | 0 → 4 |
 | **Union (a finding = caught if any tier caught it)** | **12 / 12** | 6 → 12 |
 
@@ -102,7 +141,7 @@ probes ran and are reported as *not proven live here* rather than silently dropp
 - **M9/M7:** `pnpm detect-static <target>` — App Router / performance AST detectors.
 - **M10:** `pnpm pii-classify --schema <target>/supabase/migrations`.
 
-## The answer key (12 findings)
+## Historical upstream answer key (12 claims; current semantic key retains 9)
 
 | # | Finding | Class | Location (vulnerable) | Manual? |
 |---|---------|-------|------------------------|---------|
@@ -269,4 +308,3 @@ XSS, crypto, vuln-deps) caught in both, but here the request-taint authz/injecti
 (App Router sources, #570) and the whole M2 tier went dark (per-user + custom auth, #571). Recall on
 this repo is a function of how closely the target matches the org-tenant/Supabase-Auth/Express shapes
 Harvey's rules were written against.
-

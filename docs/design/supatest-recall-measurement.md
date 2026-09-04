@@ -4,13 +4,53 @@
 **Target:** `yoanbernabeu/SupatestVibeDemo` ("VulnBlog"), a deliberately-vulnerable
 **Supabase-native Vite/React SPA** built as the practice target for the
 `supabase-pentest-skills` project. Cloned to `/private/tmp` (ephemeral, deleted after).
-**Answer key:** the repo's `README.md` enumerates exactly **9 planted flaws** (three levels),
+**Upstream claims:** the repo's `README.md` enumerates **9 planted flaws** (three levels),
 and the authoritative mechanism-for-mechanism key is
 `supabase/migrations/20250201000000_initial_vulnblog.sql` (the RLS/policy/RPC definitions) plus
 the four client components. The migration's own header brags the whole point:
 *"✅ Linter Supabase = AUCUN WARNING … ❌ Réalité = Failles critiques cachées par des tautologies
 logiques"* — i.e. the app is specifically engineered so the **mechanical linter tier sees nothing**;
-the flaws are disguised `USING(true)` tautologies and per-user `USING(true)` reads.
+the flaws are disguised `USING(true)` tautologies and per-user `USING(true)` reads. The #1947
+source/configuration audit retains **5** source-proven positives in the semantic key.
+
+## Reproducible semantic re-score identity (#1947)
+
+The semantic re-score is pinned to repository commit
+`38da50608433ec114cf555f5692a478952aae8b1` at the repository root. Generate the effective policy
+with `pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts --measurement semantic-recall --slug
+supatest --repo <clone-root> --out <policy-file>`, then invoke the `vuln-scan` skill with
+`briefs/scan-extras.txt` and the `triage` skill with three fresh votes.
+The policy waives only the blanket intended-demo exclusion for this exact corpus identity. A source
+claim about dashboard-only Auth, Realtime, storage, or other absent configuration is still
+config-to-verify rather than a proven vulnerability. Preserve the completed `TRIAGE.json` unchanged
+and feed it directly to `record-pass`; do not manufacture findings or votes.
+
+### #1947 audited reconciliation — 2026-09-03
+
+The pinned scan produced 14 candidates. Fresh triage preserved 33/33 independent ballots and
+classified 5 true positives, 6 false positives, and 3 duplicates. The source audit freezes F1, F2,
+F3, F5, and F9. F4 (storage bucket), F6 (Realtime publication), F7 (provider password policy), and
+F8 (auto-confirm/deployment policy) are absent from the pinned source/configuration and are retired.
+Matchers now distinguish article UPDATE from DELETE and profile-policy mechanisms. Validated f006
+duplicate provenance is carried onto canonical f005 so F2 is represented without emitting a second
+TP. The exact pin and F-N1 are unchanged.
+The completed attempt is retained as `semantic-corpus-passes/supatest.2026-09-03.triage.json`
+(SHA-256 `617c8b7c3033666429d963b7ba9287200cbf1dc1410ca0158e2515340669a859`); its generated but
+unaccepted M1 receipt has SHA-256 `67d97411c9282f2fa63e5c2aa1e3c2a2994380dd63f6a916a7cc9d506b6819aa`.
+The failed dated receipt remains evidence and is not a fresh accepted pass. Run all four owner
+commands again and require both semantic validators to pass before replacing accepted artifacts.
+
+### #1947 accepted fresh rerun — 2026-09-04
+
+The complete exact-pin rerun produced 13 candidates and conserved all 30 ballots across 10
+canonical candidates. Final triage recorded 9 true positives, 1 false positive, and 3 duplicates.
+The accepted completed triage object is `semantic-corpus-passes/supatest.triage.json` (SHA-256
+`0b9aced7d8dc589845dbc3d931e2e77e2e4c375164bfbed2af6b153582574424`). The owner-generated
+`reports/semantic-recall/supatest/M1.pass.json` has SHA-256
+`ef8b7572b9745ace97589ddf033ca9ceb078510694aa6c3f9589412282cb8676` and scores **5/5** positives
+while clearing F-N1. Its canonical article UPDATE finding carries the validated DELETE duplicate
+provenance needed to score F2 without emitting an extra true positive. The dated September 3 attempt
+above remains immutable failed-run evidence.
 
 This is a MEASUREMENT — every caught / missed below is grounded in an actual Harvey run's output
 observed on this date, not recall. No Harvey source was changed. All three tiers were run:
@@ -36,7 +76,7 @@ mechanical, semantic (LLM), and dynamic (M2 autonomous stand-up).
   cross-principal matrix). Self-isolated per #604 (`project-id harvey-dv-3569abe86e`, DB ports
   57691/57692); teardown scoped to that project only. No foreign Supabase volumes touched.
 
-## The answer key (9 planted flaws)
+## Historical upstream answer key (9 claims; current semantic key retains 5)
 
 Reconstructed from `README.md` (§Failles Volontaires) + the migration + component source.
 `migration` = `supabase/migrations/20250201000000_initial_vulnblog.sql`.

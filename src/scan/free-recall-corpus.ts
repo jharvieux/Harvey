@@ -23,7 +23,7 @@
 //     false positive — the failure mode that costs a free scan its credibility.
 
 import type { Finding } from "../findings.js";
-import { SEMANTIC_CORPUS, type SemanticEntry } from "./semantic-corpus.js";
+import { matchesSemanticEntry, SEMANTIC_CORPUS, type SemanticEntry } from "./semantic-corpus.js";
 
 export interface FreeRecallTarget {
   slug: string;
@@ -35,6 +35,10 @@ export interface FreeRecallTarget {
   // The free/source-only mechanical catch count that doc recorded, HAND-scored. A labelled claim
   // about the past — see the header note on why a delta against it is not self-evidently a gain.
   recordedMechanical: number;
+  // The positive denominator in force when recordedMechanical was measured. Answer-key audits may
+  // later change the live entries; retaining the original denominator prevents a historical 11/12
+  // claim from being relabelled as 11/9 without a new mechanical measurement.
+  recordedMechanicalTotal: number;
   entries: SemanticEntry[];
 }
 
@@ -55,6 +59,7 @@ const vandyand: FreeRecallTarget = {
   source: "docs/design/vandyand-recall-measurement.md",
   recordedMechanicalOn: "2026-07-18",
   recordedMechanical: 4,
+  recordedMechanicalTotal: 8,
   entries: [
     { id: "VD-1", kind: "positive", cls: "RLS never enabled on orgs (anon enumerates tenants)", locations: ["supabase/migrations"], match: ["orgs"], note: "" },
     { id: "VD-2", kind: "positive", cls: "line_items has no policy (side-door child-table leak)", locations: ["supabase/migrations"], match: ["line_items"], note: "" },
@@ -70,11 +75,11 @@ const vandyand: FreeRecallTarget = {
 // The four keys the semantic gate already carries, re-used verbatim so the free and paid columns
 // are scored against the same rows. Their recorded MECHANICAL baselines come from
 // free-tier-recall-measurement.md §2, which is a different column of the same measurement docs.
-const MECHANICAL_BASELINES: Record<string, { recordedMechanical: number; recordedMechanicalOn: string }> = {
-  supatest: { recordedMechanical: 0, recordedMechanicalOn: "2026-07-18" },
-  "nocode-rescue": { recordedMechanical: 3, recordedMechanicalOn: "2026-07-18" },
-  cipherx: { recordedMechanical: 7, recordedMechanicalOn: "2026-07-18" },
-  superredhat: { recordedMechanical: 11, recordedMechanicalOn: "2026-07-18" },
+const MECHANICAL_BASELINES: Record<string, { recordedMechanical: number; recordedMechanicalTotal: number; recordedMechanicalOn: string }> = {
+  supatest: { recordedMechanical: 0, recordedMechanicalTotal: 9, recordedMechanicalOn: "2026-07-18" },
+  "nocode-rescue": { recordedMechanical: 3, recordedMechanicalTotal: 8, recordedMechanicalOn: "2026-07-18" },
+  cipherx: { recordedMechanical: 7, recordedMechanicalTotal: 20, recordedMechanicalOn: "2026-07-18" },
+  superredhat: { recordedMechanical: 11, recordedMechanicalTotal: 12, recordedMechanicalOn: "2026-07-18" },
 };
 
 export const FREE_RECALL_CORPUS: FreeRecallTarget[] = [
@@ -92,17 +97,6 @@ export const FREE_RECALL_CORPUS: FreeRecallTarget[] = [
   }),
   vandyand,
 ];
-
-function haystack(f: Finding): string {
-  return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();
-}
-
-function matches(entry: SemanticEntry, f: Finding): boolean {
-  const loc = f.location.toLowerCase();
-  if (!entry.locations.some((l) => loc.includes(l.toLowerCase()))) return false;
-  const hay = haystack(f);
-  return entry.match.some((k) => hay.includes(k.toLowerCase()));
-}
 
 export interface FreeRecallRow {
   id: string;
@@ -132,6 +126,7 @@ export interface FreeRecallResult {
   negativesCleared: number; // no HIGH-tier match; a review-tier touch is recorded, not counted as an FP
   negativesFalsePositiveHigh: string[]; // entry ids a free-count finding landed on
   recordedMechanical: number;
+  recordedMechanicalTotal: number;
   recordedMechanicalOn: string;
   source: string;
   // Findings satisfying more than one entry. Location+keyword matching is generous, so this says
@@ -142,7 +137,7 @@ export interface FreeRecallResult {
 export function scoreFreeRecall(target: FreeRecallTarget, findings: Finding[]): FreeRecallResult {
   const hits = new Map<Finding, number>();
   const rows: FreeRecallRow[] = target.entries.map((entry) => {
-    const relevant = findings.filter((f) => matches(entry, f));
+    const relevant = findings.filter((f) => matchesSemanticEntry(entry, f));
     for (const f of relevant) hits.set(f, (hits.get(f) ?? 0) + 1);
     const tier: FreeRecallRow["tier"] = relevant.some((f) => f.precisionTier === "high")
       ? "high"
@@ -180,6 +175,7 @@ export function scoreFreeRecall(target: FreeRecallTarget, findings: Finding[]): 
     negativesCleared: neg.filter((r) => r.tier !== "high").length,
     negativesFalsePositiveHigh: neg.filter((r) => r.tier === "high").map((r) => r.id),
     recordedMechanical: target.recordedMechanical,
+    recordedMechanicalTotal: target.recordedMechanicalTotal,
     recordedMechanicalOn: target.recordedMechanicalOn,
     source: target.source,
     sharedFindings: [...hits.values()].filter((n) => n > 1).length,
@@ -202,6 +198,7 @@ export function unscoredFreeTarget(target: FreeRecallTarget, reason: string): Fr
     negativesCleared: 0,
     negativesFalsePositiveHigh: [],
     recordedMechanical: target.recordedMechanical,
+    recordedMechanicalTotal: target.recordedMechanicalTotal,
     recordedMechanicalOn: target.recordedMechanicalOn,
     source: target.source,
     sharedFindings: 0,

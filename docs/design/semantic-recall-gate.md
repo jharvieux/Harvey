@@ -1,10 +1,9 @@
 # The M1 semantic (LLM) recall gate (#870)
 
 The mechanical tier has a scored gate (`pnpm validate:calibration`). The M7/M8 heuristics have one
-(`pnpm exec tsx src/cli/validate-precision.ts`). The **paid semantic pass** — `/vuln-scan --extra
-briefs/scan-extras.txt` → `/triage --fp-rules briefs/fp-rules.txt` — had **none**, and the answer-keyed
-measurements say it is the tier carrying the product: it is the difference between 1/8 and 8/8 on
-nocode-rescue, 6/12 and 12/12 on SuperRedHat, and 100% of the catch on SupatestVibeDemo. A brief
+(`pnpm exec tsx src/cli/validate-precision.ts`). The **paid semantic pass** — the `vuln-scan` skill
+with `briefs/scan-extras.txt`, followed by the `triage` skill with `briefs/fp-rules.txt` — had **none**, and the answer-keyed
+historical measurements showed it can carry findings the mechanical tier misses. A brief
 edit, a model change or an `fp-rules.txt` tweak could degrade it and nothing would fail.
 
 This is that gate. It does not run the LLM — it **scores the artifact a semantic pass leaves**.
@@ -16,15 +15,20 @@ measured against a published key, transcribed from the per-finding tables of the
 
 | slug | repo | key | positives | negatives |
 |------|------|-----|-----------|-----------|
-| `nocode-rescue` | `yagaMI-Reverse/nocode-rescue` (`before/`) | `docs/design/nocode-rescue-recall-measurement.md` | 8 | 0 |
-| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 12 | 1 |
-| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 9 | 1 |
-| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 20 | 2 |
+| `nocode-rescue` | `yagaMI-Reverse/nocode-rescue` (`before/`) | `docs/design/nocode-rescue-recall-measurement.md` | 5 | 0 |
+| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 9 | 1 |
+| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 5 | 1 |
+| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 16 | 2 |
 
 Counts are the corpus as committed — print the current key with
 `pnpm exec tsx src/cli/validate-semantic.ts --corpus` rather than quoting this table.
 
-Each entry carries a **location anchor** and **mechanism keywords**, so a right-file/wrong-mechanism
+The #1947 source-and-triage audit reduced the frozen positive denominator from 49 to **35** without
+changing any of the four exact commits. It removed claims defeated by placeholders, dead code,
+absent grants/configuration, no-consumer paths, or hardening-only impact; it split compound CipherX
+RPC rows into independently discriminating entries. All four precision negatives remain.
+
+Each entry carries a **location anchor** and **mechanism phrases**, so a right-file/wrong-mechanism
 finding (the "partial" those docs record for the mechanical tier) does not score as a catch.
 
 The negatives are recorded semantic FP traps — reporting one means the pass believed appearance over
@@ -41,23 +45,50 @@ fires.
 ## Running it
 
 The semantic pass is an operator/LLM pass, so it leaves its evidence the way every other
-out-of-orchestrator pass does (`docs/design/audit-pass-artifacts.md`):
+out-of-orchestrator pass does (`docs/design/audit-pass-artifacts.md`). A semantic-corpus target is
+deliberately vulnerable, which conflicts with the ordinary triage rule that rejects intentionally
+unsafe demo behavior as accepted design. Do not weaken that ordinary rule. Generate a one-run policy
+bound to the corpus slug, repository remote, exact commit, and scope instead:
 
 ```bash
-# 1. clone the target at the ref the key describes
+# 1. clone the target and detach at the immutable commit in src/semantic-triage.ts
 git clone https://github.com/SuperRedHat/secure-code-review-demo /tmp/srh
-git -C /tmp/srh checkout vulnerable
+git -C /tmp/srh checkout --detach 104b81dfd54b86b441124c7e12fdf0a9e96bd55c
 
-# 2. run the semantic pass over it and write the triage output as report-schema findings
-#    (/vuln-scan --extra briefs/scan-extras.txt → /triage --fp-rules briefs/fp-rules.txt)
+# 2. from Harvey, generate the exact-pin semantic-recall policy
+pnpm exec tsx src/cli/semantic-corpus-triage-policy.ts \
+    --measurement semantic-recall --slug superredhat --repo /tmp/srh \
+    --out /tmp/srh/semantic-recall-fp-rules.txt
 
-# 3. record it under the target's slug
+# 3. invoke the vuln-scan skill over /tmp/srh with briefs/scan-extras.txt, then invoke
+#    the triage skill on VULN-FINDINGS.json with three fresh votes, /tmp/srh as the
+#    source root, and /tmp/srh/semantic-recall-fp-rules.txt as the precision policy
+#    Keep TRIAGE.json unchanged: completed status, every disposition, and every vote are evidence.
+
+# 4. record the completed TRIAGE object directly; record-pass validates it and keeps only TPs
 pnpm record-pass --module M1 --pass semantic --target /tmp/srh \
-    --findings triage.json --out artifacts/superredhat
+    --findings /tmp/srh/TRIAGE.json --out reports/semantic-recall/superredhat
 
-# 4. score every corpus target
-pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir artifacts
+# 5. score and check semantic-member freshness for every corpus target
+pnpm validate:semantic --artifacts-dir reports/semantic-recall
+pnpm validate:semantic-freshness --artifacts-dir reports/semantic-recall
 ```
+
+The generated exception changes only the blanket "intentional demo" disposition for that exact
+semantic-recall measurement. It does not excuse fake credentials, missing configuration, unreachable
+code, mock CVE data, public anon keys, or any other technical precision rule. The generator refuses
+ordinary measurements and a wrong repository, commit, or scope. `record-pass` refuses an incomplete
+or malformed triage object, inconsistent vote totals, and an invalid finding. A duplicate must name
+a canonical true positive and carry validated title/file/line/rationale provenance; that provenance
+is deterministically deduplicated and appended to the one canonical report finding. False positives
+and duplicate rows never become additional TPs, while distinct mechanisms such as Supatest article
+UPDATE and DELETE remain scoreable from the conserved triage evidence.
+
+If the fresh receipt scores below the frozen floor, do not replace the currently accepted undated
+triage artifact or install that receipt as the live `reports/semantic-recall/<slug>/M1.pass.json`.
+Preserve the completed attempt as `<slug>.<date>.triage.json`, record the owner-command receipt hash
+and measured misses, and leave the freshness issue open. Only a fully green re-score may advance the
+accepted pass artifact.
 
 `--json` emits the raw matrix.
 
@@ -74,18 +105,28 @@ pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir artifacts
   zero would read as "the tier found nothing" instead of "nobody looked". Unscored targets are
   excluded from the ratio's *denominator* too, so the headline percentage never quietly averages in
   work that was never done.
-- **Generous matching, disclosed.** Location+keyword matching means one broad finding can satisfy
-  two adjacent entries (three of supatest's nine sit in one migration file). The tool counts those
-  findings and prints the caveat next to the number.
+- **Mechanism-discriminating matching.** Location plus a specific mechanism phrase prevents an
+  adjacent same-file finding from scoring the wrong row. The tool still counts the rare case where
+  one evidence-bearing finding proves two distinct impacts.
 
 It is deliberately **not** wired into `pnpm verify`: like `validate:calibration` (which needs the
 mechanical binaries), it needs an input `pnpm verify` cannot manufacture. The scoring logic is unit
-tested in `src/scan/semantic-corpus.test.ts`, and the three re-scored passes' actual findings are
-carried in `docs/design/semantic-corpus-passes/*.triage.json` and re-scored in
-`src/scan/semantic-corpus-passes.test.ts` — both run in verify, so a corpus edit that drops a
-planted-flaw match or weakens a precision negative fails there without needing a live pass.
+tested in `src/scan/semantic-corpus.test.ts`. The four failed September 3 completed triage artifacts
+remain in `docs/design/semantic-corpus-passes/*.2026-09-03.triage.json`, and the accepted September 4
+objects are the undated `*.triage.json` files in the same directory. Both sets are re-scored through
+the production adapter in `src/scan/semantic-corpus-passes.test.ts`, so a corpus edit that drops a
+planted-flaw match or weakens a precision negative fails in verify without another live pass.
 
-## Live validation — 2026-07-23
+## Current #1947 status — accepted fresh pass, 2026-09-04
+
+All four targets were scanned and triaged again at their unchanged exact pins. Their completed
+triage objects were recorded through the owner command as
+`reports/semantic-recall/<slug>/M1.pass.json`. The production semantic validator scores **35/35**
+positives and clears **4/4** precision negatives; the semantic-member freshness validator reports
+all four pass artifacts fresh with zero artifact problems. The September 3 failed attempts remain
+immutable evidence rather than being replaced or restamped.
+
+## Historical live validation — 2026-07-23 (pre-audit denominator)
 
 Proven end-to-end on one target, not just unit tested. `yagaMI-Reverse/nocode-rescue` was cloned to
 a scratch dir, a semantic pass was run over `before/` (5 files, 155 lines) guided by
@@ -95,7 +136,7 @@ generous-match caveat firing on 2 findings that each satisfied two entries. The 
 printed as `NOT SCORED` with their reasons and stayed out of the ratio, which is the behaviour that
 matters most here.
 
-## Live re-score — 2026-07-24 (#912)
+## Historical live re-score — 2026-07-24 (#912; pre-audit denominator)
 
 The other three targets were cloned (`superredhat` at the `vulnerable` branch, `supatest` and
 `cipherx` at `main`), a semantic pass was run over each target's shipped source + migrations guided by
@@ -134,9 +175,11 @@ rule itself) runs:
 pnpm validate:semantic-freshness            # or --artifacts-dir <dir>, --now <iso>, --json
 ```
 
-It does not score anything. It asks whether each corpus target's recorded measurement is still
-inside `MAX_PASS_AGE_MS` (`src/audit-pass-artifact.ts`), and fails loud into a `ci-semantic-freshness-alert`
-tracking issue when it is not.
+It asks whether each corpus target has a fresh semantic member inside `MAX_PASS_AGE_MS`
+(`src/audit-pass-artifact.ts`) and whether that member still passes the semantic answer key. A fresh
+connected or mechanical wrapper does not replace stale, malformed, or regressed semantic evidence. The
+workflow fails loud into a `ci-semantic-freshness-alert` tracking issue when either freshness or
+semantic scoring fails.
 
 Two sources per target, and the row says which one it used, because they are not the same evidence:
 

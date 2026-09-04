@@ -1,0 +1,231 @@
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-rerun-20260904-lane-a/nocode/source/before",
+    "fp_rules_file": "/private/tmp/harvey-1947-rerun-20260904-lane-a/nocode/policy/semantic-fp-rules.txt"
+  },
+  "summary": {
+    "input_count": 5,
+    "duplicates": 0,
+    "false_positives": 1,
+    "true_positives": 4,
+    "needs_manual_test": 0,
+    "by_severity": {
+      "HIGH": 2,
+      "MEDIUM": 2,
+      "LOW": 0
+    }
+  },
+  "findings": [
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 14,
+      "category": "auth-bypass",
+      "severity": "HIGH",
+      "claimed_severity": "HIGH",
+      "title": "Client-controlled localStorage values define identity, tenant, and admin authority",
+      "description": "Dashboard parses the current user, workspace, and id entirely from localStorage at src/pages/Dashboard.tsx:14 and treats another localStorage value as the admin role at line 16. It fetches every ticket before filtering in the browser at lines 23-30, inserts caller-selected workspace_id and created_by at lines 33-41, and deletes by arbitrary id at lines 46-48 through the privileged browser client. No server-side identity, tenant, or role assertion protects these operations.",
+      "exploit_scenario": "An attacker edits localStorage to claim another workspace and the admin role, then uses the shipped client to read cross-workspace tickets, create records attributed to another user, or delete a chosen ticket id.",
+      "recommendation": "Use Supabase Auth sessions as the identity source, derive workspace and role server-side, enforce tenant ownership with RLS and server checks, and never ship a service-role client to the browser.",
+      "scanner_confidence": 1,
+      "missing_fields": [
+        "preconditions"
+      ],
+      "absorbed": [],
+      "duplicate_of": null,
+      "verdict": "true_positive",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "confidence": 10,
+      "exclusion_rule": null,
+      "refute_reasons": [],
+      "first_links": [
+        "src/pages/Dashboard.tsx:20",
+        "src/pages/Dashboard.tsx:65"
+      ],
+      "rationale": "src/pages/Dashboard.tsx:14-16 trusts attacker-editable localStorage for user, workspace, and admin authority; the effect still calls loadTickets at line 20. That path fetches every ticket before browser filtering at lines 23-30, while caller-controlled identity values reach inserts at lines 35-40 and the forgeable admin flag reaches deletion at lines 46-48 and 65. The browser client at src/lib/supabaseClient.ts:16-21 and RLS-off schema at schema.sql:30-32 leave no independent authorization control.\n\nAn unauthenticated remote attacker can manipulate client-controlled localStorage values to assume authenticated, tenant, and administrator state. The bypass reaches unscoped reads, inserts, and deletes, enabling cross-tenant data exposure and modification without an independent prerequisite.",
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "severity_label": "HIGH",
+      "threat_match": "none",
+      "severity_alignment": 5,
+      "verify_verdict": "exploitable",
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry"
+    },
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "file": "src/lib/ai.ts",
+      "line": 9,
+      "category": "exposed-cloud-credential",
+      "severity": "HIGH",
+      "claimed_severity": "HIGH",
+      "title": "VITE OpenAI key is shipped to every browser",
+      "description": "src/lib/ai.ts:8-10 initializes the OpenAI SDK in frontend code with import.meta.env.VITE_OPENAI_API_KEY and explicitly enables dangerouslyAllowBrowser. Dashboard imports this module at src/pages/Dashboard.tsx:6 and invokes it at line 34, so any real key configured for deployment is compiled into public assets and sent to every browser.",
+      "exploit_scenario": "An unauthenticated visitor downloads the frontend bundle, extracts the OpenAI API key, and uses the account's quota for arbitrary requests, causing cost and data-governance impact.",
+      "recommendation": "Move OpenAI calls to an authenticated server endpoint, keep the API key in a server-only secret, authorize and rate-limit requests, and rotate the exposed key.",
+      "scanner_confidence": 1,
+      "missing_fields": [
+        "preconditions"
+      ],
+      "absorbed": [],
+      "duplicate_of": null,
+      "verdict": "true_positive",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "confidence": 9.3,
+      "exclusion_rule": null,
+      "refute_reasons": [],
+      "first_links": [
+        "src/pages/Dashboard.tsx:34"
+      ],
+      "rationale": "src/lib/ai.ts:8-10 passes VITE_OPENAI_API_KEY into a browser-enabled OpenAI client, and src/pages/Dashboard.tsx:6,34 imports and invokes it from the submit path. The localStorage redirect at Dashboard.tsx:19 cannot protect a credential compiled into client assets, and no server proxy or restriction prevents extraction of a deployed real key.\n\nAn unauthenticated remote user can extract the browser-bundled OpenAI API key and misuse its account privileges, quota, and billing. The claimed HIGH severity is aligned because exploitation requires no authentication and can create material financial and operational impact.",
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "severity_label": "HIGH",
+      "threat_match": "none",
+      "severity_alignment": 0,
+      "verify_verdict": "exploitable",
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry"
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "file": "src/pages/Dashboard.tsx",
+      "line": 61,
+      "category": "stored-xss",
+      "severity": "MEDIUM",
+      "claimed_severity": "HIGH",
+      "title": "Ticket body is rendered through dangerouslySetInnerHTML",
+      "description": "The textarea supplies attacker-controlled body text at src/pages/Dashboard.tsx:55, and submit stores it without sanitization at lines 33-41. loadTickets retrieves stored rows at line 26, and line 61 inserts t.body into the DOM with dangerouslySetInnerHTML, bypassing React escaping.",
+      "exploit_scenario": "An attacker submits a ticket body containing an event-handler payload such as an image onerror. The script executes in the application origin whenever another user loads the dashboard and renders the stored ticket.",
+      "recommendation": "Render ticket bodies as React text content. If limited markup is required, sanitize it with a maintained allowlist sanitizer before storage and again before the raw-HTML sink.",
+      "scanner_confidence": 1,
+      "missing_fields": [
+        "preconditions"
+      ],
+      "absorbed": [],
+      "duplicate_of": null,
+      "verdict": "true_positive",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "confidence": 10,
+      "exclusion_rule": null,
+      "refute_reasons": [],
+      "first_links": [
+        "src/pages/Dashboard.tsx:20",
+        "src/pages/Dashboard.tsx:56"
+      ],
+      "rationale": "Attacker-controlled textarea content at src/pages/Dashboard.tsx:55-56 reaches submit and is stored unchanged at lines 35-41. loadTickets retrieves it at line 26 and later viewers render t.body through dangerouslySetInnerHTML at lines 58-61. No encoding or sanitizer protects the path, so React auto-escaping is explicitly bypassed and rule 14 does not exclude it.\n\nThe verified raw HTML path makes the stored XSS exploitable once a victim views the submitted ticket. That single genuine prerequisite sets a MEDIUM ceiling, despite unauthenticated remote submission otherwise supporting HIGH, so the lower derived rank is MEDIUM.",
+      "preconditions": [
+        "A victim must view the malicious ticket body in the dashboard."
+      ],
+      "access_level": "unauthenticated_remote",
+      "severity_label": "MEDIUM",
+      "threat_match": "none",
+      "severity_alignment": -2,
+      "verify_verdict": "exploitable",
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry"
+    },
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "file": "schema.sql",
+      "line": 4,
+      "category": "cross-tenant-data-exposure",
+      "severity": "MEDIUM",
+      "claimed_severity": "HIGH",
+      "title": "Missing RLS leaves all multi-tenant tables exposed",
+      "description": "schema.sql:4-28 creates workspaces containing billing identifiers, profiles containing email, role, and internal notes, and tickets keyed by workspace, but schema.sql:30-32 explicitly leaves row-level security disabled. The browser application talks directly to Supabase, so Data API callers can read or mutate rows across every workspace instead of being constrained by tenant policies.",
+      "exploit_scenario": "A remote caller uses the public application configuration to query workspaces, profiles, or tickets through the Supabase Data API and retrieves or changes another workspace's billing metadata, identities, private notes, and support records.",
+      "recommendation": "Enable RLS on every exposed table, grant only required operations, and add policies tied to auth.uid() and server-derived workspace membership. Retain matching workspace filters in application queries as a second layer.",
+      "scanner_confidence": 1,
+      "missing_fields": [
+        "preconditions"
+      ],
+      "absorbed": [],
+      "duplicate_of": null,
+      "verdict": "true_positive",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "confidence": 10,
+      "exclusion_rule": null,
+      "refute_reasons": [],
+      "first_links": [
+        "src/pages/Dashboard.tsx:26"
+      ],
+      "rationale": "schema.sql:4-28 defines the tenant-bearing workspaces, profiles, and tickets, while schema.sql:30-32 confirms that RLS is disabled. The shipped browser query at src/pages/Dashboard.tsx:26 requests every ticket and filters only afterwards at lines 27-29; inserts/deletes at lines 35-48 and the privileged browser client at src/lib/supabaseClient.ts:16-21 show that no server-side tenant boundary protects the data.\n\nThe browser receives every tenant's tickets because database RLS is absent and filtering occurs only client-side, making cross-tenant disclosure directly exploitable by an ordinary authenticated tenant user. With two preconditions and authenticated access, the prescribed rubric yields MEDIUM, so the claimed HIGH severity is overstated by one tier.",
+      "preconditions": [
+        "Possess a valid authenticated account in any tenant.",
+        "Access the shipped Dashboard route so its browser query retrieves the unscoped ticket dataset."
+      ],
+      "access_level": "authenticated",
+      "severity_label": "MEDIUM",
+      "threat_match": "none",
+      "severity_alignment": -3,
+      "verify_verdict": "exploitable",
+      "owner_hint": "top committer: Ilya Shapovalov (1/1 recent commits); no CODEOWNERS entry"
+    },
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "file": "src/lib/supabaseClient.ts",
+      "line": 16,
+      "category": "hardcoded-secret",
+      "severity": null,
+      "claimed_severity": "HIGH",
+      "title": "Browser bundle embeds a Supabase service-role credential",
+      "description": "src/lib/supabaseClient.ts:14-20 declares an explicitly labeled service_role token and passes it to createClient in a frontend module. Dashboard imports the client at src/pages/Dashboard.tsx:5 and uses it for unrestricted selects, inserts, and deletes. A deployed valid service-role credential in this position is recoverable by every browser user and bypasses all RLS.",
+      "exploit_scenario": "A visitor extracts the embedded privileged token from the JavaScript bundle and uses it directly against the Supabase project to read or mutate every table regardless of row policies.",
+      "recommendation": "Revoke and rotate any exposed service-role key, remove privileged clients from browser code, use the public anon key with strict RLS for client access, and keep service-role operations in narrowly authorized server-only handlers.",
+      "scanner_confidence": 0.6,
+      "missing_fields": [
+        "preconditions"
+      ],
+      "absorbed": [],
+      "duplicate_of": null,
+      "verdict": "false_positive",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "confidence": 10,
+      "exclusion_rule": "org rule",
+      "refute_reasons": [
+        "misread_code"
+      ],
+      "first_links": [
+        "src/pages/Dashboard.tsx:26"
+      ],
+      "rationale": "The browser path is real: src/lib/supabaseClient.ts:20 exports the client and src/pages/Dashboard.tsx:26,35,48 uses it for reads, inserts, and deletes. But src/lib/supabaseClient.ts:16-17 contains an inert marker whose payload is SERVICE_ROLE_FULL_ACCESS rather than a decoded JSON role:service_role claim and whose xxx signature cannot be HS256. The labels prove intent only; schema.sql:30-32 supports a distinct RLS defect but does not make this placeholder a valid privileged credential.",
+      "severity_label": null,
+      "verify_verdict": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "owner_hint": null
+    }
+  ]
+}

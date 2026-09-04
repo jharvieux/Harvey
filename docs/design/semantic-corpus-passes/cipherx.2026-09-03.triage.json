@@ -1,0 +1,1210 @@
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-fresh-20260903/cipherx",
+    "findings_path": "/private/tmp/harvey-1947-fresh-20260903/cipherx/VULN-FINDINGS.json",
+    "extra_fp_rules": "/private/tmp/harvey-1947-policies-7a20/cipherx.txt",
+    "fresh": true
+  },
+  "summary": {
+    "input_count": 32,
+    "duplicates": 1,
+    "false_positives": 16,
+    "true_positives": 15,
+    "needs_manual_test": 1,
+    "by_severity": {
+      "HIGH": 9,
+      "MEDIUM": 6,
+      "LOW": 0
+    }
+  },
+  "findings": [
+    {
+      "id": "f012",
+      "source": "VULN-FINDINGS.json#11",
+      "title": "Anonymous definer search returns secrets and cross-tenant records",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 23,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The unauthenticated search route sends attacker-controlled q to search_lab_data. The explicitly anon-granted SECURITY DEFINER RPC performs no caller or tenant check and serializes every column from matching file, secret, ticket, and invoice rows; SQL wildcards permit broad or complete extraction. This also absorbs the f006 route-level instance. All three votes confirmed it.\n\nNo security precondition exists beyond deployment with the supplied migration and data; an unauthenticated caller can submit a wildcard. Full records across secrets, files, tickets, and invoices are exposed, so the claimed HIGH severity is fully justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/search/route.ts:15"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f006"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Public webhook tester fetches arbitrary URLs and follows redirects",
+      "file": "src/app/api/webhook/route.ts",
+      "line": 9,
+      "category": "ssrf",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The unauthenticated GET accepts an attacker-controlled URL and passes it directly to server-side fetch with redirects followed; POST forwards its body URL into the same path. No scheme, hostname, DNS, resolved-address, or redirect-target validation exists, and response status, headers, and the first 4 KB of body are returned. All three independent votes confirmed an externally reachable SSRF with internal/link-local disclosure.\n\nNo security precondition exists beyond reaching the public route. The server provides a response-bearing request primitive into arbitrary destinations, including internal and link-local services, so HIGH is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/webhook/route.ts:8",
+        "src/app/api/webhook/route.ts:9",
+        "src/app/api/webhook/route.ts:64"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f013",
+      "source": "VULN-FINDINGS.json#12",
+      "title": "Anonymous definer RPC exports the entire secrets table",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 41,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The unauthenticated application route allowlists and invokes export_demo_secrets. The explicitly anon-granted SECURITY DEFINER function returns every row and column from fake_secrets, including its value field, without a caller check or later revocation. The planted/demo label does not exclude this technically reachable access-control flaw in the #1947 measurement. All three votes confirmed it.\n\nThe deployed POST route requires no authentication, prior state, or special configuration. An anonymous caller can invoke the bulk secret export directly, so HIGH is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f026",
+      "source": "VULN-FINDINGS.json#25",
+      "title": "Signup trigger trusts user-controlled role metadata",
+      "file": "supabase/migrations/20260101000000_initial_schema.sql",
+      "line": 134,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "Public signup is enabled without email confirmation. The final SECURITY DEFINER signup trigger still casts caller-controlled raw_user_meta_data.role into an enum containing admin; the fixed UI value does not constrain direct Auth API requests. requireRole and final RLS then trust that stored role. All three independent votes confirmed the escalation path.\n\nNo precondition exists beyond public access to the signup API. Caller-supplied admin metadata is persisted and immediately trusted by requireRole and final RLS, granting administrator-equivalent access; claimed HIGH is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/auth/signup-form.tsx:27"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f011",
+      "source": "VULN-FINDINGS.json#10",
+      "title": "Anonymous definer RPC enumerates user identities and roles",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 4,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 3,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The unauthenticated API route allowlists and invokes get_user_by_email with caller-controlled parameters. The explicitly anon-granted SECURITY DEFINER function bypasses profile RLS, permits unrestricted substring matching (including every row for an empty input), and returns user identity, role, and tenant fields without a caller check. All three independent votes confirmed the exposure.\n\nNo precondition exists beyond public network reachability; no account, target-email knowledge, or prior request is required. The unrestricted anon-executable identity enumeration warrants HIGH, so the claimed severity is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "Caller-controlled role header unlocks service-role data",
+      "file": "src/app/api/internal/users/route.ts",
+      "line": 9,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The public GET handler derives authorization solely from an untrusted header or query parameter (src/app/api/internal/users/route.ts:8-12). Middleware calls getUser() but ignores its result and always continues, so neither authentication nor a trusted role check precedes the handler (src/lib/supabase/middleware.ts:28-30). The handler creates a client with SUPABASE_SERVICE_ROLE_KEY, bypassing RLS including the admin-only system_config policy (src/lib/supabase/admin.ts:3-8, supabase/migrations/20260101000009_fix_profiles_rls_recursion.sql:33-35). Supplying admin or manager causes unrestricted profile, secret, and configuration rows to be returned in JSON (src/app/api/internal/users/route.ts:14-27); the #1947 policy expressly prevents the training label from excluding this technically valid vulnerability.\n\nThere are zero security preconditions beyond public-route reachability; supplying the privileged header or query value is the exploit action. The service-role response discloses privileged profiles, secrets, and system configuration, so the claimed HIGH severity is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/internal/users/route.ts:8",
+        "src/app/api/internal/users/route.ts:9"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f023",
+      "source": "VULN-FINDINGS.json#22",
+      "title": "Committed environment file contains a service-role credential",
+      "file": ".env",
+      "line": 13,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 9.7,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The tracked .env contains a non-placeholder Supabase JWT whose decoded role is service_role and project reference matches the committed hosted URL. The server admin client consumes it as an RLS-bypassing credential. Exposure is presence-based under the organization policy; current online validity need not be tested. All three votes confirmed it without disclosing the value.\n\nRepository exposure requires no application call path or account. The decoded service-role claim, matching project reference, and admin-client consumption support HIGH impact and the claimed severity; safe human validation is still required to settle runtime validity or revocation.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f015",
+      "source": "VULN-FINDINGS.json#14",
+      "title": "Storage policies publish backups and expose internal files across users",
+      "file": "supabase/migrations/20260101000003_storage_buckets.sql",
+      "line": 2,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 1,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The migrations make lab-backups public and grant public SELECT, while lab-internal and client-documents-lab grant every authenticated role bucket-wide reads without owner or tenant predicates. The storage seed supplies backup, cross-client, and internal credential-bearing objects, and no later migration narrows the policies. All three independent votes confirmed anonymous backup exposure and authenticated cross-tenant reads.\n\nThe easiest public-backup path requires no account, tenant state, prior request, or race, so derived severity is HIGH; authenticated bucket-wide policies expand the exposure. The claimed HIGH is roughly aligned, though explicitly fake training data limits practical production impact.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "supabase/migrations/20260101000003_storage_buckets.sql:19",
+        "src/lib/lab-configs.ts:233",
+        "src/lib/lab-configs.ts:239"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f024",
+      "source": "VULN-FINDINGS.json#23",
+      "title": "Public static paths publish account credentials and backup configuration",
+      "file": ".htaccess",
+      "line": 14,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The deployment copies public assets, .htaccess permits their unauthenticated retrieval, and robots advertises the archive/internal paths. Redacted account/password pairs in those assets exactly match source provisioning for active privileged accounts and the login sink; demo decoys and the anon key are excluded. All three votes confirmed the credential disclosure.\n\nNo precondition exists beyond ordinary Internet reachability; robots enumerates the deployed paths. The disclosed credentials map to active provisioned identities including an administrator and the public login accepts them, enabling privileged account compromise. Claimed HIGH is justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "docs/HOSTINGER_DEPLOY.md:132",
+        "public/robots.txt:8",
+        "server.js:15"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Ticket search emits reflected and stored data as raw HTML",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 52,
+      "category": "xss",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "A victim loads an attacker-crafted /api/tickets/search?q=<payload> URL in a browser."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The public GET handler reads attacker-controlled q, interpolates it unescaped into a full HTML document, and returns it as text/html (src/app/api/tickets/search/route.ts:25, src/app/api/tickets/search/route.ts:57, src/app/api/tickets/search/route.ts:70). Middleware refreshes auth but does not reject anonymous callers. A source-defined stored path also exists: the unauthenticated password-reset handler persists attacker input into ticket subject, which this route emits raw. No escaping, sanitizer, or source-defined CSP mitigates execution; all three independent votes confirmed the finding.\n\nMeaningful reflected-XSS exploitation requires one realistic victim-navigation precondition. The route is otherwise public and unsanitized, so the derived severity is MEDIUM; the claimed HIGH severity is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/tickets/search/route.ts:25"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f014",
+      "source": "VULN-FINDINGS.json#13",
+      "title": "Definer invoice lookup omits caller company scope",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 51,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker has a valid low-privilege Supabase-authenticated session.",
+        "Attacker knows or successfully guesses a predictable existing invoice number belonging to another tenant."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The application route allowlists get_invoice_details and forwards caller-controlled parameters. The authenticated-granted SECURITY DEFINER RPC filters only by predictable invoice number, never by auth.uid or company, and returns amounts, status, notes, and company names across tenants. All three independent votes confirmed the cross-tenant disclosure.\n\nThe RPC is reachable to any signed-in user and applies no user or company authorization check. Predictable invoice numbers make cross-tenant disclosure realistic, but authentication plus a per-invoice selector reduce derived severity to MEDIUM; the claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f016",
+      "source": "VULN-FINDINGS.json#15",
+      "title": "Definer invoice-debug RPC discloses any invoice by UUID",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 47,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Obtain any authenticated session; public email signup is enabled without confirmation.",
+        "Obtain and submit a valid victim invoice UUID, available through source-reachable invoice listings."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The application RPC proxy allowlists get_invoice_debug and forwards caller parameters. The authenticated-granted SECURITY DEFINER RPC returns invoice financial data, billing email, and internal notes using only a caller-supplied UUID, without ownership or company authorization. Open signup supplies access, and invoice UUIDs are source-reachable. All three votes confirmed it.\n\nAuthentication and a valid invoice UUID are realistically satisfiable but cap the result at MEDIUM. The RPC then discloses cross-company financial data, billing email, and internal notes without ownership checks, so the claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f017",
+      "source": "VULN-FINDINGS.json#16",
+      "title": "Authenticated definer RPC dumps every secret value",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 70,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Establish any authenticated account or session; public signup permits a self-created basic student account."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The application route allowlists debug_fake_secret_dump and invokes it without a role check. The explicitly authenticated-granted SECURITY DEFINER function returns every fake_secrets name and value, while signup or seeded basic accounts make the authenticated role obtainable. The admin-only UI establishes the intended boundary. All three votes confirmed it.\n\nOnly ordinary authentication is required and open signup makes it realistic. The authenticated-granted definer function returns every secret name and value without the intended admin-role check; the rubric caps this at MEDIUM, so claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f018",
+      "source": "VULN-FINDINGS.json#17",
+      "title": "Definer ticket search concatenates caller input into dynamic SQL",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 104,
+      "category": "sql-injection",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Attacker obtains a valid authenticated Supabase session; open self-service signup makes this available.",
+        "Attacker crafts p_query to balance the surrounding ILIKE expression and return six type-compatible columns through a valid UNION."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The HTTP RPC proxy forwards caller-controlled parameters to search_tickets_unsafe. That authenticated-granted SECURITY DEFINER function directly concatenates p_query into quoted dynamic SQL without bind parameters or quote_literal, permitting valid predicate or type-aligned UNION injection under definer privileges. All three independent votes confirmed the path and impact.\n\nThe RPC proxy forwards caller-controlled parameters into dynamic SQL executed with definer rights. Authentication and a syntactically/type-compatible payload are realistically satisfiable, but authenticated access caps derived severity at MEDIUM; claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f022",
+      "source": "VULN-FINDINGS.json#21",
+      "title": "Public debug route discloses credentials and server internals",
+      "file": "src/app/api/debug/route.ts",
+      "line": 10,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 1,
+      "preconditions": [
+        "The application is deployed with /api/debug remotely reachable.",
+        "The attacker sends an unauthenticated GET request with error=true."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The unauthenticated GET handler has no auth or feature gate and returns live stack, environment, working directory, runtime version, and Supabase metadata; its error branch also returns a fixed credential-bearing database URI. Middleware merely refreshes session state and always continues. The literal credential validity is unproven, but all three votes confirmed the directly reachable diagnostic disclosure.\n\nThe unauthenticated verbose branch returns live stack, environment, working directory, runtime version, and Supabase metadata. The fixed database URI adds reconnaissance value but its credentials are not proven valid, so MEDIUM rests on the confirmed diagnostics and roughly matches the claim.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/debug/route.ts:4",
+        "server.js:14"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Unauthenticated search reaches a definer function over sensitive tables",
+      "file": "src/app/api/search/route.ts",
+      "line": 14,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 1.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Semantic duplicate of f012: the same unauthenticated search_lab_data exposure is represented by the canonical SQL RPC finding.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f012",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "Unauthenticated files endpoint exposes the secret catalog",
+      "file": "src/app/api/files/route.ts",
+      "line": 5,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The public route has no authentication gate; middleware only refreshes session state and never rejects anonymous requests (src/lib/supabase/middleware.ts:28-30). However, its client uses the anon key (src/lib/supabase/server.ts:7-9), and the RLS policies merely allow rows without granting SELECT (supabase/migrations/20260101000001_vulnerable_rls.sql:48-59); no migration grants table access, while the configured default says new tables are not auto-exposed (supabase/config.toml:19-24). Consequently, the source-defined deployment does not support the claimed record disclosure, though an externally modified or legacy cloud grant could change that.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 2,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [
+        "misread_code"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/files/route.ts:5"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Invoice API omits company ownership enforcement",
+      "file": "src/app/api/invoices/[id]/route.ts",
+      "line": 17,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.5,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The URL-derived id reaches .eq(\"id\", id) after only a user-authentication check, with no profile or company comparison (src/app/api/invoices/[id]/route.ts:9, src/app/api/invoices/[id]/route.ts:12, src/app/api/invoices/[id]/route.ts:21). The checked-in RLS policies permit every authenticated role to select all invoices and company metadata (supabase/migrations/20260101000001_vulnerable_rls.sql:35, supabase/migrations/20260101000001_vulnerable_rls.sql:39). However, RLS does not grant table privileges, the migrations contain no invoice-table grant, and the checked-in config states that omitted auto_expose_new_tables leaves new entities unexposed (supabase/config.toml:19); because external cloud grants are unknown and mutable, the claimed data-returning path cannot be established without a live environment. (majority cannot verify, dropped under precision policy)",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 1,
+        "cannot_verify": 2
+      },
+      "refute_reasons": [
+        "implausible_trigger"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/invoices/[id]/route.ts:9",
+        "src/app/api/invoices/[id]/route.ts:5"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "Password reset tokens are predictable and disclosed",
+      "file": "src/app/api/password-reset/route.ts",
+      "line": 17,
+      "category": "account-takeover",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The public POST creates and discloses the token in a ticket and response, but only stores it in the module-local RESET_TOKENS map (src/app/api/password-reset/route.ts:17, src/app/api/password-reset/route.ts:27, src/app/api/password-reset/route.ts:33). Its sole source consumer is GET, which retrieves and returns the token without authorizing any operation (src/app/api/password-reset/route.ts:47). The advertised reset URL targets /login, whose form ignores reset and authenticates exclusively through signInWithPassword(email, password) (src/components/auth/login-form.tsx:34, src/components/auth/login-form.tsx:54). No shipped source validates this token, registers it with Supabase Auth, changes a password, or creates a session, so disclosure cannot produce the claimed account takeover.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "doesnt_exist",
+        "misread_code"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/password-reset/route.ts:10"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "Profile mass assignment permits self-service role escalation",
+      "file": "src/app/api/profile/route.ts",
+      "line": 24,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The authenticated PUT handler forwards arbitrary JSON directly into profiles.update, and the role-bearing fields would create escalation if the API role could update the table (src/app/api/profile/route.ts:19, src/app/api/profile/route.ts:24, src/app/api/profile/route.ts:27). But no checked-in migration grants authenticated users UPDATE on profiles, supabase/config.toml:19-24 says omitted auto_expose_new_tables leaves new tables unexposed, and the cloud setup only pushes these migrations. Because two of three independent votes could not establish the required mutable deployment grant, precision mode drops the candidate as unverified.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 1,
+        "cannot_verify": 2
+      },
+      "refute_reasons": [
+        "implausible_trigger"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/profile/route.ts:19"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "Permissive RLS exposes every tenant's companies, invoices, and tickets",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 36,
+      "category": "cross-tenant-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The USING (true) policies and unfiltered portal queries would expose cross-tenant rows if authenticated had SELECT. But no migration grants table SELECT or default privileges, and supabase/config.toml:19-24 says omitted automatic exposure leaves new entities ungranted. All three independent votes therefore could not establish the required mutable hosted ACL; precision mode drops the candidate.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 3
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/invoices/[id]/route.ts:5",
+        "src/app/client/invoices/page.tsx:14"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "Anonymous RLS policies expose files and full secret values",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 48,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The schema and anon USING (true) policies exist, but policies do not grant table privileges. No migration grants anon SELECT or default privileges, and supabase/config.toml:19-24 says omitted automatic exposure leaves new entities ungranted. The separately granted SECURITY DEFINER RPC is distinct. With two cannot-verify ballots and one false-positive ballot, precision mode drops this direct-table claim.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 1,
+        "cannot_verify": 2
+      },
+      "refute_reasons": [
+        "mitigated"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/files/route.ts:8",
+        "src/lib/supabase/client.ts:3",
+        "docs/CLOUD_SUPABASE.md:98"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f019",
+      "source": "VULN-FINDINGS.json#18",
+      "title": "All authenticated users can read complete HR records",
+      "file": "supabase/migrations/20260101000007_portal_rls.sql",
+      "line": 11,
+      "category": "cross-tenant-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The table contains cross-tenant salary and SSN data and its RLS policy admits all authenticated rows. However, no migration grants table SELECT, automatic new-table exposure is disabled in source, and the sole application query is manager-gated. The three votes split true-positive, false-positive, and cannot-verify, so precision mode drops the candidate because exploitation depends on mutable hosted privileges.",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 1,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [
+        "mitigated"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/manager/hr/page.tsx:15"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f020",
+      "source": "VULN-FINDINGS.json#19",
+      "title": "Active-profile policy exposes password hints to every account",
+      "file": "supabase/migrations/20260101000007_portal_rls.sql",
+      "line": 33,
+      "category": "credential-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The surviving policy would expose every column of active profile rows if authenticated had table SELECT, but no migration grants that privilege and source configuration leaves automatic new-table exposure disabled. Two independent votes refuted the source-defined reachability and one could not verify mutable hosted ACLs, so precision mode drops the candidate.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 2,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [
+        "mitigated"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "supabase/config.toml:13",
+        "src/components/auth/login-form.tsx:47"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f021",
+      "source": "VULN-FINDINGS.json#20",
+      "title": "Credential-vault policy includes student users",
+      "file": "supabase/migrations/20260101000009_fix_profiles_rls_recursion.sql",
+      "line": 23,
+      "category": "credential-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.5,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The final RLS policy includes the student role and the seeded table contains credential hints, but no migration grants authenticated table access, source configuration disables automatic exposure, and the sole application query is guarded for IT support. Two false-positive votes and one cannot-verify vote found exploitation depends on mutable legacy grants, so precision mode drops it.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 2,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [
+        "mitigated"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/it-support/credentials/page.tsx:14",
+        "supabase/config.toml:13"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f025",
+      "source": "VULN-FINDINGS.json#24",
+      "title": "Reflected credentialed CORS permits cross-origin ticket reads",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 10,
+      "category": "cross-origin-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The route reflects arbitrary Origin and allows credentials, but the source-pinned Supabase SSR session cookie defaults SameSite=Lax, blocking victim cookies on unrelated cross-site fetches. A hostile same-site sibling origin is not source-defined, and successful ticket access also depends on absent table grants. Two votes refuted the claimed browser path; precision mode drops it.",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 2,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "mitigated"
+      ],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/tickets/search/route.ts:25"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f027",
+      "source": "VULN-FINDINGS.json#26",
+      "title": "Client dashboard serializes independent database reads",
+      "file": "src/app/client/page.tsx",
+      "line": 16,
+      "category": "data-fetching-waterfall",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The three reads are independent, but each authenticated request performs fixed, bounded work: company uses a primary key and invoice/ticket queries use indexed filters with five-row limits. Parallelism would reduce latency, not query count. All three votes classified the claimed availability impact as ordinary volumetric traffic excluded by generic rule 1.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "1",
+      "first_links": [
+        "src/app/client/page.tsx:12",
+        "src/components/layout/sidebar.tsx:32"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f028",
+      "source": "VULN-FINDINGS.json#27",
+      "title": "Authenticated users can forge arbitrary audit-log entries",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 98,
+      "category": "audit-log-integrity",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "RLS WITH CHECK (true) does not grant INSERT; no table grant exists and source configuration disables automatic exposure. The sole application insert fixes actor/action/resource, and audit rows only feed an admin display rather than a security decision. All three votes excluded the hypothetical spoofing as low-impact log manipulation under generic rule 12.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "12",
+      "first_links": [
+        "src/app/api/profile/route.ts:43"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f029",
+      "source": "VULN-FINDINGS.json#28",
+      "title": "Profile API returns raw Postgres diagnostic fields",
+      "file": "src/app/api/profile/route.ts",
+      "line": 34,
+      "category": "error-message-schema-disclosure",
+      "claimed_severity": "LOW",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.7,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The authenticated PUT serializes PostgREST error fields, but those fields expose only low-value profile schema/type/constraint diagnostics, not secrets, query text, or other-tenant data. The same profile shape is visible to the caller, and any privilege escalation is caused by a distinct candidate. All three votes excluded this as hardening without a concrete security path under rule 13.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/profile/route.ts:19"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f030",
+      "source": "VULN-FINDINGS.json#29",
+      "title": "Service-role secret has no validated schema or rotation pair",
+      "file": "src/lib/supabase/admin.ts",
+      "line": 6,
+      "category": "secret-inventory-gap",
+      "claimed_severity": "LOW",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The service-role value comes only from trusted operator-controlled environment configuration; no request data can alter it. Missing startup validation or overlapping rotation names can cause deployment or cutover failure but supplies no attacker-triggerable compromise. All three votes excluded this as operational hardening under generic rules 8 and 13.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "8,13",
+      "first_links": [
+        "src/app/api/internal/users/route.ts:14",
+        "src/app/api/password-reset/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f031",
+      "source": "VULN-FINDINGS.json#30",
+      "title": "Growing invoice and ticket pages rely on implicit row caps",
+      "file": "src/app/client/invoices/page.tsx",
+      "line": 13,
+      "category": "unbounded-query",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The queries omit explicit pagination but the configured API cap bounds responses at 1,000 rows. Source has only six seeded invoices and no untrusted invoice write path; forcing ticket truncation requires volumetric requests. Cross-tenant reads are a separate authorization candidate. All three votes classified this as correctness/hardening without a concrete security path under rules 1 and 13.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "1,13",
+      "first_links": [
+        "src/app/client/page.tsx:69"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f032",
+      "source": "VULN-FINDINGS.json#31",
+      "title": "Service-role module lacks a server-only import guard",
+      "file": "src/lib/supabase/admin.ts",
+      "line": 1,
+      "category": "missing-server-only-guard",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 10.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The service-role key is read only by a module whose complete import graph contains two server Route Handlers. No Client Component imports or re-exports it, and Next configuration exposes no service-role variable. The absent poison pill guards against a hypothetical future import but creates no current disclosure path. All three votes excluded it as missing hardening under rule 13.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "excluded_by_policy"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/internal/users/route.ts:14"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}

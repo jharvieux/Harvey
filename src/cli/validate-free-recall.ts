@@ -60,7 +60,7 @@ if (args.includes("--corpus")) {
   for (const t of FREE_RECALL_CORPUS) {
     const pos = t.entries.filter((e) => e.kind === "positive").length;
     console.log(`\n${t.slug} — ${t.repo}@${t.ref}${t.scope ? `/${t.scope}` : ""}  (${pos} positives, ${t.entries.length - pos} negatives)`);
-    console.log(`  key: ${t.source}; mechanical tally recorded ${t.recordedMechanical}/${pos} on ${t.recordedMechanicalOn} — HAND-scored, a claim about the past`);
+    console.log(`  key: ${t.source}; mechanical tally recorded ${t.recordedMechanical}/${t.recordedMechanicalTotal} on ${t.recordedMechanicalOn} — HAND-scored against its historical denominator, a claim about the past`);
     for (const e of t.entries) console.log(`  ${e.kind === "positive" ? "POS" : "NEG"}  ${e.id.padEnd(7)} ${e.cls}`);
   }
   process.exit(0);
@@ -177,7 +177,7 @@ if (args.includes("--json")) {
       `  → ${r.caughtHigh}/${r.positivesTotal} at the FREE-COUNT (high) tier; ${r.caughtAnyTier}/${r.positivesTotal} surfaced at ANY tier. ` +
         `Negatives cleared ${r.negativesCleared}/${r.negativesTotal}. ${r.findingsScanned} raw findings scanned, ${r.sharedFindings} covering >1 entry.`,
     );
-    console.log(`  → recorded ${r.recordedMechanical}/${r.positivesTotal} on ${r.recordedMechanicalOn} (${r.source}, HAND-scored — a different instrument, not a like-for-like delta)\n`);
+    console.log(`  → recorded ${r.recordedMechanical}/${r.recordedMechanicalTotal} on ${r.recordedMechanicalOn} (${r.source}, HAND-scored against its historical denominator — a different instrument, not a like-for-like delta)\n`);
   }
   console.log(
     `TOTAL over ${matrix.scoredTargets} scored target(s): ${matrix.caughtHigh}/${matrix.positivesTotal} free-count, ` +

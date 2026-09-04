@@ -27,6 +27,8 @@ import { readNamesSafe } from "../fs-walk.js";
 import type { RunContext } from "../audit-runner.js";
 import type { AuditModule } from "../audit-coverage.js";
 import { createProducerExecutionReceipt } from "../producer-execution-receipt.js";
+import { SEMANTIC_CORPUS, scoreSemanticPass } from "../scan/semantic-corpus.js";
+import { SEMANTIC_TARGET_COMMITS } from "../semantic-triage.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(join(tmpdir(), "harvey-pass-cli-"));
@@ -224,6 +226,139 @@ describe("detect-deeper --findings-out → record-pass → M1 live (#1407, CLI v
     runCli("src/cli/detect-deeper.ts", ["--findings-out", control], stubEnv(oneGrantFinding), stubHook);
     expect(existsSync(control)).toBe(true);
     expect(JSON.parse(readFileSync(control, "utf8")).map((f: { id: string }) => f.id)).toEqual(["M1-GRANT-01"]);
+  });
+});
+
+describe("record-pass accepts only completed triage true positives (#1947)", () => {
+  const target = join(dir, "semantic-target");
+  mkdirSync(target, { recursive: true });
+  const triageFinding = (overrides: Record<string, unknown> = {}) => ({
+    id: "f001",
+    title: "Cross-tenant invoice read",
+    file: "src/app/api/invoices/[id]/route.ts",
+    line: 21,
+    category: "idor",
+    verdict: "true_positive",
+    verify_verdict: "exploitable",
+    confidence: 9,
+    severity: "HIGH",
+    rationale: "route.ts:21 returns an arbitrary invoice without checking company_id.",
+    recommendation: "Filter by the authenticated company id.",
+    vote_breakdown: { true_positive: 2, false_positive: 1, cannot_verify: 0 },
+    duplicate_of: null,
+    ...overrides,
+  });
+
+  // Exact-head failing direction before #1947: the current triage skill's top-level
+  // { triage_completed, findings } object exited 1 with "--findings must be a JSON array", so no
+  // semantic M1 pass could be recorded without hand-editing the triage artifact.
+  it("drives the real CLI with mixed TP/FP/duplicate input and records only translated TPs", () => {
+    const out = join(dir, "semantic-completed-triage");
+    const input = join(dir, "semantic-completed-triage.json");
+    writeFileSync(input, JSON.stringify({
+      triage_completed: true,
+      triage_context: { votes_per_finding: 3 },
+      findings: [
+        triageFinding(),
+        triageFinding({ id: "f002", verdict: "false_positive", severity: null, verify_verdict: null, vote_breakdown: { true_positive: 0, false_positive: 3, cannot_verify: 0 } }),
+        triageFinding({
+          id: "f003", title: "Export repeats the cross-tenant invoice read",
+          file: "src/app/api/invoices/export/route.ts", line: 44,
+          rationale: "The export reaches the same unscoped invoice query.",
+          verdict: "duplicate", severity: null, verify_verdict: null, duplicate_of: "f001",
+        }),
+      ],
+    }));
+
+    runCli("src/cli/record-pass.ts", [
+      "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
+    ]);
+    const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
+    expect(stored.findings).toEqual([
+      expect.objectContaining({
+        id: "f001",
+        severity: "High",
+        confidence: "Confirmed",
+        taxonomy: "idor",
+        location: "src/app/api/invoices/[id]/route.ts:21",
+      }),
+    ]);
+    expect(stored.findings[0].evidence).toContain(
+      "Triage duplicate f003: Export repeats the cross-tenant invoice read "
+      + "(src/app/api/invoices/export/route.ts:44).",
+    );
+  });
+
+  it("records the real Supatest completed triage and preserves the DELETE duplicate for scoring", () => {
+    const out = join(dir, "semantic-supatest-duplicate-provenance");
+    const input = join(REPO_ROOT, "docs/design/semantic-corpus-passes/supatest.2026-09-03.triage.json");
+    runCli("src/cli/record-pass.ts", [
+      "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
+    ]);
+    const stored = JSON.parse(readFileSync(join(out, "M1.pass.json"), "utf8"));
+    expect(stored.findings.map((finding: { id: string }) => finding.id)).toEqual([
+      "f001", "f002", "f004", "f005", "f007",
+    ]);
+    expect(stored.findings.find((finding: { id: string }) => finding.id === "f005").evidence)
+      .toContain("Triage duplicate f006: Tautological article DELETE policy permits arbitrary deletion");
+
+    const supatest = SEMANTIC_CORPUS.find((candidate) => candidate.slug === "supatest");
+    if (!supatest) throw new Error("supatest semantic target missing");
+    const result = scoreSemanticPass(supatest, stored.findings);
+    expect(result.rows.find((row) => row.id === "F1")?.pass).toBe(true);
+    expect(result.rows.find((row) => row.id === "F2")?.pass).toBe(true);
+    expect(result.positivesCaught).toBe(5);
+  });
+
+  it.each([
+    ["incomplete", { triage_completed: false, findings: [] }, /triage_completed: true/],
+    ["malformed", { triage_completed: true, triage_context: { votes_per_finding: 3 }, findings: [triageFinding({ rationale: "" })] }, /rationale must be a non-empty string/],
+  ])("refuses %s triage without writing a pass", (label, body, error) => {
+    const out = join(dir, `semantic-${label}-triage`);
+    const input = join(dir, `semantic-${label}-triage.json`);
+    writeFileSync(input, JSON.stringify(body));
+    expect(() => runCli("src/cli/record-pass.ts", [
+      "--module", "M1", "--target", target, "--pass", "semantic", "--findings", input, "--out", out,
+    ])).toThrow(error as RegExp);
+    expect(existsSync(join(out, "M1.pass.json"))).toBe(false);
+  });
+});
+
+describe("semantic-corpus-triage-policy exact target boundary (#1947)", () => {
+  const target = SEMANTIC_CORPUS.find((candidate) => candidate.slug === "nocode-rescue");
+  if (!target) throw new Error("nocode-rescue semantic target missing");
+  const commit = SEMANTIC_TARGET_COMMITS[target.slug];
+  if (!commit) throw new Error("nocode-rescue semantic target commit missing");
+  const cloneRoot = join(dir, "semantic-policy-nocode-rescue");
+  const gitDir = join(cloneRoot, ".git");
+  mkdirSync(join(cloneRoot, "before"), { recursive: true });
+  mkdirSync(gitDir, { recursive: true });
+  writeFileSync(join(gitDir, "HEAD"), `${commit}\n`);
+  writeFileSync(join(gitDir, "config"), `[remote "origin"]\n\turl = https://github.com/${target.repo}.git\n`);
+
+  it("drives the real CLI with clone-root identity and the scoped source directory", () => {
+    const out = join(dir, "semantic-policy-nocode-rescue.txt");
+    runCli("src/cli/semantic-corpus-triage-policy.ts", [
+      "--measurement", "semantic-recall", "--slug", target.slug, "--repo", cloneRoot,
+      "--scope", "before", "--out", out,
+    ]);
+
+    const rules = readFileSync(out, "utf8");
+    expect(rules.startsWith(readFileSync(join(REPO_ROOT, "briefs/fp-rules.txt"), "utf8").trimEnd())).toBe(true);
+    expect(rules).toContain(`${target.repo}@${commit}/before`);
+    expect(rules).toContain("Do not apply generic exclusion rule 3");
+    expect(rules).toContain("anon/publishable key is not a secret");
+  });
+
+  it.each([
+    ["ordinary measurement", ["--measurement", "client-audit", "--scope", "before"]],
+    ["missing source scope", ["--measurement", "semantic-recall"]],
+  ])("refuses an %s without writing a policy", (label, identityArgs) => {
+    const out = join(dir, `semantic-policy-rejected-${label.replaceAll(" ", "-")}.txt`);
+    expect(() => runCli("src/cli/semantic-corpus-triage-policy.ts", [
+      ...identityArgs, "--slug", target.slug, "--repo", cloneRoot, "--out", out,
+    ])).toThrow();
+    expect(existsSync(out)).toBe(false);
   });
 });
 

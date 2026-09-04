@@ -195,6 +195,8 @@ export interface MatchKeyedRow {
   /** Any-of, as both consumers use it: a finding is relevant if its location contains one of these. */
   locations: string[];
   match?: string[];
+  /** Any-of groups, each all-of, used for order-independent semantic mechanisms. */
+  matchAll?: string[][];
 }
 
 export interface SelfMatchingKeyRow {
@@ -207,12 +209,16 @@ export interface SelfMatchingKeyRow {
 export function selfMatchingKeys(rows: readonly MatchKeyedRow[]): SelfMatchingKeyRow[] {
   const out: SelfMatchingKeyRow[] = [];
   for (const e of rows) {
-    if (!e.match) continue;
+    if (!e.match && !e.matchAll) continue;
     const offending = new Map<string, string[]>(); // location -> keys it swallows
     for (const location of e.locations) {
       const raw = location.toLowerCase();
       const hyphenated = raw.replace(/[^a-z0-9]+/g, "-");
-      const keys = e.match.filter((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase()));
+      const direct = (e.match ?? []).filter((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase()));
+      const grouped = (e.matchAll ?? []).filter((group) =>
+        group.length > 0 && group.every((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase())),
+      ).flat();
+      const keys = [...direct, ...grouped];
       if (keys.length) offending.set(location, keys);
     }
     if (offending.size === 0) continue;

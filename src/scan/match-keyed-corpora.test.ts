@@ -44,6 +44,11 @@ describe("#1560 every match-keyed corpus is swept for self-matching keys", () =>
   it("is silent on a key that names the MECHANISM rather than the path — the state every entry is supposed to be in", () => {
     expect(selfMatchingKeys([vacuous({ match: ["algorithm", "expiry"] })])).toEqual([]);
   });
+
+  it("sweeps all-token groups and requires the whole group to be swallowed before calling it vacuous", () => {
+    expect(selfMatchingKeys([vacuous({ match: [], matchAll: [["lib", "jwt"]] })])[0]?.keys).toEqual(["lib", "jwt"]);
+    expect(selfMatchingKeys([vacuous({ match: [], matchAll: [["jwt", "expiry"]] })])).toEqual([]);
+  });
 });
 
 describe("#1560 the registry is discovery-backed, so a third declaration of the shape cannot join the dark", () => {

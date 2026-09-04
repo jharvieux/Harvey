@@ -27,7 +27,7 @@ describe("detect-deeper --findings-out → record-pass → M1 (live) round trip 
     const findingsOutPath = join(dir, "m1-live-findings.json");
     writeFileSync(findingsOutPath, `${JSON.stringify(findings, null, 2)}\n`);
 
-    // record-pass.ts's read of --findings: JSON.parse + Array.isArray, nothing else.
+    // record-pass.ts preserves this bare Finding[] path alongside completed TRIAGE.json ingestion.
     const parsed = JSON.parse(readFileSync(findingsOutPath, "utf8"));
     expect(Array.isArray(parsed)).toBe(true);
 

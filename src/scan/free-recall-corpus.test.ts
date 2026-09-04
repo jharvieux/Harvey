@@ -36,6 +36,7 @@ const target: FreeRecallTarget = {
   source: "docs/design/x.md",
   recordedMechanicalOn: "2026-01-01",
   recordedMechanical: 1,
+  recordedMechanicalTotal: 2,
   entries: [
     { id: "P1", kind: "positive", cls: "ssrf", locations: ["lib/fetchUrl.ts"], match: ["ssrf"], note: "" },
     { id: "P2", kind: "positive", cls: "xss", locations: ["app/notes/page.tsx"], match: ["xss"], note: "" },
@@ -80,6 +81,27 @@ describe("scoreFreeRecall", () => {
     expect(r.caughtHigh).toBe(2);
     expect(r.sharedFindings).toBe(1);
   });
+
+  it("uses the same all-token mechanism matcher as the semantic scorer", () => {
+    const grouped: FreeRecallTarget = {
+      ...target,
+      recordedMechanical: 1,
+      recordedMechanicalTotal: 1,
+      entries: [{
+        id: "P",
+        kind: "positive",
+        cls: "browser credential",
+        locations: ["lib/openai.ts"],
+        match: [],
+        matchAll: [["openai", "browser", "key"]],
+        note: "",
+      }],
+    };
+    const right = finding({ location: "lib/openai.ts:9", evidence: "The OpenAI key is bundled for browser use", precisionTier: "high" });
+    const partial = finding({ location: "lib/openai.ts:9", evidence: "The browser invokes OpenAI", precisionTier: "high" });
+    expect(scoreFreeRecall(grouped, [right]).caughtHigh).toBe(1);
+    expect(scoreFreeRecall(grouped, [partial]).caughtHigh).toBe(0);
+  });
 });
 
 describe("the not-scored row", () => {
@@ -109,8 +131,15 @@ describe("the corpus itself", () => {
     for (const t of FREE_RECALL_CORPUS) {
       expect(t.source, t.slug).toMatch(/^docs\/design\/.+\.md$/);
       expect(t.recordedMechanicalOn, t.slug).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(t.recordedMechanical, t.slug).toBeLessThanOrEqual(t.entries.filter((e) => e.kind === "positive").length);
+      expect(t.recordedMechanicalTotal, t.slug).toBeGreaterThan(0);
+      expect(t.recordedMechanical, t.slug).toBeLessThanOrEqual(t.recordedMechanicalTotal);
     }
+  });
+
+  it("keeps a historical baseline's denominator separate from the reconciled live key", () => {
+    const target = FREE_RECALL_CORPUS.find((t) => t.slug === "superredhat")!;
+    expect(target.entries.filter((entry) => entry.kind === "positive")).toHaveLength(9);
+    expect([target.recordedMechanical, target.recordedMechanicalTotal]).toEqual([11, 12]);
   });
 
   // #1355's vacuous-key rule USED to be checked here, and only here, for both this corpus and the

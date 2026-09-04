@@ -1,322 +1,2153 @@
-[
-  {
-    "id": "SEM-CX-01",
-    "title": "Weak default credentials for seeded portal accounts",
-    "severity": "High",
-    "confidence": "Likely",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "scripts/seed-auth-users.ts:32",
-    "status": "Open",
-    "evidence": "Portal accounts are provisioned with trivially weak passwords in plaintext — Admin123, Manager2024, client123, support1 (seed-auth-users.ts:32,38,47,55). These are real login credentials (email_confirm:true) discoverable via recon, not throwaway test data.",
-    "impact": "Guessable credentials for admin/manager/client/it_support accounts.",
-    "fix": "Use strong generated passwords and force rotation on first login.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
+{
+  "triage_completed": true,
+  "triage_context": {
+    "mode": "auto",
+    "environment": "Unknown. Treat any externally-reachable entry point as untrusted; flag trust-boundary assumptions explicitly in rationale.",
+    "threat_model": [],
+    "scoring": "derived HIGH/MEDIUM/LOW",
+    "noise_tolerance": "precision",
+    "votes_per_finding": 3,
+    "repo": "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source"
   },
-  {
-    "id": "SEM-CX-02",
-    "title": "Supabase service_role JWT committed in a tracked .env",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": ".env:13",
-    "status": "Open",
-    "evidence": "SUPABASE_SERVICE_ROLE_KEY holds a real service_role JWT (decoded role:service_role) committed to the tracked .env (.env:13). This key bypasses all RLS.",
-    "impact": "Full database access / RLS bypass for anyone with repo access.",
-    "fix": "Revoke and rotate the key; never commit service-role credentials.",
-    "value": 5,
-    "ease": 5,
-    "safety": 5
+  "summary": {
+    "input_count": 55,
+    "duplicates": 14,
+    "false_positives": 5,
+    "true_positives": 36,
+    "needs_manual_test": 2,
+    "by_severity": {
+      "HIGH": 9,
+      "MEDIUM": 23,
+      "LOW": 4
+    }
   },
-  {
-    "id": "SEM-CX-03",
-    "title": "Secrets backup file exposing AWS, Stripe, SMTP and signing secrets",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "public/.env.backup:10",
-    "status": "Open",
-    "evidence": "public/.env.backup contains an AWS access key + secret (AKIA.../wJalr...), a Stripe key (sk_test_...), an SMTP password, an internal API token and a weak app signing secret (lines 10-15). Being under public/ it is web-served.",
-    "impact": "Live cloud/payment/mail credentials leaked and web-reachable.",
-    "fix": "Remove the file from public/ and the repo; rotate every exposed secret.",
-    "value": 5,
-    "ease": 5,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-04",
-    "title": "Sensitive files served from the web root (public/)",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "public/backups/db-backup-demo.sql",
-    "status": "Open",
-    "evidence": "Backup and config artifacts are placed under public/ and thus served as static files: public/.env.backup, public/backups/db-backup-demo.sql, public/configs/.env.demo. The .htaccess even whitelists .sql/.env/.bak for fetch.",
-    "impact": "Anyone can download database backups and config files by URL.",
-    "fix": "Never place sensitive files under public/; block backup/config extensions.",
-    "value": 4,
-    "ease": 5,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-05",
-    "title": "invoices readable by every authenticated user (permissive RLS)",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000001_vulnerable_rls.sql:40",
-    "status": "Open",
-    "evidence": "Policy invoices_select_all_auth FOR SELECT TO authenticated USING (true) (vulnerable_rls.sql:40) — every logged-in user reads every company's invoices despite the company_id tenant key.",
-    "impact": "Cross-tenant read of all invoices.",
-    "fix": "USING (company_id = (SELECT company_id FROM profiles WHERE id = auth.uid())).",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-06",
-    "title": "support_tickets readable by every authenticated user",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000001_vulnerable_rls.sql:44",
-    "status": "Open",
-    "evidence": "Policy support_tickets_select_all_auth FOR SELECT TO authenticated USING (true) (vulnerable_rls.sql:44) — all support tickets (incl. internal_notes) readable cross-tenant.",
-    "impact": "Cross-tenant read of all support tickets and internal notes.",
-    "fix": "Scope the policy by the caller's company_id.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-07",
-    "title": "fake_secrets and fake_files readable by anon",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000001_vulnerable_rls.sql:48",
-    "status": "Open",
-    "evidence": "Policies fake_files_select_anon and fake_secrets_select_anon FOR SELECT TO anon USING (true) (vulnerable_rls.sql:48,55) — the anon key reads both tables directly.",
-    "impact": "Unauthenticated read of the fake_secrets / fake_files tables.",
-    "fix": "Remove the anon SELECT grants/policies.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-08",
-    "title": "profiles weak_password_hint exposed to any authenticated user",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000007_portal_rls.sql:33",
-    "status": "Open",
-    "evidence": "Policy profiles_select_weak_hints FOR SELECT TO authenticated USING (is_active = true) (portal_rls.sql:33) exposes every active profile — including the weak_password_hint column — to any authenticated caller. The non-literal predicate evades the permissive-USING(true) linter.",
-    "impact": "Any user reads all profiles and their password hints.",
-    "fix": "Restrict to auth.uid() = id (or privileged roles); drop the hint column.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-09",
-    "title": "employee_records (salary, ssn_last4) readable by any authenticated user",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000007_portal_rls.sql:11",
-    "status": "Open",
-    "evidence": "Policy employee_records_select_auth FOR SELECT TO authenticated USING (true) (portal_rls.sql:11) exposes the HR table defined in portal_roles.sql — full_name, salary, ssn_last4 — to every logged-in user.",
-    "impact": "Cross-tenant leak of PII/HR data including partial SSN and salary.",
-    "fix": "Scope to manager/admin roles and the owning company.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-10",
-    "title": "Public-read storage buckets expose all objects",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000003_storage_buckets.sql:2",
-    "status": "Open",
-    "evidence": "storage.buckets rows lab-public and lab-backups are created with public=true and SELECT TO public policies on storage.objects (storage_buckets.sql:2,10-21); spec_buckets_and_rpc.sql adds more public buckets (public-assets, lab-configs).",
-    "impact": "Any object in the public buckets (incl. backups) is world-readable by URL.",
-    "fix": "Set public=false and gate object reads with signed URLs / scoped policies.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-11",
-    "title": "SECURITY DEFINER RPCs granted to anon that dump and enumerate data",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000002_vulnerable_rpc.sql:20",
-    "status": "Open",
-    "evidence": "get_user_by_email, search_lab_data and export_demo_secrets are SECURITY DEFINER with GRANT EXECUTE ... TO anon, authenticated (vulnerable_rpc.sql:20,38,48) and consult no auth.uid() — they enumerate users and dump secrets/tickets/invoices for any caller. spec_buckets_and_rpc.sql adds debug_fake_secret_dump in the same pattern.",
-    "impact": "Anon callers dump secrets and enumerate arbitrary records via RPC.",
-    "fix": "Add in-function caller checks or revoke anon EXECUTE; use SECURITY INVOKER.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-12",
-    "title": "plpgsql SQL injection via dynamic EXECUTE string concatenation",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:114",
-    "status": "Open",
-    "evidence": "search_tickets_unsafe builds and runs EXECUTE 'SELECT ... WHERE t.subject ILIKE ''%' || p_query || '%''' (spec_buckets_and_rpc.sql:114-118) — the caller-supplied p_query is concatenated into the SQL text, a classic SQL injection.",
-    "impact": "Arbitrary SQL execution in the function's (DEFINER) context.",
-    "fix": "Use format() with %L / parameterized EXECUTE ... USING.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-13",
-    "title": "IDOR — any invoice returned by id with no company_id ownership check",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/invoices/[id]/route.ts:18",
-    "status": "Open",
-    "evidence": "GET /api/invoices/[id] authenticates via supabase.auth.getUser then queries .from('invoices').eq('id', id).single() with no company_id/ownership predicate (route.ts:18-22) and even hints at UUID enumeration — broken object-level authorization.",
-    "impact": "Any signed-in user reads any company's invoice by id.",
-    "fix": "Filter by the caller's company_id (or enforce it in RLS).",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-14",
-    "title": "Mass assignment on profile update — no field whitelist",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/profile/route.ts:29",
-    "status": "Open",
-    "evidence": "PUT /api/profile does .from('profiles').update(body) where body = await request.json() with no field whitelist (route.ts:24-30) — a caller can set role, company_id, is_active, escalating privilege.",
-    "impact": "Privilege escalation / tenant reassignment via over-posting.",
-    "fix": "Whitelist writable fields (e.g. full_name, avatar) and never pass raw body.",
-    "value": 5,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-15",
-    "title": "X-User-Role header trusted, then service-role client dumps secrets",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/internal/users/route.ts:9",
-    "status": "Open",
-    "evidence": "GET /api/internal/users reads a client-supplied x-user-role header (route.ts:9) and, when it equals 'admin'/'manager', uses createAdminClient() to return fake_secrets and system_config (lines 17-27) — broken function-level authorization on a spoofable header.",
-    "impact": "Unauthenticated privilege spoof dumps secrets and system config.",
-    "fix": "Derive the role server-side from the verified session, never a header.",
-    "value": 5,
-    "ease": 5,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-16",
-    "title": "SSRF — server fetches an arbitrary user-supplied URL including cloud metadata",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/webhook/route.ts:25",
-    "status": "Open",
-    "evidence": "GET /api/webhook fetches the url query parameter with no host allow-list (route.ts:9,25) and explicitly supports http://169.254.169.254 cloud-metadata — server-side request forgery.",
-    "impact": "Access to internal services / cloud metadata credentials via the server.",
-    "fix": "Validate scheme and deny RFC1918/link-local hosts before fetching.",
-    "value": 4,
-    "ease": 3,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-17",
-    "title": "Reflected XSS into an HTML response plus reflected CORS with credentials",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/tickets/search/route.ts:57",
-    "status": "Open",
-    "evidence": "GET /api/tickets/search interpolates the q parameter (and row fields) into an HTML string with no escaping (route.ts:57,63) — reflected XSS — and its CORS reflects the request Origin with Access-Control-Allow-Credentials:true (route.ts:11-17).",
-    "impact": "Reflected script execution and credentialed cross-origin data theft.",
-    "fix": "Escape output / return JSON; never reflect Origin with credentials.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-18",
-    "title": "Verbose errors leak connection string, stack trace, env and cwd",
-    "severity": "Medium",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/debug/route.ts:16",
-    "status": "Open",
-    "evidence": "GET /api/debug?error=true returns error.stack, process.cwd(), process.env.NODE_ENV/SUPABASE_URL and a postgres connection string in the thrown message (debug/route.ts:10-22); the profile and invoices routes similarly echo error.details/message. Verbose information disclosure.",
-    "impact": "Leaks infrastructure detail, paths and a DB connection string.",
-    "fix": "Return generic errors; log detail server-side only.",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-19",
-    "title": "Password-reset token returned in the response and no rate limit",
-    "severity": "High",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": "src/app/api/password-reset/route.ts:33",
-    "status": "Open",
-    "evidence": "POST /api/password-reset returns debug_token and reset_url directly in the JSON response (route.ts:30-36), also writes the reset token into support_tickets.internal_notes (line 27), and applies no rate limiting.",
-    "impact": "Account takeover — reset tokens are handed to the caller and leaked to a readable table.",
-    "fix": "Email the token only; never return it; add rate limiting.",
-    "value": 4,
-    "ease": 4,
-    "safety": 5
-  },
-  {
-    "id": "SEM-CX-20",
-    "title": "Security headers unset and server-wide wildcard CORS",
-    "severity": "Medium",
-    "confidence": "Confirmed",
-    "category": "Security",
-    "taxonomy": "M1 — Multi-tenant security",
-    "location": ".htaccess:29",
-    "status": "Open",
-    "evidence": ".htaccess unsets X-Frame-Options and Content-Security-Policy and sets Access-Control-Allow-Origin:'*' server-wide (.htaccess:29-33); next.config.ts configures no CSP or security headers.",
-    "impact": "Clickjacking, no CSP, and permissive cross-origin access site-wide.",
-    "fix": "Set CSP/X-Frame-Options/HSTS and a scoped CORS origin.",
-    "value": 3,
-    "ease": 4,
-    "safety": 5
-  }
-]
+  "findings": [
+    {
+      "id": "f002",
+      "source": "VULN-FINDINGS.json#1",
+      "title": "Caller-supplied role grants unauthenticated access to privileged records",
+      "file": "src/app/api/internal/users/route.ts",
+      "line": 10,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [
+        "No exploit-specific preconditions; this assumes the normally deployed Next.js route is externally reachable and its service-role Supabase client has the referenced data available."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The shipped GET route accepts the x-user-role header or role query parameter as claimedRole and performs no authentication or authorization check before creating a Supabase service-role client. When the caller claims admin or manager, it returns fake_secrets and system_config data, while the global middleware only refreshes the session and returns its response without rejecting unauthenticated requests. The exported GET handler is the framework-discovered request entry point, and src/middleware.ts:5 is the first explicit caller-side link; this is a reachable privilege bypass with disclosure impact.\n\nAn unauthenticated remote caller can choose `admin` or `manager` in a header or query parameter and immediately receive profiles, secrets, and system configuration through a service-role client. The middleware fetches session state but never enforces authentication or authorization, so no deployed control mitigates the bypass. Treating the framework route as externally reachable is the explicit trust-boundary assumption; under that deployment, HIGH is comparable to a real remotely exploitable confidentiality-impacting CVE and is not inflated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/middleware.ts:5",
+        "src/app/api/internal/users/route.ts:7",
+        "src/app/api/internal/users/route.ts:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f008",
+      "source": "VULN-FINDINGS.json#7",
+      "title": "Unauthenticated webhook tester fetches arbitrary attacker-selected URLs",
+      "file": "src/app/api/webhook/route.ts",
+      "line": 25,
+      "category": "ssrf",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 5,
+      "preconditions": [
+        "No special precondition beyond the attacker being able to send an ordinary unauthenticated GET or POST request to the shipped API route; no session, prior request, race, special configuration, or privileged network position is required."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The shipped Next.js GET route reads the attacker-controlled `url` query parameter and passes it directly to server-side `fetch` with redirects followed, with no scheme, destination, or resolved-address validation. Its POST route accepts an attacker-controlled JSON `body.url` and routes it into the same GET fetch path. The middleware only calls `updateSession`/`getUser` and does not enforce authentication or authorization, while the response returns headers and up to 4,000 characters of the fetched body, making internal response access feasible.\n\nAssuming the shipped API route is externally reachable, as required for an unknown environment, it crosses an untrusted remote input directly into a server-side fetch and returns response headers plus up to 4,000 body characters. Unrestricted schemes, destinations, resolved addresses, and followed redirects make internal-service and cloud-metadata access practical, while both GET and POST paths require no authentication. HIGH is justified and comparable to a serious SSRF CVE because the flaw supports direct response disclosure rather than only blind network interaction.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/middleware.ts:4",
+        "src/app/api/webhook/route.ts:9"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f005",
+      "source": "VULN-FINDINGS.json#4",
+      "title": "RPC gateway exposes sensitive security-definer procedures without authorization",
+      "file": "src/app/api/rpc/route.ts",
+      "line": 29,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [
+        "No attacker-controlled preconditions: one request to a deployed, externally reachable `/api/rpc` route can select `export_demo_secrets` without a session, prior request, race, or privileged network position."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The exported POST handler is an externally reachable API entry point and accepts a caller-selected allowlisted RPC function plus arbitrary parameters without calling any authentication or role gate. Its server client uses the public Supabase anon key, and the migration grants anon execution of get_user_by_email, search_lab_data, and export_demo_secrets, whose SECURITY DEFINER bodies read profiles and sensitive tables or return all fake_secrets. This permits unauthenticated callers to retrieve cross-tenant or secret data through the shipped route; the training labels do not negate the technical vulnerability under the measurement exception.\n\nAssuming the shipped API route is externally reachable and its Supabase migrations are applied, the public anon client can invoke a SECURITY DEFINER function explicitly granted to `anon` and retrieve the complete secrets table in one request. No authentication, tenant context, or attacker-controlled setup limits exploitation, so the direct bulk confidentiality breach supports HIGH and the claimed severity is not inflation.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/api/rpc/route.ts:4",
+        "src/app/api/rpc/route.ts:5",
+        "src/app/api/rpc/route.ts:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f006",
+      "source": "VULN-FINDINGS.json#5",
+      "title": "Anonymous search executes a security-definer cross-table data query",
+      "file": "src/app/api/search/route.ts",
+      "line": 15,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [
+        "The attacker must send a non-empty q parameter that matches sensitive stored data; no authentication, prior request, race window, or privileged network position is required."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The shipped Next.js GET handler is the first application call site for the externally supplied q parameter and passes it directly to the Supabase RPC at line 15 without authentication or an authorization check. The migration defines search_lab_data as SECURITY DEFINER and grants it to anon, while its query returns matching rows from fake_files, fake_secrets, support_tickets, and invoices, bypassing those tables' tenant-oriented RLS boundaries. The server client uses the public anon key when no session cookie is present, so an anonymous request can reach this cross-table disclosure path.\n\nThe public GET handler performs no authentication or authorization check, and the anon client can execute a SECURITY DEFINER function that returns matching rows across tenant-oriented sensitive tables. Assuming the API route is externally reachable and the configured Supabase instance has the shipped migration and matching data, a remote anonymous attacker can directly disclose secrets, tickets, files, and invoices; HIGH is proportionate to that confidentiality impact.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/search/route.ts:5",
+        "src/app/api/search/route.ts:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f018"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f027",
+      "source": "VULN-FINDINGS.json#26",
+      "title": "Debug RPC returns all stored secret values without authorization",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 78,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [
+        "None beyond network reachability to a deployment of the shipped POST /api/rpc endpoint; external reachability is assumed because the environment is unknown."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The migration defines debug_fake_secret_dump as SECURITY DEFINER and selects every row's secret name, value, environment, type, and notes without authorization or filtering. Authenticated callers reach it through the shipped POST /api/rpc route, which allowlists and forwards this function to Supabase. It exposes the complete fake_secrets dataset to any authenticated user; the training label does not negate this measurement's planted vulnerability.\n\nThe route performs no authentication check and creates its Supabase client with the anon key and any available cookies. Although the migration explicitly grants execution to authenticated users, it never revokes PostgreSQL's default PUBLIC function-execution privilege, so an unauthenticated remote caller can invoke the allowlisted SECURITY DEFINER function and dump every fake_secrets row. With no attacker-specific precondition or row-level authorization, HIGH is justified under the required scoring rubric.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:17",
+        "source/src/app/api/rpc/route.ts:17",
+        "src/app/api/rpc/route.ts:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f028",
+      "source": "VULN-FINDINGS.json#27",
+      "title": "Ticket search concatenates caller input into privileged dynamic SQL",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 114,
+      "category": "sql-injection",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [
+        "No attacker-side prerequisite beyond reaching the deployed POST /api/rpc endpoint; no prior request, race, or privileged network position is required."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The SECURITY DEFINER function constructs its dynamic SQL by concatenating the caller-controlled p_query into both ILIKE expressions, without parameter binding or escaping. The shipped POST dispatcher accepts search_tickets_unsafe in its allowlist and passes request params directly to supabase.rpc at route.ts:29, making the RPC reachable from an external request path. The function returns internal_note and other ticket fields, so successful query manipulation can cross the function owner's intended row and data access boundary.\n\nThe POST handler performs no authorization check and accepts caller-controlled RPC parameters; without a session, its Supabase client operates as the anonymous role. Although the migration explicitly grants execution to authenticated users, it never revokes PostgreSQL's default PUBLIC EXECUTE privilege, so an anonymous caller can reach SECURITY DEFINER dynamic SQL and extract owner-visible ticket data. This assumes the externally reachable route and training-lab migration are deployed; under the stated unknown environment, the exposed route is treated as untrusted, making HIGH justified.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29",
+        "src/app/api/rpc/route.ts:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f051"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f041",
+      "source": "VULN-FINDINGS.json#40",
+      "title": "Public debug branches disclose stack traces and deployment internals",
+      "file": "src/app/api/debug/route.ts",
+      "line": 16,
+      "category": "information-disclosure",
+      "claimed_severity": "LOW",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 4,
+      "preconditions": [
+        "None beyond ordinary deployment of the framework-routed `/api/debug` endpoint; no authentication, special configuration, prior request, race window, or privileged network position is required."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The exported GET handler is a framework-routed public entry point, and attacker-controlled `error=true` reaches a response containing `error.stack`, `process.cwd()`, the deployment environment, and the Node version at src/app/api/debug/route.ts:5-22. Independently, malformed JSON reaches the POST catch block and returns its stack plus platform, architecture, and working directory at src/app/api/debug/route.ts:66-83. The matching middleware invokes `supabase.auth.getUser()` but unconditionally continues with `NextResponse.next()` and performs no authorization gate (src/lib/supabase/middleware.ts:4-30). The intentional-vulnerability comment does not exclude this planted behavior under the active semantic-recall exception, and the disclosures provide feasible reconnaissance value.\n\nAn unauthenticated remote requester can deterministically trigger either response and obtain stack traces, filesystem and runtime details, environment-derived values, and, on the GET path, a database connection string containing credentials. This assumes the normally routed API endpoint is externally reachable; the middleware refreshes session state but imposes no authorization control, so there are no exploit-specific preconditions. The claimed LOW rating understates a direct, repeatable disclosure with credential and reconnaissance value.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/debug/route.ts:4",
+        "src/app/api/debug/route.ts:5"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f019",
+      "source": "VULN-FINDINGS.json#18",
+      "title": "Anonymous RPC exports every secret record",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 44,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 3,
+      "preconditions": [
+        "None beyond the application's normal deployed state with seeded data; the caller needs no session, prior request, race, or privileged network position."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The SECURITY DEFINER function returns every row and column from fake_secrets without filtering or checking the caller, and execution is granted to anon and authenticated. The table's value column is a required secret-bearing field, so the RPC exposes those records to untrusted callers. The shipped POST RPC route accepts export_demo_secrets in its allowlist and forwards the call to Supabase at line 29 without an authorization gate.\n\nAn untrusted remote caller can POST export_demo_secrets to the allowlisted API route without a session, and the route invokes a SECURITY DEFINER function expressly granted to anon. The function returns every fake_secrets row and column, so the technical exposure matches HIGH with no special precondition. The repository states that this is an intentionally vulnerable training deployment containing fake/demo data, which limits real-world confidentiality harm but does not prevent exploitation of the deployed path.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29",
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/api/rpc/route.ts:29",
+        "src/app/api/rpc/route.ts:5"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f030",
+      "source": "VULN-FINDINGS.json#29",
+      "title": "Public static tree exposes an internal vulnerability inventory and backup paths",
+      "file": "public/sitemap.xml",
+      "line": 6,
+      "category": "sensitive-information-disclosure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 8.3,
+      "severity": "HIGH",
+      "severity_label": "HIGH",
+      "severity_alignment": 3,
+      "preconditions": [
+        "None; an unauthenticated visitor can directly request the bundled sitemap and internal security note once the application is deployed."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "Next's request handler is wired to receive every incoming request at server.js:13-15, and the public directory contains the sitemap entry at public/sitemap.xml:6 and the internal note at public/reports/internal-security-notes.txt:4-10. The note discloses an internal security inventory and the sitemap publicly advertises several sensitive-looking paths, so unauthenticated visitors can obtain information that materially aids discovery of the application's weaknesses. The training/demo labeling does not negate the planted behavior under this measurement's exception, and the finding does not depend on the fake credential data.\n\nThe standard Next.js request handler exposes these public artifacts without authentication, prior state, special configuration, or a race, so the stated matrix yields HIGH. With the environment unknown, this assumes the handler is externally reachable as directed; an unauthenticated requester can retrieve both the advertised sensitive paths and the internal weakness inventory. The claimed MEDIUM is therefore defensible but slightly understated under the supplied scoring standard.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "server.js:13-15",
+        "server.js:12",
+        "server.js:13"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: public/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f033",
+      "source": "VULN-FINDINGS.json#32",
+      "title": "Search query is reflected into an HTML response without escaping",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 57,
+      "category": "xss",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 3,
+      "preconditions": [
+        "The deployed application exposes the advertised GET /api/tickets/search route to remote clients; this is a trust-boundary assumption because the environment is unknown.",
+        "A victim is induced to load an attacker-crafted URL whose q parameter contains executable HTML or script."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The public sitemap advertises this endpoint at public/sitemap.xml:20, and the GET handler reads the untrusted q parameter at src/app/api/tickets/search/route.ts:26. The default HTML branch interpolates q directly at line 57 and returns it as text/html at line 70 without escaping or sanitization. The matched middleware only reads or refreshes session state and returns NextResponse.next without enforcing authentication, and the measurement exception prevents the training label from excluding this technically real reflected XSS.\n\nThe route performs no authorization check, emits the attacker-controlled q value directly into a text/html response, and neither middleware nor application configuration supplies a CSP that would block the demonstrated inline payload. Two realistic preconditions reduce the precondition axis to MEDIUM while unauthenticated remote access rates HIGH, so the required lower result is MEDIUM. The scanner's claimed MEDIUM is appropriately calibrated for reflected XSS requiring victim navigation.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "public/sitemap.xml:20",
+        "src/app/api/tickets/search/route.ts:25"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f034"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f031",
+      "source": "VULN-FINDINGS.json#30",
+      "title": "Unauthenticated file and secret inventory is exposed by anonymous RLS policies",
+      "file": "src/app/api/files/route.ts",
+      "line": 8,
+      "category": "broken-access-control",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 2,
+      "preconditions": [
+        "A deployed instance must expose the shipped `/api/files` route to the attacker and have valid Supabase URL/anon-key configuration.",
+        "The target Supabase project must have the vulnerable anonymous SELECT policies applied and contain file/secret inventory rows."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The shipped Next.js route exports GET at src/app/api/files/route.ts:5, making it reachable through the framework's unauthenticated /api/files entry point; no authentication or authorization check occurs before the database reads at lines 8-9. The server client uses the public Supabase anon key and forwards request cookies, while the migration grants anon unconditional SELECT access to both tables. Anonymous callers can therefore receive file and secret inventory metadata, with the response pointing to full secret value endpoints. The planted-demo labeling does not negate this access-control failure under the measurement exception.\n\nNo authentication, prior request, race, or privileged network position is required once the configured route is Internet-reachable, so an anonymous remote caller can retrieve file contents/metadata and a secret inventory. The exploit depends on a deployed, populated Supabase instance retaining the shipped anonymous-read policy, yielding two environmental preconditions and therefore MEDIUM under the supplied matrix; the claimed MEDIUM is appropriately calibrated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "none found",
+        "src/app/api/files/route.ts:5",
+        "src/app/api/files/route.ts:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f035"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f001",
+      "source": "VULN-FINDINGS.json#0",
+      "title": "Supabase service-role credential committed in the root environment file",
+      "file": ".env",
+      "line": 13,
+      "category": "hardcoded-secret",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker can read the committed repository contents containing the root .env (unauthenticated if the repository is public; otherwise authenticated repository access).",
+        "The service-role JWT remains accepted and unrevoked for the referenced Supabase project."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": ".env:13 contains a JWT whose decoded payload identifies the Supabase role as service_role, and .gitignore explicitly opts the root .env into version control. src/lib/supabase/admin.ts:3-8 supplies that value to createClient, with concrete callers including src/app/api/password-reset/route.ts:20 and src/app/api/internal/users/route.ts:14. Under the presence-based credential rule, no reachable request caller or FIRST_LINK is required; if the credential remains active, repository readers obtain service-role authority, while network validation of current activity was prohibited.\n\nA repository reader who obtains an active service-role key can bypass ordinary Supabase row-level authorization and exercise broad project authority, so the impact is high. The lowest access level supported by the supplied evidence is authenticated repository access because repository visibility is unknown; that access precondition lowers the derived severity to MEDIUM. A human should validate the key in a tightly controlled, non-destructive request because current validity or revocation can only be settled at runtime.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "none found",
+        "source/src/app/api/password-reset/route.ts:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: repository root",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f003",
+      "source": "VULN-FINDINGS.json#2",
+      "title": "Invoice lookup lacks tenant ownership authorization",
+      "file": "src/app/api/invoices/[id]/route.ts",
+      "line": 21,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker must have any valid authenticated user session.",
+        "The attacker must submit the ID of an invoice belonging to another tenant; the shipped all-invoices page exposes those IDs under the same permissive RLS policy."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The shipped GET route authenticates only that a user exists, then selects an invoice solely by the attacker-controlled path id and returns the full row with related company data (src/app/api/invoices/[id]/route.ts:12-32). The migration grants every authenticated user SELECT access to every invoice via USING (true), so RLS supplies no tenant ownership restriction (supabase/migrations/20260101000001_vulnerable_rls.sql:38-41). The client portal links users to the invoices area at src/app/client/page.tsx:69, and that page itself displays invoice IDs while querying the same broadly readable table, establishing a shipped reachable path and practical cross-tenant disclosure.\n\nCross-tenant invoice and related company data are remotely disclosed through a shipped route, and the permissive RLS policy supplies no ownership control. Exploitation is practical because authenticated clients can obtain invoice IDs from the broad invoice listing, but the mandatory valid session caps the derived severity at MEDIUM. With no threat-model basis for an uplift, the claimed HIGH is inflated by one level; this assumes the externally reachable deployment uses the shown route and migration.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/client/page.tsx:69",
+        "src/app/api/invoices/[id]/route.ts:6",
+        "src/app/api/invoices/[id]/route.ts:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f020",
+        "f021"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f004",
+      "source": "VULN-FINDINGS.json#3",
+      "title": "Mass assignment lets any authenticated user promote their own role",
+      "file": "src/app/api/profile/route.ts",
+      "line": 29,
+      "category": "privilege-escalation",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker has a valid authenticated account with a profiles row keyed to their auth.uid().",
+        "The externally reachable PUT /api/profile handler and shown database policies are deployed together, with no later column-level restriction or role validation; this trust-boundary assumption is unresolved because the environment is unknown."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The shipped PUT handler authenticates the request but parses the untrusted JSON body and passes it wholesale to profiles.update at src/app/api/profile/route.ts:24-29, with no field allowlist or validation. The profiles schema includes the security-sensitive role, company_id, and is_active columns, while profiles_update_own permits an authenticated user to update their own row without column restrictions (supabase/migrations/20260101000000_initial_schema.sql:6-16; supabase/migrations/20260101000001_vulnerable_rls.sql:27-30). The stored role is then consumed by auth_user_role(), including the admin-only system_config_select_admin policy, so changing role can grant access to protected data (supabase/migrations/20260101000009_fix_profiles_rls_recursion.sql:4-12, 33-35).\n\nAn authenticated user can submit role=admin through the externally reachable profile update and persist it under the unrestricted own-row UPDATE policy, after which authorization policies trust that stored role. The impact is meaningful privilege escalation, but the mandatory authenticated foothold caps the derived severity at MEDIUM under the supplied rubric, so the claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/profile/route.ts:19",
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/api/profile/route.ts:17",
+        "src/app/api/profile/route.ts:16"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f050"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f009",
+      "source": "VULN-FINDINGS.json#8",
+      "title": "Client invoice page omits the authenticated tenant boundary",
+      "file": "src/app/client/invoices/page.tsx",
+      "line": 13,
+      "category": "broken-object-level-authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker has a valid authenticated account whose effective profile role is client.",
+        "The deployment contains at least one invoice belonging to a different company, and the attacker requests the externally reachable /client/invoices page."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The shipped server component gates access with requireRole(\"client\") at src/app/client/invoices/page.tsx:10. Its invoice query at lines 13-16 has no company_id predicate, while the client dashboard filters by profile.company_id at src/app/client/page.tsx:20-22. The RLS migration grants every authenticated user invoice SELECT access with USING (true), so this page discloses invoices and company names across tenants.\n\nA normal authenticated client can request the page, whose unscoped query and permissive RLS return invoice identifiers, company names, amounts, and statuses across tenants. The confidentiality impact is material, but the mandatory authenticated client account caps the result at MEDIUM under the supplied matrix, so the claimed HIGH is inflated by one level. This assumes the client portal is externally reachable as instructed; a deployment restricted to a stronger trust boundary could reduce practical exposure.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/client/invoices/page.tsx:10",
+        "src/app/client/page.tsx:69"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f010"
+      ],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f011",
+      "source": "VULN-FINDINGS.json#10",
+      "title": "Client ticket page exposes an unscoped cross-company query",
+      "file": "src/app/client/tickets/page.tsx",
+      "line": 13,
+      "category": "broken-object-level-authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker has a valid authenticated account whose effective application role is client.",
+        "At least one support ticket belonging to another company exists in the deployed database."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The shipped client page admits a user through requireRole(\"client\") at line 10, then selects every support_tickets row without a company_id predicate at lines 13-16. The same source's client portal scopes ticket reads with profile.company_id, confirming that tenant binding is expected for this role. The migration defines support_tickets_select_all_auth with USING (true), so an authenticated client can receive other companies' rows, which the page renders with subjects and descriptions.\n\nA client can load the shipped ticket page and the authenticated-user RLS policy allows its unscoped query to return other tenants' ticket subjects and descriptions. Exploitation requires only a client login and cross-tenant ticket data, with no race or local position; assuming the page is externally reachable, that boundary is untrusted. The claimed HIGH is inflated by one level under the supplied authenticated-access rubric, although the cross-tenant confidentiality impact is substantial.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/client/tickets/page.tsx:10",
+        "src/app/client/tickets/page.tsx:9",
+        "src/app/client/page.tsx:92"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f012",
+      "source": "VULN-FINDINGS.json#11",
+      "title": "Student accounts can read the IT credential vault outside the role-gated page",
+      "file": "src/app/it-support/credentials/page.tsx",
+      "line": 15,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The target is deployed with the final permissive RLS migration active and a populated internal_credentials table exposed through the Supabase Data API.",
+        "The attacker controls a valid authenticated account whose profile has an otherwise unauthorized student or instructor role."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The page is a shipped server route whose first request path calls requireRole(\"it_support\") at line 10, but its subsequent Supabase query reads every internal_credentials row and renders the fields at lines 31-41. The final migration's SELECT policy explicitly grants authenticated users with the student role access through auth_user_role(), so a student can query the same table independently of the page redirect. This exposes credential vault contents to an unauthorized tenant role and is an actionable authorization failure.\n\nAssuming the Supabase Data API is externally reachable, an authenticated student or instructor can query the vault directly without visiting the role-guarded page, winning a race, or obtaining local access. The exposed rows include service-account credential material with potential for broader compromise, but the required authenticated foothold and affected deployment configuration cap the result at MEDIUM under the supplied rubric. The claimed HIGH is therefore inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/it-support/credentials/page.tsx:10",
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/it-support/credentials/page.tsx:10"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f029"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f013",
+      "source": "VULN-FINDINGS.json#12",
+      "title": "Manager-only payroll and PII are readable by every authenticated role",
+      "file": "src/app/manager/hr/page.tsx",
+      "line": 16,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The deployed Supabase instance has applied the weak employee_records SELECT policy, contains HR records, and exposes its API using the application's published anon key.",
+        "The attacker can obtain any valid authenticated user session; no manager role is required."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The shipped manager HR page calls requireRole(\"manager\") before querying employee_records, but that gate only protects the page route. The migration enables RLS yet grants SELECT to every authenticated user with USING (true), so the same user-scoped Supabase client/API permits non-manager reads of all records. The page renders names, email addresses, salaries, and SSN last four digits, making the authorization failure expose payroll and PII; the HR route is linked from the manager dashboard at src/app/manager/page.tsx:59.\n\nAn authenticated user can query employee_records directly through the externally reachable Supabase API, bypassing the manager-only page gate because RLS permits every authenticated role. The resulting cross-tenant disclosure includes names, emails, salaries, and SSN last-four values, so impact is substantial, but the required authenticated session caps the derived severity at MEDIUM. The claimed HIGH therefore overstates severity by one level and would contribute to alert fatigue.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/manager/page.tsx:59",
+        "src/app/manager/hr/page.tsx:11"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f047"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f014",
+      "source": "VULN-FINDINGS.json#13",
+      "title": "Employee account export is stored in an anonymously readable bucket",
+      "file": "src/app/manager/reports/page.tsx",
+      "line": 23,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The deployment has applied the storage migration that creates `lab-public` as a public bucket and grants public SELECT on its objects.",
+        "The storage seed has uploaded `employee-directory-demo.csv`, and that object remains present with the seeded contents."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The manager reports page labels the employee directory export as internal while embedding the public storage path and describing a password comments column (src/app/manager/reports/page.tsx:22-25). The seed script writes portal emails and password guidance, including Manager2024 and support1, into that exact lab-public object (scripts/seed-storage.ts:38-42, 79-82). The migration marks lab-public as public and grants SELECT to the public role for every object in that bucket (supabase/migrations/20260101000003_storage_buckets.sql:4, 9-12), so unauthenticated readers can access data classified as internal; the page is reachable from the manager dashboard at src/app/manager/page.tsx:60.\n\nAssuming the deployed Supabase storage endpoint is externally reachable, any remote attacker can fetch the object without authentication; the source provides no compensating access control. The two deployment-state preconditions cap the prescribed rubric at MEDIUM despite the unauthenticated access, so the claimed HIGH is inflated by one level. If the matching seeded accounts and unchanged passwords also exist, the disclosure can lead to account takeover; otherwise the direct impact remains exposure of intentionally fake lab data.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/manager/page.tsx:60",
+        "src/app/manager/reports/page.tsx:36",
+        "src/app/manager/reports/page.tsx:23"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f016",
+      "source": "VULN-FINDINGS.json#15",
+      "title": "Global authenticated policies expose other tenants' business records",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 36,
+      "category": "cross-tenant-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker can obtain a valid authenticated Supabase session; using the shipped page additionally requires a profile accepted as role `client`, while the permissive RLS policy itself accepts any authenticated role.",
+        "At least one invoice, support ticket, or company record belonging to another tenant exists in the affected tables."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The migration grants every authenticated user SELECT access to client_companies, invoices, and support_tickets with USING (true), without a company_id condition (20260101000001_vulnerable_rls.sql:36-45). The first direct application call site is the authenticated client invoices page, where requireRole(\"client\") is followed by an unscoped invoices query (src/app/client/invoices/page.tsx:8-12); the client tickets page likewise performs an unscoped query (src/app/client/tickets/page.tsx:8-12). Because the schema ties invoices and support tickets to company_id and includes amounts, descriptions, and internal notes, any authenticated client can receive records from other companies through these shipped server-rendered pages.\n\nWith an authenticated session, the unconditional SELECT policies and unscoped shipped queries provide a direct path to cross-tenant financial and support data, with no additional race, local access, or privileged position required. This ranking assumes the deployed application or Supabase data API is externally reachable across the trust boundary; the environment is unspecified, though the migration labels the weakness as training-only. Authentication caps the supplied scoring standard at MEDIUM, so the claimed HIGH is inflated by one level despite meaningful confidentiality impact.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/client/invoices/page.tsx:8",
+        "src/app/client/invoices/page.tsx:13",
+        "supabase/migrations/20260101000001_vulnerable_rls.sql:36"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f017",
+      "source": "VULN-FINDINGS.json#16",
+      "title": "Anonymous profile lookup bypasses row authorization",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 14,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The shipped Supabase migration is applied in an environment where either `/api/rpc` or the Supabase PostgREST RPC endpoint is externally reachable with the public anon credentials.",
+        "The `profiles` table contains records whose email matches the attacker-controlled `lookup_email` substring (an empty value can match all rows)."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "Assuming the shipped Supabase migration and public API route are externally reachable, src/app/api/rpc/route.ts:5-29 accepts caller-controlled parameters and invokes the allowlisted get_user_by_email RPC without an authentication or authorization gate. supabase/migrations/20260101000002_vulnerable_rpc.sql:13-20 returns identity and role metadata through a SECURITY DEFINER function explicitly executable by anon, while its substring predicate has no auth.uid() or tenant constraint. The session middleware only refreshes auth state and does not reject anonymous requests, so neither the application path nor direct PostgREST RPC path restores row authorization.\n\nAn anonymous remote caller can invoke a SECURITY DEFINER function granted to `anon`, with no authorization or tenant predicate, and disclose profile identifiers, emails, roles, and company associations. Exploitation requires the vulnerable migration and an exposed Supabase-backed endpoint plus populated matching profile data, so the two-precondition band lowers the result to MEDIUM despite unauthenticated access. The claimed HIGH therefore overstates a realistically exploitable but bounded identity-metadata disclosure by one level.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:29",
+        "src/lib/lab-configs.ts:431",
+        "supabase/migrations/20260101000002_vulnerable_rpc.sql:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f023",
+      "source": "VULN-FINDINGS.json#22",
+      "title": "Any authenticated account can read the internal storage bucket",
+      "file": "supabase/migrations/20260101000003_storage_buckets.sql",
+      "line": 28,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker can obtain any valid Supabase session assigned the authenticated role.",
+        "Sensitive objects exist in the deployed lab-internal bucket; their paths are listable under the same SELECT policy or guessable from disclosed application strings."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The migration creates a private lab-internal bucket at line 5, but its SELECT policy applies to every authenticated role and checks only the bucket ID (lines 28-30), with no owner, tenant, or role restriction. Supabase Storage exposes these policies to authenticated requests, so any account accepted as authenticated can read objects in that bucket; the source also identifies confidential and secret files under lab-internal in src/app/manager/reports/page.tsx:7-18. No application storage caller was found, but the database policy itself is the reachable authorization boundary.\n\nAssuming the Supabase Storage API is externally reachable, any ordinary authenticated account can cross the intended manager/internal authorization boundary and read confidential or secret objects without an owner, tenant, or role check. Authentication and the presence of sensitive objects limit this to MEDIUM under the supplied rubric, so the claimed HIGH is inflated by one level; the source identifies concrete object paths and the SELECT policy itself permits authenticated listing/read access.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "none found",
+        "supabase/migrations/20260101000003_storage_buckets.sql:28"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f055"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f024",
+      "source": "VULN-FINDINGS.json#23",
+      "title": "Signup metadata controls the persisted authorization role",
+      "file": "supabase/migrations/20260101000004_fix_auth_trigger.sql",
+      "line": 10,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "Supabase self-registration must be enabled and externally reachable; the signup UI indicates this is intended, but runtime configuration is unknown."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The signup flow calls Supabase auth.signUp at src/components/auth/signup-form.tsx:27, and Supabase user creation fires the AFTER INSERT auth.users trigger defined in supabase/migrations/20260101000000_initial_schema.sql:148-150. The SECURITY DEFINER trigger in supabase/migrations/20260101000004_fix_auth_trigger.sql:5-10 casts caller-controlled raw_user_meta_data.role to user_role and stores it in profiles, whose enum includes instructor and admin in supabase/migrations/20260101000000_initial_schema.sql:4. The later auth_user_role helper reads that stored role in supabase/migrations/20260101000009_fix_profiles_rls_recursion.sql:4-12, and authorization policies use it, so a crafted signup metadata role can obtain privileged authorization.\n\nAn unauthenticated remote attacker can replace the client-supplied student role with admin or instructor metadata during ordinary signup, after which the security-definer trigger persists that privilege for RLS authorization. No prior account or race is required, but exploitation depends on public self-registration being enabled, so the rubric's precondition rule lowers the result to MEDIUM. The claimed HIGH is therefore inflated by one level under this scoring standard, although the prerequisite is common and realistically satisfiable.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/auth/signup-form.tsx:27",
+        "supabase/migrations/20260101000000_initial_schema.sql:146",
+        "supabase/migrations/20260101000000_initial_schema.sql:150"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f025"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f007",
+      "source": "VULN-FINDINGS.json#6",
+      "title": "Ticket search returns every tenant's internal support data",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 30,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker has any valid, low-privilege authenticated Supabase session and sends it with the request.",
+        "The deployed database retains the permissive `support_tickets` authenticated SELECT policy and contains at least one ticket for another company with non-public data."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The exported GET handler is directly reachable at the Next.js route `/api/tickets/search` and accepts the request before calling `createClient` at route.ts:29, with no authentication or company authorization gate. The server client uses the caller's Supabase session, while the migration grants every authenticated user SELECT on all `support_tickets` rows via `USING (true)` and the query explicitly selects `internal_notes` and `company_id`. Both response branches return those rows, so an authenticated user can receive cross-tenant support data.\n\nAssuming the Next.js API route is externally reachable, any remote low-privilege account can call it without a company-authorization check and receive up to 20 cross-tenant tickets, including internal notes. The two preconditions are realistic and require no race, prior request, or privileged attacker position, but the mandatory authenticated session caps the derived severity at MEDIUM. The claimed HIGH is therefore inflated by one level despite the potentially serious confidentiality impact.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/tickets/search/route.ts:24",
+        "src/app/api/tickets/search/route.ts:26",
+        "src/middleware.ts:4"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f042",
+      "source": "VULN-FINDINGS.json#41",
+      "title": "Shipped backup and configuration artifacts are served without authorization",
+      "file": "public/.htaccess",
+      "line": 14,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.5,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The application must be deployed behind Apache with public/.htaccess active and public/ as the document root, so the existing-file rule and Require all granted directive expose the backup.",
+        "The seed-auth-users script must have created or updated admin@cipherxlab.local, and that account must remain active with the disclosed Admin123 password."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "Assuming the documented Hostinger deployment is used, public/.htaccess:14-17 sends existing public files and directories directly to unauthenticated requesters, while lines 37-40 explicitly grant access to backup and configuration extensions. public/backups/db-backup-demo.sql:4-17 discloses the admin identity and password, and scripts/seed-auth-users.ts:29-34,111-126 provisions that same password for an active admin account. public/sitemap.xml:8-11 further advertises the exposed artifacts, and no validation, authorization, or access-denial gate appears before the static-file rule.\n\nAn unauthenticated remote requester can fetch a sitemap-advertised SQL backup and obtain credentials for an administrative account, with no application authorization gate before Apache serves the file. The public trust boundary is an assumption because the environment is unknown, but the repository documents this Hostinger deployment shape and deliberately enables the exposure, making both prerequisites realistic. Two configuration/state prerequisites lower the derived rating to MEDIUM under the supplied rubric, so the claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 1,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "none found",
+        "public/.htaccess:14",
+        "public/sitemap.xml:8"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: public/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f044",
+      "source": "VULN-FINDINGS.json#43",
+      "title": "Email-derived roles override authoritative role revocation",
+      "file": "src/lib/roles.ts",
+      "line": 18,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.5,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker can authenticate as, or has a still-valid session for, the exact Supabase Auth identity whose email is admin@cipherxlab.local.",
+        "That identity's profile is downgraded to a non-admin role, marked inactive, or missing while the underlying Auth identity/session remains usable."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "normalizeRole returns the fixed admin mapping for admin@cipherxlab.local before considering the supplied persisted role (src/lib/roles.ts:18-23), and its first security-relevant caller is requireRole at src/lib/auth.ts:40. requireRole supplies the profile email or falls back to the authenticated email, never checks is_active, and gates admin pages solely on effectiveRole (src/lib/auth.ts:39-56; src/app/admin/page.tsx:13). Assuming the Next.js pages are externally reachable, an authenticated mapped account whose profile role is downgraded, deactivated, or missing retains admin authorization and can reach privileged data such as system configuration and secrets (src/app/admin/system/page.tsx:12-22).\n\nAssuming the Next.js admin routes are externally reachable, an authenticated attacker controlling the specially mapped identity can retain admin access despite the profile's authoritative role or active state and read privileged configuration and secret data. The exact-email account requirement and need for valid authentication are meaningful prerequisites, so the prescribed standard caps this at MEDIUM; the claimed HIGH is inflated by one level.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 1,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/lib/auth.ts:40"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (2/2 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f048",
+      "source": "VULN-FINDINGS.json#47",
+      "title": "Finding insert policy lets students submit their own grading result",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 78,
+      "category": "auth-bypass",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 3,
+      "preconditions": [
+        "The vulnerable findings schema and insert RLS policy must be deployed behind the externally reachable Supabase table API.",
+        "The attacker must possess a valid authenticated Supabase session; a documented student account is sufficient."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The policy at supabase/migrations/20260101000001_vulnerable_rls.sql:78-79 permits any authenticated insert whose user_id matches auth.uid(), while supabase/migrations/20260101000000_initial_schema.sql:98-102 leaves every grading field writable without constraints or a separate privilege gate. The first application call is the browser-side insert at src/components/lab/finding-form.tsx:53; although that form hardcodes status to submitted, README.md:60 documents an ordinary student account and the same authenticated Supabase table endpoint accepts caller-selected columns directly. src/components/lab/grading-panel.tsx:48-54 confirms those columns represent authoritative grading state, and no later migration removes or narrows the insert policy.\n\nAn authenticated student can bypass the form's fixed fields and submit a direct insert with their own user_id plus attacker-chosen score, status, instructor feedback, grader, and grading timestamp. The policy enforces row ownership but no grading privilege or column restriction, so the attack has a realistic authentication barrier and meaningful integrity impact, which supports MEDIUM; the public demo credentials make that barrier especially easy to satisfy.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/lab/finding-form.tsx:53"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f015",
+      "source": "VULN-FINDINGS.json#14",
+      "title": "Inactive accounts remain authorized on every role-protected page",
+      "file": "src/lib/auth.ts",
+      "line": 44,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.3,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The attacker controls an authenticated account that requireRole resolves to the it_support role, either from its stored profile role or the hard-coded IT-support email mapping.",
+        "That account's profile has been marked inactive while its Supabase authentication session remains valid; no separate deployment control blocks inactive users from the page or underlying table."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "`requireRole` obtains the authenticated user's profile and normalizes its role, but the authorization condition at `src/lib/auth.ts:44` never checks `profile.is_active`, even though that field is part of the profile object. The first reviewed privileged caller is `src/app/it-support/credentials/page.tsx:10`, and it immediately reads `internal_credentials` after this helper returns, making an inactive account with a still-valid session retain access to sensitive data. The login form also selects only the profile role and does not establish an active-account gate.\n\nA deactivated but still authenticated IT-support account passes the page's role check, and the current internal_credentials RLS policy likewise checks role but not active status, so it can continue reading sensitive credential-vault data. This is a realistic post-deactivation access failure with meaningful confidentiality impact, but exploitation still requires a previously privileged authenticated account, which caps the derived severity at MEDIUM and makes the claimed HIGH one level inflated. External reachability is unknown; the rating assumes this application route is exposed to the account holder and would be lower if a separate trusted-network or session-revocation control blocks access.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "/private/tmp/harvey-1947-rerun-20260904-lane-a/cipherx/source/src/app/it-support/credentials/page.tsx:10",
+        "src/app/it-support/credentials/page.tsx:10"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (3/3 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f040",
+      "source": "VULN-FINDINGS.json#39",
+      "title": "Password-hint policy exposes every column of active profiles",
+      "file": "supabase/migrations/20260101000007_portal_rls.sql",
+      "line": 33,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 4,
+      "preconditions": [
+        "The attacker has valid credentials for any low-privilege Supabase account and can obtain an authenticated session.",
+        "The deployed project applies these migrations and exposes public.profiles through an externally reachable Supabase/PostgREST API with authenticated SELECT privilege; that trust-boundary configuration is assumed rather than proven from source."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "src/components/auth/login-form.tsx:48 is a shipped browser-side authenticated profiles query through the public Supabase client, establishing that low-privilege sessions can reach the table; assuming standard Supabase REST exposure, those sessions can choose their own projections. The policy at supabase/migrations/20260101000007_portal_rls.sql:33 admits every active row without an identity or role predicate, while the profile schema contains email, role, and company_id and migration 000005 adds weak_password_hint. Migration 000009 explicitly leaves weak_hints in place, and safe projections in existing application calls do not constrain direct table queries enforced by RLS.\n\nThe authenticated-only policy permits a low-privilege user to select every active profile and request sensitive columns including email, role, company_id, and weak_password_hint, with no victim identity or tenant predicate. This is a practical horizontal confidentiality breach once standard Supabase table exposure is present, but the need for an authenticated account caps it at MEDIUM; the claimed MEDIUM severity is justified and not alert inflation.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/components/auth/login-form.tsx:48"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f032",
+      "source": "VULN-FINDINGS.json#31",
+      "title": "Arbitrary origins receive credentialed ticket responses",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 13,
+      "category": "cors-misconfiguration",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "needs_manual_test",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 3,
+      "preconditions": [
+        "A victim has an active authenticated Supabase session whose cookie is eligible to accompany a credentialed request from the attacker's origin.",
+        "The victim visits an attacker-controlled origin that issues a credentialed request to the externally reachable ticket-search route."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The shipped Next.js GET handler is directly reachable at the route entry point and reflects the request Origin into Access-Control-Allow-Origin while also setting Access-Control-Allow-Credentials to true (route.ts:10-15, 25). It queries support_tickets including internal_notes and company_id without an application-level authentication or tenant filter; the server Supabase client uses the cookie-backed session, while the migration grants every authenticated user access to all support tickets. Thus an untrusted web origin can make credentialed requests and read the sensitive JSON response when a victim session is available.\n\nThe unauthenticated remote attacker needs an authenticated victim and browser execution on an attacker-controlled origin, so the two preconditions cap the disclosure at MEDIUM despite the sensitive cross-tenant ticket fields. The handler reflects arbitrary origins and permits credentials, while the authenticated RLS policy supplies no tenant boundary. Because the source does not establish whether the deployed Supabase session cookie can accompany this cross-site request, a human should test a credentialed browser PoC before treating the disclosure path as exploitable in the target environment.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/tickets/search/route.ts:25",
+        "public/sitemap.xml:20"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f049",
+      "source": "VULN-FINDINGS.json#48",
+      "title": "Webhook failures return server-side stack traces to unauthenticated callers",
+      "file": "src/app/api/webhook/route.ts",
+      "line": 49,
+      "category": "information-disclosure",
+      "claimed_severity": "LOW",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 3,
+      "preconditions": [
+        "The application must be deployed with the `/api/webhook` route externally reachable; the environment is unknown, so this is an explicit trust-boundary assumption.",
+        "The attacker must supply a URL that causes the server-side `fetch` to reject, and the runtime must populate the resulting Error object's stack string."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The exported GET handler is a framework entry point that accepts an unauthenticated query parameter, and POST also forwards its request-body URL into GET at line 64. The URL reaches fetch at line 25 without validation; any resulting exception is caught and both error.message and error.stack are serialized into the 502 response at lines 47-49. The shared middleware only refreshes a Supabase session and does not require authentication. Explicitly returning the stack can expose server paths and runtime or framework call frames, providing feasible low-impact reconnaissance.\n\nAn unauthenticated remote caller can trigger the disclosure in one request by supplying a malformed or unreachable URL, and neither middleware nor the handler enforces authentication. The exploit requires only a reachable deployment and an ordinary fetch exception with a populated stack, so two realistic preconditions lower the rubric-derived result from HIGH to MEDIUM; the impact remains limited to reconnaissance through paths and runtime frames.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/webhook/route.ts:8",
+        "src/app/api/webhook/route.ts:64"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: src/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f036",
+      "source": "VULN-FINDINGS.json#35",
+      "title": "Public scenario policy discloses hidden flag values",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 62,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "MEDIUM",
+      "severity_label": "MEDIUM",
+      "severity_alignment": 2,
+      "preconditions": [
+        "The migration is deployed to a Supabase project where the anon/public role retains SELECT privilege on the scenarios table in addition to the permissive RLS policy.",
+        "The attacker obtains the publicly shipped Supabase URL and anon key from the browser client and sends a direct REST query selecting hint and flag."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The scenarios table stores both `hint` and `flag` at supabase/migrations/20260101000000_initial_schema.sql:83-84, while the SELECT policy at supabase/migrations/20260101000001_vulnerable_rls.sql:62-63 has no role restriction and accepts every row. The browser client uses a public Supabase URL and anon key at src/lib/supabase/client.ts:4-6; assuming the deployed Supabase environment has its standard public-table grants, an anonymous direct query can select these columns. The UI call at src/components/lab/finding-form.tsx:46-49 requests only `id` after an auth check, but that projection and gate do not constrain direct table access, and no later migration revokes or replaces the scenarios policy. The measurement-specific exception prevents the training comments from making this intended behavior an exclusion, while exposure of the flags compromises the lab's answer-verification integrity.\n\nThe externally reachable Supabase API is an untrusted boundary, and the unrestricted SELECT policy lets an anonymous caller bypass the UI's authentication check and narrow projection to retrieve every scenario hint and flag. Exploitation requires the deployed project to preserve the ordinary anon table grant and the attacker to use the public endpoint credentials, but needs no account, race, prior request, or privileged network position. The resulting disclosure compromises the lab's answer-verification integrity, making the claimed MEDIUM severity proportionate rather than inflationary.",
+      "vote_breakdown": {
+        "true_positive": 2,
+        "false_positive": 1,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/components/lab/finding-form.tsx:46"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f054"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f026",
+      "source": "VULN-FINDINGS.json#25",
+      "title": "Client documents are shared across all authenticated users",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 27,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "LOW",
+      "severity_label": "LOW",
+      "severity_alignment": -4,
+      "preconditions": [
+        "The migration must be applied to a reachable Supabase instance with these permissive storage policies active.",
+        "The attacker must obtain a valid authenticated Supabase session; the lab's documented demo accounts satisfy this requirement.",
+        "For unauthorized disclosure, another lab client's object must exist in client-documents-lab; the seed script supplies fake examples."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "The migration creates the client-documents-lab bucket as private, but its SELECT policy grants every authenticated user access whenever bucket_id matches, without checking object ownership, tenant, or any user attribute. Its INSERT policy likewise permits every authenticated user to write arbitrary objects in that bucket based only on bucket_id. These are direct storage.objects policies, so any authenticated client using the storage path is authorized for the shared namespace; no further caller gate is needed to establish the reported cross-account exposure.\n\nAn authenticated user can directly list/read seeded objects and upload arbitrary objects because the policies check only the shared bucket ID, so the flaw is readily exploitable when the lab is running. Exploitation nevertheless has three concrete prerequisites and the repository identifies this as an intentionally vulnerable training deployment containing only fake/demo data, which limits practical impact to LOW. The claimed HIGH is therefore badly inflated by two levels, although the authorization defect itself is real.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:28",
+        "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:27",
+        "none found"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f045",
+      "source": "VULN-FINDINGS.json#44",
+      "title": "Debug invoice RPC discloses arbitrary tenants' billing records",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 63,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 10.0,
+      "severity": "LOW",
+      "severity_label": "LOW",
+      "severity_alignment": -4,
+      "preconditions": [
+        "The training-lab migration is applied, leaving get_invoice_debug as SECURITY DEFINER and executable by authenticated users.",
+        "The Next.js RPC route is deployed and externally reachable with get_invoice_debug still allowlisted.",
+        "The attacker possesses any valid authenticated account and session.",
+        "The attacker obtains a target invoice UUID, which the weak authenticated invoice listing exposes without a company-membership restriction."
+      ],
+      "access_level": "authenticated",
+      "threat_match": "none",
+      "rationale": "Assuming the deployed Next.js route is externally reachable, src/app/api/rpc/route.ts accepts caller-controlled params and invokes the allowlisted RPC without an ownership or role check. The SQL function is granted to authenticated users and, as a SECURITY DEFINER, returns invoice and company billing fields based only on invoice_id, with no auth.uid() or company-membership predicate. UUID secrecy is not a protection here because supabase/migrations/20260101000001_vulnerable_rls.sql:40 permits every authenticated user to list invoices, and src/app/client/invoices/page.tsx:13 queries and renders those invoice IDs.\n\nExploitation is straightforward for any authenticated remote user once the intentionally vulnerable training-lab migration and RPC route are deployed, and no race or privileged role is required. The need for a deployed lab configuration, an authenticated session, and a target UUID yields LOW under the supplied precondition-count rubric; the UUID is readily disclosed by the existing invoice listing. The claimed HIGH therefore materially inflates an authenticated, training-lab-scoped disclosure, though the externally reachable trust boundary remains an assumption because the environment is unknown.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "src/app/api/rpc/route.ts:23",
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f022",
+      "source": "VULN-FINDINGS.json#21",
+      "title": "Backup objects are anonymously readable from a public bucket",
+      "file": "supabase/migrations/20260101000003_storage_buckets.sql",
+      "line": 6,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.7,
+      "severity": "LOW",
+      "severity_label": "LOW",
+      "severity_alignment": -5,
+      "preconditions": [
+        "A Supabase instance using this repository must be deployed with its Storage endpoint externally reachable.",
+        "The storage-bucket migration must have been applied, leaving lab-backups public with the public-role SELECT policy active.",
+        "The storage seed step or an equivalent upload must have placed the credential-bearing backup objects in lab-backups and left them there.",
+        "The attacker must learn or guess an object key, which is realistic because the bucket path is documented and the seeded filenames are predictable."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The migration marks the lab-backups bucket public and creates a SELECT policy for the public role using only bucket_id = 'lab-backups', so anonymous readers face no identity or tenant condition. The committed backup snapshot contains database and API credential shaped values, and the SQL backup contains account hashes and a connection string, making the exposed object contents sensitive. The source shows no application caller is needed for this infrastructure policy; the public Supabase Storage object path is the first externally reachable link.\n\nAssuming the documented Supabase Storage endpoint is externally reachable, it is an untrusted anonymous boundary and no login is required once an object key is known. Exploitation is realistic in a deployed, seeded lab, but it depends on several deployment and data-presence conditions, and the repository explicitly labels the exposed credentials and backups as fake training data. A claimed HIGH therefore overstates both the conditional reachability and the demonstrated impact by two levels.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "none found",
+        "README.md:137",
+        "supabase/migrations/20260101000003_storage_buckets.sql:6"
+      ],
+      "duplicate_of": null,
+      "absorbed": [
+        "f038"
+      ],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f039",
+      "source": "VULN-FINDINGS.json#38",
+      "title": "Configuration bucket is deliberately exposed to anonymous readers",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 10,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "true_positive",
+      "verify_verdict": "exploitable",
+      "confidence": 9.0,
+      "severity": "LOW",
+      "severity_label": "LOW",
+      "severity_alignment": -2,
+      "preconditions": [
+        "The training-lab migration is deployed so the `lab-configs` bucket exists, is public, and permits SELECT to `public`.",
+        "The storage seed script has run successfully and uploaded `lab-configs/old-admin-notes.txt` with the disclosed admin credential.",
+        "The authentication seed script has run successfully and created or updated `admin@cipherxlab.local` with password `Admin123`.",
+        "The seeded admin password remains unchanged and no MFA or equivalent login control prevents password-only authentication.",
+        "The attacker can determine the bucket/object path and reach both the Supabase public storage endpoint and the portal authentication endpoint from the network."
+      ],
+      "access_level": "unauthenticated_remote",
+      "threat_match": "none",
+      "rationale": "The migration makes `lab-configs` public and grants SELECT to `public`, so object reads have no authentication, tenant, or privileged-role gate. The upload call at scripts/seed-storage.ts:167 writes the configured objects, including `.env.demo` and `old-admin-notes.txt`; the latter contains the same admin credential configured for the seeded account at scripts/seed-auth-users.ts:30. Assuming standard Supabase Storage public-URL behavior and deployment of this migration, the source-disclosed object names are anonymously retrievable and enable feasible account compromise.\n\nAn unauthenticated remote attacker can retrieve a password-bearing object and use the credential for an admin account when the lab migration and both seed paths have been deployed as intended. However, exploitation depends on at least five concrete deployment, seed-state, credential-lifetime, path-discovery, and reachability conditions, and the code explicitly identifies itself as a training lab. Under the supplied lower-result rubric, the 3+ precondition branch caps the derived severity at LOW, making the claimed MEDIUM somewhat inflated.",
+      "vote_breakdown": {
+        "true_positive": 3,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [],
+      "exclusion_rule": null,
+      "first_links": [
+        "scripts/seed-storage.ts:167",
+        "scripts/seed-storage.ts:45"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": "top committer: thecipherxpro (1/1 recent commits); no CODEOWNERS entry; component: supabase/",
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f010",
+      "source": "VULN-FINDINGS.json#9",
+      "title": "Client pages return invoices and support tickets from every tenant",
+      "file": "src/app/client/invoices/page.tsx",
+      "line": 15,
+      "category": "broken-object-level-authorization",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f009 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f009",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f018",
+      "source": "VULN-FINDINGS.json#17",
+      "title": "Anonymous search aggregates sensitive rows across protected tables",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 28,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f006 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f006",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f020",
+      "source": "VULN-FINDINGS.json#19",
+      "title": "Invoice RPC procedures bypass tenant ownership checks",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 62,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f003 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f003",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f021",
+      "source": "VULN-FINDINGS.json#20",
+      "title": "Nominally restricted RPC grants leave default PUBLIC execution intact",
+      "file": "supabase/migrations/20260101000002_vulnerable_rpc.sql",
+      "line": 69,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f020 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f003",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f025",
+      "source": "VULN-FINDINGS.json#24",
+      "title": "Signup metadata controls the privileged profile role",
+      "file": "supabase/migrations/20260101000004_fix_auth_trigger.sql",
+      "line": 10,
+      "category": "privilege-escalation",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f024 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f024",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f029",
+      "source": "VULN-FINDINGS.json#28",
+      "title": "Final credential-vault policy authorizes ordinary students",
+      "file": "supabase/migrations/20260101000009_fix_profiles_rls_recursion.sql",
+      "line": 23,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f012 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f012",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f034",
+      "source": "VULN-FINDINGS.json#33",
+      "title": "Persisted ticket fields are rendered as raw HTML",
+      "file": "src/app/api/tickets/search/route.ts",
+      "line": 63,
+      "category": "xss",
+      "claimed_severity": "MEDIUM",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f033 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f033",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f035",
+      "source": "VULN-FINDINGS.json#34",
+      "title": "Anonymous policies expose file previews and stored secret values",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 48,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f031 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f031",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f038",
+      "source": "VULN-FINDINGS.json#37",
+      "title": "Public bucket exposes employee-directory data",
+      "file": "supabase/migrations/20260101000003_storage_buckets.sql",
+      "line": 4,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f022 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f022",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f047",
+      "source": "VULN-FINDINGS.json#46",
+      "title": "Any authenticated user can read all employee payroll and PII",
+      "file": "supabase/migrations/20260101000007_portal_rls.sql",
+      "line": 11,
+      "category": "cross-tenant-data-exposure",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f013 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f013",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f050",
+      "source": "VULN-FINDINGS.json#49",
+      "title": "Own-profile update policy permits role and tenant mass assignment",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 29,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f004 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f004",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f051",
+      "source": "VULN-FINDINGS.json#50",
+      "title": "Ticket-search RPC interpolates caller input into security-definer SQL",
+      "file": "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql",
+      "line": 117,
+      "category": "sql-injection",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f028 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f028",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f054",
+      "source": "VULN-FINDINGS.json#53",
+      "title": "Public report template discloses the complete assessment flag set",
+      "file": "src/app/api/report-template/route.ts",
+      "line": 70,
+      "category": "sensitive-data-exposure",
+      "claimed_severity": "MEDIUM",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f036 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f036",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f055",
+      "source": "VULN-FINDINGS.json#54",
+      "title": "Any authenticated account can retrieve internal manager and IT credential documents",
+      "file": "src/app/manager/reports/page.tsx",
+      "line": 17,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "duplicate",
+      "verify_verdict": null,
+      "confidence": 0.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Duplicate of f023 by fresh deterministic or semantic dedupe.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 0,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "duplicate"
+      ],
+      "exclusion_rule": null,
+      "first_links": [],
+      "duplicate_of": "f023",
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f037",
+      "source": "VULN-FINDINGS.json#36",
+      "title": "Authenticated users can forge arbitrary audit-log entries",
+      "file": "supabase/migrations/20260101000001_vulnerable_rls.sql",
+      "line": 98,
+      "category": "data-integrity",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The policy at supabase/migrations/20260101000001_vulnerable_rls.sql:98 would accept arbitrary row values from the authenticated role, and the first application insert at src/app/api/profile/route.ts:43 supplies fixed attribution without validating a caller-provided log record. However, supabase/config.toml:20-24 states that new public tables are not reachable by Data API roles unless auto_expose_new_tables is enabled, it is left disabled here, and no migration grants INSERT on audit_logs; assuming the checked-in Supabase configuration governs deployment, an authenticated direct request is rejected before this RLS policy can authorize it. Later migrations only replace SELECT policies, so they do not create an alternate write path, and the unchecked application insert is not itself attacker-controlled. (split vote, dropped under precision policy)",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 1,
+        "cannot_verify": 1
+      },
+      "refute_reasons": [
+        "implausible_trigger"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/profile/route.ts:43"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f043",
+      "source": "VULN-FINDINGS.json#42",
+      "title": "Unauthenticated API discloses password-reset tokens for arbitrary email addresses",
+      "file": "src/app/api/password-reset/route.ts",
+      "line": 33,
+      "category": "password-reset-token-disclosure",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Assuming the exported Next.js route is externally reachable, POST accepts an unauthenticated body and returns the generated value, while GET can retrieve it by email. However, src/app/api/password-reset/route.ts:16-18 only constructs and stores a custom base64url string, and the source contains no path that consumes or validates it to authorize a password change. The disclosed value therefore is not established as a bearer credential with feasible security impact, so this is hardening without an exploit.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "misread_code",
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/password-reset/route.ts:10"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f046",
+      "source": "VULN-FINDINGS.json#45",
+      "title": "Privileged profile seeding function remains executable by PUBLIC",
+      "file": "supabase/migrations/20260101000006_portal_roles.sql",
+      "line": 41,
+      "category": "auth-bypass",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "Assuming the checked-in Supabase configuration governs deployment, supabase/config.toml:19-24 says that leaving auto_expose_new_tables unset prevents new public-schema functions from being exposed to anon or authenticated without an explicit grant. supabase/migrations/20260101000006_portal_roles.sql:70 grants EXECUTE only to service_role, so the SECURITY DEFINER function at line 41 is not an untrusted Data API path despite its unrestricted parameters. Repository search found no caller for seed_portal_profile beyond its definition and grant; the claimed PUBLIC execution depends on legacy platform privilege state contrary to the checked-in configuration.",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 2,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "already_handled",
+        "misread_code"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "none found",
+        "supabase/config.toml:13"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f052",
+      "source": "VULN-FINDINGS.json#51",
+      "title": "Profile seeding RPC can assign arbitrary roles under definer privilege",
+      "file": "supabase/migrations/20260101000006_portal_roles.sql",
+      "line": 56,
+      "category": "privilege-escalation",
+      "claimed_severity": "HIGH",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 8.5,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "`supabase/config.toml:13` exposes the public schema through the API, but `supabase/config.toml:19` states that new functions are not reachable through Data API roles without explicit grants when `auto_expose_new_tables` is unset, as it is here. `supabase/migrations/20260101000006_portal_roles.sql:70` explicitly grants execution only to `service_role`, and the source contains no caller beyond the function definition and grant. Assuming deployment honors the checked-in Supabase configuration or its stated current cloud default, only the trusted service role can invoke this definer function, so the service-role/RLS organization rule excludes the claim absent any untrusted service-role path.",
+      "vote_breakdown": {
+        "true_positive": 1,
+        "false_positive": 2,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "already_handled"
+      ],
+      "exclusion_rule": "org rule",
+      "first_links": [
+        "none found",
+        "src/app/api/rpc/route.ts:29"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    },
+    {
+      "id": "f053",
+      "source": "VULN-FINDINGS.json#52",
+      "title": "Password-reset tokens are deterministic encodings rather than random secrets",
+      "file": "src/app/api/password-reset/route.ts",
+      "line": 17,
+      "category": "weak-token-generation",
+      "claimed_severity": "MEDIUM",
+      "verdict": "false_positive",
+      "verify_verdict": null,
+      "confidence": 9.0,
+      "severity": null,
+      "severity_label": null,
+      "severity_alignment": null,
+      "preconditions": [],
+      "access_level": null,
+      "threat_match": null,
+      "rationale": "The unauthenticated POST handler accepts an attacker-controlled email and line 17 does create a predictable Base64url encoding, but the only uses of that token in shipped source are storage and disclosure in this same route. No source path consumes the token to authorize a password change or any other privileged action, so prediction has no independent security impact if the direct disclosure paths are removed. The demonstrable defect is token disclosure at route.ts:26-35 and route.ts:40-52, not weak generation as independently exploitable; absent a security-sensitive consumer, changing the generator is hardening without an exploit path.",
+      "vote_breakdown": {
+        "true_positive": 0,
+        "false_positive": 3,
+        "cannot_verify": 0
+      },
+      "refute_reasons": [
+        "not_actionable"
+      ],
+      "exclusion_rule": "13",
+      "first_links": [
+        "src/app/api/password-reset/route.ts:10"
+      ],
+      "duplicate_of": null,
+      "absorbed": [],
+      "owner_hint": null,
+      "missing_fields": [
+        "preconditions"
+      ]
+    }
+  ]
+}
