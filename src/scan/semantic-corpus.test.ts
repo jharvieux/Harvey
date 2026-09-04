@@ -98,6 +98,49 @@ describe("scoreSemanticPass", () => {
     expect(one.positivesCaught).toBe(2);
     expect(one.sharedFindings).toBe(1);
   });
+
+  it("matches an any-of list of all-of mechanism concepts without treating the location as evidence", () => {
+    const t = target({
+      entries: [{
+        id: "A",
+        kind: "positive",
+        cls: "browser credential",
+        locations: ["lib/openai.ts"],
+        match: [],
+        matchAll: [["openai", "browser", "key"], ["openai", "client", "credential"]],
+        note: "",
+      }],
+      recordedCaught: 1,
+    });
+    expect(scoreSemanticPass(t, [finding("lib/openai.ts:9", "Browser bundles an OpenAI API key")]).positivesCaught).toBe(1);
+    expect(scoreSemanticPass(t, [finding("lib/openai.ts:9", "Browser invokes OpenAI")]).positivesCaught).toBe(0);
+
+    const locationOnly = target({
+      entries: [{ id: "A", kind: "positive", cls: "jwt", locations: ["lib/jwt.ts"], match: ["jwt"], note: "" }],
+      recordedCaught: 1,
+    });
+    expect(scoreSemanticPass(locationOnly, [finding("lib/jwt.ts:9", "Missing expiry")]).positivesCaught).toBe(0);
+  });
+
+  it("scores the fresh Nocode mechanisms without turning one shared finding into two findings", () => {
+    const t = SEMANTIC_CORPUS.find((candidate) => candidate.slug === "nocode-rescue")!;
+    const result = scoreSemanticPass(t, [
+      finding("schema.sql:4", "Missing RLS leaves all multi-tenant tables exposed"),
+      finding(
+        "src/lib/ai.ts:9",
+        "VITE OpenAI key is shipped to every browser",
+        "VITE_OPENAI_API_KEY is supplied to a browser-enabled OpenAI client",
+      ),
+      finding(
+        "src/pages/Dashboard.tsx:14",
+        "Client-controlled localStorage values define identity, tenant, and admin authority",
+        "localStorage controls user identity, workspace, role, and admin authority",
+      ),
+      finding("src/pages/Dashboard.tsx:61", "Ticket body is rendered through dangerouslySetInnerHTML"),
+    ]);
+    expect(result.positivesCaught).toBe(5);
+    expect(result.sharedFindings).toBe(1);
+  });
 });
 
 describe("loadSemanticPass — a pass that did not run must never score as one", () => {
@@ -207,13 +250,45 @@ describe("the shipped corpus", () => {
       if (!corpusTarget) throw new Error(`missing semantic target ${slug}`);
       expect(scoreSemanticPass(corpusTarget, [candidate]).rows.find((row) => row.id === id)?.pass).toBe(false);
     };
-    score("nocode-rescue", finding("src/lib/ai.ts:8", "Prompt injection reaches the OpenAI request"), "NR-2");
-    score("nocode-rescue", finding("src/pages/Dashboard.tsx:14", "Authentication is enforced only in localStorage"), "NR-5");
-    score("superredhat", finding("lib/jwt.ts:6", "JWT lacks an explicit expiry but uses a deployment secret"), "F-09");
-    score("supatest", finding("supabase/migrations/0001.sql:53", "Tautological profile UPDATE policy"), "F1");
-    score("supatest", finding("supabase/migrations/0001.sql:76", "Tautological article UPDATE policy"), "F2");
-    score("cipherx", finding("supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:104", "plpgsql SQL injection through EXECUTE"), "CX-10");
-    score("cipherx", finding("src/app/api/tickets/search/route.ts:10", "Reflected credentialed CORS"), "CX-17");
+    const cases: Array<[string, string, string, string]> = [
+      ["nocode-rescue", "src/lib/ai.ts:8", "Prompt injection reaches the browser OpenAI request", "NR-2"],
+      ["nocode-rescue", "src/pages/Dashboard.tsx:14", "Admin role is stored in localStorage", "NR-4"],
+      ["nocode-rescue", "src/pages/Dashboard.tsx:14", "Authentication trusts localStorage identity", "NR-5"],
+      ["superredhat", "lib/supabaseAdmin.ts:15", "A synthetic placeholder credential is committed", "F-01"],
+      ["superredhat", "app/api/notes/[id]/route.ts:20", "Mass assignment changes note ownership", "F-03"],
+      ["superredhat", "app/api/admin/users/route.ts:7", "Authorization header is parsed", "F-04"],
+      ["superredhat", "lib/jwt.ts:6", "JWT lacks expiry but uses a deployment secret", "F-09"],
+      ["supatest", "supabase/migrations/0001.sql:53", "Tautological profile UPDATE policy", "F1"],
+      ["supatest", "supabase/migrations/0001.sql:76", "Tautological article UPDATE policy", "F2"],
+      ["supatest", "supabase/migrations/0001.sql:90", "SECURITY DEFINER deletes audit rows", "F5"],
+      ["supatest", "supabase/migrations/0001.sql:68", "Article policy exposes public content", "F9"],
+      ["cipherx", ".env:2", "An anonymous JWT is committed for the public browser client", "CX-02"],
+      ["cipherx", "src/app/api/internal/users/route.ts:8", "A cache response header leaks metadata", "CX-15"],
+      ["cipherx", "supabase/migrations/20260101000005_spec_buckets_and_rpc.sql:104", "plpgsql SQL injection through EXECUTE", "CX-10"],
+    ];
+    expect(cases).toHaveLength(14);
+    for (const [slug, location, title, id] of cases) score(slug, finding(location, title), id);
+  });
+
+  it("matches retained mechanisms when a fresh reviewer changes phrase order", () => {
+    const cases: Array<[string, string, string, string]> = [
+      ["superredhat", "lib/jwt.ts:6", "Application sessions can be forged because JWT verification uses a secret literal as a public fallback", "F-09"],
+      ["supatest", "supabase/migrations/0001.sql:76", "The RLS policy on article rows permits UPDATE for every caller", "F1"],
+      ["supatest", "supabase/migrations/0001.sql:81", "The RLS policy permits DELETE of any article", "F2"],
+      ["supatest", "supabase/migrations/0001.sql:90", "A SECURITY DEFINER function returns profile email to any RPC caller", "F5"],
+      ["supatest", "supabase/migrations/0001.sql:53", "The profile policy permits UPDATE and exposes email", "F9"],
+      ["cipherx", "public/accounts.txt:1", "Public files disclose seeded account usernames and passwords", "CX-01"],
+      ["cipherx", "public/backup.env:1", "A backup configuration file is served from the public web root", "CX-04"],
+      ["cipherx", "storage_buckets.sql:8", "The storage backup bucket is readable by public clients", "CX-10"],
+      ["cipherx", "spec_buckets_and_rpc.sql:104", "Caller input reaches dynamic SQL and creates SQL injection", "CX-12"],
+      ["cipherx", "src/app/api/internal/users/route.ts:8", "A role header authorizes a service role client to dump secrets", "CX-15"],
+      ["cipherx", "src/app/api/debug/route.ts:8", "The public debug response returns environment data and a live stack", "CX-18"],
+    ];
+    expect(cases).toHaveLength(11);
+    for (const [slug, location, title, id] of cases) {
+      const corpusTarget = SEMANTIC_CORPUS.find((entry) => entry.slug === slug)!;
+      expect(scoreSemanticPass(corpusTarget, [finding(location, title)]).rows.find((row) => row.id === id)?.pass).toBe(true);
+    }
   });
 
   it("records a baseline no larger than the planted positives it is a baseline for", () => {
@@ -227,7 +302,7 @@ describe("the shipped corpus", () => {
     for (const t of SEMANTIC_CORPUS) {
       for (const e of t.entries) {
         expect(e.locations.length, `${t.slug}/${e.id} has no location anchor`).toBeGreaterThan(0);
-        expect(e.match.length, `${t.slug}/${e.id} has no mechanism keyword`).toBeGreaterThan(0);
+        expect(e.match.length + (e.matchAll?.flat().length ?? 0), `${t.slug}/${e.id} has no mechanism keyword`).toBeGreaterThan(0);
       }
     }
   });

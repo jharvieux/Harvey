@@ -23,7 +23,7 @@
 //     false positive — the failure mode that costs a free scan its credibility.
 
 import type { Finding } from "../findings.js";
-import { SEMANTIC_CORPUS, type SemanticEntry } from "./semantic-corpus.js";
+import { matchesSemanticEntry, SEMANTIC_CORPUS, type SemanticEntry } from "./semantic-corpus.js";
 
 export interface FreeRecallTarget {
   slug: string;
@@ -98,17 +98,6 @@ export const FREE_RECALL_CORPUS: FreeRecallTarget[] = [
   vandyand,
 ];
 
-function haystack(f: Finding): string {
-  return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();
-}
-
-function matches(entry: SemanticEntry, f: Finding): boolean {
-  const loc = f.location.toLowerCase();
-  if (!entry.locations.some((l) => loc.includes(l.toLowerCase()))) return false;
-  const hay = haystack(f);
-  return entry.match.some((k) => hay.includes(k.toLowerCase()));
-}
-
 export interface FreeRecallRow {
   id: string;
   kind: SemanticEntry["kind"];
@@ -148,7 +137,7 @@ export interface FreeRecallResult {
 export function scoreFreeRecall(target: FreeRecallTarget, findings: Finding[]): FreeRecallResult {
   const hits = new Map<Finding, number>();
   const rows: FreeRecallRow[] = target.entries.map((entry) => {
-    const relevant = findings.filter((f) => matches(entry, f));
+    const relevant = findings.filter((f) => matchesSemanticEntry(entry, f));
     for (const f of relevant) hits.set(f, (hits.get(f) ?? 0) + 1);
     const tier: FreeRecallRow["tier"] = relevant.some((f) => f.precisionTier === "high")
       ? "high"

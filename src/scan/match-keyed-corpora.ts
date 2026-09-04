@@ -50,12 +50,12 @@ export function matchKeyedCorpora(): MatchKeyedCorpus[] {
     {
       label: "SEMANTIC_CORPUS (M1 semantic answer keys)",
       source: "src/scan/semantic-corpus.ts",
-      rows: SEMANTIC_CORPUS.flatMap((t) => t.entries.map((e) => ({ id: `${t.slug}/${e.id}`, kind: e.kind, locations: e.locations, match: e.match }))),
+      rows: SEMANTIC_CORPUS.flatMap((t) => t.entries.map((e) => ({ id: `${t.slug}/${e.id}`, kind: e.kind, locations: e.locations, match: e.match, matchAll: e.matchAll }))),
     },
     {
       label: "FREE_RECALL_CORPUS (free-tier answer keys)",
       source: "src/scan/free-recall-corpus.ts",
-      rows: FREE_RECALL_CORPUS.flatMap((t) => t.entries.map((e) => ({ id: `${t.slug}/${e.id}`, kind: e.kind, locations: e.locations, match: e.match }))),
+      rows: FREE_RECALL_CORPUS.flatMap((t) => t.entries.map((e) => ({ id: `${t.slug}/${e.id}`, kind: e.kind, locations: e.locations, match: e.match, matchAll: e.matchAll }))),
     },
   ];
 }
@@ -79,7 +79,7 @@ export function allSelfMatchingKeys(corpora: MatchKeyedCorpus[] = matchKeyedCorp
 //   semantic-corpus.ts    — SemanticEntry, registered as SEMANTIC_CORPUS and, re-used, FREE_RECALL_CORPUS
 const DECLARING_SOURCES = ["scan/calibration.ts", "scan/calibration/types.ts", "scan/semantic-corpus.ts"];
 
-const MATCH_FIELD = /^\s+match\??: (readonly )?string\[\]/m;
+const MATCH_FIELD = /^\s+match(?:All)?\??: (readonly )?string\[\](?:\[\])?/m;
 
 /**
  * Source files declaring the shape that the registry does not account for. Non-empty = a corpus is

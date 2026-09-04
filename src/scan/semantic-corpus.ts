@@ -31,10 +31,13 @@ export interface SemanticEntry {
   // Any-of: the finding's location must contain one of these (case-insensitive substring), which is
   // what pins a finding to the planted bug's file rather than to its wording alone.
   locations: string[];
-  // Any-of: at least one must appear in the finding's id/title/taxonomy/evidence/location. These
+  // Any-of: at least one must appear in the finding's id/title/taxonomy/evidence. These
   // name the MECHANISM, so a right-file/wrong-mechanism finding (the "partial" the measurement docs
   // record) does not score as a catch.
   match: string[];
+  // Any-of groups, each of which is all-of. This carries stable mechanism concepts without making
+  // their prose order part of the answer key.
+  matchAll?: string[][];
   note: string;
 }
 
@@ -69,10 +72,10 @@ const nocodeRescue: SemanticTarget = {
   recordedOn: "2026-07-18",
   recordedCaught: 5,
   entries: [
-    { id: "NR-2", kind: "positive", cls: "OpenAI key shipped to the browser + dangerouslyAllowBrowser", locations: ["src/lib/ai.ts"], match: ["openai credential is shipped to the browser", "dangerouslyallowbrowser"], note: "Audited at the pinned source and confirmed 3/0/0 in the 2026-09-03 triage." },
+    { id: "NR-2", kind: "positive", cls: "OpenAI key shipped to the browser + dangerouslyAllowBrowser", locations: ["src/lib/ai.ts"], match: ["dangerouslyallowbrowser"], matchAll: [["openai", "browser", "key"], ["openai", "browser", "credential"], ["vite_openai_api_key", "browser"]], note: "Audited at the pinned source and confirmed 3/0/0 in the 2026-09-03 triage." },
     { id: "NR-3", kind: "positive", cls: "RLS off on tickets/profiles/workspaces", locations: ["schema.sql"], match: ["rls", "row level security", "row-level security"], note: "Mechanically blocked by the unqualified `create table` regex (residual gap B); semantic + dynamic carry it." },
-    { id: "NR-4", kind: "positive", cls: "authentication enforced only in the client", locations: ["src/pages/Dashboard.tsx"], match: ["authentication is enforced only", "client-only authentication", "client-side authentication"], note: "Narrowed so the adjacent role/workspace authorization finding cannot score this row." },
-    { id: "NR-5", kind: "positive", cls: "client-controlled role and workspace authorize cross-tenant operations", locations: ["src/pages/Dashboard.tsx"], match: ["client-controlled role", "role and workspace authorize cross-tenant"], note: "Narrowed so the adjacent localStorage authentication finding cannot score this row." },
+    { id: "NR-4", kind: "positive", cls: "authentication enforced only in the client", locations: ["src/pages/Dashboard.tsx"], match: ["authentication is enforced only", "client-only authentication", "client-side authentication"], matchAll: [["localstorage", "identity"], ["localstorage", "authentication"], ["client-controlled", "identity"]], note: "Narrowed so the adjacent role/workspace authorization finding cannot score this row." },
+    { id: "NR-5", kind: "positive", cls: "client-controlled role and workspace authorize cross-tenant operations", locations: ["src/pages/Dashboard.tsx"], match: ["role and workspace authorize cross-tenant"], matchAll: [["localstorage", "workspace", "admin"], ["client-controlled", "role", "workspace"]], note: "Narrowed so the adjacent localStorage authentication finding cannot score this row." },
     { id: "NR-6", kind: "positive", cls: "stored XSS via dangerouslySetInnerHTML", locations: ["src/pages/Dashboard.tsx"], match: ["xss", "dangerouslysetinnerhtml"], note: "The one finding the original static-only measurement caught." },
   ],
 };
@@ -85,14 +88,14 @@ const superRedHat: SemanticTarget = {
   recordedOn: "2026-07-24",
   recordedCaught: 9,
   entries: [
-    { id: "F-01", kind: "positive", cls: "hardcoded Supabase service-role key", locations: ["lib/supabaseAdmin.ts"], match: ["service_role", "service-role", "credential"], note: "" },
+    { id: "F-01", kind: "positive", cls: "hardcoded Supabase service-role key", locations: ["lib/supabaseAdmin.ts"], match: ["service_role", "service-role"], matchAll: [["supabase", "service role"], ["hardcoded", "service role"]], note: "" },
     { id: "F-02", kind: "positive", cls: "RLS disabled on every table", locations: ["supabase/migrations"], match: ["rls", "row level security", "row-level security"], note: "" },
-    { id: "F-03", kind: "positive", cls: "IDOR — notes read/written by id with no ownership check", locations: ["app/api/notes/[id]/route.ts"], match: ["idor", "object-level", "ownership", "owner"], note: "The report flags this as scanner-invisible; semantic + M2 are the tiers that reach it." },
-    { id: "F-04", kind: "positive", cls: "admin authorization enforced in the UI only", locations: ["app/api/admin/users/route.ts", "app/admin/page.tsx"], match: ["role check", "function-level", "bfla", "authorization"], note: "Right-file/wrong-mechanism mechanically for a long time (#561) — keywords name the mechanism so a filename heuristic can't score." },
+    { id: "F-03", kind: "positive", cls: "IDOR — notes read/written by id with no ownership check", locations: ["app/api/notes/[id]/route.ts"], match: ["idor", "object-level"], matchAll: [["note", "ownership", "check"], ["note", "owner", "check"]], note: "The report flags this as scanner-invisible; semantic + M2 are the tiers that reach it." },
+    { id: "F-04", kind: "positive", cls: "admin authorization enforced in the UI only", locations: ["app/api/admin/users/route.ts", "app/admin/page.tsx"], match: ["role check", "function-level", "bfla"], matchAll: [["admin", "role"], ["admin", "server-side"]], note: "Right-file/wrong-mechanism mechanically for a long time (#561) — keywords name the mechanism so a filename heuristic can't score." },
     { id: "F-05", kind: "positive", cls: "SSRF in the avatar proxy / URL import", locations: ["lib/fetchUrl.ts", "app/api/avatar/route.ts", "app/api/import/route.ts"], match: ["ssrf"], note: "" },
     { id: "F-06", kind: "positive", cls: "stored XSS via dangerouslySetInnerHTML", locations: ["app/notes/[id]/page.tsx"], match: ["xss", "dangerouslysetinnerhtml"], note: "" },
     { id: "F-07", kind: "positive", cls: "mass assignment / over-posting on note writes", locations: ["app/api/notes/route.ts", "app/api/notes/[id]/route.ts"], match: ["mass assignment", "mass-assignment", "over-post", "overposting", "whitelist"], note: "" },
-    { id: "F-09", kind: "positive", cls: "public fallback JWT secret permits forged application sessions", locations: ["lib/jwt.ts"], match: ["fallback secret", "public fallback", "source-visible signing key"], note: "Narrowed to the proven fallback-secret forgery path; generic `secret` in this file no longer scores." },
+    { id: "F-09", kind: "positive", cls: "public fallback JWT secret permits forged application sessions", locations: ["lib/jwt.ts"], match: ["fallback secret", "public fallback", "source-visible signing key"], matchAll: [["jwt", "fallback", "secret"], ["session", "signing", "key"]], note: "Narrowed to the proven fallback-secret forgery path; generic `secret` in this file no longer scores." },
     { id: "F-12", kind: "positive", cls: "vulnerable ejs dependency + SSTI render endpoint", locations: ["package.json", "app/api/render/route.ts"], match: ["ejs", "ssti", "template injection"], note: "" },
     {
       id: "F-N1",
@@ -113,11 +116,11 @@ const supatest: SemanticTarget = {
   recordedOn: "2026-07-24",
   recordedCaught: 5,
   entries: [
-    { id: "F1", kind: "positive", cls: "UPDATE articles guarded by an always-true tautology", locations: ["supabase/migrations"], match: ["article update policy"], note: "The exact mechanism phrase prevents adjacent profile-policy findings from scoring this row." },
-    { id: "F2", kind: "positive", cls: "DELETE articles guarded by the same tautology", locations: ["supabase/migrations"], match: ["article delete policy"], note: "The completed-triage adapter carries the validated f006 duplicate provenance onto canonical f005." },
+    { id: "F1", kind: "positive", cls: "UPDATE articles guarded by an always-true tautology", locations: ["supabase/migrations"], match: ["article update policy"], matchAll: [["article", "update", "policy"]], note: "The exact mechanism phrase prevents adjacent profile-policy findings from scoring this row." },
+    { id: "F2", kind: "positive", cls: "DELETE articles guarded by the same tautology", locations: ["supabase/migrations"], match: ["article delete policy"], matchAll: [["article", "delete", "policy"]], note: "The completed-triage adapter carries the validated f006 duplicate provenance onto canonical f005." },
     { id: "F3", kind: "positive", cls: "unpublished drafts readable by anon (SELECT USING(true))", locations: ["supabase/migrations"], match: ["exposes unpublished drafts", "unpublished draft"], note: "Narrowed to the source-proven SELECT exposure." },
-    { id: "F5", kind: "positive", cls: "profile PII exposed by an unrestricted SECURITY DEFINER RPC", locations: ["supabase/migrations"], match: ["security definer rpc exposes profile pii", "without caller authorization"], note: "Narrowed to the source-proven RPC and PII mechanism." },
-    { id: "F9", kind: "positive", cls: "profile email exposure plus unrestricted profile edit/delete policies", locations: ["supabase/migrations"], match: ["profile policy exposes every user's email", "profile update policy", "profile delete policy"], note: "One audited policy-family row; generic mentions of profiles do not score it." },
+    { id: "F5", kind: "positive", cls: "profile PII exposed by an unrestricted SECURITY DEFINER RPC", locations: ["supabase/migrations"], match: ["security definer rpc exposes profile pii", "without caller authorization"], matchAll: [["security definer", "profile", "pii"], ["security definer", "profile", "email"], ["rpc", "profile", "email"]], note: "Narrowed to the source-proven RPC and PII mechanism." },
+    { id: "F9", kind: "positive", cls: "profile email exposure plus unrestricted profile edit/delete policies", locations: ["supabase/migrations"], match: ["profile policy exposes every user's email", "profile update policy", "profile delete policy"], matchAll: [["profile", "email", "policy"], ["profile", "update", "policy"], ["profile", "delete", "policy"]], note: "One audited policy-family row; generic mentions of profiles do not score it." },
     {
       id: "F-N1",
       kind: "negative",
@@ -137,15 +140,15 @@ const cipherx: SemanticTarget = {
   recordedOn: "2026-07-24",
   recordedCaught: 16,
   entries: [
-    { id: "CX-01", kind: "positive", cls: "weak/default seeded account credentials disclosed from public static paths", locations: [".htaccess", "public/"], match: ["account credentials", "account/password pairs", "privileged account"], note: "The 3/0/0 public-disclosure finding ties the published pairs to active source-provisioned accounts." },
-    { id: "CX-02", kind: "positive", cls: "service-role + anon JWT committed in a tracked .env", locations: [".env"], match: ["service_role", "service-role", "jwt"], note: "" },
-    { id: "CX-04", kind: "positive", cls: "sensitive files served from the web root", locations: [".htaccess", "public/"], match: ["public static paths", "backup configuration", "robots advertises"], note: "Narrowed to the proven deployed static-path exposure; decoy secret text alone does not score." },
-    { id: "CX-10", kind: "positive", cls: "public and cross-user storage bucket reads", locations: ["storage_buckets.sql", "spec_buckets_and_rpc.sql"], match: ["storage policies publish backups", "public-backup", "bucket-wide reads"], note: "Narrowed to the audited storage-policy finding." },
-    { id: "CX-12", kind: "positive", cls: "plpgsql SQL injection via dynamic EXECUTE concatenation", locations: ["spec_buckets_and_rpc.sql"], match: ["concatenates caller input into dynamic sql", "sql-injection", "dynamic sql executed"], note: "" },
-    { id: "CX-15", kind: "positive", cls: "X-User-Role header trusted, then service-role client dumps secrets", locations: ["src/app/api/internal/users/route.ts"], match: ["x-user-role", "header", "service role", "function-level"], note: "" },
+    { id: "CX-01", kind: "positive", cls: "weak/default seeded account credentials disclosed from public static paths", locations: [".htaccess", "public/"], match: ["account credentials", "account/password pairs", "privileged account"], matchAll: [["seeded", "account", "password"], ["public", "username", "password"]], note: "The 3/0/0 public-disclosure finding ties the published pairs to active source-provisioned accounts." },
+    { id: "CX-02", kind: "positive", cls: "service-role + anon JWT committed in a tracked .env", locations: [".env"], match: ["service_role", "service-role"], matchAll: [["committed", "service role"], ["hardcoded", "service role"]], note: "" },
+    { id: "CX-04", kind: "positive", cls: "sensitive files served from the web root", locations: [".htaccess", "public/"], match: ["public static paths", "backup configuration", "robots advertises"], matchAll: [["public", "backup", "configuration"], ["web root", "sensitive", "file"], ["robots", "backup"]], note: "Narrowed to the proven deployed static-path exposure; decoy secret text alone does not score." },
+    { id: "CX-10", kind: "positive", cls: "public and cross-user storage bucket reads", locations: ["storage_buckets.sql", "spec_buckets_and_rpc.sql"], match: ["storage policies publish backups", "public-backup", "bucket-wide reads"], matchAll: [["storage", "bucket", "public"], ["storage", "backup", "read"]], note: "Narrowed to the audited storage-policy finding." },
+    { id: "CX-12", kind: "positive", cls: "plpgsql SQL injection via dynamic EXECUTE concatenation", locations: ["spec_buckets_and_rpc.sql"], match: ["concatenates caller input into dynamic sql", "sql-injection", "dynamic sql executed"], matchAll: [["sql injection", "dynamic sql"], ["execute", "caller input"]], note: "" },
+    { id: "CX-15", kind: "positive", cls: "X-User-Role header trusted, then service-role client dumps secrets", locations: ["src/app/api/internal/users/route.ts"], match: ["x-user-role", "function-level"], matchAll: [["role", "header", "service role"], ["role", "header", "service-role"], ["role", "query", "service role"], ["role", "query", "service-role"], ["x-user-role", "secret"]], note: "" },
     { id: "CX-16", kind: "positive", cls: "SSRF webhook fetch reaching cloud metadata", locations: ["src/app/api/webhook/route.ts"], match: ["ssrf"], note: "" },
     { id: "CX-17", kind: "positive", cls: "reflected and stored XSS in the ticket HTML response", locations: ["src/app/api/tickets/search/route.ts"], match: ["xss", "executable html", "raw html"], note: "The unverified credentialed-CORS facet was removed from this row." },
-    { id: "CX-18", kind: "positive", cls: "public debug route discloses credentials and server internals", locations: ["src/app/api/debug/route.ts"], match: ["public debug route", "live stack", "server internals"], note: "Narrowed to the directly reachable debug response; unrelated error paths cannot score it." },
+    { id: "CX-18", kind: "positive", cls: "public debug route discloses credentials and server internals", locations: ["src/app/api/debug/route.ts"], match: ["public debug route", "live stack", "server internals"], matchAll: [["debug", "stack", "environment"], ["debug", "credential", "public"]], note: "Narrowed to the directly reachable debug response; unrelated error paths cannot score it." },
     { id: "CX-23", kind: "positive", cls: "anon SECURITY DEFINER get_user_by_email enumerates identities and roles", locations: ["vulnerable_rpc.sql"], match: ["get_user_by_email"], note: "Split from retired compound CX-11; canonical triage finding f011." },
     { id: "CX-24", kind: "positive", cls: "anon SECURITY DEFINER search_lab_data returns secrets and cross-tenant rows", locations: ["vulnerable_rpc.sql"], match: ["search_lab_data"], note: "Split from retired compound CX-11; canonical triage finding f012." },
     { id: "CX-25", kind: "positive", cls: "anon SECURITY DEFINER export_demo_secrets dumps the secrets table", locations: ["vulnerable_rpc.sql"], match: ["export_demo_secrets"], note: "Split from retired compound CX-11; canonical triage finding f013." },
@@ -178,15 +181,14 @@ export const SEMANTIC_CORPUS: SemanticTarget[] = [nocodeRescue, superRedHat, sup
 // Scoring
 // ---------------------------------------------------------------------------------------------
 
-function haystack(f: Finding): string {
-  return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();
-}
-
-function matches(entry: SemanticEntry, f: Finding): boolean {
+export function matchesSemanticEntry(entry: SemanticEntry, f: Finding): boolean {
   const loc = f.location.toLowerCase();
   if (!entry.locations.some((l) => loc.includes(l.toLowerCase()))) return false;
-  const hay = haystack(f);
-  return entry.match.some((k) => hay.includes(k.toLowerCase()));
+  // Location is deliberately absent. It is the independently checked anchor, not proof of a
+  // mechanism, and letting it into this text recreated the right-file/wrong-mechanism defect.
+  const hay = `${f.id} ${f.title} ${f.taxonomy} ${f.evidence}`.toLowerCase();
+  return entry.match.some((key) => hay.includes(key.toLowerCase())) ||
+    (entry.matchAll ?? []).some((group) => group.length > 0 && group.every((key) => hay.includes(key.toLowerCase())));
 }
 
 export interface SemanticRow {
@@ -258,7 +260,7 @@ export function loadSemanticPass(raw: unknown, target: SemanticTarget, path: str
 export function scoreSemanticPass(target: SemanticTarget, findings: Finding[], generatedAt?: string): SemanticTargetResult {
   const hits = new Map<Finding, number>();
   const rows: SemanticRow[] = target.entries.map((entry) => {
-    const relevant = findings.filter((f) => matches(entry, f));
+    const relevant = findings.filter((f) => matchesSemanticEntry(entry, f));
     for (const f of relevant) hits.set(f, (hits.get(f) ?? 0) + 1);
     const matched = relevant.length;
     const pass = entry.kind === "positive" ? matched > 0 : matched === 0;

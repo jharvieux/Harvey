@@ -81,6 +81,27 @@ describe("scoreFreeRecall", () => {
     expect(r.caughtHigh).toBe(2);
     expect(r.sharedFindings).toBe(1);
   });
+
+  it("uses the same all-token mechanism matcher as the semantic scorer", () => {
+    const grouped: FreeRecallTarget = {
+      ...target,
+      recordedMechanical: 1,
+      recordedMechanicalTotal: 1,
+      entries: [{
+        id: "P",
+        kind: "positive",
+        cls: "browser credential",
+        locations: ["lib/openai.ts"],
+        match: [],
+        matchAll: [["openai", "browser", "key"]],
+        note: "",
+      }],
+    };
+    const right = finding({ location: "lib/openai.ts:9", evidence: "The OpenAI key is bundled for browser use", precisionTier: "high" });
+    const partial = finding({ location: "lib/openai.ts:9", evidence: "The browser invokes OpenAI", precisionTier: "high" });
+    expect(scoreFreeRecall(grouped, [right]).caughtHigh).toBe(1);
+    expect(scoreFreeRecall(grouped, [partial]).caughtHigh).toBe(0);
+  });
 });
 
 describe("the not-scored row", () => {
