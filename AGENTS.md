@@ -54,6 +54,10 @@ executors return a structured proposal without choosing a number or editing them
 `SESSION.md` remains last-write-wins handoff state: neither it nor durable memory
 authorizes work, resumes a paused workflow, or overrides the user's current request.
 
+`tools/funes-memory.ts` provides optional local semantic retrieval over the curated
+decision log. Its generated index is disposable and non-authoritative: reopen every
+useful recall hit in the current `MEMORY.md` before relying on it.
+
 ## Audit invariants
 
 - Account for every module M1–M10 against every enumerated target. A tier that cannot run is `partial` or `requires-live-run` with a concrete reason, provenance, and falsifier; it is never silently skipped.
