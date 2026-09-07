@@ -280,8 +280,11 @@ function sanitizedFunesEnvironment(root: string): NodeJS.ProcessEnv {
   delete env.HUGGING_FACE_HUB_TOKEN;
   delete env.HUGGINGFACE_TOKEN;
   delete env.HF_HUB_CACHE;
+  delete env.HF_TOKEN_PATH;
+  delete env.HF_ENDPOINT;
   env.FUNES_HOME = funesHome;
   env.HF_HOME = hfHome;
+  env.HF_HUB_DISABLE_IMPLICIT_TOKEN = "1";
   return env;
 }
 

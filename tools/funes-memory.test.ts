@@ -97,7 +97,10 @@ function installFakeFunes(root: string, version = "1.3.0", commandStatus = 0): {
     "FUNES_TRUFFLEHOG",
     "HF_HOME",
     "HF_HUB_CACHE",
+    "HF_HUB_DISABLE_IMPLICIT_TOKEN",
+    "HF_ENDPOINT",
     "HF_TOKEN",
+    "HF_TOKEN_PATH",
     "HUGGING_FACE_HUB_TOKEN",
     "HUGGINGFACE_TOKEN",
   ];
@@ -408,12 +411,18 @@ describe("funes-memory process boundary", () => {
         present: true,
         value: join(root, ".funes-harvey", "huggingface"),
       });
+      expect(call.env.HF_HUB_DISABLE_IMPLICIT_TOKEN).toEqual({
+        present: true,
+        value: "1",
+      });
       for (const name of [
         "FUNES_BIN",
         "FUNES_MEMORY",
         "FUNES_TRUFFLEHOG",
         "HF_HUB_CACHE",
+        "HF_ENDPOINT",
         "HF_TOKEN",
+        "HF_TOKEN_PATH",
         "HUGGING_FACE_HUB_TOKEN",
         "HUGGINGFACE_TOKEN",
       ]) {
