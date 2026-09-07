@@ -382,6 +382,33 @@ describe("funes-memory export", () => {
     expect(result.stderr).toContain("rebuild explicitly");
   });
 
+  it("rejects selective witness cleanup while the old Funes index survives", () => {
+    const root = fixtureRoot();
+    writeFixture(
+      root,
+      `${FIRST_ENTRY}${SUFFIXED_ENTRY}`,
+      [
+        { id: "D-001", date: "2026-08-03" },
+        { id: "D-002a", date: "2026-08-04" },
+      ],
+    );
+    expectSuccess(runCli(root, ["export"]));
+    const state = join(root, ".funes-harvey");
+    mkdirSync(join(state, "funes"));
+    writeFileSync(join(state, "funes", "state.json"), "old index\n");
+    rmSync(join(state, "source"), { recursive: true });
+    rmSync(join(state, "export-manifest.json"));
+    writeFixture(
+      root,
+      SUFFIXED_ENTRY.replace("legacy suffix", "mutated suffix"),
+      [{ id: "D-002a", date: "2026-08-04" }],
+    );
+
+    const result = runCli(root, ["export"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/pre-existing local Funes state without its export manifest.*rebuild/i);
+  });
+
   it("refuses unexplained extras in the generated source directory", () => {
     const root = fixtureRoot();
     writeFixture(root, FIRST_ENTRY, [{ id: "D-001", date: "2026-08-03" }]);
@@ -510,8 +537,30 @@ describe("funes-memory process boundary", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/state cannot contain symlinks.*huggingface\/hub/i);
+    expect(result.stderr).toMatch(/symlink escapes.*huggingface\/hub/i);
     expect(existsSync(fake.log)).toBe(false);
+  });
+
+  it("allows Hugging Face-style symlinks that stay inside local state", () => {
+    const root = fixtureRoot();
+    const fake = installFakeFunes(root);
+    const huggingface = join(root, ".funes-harvey", "huggingface");
+    const model = join(huggingface, "hub", "models--BAAI--bge-small");
+    mkdirSync(join(model, "blobs"), { recursive: true });
+    mkdirSync(join(model, "snapshots", "commit"), { recursive: true });
+    writeFileSync(join(model, "blobs", "hash"), "local model\n");
+    symlinkSync(join("..", "..", "blobs", "hash"), join(model, "snapshots", "commit", "model"));
+
+    const result = runCli(root, ["recall", "why?"], {
+      FUNES_BIN: fake.bin,
+      FAKE_FUNES_LOG: fake.log,
+    });
+
+    expectSuccess(result);
+    expect(fakeCalls(fake.log).map((call) => call.argv)).toEqual([
+      ["--version"],
+      ["recall", "--memory", "local", "--half-life", "0", "--", "why?"],
+    ]);
   });
 
   it("pins recall to local memory and treats a leading --memory as query text", () => {
