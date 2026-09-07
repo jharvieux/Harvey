@@ -97,6 +97,7 @@ function installFakeFunes(root: string, version = "1.3.0", commandStatus = 0): {
     "FUNES_TRUFFLEHOG",
     "HF_HOME",
     "HF_HUB_CACHE",
+    "HUGGINGFACE_HUB_CACHE",
     "HF_HUB_DISABLE_IMPLICIT_TOKEN",
     "HF_ENDPOINT",
     "HF_TOKEN",
@@ -335,7 +336,7 @@ describe("funes-memory export", () => {
     );
     const result = runCli(root, ["export"]);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("historical generated file was modified: D-001.jsonl");
+    expect(result.stderr).toContain("changed historical decisions: D-001");
     expect(readFileSync(generatedPath(root, "D-001")).equals(original)).toBe(true);
     expect(existsSync(generatedPath(root, "D-002a"))).toBe(false);
   });
@@ -355,7 +356,24 @@ describe("funes-memory export", () => {
 
     const result = runCli(root, ["export"]);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("generated file for removed decision D-001 still exists");
+    expect(result.stderr).toContain("removed decisions: D-001.jsonl");
+  });
+
+  it("uses the independent manifest when a historical generated file is missing", () => {
+    const root = fixtureRoot();
+    writeFixture(root, FIRST_ENTRY, [{ id: "D-001", date: "2026-08-03" }]);
+    expectSuccess(runCli(root, ["export"]));
+    rmSync(generatedPath(root, "D-001"));
+
+    writeFixture(
+      root,
+      FIRST_ENTRY.replace("horizontal rule", "changed rule"),
+      [{ id: "D-001", date: "2026-08-03" }],
+    );
+    const result = runCli(root, ["export"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("changed historical decisions: D-001");
+    expect(result.stderr).toContain("rebuild explicitly");
   });
 
   it("refuses unexplained extras in the generated source directory", () => {
@@ -381,7 +399,10 @@ describe("funes-memory process boundary", () => {
       FUNES_MEMORY: "hf://datasets/attacker/remote",
       FUNES_TRUFFLEHOG: "/tmp/untrusted-trufflehog",
       HF_HUB_CACHE: "/tmp/outside-cache",
+      HUGGINGFACE_HUB_CACHE: "/tmp/outside-legacy-cache",
+      HF_ENDPOINT: "https://attacker.invalid",
       HF_TOKEN: "hf-secret-one",
+      HF_TOKEN_PATH: "/tmp/operator-token",
       HUGGING_FACE_HUB_TOKEN: "hf-secret-two",
       HUGGINGFACE_TOKEN: "hf-secret-three",
       FAKE_FUNES_LOG: fake.log,
@@ -411,6 +432,14 @@ describe("funes-memory process boundary", () => {
         present: true,
         value: join(root, ".funes-harvey", "huggingface"),
       });
+      expect(call.env.HF_HUB_CACHE).toEqual({
+        present: true,
+        value: join(root, ".funes-harvey", "huggingface", "hub"),
+      });
+      expect(call.env.HUGGINGFACE_HUB_CACHE).toEqual({
+        present: true,
+        value: join(root, ".funes-harvey", "huggingface", "hub"),
+      });
       expect(call.env.HF_HUB_DISABLE_IMPLICIT_TOKEN).toEqual({
         present: true,
         value: "1",
@@ -419,7 +448,6 @@ describe("funes-memory process boundary", () => {
         "FUNES_BIN",
         "FUNES_MEMORY",
         "FUNES_TRUFFLEHOG",
-        "HF_HUB_CACHE",
         "HF_ENDPOINT",
         "HF_TOKEN",
         "HF_TOKEN_PATH",
@@ -456,6 +484,7 @@ describe("funes-memory process boundary", () => {
       FAKE_FUNES_LOG: fake.log,
     });
     expectSuccess(result);
+    expect(result.stderr).toMatch(/navigation only.*verify every hit.*MEMORY\.md/i);
     const calls = fakeCalls(fake.log);
     expect(calls.map((call) => call.argv)).toEqual([
       ["--version"],

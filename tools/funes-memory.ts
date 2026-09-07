@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -13,6 +16,8 @@ const REQUIRED_FUNES_VERSION = "1.3.0";
 const MEMORY_FILE = "MEMORY.md";
 const LEAN_INDEX_FILE = "MEMORY-INDEX.md";
 const ARCHIVE_INDEX_FILE = "MEMORY-INDEX-ARCHIVE.md";
+const EXPORT_MANIFEST_FILE = "export-manifest.json";
+const EXPORT_MANIFEST_VERSION = 1;
 const DECISION_HEADER = /^## (D-\d+[a-z]?) — (\d{4}-\d{2}-\d{2}) —/gm;
 const INDEX_ENTRY = /^- (D-\d+[a-z]?) — (\d{4}-\d{2}-\d{2}) — (\S.*)$/;
 
@@ -32,6 +37,11 @@ interface ExportResult {
   added: number;
   unchanged: number;
   sourceDirectory: string;
+}
+
+interface ExportManifest {
+  version: typeof EXPORT_MANIFEST_VERSION;
+  entries: Record<string, string>;
 }
 
 class CliFailure extends Error {
@@ -209,6 +219,71 @@ function ensureDirectory(path: string, label: string): void {
   }
 }
 
+function digest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function rebuildInstruction(): string {
+  return "Move or remove .funes-harvey and rerun the export to rebuild explicitly.";
+}
+
+function readExportManifest(adapterDirectory: string): ExportManifest | undefined {
+  const path = join(adapterDirectory, EXPORT_MANIFEST_FILE);
+  if (!existsSync(path)) return undefined;
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new CliFailure(`Funes export manifest must be a regular file. ${rebuildInstruction()}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new CliFailure(`Invalid Funes export manifest: ${detail}. ${rebuildInstruction()}`);
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    (parsed as { version?: unknown }).version !== EXPORT_MANIFEST_VERSION ||
+    typeof (parsed as { entries?: unknown }).entries !== "object" ||
+    (parsed as { entries?: unknown }).entries === null ||
+    Array.isArray((parsed as { entries?: unknown }).entries)
+  ) {
+    throw new CliFailure(`Invalid Funes export manifest schema. ${rebuildInstruction()}`);
+  }
+
+  const entries = (parsed as { entries: Record<string, unknown> }).entries;
+  for (const [name, hash] of Object.entries(entries)) {
+    if (!/^D-\d+[a-z]?\.jsonl$/.test(name) || !/^[0-9a-f]{64}$/.test(String(hash))) {
+      throw new CliFailure(
+        `Invalid Funes export manifest entry ${JSON.stringify(name)}. ${rebuildInstruction()}`,
+      );
+    }
+  }
+  return parsed as ExportManifest;
+}
+
+function writeExportManifest(adapterDirectory: string, manifest: ExportManifest): void {
+  const path = join(adapterDirectory, EXPORT_MANIFEST_FILE);
+  const temporaryPath = `${path}.tmp-${process.pid}`;
+  if (existsSync(temporaryPath)) {
+    throw new CliFailure(`Refusing pre-existing temporary Funes manifest: ${temporaryPath}`);
+  }
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new CliFailure(`Could not write Funes export manifest: ${detail}`);
+  }
+}
+
 function exportMemory(root: string): ExportResult {
   const decisions = parseDecisions(readRequiredFile(root, MEMORY_FILE));
   const lean = parseIndex(readRequiredFile(root, LEAN_INDEX_FILE), LEAN_INDEX_FILE);
@@ -226,19 +301,38 @@ function exportMemory(root: string): ExportResult {
   const existingNames = readEntriesLstatSafe(sourceDirectory).sort((left, right) =>
     compareText(left.name, right.name),
   );
+  const manifest = readExportManifest(adapterDirectory);
+  if (!manifest && existingNames.length > 0) {
+    throw new CliFailure(`Refusing unmanifested historical generated files. ${rebuildInstruction()}`);
+  }
+  const historical = manifest?.entries ?? {};
+
+  const removed = Object.keys(historical)
+    .filter((name) => !expected.has(name))
+    .sort(compareText);
+  const mutated = Object.entries(historical)
+    .filter(([name, hash]) => {
+      const generated = expected.get(name);
+      return generated !== undefined && digest(generated.bytes) !== hash;
+    })
+    .map(([name]) => name.replace(/\.jsonl$/, ""))
+    .sort(compareText);
+  if (removed.length > 0 || mutated.length > 0) {
+    const details = [
+      removed.length > 0 ? `removed decisions: ${removed.join(", ")}` : undefined,
+      mutated.length > 0 ? `changed historical decisions: ${mutated.join(", ")}` : undefined,
+    ].filter((detail): detail is string => detail !== undefined);
+    throw new CliFailure(`Refusing append-only export: ${details.join("; ")}. ${rebuildInstruction()}`);
+  }
+
   const existing = new Set<string>();
 
   for (const entry of existingNames) {
-    const generated = expected.get(entry.name);
-    if (!generated) {
-      const removed = /^(D-\d+[a-z]?)\.jsonl$/.exec(entry.name)?.[1];
-      if (removed) {
-        throw new CliFailure(
-          `Refusing append-only export: generated file for removed decision ${removed} still exists`,
-        );
-      }
+    if (!(entry.name in historical)) {
       throw new CliFailure(`Refusing append-only export: unexplained extra in source directory: ${entry.name}`);
     }
+    const generated = expected.get(entry.name);
+    if (!generated) throw new CliFailure(`Internal manifest mismatch for ${entry.name}`);
     if (!entry.isFile || entry.isSymbolicLink) {
       throw new CliFailure(`Refusing append-only export: historical generated path is not a regular file: ${entry.name}`);
     }
@@ -247,6 +341,15 @@ function exportMemory(root: string): ExportResult {
       throw new CliFailure(`Refusing append-only export: historical generated file was modified: ${entry.name}`);
     }
     existing.add(entry.name);
+  }
+
+  const missingHistorical = Object.keys(historical)
+    .filter((name) => !existing.has(name))
+    .sort(compareText);
+  if (missingHistorical.length > 0) {
+    throw new CliFailure(
+      `Refusing append-only export: historical generated files are missing: ${missingHistorical.join(", ")}. ${rebuildInstruction()}`,
+    );
   }
 
   const additions = [...expected.entries()]
@@ -260,6 +363,17 @@ function exportMemory(root: string): ExportResult {
       throw new CliFailure(`Could not append generated source ${name}: ${detail}`);
     }
   }
+
+  const nextManifest: ExportManifest = {
+    version: EXPORT_MANIFEST_VERSION,
+    entries: Object.fromEntries(
+      decisions.map((decision) => {
+        const name = `${decision.id}.jsonl`;
+        return [name, digest(expected.get(name)?.bytes ?? "")];
+      }),
+    ),
+  };
+  if (!manifest || additions.length > 0) writeExportManifest(adapterDirectory, nextManifest);
 
   return { added: additions.length, unchanged: existing.size, sourceDirectory };
 }
@@ -279,11 +393,12 @@ function sanitizedFunesEnvironment(root: string): NodeJS.ProcessEnv {
   delete env.HF_TOKEN;
   delete env.HUGGING_FACE_HUB_TOKEN;
   delete env.HUGGINGFACE_TOKEN;
-  delete env.HF_HUB_CACHE;
   delete env.HF_TOKEN_PATH;
   delete env.HF_ENDPOINT;
   env.FUNES_HOME = funesHome;
   env.HF_HOME = hfHome;
+  env.HF_HUB_CACHE = join(hfHome, "hub");
+  env.HUGGINGFACE_HUB_CACHE = env.HF_HUB_CACHE;
   env.HF_HUB_DISABLE_IMPLICIT_TOKEN = "1";
   return env;
 }
@@ -372,6 +487,7 @@ function main(args: readonly string[]): void {
     const query = rest.join(" ").trim();
     if (!query) throw new CliFailure("recall requires a non-empty query");
     runFunes(root, ["recall", "--memory", "local", "--half-life", "0", "--", query]);
+    console.error("Funes recall is navigation only; verify every hit against authoritative MEMORY.md before relying on it.");
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
