@@ -29,9 +29,30 @@ Do not duplicate these files into prompts or rely on remembered counts.
 | Coverage-guard state | `docs/design/coverage-guard-status.md` |
 | Engagement operations | `docs/runbooks/` |
 | Current handoff and volatile state | `SESSION.md` |
+| Durable project decisions | `MEMORY-INDEX.md`, then targeted lookup in `MEMORY.md` |
+| Record a durable decision | `.agents/skills/memory-entry/SKILL.md` |
 | Historical agent doctrine and rationale | `docs/runbooks/agent-doctrine.md` |
 
 When a task matches an available skill, read its complete `SKILL.md` before acting. Follow referenced files only as needed. Prefer skills over re-embedding their procedure here.
+
+## Durable memory
+
+Resolve repository-owned context in this order: the current explicit user direction;
+this `AGENTS.md` and the applicable workflow skill; the named source of truth for the
+task; durable decisions in `MEMORY.md`; then transient state in `SESSION.md`. Current
+code and command output remain the evidence for what the tree actually does. Surface a
+conflict instead of silently letting a lower-authority source override a higher one.
+
+At session start, read `MEMORY-INDEX.md`, not the full decision log. Search
+`MEMORY-INDEX-ARCHIVE.md` and then read only matching entries in `MEMORY.md` when the
+task touches older context. Prior `MEMORY.md` entries are immutable. Use the
+`memory-entry` skill for a significant user-approved decision and mirror its exact
+header into the lean index; new entries never start in the archive.
+
+The primary supervisor is the sole writer of all three memory files. Delegated
+executors return a structured proposal without choosing a number or editing them.
+`SESSION.md` remains last-write-wins handoff state: neither it nor durable memory
+authorizes work, resumes a paused workflow, or overrides the user's current request.
 
 ## Audit invariants
 
