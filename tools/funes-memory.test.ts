@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
-  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -18,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO_ROOT, "tools", "funes-memory.ts");
+const TSX_LOADER = createRequire(import.meta.url).resolve("tsx/esm");
 const SCRATCH: string[] = [];
 
 interface IndexFixture {
@@ -67,7 +69,7 @@ function writeFixture(
 }
 
 function runCli(root: string, args: readonly string[], env: NodeJS.ProcessEnv = {}): ReturnType<typeof spawnSync> {
-  return spawnSync(process.execPath, [CLI, ...args], {
+  return spawnSync(process.execPath, ["--import", TSX_LOADER, CLI, ...args], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, ...env },
@@ -279,13 +281,13 @@ describe("funes-memory export", () => {
     const before = readFileSync(path);
     const oldTime = new Date("2001-02-03T04:05:06.000Z");
     utimesSync(path, oldTime, oldTime);
-    const mtime = statSync(path, { bigint: true }).mtimeNs;
+    const mtime = lstatSync(path, { bigint: true }).mtimeNs;
 
     const second = runCli(root, ["export"]);
     expectSuccess(second);
     expect(second.stdout).toContain("0 added, 1 unchanged");
     expect(readFileSync(path).equals(before)).toBe(true);
-    expect(statSync(path, { bigint: true }).mtimeNs).toBe(mtime);
+    expect(lstatSync(path, { bigint: true }).mtimeNs).toBe(mtime);
   });
 
   it("adds a new decision without rewriting the historical source", () => {
@@ -296,7 +298,7 @@ describe("funes-memory export", () => {
     const firstBytes = readFileSync(firstPath);
     const oldTime = new Date("2002-03-04T05:06:07.000Z");
     utimesSync(firstPath, oldTime, oldTime);
-    const firstMtime = statSync(firstPath, { bigint: true }).mtimeNs;
+    const firstMtime = lstatSync(firstPath, { bigint: true }).mtimeNs;
 
     writeFixture(
       root,
@@ -310,7 +312,7 @@ describe("funes-memory export", () => {
     expectSuccess(addition);
     expect(addition.stdout).toContain("1 added, 1 unchanged");
     expect(readFileSync(firstPath).equals(firstBytes)).toBe(true);
-    expect(statSync(firstPath, { bigint: true }).mtimeNs).toBe(firstMtime);
+    expect(lstatSync(firstPath, { bigint: true }).mtimeNs).toBe(firstMtime);
     expect(existsSync(generatedPath(root, "D-002a"))).toBe(true);
   });
 

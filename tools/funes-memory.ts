@@ -4,10 +4,10 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { readEntriesLstatSafe } from "../src/fs-walk.js";
 
 const REQUIRED_FUNES_VERSION = "1.3.0";
 const MEMORY_FILE = "MEMORY.md";
@@ -223,7 +223,7 @@ function exportMemory(root: string): ExportResult {
   const expected = new Map(
     decisions.map((decision) => [`${decision.id}.jsonl`, { decision, bytes: jsonlFor(decision) }]),
   );
-  const existingNames = readdirSync(sourceDirectory, { withFileTypes: true }).sort((left, right) =>
+  const existingNames = readEntriesLstatSafe(sourceDirectory).sort((left, right) =>
     compareText(left.name, right.name),
   );
   const existing = new Set<string>();
@@ -239,7 +239,7 @@ function exportMemory(root: string): ExportResult {
       }
       throw new CliFailure(`Refusing append-only export: unexplained extra in source directory: ${entry.name}`);
     }
-    if (!entry.isFile() || entry.isSymbolicLink()) {
+    if (!entry.isFile || entry.isSymbolicLink) {
       throw new CliFailure(`Refusing append-only export: historical generated path is not a regular file: ${entry.name}`);
     }
     const actual = readFileSync(join(sourceDirectory, entry.name));
