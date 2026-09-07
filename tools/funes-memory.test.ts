@@ -96,8 +96,13 @@ function installFakeFunes(root: string, version = "1.3.0", commandStatus = 0): {
     "FUNES_MEMORY",
     "FUNES_TRUFFLEHOG",
     "HF_HOME",
+    "HF_ASSETS_CACHE",
     "HF_HUB_CACHE",
     "HUGGINGFACE_HUB_CACHE",
+    "HF_XET_CACHE",
+    "HF_FUTURE_ESCAPE",
+    "HUGGINGFACE_FUTURE_ESCAPE",
+    "HUGGING_FACE_FUTURE_ESCAPE",
     "HF_HUB_DISABLE_IMPLICIT_TOKEN",
     "HF_ENDPOINT",
     "HF_TOKEN",
@@ -400,9 +405,14 @@ describe("funes-memory process boundary", () => {
       FUNES_TRUFFLEHOG: "/tmp/untrusted-trufflehog",
       HF_HUB_CACHE: "/tmp/outside-cache",
       HUGGINGFACE_HUB_CACHE: "/tmp/outside-legacy-cache",
+      HF_XET_CACHE: "/tmp/outside-xet-cache",
+      HF_ASSETS_CACHE: "/tmp/outside-assets-cache",
       HF_ENDPOINT: "https://attacker.invalid",
       HF_TOKEN: "hf-secret-one",
       HF_TOKEN_PATH: "/tmp/operator-token",
+      HF_FUTURE_ESCAPE: "/tmp/outside-future-cache",
+      HUGGINGFACE_FUTURE_ESCAPE: "/tmp/outside-future-huggingface",
+      HUGGING_FACE_FUTURE_ESCAPE: "/tmp/outside-future-hugging-face",
       HUGGING_FACE_HUB_TOKEN: "hf-secret-two",
       HUGGINGFACE_TOKEN: "hf-secret-three",
       FAKE_FUNES_LOG: fake.log,
@@ -440,6 +450,14 @@ describe("funes-memory process boundary", () => {
         present: true,
         value: join(root, ".funes-harvey", "huggingface", "hub"),
       });
+      expect(call.env.HF_XET_CACHE).toEqual({
+        present: true,
+        value: join(root, ".funes-harvey", "huggingface", "xet"),
+      });
+      expect(call.env.HF_ASSETS_CACHE).toEqual({
+        present: true,
+        value: join(root, ".funes-harvey", "huggingface", "assets"),
+      });
       expect(call.env.HF_HUB_DISABLE_IMPLICIT_TOKEN).toEqual({
         present: true,
         value: "1",
@@ -451,6 +469,9 @@ describe("funes-memory process boundary", () => {
         "HF_ENDPOINT",
         "HF_TOKEN",
         "HF_TOKEN_PATH",
+        "HF_FUTURE_ESCAPE",
+        "HUGGINGFACE_FUTURE_ESCAPE",
+        "HUGGING_FACE_FUTURE_ESCAPE",
         "HUGGING_FACE_HUB_TOKEN",
         "HUGGINGFACE_TOKEN",
       ]) {

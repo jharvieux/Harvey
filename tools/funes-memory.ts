@@ -388,17 +388,21 @@ function sanitizedFunesEnvironment(root: string): NodeJS.ProcessEnv {
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(env)) {
-    if (name.startsWith("FUNES_")) delete env[name];
+    if (
+      name.startsWith("FUNES_") ||
+      name.startsWith("HF_") ||
+      name.startsWith("HUGGINGFACE_") ||
+      name.startsWith("HUGGING_FACE_")
+    ) {
+      delete env[name];
+    }
   }
-  delete env.HF_TOKEN;
-  delete env.HUGGING_FACE_HUB_TOKEN;
-  delete env.HUGGINGFACE_TOKEN;
-  delete env.HF_TOKEN_PATH;
-  delete env.HF_ENDPOINT;
   env.FUNES_HOME = funesHome;
   env.HF_HOME = hfHome;
   env.HF_HUB_CACHE = join(hfHome, "hub");
   env.HUGGINGFACE_HUB_CACHE = env.HF_HUB_CACHE;
+  env.HF_XET_CACHE = join(hfHome, "xet");
+  env.HF_ASSETS_CACHE = join(hfHome, "assets");
   env.HF_HUB_DISABLE_IMPLICIT_TOKEN = "1";
   return env;
 }
