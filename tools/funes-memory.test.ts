@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -493,6 +494,24 @@ describe("funes-memory process boundary", () => {
     expect(result.stderr).toContain("Funes 1.3.0 is required");
     expect(existsSync(generatedPath(root, "D-001"))).toBe(true);
     expect(fakeCalls(fake.log).map((call) => call.argv)).toEqual([["--version"]]);
+  });
+
+  it("refuses nested state symlinks before Funes can write through them", () => {
+    const root = fixtureRoot();
+    const outside = fixtureRoot();
+    const fake = installFakeFunes(root);
+    mkdirSync(join(root, ".funes-harvey"));
+    mkdirSync(join(root, ".funes-harvey", "huggingface"));
+    symlinkSync(outside, join(root, ".funes-harvey", "huggingface", "hub"));
+
+    const result = runCli(root, ["recall", "why?"], {
+      FUNES_BIN: fake.bin,
+      FAKE_FUNES_LOG: fake.log,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/state cannot contain symlinks.*huggingface\/hub/i);
+    expect(existsSync(fake.log)).toBe(false);
   });
 
   it("pins recall to local memory and treats a leading --memory as query text", () => {

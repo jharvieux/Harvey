@@ -219,6 +219,25 @@ function ensureDirectory(path: string, label: string): void {
   }
 }
 
+function rejectStateSymlinks(root: string): void {
+  if (!existsSync(root)) return;
+  const rootStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new CliFailure(`Local Funes state must be a real directory: ${root}`);
+  }
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) break;
+    for (const entry of readEntriesLstatSafe(directory)) {
+      if (entry.isSymbolicLink) {
+        throw new CliFailure(`Local Funes state cannot contain symlinks: ${entry.path}`);
+      }
+      if (entry.isDirectory) pending.push(entry.path);
+    }
+  }
+}
+
 function digest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -385,6 +404,7 @@ function sanitizedFunesEnvironment(root: string): NodeJS.ProcessEnv {
   const hfHome = join(adapterDirectory, "huggingface");
   ensureDirectory(funesHome, "FUNES_HOME");
   ensureDirectory(hfHome, "HF_HOME");
+  rejectStateSymlinks(adapterDirectory);
 
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(env)) {
@@ -443,12 +463,14 @@ function runFunes(root: string, args: readonly string[]): void {
   const executable = funesExecutable();
   const env = sanitizedFunesEnvironment(root);
   requireFunesVersion(root, executable, env);
+  rejectStateSymlinks(join(root, ".funes-harvey"));
   const result = spawnSync(executable, [...args], {
     cwd: root,
     env,
     shell: false,
     stdio: "inherit",
   });
+  rejectStateSymlinks(join(root, ".funes-harvey"));
   if (result.error) {
     throw new CliFailure(`Could not execute ${JSON.stringify(executable)}: ${result.error.message}`);
   }
