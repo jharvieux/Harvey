@@ -9,18 +9,18 @@ export interface MemoryIssue {
   message: string;
 }
 
-export interface MemoryPopulation {
+interface MemoryPopulation {
   memory: number;
   index: number;
   archive: number;
 }
 
-export interface MemoryValidationResult {
+interface MemoryValidationResult {
   issues: MemoryIssue[];
   population: MemoryPopulation;
 }
 
-export interface BranchMemoryState {
+interface BranchMemoryState {
   /** MEMORY.md at the merge base, or null when the file did not exist there. */
   ancestorMemory: string | null;
   /** MEMORY.md at the target base ref, or null when the file does not exist there. */
@@ -29,7 +29,7 @@ export interface BranchMemoryState {
   currentMemory: string;
 }
 
-export interface BranchMemoryValidationResult {
+interface BranchMemoryValidationResult {
   addedIds: string[];
   issues: MemoryIssue[];
 }
