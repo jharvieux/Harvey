@@ -232,6 +232,11 @@ export const NOT_SCORED: readonly StructuralGate[] = [
     why: "structural — compares the source-derived M9 taxonomy registry bidirectionally with docs/m9-app-router.md Checks headers (#1640)",
     verificationTest: "src/detectors/m9-taxonomy-docs.test.ts",
   },
+  {
+    id: "validate-memory",
+    why: "structural — checks durable decision history, index consistency, sequential numbering, and target-base ownership; reports violations and population, not a product score",
+    verificationTest: "src/memory-repository.test.ts",
+  },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
