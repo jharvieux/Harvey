@@ -156,6 +156,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The real-file memory validator compares the branch against origin/main.
+          # A shallow checkout would remove that production acceptance seam.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

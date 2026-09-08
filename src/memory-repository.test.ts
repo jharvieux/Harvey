@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -65,29 +65,11 @@ function git(repo: string, ...args: string[]): void {
   execFileSync("git", args, { cwd: repo, stdio: "ignore" });
 }
 
-function hasCommitRef(repo: string, ref: string): boolean {
-  return (
-    spawnSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
-      cwd: repo,
-      stdio: "ignore",
-    }).status === 0
-  );
-}
-
-function checkedInMemoryBase(repo: string): "origin/main" | "HEAD" {
-  // GitHub Actions uses a deliberately shallow checkout, which has no origin/main
-  // ref. HEAD still exercises the checked-in ledger and index invariants; the
-  // synthetic repository below separately proves target-base collision detection.
-  return hasCommitRef(repo, "origin/main") ? "origin/main" : "HEAD";
-}
-
 describe("the production memory CLI against real files and Git refs", () => {
-  it("keeps the checked-in Harvey files consistent using origin/main or the shallow-checkout HEAD fallback", async () => {
-    const base = checkedInMemoryBase(REPO_ROOT);
-    const result = await runCli(["--repo", REPO_ROOT, "--base", base]);
+  it("keeps the checked-in Harvey files consistent and collision-free against origin/main", async () => {
+    const result = await runCli(["--repo", REPO_ROOT, "--base", "origin/main"]);
     expect(result.code, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("MEMORY POPULATION 1 full entries; 1 startup index; 0 archive");
-    expect(result.stdout).toContain(`MEMORY BASE ${base} ->`);
     expect(result.stdout).toContain("MEMORY GATE PASS");
   });
 
