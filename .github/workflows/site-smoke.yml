@@ -44,7 +44,7 @@ name: site-smoke
 
 on:
   schedule:
-    - cron: "15 8 * * *" # daily, after reasons-drift (08:00 UTC)
+    - cron: "15 8 * * *" # daily, after reasons-drift (08:07 UTC)
   workflow_dispatch:
     inputs:
       alert_drill:

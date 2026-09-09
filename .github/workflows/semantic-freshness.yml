@@ -27,7 +27,7 @@ name: semantic-freshness
 
 on:
   schedule:
-    - cron: "0 9 * * *" # Daily 09:00 UTC — after reasons-drift (08:00) and site-smoke (08:15)
+    - cron: "7 9 * * *" # Daily 09:07 UTC — after reasons-drift (08:07) and site-smoke (08:15)
   workflow_dispatch:
     inputs:
       alert_drill:
@@ -37,7 +37,7 @@ on:
   # On PRs too, but ONLY when the alarm's own moving parts move: the corpus dates, the freshness
   # rule, the CLI, or this file. This is NOT a required check, so a path filter here cannot deadlock
   # anything (#1107's rule applies to required contexts). A PR that edits `recordedOn` should hear
-  # about it before it merges, not at 09:00 the next morning.
+  # about it before it merges, not at 09:07 the next morning.
   pull_request:
     paths:
       - "src/scan/semantic-corpus.ts"

@@ -31,10 +31,10 @@
 name: free-recall
 
 on:
-  # 05:00 UTC on the 2nd. secbench takes 05:00 on the 1st; a day apart so the two monthly jobs that
+  # 05:13 UTC on the 2nd. secbench takes 05:07 on the 1st; a day apart so the two monthly jobs that
   # both clone external corpora and install the scanner binaries do not stack.
   schedule:
-    - cron: "0 5 2 * *"
+    - cron: "13 5 2 * *"
   workflow_dispatch:
     inputs:
       alert_drill:
