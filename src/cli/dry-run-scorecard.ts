@@ -16,9 +16,10 @@
 // its accepted no-mechanical-rule gap first-class: it scores "missed" while the gap holds, and if a
 // rule ever fires on the class the corpus gate fails loud (src/scan/calibration.ts).
 //
-//   pnpm exec tsx src/cli/dry-run.ts --out dry-run   # produces dry-run/findings.json first
-//   pnpm exec tsx src/cli/dry-run-scorecard.ts --findings dry-run/findings.json --out dry-run
+//   pnpm exec tsx src/cli/dry-run.ts --out dry-run   # publishes the complete family
+//   pnpm exec tsx src/cli/dry-run-scorecard.ts --findings dry-run/findings.json --out <separate-existing-directory>
 
+import "./sync-stdio.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,13 +163,7 @@ function loadDynamicScorecard(): DynamicScorecard | undefined {
   return JSON.parse(readFileSync(path, "utf8")) as DynamicScorecard;
 }
 
-function main(): void {
-  const findingsPath = arg("--findings", "dry-run/findings.json");
-  const outDir = arg("--out", "dry-run");
-
-  const findings = JSON.parse(readFileSync(findingsPath, "utf8")) as Finding[];
-  const dynamic = loadDynamicScorecard();
-
+export function buildDryRunScorecard(findings: Finding[], dynamic?: DynamicScorecard) {
   const bugs: GroundTruthBug[] = GROUND_TRUTH_BUGS.map((b) => ({
     id: b.id,
     severity: b.severity,
@@ -178,6 +173,18 @@ function main(): void {
   }));
   const scored = scoreCoverage(bugs);
   const summary = summarizeCoverage(scored);
+  return { summary, bugs: scored };
+}
+
+function main(): void {
+  const findingsPath = arg("--findings", "dry-run/findings.json");
+  const outDir = arg("--out", "dry-run");
+  if (existsSync(join(outDir, "artifact-family.json")) || existsSync(join(outDir, "findings-report.json"))) {
+    throw new Error("The dry-run scorecard belongs to an atomic artifact family. Regenerate it with pnpm exec tsx src/cli/dry-run.ts; use a separate --out directory for a standalone scorecard.");
+  }
+  const findings = JSON.parse(readFileSync(findingsPath, "utf8")) as Finding[];
+  const dynamic = loadDynamicScorecard();
+  const { summary, bugs: scored } = buildDryRunScorecard(findings, dynamic);
 
   writeFileSync(join(outDir, "scorecard.json"), JSON.stringify({ summary, bugs: scored }, null, 2));
 

@@ -113,5 +113,11 @@
       "tier": "high",
       "note": "M2 replay ANON-PRIVILEGED-RPC scored \"caught\" against http://127.0.0.1:3000 in the pen-test scorecard generated 2026-07-31T17:45:10.781Z: Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised by the DATABASE ENGINE from inside the function (\"null value in column \"tenant_id\" of relation \"audit_logs\" violates not-null constraint\") — the body executed as anon and a data constraint, not the function, stopped it); EXECUTE is granted to anon with no auth.uid() check."
     }
-  ]
+  ],
+  "artifactLinkage": {
+    "schemaVersion": 1,
+    "rawSha256": "20179369f1e3c644fcd654ae512d1aff100f909eb29fe94c776d11ac0980c849",
+    "targetTree": "447f5bd71b486781b2995e6dacbe6069eff3cf47",
+    "dynamicSha256": "c3d0ebf9a25a35dd8be1071bfb1c591f6034fc603da3bec48d19c4f83fd26b32"
+  }
 }

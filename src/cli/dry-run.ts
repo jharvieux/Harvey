@@ -1,6 +1,6 @@
 // Dry-run harness for the calibration target (issue #34). Runs every scan module that is
 // genuinely executable in a sandbox with no Docker/live DB against a target directory, timing
-// each phase and emitting a combined Finding[] + timing report + PII data map.
+// each phase and publishing raw findings, PII data, scorecard, report, and linkage receipt together.
 //
 //   pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run
 //
@@ -16,9 +16,10 @@
 
 import "./sync-stdio.js";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { recordMeasured } from "../ci-liveness.js";
 import { readEntriesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
@@ -29,6 +30,8 @@ import { classifyNoPolicyTables, grantFindings, type NoPolicyTable } from "../gr
 import { parseDefinerFunctions, parseRlsState } from "../migration-sql-parse.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
+import { buildDryRunFamily, publishDryRunFamily } from "../dry-run-artifacts.js";
+import type { DynamicScorecard } from "../pentest/scorecard.js";
 
 interface PhaseResult {
   phase: string;
@@ -109,7 +112,7 @@ function buildScratchTarget(targetDir: string): { scanDir: string; cleanup: () =
   // source tree has planted .env fixtures but the scratch repo's index doesn't have every one of
   // them, the force-add pass above regressed — a quietly-wrong dry run is worse than a crash that
   // names exactly which fixture went missing.
-  const expected = findEnvFixtures(targetDir);
+  const expected = findEnvFixtures(scanDir);
   if (expected.length > 0) {
     const tracked = new Set(execFileSync("git", ["-C", scanDir, "ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean));
     const missing = expected.filter((rel) => !tracked.has(rel));
@@ -136,11 +139,7 @@ function arg(flag: string, fallback: string): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
-async function main(): Promise<void> {
-  const targetDir = arg("--target", join(import.meta.dirname, "..", "..", "targets", "calibration"));
-  const outDir = arg("--out", join(import.meta.dirname, "..", "..", "dry-run"));
-  mkdirSync(outDir, { recursive: true });
-
+export async function generateDryRun(targetDir: string, outDir: string, dynamic?: DynamicScorecard): Promise<void> {
   const phases: PhaseResult[] = [];
   const allFindings: Finding[] = [];
 
@@ -148,9 +147,15 @@ async function main(): Promise<void> {
   // Scan a scratch copy (#343) rather than targetDir directly, so the scope guard's
   // git-tracked-only walk can't silently drop a planted .env fixture nobody force-added upstream.
   const scratch = buildScratchTarget(targetDir);
-  let mech: Awaited<ReturnType<typeof timePhase<Finding[]>>>;
   try {
-    mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
+    const source = {
+      target: relative(resolve(import.meta.dirname, "../.."), resolve(targetDir)).replaceAll("\\", "/"),
+      targetTree: execFileSync("git", ["write-tree"], { cwd: join(scratch.scanDir, ".."), encoding: "utf8" }).trim(),
+    };
+    // Retain the same snapshot until all producers and derived artifacts finish. Previously the
+    // mechanical scratch was removed here and M1/M10 reread a potentially changed original target.
+    const migrationSql = readMigrations(scratch.scanDir);
+    const mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
       // skipNetworkChecks: findings.json is committed and contractually deterministic across
       // machines (#285) — a live npm-registry call would let it drift on registry reachability,
       // not just the target/scanner. It pins off checkSlopsquat entirely and, since #1213,
@@ -160,72 +165,89 @@ async function main(): Promise<void> {
       // dry-run harness sets it.
       runMechanicalScan({ dir: scratch.scanDir, skipNetworkChecks: true, skipBundleScan: true }),
     );
+    mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the live npm-registry lookups (slopsquat entirely, and license compliance's registry fallback — its lockfile classification still ran) which are skipped to keep this artifact network-independent.";
+    phases.push(mech.report);
+    allFindings.push(...mech.findings);
+
+    // --- M1 detect-deeper: grant/definer classifiers fed from parsed migration SQL ---
+    const m1Deeper = await timePhase("M1 detect-deeper", "grant/definer classifiers (static migration-SQL feed, no live DB)", () => {
+      const definerFns: DefinerFunction[] = parseDefinerFunctions(migrationSql).map((fn) => ({
+        ...fn,
+        exposedTo: ASSUMED_DEFAULT_FUNCTION_EXPOSURE,
+      }));
+      const definerVerdicts = classifyDefinerFunctions(definerFns);
+
+      const rlsState = parseRlsState(migrationSql, migrationSql);
+      const noPolicyCandidates: NoPolicyTable[] = rlsState
+        .filter((t) => t.rlsEnabled && !t.hasPolicy)
+        .map((t) => ({ schema: t.schema, table: t.table, grants: [], queriedByClientCode: false }));
+      const grantVerdicts = classifyNoPolicyTables(noPolicyCandidates);
+
+      return [...definerFindings(definerVerdicts), ...grantFindings(grantVerdicts)];
+    });
+    m1Deeper.report.notes = "exposedTo for SECURITY DEFINER functions is an assumed default (Postgres grants EXECUTE to PUBLIC unless revoked; no REVOKE found) — see ASSUMED_DEFAULT_FUNCTION_EXPOSURE. No-policy-table candidates require only structural RLS/policy presence, no live grants.";
+    phases.push(m1Deeper.report);
+    allFindings.push(...m1Deeper.findings);
+
+    // --- M10: PII data map over parsed migration columns ---
+    const piiPhase = await timePhase("M10", "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)", () => {
+      const { columns, dataMap, unknownType } = classifyMigrationSql(migrationSql);
+      return { columns, dataMap, unknownType };
+    });
+    const dataMap = piiPhase.result.dataMap;
+    const unknownTypeNote = piiPhase.result.unknownType.length
+      ? ` ${piiPhase.result.unknownType.length} column(s) had an unrecognized SQL type, classified by name only (#851).`
+      : "";
+    phases.push({
+      phase: "M10",
+      module: piiPhase.report.module,
+      ms: piiPhase.report.ms,
+      findingCount: Object.keys(dataMap).length,
+      notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.${unknownTypeNote}`,
+    });
+
+    // #975 — declare CWEs for the out-of-mechanical-scan classifier findings too (definer/grant);
+    // mech.findings are already enriched, and the pass is idempotent.
+    enrichFindingsCwe(allFindings);
+    // findings.json is committed, so it must be diffable across runs and machines (issue #285).
+    const portableFindings = allFindings.map((f) => ({ ...f, location: relativizeScanScope(f.location) }));
+    const unavailable = portableFindings.filter((f) => ["SEM-00", "SEC-TH-00", "SEC-GL-00", "DEP-OSV-00"].includes(f.id));
+    if (unavailable.length > 0) throw new Error(`Dry-run generation refused an incomplete mechanical run: ${unavailable.map((f) => `${f.id}: ${f.evidence}`).join("; ")}. Previous artifacts were not updated.`);
+    publishDryRunFamily(outDir, buildDryRunFamily(portableFindings, dataMap, source, dynamic), phases);
+
+    // #1509's second-order defect: the dry-run-drift job's own value is the DIFF, and a job that dies
+    // before regenerating anything diffs nothing and reports the same green as a job whose artifact was
+    // already correct. The receipt makes the regeneration phase assertable; the workflow records the
+    // diff phase separately.
+    recordMeasured("dry-run-regen", allFindings.length, `findings regenerated from ${targetDir}`);
+
+    console.log(`dry-run complete: ${allFindings.length} findings, ${Object.keys(dataMap).length} PII-bearing tables`);
+    for (const p of phases) console.log(`  ${p.phase.padEnd(20)} ${String(p.ms).padStart(8)}ms  ${p.module}`);
+    console.log(`\nPublished ${outDir}/{findings.json,pii-data-map.json,scorecard.json,findings-report.json,artifact-family.json,timing.json} as one validated family`);
   } finally {
     scratch.cleanup();
   }
-  mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the live npm-registry lookups (slopsquat entirely, and license compliance's registry fallback — its lockfile classification still ran) which are skipped to keep this artifact network-independent.";
-  phases.push(mech.report);
-  allFindings.push(...mech.findings);
-
-  // --- M1 detect-deeper: grant/definer classifiers fed from parsed migration SQL ---
-  const migrationSql = readMigrations(targetDir);
-  const m1Deeper = await timePhase("M1 detect-deeper", "grant/definer classifiers (static migration-SQL feed, no live DB)", () => {
-    const definerFns: DefinerFunction[] = parseDefinerFunctions(migrationSql).map((fn) => ({
-      ...fn,
-      exposedTo: ASSUMED_DEFAULT_FUNCTION_EXPOSURE,
-    }));
-    const definerVerdicts = classifyDefinerFunctions(definerFns);
-
-    const rlsState = parseRlsState(migrationSql, migrationSql);
-    const noPolicyCandidates: NoPolicyTable[] = rlsState
-      .filter((t) => t.rlsEnabled && !t.hasPolicy)
-      .map((t) => ({ schema: t.schema, table: t.table, grants: [], queriedByClientCode: false }));
-    const grantVerdicts = classifyNoPolicyTables(noPolicyCandidates);
-
-    return [...definerFindings(definerVerdicts), ...grantFindings(grantVerdicts)];
-  });
-  m1Deeper.report.notes = "exposedTo for SECURITY DEFINER functions is an assumed default (Postgres grants EXECUTE to PUBLIC unless revoked; no REVOKE found) — see ASSUMED_DEFAULT_FUNCTION_EXPOSURE. No-policy-table candidates require only structural RLS/policy presence, no live grants.";
-  phases.push(m1Deeper.report);
-  allFindings.push(...m1Deeper.findings);
-
-  // --- M10: PII data map over parsed migration columns ---
-  const piiPhase = await timePhase("M10", "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)", () => {
-    const { columns, dataMap, unknownType } = classifyMigrationSql(migrationSql);
-    return { columns, dataMap, unknownType };
-  });
-  const dataMap = piiPhase.result.dataMap;
-  const unknownTypeNote = piiPhase.result.unknownType.length
-    ? ` ${piiPhase.result.unknownType.length} column(s) had an unrecognized SQL type, classified by name only (#851).`
-    : "";
-  phases.push({
-    phase: "M10",
-    module: piiPhase.report.module,
-    ms: piiPhase.report.ms,
-    findingCount: Object.keys(dataMap).length,
-    notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.${unknownTypeNote}`,
-  });
-
-  // #975 — declare CWEs for the out-of-mechanical-scan classifier findings too (definer/grant);
-  // mech.findings are already enriched, and the pass is idempotent.
-  enrichFindingsCwe(allFindings);
-  // findings.json is committed, so it must be diffable across runs and machines (issue #285).
-  const portableFindings = allFindings.map((f) => ({ ...f, location: relativizeScanScope(f.location) }));
-  writeFileSync(join(outDir, "findings.json"), JSON.stringify(portableFindings, null, 2));
-  writeFileSync(join(outDir, "pii-data-map.json"), JSON.stringify(dataMap, null, 2));
-  writeFileSync(join(outDir, "timing.json"), JSON.stringify(phases, null, 2));
-
-  // #1509's second-order defect: the dry-run-drift job's own value is the DIFF, and a job that dies
-  // before regenerating anything diffs nothing and reports the same green as a job whose artifact was
-  // already correct. The receipt makes the regeneration phase assertable; the workflow records the
-  // diff phase separately.
-  recordMeasured("dry-run-regen", allFindings.length, `findings regenerated from ${targetDir}`);
-
-  console.log(`dry-run complete: ${allFindings.length} findings, ${Object.keys(dataMap).length} PII-bearing tables`);
-  for (const p of phases) console.log(`  ${p.phase.padEnd(20)} ${String(p.ms).padStart(8)}ms  ${p.module}`);
-  console.log(`\nWrote ${outDir}/{findings.json,pii-data-map.json,timing.json}`);
 }
 
-main().catch((err: unknown) => {
+async function main(): Promise<void> {
+  const calibration = resolve(import.meta.dirname, "../../targets/calibration");
+  const targetDir = arg("--target", calibration);
+  const outDir = arg("--out", resolve(import.meta.dirname, "../../dry-run"));
+  // Historical M2 evidence belongs only to calibration. Capture it once before any phase runs;
+  // the receipt retains its original target/date and digest, rather than claiming a new live run.
+  const explicit = process.argv.includes("--dynamic-scorecard");
+  const dynamicPath = arg("--dynamic-scorecard", resolve(import.meta.dirname, "../../dry-run/dynamic-scorecard.json"));
+  if (explicit && !existsSync(dynamicPath)) throw new Error(`--dynamic-scorecard ${dynamicPath} does not exist`);
+  const dynamic = (explicit || resolve(targetDir) === calibration) && existsSync(dynamicPath)
+    ? JSON.parse(readFileSync(dynamicPath, "utf8")) as DynamicScorecard : undefined;
+  for (const binary of ["semgrep", "trufflehog", "gitleaks", "osv-scanner"]) {
+    try { execFileSync(binary, ["--version"], { stdio: "pipe" }); }
+    catch { throw new Error(`Dry-run generation requires a working ${binary} binary on PATH; previous artifacts were not updated.`); }
+  }
+  await generateDryRun(targetDir, outDir, dynamic);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "canonicalization": "json-key-sorted-v1",
+  "producer": "src/cli/dry-run.ts",
+  "source": {
+    "target": "targets/calibration",
+    "targetTree": "447f5bd71b486781b2995e6dacbe6069eff3cf47"
+  },
+  "retainedDynamic": {
+    "role": "historical-dynamic-evidence",
+    "sha256": "c3d0ebf9a25a35dd8be1071bfb1c591f6034fc603da3bec48d19c4f83fd26b32",
+    "document": {
+      "target": "http://127.0.0.1:3000",
+      "generatedAt": "2026-07-31T17:45:10.781Z",
+      "allowDestructive": true,
+      "probes": [
+        {
+          "findingId": "SHADOW-API-VERSION",
+          "status": "caught",
+          "severity": "High",
+          "evidence": "Deprecated route /api/v1/export answered anon with 2 row(s); an old API version is left live with weaker auth than the current route."
+        },
+        {
+          "findingId": "NO-RATE-LIMIT",
+          "status": "caught",
+          "severity": "High",
+          "evidence": "/api/coupon/redeem accepted 5/5 repeated calls with no anti-automation/rate limit."
+        },
+        {
+          "findingId": "CACHE-CROSS-USER",
+          "status": "caught",
+          "severity": "High",
+          "evidence": "/api/me/summary returns a per-identity body under a shared-cache directive (Cache-Control: public, s-maxage=60) with no Vary on the credential (Vary: Accept-Encoding): the authenticated and anon bodies differ, so the response is per-identity; no shared cache sits in front of this origin in the harness, so the leak is proven from the origin's own directives rather than from a captured hit. Any CDN/proxy in front of this origin will store Tenant A's personalized response under the path and replay it to every later visitor."
+        },
+        {
+          "findingId": "ANON-PRIVILEGED-RPC",
+          "status": "caught",
+          "severity": "Critical",
+          "evidence": "Privileged RPC issue_refund executed with only the anon key (status 400, and the error it returned is the Postgres SQLSTATE 23502 raised by the DATABASE ENGINE from inside the function (\"null value in column \"tenant_id\" of relation \"audit_logs\" violates not-null constraint\") — the body executed as anon and a data constraint, not the function, stopped it); EXECUTE is granted to anon with no auth.uid() check."
+        }
+      ],
+      "summary": {
+        "caught": 4,
+        "cleared": 0,
+        "not-applicable": 0,
+        "not-run": 0,
+        "not-assessed": 0
+      }
+    }
+  },
+  "artifacts": {
+    "findings.json": {
+      "sha256": "20179369f1e3c644fcd654ae512d1aff100f909eb29fe94c776d11ac0980c849"
+    },
+    "pii-data-map.json": {
+      "sha256": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9"
+    },
+    "scorecard.json": {
+      "sha256": "efa2949f200e2032a17ca7cb707e232d887438cc0f646aff89c386642b4236c4"
+    },
+    "findings-report.json": {
+      "sha256": "fffd016a648d125e90da3091b3fe1274124d15b3ff7c4b21a409fe0ab6147f0c"
+    }
+  },
+  "transformations": {
+    "report": {
+      "kind": "findings-envelope-v1",
+      "reason": "Add report metadata and source linkage; preserve every raw finding occurrence and field. Rendering rollups remain downstream of this artifact seam.",
+      "produced": 797,
+      "delivered": 797,
+      "deduped": 0,
+      "suppressed": 0,
+      "capped": 0,
+      "notApplicable": 0,
+      "synthesized": 0
+    },
+    "scorecard": {
+      "kind": "calibration-scorecard-v1",
+      "reason": "Classify each planted bug against the gated corpus using this raw array and explicitly retained historical M2 evidence. This summary does not remove findings from the report."
+    }
+  }
+}

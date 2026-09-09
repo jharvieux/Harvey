@@ -2,17 +2,17 @@
   "meta": {
     "client": "Calibration target (internal dry run — issue #34)",
     "subtitle": "PARTIAL — mechanical scan + M1 detect-deeper only; no live DB/Docker in this pass",
-    "date": "2026-09-02",
-    "commit": "dry-run scratch snapshot (git-initialized copy of targets/calibration, see docs/runbooks/dry-run-calibration.md)",
+    "date": "Undated calibration snapshot",
+    "commit": "Retained target tree 447f5bd71b486781b2995e6dacbe6069eff3cf47",
     "auditor": "Harvey dry-run harness (src/cli/dry-run.ts)",
     "confidential": false,
     "overallHealth": 0,
-    "tenantIsolation": "NOT ASSESSED IN THIS PASS — the 3 planted RLS bugs (GROUND-TRUTH.md #1-#3) require either a live Supabase Advisor run or a manual/LLM policy-semantics read, neither of which ran here; see docs/runbooks/dry-run-calibration.md.",
+    "tenantIsolation": "NOT ASSESSED IN THIS PASS — no live Supabase Advisor or manual/LLM policy-semantics pass ran in this invocation.",
     "authModel": "N/A — not evaluated in this pass.",
-    "headline": "This is NOT a scored audit. It demonstrates the findings.json -> report render pipeline using REAL output from a real (partial) scan run. 6 of 12 GROUND-TRUTH.md planted bugs were asserted by high-precision rules; 5 were surfaced for review (review-tier findings a human must adjudicate); 1 missed; 0 require a live run. See the coverage scorecard (dry-run/scorecard.json) for why.",
-    "scope": "targets/calibration (mechanical scan: secrets/deps/semgrep/supply-chain/leftover-auth; M1 detect-deeper grant/definer classifiers fed from migration SQL; M10 PII data map).",
-    "methodology": "src/cli/dry-run.ts — see docs/runbooks/dry-run-calibration.md for exactly what ran and what didn't.",
-    "outOfScope": "Everything requiring Docker/a live DB or the LLM /threat-model+/vuln-scan+/triage pass — not available in this sandbox."
+    "headline": "This is NOT a scored audit. It demonstrates the findings.json -> report render pipeline using real output from one partial scan. 6 of 12 planted bugs were asserted; 5 were surfaced for review; 1 missed; 0 require a live run. M2 outcomes use historical evidence recorded 2026-07-31T17:45:10.781Z against http://127.0.0.1:3000; this invocation ran no dynamic probes. See scorecard.json and artifact-family.json for the source linkage.",
+    "scope": "targets/calibration (mechanical scan; M1 detect-deeper grant/definer classifiers fed from the same retained migration SQL; M10 PII data map).",
+    "methodology": "src/cli/dry-run.ts — findings are retained in full inside the report envelope; the scorecard is a separate classification of planted bugs, not a filtered finding set.",
+    "outOfScope": "Live DB, dynamic probes, built-bundle scanning, and the interactive semantic review were not executed by this invocation."
   },
   "findings": [
     {
@@ -1395,6 +1395,70 @@
       }
     },
     {
+      "id": "DEP-OSV-GHSA-2xp9-vwfh-vxw4-next@14.2.35",
+      "title": "next@14.2.35: Next.js: Unauthenticated Remote Code Execution in Image Optimization API when AVIF files are used (fixed in 15.5.24 / 16.3.3)",
+      "severity": "Critical",
+      "confidence": "Review",
+      "category": "Dependency CVE",
+      "taxonomy": "Known-vulnerable dependency",
+      "location": "package-lock.json (next@14.2.35)",
+      "status": "Open",
+      "evidence": "OSV-Scanner matched GHSA-2xp9-vwfh-vxw4 against next@14.2.35. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 15.5.24 / 16.3.3.",
+      "impact": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when AVIF files are used — A vulnerability in the underlying `libheif` library used by `sharp` which Next.js uses for image optimization can lead to remote code execution when AVIF files are optimized.",
+      "fix": "Upgrade next to 15.5.24 or later (see GHSA-2xp9-vwfh-vxw4).",
+      "value": 5,
+      "ease": 3,
+      "safety": 4,
+      "mechanical": true,
+      "precisionTier": "review",
+      "cwe": [
+        "CWE-1395"
+      ],
+      "dependency": "next",
+      "reachability": {
+        "status": "imported",
+        "rank": 0,
+        "files": [
+          "app/actions-auth.ts",
+          "app/actions.ts",
+          "app/admin/page-safe.tsx",
+          "app/api/ar-cors-reflected/route.ts",
+          "app/api/ar-cors-reflected-safe/route.ts",
+          "app/api/ar-debug-env/route.ts",
+          "app/api/ar-debug-env-safe/route.ts",
+          "app/api/ar-deser-cookie/route.ts",
+          "app/api/ar-src-redirect/route.ts",
+          "components/AnchorLink.jsx",
+          "components/ImgAttr.jsx",
+          "components/NavLink.jsx",
+          "components/Widget.jsx",
+          "lib/reset-link.js",
+          "middleware.ts",
+          "next.config.js",
+          "pages/api/preview/enable-safe.js",
+          "pages/api/preview/enable.js",
+          "pages/post.js",
+          "pages/search-results.js",
+          "src/client-url-source/csv-fast-csv-client-negative.ts",
+          "src/client-url-source/csv-json2csv-client-negative.ts",
+          "src/client-url-source/csv-papaparse-client-safe.ts",
+          "src/client-url-source/csv-papaparse-client.ts",
+          "src/client-url-source/csv-stringify-client-negative.ts",
+          "src/client-url-source/csv-xlsx-client.ts",
+          "src/client-url-source/dynamic-dispatch-client-safe.ts",
+          "src/client-url-source/dynamic-dispatch-client.ts",
+          "src/client-url-source/eval-client-safe.ts",
+          "src/client-url-source/eval-client.ts",
+          "src/client-url-source/new-function-client.ts",
+          "src/client-url-source/xxe-domparser-client-negative.ts",
+          "src/owasp-node/sensitive-response-cached.ts",
+          "src/owasp-node/sensitive-response-not-cached.ts",
+          "src/owasp-react/scope-control-innerhtml.tsx"
+        ],
+        "justification": "next is imported in 35 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +32 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      }
+    },
+    {
       "id": "DEP-OSV-GHSA-36qx-fr4f-26g5-next@14.2.35",
       "title": "next@14.2.35: Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n (fixed in 15.5.16 / 16.2.5)",
       "severity": "High",
@@ -2421,6 +2485,70 @@
       }
     },
     {
+      "id": "DEP-OSV-GHSA-p293-qw3h-jr36-next@14.2.35",
+      "title": "next@14.2.35: Next.js: Unauthenticated Remote Code Execution on windows-hosted servers (fixed in 15.5.24 / 16.3.3)",
+      "severity": "Critical",
+      "confidence": "Review",
+      "category": "Dependency CVE",
+      "taxonomy": "Known-vulnerable dependency",
+      "location": "package-lock.json (next@14.2.35)",
+      "status": "Open",
+      "evidence": "OSV-Scanner matched GHSA-p293-qw3h-jr36 (aliases: CVE-2026-75604) against next@14.2.35. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 15.5.24 / 16.3.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-75604.",
+      "impact": "Next.js: Unauthenticated Remote Code Execution on windows-hosted servers — A vulnerability in applications using Pages and App router without Cache Component can lead to remote code execution when the server is hosted on machines using a Windows filesystem.",
+      "fix": "Upgrade next to 15.5.24 or later (see GHSA-p293-qw3h-jr36).",
+      "value": 5,
+      "ease": 3,
+      "safety": 4,
+      "mechanical": true,
+      "precisionTier": "review",
+      "cwe": [
+        "CWE-22"
+      ],
+      "dependency": "next",
+      "reachability": {
+        "status": "imported",
+        "rank": 0,
+        "files": [
+          "app/actions-auth.ts",
+          "app/actions.ts",
+          "app/admin/page-safe.tsx",
+          "app/api/ar-cors-reflected/route.ts",
+          "app/api/ar-cors-reflected-safe/route.ts",
+          "app/api/ar-debug-env/route.ts",
+          "app/api/ar-debug-env-safe/route.ts",
+          "app/api/ar-deser-cookie/route.ts",
+          "app/api/ar-src-redirect/route.ts",
+          "components/AnchorLink.jsx",
+          "components/ImgAttr.jsx",
+          "components/NavLink.jsx",
+          "components/Widget.jsx",
+          "lib/reset-link.js",
+          "middleware.ts",
+          "next.config.js",
+          "pages/api/preview/enable-safe.js",
+          "pages/api/preview/enable.js",
+          "pages/post.js",
+          "pages/search-results.js",
+          "src/client-url-source/csv-fast-csv-client-negative.ts",
+          "src/client-url-source/csv-json2csv-client-negative.ts",
+          "src/client-url-source/csv-papaparse-client-safe.ts",
+          "src/client-url-source/csv-papaparse-client.ts",
+          "src/client-url-source/csv-stringify-client-negative.ts",
+          "src/client-url-source/csv-xlsx-client.ts",
+          "src/client-url-source/dynamic-dispatch-client-safe.ts",
+          "src/client-url-source/dynamic-dispatch-client.ts",
+          "src/client-url-source/eval-client-safe.ts",
+          "src/client-url-source/eval-client.ts",
+          "src/client-url-source/new-function-client.ts",
+          "src/client-url-source/xxe-domparser-client-negative.ts",
+          "src/owasp-node/sensitive-response-cached.ts",
+          "src/owasp-node/sensitive-response-not-cached.ts",
+          "src/owasp-react/scope-control-innerhtml.tsx"
+        ],
+        "justification": "next is imported in 35 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +32 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      }
+    },
+    {
       "id": "DEP-OSV-GHSA-p9j2-gv94-2wf4-next@14.2.35",
       "title": "next@14.2.35: Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname (fixed in 15.5.21 / 16.2.11)",
       "severity": "High",
@@ -2887,6 +3015,33 @@
       "precisionTier": "review",
       "cwe": [
         "CWE-1395"
+      ],
+      "dependency": "sharp",
+      "reachability": {
+        "status": "transitive-only",
+        "rank": 3,
+        "justification": "sharp is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+      }
+    },
+    {
+      "id": "DEP-OSV-GHSA-rgj7-g3m4-5g8c-sharp@0.34.5",
+      "title": "sharp@0.34.5: sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545 (fixed in 0.35.4)",
+      "severity": "High",
+      "confidence": "Review",
+      "category": "Dependency CVE",
+      "taxonomy": "Known-vulnerable dependency",
+      "location": "package-lock.json (sharp@0.34.5)",
+      "status": "Open",
+      "evidence": "OSV-Scanner matched GHSA-rgj7-g3m4-5g8c against sharp@0.34.5. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 0.35.4.",
+      "impact": "sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545 — The attack vector for these claims to be \"network\" however sharp does not provide any networking features so this vulnerability is down-rated to a \"High\" severity using CVSSv4 but please note its Subsequent System Impact.",
+      "fix": "Upgrade sharp to 0.35.4 or later (see GHSA-rgj7-g3m4-5g8c).",
+      "value": 4,
+      "ease": 3,
+      "safety": 4,
+      "mechanical": true,
+      "precisionTier": "review",
+      "cwe": [
+        "CWE-122"
       ],
       "dependency": "sharp",
       "reachability": {
@@ -28372,5 +28527,11 @@
       "notOkWhen": "The function returns or mutates rows for the passed id without also checking that id belongs to the calling user/tenant.",
       "okWhen": "The query additionally constrains by auth.uid()/auth.jwt(), or the id parameter is only ever the caller's own (enforced elsewhere and provably unspoofable)."
     }
-  ]
+  ],
+  "artifactLinkage": {
+    "schemaVersion": 1,
+    "rawSha256": "20179369f1e3c644fcd654ae512d1aff100f909eb29fe94c776d11ac0980c849",
+    "targetTree": "447f5bd71b486781b2995e6dacbe6069eff3cf47",
+    "dynamicSha256": "c3d0ebf9a25a35dd8be1071bfb1c591f6034fc603da3bec48d19c4f83fd26b32"
+  }
 }
