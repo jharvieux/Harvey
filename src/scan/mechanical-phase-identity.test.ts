@@ -1,10 +1,16 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CACHEABLE_MECHANICAL_PHASES } from "./mechanical-phase-cache.js";
 import { buildMechanicalPhaseCache, discoverMechanicalPhaseImplementationFiles } from "./mechanical-phase-identity.js";
 
 const yieldToVitestRpc = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+const IDENTITY_FIXTURE_PHASES = ["secrets-history", "dependency-advisory", ...CACHEABLE_MECHANICAL_PHASES] as const;
+const IDENTITY_FIXTURE_FILES = [
+  join(process.cwd(), "src", "scan", "mechanical.ts"),
+  ...IDENTITY_FIXTURE_PHASES.flatMap((phase) => discoverMechanicalPhaseImplementationFiles(process.cwd(), [phase])[phase] ?? []),
+];
 
 describe("mechanical phase implementation identities (#1864)", () => {
   const dirs: string[] = [];
@@ -16,8 +22,18 @@ describe("mechanical phase implementation identities (#1864)", () => {
   const fixture = (): string => {
     const root = mkdtempSync(join(tmpdir(), "harvey-phase-identity-"));
     dirs.push(root);
-    cpSync(join(process.cwd(), "src"), join(root, "src"), { recursive: true });
-    cpSync(join(process.cwd(), "tools"), join(root, "tools"), { recursive: true });
+    // The cache identity only reads these source closures. Copying the whole repository source tree
+    // made each assertion pay for thousands of unrelated files and could exhaust the 30 s Vitest
+    // budget under shared I/O pressure. Discovering the closures from production source keeps this
+    // fixture aligned with the real cache inputs; every copied source remains independently
+    // re-walked and digested after an edit in the temporary checkout.
+    for (const source of new Set(IDENTITY_FIXTURE_FILES)) {
+      const destination = join(root, relative(process.cwd(), source));
+      mkdirSync(dirname(destination), { recursive: true });
+      cpSync(source, destination);
+    }
+    cpSync(join(process.cwd(), "src", "scan", "rules", "semgrep"), join(root, "src", "scan", "rules", "semgrep"), { recursive: true });
+    cpSync(join(process.cwd(), "src", "scan", "rules", "gitleaks-supabase.toml"), join(root, "src", "scan", "rules", "gitleaks-supabase.toml"));
     cpSync(join(process.cwd(), "package.json"), join(root, "package.json"));
     cpSync(join(process.cwd(), "pnpm-lock.yaml"), join(root, "pnpm-lock.yaml"));
     writeFileSync(join(root, "registry.yml"), "rules: []\n");
