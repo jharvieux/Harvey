@@ -163,7 +163,7 @@ describe("mechanical live advisory parity (#1883)", () => {
     } }));
     const { inventoryOsvInputs } = await import("./dependencies.js");
     const provider = structuredClone(captured.result);
-    provider.results![0]!.packages!.push({ package: { name: "member", version: "0.0.0", ecosystem: "npm" } }, { package: { name: "member", version: "", ecosystem: "npm" } });
+    provider.results![0]!.packages!.push({ package: { name: "member", version: "0.0.0", ecosystem: "npm" }, vulnerabilities: [{ ...parityInput().results[0]!.packages[0]!.vulnerabilities[0]!, id: "GHSA-first-party-only" }] }, { package: { name: "member", version: "", ecosystem: "npm" } });
     const inventory = inventoryOsvInputs(dir);
     const actual = runOsvScanner(dir);
     // Preserve the production receipt algorithm by observing the added provider workspace rows.
@@ -175,10 +175,43 @@ describe("mechanical live advisory parity (#1883)", () => {
     const context = new MechanicalScanContext(dir);
     try {
       const early = await runRegisteredDependencyDetectors({ scanDir: dir, context, pkg: null, osv: withWorkspaces, skipNetworkChecks: true }, "early");
+      expect(early.findings.some((finding) => finding.id.includes("GHSA-first-party-only"))).toBe(false);
       const quick = buildQuickScanReport(early.findings);
       expect(quick.informational.find((finding) => finding.id === "DEP-OSV-00")?.title).toContain("2 workspace package/link records excluded");
       expect(quick.total).toBe(0);
     } finally { context.dispose(); }
+  });
+
+  it("scopes advisory findings to exact examined source identities and excludes ambiguous and unversioned workspace rows", async () => {
+    mkdirSync(join(dir, "nested"));
+    writeFileSync(join(dir, "nested", "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/fixture-dep": { link: true, resolved: "packages/member" },
+      "packages/member": { name: "fixture-dep", version: "1.0.0" },
+      "node_modules/host": { version: "2.0.0" },
+      "node_modules/host/node_modules/fixture-dep": { version: "1.0.0" },
+    } }));
+    const native = await import("node:child_process");
+    const mock = vi.mocked(native.execFileSync);
+    const prior = mock.getMockImplementation()!;
+    let captured;
+    mock.mockImplementation((bin, args, opts) => {
+      if (bin !== "osv-scanner") return prior(bin, args, opts);
+      const input = (args as string[]).at(-1)!;
+      const raw = parityInput();
+      const packages: NonNullable<typeof raw.results[0]>["packages"][number][] = [...raw.results[0]!.packages];
+      if (input.includes("/nested/")) packages.push({ ...raw.results[0]!.packages[0]!, package: { name: "fixture-dep", version: "", ecosystem: "npm" } }, { ...raw.results[0]!.packages[0]!, package: { name: "host", version: "2.0.0", ecosystem: "npm" }, vulnerabilities: [] });
+      return JSON.stringify({ results: [{ source: { path: input }, packages }] });
+    });
+    try { captured = runOsvScanner(dir); } finally { mock.mockImplementation(prior); }
+    expect(captured.failure).toBeUndefined();
+    expect(captured.assessment.invocations.find((input) => input.path === "nested/package-lock.json")).toMatchObject({ examinedPackages: ["npm:host@2.0.0"], unassessedPackages: ["npm:fixture-dep@1.0.0"], ambiguousPackages: ["npm:fixture-dep@1.0.0"] });
+    const scan = await runMechanicalScanDetailed({ dir, skipNetworkChecks: true, advisorySnapshot: {
+      ...captured, digest: "a".repeat(64), capturedAt: "2026-09-10T00:00:00Z", expiresAt: "2026-09-17T00:00:00Z", osvScannerVersion: "2.3.8",
+    } });
+    const advisories = scan.findings.filter((finding) => finding.id.startsWith("DEP-OSV-GHSA-fixture"));
+    expect(advisories).toHaveLength(1);
+    expect(advisories[0]!.location).toBe("package-lock.json (fixture-dep@1.0.0)");
+    expect(scan.findings.find((finding) => finding.id === "DEP-OSV-00")?.evidence).toContain("provider coordinate does not distinguish their origins");
   });
 
   it("reports zero resolved examination when no provider invocation occurred", async () => {
