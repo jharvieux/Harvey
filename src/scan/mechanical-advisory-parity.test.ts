@@ -12,7 +12,7 @@ vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
   return { ...actual, checkSlopsquat: vi.fn(async () => []), checkLicenseCompliance: vi.fn(async () => []) };
 });
-vi.mock("./secrets.js", () => ({ scanSecrets: vi.fn(() => []), resolveBundleScan: vi.fn(() => ({})) }));
+vi.mock("./secrets.js", async (importOriginal) => ({ ...await importOriginal<typeof import("./secrets.js")>(), scanSecrets: vi.fn(() => []), resolveBundleScan: vi.fn(() => ({})) }));
 vi.mock("./semgrep.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./semgrep.js")>();
   return {
@@ -25,6 +25,7 @@ vi.mock("./semgrep.js", async (importOriginal) => {
 
 const { assembleEngagementDocument } = await import("../audit-report.js");
 const { conservationLedger } = await import("../conservation-ledger.js");
+const { buildQuickScanReport } = await import("../quick-scan.js");
 const { renderFidelityBreaches } = await import("../render-fidelity.js");
 const { buildHtml } = await import("../../report-template/render.mjs");
 const { esc } = await import("../../report-template/sections.mjs");
@@ -141,11 +142,43 @@ describe("mechanical live advisory parity (#1883)", () => {
     expect(conservationLedger(scan.findings, document.findings).ok).toBe(true);
     expect(renderFidelityBreaches(document, html)).toEqual([]);
     const disclosure = document.findings.find((finding) => finding.id === "DEP-OSV-00")!;
+    const quick = buildQuickScanReport(scan.findings);
+    expect(quick.informational.find((finding) => finding.id === "DEP-OSV-00")?.title).toContain("Cargo.lock: unsupported format");
+    expect(quick.findings.some((finding) => finding.id === "DEP-OSV-00")).toBe(false);
     expect(disclosure.evidence).toContain("Cargo.lock");
     expect(html).toContain(esc(disclosure.evidence));
     expect(html).toContain("nested/package-lock.json");
     const withoutReason = html.replace(esc(disclosure.evidence), "");
     expect(renderFidelityBreaches(document, withoutReason).length).toBeGreaterThan(0);
+  });
+
+  it("keeps measured workspace exclusions visible in the non-grading free diagnosis", async () => {
+    const captured = runOsvScanner(dir);
+    const { runRegisteredDependencyDetectors } = await import("./mechanical-dependency-registry.js");
+    const { MechanicalScanContext } = await import("./mechanical-context.js");
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/fixture-dep": { version: "1.0.0" },
+      "node_modules/member": { link: true, resolved: "packages/member" },
+      "packages/member": { name: "member", version: "0.0.0" },
+    } }));
+    const { inventoryOsvInputs } = await import("./dependencies.js");
+    const provider = structuredClone(captured.result);
+    provider.results![0]!.packages!.push({ package: { name: "member", version: "0.0.0", ecosystem: "npm" } }, { package: { name: "member", version: "", ecosystem: "npm" } });
+    const inventory = inventoryOsvInputs(dir);
+    const actual = runOsvScanner(dir);
+    // Preserve the production receipt algorithm by observing the added provider workspace rows.
+    const native = await import("node:child_process");
+    vi.mocked(native.execFileSync).mockImplementationOnce(() => JSON.stringify(provider));
+    const withWorkspaces = runOsvScanner(dir, inventory);
+    expect(withWorkspaces.assessment.status).toBe("assessed");
+    expect(actual.assessment.invocations[0]!.examinedPackages).toEqual(withWorkspaces.assessment.invocations[0]!.examinedPackages);
+    const context = new MechanicalScanContext(dir);
+    try {
+      const early = await runRegisteredDependencyDetectors({ scanDir: dir, context, pkg: null, osv: withWorkspaces, skipNetworkChecks: true }, "early");
+      const quick = buildQuickScanReport(early.findings);
+      expect(quick.informational.find((finding) => finding.id === "DEP-OSV-00")?.title).toContain("2 workspace package/link records excluded");
+      expect(quick.total).toBe(0);
+    } finally { context.dispose(); }
   });
 
   it("reports zero resolved examination when no provider invocation occurred", async () => {

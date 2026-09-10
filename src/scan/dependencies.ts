@@ -645,7 +645,8 @@ export interface OsvScanResult {
 }
 
 const OSV_LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
-const OSV_INPUT_NAME = /^(?:package\.json|.*\.lock|bun\.lockb|pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|requirements[^/]*\.txt|go\.mod|pom\.xml|composer\.json|Gemfile|pyproject\.toml|Cargo\.toml|pubspec\.yaml)$/;
+const OSV_RESOLVED_VERSION = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const OSV_INPUT_NAME = /^(?:package\.json|.*\.lock|bun\.lockb|pnpm-(?:lock|workspace)\.yaml|package-lock\.json|npm-shrinkwrap\.json|requirements[^/]*\.txt|go\.mod|pom\.xml|composer\.json|Gemfile|pyproject\.toml|Cargo\.toml|pubspec\.yaml)$/;
 
 export interface OsvInputInventory {
   schema: 1;
@@ -657,6 +658,7 @@ export interface OsvInputInventory {
     reason: string;
     selectedBy?: string;
     resolvedPackages?: string[];
+    unresolvedPackages?: string[];
     workspacePackages?: string[];
   }[];
   sha256: string;
@@ -666,7 +668,7 @@ export interface OsvAssessment {
   schema: 1;
   inventory: OsvInputInventory;
   status: "assessed" | "partial" | "not-assessed" | "not-applicable";
-  invocations: { path: string; sha256: string; status: "assessed" | "partial" | "not-assessed"; examinedPackages: string[]; unassessedPackages: string[]; unversionedPackages: string[]; notApplicablePackages: string[]; reason?: string }[];
+  invocations: { path: string; sha256: string; status: "assessed" | "partial" | "not-assessed"; examinedPackages: string[]; unassessedPackages: string[]; ambiguousPackages: string[]; unversionedPackages: string[]; notApplicablePackages: string[]; reason?: string }[];
   reason: string;
   provenance: string;
   falsifier: string;
@@ -678,14 +680,15 @@ interface OsvScanRun {
   failure?: string;
 }
 
-const inputHash = (value: string): string => createHash("sha256").update(value).digest("hex");
+const inputHash = (value: string | Uint8Array): string => createHash("sha256").update(value).digest("hex");
 const packageIdentity = (name: string, version: string): string => `npm:${name}@${version}`;
 const osvFalsifier = "Re-run osv-scanner with --all-packages for every selected lockfile and reconcile its source paths and package identities with this inventory; assess each disclosed input before claiming full coverage.";
 
 /** Inventory the already prepared target. Selection preserves OSV's precedence per directory. */
 export function inventoryOsvInputs(dir: string, paths: readonly string[] = readRecursiveSafe(dir)): OsvInputInventory {
   const candidates = paths.filter((path) => OSV_INPUT_NAME.test(basename(path))).sort();
-  const textByPath = new Map(candidates.map((path) => [path, readFileSync(join(dir, path), "utf8")]));
+  const bytesByPath = new Map(candidates.map((path) => [path, readFileSync(join(dir, path))]));
+  const textByPath = new Map([...bytesByPath].map(([path, bytes]) => [path, bytes.toString("utf8")]));
   const selected = new Map<string, string>();
   for (const path of candidates) {
     if (!OSV_LOCKFILES.includes(basename(path))) continue;
@@ -708,31 +711,36 @@ export function inventoryOsvInputs(dir: string, paths: readonly string[] = readR
   const inputs: OsvInputInventory["inputs"] = candidates.map((path) => {
     const text = textByPath.get(path)!;
     const own = selected.get(dirname(path));
-    const base = { path, sha256: inputHash(text), kind: basename(path) === "package.json" ? "manifest" as const : "lockfile" as const };
+    const base = { path, sha256: inputHash(bytesByPath.get(path)!), kind: ["package.json", "pnpm-workspace.yaml"].includes(basename(path)) ? "manifest" as const : "lockfile" as const };
     if (OSV_LOCKFILES.includes(basename(path))) {
       if (path !== own) return { ...base, disposition: "unselected", selectedBy: own!, reason: `Not assessed: ${own} takes precedence for this dependency root; equivalence of this alternate resolved tree was not established.` };
       let resolvedPackages: string[] = [];
+      let unresolvedPackages: string[] = [];
       const workspacePackages: string[] = [];
       try {
         const parsed = basename(path) === "pnpm-lock.yaml" ? parsePnpmLock(text) : basename(path) === "yarn.lock" ? parseYarnLock(text) : parsePackageLock(text);
-        resolvedPackages = parsed.components.map((component) => packageIdentity(component.name, component.version)).sort();
+        resolvedPackages = parsed.components.filter((component) => OSV_RESOLVED_VERSION.test(component.version)).map((component) => packageIdentity(component.name, component.version)).sort();
+        unresolvedPackages = parsed.components.filter((component) => !OSV_RESOLVED_VERSION.test(component.version)).map((component) => packageIdentity(component.name, component.version));
         if (basename(path) === "package-lock.json") {
           const raw: unknown = JSON.parse(text);
           if (record(raw) && record(raw.packages)) {
             resolvedPackages = [];
+            unresolvedPackages = [];
             for (const [installPath, meta] of Object.entries(raw.packages)) {
               if (!record(meta) || !installPath) continue;
-              if (!installPath.includes("node_modules/")) { if (typeof meta.name === "string") workspacePackages.push(meta.name); continue; }
+              if (!installPath.includes("node_modules/")) { if (typeof meta.name === "string") workspacePackages.push(packageIdentity(meta.name, typeof meta.version === "string" && meta.version ? meta.version : "unresolved")); continue; }
               const name = typeof meta.name === "string" ? meta.name : installPath.replace(/^(?:.*\/)?node_modules\//, "");
-              if (meta.link) { workspacePackages.push(name); continue; }
-              if (typeof meta.version === "string" && meta.version) resolvedPackages.push(packageIdentity(name, meta.version));
+              if (meta.link) { workspacePackages.push(packageIdentity(name, "unresolved")); continue; }
+              if (typeof meta.version === "string" && OSV_RESOLVED_VERSION.test(meta.version)) resolvedPackages.push(packageIdentity(name, meta.version));
+              else unresolvedPackages.push(packageIdentity(name, typeof meta.version === "string" ? meta.version : "unresolved"));
             }
           }
         }
         resolvedPackages = [...new Set(resolvedPackages)].sort();
       } catch { /* The selected input retains its failed invocation and reason. */ }
-      return { ...base, disposition: "selected", resolvedPackages, workspacePackages: [...new Set(workspacePackages)].sort(), reason: "Selected supported lockfile for this dependency root." };
+      return { ...base, disposition: "selected", resolvedPackages, unresolvedPackages: [...new Set(unresolvedPackages)].sort(), workspacePackages: [...new Set(workspacePackages)].sort(), reason: "Selected supported lockfile for this dependency root." };
     }
+    if (basename(path) === "pnpm-workspace.yaml") return { ...base, disposition: own ? "covered" : "not-applicable", ...(own ? { selectedBy: own } : {}), reason: `Supporting pnpm workspace metadata; not passed to OSV --lockfile and contributes zero resolved examined units. ${own ? `Resolved packages and workspace importers are assessed through ${own}.` : "No selected supported lockfile belongs to this metadata root."}` };
     if (basename(path) !== "package.json") return { ...base, disposition: "unsupported", reason: "Not assessed: this input format is outside Harvey's pnpm/package-lock/yarn OSV invocation policy." };
     const source = own ?? workspaceSources.get(path);
     if (source) return { ...base, disposition: "covered", selectedBy: source, reason: `Resolved package assessment uses ${source}; declared ranges are not counted as resolved packages.` };
@@ -758,6 +766,7 @@ function validateOsvResult(value: unknown): asserts value is OsvScanResult {
     if (!record(source) || !record(source.source) || typeof source.source.path !== "string" || !Array.isArray(source.packages)) throw new Error("invalid OSV source/package population");
     for (const row of source.packages) {
       if (!record(row) || !record(row.package) || typeof row.package.name !== "string" || !row.package.name || typeof row.package.version !== "string" || row.package.ecosystem !== "npm") throw new Error("invalid OSV package identity/ecosystem");
+      if (row.package.version && !OSV_RESOLVED_VERSION.test(row.package.version)) throw new Error(`OSV package ${row.package.name} has a non-concrete resolved version`);
       for (const field of ["groups", "vulnerabilities"] as const) if (row[field] !== undefined && !Array.isArray(row[field])) throw new Error(`invalid OSV ${field}`);
       for (const group of (row.groups ?? []) as unknown[]) if (!record(group) || (group.ids !== undefined && (!Array.isArray(group.ids) || group.ids.some((id) => typeof id !== "string"))) || (group.max_severity !== undefined && typeof group.max_severity !== "string")) throw new Error("invalid OSV advisory group");
       for (const vuln of (row.vulnerabilities ?? []) as unknown[]) {
@@ -780,20 +789,22 @@ function validateOsvResult(value: unknown): asserts value is OsvScanResult {
 }
 
 function examinedPackages(result: OsvScanResult, path: string, workspacePackages: readonly string[] = []): string[] {
-  return [...new Set((result.results ?? []).filter((row) => row.source?.path === path).flatMap((row) => (row.packages ?? []).filter((pkg) => pkg.package?.version && !workspacePackages.includes(pkg.package.name!)).map((pkg) => packageIdentity(pkg.package!.name!, pkg.package!.version!))))].sort();
+  return [...new Set((result.results ?? []).filter((row) => row.source?.path === path).flatMap((row) => (row.packages ?? []).filter((pkg) => pkg.package?.version && !workspacePackages.includes(packageIdentity(pkg.package.name!, pkg.package.version))).map((pkg) => packageIdentity(pkg.package!.name!, pkg.package!.version!))))].sort();
 }
 
 function assessmentFor(inventory: OsvInputInventory, result: OsvScanResult, failures: Map<string, string>): OsvAssessment {
   const invocations: OsvAssessment["invocations"] = inventory.inputs.filter((input) => input.disposition === "selected").map((input) => {
     const packages = failures.has(input.path) ? [] : examinedPackages(result, input.path, input.workspacePackages);
     const unassessedPackages = (input.resolvedPackages ?? []).filter((identity) => !packages.includes(identity));
+    const ambiguousPackages = unassessedPackages.filter((identity) => input.workspacePackages?.includes(identity) && examinedPackages(result, input.path).includes(identity));
+    const omittedPackages = unassessedPackages.filter((identity) => !ambiguousPackages.includes(identity));
     const unversionedPackages = [...new Set((result.results ?? []).filter((row) => row.source?.path === input.path).flatMap((row) => (row.packages ?? []).filter((pkg) => !pkg.package?.version).map((pkg) => pkg.package!.name!)))].sort();
     const gap = failures.get(input.path) ?? (packages.length === 0 ? "The provider returned no resolved packages for this input; no package examination is claimed."
-      : unassessedPackages.length > 0 ? `Not assessed: osv-scanner --all-packages omitted ${unassessedPackages.length} package identities resolved from this selected lockfile: ${unassessedPackages.join(", ")}.` : undefined);
-    const notApplicablePackages = [...new Set((result.results ?? []).filter((row) => row.source?.path === input.path).flatMap((row) => (row.packages ?? []).filter((pkg) => input.workspacePackages?.includes(pkg.package!.name!)).map((pkg) => packageIdentity(pkg.package!.name!, pkg.package!.version || "unresolved"))))].sort();
-    const reason = [gap, ...notApplicablePackages.map((identity) => `${identity}: first-party workspace package/link; not applicable to third-party registry dependency assessment and excluded from resolved examination.`), ...unversionedPackages.filter((name) => !(input.workspacePackages ?? []).includes(name)).map((name) => `${name}: provider returned no version; not assessed and excluded from resolved examination.`)].filter(Boolean).join(" ");
-    const hasUnknownVersion = unversionedPackages.some((name) => !(input.workspacePackages ?? []).includes(name));
-    return { path: input.path, sha256: input.sha256, status: packages.length === 0 ? "not-assessed" : unassessedPackages.length || hasUnknownVersion ? "partial" : "assessed", examinedPackages: packages, unassessedPackages, unversionedPackages, notApplicablePackages, ...(reason ? { reason } : {}) };
+      : omittedPackages.length > 0 ? `Not assessed: osv-scanner --all-packages omitted ${omittedPackages.length} package identities resolved from this selected lockfile: ${omittedPackages.join(", ")}.` : undefined);
+    const notApplicablePackages = [...new Set((result.results ?? []).filter((row) => row.source?.path === input.path).flatMap((row) => (row.packages ?? []).map((pkg) => packageIdentity(pkg.package!.name!, pkg.package!.version || "unresolved")).filter((identity) => input.workspacePackages?.includes(identity) && !ambiguousPackages.includes(identity))))].sort();
+    const reason = [gap, ...ambiguousPackages.map((identity) => `${identity}: shared by a first-party workspace and a third-party resolution; the provider coordinate does not distinguish their origins, so third-party coverage is not assessed.`), ...notApplicablePackages.filter((identity) => !ambiguousPackages.includes(identity)).map((identity) => `${identity}: first-party workspace package/link; not applicable to third-party registry dependency assessment and excluded from resolved examination.`), ...unversionedPackages.filter((name) => !(input.workspacePackages ?? []).includes(packageIdentity(name, "unresolved"))).map((name) => `${name}: provider returned no version; not assessed and excluded from resolved examination.`)].filter(Boolean).join(" ");
+    const hasUnknownVersion = unversionedPackages.some((name) => !(input.workspacePackages ?? []).includes(packageIdentity(name, "unresolved")));
+    return { path: input.path, sha256: input.sha256, status: packages.length === 0 ? "not-assessed" : unassessedPackages.length || hasUnknownVersion ? "partial" : "assessed", examinedPackages: packages, unassessedPackages, ambiguousPackages, unversionedPackages, notApplicablePackages, ...(reason ? { reason } : {}) };
   });
   const assessed = invocations.filter((input) => input.status !== "not-assessed");
   const excluded = inventory.inputs.filter((input) => ["unsupported", "unselected", "missing-input"].includes(input.disposition));
@@ -819,6 +830,10 @@ export function validateOsvAssessment(assessment: OsvAssessment, result: OsvScan
   if (inputHash(JSON.stringify(inventory.inputs)) !== inventory.sha256 || (expectedInventory && JSON.stringify(inventory) !== JSON.stringify(expectedInventory))) throw new Error("OSV input inventory differs from the complete prepared-target population");
   const selected = new Set(inventory.inputs.filter((input) => input.disposition === "selected").map((input) => input.path));
   if ((result.results ?? []).some((row) => !selected.has(row.source!.path!))) throw new Error("OSV report contains an unselected source");
+  for (const input of inventory.inputs.filter((input) => input.disposition === "selected")) {
+    const unexpected = examinedPackages(result, input.path, input.workspacePackages).filter((identity) => !input.resolvedPackages?.includes(identity));
+    if (unexpected.length) throw new Error(`OSV report contains package identities absent from selected input ${input.path}: ${unexpected.join(", ")}`);
+  }
   const failures = new Map(assessment.invocations.filter((input) => input.status === "not-assessed").map((input) => [input.path, input.reason ?? ""]));
   if (assessment.invocations.some((input) => input.status === "not-assessed" && (!input.reason || examinedPackages(result, input.path, inventory.inputs.find((source) => source.path === input.path)?.workspacePackages).length))) throw new Error("unassessed OSV source has packages or lacks a reason");
   if (JSON.stringify(assessmentFor(inventory, result, failures)) !== JSON.stringify(assessment)) throw new Error("OSV assessment does not reconcile selected sources and exact provider package identities");
@@ -832,8 +847,10 @@ export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)):
   const failures = new Map<string, string>();
   for (const input of inventory.inputs.filter((entry) => entry.disposition === "selected")) {
     try {
-      const text = readFileSync(join(dir, input.path), "utf8");
-      if (inputHash(text) !== input.sha256) throw new Error("selected lockfile changed after input inventory");
+      const bytes = readFileSync(join(dir, input.path));
+      if (inputHash(bytes) !== input.sha256) throw new Error("selected lockfile changed after input inventory");
+      const text = bytes.toString("utf8");
+      if (input.unresolvedPackages?.length) throw new Error(`selected lockfile contains unresolved package versions: ${input.unresolvedPackages.join(", ")}`);
       const parsed = basename(input.path) === "pnpm-lock.yaml" ? parsePnpmLock(text) : basename(input.path) === "yarn.lock" ? parseYarnLock(text) : parsePackageLock(text);
       if (parsed.unmatched > 0 || parsed.components.length === 0) throw new Error(`selected lockfile has ${parsed.unmatched} unresolved entries and ${parsed.components.length} resolved packages; input completeness is not established`);
       let out: string;
@@ -855,6 +872,8 @@ export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)):
       const normalized: OsvScanResult = { ...raw, results: raw.results?.map((row) => ({ ...row, source: { ...row.source, path: isAbsolute(row.source!.path!) ? relative(dir, row.source!.path!) : row.source!.path! } })) };
       if ((normalized.results ?? []).some((row) => row.source?.path !== input.path)) throw new Error("OSV returned a source other than the selected input");
       const actual = new Set(examinedPackages(normalized, input.path, input.workspacePackages));
+      const unexpected = [...actual].filter((identity) => !input.resolvedPackages?.includes(identity));
+      if (unexpected.length) throw new Error(`OSV report contains package identities absent from selected input: ${unexpected.join(", ")}`);
       if (actual.size === 0) throw new Error("OSV --all-packages receipt returned no selected-lock package identities");
       result.results!.push(...normalized.results!);
       (result.inputReports ??= []).push({ path: input.path, metadata: Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "results")) });
@@ -961,23 +980,25 @@ export function osvUnavailableFinding(reason: string | OsvAssessment): Finding {
   const assessment = typeof reason === "string" ? undefined : reason;
   const gaps = assessment ? [
     ...assessment.invocations.filter((input) => input.status !== "assessed").map((input) => {
-      const missing = input.unassessedPackages.length ? `${input.unassessedPackages.length} resolved packages absent from provider output` : `${input.unversionedPackages.length} provider packages lack resolved versions`;
+      const missing = input.unassessedPackages.length ? `${input.unassessedPackages.length - input.ambiguousPackages.length} resolved packages absent from provider output${input.ambiguousPackages.length ? `; ${input.ambiguousPackages.length} workspace/third-party origins ambiguous` : ""}` : `${input.unversionedPackages.length} provider packages lack resolved versions`;
       return `${input.path}: ${input.status === "not-assessed" ? (input.reason ?? "provider examination incomplete").split(/\.\s/)[0]!.slice(0, 160) : missing}`;
     }),
     ...assessment.inventory.inputs.filter((input) => ["unsupported", "unselected", "missing-input"].includes(input.disposition)).map((input) => `${input.path}: ${input.disposition === "unselected" ? "alternate tree not assessed" : input.disposition === "missing-input" ? "no supported resolved input" : "unsupported format"}`),
+    ...assessment.invocations.filter((input) => input.notApplicablePackages.length).map((input) => `${input.path}: ${input.notApplicablePackages.length} workspace package/link records excluded from third-party examination`),
   ] : [];
   const summary = gaps.length ? `${gaps.slice(0, 3).join("; ")}${gaps.length > 3 ? `; ${gaps.length - 3} more input gaps` : ""}` : "no applicable Node lockfile population";
   return {
     id: "DEP-OSV-00",
     title: assessment ? `Dependency-CVE assessment ${assessment.status} — ${summary}` : "Dependency-CVE scan (osv-scanner) did not run",
     severity: "Info",
+    precisionTier: "high",
     confidence: "N/A",
     category: "Dependency CVE",
     taxonomy: "Known-vulnerable dependency — coverage not assessed",
     location: "(repo-wide)",
     status: "Open",
     evidence: assessment ? `${assessment.reason} ${assessment.provenance} Falsifier: ${assessment.falsifier}` : `osv-scanner failed to run: ${reason}`,
-    impact: (assessment ? `${assessment.reason} ` : "") + (assessment?.status === "not-applicable" ? "This prepared target has no applicable Node dependency population; no dependency examination is claimed." : "Lockfile CVE coverage is incomplete for the named inputs; this is not a finding of zero vulnerable dependencies. Curated checks have their own scope."),
+    impact: (assessment ? `${assessment.reason} ` : "") + (assessment?.status === "not-applicable" ? "This prepared target has no applicable Node dependency population; no dependency examination is claimed." : assessment?.status === "assessed" ? "Third-party registry dependency assessment excludes the named first-party workspace metadata and links." : "Lockfile CVE coverage is incomplete for the named inputs; this is not a finding of zero vulnerable dependencies. Curated checks have their own scope."),
     fix: assessment ? "Resolve the named unsupported, unselected or missing-input boundaries and re-run the selected inputs with osv-scanner --all-packages. A target with no applicable ecosystem needs no Node lockfile." : "Install osv-scanner on the scanning machine (see this file's header) and re-run the scan.",
     value: 1,
     ease: 3,

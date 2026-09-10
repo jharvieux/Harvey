@@ -4,6 +4,7 @@
 // dependencies.ts), not an invented one. Same harness shape as semgrep-crash.test.ts.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -175,6 +176,90 @@ describe("OSV input inventory and effective examination (#2033)", () => {
     expect(run.assessment.invocations[0]).toMatchObject({ status: "assessed", examinedPackages: ["npm:chosen@1.0.0"], unassessedPackages: [], unversionedPackages: ["workspace-member"] });
     expect(run.assessment.reason).toContain("first-party workspace package/link");
     expect(run.assessment.reason).not.toContain("npm:alias");
+  });
+
+  it.each([false, true])("rejects an extra provider identity, including when expected packages are also returned: %s", (withExpected) => {
+    const target = root();
+    write(target, "pnpm-lock.yaml", lock());
+    osvBehavior = (args) => {
+      const raw = JSON.parse(provider(args));
+      if (!withExpected) raw.results[0].packages = [];
+      raw.results[0].packages.push({ package: { name: "invented", version: "9.9.9", ecosystem: "npm" } });
+      return JSON.stringify(raw);
+    };
+    const invalid = runOsvScanner(target);
+    expect(invalid.failure).toContain("package identities absent from selected input: npm:invented@9.9.9");
+    expect(invalid.assessment.status).toBe("not-assessed");
+    expect(invalid.assessment.invocations[0]!.examinedPackages).toEqual([]);
+    osvBehavior = provider;
+    const valid = runOsvScanner(target);
+    const raw = structuredClone(valid.result);
+    raw.results![0]!.packages!.push({ package: { name: "invented", version: "9.9.9", ecosystem: "npm" } });
+    const forged = structuredClone(valid.assessment);
+    forged.invocations[0]!.examinedPackages.push("npm:invented@9.9.9");
+    expect(() => validateOsvAssessment(forged, raw, inventoryOsvInputs(target))).toThrow("package identities absent from selected input");
+  });
+
+  it.each(["0.0.0", "1.0.0"])("distinguishes a workspace name from a locked third-party coordinate at local version %s", (localVersion) => {
+    const target = root();
+    write(target, "package-lock.json", JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/chosen": { link: true, resolved: "packages/local" },
+      "packages/local": { name: "chosen", version: localVersion },
+      "node_modules/transitive/node_modules/chosen": { version: "1.0.0" },
+      "node_modules/transitive": { version: "2.0.0" },
+    } }));
+    osvBehavior = (args) => JSON.stringify({ results: [{ source: { path: args.at(-1) }, packages: [["chosen", ""], ["chosen", localVersion], ["chosen", "1.0.0"], ["transitive", "2.0.0"]].map(([name, version]) => ({ package: { name, version, ecosystem: "npm" } })) }] });
+    const run = runOsvScanner(target);
+    expect(run.failure).toBeUndefined();
+    const input = run.assessment.invocations[0]!;
+    expect(input.notApplicablePackages).not.toContain("npm:chosen@1.0.0");
+    if (localVersion === "0.0.0") {
+      expect(input).toMatchObject({ status: "assessed", examinedPackages: ["npm:chosen@1.0.0", "npm:transitive@2.0.0"], unassessedPackages: [] });
+      expect(input.notApplicablePackages).toEqual(["npm:chosen@0.0.0", "npm:chosen@unresolved"]);
+    } else {
+      expect(input).toMatchObject({ status: "partial", examinedPackages: ["npm:transitive@2.0.0"], unassessedPackages: ["npm:chosen@1.0.0"] });
+      expect(input.reason).toContain("provider coordinate does not distinguish their origins");
+    }
+  });
+
+  it("binds supporting pnpm workspace bytes without treating them as queried packages", () => {
+    const target = root();
+    write(target, "pnpm-lock.yaml", lock());
+    write(target, "pnpm-workspace.yaml", "packages: ['apps/*']\n");
+    const calls: string[][] = [];
+    osvBehavior = (args) => { calls.push(args); return provider(args); };
+    const run = runOsvScanner(target);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.at(-1)).toBe(join(target, "pnpm-lock.yaml"));
+    const metadata = run.assessment.inventory.inputs.find((input) => input.path === "pnpm-workspace.yaml")!;
+    expect(metadata).toMatchObject({ kind: "manifest", disposition: "covered", selectedBy: "pnpm-lock.yaml" });
+    expect(metadata.reason).toContain("not passed to OSV --lockfile and contributes zero resolved examined units");
+    write(target, "pnpm-workspace.yaml", "packages: ['packages/*']\n");
+    const changed = inventoryOsvInputs(target);
+    expect(changed.inputs.filter((input) => input.disposition === "selected")).toEqual(run.assessment.inventory.inputs.filter((input) => input.disposition === "selected"));
+    expect(() => validateOsvAssessment(run.assessment, run.result, changed)).toThrow("complete prepared-target population");
+  });
+
+  it("hashes unsupported binary lockfiles as bytes without decoding loss", () => {
+    const target = root();
+    const bytes = Buffer.from([0xff, 0xfe, 0x80, 0x00, 0x01]);
+    writeFileSync(join(target, "bun.lockb"), bytes);
+    expect(inventoryOsvInputs(target).inputs[0]).toMatchObject({ disposition: "unsupported", sha256: createHash("sha256").update(bytes).digest("hex") });
+  });
+
+  it("rejects unresolved lock versions before invoking the provider and non-concrete provider versions before examination", () => {
+    const target = root();
+    write(target, "package-lock.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/chosen": { version: "^1.0.0" } } }));
+    osvBehavior = () => { throw new Error("a range is not an invokable resolved version"); };
+    const invalidInput = runOsvScanner(target);
+    expect(invalidInput.failure).toContain("selected lockfile contains unresolved package versions");
+    expect(invalidInput.assessment.inventory.inputs[0]!.resolvedPackages).toEqual([]);
+    expect(invalidInput.assessment.invocations[0]!.examinedPackages).toEqual([]);
+    write(target, "package-lock.json", JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/chosen": { version: "1.0.0" } } }));
+    osvBehavior = (args) => provider(args).replace('"version":"1.0.0"', '"version":"^1.0.0"');
+    const invalidProvider = runOsvScanner(target);
+    expect(invalidProvider.failure).toContain("non-concrete resolved version");
+    expect(invalidProvider.assessment.invocations[0]!.examinedPackages).toEqual([]);
   });
 
   it("conserves provider omissions as explicit unassessed identities while keeping actual examined packages", () => {

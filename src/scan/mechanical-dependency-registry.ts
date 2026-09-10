@@ -154,7 +154,7 @@ export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Obj
     examinedUnitIdentities: (_state, selected) => semanticExaminedUnits("osv-advisories", "resolved-dependency", selected as string[]),
     invoke: ({ osv }) => [
       ...(osv.assessment ? parseOsvFindings(osv.result ?? {}) : []),
-      ...(osv.assessment?.status === "assessed" ? [] : [osvUnavailableFinding(osv.assessment ?? osv.failure ?? "No OSV input/invocation receipt was supplied; package examination is not established.")]),
+      ...(osv.assessment?.status === "assessed" && !osv.assessment.invocations.some((input) => input.notApplicablePackages.length) ? [] : [osvUnavailableFinding(osv.assessment ?? osv.failure ?? "No OSV input/invocation receipt was supplied; package examination is not established.")]),
     ],
   }),
   definition({ id: "next-curated-cves", order: 20, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "checkNextVersionCVEs" }, taxonomies: ["Known-vulnerable dependency", "EOL framework version"], applicableFiles: population("the declared Next.js dependency and resolved version", ({ pkg }) => pkg?.dependencies?.next ?? pkg?.devDependencies?.next ? ["next"] : []), enabled: ({ pkg }) => Boolean(pkg?.dependencies?.next ?? pkg?.devDependencies?.next), invoke: ({ pkg, context }) => checkNextVersionCVEs((pkg?.dependencies?.next ?? pkg?.devDependencies?.next)!, "package.json", context.dependencyTree) }),
