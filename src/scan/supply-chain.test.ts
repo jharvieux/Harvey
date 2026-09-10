@@ -160,11 +160,13 @@ describe("checkLockfilePresence", () => {
 
   it("flags a project directory with no lockfile", () => {
     dir = mkdtempSync(join(tmpdir(), "harvey-lockfile-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { react: "^18.2.0" } }));
     expect(checkLockfilePresence(dir)).toHaveLength(1);
   });
 
   it("reports the caller's label as the location instead of the scratch path", () => {
     dir = mkdtempSync(join(tmpdir(), "harvey-lockfile-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { react: "^18.2.0" } }));
     expect(checkLockfilePresence(dir, "fixtures/legacy-app")[0]?.location).toBe("fixtures/legacy-app");
   });
 
@@ -565,8 +567,8 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
   });
 
   it("moves the curated CVE table into the tree-wide set exactly when osv-scanner did not run", () => {
-    expect(supplyChainScopeFinding(args).evidence).toContain("double-report");
-    expect(supplyChainScopeFinding({ ...args, osvRan: false }).evidence).toContain("widened for this pass because osv-scanner did not run");
+    expect(supplyChainScopeFinding(args).evidence).toContain("selected inputs named in its independent receipt");
+    expect(supplyChainScopeFinding({ ...args, osvRan: false }).evidence).toContain("widened for this pass because no successfully assessed OSV input was recorded");
   });
 
   it("#1344: names the workspace-internal packages excluded from the registry-backed checks, and says nothing when there are none", () => {

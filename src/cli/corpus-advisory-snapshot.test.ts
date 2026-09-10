@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { runOsvScanner } from "../scan/dependencies.js";
 import { loadCorpusAdvisorySnapshot, type CorpusAdvisorySnapshotEntry, type CorpusAdvisorySnapshotManifest } from "../corpus-advisory-snapshot.js";
 
 const PROPOSIT = {
@@ -24,11 +25,16 @@ describe("corpus-advisory-snapshot CLI target selection", () => {
     const cache = join(root, "cache");
     const bin = join(root, "bin");
     mkdirSync(out, { recursive: true });
-    mkdirSync(join(cache, PROPOSIT.repo, ".git"), { recursive: true });
+    const cached = join(cache, PROPOSIT.repo);
+    mkdirSync(cached, { recursive: true });
+    execFileSync("git", ["init", "-q", cached]);
     mkdirSync(bin);
-    writeFileSync(join(cache, PROPOSIT.repo, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {} }));
+    writeFileSync(join(cache, PROPOSIT.repo, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/fixture": { version: "1.0.0" } } }));
 
-    const oldBytes = gzipSync(JSON.stringify({ results: [] }));
+    execFileSync("git", ["-C", cached, "add", "."]);
+    execFileSync("git", ["-C", cached, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "Fixture"]);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const oldBytes = gzipSync(JSON.stringify({ schema: 1, ...runOsvScanner(out) }));
     const oldEntry = (file: string, targetCommit: string): CorpusAdvisorySnapshotEntry => ({
       file,
       sha256: createHash("sha256").update(oldBytes).digest("hex"),
@@ -50,12 +56,12 @@ describe("corpus-advisory-snapshot CLI target selection", () => {
 
     writeFileSync(
       join(bin, "git"),
-      `#!/bin/sh\ncase " $* " in\n  *" rev-parse HEAD "*) echo ${PROPOSIT.commit}; exit 0 ;;\n  *" status --porcelain "*) exit 0 ;;\n  *) exit 0 ;;\nesac\n`,
+      `#!/bin/sh\nif [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then echo ${PROPOSIT.commit}; exit 0; fi\nif [ "$3" = "rev-parse" ] && [ "$4" = "${PROPOSIT.commit}^{tree}" ]; then exec ${realGit} "$1" "$2" rev-parse 'HEAD^{tree}'; fi\nif [ "$3" = "rev-list" ]; then echo ${PROPOSIT.commit}; exit 0; fi\nif [ "$3" = "diff" ] || [ "$3" = "fetch" ]; then exit 0; fi\nexec ${realGit} "$@"\n`,
       { mode: 0o755 },
     );
     writeFileSync(
       join(bin, "osv-scanner"),
-      '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "osv-scanner version: 2.3.8\\nosv-scalibr version: 0.4.5\\n"; exit 0; fi\nprintf \'{"results":[]}\\n\'\n',
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "osv-scanner version: 2.3.8\\nosv-scalibr version: 0.4.5\\n"; exit 0; fi\nprintf \'{"results":[{"source":{"path":"package-lock.json"},"packages":[{"package":{"name":"fixture","version":"1.0.0","ecosystem":"npm"}}]}]}\\n\'\n',
       { mode: 0o755 },
     );
 

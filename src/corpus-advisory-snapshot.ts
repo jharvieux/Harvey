@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import type { Finding } from "./findings.js";
-import type { OsvScanResult } from "./scan/dependencies.js";
+import { validateOsvAssessment, type OsvAssessment, type OsvScanResult } from "./scan/dependencies.js";
 
 export interface CorpusAdvisorySnapshotEntry {
   file: string;
@@ -29,6 +29,7 @@ interface LegacyCorpusAdvisorySnapshotManifest {
 
 interface LoadedCorpusAdvisorySnapshot {
   result: OsvScanResult;
+  assessment: OsvAssessment;
   digest: string;
   capturedAt: string;
   expiresAt: string;
@@ -47,6 +48,7 @@ export interface CorpusAdvisoryFindingChange {
 
 export interface CorpusAdvisoryComparisonReceipt {
   schema: 1;
+  assessment?: { live: OsvAssessment; snapshot: OsvAssessment; equal: boolean };
   status: "equal" | "metadata-only" | "finding-change";
   raw: {
     equal: boolean;
@@ -96,6 +98,7 @@ export interface CorpusAdvisoryObservationArtifact {
   startedAt: string;
   completedAt: string | null;
   populationComplete: boolean;
+  assessmentCoverage?: { inventoryComplete: boolean; assessed: number; partial: number; notAssessed: number; notApplicable: number };
   liveOsvScannerVersion: string;
   expectedTargets: { slug: string; repo: string; pin: string }[];
   targets: Record<string, CorpusAdvisoryObservationTarget>;
@@ -116,7 +119,7 @@ export function canonicalizeCorpusOsvInput(result: OsvScanResult): OsvScanResult
     ...result,
     results: result.results?.map((row) => ({
       ...row,
-      source: row.source?.path ? { ...row.source, path: basename(row.source.path) } : row.source,
+      source: row.source?.path && isAbsolute(row.source.path) ? { ...row.source, path: basename(row.source.path) } : row.source,
     })),
   };
 }
@@ -152,7 +155,14 @@ export function compareCorpusAdvisoryState(input: {
   snapshotRaw: OsvScanResult;
   liveFindings: Finding[];
   snapshotFindings: Finding[];
+  liveAssessment?: OsvAssessment;
+  snapshotAssessment?: OsvAssessment;
 }): CorpusAdvisoryComparisonReceipt {
+  if (input.liveAssessment || input.snapshotAssessment) {
+    if (!input.liveAssessment || !input.snapshotAssessment) throw new Error("advisory comparison requires both input assessments");
+    validateOsvAssessment(input.liveAssessment, input.liveRaw);
+    validateOsvAssessment(input.snapshotAssessment, input.snapshotRaw, input.liveAssessment.inventory);
+  }
   const liveRawJson = JSON.stringify(canonicalizeCorpusOsvInput(input.liveRaw));
   const snapshotRawJson = JSON.stringify(canonicalizeCorpusOsvInput(input.snapshotRaw));
   const liveFindings = canonicalFindings(input.liveFindings);
@@ -193,6 +203,7 @@ export function compareCorpusAdvisoryState(input: {
   const snapshotPopulation = population(input.snapshotRaw);
   return {
     schema: 1,
+    ...(input.liveAssessment && input.snapshotAssessment ? { assessment: { live: input.liveAssessment, snapshot: input.snapshotAssessment, equal: canonicalJson(input.liveAssessment) === canonicalJson(input.snapshotAssessment) } } : {}),
     status: semanticEqual ? (rawEqual ? "equal" : "metadata-only") : "finding-change",
     raw: {
       equal: rawEqual,
@@ -318,13 +329,19 @@ export function loadCorpusAdvisorySnapshot(
   const actual = sha256(bytes);
   if (actual !== entry.sha256) throw new Error(`corpus advisory snapshot payload for ${slug} hashes to ${actual}, not ${entry.sha256}`);
   let result: OsvScanResult;
+  let assessment: OsvAssessment;
   try {
-    result = canonicalizeCorpusOsvInput(JSON.parse(gunzipSync(bytes).toString("utf8")) as OsvScanResult);
+    const payload = JSON.parse(gunzipSync(bytes).toString("utf8")) as { schema?: number; result: OsvScanResult; assessment: OsvAssessment };
+    if (payload.schema !== 1 || !payload.assessment || !payload.result) throw new Error("OSV input assessment provenance is missing; perform a real snapshot recapture");
+    result = canonicalizeCorpusOsvInput(payload.result);
+    assessment = payload.assessment;
+    validateOsvAssessment(assessment, result);
   } catch (error) {
     throw new Error(`corpus advisory snapshot payload for ${slug} is corrupt: ${error instanceof Error ? error.message : String(error)}`);
   }
   return {
     result,
+    assessment,
     digest: entry.sha256,
     capturedAt: entry.capturedAt,
     expiresAt: entry.expiresAt,

@@ -24,6 +24,16 @@ const runSemgrep = vi.fn(() => ({
   result: { results: [], errors: [], paths: { scanned: [], skipped: [] }, time: { rules: [], fixpoint_timeouts: [] } },
 }) as { result: object; executionPlan?: object; failure?: string });
 
+// OSV networking is outside this suite's registry/manifest seam; its real invocation is
+// exercised by osv-crash.test.ts and the all-target live corpus verification.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFileSync: vi.fn((bin: string, args: string[], opts: unknown) => {
+    if (bin === "osv-scanner") throw Object.assign(new Error("offline fixture"), { code: "ENOENT" });
+    return actual.execFileSync(bin as never, args as never, opts as never);
+  }) };
+});
+
 vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
   return { ...actual, checkSlopsquat, checkLicenseCompliance };
