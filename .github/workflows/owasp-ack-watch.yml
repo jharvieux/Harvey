@@ -36,7 +36,7 @@ name: owasp-ack-watch
 
 on:
   schedule:
-    - cron: "11 12 * * *" # Daily 12:11 UTC / 08:11 ET — same slot the retired routine held
+    - cron: "11 12 * * *" # Daily 12:11 UTC
   workflow_dispatch: # so a human can run it and SEE the output; the routine's first run never was
     inputs:
       alert_drill:
