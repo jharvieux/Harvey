@@ -50,24 +50,24 @@
   },
   "artifacts": {
     "findings.json": {
-      "sha256": "20179369f1e3c644fcd654ae512d1aff100f909eb29fe94c776d11ac0980c849"
+      "sha256": "f3118adc7890d94bd3b20da66348e3b17baa458f6742be334bd9047a97498d62"
     },
     "pii-data-map.json": {
       "sha256": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9"
     },
     "scorecard.json": {
-      "sha256": "efa2949f200e2032a17ca7cb707e232d887438cc0f646aff89c386642b4236c4"
+      "sha256": "a6bc7c84904e48c47dfd5a2901c3e5a5742826ea6e68a2fe45b98fa4bc9b360c"
     },
     "findings-report.json": {
-      "sha256": "fffd016a648d125e90da3091b3fe1274124d15b3ff7c4b21a409fe0ab6147f0c"
+      "sha256": "bfda56e37472ccbf69a407bd54b450590bd55e28c96a728df7946f2177a73c50"
     }
   },
   "transformations": {
     "report": {
       "kind": "findings-envelope-v1",
       "reason": "Add report metadata and source linkage; preserve every raw finding occurrence and field. Rendering rollups remain downstream of this artifact seam.",
-      "produced": 797,
-      "delivered": 797,
+      "produced": 822,
+      "delivered": 822,
       "deduped": 0,
       "suppressed": 0,
       "capped": 0,

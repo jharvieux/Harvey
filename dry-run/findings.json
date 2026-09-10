@@ -3035,6 +3035,579 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-82fw-gwwq-j7x9-@vitest/mocker@3.2.7#test-quality/package-lock.json",
+    "title": "@vitest/mocker@3.2.7: Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock (fixed in 4.1.11 / 5.0.0-rc.2)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (@vitest/mocker@3.2.7)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-82fw-gwwq-j7x9 (aliases: CVE-2026-84373) against @vitest/mocker@3.2.7. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.1.11 / 5.0.0-rc.2. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-84373.",
+    "impact": "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock — This is exploitable **without authentication** only through the public\n`mockerPlugin` / standalone `interceptorPlugin` exports (used by third-party dev\nservers), which register the handler on Vite's unauthenticated HMR socket.\nVitest's own browser mode registers mocks over a **token-authenticated** RPC and\nis not remotely reachable by default (see Scope).",
+    "fix": "Upgrade @vitest/mocker to 4.1.11 or later (see GHSA-82fw-gwwq-j7x9).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22"
+    ],
+    "dependency": "@vitest/mocker",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "@vitest/mocker is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-w5vr-8v7q-w6rv-baseline-browser-mapping@2.10.42#test-quality/package-lock.json",
+    "title": "baseline-browser-mapping@2.10.42: baseline-browser-mapping process termination on invalid input causes denial of service (fixed in 2.11.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (baseline-browser-mapping@2.10.42)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-w5vr-8v7q-w6rv (aliases: CVE-2026-45819) against baseline-browser-mapping@2.10.42. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 2.11.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-45819.",
+    "impact": "baseline-browser-mapping process termination on invalid input causes denial of service — baseline-browser-mapping 2.x before 2.11.0 calls process.exit() instead of throwing on invalid or conflicting input parameters, and can trigger immediate process termination, causing denial of service.",
+    "fix": "Upgrade baseline-browser-mapping to 2.11.0 or later (see GHSA-w5vr-8v7q-w6rv).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-705"
+    ],
+    "dependency": "baseline-browser-mapping",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "baseline-browser-mapping is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-mh99-v99m-4gvg-brace-expansion@5.0.7#test-quality/package-lock.json",
+    "title": "brace-expansion@5.0.7: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8 / 3.0.3 / 2.1.3 / 1.1.17)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (brace-expansion@5.0.7)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-mh99-v99m-4gvg (aliases: CVE-2026-14257) against brace-expansion@5.0.7. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 5.0.8 / 3.0.3 / 2.1.3 / 1.1.17. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-14257.",
+    "impact": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash — `expand()` bounds the *number* of results it produces (the `max` option,\n`100_000` by default) but not their *length*. By chaining many brace groups,\nan attacker keeps the result count under `max` while making every result grow\nwith the number of groups. Building `max` long results — plus the intermediate\narrays combined at each brace group — exhausts memory and crashes the Node\nprocess with an **uncatchable** out-of-memory error. `try/catch` around\n`expand()` does not help: the fatal error terminates the process.",
+    "fix": "Upgrade brace-expansion to 5.0.8 or later (see GHSA-mh99-v99m-4gvg).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-770"
+    ],
+    "dependency": "brace-expansion",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "brace-expansion is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-rgw5-rvv9-x895-brace-expansion@5.0.7#test-quality/package-lock.json",
+    "title": "brace-expansion@5.0.7: brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation (fixed in 1.1.18 / 2.1.4 / 3.0.6 / 5.0.9)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (brace-expansion@5.0.7)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-rgw5-rvv9-x895 (aliases: CVE-2026-69152) against brace-expansion@5.0.7. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 1.1.18 / 2.1.4 / 3.0.6 / 5.0.9. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-69152.",
+    "impact": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation — The `maxLength` mitigation added in `5.0.8` for GHSA-mh99-v99m-4gvg / CVE-2026-14257 is incomplete. It bounds the accumulator where results are *combined*, but not the intermediate arrays that feed it. A ~25 KB input still crashes the Node process with an **uncatchable** out-of-memory error, so `try/catch` around `expand()` does not help.",
+    "fix": "Upgrade brace-expansion to 1.1.18 or later (see GHSA-rgw5-rvv9-x895).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-770"
+    ],
+    "dependency": "brace-expansion",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "brace-expansion is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-73wf-gq98-2v4g-browserslist@4.28.5#test-quality/package-lock.json",
+    "title": "browserslist@4.28.5: Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats) (fixed in 4.28.7)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (browserslist@4.28.5)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-73wf-gq98-2v4g (aliases: CVE-2026-73088) against browserslist@4.28.5. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 4.28.7. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-73088.",
+    "impact": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats) — **File**: `node.js`\n**Function**: `normalizeStats()` (line ~214), reached from `getStat()` (called\n**unconditionally** on every `browserslist()` call) and `loadStat()`",
+    "fix": "Upgrade browserslist to 4.28.7 or later (see GHSA-73wf-gq98-2v4g).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1321",
+      "CWE-248"
+    ],
+    "dependency": "browserslist",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "browserslist is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-c83g-rgw3-j3cx-browserslist@4.28.5#test-quality/package-lock.json",
+    "title": "browserslist@4.28.5: Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM (fixed in 4.28.7)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (browserslist@4.28.5)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-c83g-rgw3-j3cx (aliases: CVE-2026-73089) against browserslist@4.28.5. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 4.28.7. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-73089.",
+    "impact": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM — **File**: `index.js`\n**Location**: `cache` (browserslist()'s result cache, line ~402) and\n`parseCache` (parseQueries()'s AST cache)",
+    "fix": "Upgrade browserslist to 4.28.7 or later (see GHSA-c83g-rgw3-j3cx).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
+    "dependency": "browserslist",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "browserslist is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-5jgf-p345-68v8-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to host confusion via skipped IDN canonicalization on scheme-relative references (fixed in 2.4.5 / 3.1.6 / 4.1.3)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-5jgf-p345-68v8 (aliases: CVE-2026-75931) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.5 / 3.1.6 / 4.1.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-75931.",
+    "impact": "fast-uri vulnerable to host confusion via skipped IDN canonicalization on scheme-relative references — `fast-uri` canonicalizes a host to its ASCII form only when the input carries an explicit scheme. When `resolve()` resolves a scheme-relative reference (`//host/`) against a scheme-bearing base, it still emits the host verbatim even though the effective scheme is known, so re-parsing the resolved URI yields a different host than the one `resolve()` returned. An application that resolves an untrusted reference with `fast-uri` and then checks or routes on the resulting host can make a policy decision on one host and reach another. This is an incomplete-fix variant of CVE-2026-13676, whose IDN ca…",
+    "fix": "Upgrade fast-uri to 2.4.5 or later (see GHSA-5jgf-p345-68v8).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-436"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-7p8r-x3mc-p8w7-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to host confusion via backslash authority introducer (fixed in 2.4.4 / 3.1.5 / 4.1.2)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-7p8r-x3mc-p8w7 (aliases: CVE-2026-18446) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.4 / 3.1.5 / 4.1.2. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-18446.",
+    "impact": "fast-uri vulnerable to host confusion via backslash authority introducer — `fast-uri` v4.1.1 and earlier require a literal `//` to recognize a URI authority, so a reference that uses `\\\\`, `/\\`, or `\\/` as the authority introducer (in place of `//`, after an optional scheme) is parsed with no authority: the sequence and everything after it fold into the path. Node's native WHATWG `URL` (used by `fetch()`, `undici`, and Node's `http`/`https` clients) instead treats `\\` as interchangeable with `/` for special schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`), so the two parsers extract different hosts from the same input.",
+    "fix": "Upgrade fast-uri to 2.4.4 or later (see GHSA-7p8r-x3mc-p8w7).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-436"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-f65p-4m7j-42xc-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization (fixed in 2.4.5 / 3.1.6 / 4.1.3)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-f65p-4m7j-42xc (aliases: CVE-2026-75975) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.5 / 3.1.6 / 4.1.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-75975.",
+    "impact": "fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization — `fast-uri` does not validate the complete RFC 3986 grammar for bracketed IPv6 literals, so a malformed literal with invalid trailing text is silently truncated to a different valid IPv6 address with no error reported. For example, `normalize('http://[::not-valid]/private')` returns `http://[::]/private`, and `[fc00::not-hex]` and `[fe80::not-hex]` collapse to `[fc00::]` and `[fe80::]`. An application that normalizes an untrusted URL before an outbound request, redirect, or host-policy check can be routed to a local or private address such as loopback (`::1`), unique-local, or link-local. Becau…",
+    "fix": "Upgrade fast-uri to 2.4.5 or later (see GHSA-f65p-4m7j-42xc).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-20",
+      "CWE-918"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-fph4-wmhf-6fwf-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to server-side request forgery via repeated hostname percent-decoding (fixed in 2.4.5 / 3.1.6 / 4.1.3)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-fph4-wmhf-6fwf (aliases: CVE-2026-75899) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.5 / 3.1.6 / 4.1.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-75899.",
+    "impact": "fast-uri vulnerable to server-side request forgery via repeated hostname percent-decoding — `fast-uri` decodes a hostname's percent escapes twice in a single `normalize()` or `resolve()` call: once during parsing and again during authority recomposition. A nested percent-encoded host therefore survives the first decode and is turned into a live destination by the second, so `normalize('http://%256c%256f%2563%2561%256c%2568%256f%2573%2574/')` returns `http://localhost/`. Applications that normalize or resolve an untrusted URI before an SSRF check, redirect validation, or host allowlist can be steered to a different destination, including internal addresses such as loopback or a cloud…",
+    "fix": "Upgrade fast-uri to 2.4.5 or later (see GHSA-fph4-wmhf-6fwf).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-174",
+      "CWE-918"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-jqff-g426-hqxp-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to host confusion via percent-encoded scheme normalization (fixed in 2.4.5 / 3.1.6 / 4.1.3)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-jqff-g426-hqxp (aliases: CVE-2026-76172) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.5 / 3.1.6 / 4.1.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-76172.",
+    "impact": "fast-uri vulnerable to host confusion via percent-encoded scheme normalization — `fast-uri` decodes percent-encoded characters in the scheme component with the legacy global `unescape()` and serializes the result back as raw characters, without re-escaping it or validating it as a scheme. A scheme that decodes to characters outside the RFC 3986 scheme grammar can therefore introduce structure the original input did not contain.",
+    "fix": "Upgrade fast-uri to 2.4.5 or later (see GHSA-jqff-g426-hqxp).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-177"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-v2hh-gcrm-f6hx-fast-uri@3.1.3#test-quality/package-lock.json",
+    "title": "fast-uri@3.1.3: fast-uri vulnerable to host confusion via literal backslash authority delimiter (fixed in 2.4.3 / 3.1.4 / 4.1.1)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (fast-uri@3.1.3)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-v2hh-gcrm-f6hx (aliases: CVE-2026-16221) against fast-uri@3.1.3. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 2.4.3 / 3.1.4 / 4.1.1. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-16221.",
+    "impact": "fast-uri vulnerable to host confusion via literal backslash authority delimiter — `fast-uri` v4.1.0 and earlier do not treat a literal backslash (U+005C) as an authority delimiter. Node's native WHATWG `URL` (used by `fetch()`, `undici`, and Node's `http`/`https` clients) normalizes `\\` to `/` for special schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`), so the two parsers extract different hosts from the same input string.",
+    "fix": "Upgrade fast-uri to 2.4.3 or later (see GHSA-v2hh-gcrm-f6hx).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-436"
+    ],
+    "dependency": "fast-uri",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "fast-uri is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-28wg-ghj8-5hjv-nanoid@3.3.15#test-quality/package-lock.json",
+    "title": "nanoid@3.3.15: nanoid: non-secure generators can loop indefinitely with negative size (fixed in 3.3.16 / 5.1.16)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (nanoid@3.3.15)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-28wg-ghj8-5hjv (aliases: CVE-2026-67214) against nanoid@3.3.15. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 3.3.16 / 5.1.16. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-67214.",
+    "impact": "nanoid: non-secure generators can loop indefinitely with negative size — nanoid (Nano ID) before 5.1.16 contains an infinite loop in the customAlphabet and nanoid functions of its non-secure module (nanoid/non-secure). When these functions are given a negative size, the loop counter is decremented from a negative value and never reaches its termination condition, spinning indefinitely and hanging the calling thread. An application that passes an unvalidated, attacker-controlled negative size to these functions is exposed to a denial-of-service condition.",
+    "fix": "Upgrade nanoid to 3.3.16 or later (see GHSA-28wg-ghj8-5hjv).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-835"
+    ],
+    "dependency": "nanoid",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "nanoid is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-2v37-7h3g-55p8-nanoid@3.3.15#test-quality/package-lock.json",
+    "title": "nanoid@3.3.15: nanoid: custom generators can loop indefinitely when size is zero (fixed in 3.3.18 / 5.1.6)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (nanoid@3.3.15)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-2v37-7h3g-55p8 (aliases: CVE-2026-67213) against nanoid@3.3.15. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 3.3.18 / 5.1.6. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-67213.",
+    "impact": "nanoid: custom generators can loop indefinitely when size is zero — nanoid (Nano ID) before 5.1.6 contains an infinite loop in the customAlphabet and customRandom functions. When these functions are configured with a size of 0, the internal generation loop never satisfies its exit condition and spins indefinitely, hanging the calling thread. An application that passes an unvalidated, attacker-controlled size of 0 to these functions is exposed to a denial-of-service condition.",
+    "fix": "Upgrade nanoid to 3.3.18 or later (see GHSA-2v37-7h3g-55p8).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-835"
+    ],
+    "dependency": "nanoid",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "nanoid is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-fxqj-rqcc-2cmp-postcss@8.5.16#test-quality/package-lock.json",
+    "title": "postcss@8.5.16: PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset (fixed in 8.5.23)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (postcss@8.5.16)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-fxqj-rqcc-2cmp (aliases: CVE-2026-69153) against postcss@8.5.16. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 8.5.23.",
+    "impact": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset — The fix for GHSA-6g55-p6wh-862q added a guard in `lib/previous-map.js` `PreviousMap.loadFile()` that restricts an attacker-controlled `sourceMappingURL` (from a CSS comment) to a `.map` extension and, for untrusted maps, rejects `..` traversal and absolute paths. The traversal/absolute rejection is nested inside `if (cssFile) { ... }`. When PostCSS is invoked without the `from` option, `cssFile` is falsy and that branch is skipped, leaving only the `.map` extension check.",
+    "fix": "Upgrade postcss to 8.5.23 or later (see GHSA-fxqj-rqcc-2cmp).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-r28c-9q8g-f849-postcss@8.5.16#test-quality/package-lock.json",
+    "title": "postcss@8.5.16: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure (fixed in 8.5.18)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (postcss@8.5.16)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-r28c-9q8g-f849 (aliases: CVE-2026-73646) against postcss@8.5.16. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 8.5.18.",
+    "impact": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure — **File**: `lib/previous-map.js`\n**Line**: 87-98 (`loadFile`), 129-144 (`loadMap`)",
+    "fix": "Upgrade postcss to 8.5.18 or later (see GHSA-r28c-9q8g-f849).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22"
+    ],
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-4mjr-xmp4-gh2g-qs@6.15.1#test-quality/package-lock.json",
+    "title": "qs@6.15.1: qs: Denial of Service via Attacker Controlled isBuffer (fixed in 6.16.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (qs@6.15.1)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-4mjr-xmp4-gh2g (aliases: CVE-2026-82417) against qs@6.15.1. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 6.16.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-82417.",
+    "impact": "qs: Denial of Service via Attacker Controlled isBuffer — `qs.stringify()` calls `utils.isBuffer()` on every value it serializes, and `utils.isBuffer()` invokes `obj.constructor.isBuffer(obj)` without checking that it is callable. A value whose own `constructor.isBuffer` is a non-function makes `qs` call a non-callable and throw `TypeError`. Such a value is produced **by `qs.parse` itself** from an untrusted query string when `plainObjects: true` or `allowPrototypes: true` is set, so a pure-`qs` `parse` → `stringify` round-trip — no `JSON.parse` — turns an unauthenticated query string into an uncaught throw.",
+    "fix": "Upgrade qs to 6.16.0 or later (see GHSA-4mjr-xmp4-gh2g).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-248",
+      "CWE-703"
+    ],
+    "dependency": "qs",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "qs is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-q8mj-m7cp-5q26-qs@6.15.1#test-quality/package-lock.json",
+    "title": "qs@6.15.1: qs has a remotely triggerable DoS: qs.stringify crashes with TypeError on null/undefined entries in comma-format arrays when encodeValuesOnly is set (fixed in 6.15.2)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (qs@6.15.1)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-q8mj-m7cp-5q26 (aliases: CVE-2026-8723) against qs@6.15.1. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 6.15.2. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-8723.",
+    "impact": "qs has a remotely triggerable DoS: qs.stringify crashes with TypeError on null/undefined entries in comma-format arrays when encodeValuesOnly is set — `qs.stringify` throws `TypeError` when called with `arrayFormat: 'comma'` and `encodeValuesOnly: true` on an array containing `null` or `undefined`. The throw is synchronous and not handled by any of qs's null-related options (`skipNulls`, `strictNullHandling`).",
+    "fix": "Upgrade qs to 6.15.2 or later (see GHSA-q8mj-m7cp-5q26).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-476"
+    ],
+    "dependency": "qs",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "qs is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-x5fp-wj9c-mxmx-qs@6.15.1#test-quality/package-lock.json",
+    "title": "qs@6.15.1: qs array-limit bypass via bracket-key comma parsing (fixed in 6.16.0)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (qs@6.15.1)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-x5fp-wj9c-mxmx (aliases: CVE-2026-82562) against qs@6.15.1. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 6.16.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-82562.",
+    "impact": "qs array-limit bypass via bracket-key comma parsing — `qs` `v6.15.3` allows bracket-key input to bypass `arrayLimit` and `throwOnLimitExceeded` when `comma: true`. The input `a[]=1,2,3,4` succeeds with `arrayLimit: 3`, while the equivalent plain-key input is rejected.",
+    "fix": "Upgrade qs to 6.16.0 or later (see GHSA-x5fp-wj9c-mxmx).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
+    "dependency": "qs",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "qs is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
+    "id": "DEP-OSV-GHSA-82fw-gwwq-j7x9-vitest@3.2.7#test-quality/package-lock.json",
+    "title": "vitest@3.2.7: Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock (fixed in 4.1.11 / 5.0.0-rc.2)",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "test-quality/package-lock.json (vitest@3.2.7)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-82fw-gwwq-j7x9 (aliases: CVE-2026-84373) against vitest@3.2.7. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.1.11 / 5.0.0-rc.2. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-84373.",
+    "impact": "Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock — This is exploitable **without authentication** only through the public\n`mockerPlugin` / standalone `interceptorPlugin` exports (used by third-party dev\nservers), which register the handler on Vite's unauthenticated HMR socket.\nVitest's own browser mode registers mocks over a **token-authenticated** RPC and\nis not remotely reachable by default (see Scope).",
+    "fix": "Upgrade vitest to 4.1.11 or later (see GHSA-82fw-gwwq-j7x9).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22"
+    ],
+    "dependency": "vitest",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "src/m8-vacuous-assertion/controls.test.ts",
+        "src/m8-vacuous-assertion/vacuous.test.ts",
+        "test-quality/audit-log.deletion-surviving.test.ts",
+        "test-quality/authz.strong.test.ts",
+        "test-quality/discount.tautological.test.ts",
+        "test-quality/vacuous.smoke.test.ts",
+        "test-quality/vitest.config.ts"
+      ],
+      "justification": "vitest is imported in 7 source file(s): src/m8-vacuous-assertion/controls.test.ts, src/m8-vacuous-assertion/vacuous.test.ts, test-quality/audit-log.deletion-surviving.test.ts, +4 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
+  },
+  {
+    "id": "DEP-OSV-00",
+    "title": "Dependency-CVE assessment partial — fixtures/b10-nextauth-csrf/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established; fixtures/b10-patched-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established; fixtures/b10-vuln-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established; 5 more input gaps",
+    "severity": "Info",
+    "precisionTier": "high",
+    "confidence": "N/A",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency — coverage not assessed",
+    "location": "(repo-wide)",
+    "status": "Open",
+    "evidence": "2 of 6 selected lockfile(s) assessed; 655 exact third-party source/package identities returned by osv-scanner --all-packages. fixtures/b10-nextauth-csrf/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-patched-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-vuln-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/supported-app/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-next14-rsc/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-declared-range/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-pinned-vuln/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/legacy-app/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. MEASURED prepared-target input inventory SHA-256 3fc86726f20e33425a23a43c0132eee3157b9ad3455d5383dec8c67a2367018f; provider --all-packages output bound to each selected source and input digest. Falsifier: Re-run osv-scanner with --all-packages for every selected lockfile and reconcile its source paths and package identities with this inventory; assess each disclosed input before claiming full coverage.",
+    "impact": "2 of 6 selected lockfile(s) assessed; 655 exact third-party source/package identities returned by osv-scanner --all-packages. fixtures/b10-nextauth-csrf/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-patched-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-vuln-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/supported-app/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-next14-rsc/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-declared-range/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-pinned-vuln/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/legacy-app/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. Lockfile CVE coverage is incomplete for the named inputs; this is not a finding of zero vulnerable dependencies. Curated checks have their own scope.",
+    "fix": "Resolve the named unsupported, unselected or missing-input boundaries and re-run the selected inputs with osv-scanner --all-packages. A target with no applicable ecosystem needs no Node lockfile.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
     "id": "DEP-CVE-2026-44578",
     "title": "next@14.2.35 vulnerable to CVE-2026-44578 (WebSocket-upgrade SSRF)",
     "severity": "High",
@@ -25025,7 +25598,7 @@
     "id": "SUP-SCOPE-00",
     "title": "Supply-chain scope: 4 resolved-tree check families; declaration ranges assessed separately",
     "taxonomy": "Coverage — supply-chain check scope",
-    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance); SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351). Limited to the declared manifests: SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows. SUP-UNPINNED and SUP-NON-REGISTRY examine 11 manifest declarations plus admitted npm v2/v3 dependency/devDependency/optionalDependency edges. package-lock.json (package-lock version 3, read): 725 admitted third-party range edges, 725 input unit(s) examined, 0 present/unread unit(s), 0 unsupported source schema(s). Excluded copies/constraints: root 8, workspace 0, link 0, peer 12. Read npm v2/v3 third-party dependency, devDependency and optionalDependency declarations. Root/workspace/link copies are excluded because manifests are authoritative; peer ranges are intentionally excluded compatibility constraints. Falsifier for an unread-format limit: a parser/registry replay of the named file that emits validated owner-path declaration edges and reports zero unread/unsupported units. Peer ranges are intentionally excluded compatibility constraints; the peer-only control in src/scan/mechanical.test.ts guards that boundary.",
+    "evidence": "OSV partial: 2 of 6 selected lockfile(s) assessed; 655 exact third-party source/package identities returned by osv-scanner --all-packages. fixtures/b10-nextauth-csrf/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-patched-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-vuln-deps/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/supported-app/package-lock.json: selected lockfile has 0 unresolved entries and 0 resolved packages; input completeness is not established fixtures/b10-next14-rsc/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-declared-range/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/b25-next-pinned-vuln/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. fixtures/legacy-app/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions. MEASURED prepared-target input inventory SHA-256 3fc86726f20e33425a23a43c0132eee3157b9ad3455d5383dec8c67a2367018f; provider --all-packages output bound to each selected source and input digest. Falsifier: Re-run osv-scanner with --all-packages for every selected lockfile and reconcile its source paths and package identities with this inventory; assess each disclosed input before claiming full coverage. Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance); SUP-INSTALL-SCRIPT-DEP (a RESOLVED package's own install-time lifecycle script, transitive ones included), because package-lock.json v2/v3 records `hasInstallScript` per resolved entry (#1351). Limited to the declared manifests: SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; DEP-CVE-* (the curated offline CVE table), because OSV assessed the selected inputs named in its independent receipt; unsupported and alternate inputs remain disclosed. SUP-UNPINNED and SUP-NON-REGISTRY examine 11 manifest declarations plus admitted npm v2/v3 dependency/devDependency/optionalDependency edges. package-lock.json (package-lock version 3, read): 725 admitted third-party range edges, 725 input unit(s) examined, 0 present/unread unit(s), 0 unsupported source schema(s). Excluded copies/constraints: root 8, workspace 0, link 0, peer 12. Read npm v2/v3 third-party dependency, devDependency and optionalDependency declarations. Root/workspace/link copies are excluded because manifests are authoritative; peer ranges are intentionally excluded compatibility constraints. Falsifier for an unread-format limit: a parser/registry replay of the named file that emits validated owner-path declaration edges and reports zero unread/unsupported units. Peer ranges are intentionally excluded compatibility constraints; the peer-only control in src/scan/mechanical.test.ts guards that boundary.",
     "impact": "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     "fix": "Keep root/workspace manifests authoritative and enforce a committed lockfile with frozen installs. npm v2/v3 declaration ranges are assessed; unread, unsupported or malformed range sources above need a validated format-specific parser/consumer before their absence of findings can count as coverage. For third-party declarations, update or override the owning dependency rather than editing generated lock metadata. Declare every workspace member so its manifest is included.",
     "severity": "Info",
@@ -25036,6 +25609,78 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true
+  },
+  {
+    "id": "SUP-NO-LOCKFILE-fixtures/b10-next14-rsc/package.json",
+    "title": "No supported lockfile resolves this manifest",
+    "severity": "Medium",
+    "confidence": "Confirmed",
+    "category": "Supply chain",
+    "taxonomy": "Missing lockfile",
+    "location": "fixtures/b10-next14-rsc/package.json",
+    "status": "Open",
+    "evidence": "fixtures/b10-next14-rsc/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions.",
+    "impact": "No reproducible dependency tree was assessed for this manifest; resolved versions and dependency CVE coverage remain unmeasured.",
+    "fix": "Commit a supported lockfile or record this manifest in its workspace lockfile, then run frozen installs and repeat the dependency assessment.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
+    "id": "SUP-NO-LOCKFILE-fixtures/b25-next-declared-range/package.json",
+    "title": "No supported lockfile resolves this manifest",
+    "severity": "Medium",
+    "confidence": "Confirmed",
+    "category": "Supply chain",
+    "taxonomy": "Missing lockfile",
+    "location": "fixtures/b25-next-declared-range/package.json",
+    "status": "Open",
+    "evidence": "fixtures/b25-next-declared-range/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions.",
+    "impact": "No reproducible dependency tree was assessed for this manifest; resolved versions and dependency CVE coverage remain unmeasured.",
+    "fix": "Commit a supported lockfile or record this manifest in its workspace lockfile, then run frozen installs and repeat the dependency assessment.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
+    "id": "SUP-NO-LOCKFILE-fixtures/b25-next-pinned-vuln/package.json",
+    "title": "No supported lockfile resolves this manifest",
+    "severity": "Medium",
+    "confidence": "Confirmed",
+    "category": "Supply chain",
+    "taxonomy": "Missing lockfile",
+    "location": "fixtures/b25-next-pinned-vuln/package.json",
+    "status": "Open",
+    "evidence": "fixtures/b25-next-pinned-vuln/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions.",
+    "impact": "No reproducible dependency tree was assessed for this manifest; resolved versions and dependency CVE coverage remain unmeasured.",
+    "fix": "Commit a supported lockfile or record this manifest in its workspace lockfile, then run frozen installs and repeat the dependency assessment.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
+    "id": "SUP-NO-LOCKFILE-fixtures/legacy-app/package.json",
+    "title": "No supported lockfile resolves this manifest",
+    "severity": "Medium",
+    "confidence": "Confirmed",
+    "category": "Supply chain",
+    "taxonomy": "Missing lockfile",
+    "location": "fixtures/legacy-app/package.json",
+    "status": "Open",
+    "evidence": "fixtures/legacy-app/package.json: Not assessed: this manifest has no selected supported lockfile or recorded workspace importer; manifest ranges are not resolved versions.",
+    "impact": "No reproducible dependency tree was assessed for this manifest; resolved versions and dependency CVE coverage remain unmeasured.",
+    "fix": "Commit a supported lockfile or record this manifest in its workspace lockfile, then run frozen installs and repeat the dependency assessment.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
   },
   {
     "id": "AUTH-sensitive-route-app-api-admin-metrics-open-route-ts",
