@@ -29,10 +29,10 @@
 name: secbench
 
 on:
-  # 05:00 UTC on the 1st. Ahead of ci (06:00), corpus-drift (07:23), conservation (07:30) and
-  # reasons-drift (08:00) so the scheduled jobs do not stack on one hour.
+  # 05:07 UTC on the 1st. Ahead of ci (06:11), corpus-drift (07:23), conservation (07:30) and
+  # reasons-drift (08:07) so the scheduled jobs do not stack on one hour.
   schedule:
-    - cron: "0 5 1 * *"
+    - cron: "7 5 1 * *"
   workflow_dispatch:
     inputs:
       alert_drill:

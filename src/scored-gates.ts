@@ -146,7 +146,7 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     // read (#879). Measured 2026-07-28 on this machine: clone 3s, 594/600 lockfiles in 39s at
     // concurrency 12, osv 3.4s, score 5.5s. Cheap enough to run, too external to run per-PR — what
     // moves it is OSV's advisory database, which no diff in this repo touches.
-    cadence: { kind: "workflow", file: ".github/workflows/secbench.yml", job: "secbench-recall", when: "monthly (1st, 05:00 UTC) + workflow_dispatch" },
+    cadence: { kind: "workflow", file: ".github/workflows/secbench.yml", job: "secbench-recall", when: "monthly (1st, 05:07 UTC) + workflow_dispatch" },
   },
   {
     id: "validate-free-recall",
@@ -158,7 +158,7 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     // 60s to run quick-scan + detect-static over all five and score them. It is the only gate whose
     // answer keys were written by people outside this repo, so a miss here is evidence in a way a
     // miss on our own fixtures is not.
-    cadence: { kind: "workflow", file: ".github/workflows/free-recall.yml", job: "free-recall", when: "monthly (2nd, 05:00 UTC) + workflow_dispatch" },
+    cadence: { kind: "workflow", file: ".github/workflows/free-recall.yml", job: "free-recall", when: "monthly (2nd, 05:13 UTC) + workflow_dispatch" },
   },
   {
     id: "validate-connected",
@@ -179,7 +179,7 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     cadence: {
       kind: "none",
       issue: 1270,
-      alarmedBy: { file: ".github/workflows/semantic-freshness.yml", when: "daily 09:00 UTC + workflow_dispatch" },
+      alarmedBy: { file: ".github/workflows/semantic-freshness.yml", when: "daily 09:07 UTC + workflow_dispatch" },
     },
   },
 ];
@@ -202,7 +202,7 @@ export const MEASURED_OUTSIDE_DISCOVERY: readonly ScoredGate[] = [
     id: "genai-admission-census",
     script: "genai-admission-census",
     measures: "POPULATION available to a commit-level self-admitted-GenAI comparison over the pinned corpus (#1600)",
-    cadence: { kind: "workflow", file: ".github/workflows/genai-census.yml", job: "genai-census", when: "monthly (3rd, 05:00 UTC) + workflow_dispatch + PR on the corpus/classifier" },
+    cadence: { kind: "workflow", file: ".github/workflows/genai-census.yml", job: "genai-census", when: "monthly (3rd, 05:19 UTC) + workflow_dispatch + PR on the corpus/classifier" },
   },
 ];
 

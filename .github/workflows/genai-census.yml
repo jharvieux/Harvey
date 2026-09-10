@@ -33,7 +33,7 @@ name: genai-census
 
 on:
   schedule:
-    - cron: "0 5 3 * *"
+    - cron: "19 5 3 * *"
   workflow_dispatch:
     inputs:
       alert_drill:

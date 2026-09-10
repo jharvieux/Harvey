@@ -157,7 +157,7 @@ Four cautions that travel with these numbers.
    indicators and stay out of the free count. Both issues are CLOSED and the measurement corroborates
    that, at the tier it corroborates it at.
 
-The gate runs monthly (`.github/workflows/free-recall.yml`, 2nd at 05:00 UTC) plus on any PR
+The gate runs monthly (`.github/workflows/free-recall.yml`, 2nd at 05:13 UTC) plus on any PR
 touching the harness or the keys, so this section should not go stale the way §2b did. It fails only
 on a free-count false positive or on nothing being scored.
 

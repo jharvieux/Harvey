@@ -17,7 +17,7 @@ on:
   # it. On a schedule event the `changes` router sets code=true, so heavy-cli (and the full verify)
   # run as a post-merge-style safety net.
   schedule:
-    - cron: "0 6 * * *" # daily 06:00 UTC
+    - cron: "11 6 * * *" # daily 06:11 UTC
   # #1287: this workflow had NO manual trigger, so heavy-cli's `ci-heavy-cli-alert` path could only
   # ever run on cron — i.e. it could not be proven to work at all. The alert path had in fact never
   # executed. `alert_drill` is the re-runnable proof; a bare dispatch with it off is an ordinary run.

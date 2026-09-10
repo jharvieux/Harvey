@@ -168,7 +168,7 @@ direction — the recorded tallies would age out of their own 30-day window and 
 would happen is that the next hand-run of `validate-semantic` would print `NOT SCORED`, in a session
 nobody was scheduled to have.
 
-`.github/workflows/semantic-freshness.yml` (daily 09:00 UTC, plus a PR trigger on the corpus and the
+`.github/workflows/semantic-freshness.yml` (daily 09:07 UTC, plus a PR trigger on the corpus and the
 rule itself) runs:
 
 ```bash

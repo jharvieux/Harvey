@@ -70,7 +70,7 @@ name: reasons-drift
 
 on:
   schedule:
-    - cron: "0 8 * * *" # Daily 08:00 UTC — after dry-run-drift (Mon 07:00) and conservation (07:30)
+    - cron: "7 8 * * *" # Daily 08:07 UTC — after dry-run-drift (Mon 07:07) and conservation (07:30)
   workflow_dispatch:
     inputs:
       alert_drill:

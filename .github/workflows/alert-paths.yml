@@ -26,7 +26,7 @@ name: alert-paths
 
 on:
   schedule:
-    - cron: "45 7 * * *" # Daily 07:45 UTC — between conservation (07:30) and reasons-drift (08:00)
+    - cron: "45 7 * * *" # Daily 07:45 UTC — between conservation (07:30) and reasons-drift (08:07)
   workflow_dispatch:
     inputs:
       alert_drill:
