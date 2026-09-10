@@ -909,7 +909,7 @@ export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)):
 
 
 /** Publishing current artifacts requires completed live calls, not merely a nonzero finding count.
- * Static input gaps remain explicit findings; a broken required call cannot refresh the family. */
+ * Static input gaps have a different cause from failed required calls. */
 export function assertOsvExecution(assessment: OsvAssessment, execution?: OsvExecutionReceipt): void {
   if (!execution || execution.inventorySha256 !== assessment.inventory.sha256) throw new Error("OSV live execution receipt is missing or belongs to another input inventory");
   const selected = assessment.inventory.inputs.filter((input) => input.disposition === "selected");
