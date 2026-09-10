@@ -1245,7 +1245,7 @@
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 4.17.12. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2019-10744.",
+    "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744, SNYK-JS-LODASH-450202) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 4.17.12. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2019-10744.",
     "impact": "Prototype Pollution in lodash — Versions of `lodash` before 4.17.12 are vulnerable to Prototype Pollution.  The function `defaultsDeep` allows a malicious user to modify the prototype of `Object` via `{constructor: {prototype: {...}}}` causing the addition or modification of an existing property that will exist on all objects.",
     "fix": "Upgrade lodash to 4.17.12 or later (see GHSA-jf85-cpcp-j695).",
     "value": 5,

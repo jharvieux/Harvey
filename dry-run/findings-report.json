@@ -3,7 +3,7 @@
     "client": "Calibration target (internal dry run — issue #34)",
     "subtitle": "PARTIAL — mechanical scan + M1 detect-deeper only; no live DB/Docker in this pass",
     "date": "Undated calibration snapshot",
-    "commit": "Retained target tree 447f5bd71b486781b2995e6dacbe6069eff3cf47",
+    "commit": "Retained target tree b923c5c5b030664205a9150950da808bc8f9517c",
     "auditor": "Harvey dry-run harness (src/cli/dry-run.ts)",
     "confidential": false,
     "overallHealth": 0,
@@ -1261,7 +1261,7 @@
       "taxonomy": "Known-vulnerable dependency",
       "location": "package-lock.json (lodash@4.17.11)",
       "status": "Open",
-      "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 4.17.12. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2019-10744.",
+      "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744, SNYK-JS-LODASH-450202) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 4.17.12. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2019-10744.",
       "impact": "Prototype Pollution in lodash — Versions of `lodash` before 4.17.12 are vulnerable to Prototype Pollution.  The function `defaultsDeep` allows a malicious user to modify the prototype of `Object` via `{constructor: {prototype: {...}}}` causing the addition or modification of an existing property that will exist on all objects.",
       "fix": "Upgrade lodash to 4.17.12 or later (see GHSA-jf85-cpcp-j695).",
       "value": 5,
@@ -29175,8 +29175,8 @@
   ],
   "artifactLinkage": {
     "schemaVersion": 1,
-    "rawSha256": "fc7b24ae0b86d76e8efa7912f7815a41b48f2805ef12f5084e39f45568b79f12",
-    "targetTree": "447f5bd71b486781b2995e6dacbe6069eff3cf47",
+    "rawSha256": "98ca7c5a107fa107e8b9971e067a7397a43c03c1b37a553c1b55815c634c9ef8",
+    "targetTree": "b923c5c5b030664205a9150950da808bc8f9517c",
     "dynamicSha256": "c3d0ebf9a25a35dd8be1071bfb1c591f6034fc603da3bec48d19c4f83fd26b32"
   }
 }

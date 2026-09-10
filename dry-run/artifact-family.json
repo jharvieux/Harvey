@@ -4,7 +4,7 @@
   "producer": "src/cli/dry-run.ts",
   "source": {
     "target": "targets/calibration",
-    "targetTree": "447f5bd71b486781b2995e6dacbe6069eff3cf47"
+    "targetTree": "b923c5c5b030664205a9150950da808bc8f9517c"
   },
   "retainedDynamic": {
     "role": "historical-dynamic-evidence",
@@ -50,16 +50,16 @@
   },
   "artifacts": {
     "findings.json": {
-      "sha256": "fc7b24ae0b86d76e8efa7912f7815a41b48f2805ef12f5084e39f45568b79f12"
+      "sha256": "98ca7c5a107fa107e8b9971e067a7397a43c03c1b37a553c1b55815c634c9ef8"
     },
     "pii-data-map.json": {
       "sha256": "f6ebffce42126c05a99c0ad8b3b2029be171fb17ef29af9c12678a14857d39d9"
     },
     "scorecard.json": {
-      "sha256": "2fd7fb128741b540cc205d584c56a308f47be881808dd8d2b14f3aea2304a72e"
+      "sha256": "f7d9dc7e87fc9e04f92b712b8bbef9c0bd73fde58e1f451663abb22fc235d06d"
     },
     "findings-report.json": {
-      "sha256": "efdef34a666a6316832fab2d19275af4d464bf38da20537c82493e4cfe202f3e"
+      "sha256": "c953599856a676b28ec71f49ba45635fb4bd42ce81b99d9fb3203e50ae6a04c5"
     }
   },
   "transformations": {
