@@ -37,6 +37,7 @@ import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { scanDidNotRun } from "../scan/semgrep.js";
 import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS } from "../scan/rule-corpus-pairing.js";
+import { observeDependencyCorpusPairs } from "../scan/calibration/dependency-pairings.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
 const FLAGS = [
@@ -515,17 +516,23 @@ const pairings = ruleCorpusPairings(harveySemgrepRules(), findings);
 // ratchet spanning two populations is two numbers wearing one name. TWIN_BACKLOG is pinned to the
 // deterministic one — the artifact the required `dry-run-drift` check keeps honest, and the one
 // `pnpm verify` scores — and the live figure is REPORTED beside it rather than dropped.
-const outsidePairings = pairUnits(freeCountOutsideUnits(findings, harveySemgrepRules()), findings);
+// Dependency states have whole-root locations, so require independently executed root pairs.
+// This live consumer uses real OSV calls; the unit gate substitutes only the provider boundary.
+const executedPairs = await observeDependencyCorpusPairs(dir);
+for (const pair of executedPairs) {
+  console.log(`  EXECUTED DEPENDENCY PAIR [${pair.detector}]: ${pair.positive.fixture} (${pair.positive.receipt.status}, ${pair.positive.receipt.findings} finding(s)) → ${pair.negative.fixture} (${pair.negative.receipt.status}, ${pair.negative.receipt.unitsExamined} examined unit(s)); selected-input inventory ${pair.negative.execution.inventorySha256}`);
+}
+const outsidePairings = pairUnits(freeCountOutsideUnits(findings, harveySemgrepRules()), findings, CORPUS, executedPairs);
 const allPairings = [...pairings, ...outsidePairings];
 const unpaired = allPairings.filter((p) => p.unpaired && !UNSCORED_OUTSIDE_UNITS.some((u) => u.unit === p.rule));
 const committed = committedScanFindings();
-const ratchetPairings = [...ruleCorpusPairings(harveySemgrepRules(), committed), ...pairUnits(freeCountOutsideUnits(committed, harveySemgrepRules()), committed)];
+const ratchetPairings = [...ruleCorpusPairings(harveySemgrepRules(), committed), ...pairUnits(freeCountOutsideUnits(committed, harveySemgrepRules()), committed, CORPUS, executedPairs)];
 const twinless = ratchetPairings.filter((p) => p.twinless);
 const newTwinless = twinless.filter((p) => !TWIN_BACKLOG.includes(p.rule));
 const staleTwinBacklog = TWIN_BACKLOG.filter((id) => !twinless.some((p) => p.rule === id) && ratchetPairings.some((p) => p.rule === id));
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301/#1676), scored against this run: ${allPairings.length} unit(s) across ${new Set(allPairings.map((p) => p.engine)).size} engine(s)`);
 console.log(`  POSITIVE half (fatal, THIS RUN): ${allPairings.length - allPairings.filter((p) => p.unpaired).length}/${allPairings.length} are claimed by a corpus positive they caught`);
-console.log(`  NEGATIVE half (ratcheted, COMMITTED dry-run artifact): ${ratchetPairings.length - twinless.length}/${ratchetPairings.length} also have a benign twin they stayed silent on; ${twinless.length} do not and are enumerated in TWIN_BACKLOG`);
+console.log(`  NEGATIVE half (ratcheted, committed file twins and executed dependency-root twins): ${ratchetPairings.length - twinless.length}/${ratchetPairings.length} also have a benign twin they stayed silent on; ${twinless.length} do not and are enumerated in TWIN_BACKLOG`);
 console.log(`  NEGATIVE half on THIS RUN, reported not ratcheted: ${allPairings.filter((p) => p.twinless).length}/${allPairings.length} twinless — a larger population leaves fewer un-hit fixtures to serve as twins, so this number is expected to be higher and is NOT the ratchet's subject`);
 for (const p of unpaired) console.log(`  UNPAIRED  [${p.engine}] ${p.rule} — ${p.unpaired}`);
 for (const p of newTwinless) console.log(`  NEW TWINLESS  [${p.engine}] ${p.rule} — ${p.twinless}`);
