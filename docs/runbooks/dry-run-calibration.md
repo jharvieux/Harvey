@@ -219,12 +219,9 @@ are explicit that this is a partial dry run, not a scored client audit — see
 - `dry-run/pii-data-map.json` — real M10 output.
 - `dry-run/timing.json` — real per-phase wall-clock from `src/cli/dry-run.ts`.
 - `dry-run/scorecard.json` — the coverage scorecard (§3), from `src/cli/dry-run-scorecard.ts`.
-- `dry-run/findings-report.json` / `dry-run/build-report-doc.mjs` — the findings.json wrapped
-  with report meta, used for §6's render.
-- `src/cli/dry-run.ts`, `src/cli/dry-run-scorecard.ts` — the harness, re-runnable:
-  `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` (git-init a
-  scratch copy first per issue #55 to avoid the crash), then
-  `pnpm exec tsx src/cli/dry-run-scorecard.ts`.
+- `dry-run/findings-report.json` — the exact raw findings wrapped with report metadata and source linkage, used for §6's render. `dry-run/build-report-doc.mjs` validates the existing family; it no longer rebuilds a report independently.
+- `dry-run/artifact-family.json` — deterministic digests and transformation/conservation receipt for the current raw findings, PII data, scorecard, and report. Historical M2 evidence is retained explicitly as an input with its original target and date; it is not a live run by this invocation.
+- Regenerate the complete family with `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run`. The harness creates and retains its own scratch snapshot, derives all outputs from that invocation, validates staging, and activates the complete directory. Validate the result with `pnpm validate:findings dry-run/findings-report.json`. The standalone `dry-run-scorecard.ts` requires a separate output directory and refuses to overwrite a published family. If publication is interrupted between directory renames, the validator names the retained previous directory for recovery.
 - `src/migration-sql-parse.ts`, `src/coverage-scorecard.ts` — the new pure logic, unit tested
   (`src/migration-sql-parse.test.ts`, `src/coverage-scorecard.test.ts`).
 

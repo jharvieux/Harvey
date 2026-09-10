@@ -154,13 +154,13 @@ Do not quote the number of heavy files or binary-gated files; run the shard comm
 
 Every `src/cli` entry point that may exit non-zero imports `./sync-stdio.js` as its first import. Add the import for new CLIs; do not edit the discovery ratchet to avoid it.
 
-After changing a detector, Semgrep rule, finding schema, or calibration fixture, regenerate and commit both artifacts:
+After changing a detector, Semgrep rule, finding schema, or calibration fixture, regenerate and commit the complete current artifact family (`findings.json`, `pii-data-map.json`, `scorecard.json`, `findings-report.json`, and `artifact-family.json`; timing remains untracked):
 
 ```bash
 pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run
 ```
 
-The machine must have the mechanical binaries installed. A missing required binary or nondeterministic external input must be fixed or explicitly pinned; do not commit a degraded artifact.
+The machine must have the mechanical binaries installed. A missing required binary or nondeterministic external input must be fixed or explicitly pinned; do not commit a degraded artifact. Validate linkage with `pnpm validate:findings dry-run/findings-report.json`; do not regenerate derived members independently.
 
 Other checks are run when relevant:
 
