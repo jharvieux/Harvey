@@ -47,6 +47,7 @@ export function observeOsvInputs(scanDir: string, context: MechanicalScanContext
 }
 
 interface DependencyState extends DependencyInput {
+  emittedFindings: Record<string, Finding[]>;
   declared: DeclaredDependency[];
   rangeDeclarations: DeclaredDependency[];
   declaredNames: string[];
@@ -145,23 +146,34 @@ function dependencyState(input: DependencyInput): DependencyState {
     manifest: edge.source, name: edge.name, range: edge.range, edge,
   })))];
   const allNames = [...new Set([...declaredNames, ...license.candidates.map((candidate) => candidate.name)])];
-  return { ...input, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
+  return { ...input, emittedFindings: {}, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
 }
 
 export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Object.freeze([
+  definition({ id: "next-curated-cves", order: 5, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "checkNextVersionCVEs" }, taxonomies: ["Known-vulnerable dependency", "EOL framework version"], applicableFiles: population("the declared Next.js dependency and resolved version", ({ pkg }) => pkg?.dependencies?.next ?? pkg?.devDependencies?.next ? ["next"] : []), enabled: ({ pkg }) => Boolean(pkg?.dependencies?.next ?? pkg?.devDependencies?.next), invoke: ({ pkg, context }) => checkNextVersionCVEs((pkg?.dependencies?.next ?? pkg?.devDependencies?.next)!, "package.json", context.dependencyTree) }),
   definition({ id: "osv-advisories", order: 10, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "parseOsvFindings" }, additionalImplementations: [{ file: "src/scan/dependencies.ts", exportName: "osvUnavailableFinding" }, { file: "src/scan/dependencies.ts", exportName: "inventoryOsvInputs" }, { file: "src/scan/dependencies.ts", exportName: "validateOsvAssessment" }, { file: "src/scan/dependencies.ts", exportName: "runOsvScanner" }], taxonomies: ["Known-vulnerable dependency", "Known-vulnerable dependency — coverage not assessed"],
     applicableFiles: population("OSV-selected source/package identities from validated --all-packages output", ({ osv }) => (osv.assessment?.invocations ?? []).flatMap((input) => input.examinedPackages.map((identity) => `${input.path}#${identity}`))),
     examinedUnitIdentities: (_state, selected) => semanticExaminedUnits("osv-advisories", "resolved-dependency", selected as string[]),
-    invoke: ({ osv }) => {
+    invoke: ({ osv, context, emittedFindings }) => {
       const examined = new Map(osv.assessment?.invocations.map((input) => [input.path, new Set(input.examinedPackages)]));
       const assessed = { results: osv.result?.results?.map((source) => ({ ...source, packages: source.packages?.filter((pkg) => examined.get(source.source?.path ?? "")?.has(`npm:${pkg.package?.name}@${pkg.package?.version}`)) })) };
+      const tree = context.dependencyTree;
+      const version = tree?.versions.get("next");
+      const source = osv.assessment?.invocations.find((input) => input.path === tree?.source && input.examinedPackages.includes(`npm:next@${version}`));
+      const representatives = source && version ? (emittedFindings["next-curated-cves"] ?? []).map((finding) => ({ source: source.path, sourceSha256: source.sha256, name: "next", version, finding })) : [];
       return [
-        ...(osv.assessment ? parseOsvFindings(assessed) : []),
+        ...(osv.assessment ? parseOsvFindings(assessed, {
+          entries: representatives,
+          record: (id, reason) => {
+            const finding = emittedFindings["next-curated-cves"]?.find((finding) => finding.id === id);
+            if (!finding) throw new Error(`OSV representative ${id} was not emitted by the curated registry producer`);
+            finding.evidence += ` ${reason}`;
+          },
+        }) : []),
         ...(osv.assessment?.status === "assessed" && !osv.assessment.invocations.some((input) => input.notApplicablePackages.length) ? [] : [osvUnavailableFinding(osv.assessment ?? osv.failure ?? "No OSV input/invocation receipt was supplied; package examination is not established.")]),
       ];
     },
   }),
-  definition({ id: "next-curated-cves", order: 20, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "checkNextVersionCVEs" }, taxonomies: ["Known-vulnerable dependency", "EOL framework version"], applicableFiles: population("the declared Next.js dependency and resolved version", ({ pkg }) => pkg?.dependencies?.next ?? pkg?.devDependencies?.next ? ["next"] : []), enabled: ({ pkg }) => Boolean(pkg?.dependencies?.next ?? pkg?.devDependencies?.next), invoke: ({ pkg, context }) => checkNextVersionCVEs((pkg?.dependencies?.next ?? pkg?.devDependencies?.next)!, "package.json", context.dependencyTree) }),
   definition({ id: "dependency-typosquat", order: 30, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkTyposquat" }, taxonomies: ["Possible typosquat/slopsquat"], applicableFiles: population("declared and resolved dependency names", ({ allNames }) => allNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ allNames, license, declaredNames }) => checkTyposquat(allNames, { declared: new Set(declaredNames), source: license.source }) }),
   definition({ id: "dependency-ioc", order: 40, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkKnownIoc" }, taxonomies: ["Known-malicious dependency"], applicableFiles: population("declared and resolved dependency names checked against the IOC catalog", ({ allNames }) => allNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ allNames, license, declaredNames }) => checkKnownIoc(allNames, "package.json", { declared: new Set(declaredNames), source: license.source }) }),
   definition({ id: "curated-dependency-cves", order: 50, implementation: { file: "src/scan/dependencies.ts", exportName: "checkKnownDependencyCVEs" }, taxonomies: ["Known-vulnerable dependency"], applicableFiles: population("declared dependencies plus resolved candidates used when OSV is unavailable", ({ declared, license, osv }) => osv.assessment?.invocations.some((input) => input.status !== "not-assessed") ? declared : [...declared, ...license.candidates]), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ osv, license, declared, context }) => {
@@ -188,7 +200,7 @@ export async function runRegisteredDependencyDetectors(input: DependencyInput, s
   if (input.osv.assessment) validateOsvAssessment(input.osv.assessment, input.osv.result ?? {}, inventoryOsvInputs(input.scanDir, input.context.paths));
   const state = dependencyState(input);
   const findings: Finding[] = [];
-  const findingsByDetector: Record<string, Finding[]> = {};
+  const findingsByDetector = state.emittedFindings;
   const records: MechanicalProducerRecord[] = [];
   for (const detector of DEPENDENCY_DETECTORS) {
     if (detector.stage !== stage) continue;

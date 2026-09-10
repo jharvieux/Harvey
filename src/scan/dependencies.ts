@@ -8,11 +8,11 @@
 // Invocation (from the target repo root):
 //   osv-scanner --format json --lockfile pnpm-lock.yaml    (or package-lock.json / yarn.lock)
 //
-// Trust boundary: a vulnerability whose id/alias is one of the curated CVEs below is already
-// reported by checkNextVersionCVEs with a hand-written exploitability narrative, so an OSV hit
-// against one of them is a duplicate of that finding and is dropped here (see
-// CURATED_ADVISORY_IDS / dedup in parseOsvFindings). Every other OSV hit is "review" — a version
-// match isn't proof of exploitability (deployment context, e.g. self-hosted vs. Vercel, matters).
+// OSV findings are retained unless the registry supplies an actually emitted representative for
+// the same source, package, version and advisory. A curated advisory name alone proves no such
+// replacement: nested inputs and alternate lockfiles can resolve different package populations.
+// Generic OSV hits are "review" — a version match isn't proof of exploitability (deployment
+// context, e.g. self-hosted vs. Vercel, matters).
 //
 // `precisionTier` here ("high" vs "review") is about confidence in the VERSION MATCH itself, a
 // different axis from exploitability. Every "Dependency CVE" finding below is a version match
@@ -972,22 +972,6 @@ function osvFixedVersions(vuln: OsvVulnerability, pkg: string): string[] {
   return [...new Set(fixed)];
 }
 
-// Advisory ids whose exploitability we've independently curated above (checkNextVersionCVEs) —
-// the vuln identity (GHSA id, cross-referenced against OSV's id + aliases) that ties an OSV hit
-// back to its curated finding. An OSV hit matching one of these is the SAME underlying CVE as
-// the curated finding, not a distinct dependency issue, so parseOsvFindings drops it rather than
-// double-reporting: the curated finding is richer (specific fix guidance, deployment-context
-// impact) and stays the sole representative. This is a general rule keyed on advisory identity,
-// not a one-off for any single GHSA — extend this set whenever a new CVE is added above.
-const CURATED_ADVISORY_IDS = new Set([
-  "GHSA-f82v-jwr5-mffw", // CVE-2025-29927 middleware auth bypass
-  "GHSA-9qr9-h5gf-34mp", // CVE-2025-55182 RSC RCE (Next.js advisory)
-  "GHSA-fv66-9v8q-g76r", // CVE-2025-55182 RSC RCE (upstream React advisory — same vuln, so an OSV
-  // hit on a react-server-dom-* package is the same finding we already report against next
-  "GHSA-c4j6-fc7j-m34r", // CVE-2026-44578 WebSocket-upgrade SSRF
-  "GHSA-mq59-m269-xvcx", // CVE-2026-27978 Server Actions null-origin CSRF
-]);
-
 const OSV_SEVERITY_LABELS: Record<string, Severity> = {
   CRITICAL: "Critical",
   HIGH: "High",
@@ -1076,7 +1060,12 @@ function osvImpact(vuln: OsvVulnerability): string {
   return vuln.summary && !body.startsWith(vuln.summary) ? `${vuln.summary} — ${body}` : body;
 }
 
-export function parseOsvFindings(result: OsvScanResult): Finding[] {
+interface OsvEmittedRepresentatives {
+  entries: readonly { source: string; sourceSha256: string; name: string; version: string; finding: Finding }[];
+  record: (representativeId: string, reason: string) => void;
+}
+
+export function parseOsvFindings(result: OsvScanResult, represented?: OsvEmittedRepresentatives): Finding[] {
   const findings: Finding[] = [];
   for (const src of result.results ?? []) {
     for (const pkg of src.packages ?? []) {
@@ -1086,10 +1075,14 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
       for (const vuln of pkg.vulnerabilities ?? []) {
         const id = vuln.id ?? "unknown-id";
         const ids = new Set([id, ...(vuln.aliases ?? [])]);
-        const curated = [...ids].some((a) => CURATED_ADVISORY_IDS.has(a));
-        // Same underlying CVE as an already-curated checkNextVersionCVEs finding — drop the
-        // OSV duplicate rather than double-reporting the same vuln under two ids.
-        if (curated) continue;
+        const representative = represented?.entries.find((entry) =>
+          entry.source === src.source?.path && entry.name === name && entry.version === version &&
+          entry.finding.dependency === name && entry.finding.taxonomy === "Known-vulnerable dependency" &&
+          ids.has(entry.finding.id.replace(/^DEP-/, "")));
+        if (representative) {
+          represented!.record(representative.finding.id, `OSV also matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against npm:${name}@${version} from ${representative.source} (input SHA-256 ${representative.sourceSha256}). This exact source/package/version/advisory occurrence is represented by this emitted ${representative.finding.id} finding, so the duplicate OSV row is not delivered separately.`);
+          continue;
+        }
         const group = pkg.groups?.find((g) => g.ids?.includes(id));
         const { severity, basis } = resolveOsvSeverity(vuln.database_specific?.severity, group?.max_severity);
         const rating = basis
