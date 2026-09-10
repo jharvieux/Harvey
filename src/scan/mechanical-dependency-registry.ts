@@ -1,7 +1,7 @@
 import type { Finding } from "../findings.js";
 import { dependencyRangeEdge, licenseScope } from "../sbom.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, runOsvScanner, type OsvScanResult, type OsvAssessment, inventoryOsvInputs, validateOsvAssessment } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, runOsvScanner, type OsvScanResult, type OsvAssessment, type OsvExecutionReceipt, inventoryOsvInputs, validateOsvAssessment } from "./dependencies.js";
 import {
   checkDependencyInstallScripts,
   checkInstallScripts,
@@ -39,7 +39,7 @@ interface DependencyInput {
 }
 
 /** Bind live and replayed observations to the same prepared dependency population. */
-export function observeOsvInputs(scanDir: string, context: MechanicalScanContext, snapshot?: { result: OsvScanResult; assessment: OsvAssessment }, paritySnapshot?: { result: OsvScanResult; assessment: OsvAssessment }): { result: OsvScanResult; assessment: OsvAssessment; failure?: string } {
+export function observeOsvInputs(scanDir: string, context: MechanicalScanContext, snapshot?: { result: OsvScanResult; assessment: OsvAssessment }, paritySnapshot?: { result: OsvScanResult; assessment: OsvAssessment }): { result: OsvScanResult; assessment: OsvAssessment; execution?: OsvExecutionReceipt; failure?: string } {
   const inventory = inventoryOsvInputs(scanDir, context.paths);
   if (snapshot) validateOsvAssessment(snapshot.assessment, snapshot.result, inventory);
   if (paritySnapshot) validateOsvAssessment(paritySnapshot.assessment, paritySnapshot.result, inventory);

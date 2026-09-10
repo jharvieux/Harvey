@@ -6,7 +6,7 @@
 // CLI: `pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]`
 
 import type { Finding } from "../findings.js";
-import type { OsvAssessment, OsvScanResult } from "./dependencies.js";
+import { assertOsvExecution, type OsvAssessment, type OsvScanResult } from "./dependencies.js";
 import { resolveScanScope } from "./scan-scope.js";
 import type { TenancyOverride } from "./supabase-static.js";
 import type { DependencyMap } from "./supply-chain.js";
@@ -70,6 +70,8 @@ interface MechanicalScanOptions {
   // registry-reachability dependency would let it drift on an offline/blipped CI run for reasons
   // that have nothing to do with the scanner's own code.
   skipNetworkChecks?: boolean;
+  /** Refuse artifact publication after any failed required OSV call; retain static scope disclosures. */
+  requireOsvExecution?: boolean;
   // #1300 / #126 option (2): guard helper names supplied per engagement, folded into the
   // route-noauth / authed-no-role-check clearance test alongside the ones discoverAuthGuards finds
   // in the target's own source (option (1)). #126 recommended both; PR #127 shipped neither.
@@ -177,6 +179,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     const observedOsv = observeOsvInputs(scanDir, context, advisorySnapshot, advisoryParitySnapshot);
     context.recordToolResult("osv", observedOsv);
     const osv = context.toolResult<typeof observedOsv>("osv")!;
+    if (opts.requireOsvExecution) assertOsvExecution(osv.assessment, osv.execution);
     let advisoryObservation: CorpusAdvisoryComparisonReceipt | undefined;
     if (advisoryParitySnapshot && osv.failure) {
       throw new Error(`live OSV advisory verification did not complete: ${osv.failure}`);

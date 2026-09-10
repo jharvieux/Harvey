@@ -24,7 +24,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { inventoryOsvInputs, osvUnavailableFinding, runOsvScanner, validateOsvAssessment } = await import("./dependencies.js");
+const { assertOsvExecution, inventoryOsvInputs, osvUnavailableFinding, runOsvScanner, validateOsvAssessment } = await import("./dependencies.js");
 
 // runOsvScanner only invokes the binary when a lockfile exists — the mock never reads it.
 const dir = mkdtempSync(join(tmpdir(), "harvey-osv-crash-"));
@@ -305,5 +305,21 @@ describe("OSV input inventory and effective examination (#2033)", () => {
     const run = runOsvScanner(target);
     expect(run.failure).toContain("input completeness is not established");
     expect(run.assessment.status).toBe("not-assessed");
+  });
+});
+
+
+describe("required live OSV execution receipts", () => {
+  it("accepts a reconciled live receipt and refuses absent, incomplete, duplicate, foreign, or relabelled execution", () => {
+    osvBehavior = () => COMPLETE_REPORT;
+    const { assessment, execution } = runOsvScanner(dir);
+    expect(() => assertOsvExecution(assessment, execution)).not.toThrow();
+    expect(() => assertOsvExecution(assessment)).toThrow(/missing/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inputs: [] })).toThrow(/every selected/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inputs: [...execution.inputs, ...execution.inputs] })).toThrow(/every selected/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inventorySha256: "foreign" })).toThrow(/another input/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inputs: [{ ...execution.inputs[0]!, path: "other/package-lock.json" }] })).toThrow(/missing or duplicate/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inputs: [{ ...execution.inputs[0]!, sha256: "foreign" }] })).toThrow(/missing or duplicate/);
+    expect(() => assertOsvExecution(assessment, { ...execution, inputs: [{ ...execution.inputs[0]!, status: "input-not-assessed", reason: "fabricated static gap" }] })).toThrow(/preflight condition/);
   });
 });

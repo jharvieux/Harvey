@@ -674,7 +674,13 @@ export interface OsvAssessment {
   falsifier: string;
 }
 
+export interface OsvExecutionReceipt {
+  inventorySha256: string;
+  inputs: { path: string; sha256: string; status: "completed" | "input-not-assessed" | "failed"; inputGap?: { code: "unresolved-versions" | "incomplete-parse" | "no-resolved-packages"; unresolved: number; unmatched: number; resolved: number }; reason?: string }[];
+}
+
 interface OsvScanRun {
+  execution: OsvExecutionReceipt;
   result: OsvScanResult;
   assessment: OsvAssessment;
   failure?: string;
@@ -845,14 +851,27 @@ export function validateOsvAssessment(assessment: OsvAssessment, result: OsvScan
 export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)): OsvScanRun {
   const result: OsvScanResult = { results: [] };
   const failures = new Map<string, string>();
+  const execution: OsvExecutionReceipt = { inventorySha256: inventory.sha256, inputs: [] };
   for (const input of inventory.inputs.filter((entry) => entry.disposition === "selected")) {
+    const receipt: OsvExecutionReceipt["inputs"][number] = { path: input.path, sha256: input.sha256, status: "failed" };
+    execution.inputs.push(receipt);
     try {
       const bytes = readFileSync(join(dir, input.path));
       if (inputHash(bytes) !== input.sha256) throw new Error("selected lockfile changed after input inventory");
       const text = bytes.toString("utf8");
-      if (input.unresolvedPackages?.length) throw new Error(`selected lockfile contains unresolved package versions: ${input.unresolvedPackages.join(", ")}`);
       const parsed = basename(input.path) === "pnpm-lock.yaml" ? parsePnpmLock(text) : basename(input.path) === "yarn.lock" ? parseYarnLock(text) : parsePackageLock(text);
-      if (parsed.unmatched > 0 || parsed.components.length === 0) throw new Error(`selected lockfile has ${parsed.unmatched} unresolved entries and ${parsed.components.length} resolved packages; input completeness is not established`);
+      const inputGap = input.unresolvedPackages?.length
+        ? `selected lockfile contains unresolved package versions: ${input.unresolvedPackages.join(", ")}`
+        : parsed.unmatched > 0 || parsed.components.length === 0
+          ? `selected lockfile has ${parsed.unmatched} unresolved entries and ${parsed.components.length} resolved packages; input completeness is not established`
+          : undefined;
+      if (inputGap) {
+        receipt.status = "input-not-assessed";
+        receipt.inputGap = { code: input.unresolvedPackages?.length ? "unresolved-versions" : parsed.unmatched > 0 ? "incomplete-parse" : "no-resolved-packages", unresolved: input.unresolvedPackages?.length ?? 0, unmatched: parsed.unmatched, resolved: parsed.components.length };
+        receipt.reason = inputGap;
+        failures.set(input.path, inputGap);
+        continue;
+      }
       let out: string;
       try {
         out = execFileSync("osv-scanner", ["--format", "json", "--all-packages", "--lockfile", join(dir, input.path)], { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
@@ -877,13 +896,47 @@ export function runOsvScanner(dir: string, inventory = inventoryOsvInputs(dir)):
       if (actual.size === 0) throw new Error("OSV --all-packages receipt returned no selected-lock package identities");
       result.results!.push(...normalized.results!);
       (result.inputReports ??= []).push({ path: input.path, metadata: Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "results")) });
+      receipt.status = "completed";
     } catch (error) {
-      failures.set(input.path, error instanceof Error ? error.message : String(error));
+      receipt.reason = error instanceof Error ? error.message : String(error);
+      failures.set(input.path, receipt.reason);
     }
   }
   const assessment = assessmentFor(inventory, result, failures);
   validateOsvAssessment(assessment, result, inventory);
-  return { result, assessment, ...(failures.size ? { failure: [...failures].map(([path, reason]) => `${path}: ${reason}`).join("; ") } : {}) };
+  return { result, assessment, execution, ...(failures.size ? { failure: [...failures].map(([path, reason]) => `${path}: ${reason}`).join("; ") } : {}) };
+}
+
+
+/** Publishing current artifacts requires completed live calls, not merely a nonzero finding count.
+ * Static input gaps remain explicit findings; a broken required call cannot refresh the family. */
+export function assertOsvExecution(assessment: OsvAssessment, execution?: OsvExecutionReceipt): void {
+  if (!execution || execution.inventorySha256 !== assessment.inventory.sha256) throw new Error("OSV live execution receipt is missing or belongs to another input inventory");
+  const selected = assessment.inventory.inputs.filter((input) => input.disposition === "selected");
+  if (execution.inputs.length !== selected.length) throw new Error("OSV live execution receipt does not cover every selected input");
+  for (const input of selected) {
+    const rows = execution.inputs.filter((row) => row.path === input.path && row.sha256 === input.sha256);
+    if (rows.length !== 1) throw new Error(`OSV live execution receipt has missing or duplicate input ${input.path}`);
+    const row = rows[0]!;
+    const invocation = assessment.invocations.find((item) => item.path === input.path && item.sha256 === input.sha256);
+    if (!invocation) throw new Error(`OSV live execution receipt lacks an assessment for ${input.path}`);
+    if (row.status === "failed") throw new Error(`OSV required live execution failed for ${input.path}: ${row.reason ?? "no reason supplied"}`);
+    if (row.status === "input-not-assessed") {
+      const gap = row.inputGap;
+      const validGap = gap && gap.unresolved === (input.unresolvedPackages?.length ?? 0) && (
+        gap.code === "unresolved-versions" ? gap.unresolved > 0
+          : gap.code === "incomplete-parse" ? gap.unresolved === 0 && gap.unmatched > 0
+            : gap.code === "no-resolved-packages" && gap.unresolved === 0 && gap.unmatched === 0 && gap.resolved === 0
+      );
+      if (!validGap) throw new Error(`OSV static input gap lacks its measured preflight condition for ${input.path}`);
+      if (!row.reason || invocation.status !== "not-assessed" || invocation.examinedPackages.length) throw new Error(`OSV static input gap is inconsistent for ${input.path}`);
+      continue;
+    }
+    if (row.status !== "completed") throw new Error(`OSV live execution status is invalid for ${input.path}`);
+    const missing = invocation.unassessedPackages.filter((identity) => !invocation.ambiguousPackages.includes(identity));
+    const unversioned = invocation.unversionedPackages.filter((name) => !input.workspacePackages?.includes(packageIdentity(name, "unresolved")));
+    if (missing.length || unversioned.length || invocation.status === "not-assessed") throw new Error(`OSV required live execution has incomplete provider coverage for ${input.path}`);
+  }
 }
 
 export interface OsvVulnerability {

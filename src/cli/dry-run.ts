@@ -163,7 +163,7 @@ export async function generateDryRun(targetDir: string, outDir: string, dynamic?
       // lockfile, which is deterministic, so the copyleft detection stays exercised here instead of
       // going silent. Real engagement scans are unaffected: this flag is opt-in and only the
       // dry-run harness sets it.
-      runMechanicalScan({ dir: scratch.scanDir, skipNetworkChecks: true, skipBundleScan: true }),
+      runMechanicalScan({ dir: scratch.scanDir, requireOsvExecution: true, skipNetworkChecks: true, skipBundleScan: true }),
     );
     mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the live npm-registry lookups (slopsquat entirely, and license compliance's registry fallback — its lockfile classification still ran) which are skipped to keep this artifact network-independent.";
     phases.push(mech.report);
@@ -211,7 +211,7 @@ export async function generateDryRun(targetDir: string, outDir: string, dynamic?
     enrichFindingsCwe(allFindings);
     // findings.json is committed, so it must be diffable across runs and machines (issue #285).
     const portableFindings = allFindings.map((f) => ({ ...f, location: relativizeScanScope(f.location) }));
-    const unavailable = portableFindings.filter((f) => ["SEM-00", "SEC-TH-00", "SEC-GL-00", "DEP-OSV-00"].includes(f.id));
+    const unavailable = portableFindings.filter((f) => ["SEM-00", "SEC-TH-00", "SEC-GL-00"].includes(f.id));
     if (unavailable.length > 0) throw new Error(`Dry-run generation refused an incomplete mechanical run: ${unavailable.map((f) => `${f.id}: ${f.evidence}`).join("; ")}. Previous artifacts were not updated.`);
     publishDryRunFamily(outDir, buildDryRunFamily(portableFindings, dataMap, source, dynamic), phases);
 
