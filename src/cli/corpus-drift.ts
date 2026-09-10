@@ -1003,7 +1003,15 @@ for (const target of targets) {
 }
 
 if (advisoryObservation) {
-  advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every(({ slug }) => ["equal", "metadata-only", "finding-change"].includes(advisoryObservation.targets[slug]?.status ?? ""));
+  const assessments = advisoryObservation.expectedTargets.map(({ slug }) => advisoryObservation.targets[slug]?.comparison?.assessment);
+  advisoryObservation.populationComplete = advisoryObservation.expectedTargets.every(({ slug }) => ["equal", "metadata-only", "finding-change"].includes(advisoryObservation.targets[slug]?.status ?? "")) && assessments.every((assessment) => assessment?.equal);
+  advisoryObservation.assessmentCoverage = {
+    inventoryComplete: assessments.every((assessment) => assessment?.equal),
+    assessed: assessments.filter((assessment) => assessment?.live.status === "assessed").length,
+    partial: assessments.filter((assessment) => assessment?.live.status === "partial").length,
+    notAssessed: assessments.filter((assessment) => assessment?.live.status === "not-assessed").length,
+    notApplicable: assessments.filter((assessment) => assessment?.live.status === "not-applicable").length,
+  };
   advisoryObservation.completedAt = new Date().toISOString();
   persistAdvisoryObservation();
 }

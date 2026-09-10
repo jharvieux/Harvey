@@ -1,10 +1,16 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { CACHEABLE_MECHANICAL_PHASES } from "./mechanical-phase-cache.js";
 import { buildMechanicalPhaseCache, discoverMechanicalPhaseImplementationFiles } from "./mechanical-phase-identity.js";
 
 const yieldToVitestRpc = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+const IDENTITY_FIXTURE_PHASES = ["secrets-history", "dependency-advisory", ...CACHEABLE_MECHANICAL_PHASES] as const;
+const IDENTITY_FIXTURE_FILES = [
+  join(process.cwd(), "src", "scan", "mechanical.ts"),
+  ...IDENTITY_FIXTURE_PHASES.flatMap((phase) => discoverMechanicalPhaseImplementationFiles(process.cwd(), [phase])[phase] ?? []),
+];
 
 describe("mechanical phase implementation identities (#1864)", () => {
   const dirs: string[] = [];
@@ -13,17 +19,52 @@ describe("mechanical phase implementation identities (#1864)", () => {
     await yieldToVitestRpc();
   });
 
+  const writeFixtureSemgrepVersion = (root: string, version: string): void => {
+    const binary = join(root, "bin", "semgrep");
+    mkdirSync(dirname(binary), { recursive: true });
+    writeFileSync(binary, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' '${version}'
+  exit 0
+fi
+exit 64
+`);
+    chmodSync(binary, 0o755);
+  };
+
+  const withFixtureSemgrep = <T>(root: string, action: () => T): T => {
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${join(root, "bin")}${delimiter}${previousPath ?? ""}`;
+    try {
+      return action();
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  };
+
   const fixture = (): string => {
     const root = mkdtempSync(join(tmpdir(), "harvey-phase-identity-"));
     dirs.push(root);
-    cpSync(join(process.cwd(), "src"), join(root, "src"), { recursive: true });
-    cpSync(join(process.cwd(), "tools"), join(root, "tools"), { recursive: true });
+    // The cache identity only reads these source closures. Copying the whole repository source tree
+    // made each assertion pay for thousands of unrelated files and could exhaust the 30 s Vitest
+    // budget under shared I/O pressure. Discovering the closures from production source keeps this
+    // fixture aligned with the real cache inputs; every copied source remains independently
+    // re-walked and digested after an edit in the temporary checkout.
+    for (const source of new Set(IDENTITY_FIXTURE_FILES)) {
+      const destination = join(root, relative(process.cwd(), source));
+      mkdirSync(dirname(destination), { recursive: true });
+      cpSync(source, destination);
+    }
+    cpSync(join(process.cwd(), "src", "scan", "rules", "semgrep"), join(root, "src", "scan", "rules", "semgrep"), { recursive: true });
+    cpSync(join(process.cwd(), "src", "scan", "rules", "gitleaks-supabase.toml"), join(root, "src", "scan", "rules", "gitleaks-supabase.toml"));
     cpSync(join(process.cwd(), "package.json"), join(root, "package.json"));
     cpSync(join(process.cwd(), "pnpm-lock.yaml"), join(root, "pnpm-lock.yaml"));
     writeFileSync(join(root, "registry.yml"), "rules: []\n");
+    writeFixtureSemgrepVersion(root, "fixture-semgrep-1");
     return root;
   };
-  const buildCache = (root: string) => buildMechanicalPhaseCache({
+  const buildCache = (root: string, overrides: Partial<Parameters<typeof buildMechanicalPhaseCache>[0]> = {}) => withFixtureSemgrep(root, () => buildMechanicalPhaseCache({
     repoRoot: root,
     cacheDir: join(root, "cache"),
     mode: "read-write",
@@ -31,7 +72,8 @@ describe("mechanical phase implementation identities (#1864)", () => {
     targetTree: "tree",
     optionIdentity: "options",
     registryPackIdentity: { identity: "resolved-registry-packs-v1", files: [join(root, "registry.yml")] },
-  });
+    ...overrides,
+  }));
   const build = (root: string) => buildCache(root).implementation;
 
   it("a Semgrep rule edit invalidates Semgrep without falsely invalidating unrelated phases", () => {
@@ -65,6 +107,19 @@ describe("mechanical phase implementation identities (#1864)", () => {
       expect(after.implementation.semgrep).not.toBe(before.implementation.semgrep);
       expect(after.semgrepFamilies?.implementation).not.toBe(before.semgrepFamilies?.implementation);
     }
+  });
+
+  it("a successful Semgrep version change invalidates external phase and family identities", () => {
+    const root = fixture();
+    const before = buildCache(root);
+    expect(before.externalInputs.semgrep?.semgrep).toBe("fixture-semgrep-1");
+    expect(before.semgrepFamilies?.externalInputs.semgrep).toBe("fixture-semgrep-1");
+    writeFixtureSemgrepVersion(root, "fixture-semgrep-2");
+    const after = buildCache(root);
+    expect(after.externalInputs.semgrep?.semgrep).toBe("fixture-semgrep-2");
+    expect(after.semgrepFamilies?.externalInputs.semgrep).toBe("fixture-semgrep-2");
+    expect(after.externalInputs.semgrep).not.toEqual(before.externalInputs.semgrep);
+    expect(after.semgrepFamilies?.externalInputs).not.toEqual(before.semgrepFamilies?.externalInputs);
   });
 
   it("a shared Semgrep semantic-time policy edit invalidates phase and family caches", () => {
@@ -102,13 +157,7 @@ describe("mechanical phase implementation identities (#1864)", () => {
     const files = discoverMechanicalPhaseImplementationFiles(root, ["dependency-advisory"])["dependency-advisory"]!;
     expect(files).toContain(join(root, "src", "scan", "mechanical-context.ts"));
     expect(files).toContain(join(root, "src", "workspaces.ts"));
-    expect(buildMechanicalPhaseCache({
-      repoRoot: root,
-      cacheDir: join(root, "cache"),
-      mode: "read-write",
-      targetRevision: "commit",
-      targetTree: "tree",
-      optionIdentity: "options",
+    expect(buildCache(root, {
       registryPackIdentity: { identity: "resolved-registry-packs-v1" },
       deterministicExternalState: {
         advisoryDigest: "advisory-snapshot",
@@ -191,13 +240,8 @@ void scan;
   it("makes Semgrep explicitly non-cacheable when a retry restored no exact attempt-1 snapshot", () => {
     const root = fixture();
     const events: string[] = [];
-    const cache = buildMechanicalPhaseCache({
-      repoRoot: root,
-      cacheDir: join(root, "cache"),
-      mode: "read-write",
-      targetRevision: "commit",
-      targetTree: "tree",
-      optionIdentity: "options",
+    const cache = buildCache(root, {
+      registryPackIdentity: undefined,
       registrySnapshotMode: "unavailable",
       onEvent: (message) => events.push(message),
     });

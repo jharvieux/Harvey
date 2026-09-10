@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { binaryVersion } from "../scan/mechanical-phase-cache.js";
-import { cloneAtPinCached } from "../scan/corpus-clone.js";
+import { assertPreparedTargetUnchanged, prepareCurrentMechanicalTarget } from "../corpus-mechanical-readiness.js";
 import { runOsvScanner } from "../scan/dependencies.js";
 import { EXTERNAL_CORPUS } from "../scan/external-corpus.js";
 import {
@@ -47,10 +47,11 @@ const refreshed: Record<string, CorpusAdvisorySnapshotEntry> = {};
 for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-advisory-${target.slug}-`));
   try {
-    cloneAtPinCached(target.repo, target.commit, dir, process.env.HARVEY_CORPUS_CACHE_DIR, true);
-    const run = runOsvScanner(dir);
+    const prepared = prepareCurrentMechanicalTarget({ target, checkoutDir: join(dir, "checkout"), preparedDir: join(dir, "prepared"), cloneCacheDir: process.env.HARVEY_CORPUS_CACHE_DIR });
+    const run = runOsvScanner(prepared.preparedDir);
+    assertPreparedTargetUnchanged(prepared);
     if (run.failure) throw new Error(`${target.slug}: ${run.failure}`);
-    const bytes = gzipSync(`${JSON.stringify(canonicalizeCorpusOsvInput(run.result))}\n`, { level: 9 });
+    const bytes = gzipSync(`${JSON.stringify({ schema: 1, result: canonicalizeCorpusOsvInput(run.result), assessment: run.assessment })}\n`, { level: 9 });
     const file = `${target.slug}.osv.json.gz`;
     writeFileSync(join(outDir, file), bytes);
     refreshed[target.slug] = {
@@ -61,7 +62,7 @@ for (const target of targets) {
       expiresAt: expiresAt.toISOString(),
       osvScannerVersion,
     };
-    console.error(`${target.slug}: captured ${bytes.length} compressed byte(s)`);
+    console.error(`${target.slug}: captured ${bytes.length} compressed byte(s); OSV ${run.assessment.status}; ${run.assessment.reason}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

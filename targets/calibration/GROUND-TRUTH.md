@@ -289,6 +289,32 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-KNOWN-IOC-TRANSITIVE | `package-lock.json` (`crossenv`) | `checkKnownIoc` — curated IOC-feed name match on a package NO manifest declares (#1231) | high |
 | P-INSTALL-SCRIPT-DEP-TRANSITIVE | `package-lock.json` (`fsevents`, two tree positions) | `checkDependencyInstallScripts` (new, #1351) — `hasInstallScript: true` on a resolved package NO manifest declares | review |
 
+### B2 dependency assessment state pairing (#2033)
+
+`P-DEP-OSV-COVERAGE-NOT-ASSESSED` requires the whole-target scan to retain the high-precision,
+Info-severity `DEP-OSV-00` disclosure for the calibration target's unresolved input boundaries.
+The row stays visible in the free diagnosis and outside its hygiene grade.
+
+The paired findings describe whole-root states, so their scope is verified with separate runs.
+`src/scan/calibration/dependency-pairings.ts` executes the existing `fixtures/legacy-app`
+root (a manifest with dependencies and no lockfile) and the existing `test-quality` root (a selected
+lockfile with resolved packages) through inventory, provider reconciliation, and the live dependency
+registry. Both disclosure and missing-lockfile producers must fire on the positive. The negative
+requires a completed nonzero producer examination and no hit from the paired taxonomy. Its two
+negative entries are scored within that independent run, never against the whole-target findings.
+`N-DEP-OSV-ASSESSMENT-COMPLETE` protects the coverage disclosure's silence;
+`N-LOCKFILE-RESOLVED` protects missing-lockfile silence. Their returned evidence retains the input
+inventory, selected lockfile content hash, completed execution receipt, and exact examined package
+identities. The live CLI prints each root, producer status, examination count, and inventory hash.
+
+No fixture dependency is added, removed, installed, or upgraded. `fixtures/supported-app` is not an
+assessment-completeness negative: its skeleton lockfile contains root metadata and no resolved
+packages. Unit verification substitutes only OSV's external output with identities read independently
+from the unchanged lockfile; live calibration uses the real provider. Removing a positive emission,
+injecting either taxonomy on the negative (including review-tier or unexpected-location hits),
+omitting the provider source or a resolved package, or replacing the negative's examination with
+zero units must fail the pairing gate. The existing unscored and twin-backlog ratchets remain unchanged.
+
 ### B2 transitive-copyleft plant (#1213)
 
 `package-lock.json` carries two entries that appear in NO `package.json` anywhere in this target:

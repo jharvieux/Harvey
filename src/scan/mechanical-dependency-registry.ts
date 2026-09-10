@@ -1,7 +1,7 @@
 import type { Finding } from "../findings.js";
 import { dependencyRangeEdge, licenseScope } from "../sbom.js";
 import type { MechanicalScanContext } from "./mechanical-context.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, runOsvScanner, type OsvScanResult, type OsvAssessment, type OsvExecutionReceipt, inventoryOsvInputs, validateOsvAssessment } from "./dependencies.js";
 import {
   checkDependencyInstallScripts,
   checkInstallScripts,
@@ -34,11 +34,20 @@ interface DependencyInput {
   context: MechanicalScanContext;
   scanDir: string;
   pkg: MechanicalPackageJson | null;
-  osv: { result?: OsvScanResult; failure?: string };
+  osv: { result?: OsvScanResult; failure?: string; assessment?: OsvAssessment };
   skipNetworkChecks?: boolean;
 }
 
+/** Bind live and replayed observations to the same prepared dependency population. */
+export function observeOsvInputs(scanDir: string, context: MechanicalScanContext, snapshot?: { result: OsvScanResult; assessment: OsvAssessment }, paritySnapshot?: { result: OsvScanResult; assessment: OsvAssessment }): { result: OsvScanResult; assessment: OsvAssessment; execution?: OsvExecutionReceipt; failure?: string } {
+  const inventory = inventoryOsvInputs(scanDir, context.paths);
+  if (snapshot) validateOsvAssessment(snapshot.assessment, snapshot.result, inventory);
+  if (paritySnapshot) validateOsvAssessment(paritySnapshot.assessment, paritySnapshot.result, inventory);
+  return snapshot ?? runOsvScanner(scanDir, inventory);
+}
+
 interface DependencyState extends DependencyInput {
+  emittedFindings: Record<string, Finding[]>;
   declared: DeclaredDependency[];
   rangeDeclarations: DeclaredDependency[];
   declaredNames: string[];
@@ -137,17 +146,39 @@ function dependencyState(input: DependencyInput): DependencyState {
     manifest: edge.source, name: edge.name, range: edge.range, edge,
   })))];
   const allNames = [...new Set([...declaredNames, ...license.candidates.map((candidate) => candidate.name)])];
-  return { ...input, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
+  return { ...input, emittedFindings: {}, declared, rangeDeclarations, declaredNames, workspaceInternalNames, allNames, license };
 }
 
 export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Object.freeze([
-  definition({ id: "osv-advisories", order: 10, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "parseOsvFindings" }, additionalImplementations: [{ file: "src/scan/dependencies.ts", exportName: "osvUnavailableFinding" }], taxonomies: ["Known-vulnerable dependency", "Known-vulnerable dependency — coverage not assessed"], applicableFiles: resolvedDependencies, countExaminedUnits: ({ osv, license }) => osv.failure ? 0 : license.candidates.length, examinedUnitIdentities: ({ osv }, selected) => osv.failure ? [] : dependencyExaminedUnits("osv-advisories", selected), invoke: ({ osv }) => osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result!) }),
-  definition({ id: "next-curated-cves", order: 20, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "checkNextVersionCVEs" }, taxonomies: ["Known-vulnerable dependency", "EOL framework version"], applicableFiles: population("the declared Next.js dependency and resolved version", ({ pkg }) => pkg?.dependencies?.next ?? pkg?.devDependencies?.next ? ["next"] : []), enabled: ({ pkg }) => Boolean(pkg?.dependencies?.next ?? pkg?.devDependencies?.next), invoke: ({ pkg, context }) => checkNextVersionCVEs((pkg?.dependencies?.next ?? pkg?.devDependencies?.next)!, "package.json", context.dependencyTree) }),
+  definition({ id: "next-curated-cves", order: 5, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "checkNextVersionCVEs" }, taxonomies: ["Known-vulnerable dependency", "EOL framework version"], applicableFiles: population("the declared Next.js dependency and resolved version", ({ pkg }) => pkg?.dependencies?.next ?? pkg?.devDependencies?.next ? ["next"] : []), enabled: ({ pkg }) => Boolean(pkg?.dependencies?.next ?? pkg?.devDependencies?.next), invoke: ({ pkg, context }) => checkNextVersionCVEs((pkg?.dependencies?.next ?? pkg?.devDependencies?.next)!, "package.json", context.dependencyTree) }),
+  definition({ id: "osv-advisories", order: 10, stage: "early", implementation: { file: "src/scan/dependencies.ts", exportName: "parseOsvFindings" }, additionalImplementations: [{ file: "src/scan/dependencies.ts", exportName: "osvUnavailableFinding" }, { file: "src/scan/dependencies.ts", exportName: "inventoryOsvInputs" }, { file: "src/scan/dependencies.ts", exportName: "validateOsvAssessment" }, { file: "src/scan/dependencies.ts", exportName: "runOsvScanner" }], taxonomies: ["Known-vulnerable dependency", "Known-vulnerable dependency — coverage not assessed"],
+    applicableFiles: population("OSV-selected source/package identities from validated --all-packages output", ({ osv }) => (osv.assessment?.invocations ?? []).flatMap((input) => input.examinedPackages.map((identity) => `${input.path}#${identity}`))),
+    examinedUnitIdentities: (_state, selected) => semanticExaminedUnits("osv-advisories", "resolved-dependency", selected as string[]),
+    invoke: ({ osv, context, emittedFindings }) => {
+      const examined = new Map(osv.assessment?.invocations.map((input) => [input.path, new Set(input.examinedPackages)]));
+      const assessed = { results: osv.result?.results?.map((source) => ({ ...source, packages: source.packages?.filter((pkg) => examined.get(source.source?.path ?? "")?.has(`npm:${pkg.package?.name}@${pkg.package?.version}`)) })) };
+      const tree = context.dependencyTree;
+      const version = tree?.versions.get("next");
+      const source = osv.assessment?.invocations.find((input) => input.path === tree?.source && input.examinedPackages.includes(`npm:next@${version}`));
+      const representatives = source && version ? (emittedFindings["next-curated-cves"] ?? []).map((finding) => ({ source: source.path, sourceSha256: source.sha256, name: "next", version, finding })) : [];
+      return [
+        ...(osv.assessment ? parseOsvFindings(assessed, {
+          entries: representatives,
+          record: (id, reason) => {
+            const finding = emittedFindings["next-curated-cves"]?.find((finding) => finding.id === id);
+            if (!finding) throw new Error(`OSV representative ${id} was not emitted by the curated registry producer`);
+            finding.evidence += ` ${reason}`;
+          },
+        }) : []),
+        ...(osv.assessment?.status === "assessed" && !osv.assessment.invocations.some((input) => input.notApplicablePackages.length) ? [] : [osvUnavailableFinding(osv.assessment ?? osv.failure ?? "No OSV input/invocation receipt was supplied; package examination is not established.")]),
+      ];
+    },
+  }),
   definition({ id: "dependency-typosquat", order: 30, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkTyposquat" }, taxonomies: ["Possible typosquat/slopsquat"], applicableFiles: population("declared and resolved dependency names", ({ allNames }) => allNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ allNames, license, declaredNames }) => checkTyposquat(allNames, { declared: new Set(declaredNames), source: license.source }) }),
   definition({ id: "dependency-ioc", order: 40, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkKnownIoc" }, taxonomies: ["Known-malicious dependency"], applicableFiles: population("declared and resolved dependency names checked against the IOC catalog", ({ allNames }) => allNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ allNames, license, declaredNames }) => checkKnownIoc(allNames, "package.json", { declared: new Set(declaredNames), source: license.source }) }),
-  definition({ id: "curated-dependency-cves", order: 50, implementation: { file: "src/scan/dependencies.ts", exportName: "checkKnownDependencyCVEs" }, taxonomies: ["Known-vulnerable dependency"], applicableFiles: population("declared dependencies plus resolved candidates used when OSV is unavailable", ({ declared, license, osv }) => osv.failure ? [...declared, ...license.candidates] : declared), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ osv, license, declared, context }) => {
+  definition({ id: "curated-dependency-cves", order: 50, implementation: { file: "src/scan/dependencies.ts", exportName: "checkKnownDependencyCVEs" }, taxonomies: ["Known-vulnerable dependency"], applicableFiles: population("declared dependencies plus resolved candidates used when OSV is unavailable", ({ declared, license, osv }) => osv.assessment?.invocations.some((input) => input.status !== "not-assessed") ? declared : [...declared, ...license.candidates]), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ osv, license, declared, context }) => {
     const dependencies: DependencyMap = {};
-    if (osv.failure) for (const candidate of license.candidates) if (candidate.version) dependencies[candidate.name] ??= candidate.version;
+    if (!osv.assessment?.invocations.some((input) => input.status !== "not-assessed")) for (const candidate of license.candidates) if (candidate.version) dependencies[candidate.name] ??= candidate.version;
     for (const dependency of declared) dependencies[dependency.name] = dependency.range;
     return checkKnownDependencyCVEs(dependencies, "package.json", context.dependencyTree);
   } }),
@@ -157,8 +188,8 @@ export const DEPENDENCY_DETECTORS: readonly DependencyDetectorDefinition[] = Obj
   definition({ id: "resolved-install-scripts", order: 90, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkDependencyInstallScripts" }, taxonomies: ["Install lifecycle script (dependency)"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license }) => checkDependencyInstallScripts(license.candidates) }),
   definition({ id: "dependency-slopsquat", order: 100, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkSlopsquat" }, additionalImplementations: [{ file: "src/scan/supply-chain.ts", exportName: "slopsquatCoverageFinding" }], taxonomies: ["Slopsquatted/hallucinated dependency", "Coverage — npm-registry existence check not assessed"], applicableFiles: population("declared external registry package names", ({ declaredNames }) => declaredNames), enabled: ({ pkg }) => Boolean(pkg), invoke: ({ declaredNames, skipNetworkChecks }) => skipNetworkChecks ? [slopsquatCoverageFinding(declaredNames, NETWORK_SKIPPED_REASON)] : checkSlopsquat(declaredNames) }),
   definition({ id: "dependency-license", order: 110, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLicenseCompliance" }, taxonomies: ["Unknown/missing dependency license", "Copyleft license conflict", "Coverage — dependency license not assessed"], applicableFiles: resolvedDependencies, enabled: ({ pkg }) => Boolean(pkg), invoke: ({ license, skipNetworkChecks }) => checkLicenseCompliance(license, { skipRegistry: skipNetworkChecks }) }),
-  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg, license }) => Boolean(pkg) || license.rangeScopes.length > 0, invoke: ({ license, declared, declaredNames, workspaceInternalNames, osv }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, manifestDeclarations: declared.length, workspaceInternalNames, osvRan: osv.failure === undefined })] }),
-  definition({ id: "lockfile-presence", order: 130, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLockfilePresence" }, taxonomies: ["Missing lockfile"], applicableFiles: population("supported lockfile paths", ({ context }) => context.paths.filter((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|npm-shrinkwrap\.json)$/.test(path))), countExaminedUnits: () => 1, examinedUnitIdentities: () => semanticExaminedUnits("lockfile-presence", "semantic-check", ["supported-lockfile-presence"]), invoke: ({ scanDir }) => checkLockfilePresence(scanDir) }),
+  definition({ id: "supply-chain-scope", order: 120, implementation: { file: "src/scan/supply-chain.ts", exportName: "supplyChainScopeFinding" }, taxonomies: ["Coverage — supply-chain check scope"], applicableFiles: population("declared, workspace-internal, and resolved dependency populations", ({ declaredNames, workspaceInternalNames, license }) => [...declaredNames, ...workspaceInternalNames, ...license.candidates]), enabled: ({ pkg, license }) => Boolean(pkg) || license.rangeScopes.length > 0, invoke: ({ license, declared, declaredNames, workspaceInternalNames, osv }) => [supplyChainScopeFinding({ license, treeNames: new Set(license.candidates.map((candidate) => candidate.name)).size, declaredNames: declaredNames.length, manifestDeclarations: declared.length, workspaceInternalNames, osvAssessment: osv.assessment })] }),
+  definition({ id: "lockfile-presence", order: 130, implementation: { file: "src/scan/supply-chain.ts", exportName: "checkLockfilePresence" }, taxonomies: ["Missing lockfile"], applicableFiles: population("supported lockfile paths", ({ context }) => context.paths.filter((path) => /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|npm-shrinkwrap\.json)$/.test(path))), countExaminedUnits: () => 1, examinedUnitIdentities: () => semanticExaminedUnits("lockfile-presence", "semantic-check", ["supported-lockfile-presence"]), invoke: ({ scanDir, osv, context }) => checkLockfilePresence(scanDir, scanDir, osv.assessment?.inventory ?? inventoryOsvInputs(scanDir, context.paths)) }),
 ]);
 
 export async function runRegisteredDependencyDetectors(input: DependencyInput, stage: DependencyDetectorDefinition["stage"]): Promise<{
@@ -166,9 +197,10 @@ export async function runRegisteredDependencyDetectors(input: DependencyInput, s
   findingsByDetector: Record<string, Finding[]>;
   records: MechanicalProducerRecord[];
 }> {
+  if (input.osv.assessment) validateOsvAssessment(input.osv.assessment, input.osv.result ?? {}, inventoryOsvInputs(input.scanDir, input.context.paths));
   const state = dependencyState(input);
   const findings: Finding[] = [];
-  const findingsByDetector: Record<string, Finding[]> = {};
+  const findingsByDetector = state.emittedFindings;
   const records: MechanicalProducerRecord[] = [];
   for (const detector of DEPENDENCY_DETECTORS) {
     if (detector.stage !== stage) continue;
@@ -186,7 +218,17 @@ export async function runRegisteredDependencyDetectors(input: DependencyInput, s
     assertProducerTaxonomyOwnership(detector, emitted);
     findingsByDetector[detector.id] = emitted;
     findings.push(...emitted);
-    records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started, status: unitsExamined === 0 ? "not-applicable" : "ran" }));
+    const unassessedOsv = detector.id === "osv-advisories" && unitsExamined === 0 && state.osv.assessment?.status !== "not-applicable";
+    const assessment = state.osv.assessment;
+    records.push(receiptRecord({ detector: detector.id, phase: detector.phase, order: detector.order, module: detector.module, examinedUnitIdentities, findings: emitted.length, durationMs: performance.now() - started,
+      status: unassessedOsv ? "not-assessed" : unitsExamined === 0 ? "not-applicable" : "ran",
+      ...(unassessedOsv ? { notAssessed: {
+        reason: assessment?.reason ?? state.osv.failure ?? "OSV input/invocation receipt was not supplied.",
+        provenance: assessment?.provenance ?? "MEASURED missing OSV invocation receipt at the dependency registry boundary.",
+        falsifier: assessment?.falsifier ?? "Run osv-scanner --all-packages and supply a validated input assessment receipt.",
+        inventory: { broadUnits: assessment?.inventory.inputs.length ?? 0, selectedUnits: 0 as const, pathSetDigest: assessment?.inventory.sha256 ?? "0".repeat(64), scope: "prepared-target OSV inputs" },
+      } } : {}),
+    }));
   }
   return { findings, findingsByDetector, records };
 }

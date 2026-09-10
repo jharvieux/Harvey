@@ -4,9 +4,10 @@
 // in src/scan/rules/semgrep/ must be PAIRED — claimed by a planted positive it actually caught, and
 // paired with a benign twin fixture it stayed silent on.
 //
-// It is scored against `dry-run/findings.json`, the committed artifact of the real scan over
-// targets/calibration, so the check needs no binaries and runs under `pnpm verify`. That artifact
-// is kept honest by the required `dry-run-drift` status check, which regenerates and diffs it.
+// Aggregate positives and filename-derived twins are scored against `dry-run/findings.json`,
+// the committed artifact kept honest by the required `dry-run-drift` check. Whole-root dependency
+// pairs additionally execute their fixtures; unit verification substitutes only the OSV process,
+// so `pnpm verify` needs no scanner binaries. Live calibration uses the real provider.
 //
 // WHAT THE NEGATIVE HALF DOES AND DOES NOT PROVE — the link between a rule and its boundary
 // negative is DERIVED FROM FIXTURE NAMES (`redos-regex.ts` ↔ `redos-regex-safe.ts`), not declared
@@ -33,6 +34,7 @@ import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
 import type { Finding } from "../findings.js";
+import type { MechanicalProducerRecord } from "./mechanical-phase-cache.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -109,10 +111,20 @@ interface UnitPairing {
   twinless?: string;
 }
 
+// These observations bind whole-root findings to separately executed corpus roots. Each
+// explicit pair preserves the producer receipts that establish its positive and negative scope.
+export interface ExecutedCorpusPair {
+  unit: string;
+  detector: string;
+  positive: { entry: string; fixture: string; findings: Finding[]; receipt: MechanicalProducerRecord };
+  negative: { entry: CorpusEntry; fixture: string; findings: Finding[]; receipt: MechanicalProducerRecord };
+}
+
 export function pairUnits(
   units: PairableUnit[],
   findings: Finding[] = committedScanFindings(),
   corpus: CorpusEntry[] = CORPUS,
+  executedPairs: readonly ExecutedCorpusPair[] = [],
 ): UnitPairing[] {
   const tracked = execFileSync("git", ["ls-files", "targets/calibration"], { cwd: repoRoot, encoding: "utf8" })
     .trim().split("\n").map((p) => p.replace(/^targets\/calibration\//, ""));
@@ -125,6 +137,36 @@ export function pairUnits(
     const positives = corpus.filter((e) => e.kind === "positive" && scoreEntry(e, own).caughtTier !== undefined).map((e) => e.id);
     if (positives.length === 0) {
       return { rule: id, engine, positives, unpaired: own.length === 0 ? "fires on nothing in targets/calibration — it has never been shown to work" : "fires, but no POSITIVE corpus entry scores it, so nothing would notice if it stopped" };
+    }
+    const executed = executedPairs.filter((pair) => pair.unit === id);
+    if (executed.length > 0) {
+      if (executed.length !== 1) return { rule: id, engine, positives, twinless: "expected exactly one executed corpus pair for this unit" };
+      const pair = executed[0]!;
+      const positive = corpus.find((entry) => entry.id === pair.positive.entry && entry.kind === "positive");
+      const inTarget = (fixture: string): boolean => tracked.some((path) => path === fixture || path.startsWith(`${fixture}/`));
+      const validReceipt = (side: ExecutedCorpusPair["positive"] | ExecutedCorpusPair["negative"]): boolean =>
+        side.receipt.detector === pair.detector && side.receipt.findings === side.findings.length &&
+        side.receipt.unitsExamined === side.receipt.examinedUnitIdentities.length &&
+        side.receipt.examinedUnitIdentities.every((unit) => unit.producer === pair.detector && unit.identity.length > 0);
+      if (!positive || !positives.includes(positive.id) || !inTarget(pair.positive.fixture) || !validReceipt(pair.positive)) {
+        return { rule: id, engine, positives, unpaired: "executed positive lacks its scored corpus entry, tracked fixture, or matching producer receipt" };
+      }
+      const scored = scoreEntry(positive, pair.positive.findings.filter((finding) => finding.taxonomy === taxonomy));
+      if (!scored.pass || scored.caughtTier !== positive.expectedTier || scored.severityMismatch ||
+          !["ran", "not-assessed"].includes(pair.positive.receipt.status)) {
+        return { rule: id, engine, positives, unpaired: "the production detector did not emit its executed positive at the declared tier and severity" };
+      }
+      if (pair.negative.entry.kind !== "negative" || pair.positive.fixture === pair.negative.fixture ||
+          !inTarget(pair.negative.fixture) || !validReceipt(pair.negative) ||
+          pair.negative.receipt.status !== "ran" || pair.negative.receipt.unitsExamined === 0) {
+        return { rule: id, engine, positives, twinless: "the explicit benign fixture has no completed nonzero producer examination" };
+      }
+      // Any hit from this taxonomy breaks the negative, regardless of tier or match wording.
+      const negativeHits = pair.negative.findings.filter((finding) => finding.taxonomy === taxonomy);
+      if (negativeHits.length > 0 || !scoreEntry(pair.negative.entry, negativeHits).pass) {
+        return { rule: id, engine, positives, twinless: "the production detector also fires on its executed benign fixture" };
+      }
+      return { rule: id, engine, positives, twin: { entry: pair.negative.entry.id, fixture: pair.negative.fixture } };
     }
     const firedStems = new Set(own.map((f) => stem(filePart(f.location))));
     const candidates = negativeFixtures.filter(({ fixture }) => {

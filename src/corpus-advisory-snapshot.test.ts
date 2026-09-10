@@ -15,7 +15,7 @@ import {
   type CorpusAdvisorySnapshotEntry,
   type CorpusAdvisorySnapshotManifest,
 } from "./corpus-advisory-snapshot.js";
-import { parseOsvFindings, type OsvScanResult } from "./scan/dependencies.js";
+import { runOsvScanner, parseOsvFindings, type OsvScanResult } from "./scan/dependencies.js";
 
 function advisoryInput(overrides: Record<string, unknown> = {}): OsvScanResult {
   return {
@@ -47,7 +47,7 @@ describe("immutable corpus advisory snapshots (#1876)", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvey-advisory-snapshot-"));
     dirs.push(dir);
     const payload = "target.osv.json.gz";
-    const bytes = gzipSync(JSON.stringify({ results: [] }));
+    const bytes = gzipSync(JSON.stringify({ schema: 1, ...runOsvScanner(dir) }));
     writeFileSync(join(dir, payload), bytes);
     const manifest: CorpusAdvisorySnapshotManifest = {
       schema: 2,
@@ -70,6 +70,7 @@ describe("immutable corpus advisory snapshots (#1876)", () => {
     const { dir, manifest } = fixture();
     expect(loadCorpusAdvisorySnapshot("target", "commit-a", { dir, now: new Date("2026-08-12T00:00:00Z") })).toEqual({
       result: { results: [] },
+      assessment: runOsvScanner(dir).assessment,
       digest: manifest.targets.target!.sha256,
       capturedAt: manifest.targets.target!.capturedAt,
       expiresAt: manifest.targets.target!.expiresAt,
@@ -98,7 +99,7 @@ describe("immutable corpus advisory snapshots (#1876)", () => {
   it("keeps untouched target epochs during a target-only refresh and rejects them once stale", () => {
     const { dir, manifest } = fixture();
     const old = manifest.targets.target!;
-    const untouchedBytes = gzipSync(JSON.stringify({ results: [] }));
+    const untouchedBytes = gzipSync(JSON.stringify({ schema: 1, ...runOsvScanner(dir) }));
     writeFileSync(join(dir, "untouched.osv.json.gz"), untouchedBytes);
     const untouched: CorpusAdvisorySnapshotEntry = {
       ...old,

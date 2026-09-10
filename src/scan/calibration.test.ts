@@ -381,6 +381,7 @@ describe("Batch B2 deferred corpus (secondary manifest fixtures → real check o
 
   const legacyLabel = "fixtures/legacy-app/package.json";
   const legacyDeps = { next: "12.3.5", react: "16.4.0", "react-dom": "16.4.0", minimist: "1.2.5", "flatmap-stream": "0.1.1" };
+  writeFileSync(join(emptyDir, "package.json"), JSON.stringify({ dependencies: legacyDeps }));
   const supportedLabel = "fixtures/supported-app/package.json";
   const supportedDeps = { next: "15.5.16", react: "18.3.1", "react-dom": "18.3.1", esbuild: "0.21.5" };
 

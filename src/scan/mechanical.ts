@@ -6,7 +6,7 @@
 // CLI: `pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]`
 
 import type { Finding } from "../findings.js";
-import { runOsvScanner, type OsvScanResult } from "./dependencies.js";
+import { assertOsvExecution, type OsvAssessment, type OsvScanResult } from "./dependencies.js";
 import { resolveScanScope } from "./scan-scope.js";
 import type { TenancyOverride } from "./supabase-static.js";
 import type { DependencyMap } from "./supply-chain.js";
@@ -27,7 +27,7 @@ import {
 import { MechanicalScanContext, type MechanicalContextMetrics } from "./mechanical-context.js";
 import { runRegisteredMechanicalDetectors, type DetectorExecutionRecord } from "./mechanical-detector-registry.js";
 import { runRegisteredConfigurationDetectors } from "./mechanical-configuration-registry.js";
-import { runRegisteredDependencyDetectors } from "./mechanical-dependency-registry.js";
+import { observeOsvInputs, runRegisteredDependencyDetectors } from "./mechanical-dependency-registry.js";
 import { runRegisteredSemgrepEngines } from "./mechanical-semgrep-registry.js";
 import { runRegisteredSecretsEngines } from "./mechanical-secrets-registry.js";
 import { runRegisteredNormalizationEngines } from "./mechanical-normalization-registry.js";
@@ -70,13 +70,15 @@ interface MechanicalScanOptions {
   // registry-reachability dependency would let it drift on an offline/blipped CI run for reasons
   // that have nothing to do with the scanner's own code.
   skipNetworkChecks?: boolean;
+  /** Refuse artifact publication after any failed required OSV call; retain static scope disclosures. */
+  requireOsvExecution?: boolean;
   // #1300 / #126 option (2): guard helper names supplied per engagement, folded into the
   // route-noauth / authed-no-role-check clearance test alongside the ones discoverAuthGuards finds
   // in the target's own source (option (1)). #126 recommended both; PR #127 shipped neither.
   authGuards?: string[];
   phaseCache?: MechanicalPhaseCacheOptions;
-  advisorySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string; expiresAt: string; osvScannerVersion: string };
-  advisoryParitySnapshot?: { result: OsvScanResult; digest: string; capturedAt: string };
+  advisorySnapshot?: { result: OsvScanResult; assessment: OsvAssessment; digest: string; capturedAt: string; expiresAt: string; osvScannerVersion: string };
+  advisoryParitySnapshot?: { result: OsvScanResult; assessment: OsvAssessment; digest: string; capturedAt: string };
   advisoryFindingChangeDisposition?: "throw" | "record";
   onAdvisoryObservation?: (receipt: CorpusAdvisoryComparisonReceipt) => void;
   secretCandidateIdentity?: string;
@@ -174,9 +176,10 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
     // floor as if it were installed made "Installed next@14.2.5" a false claim on this repo's own
     // calibration target, whose lockfile resolves the patched 14.2.35.
     const dependencyStart = Date.now();
-    const observedOsv = advisorySnapshot ? { result: advisorySnapshot.result } : runOsvScanner(scanDir);
+    const observedOsv = observeOsvInputs(scanDir, context, advisorySnapshot, advisoryParitySnapshot);
     context.recordToolResult("osv", observedOsv);
     const osv = context.toolResult<typeof observedOsv>("osv")!;
+    if (opts.requireOsvExecution) assertOsvExecution(osv.assessment, osv.execution);
     let advisoryObservation: CorpusAdvisoryComparisonReceipt | undefined;
     if (advisoryParitySnapshot && osv.failure) {
       throw new Error(`live OSV advisory verification did not complete: ${osv.failure}`);
@@ -186,7 +189,7 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       context,
       scanDir,
       pkg,
-      osv: parityLiveRaw ? { result: parityLiveRaw } : osv,
+      osv: parityLiveRaw ? { ...osv, result: parityLiveRaw } : osv,
       skipNetworkChecks,
     };
     const earlyDependency = await runRegisteredDependencyDetectors(dependencyInput, "early");
@@ -195,11 +198,13 @@ export async function runMechanicalScanDetailed(opts: MechanicalScanOptions): Pr
       const snapshotRaw = canonicalizeCorpusOsvInput(advisoryParitySnapshot.result);
       const snapshotDependency = await runRegisteredDependencyDetectors({
         ...dependencyInput,
-        osv: { result: snapshotRaw },
+        osv: { result: snapshotRaw, assessment: advisoryParitySnapshot.assessment },
       }, "early");
       advisoryObservation = compareCorpusAdvisoryState({
         liveRaw,
         snapshotRaw,
+        liveAssessment: osv.assessment,
+        snapshotAssessment: advisoryParitySnapshot.assessment,
         liveFindings: earlyDependency.findingsByDetector["osv-advisories"] ?? [],
         snapshotFindings: snapshotDependency.findingsByDetector["osv-advisories"] ?? [],
       });

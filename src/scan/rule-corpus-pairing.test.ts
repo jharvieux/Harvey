@@ -1,5 +1,33 @@
 import { execFileSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { observeDependencyCorpusPairs } from "./calibration/dependency-pairings.js";
+import { selectFreeFindings, selectGradedFindings } from "../quick-scan.js";
+
+const provider = vi.hoisted(() => ({ mode: "complete" as "complete" | "missing-source" | "missing-package" | "empty-packages" }));
+
+// Only the external provider is substituted. Package identities come from the unchanged fixture
+// bytes, independently of Harvey's parser; inventory, reconciliation and registry emission run.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFileSync: vi.fn((bin: string, args: string[], options: unknown) => {
+    if (bin !== "osv-scanner") return actual.execFileSync(bin as never, args as never, options as never);
+    const selected = args.at(-1)!;
+    if (!selected.endsWith("/targets/calibration/test-quality/package-lock.json") || !args.includes("--all-packages")) {
+      throw new Error("Unexpected dependency pairing provider invocation");
+    }
+    const lock = JSON.parse(readFileSync(selected, "utf8")) as { packages: Record<string, { name?: string; version?: string; link?: boolean }> };
+    const packages = Object.entries(lock.packages).filter(([path, metadata]) => path.includes("node_modules/") && !metadata.link).map(([path, metadata]) => ({
+      package: { name: metadata.name ?? path.split("node_modules/").at(-1)!, version: metadata.version!, ecosystem: "npm" },
+    }));
+    const supplied = provider.mode === "missing-package"
+      ? packages.filter((entry) => entry.package.name !== packages[0]!.package.name)
+      : provider.mode === "empty-packages" ? [] : packages;
+    return JSON.stringify({ results: [{ ...(provider.mode === "missing-source" ? {} : { source: { path: selected } }), packages: supplied }] });
+  }) };
+});
 import { committedScanFindings, freeCountCoverage, freeCountOutsideUnits, harveySemgrepRules, pairUnits, ruleCorpusPairings, stem, TWIN_BACKLOG, UNSCORED_OUTSIDE_UNITS, type SemgrepRule } from "./rule-corpus-pairing.js";
 import { CORPUS } from "./calibration.js";
 import type { Finding } from "../findings.js";
@@ -117,7 +145,72 @@ describe("#1414 free-count coverage of the pairing gate, and the per-rule gate p
 // Re-tested: false of the predicate as written. `pairUnits` keys on taxonomy and derives twins from
 // fixture names; only the ENUMERATION was semgrep-shaped.
 describe("#1676 outside-engine pairing, and the twin ratchet", () => {
-  const outside = (): ReturnType<typeof pairUnits> => pairUnits(freeCountOutsideUnits());
+  const targetDir = fileURLToPath(new URL("../../targets/calibration/", import.meta.url));
+  let executedPairs: Awaited<ReturnType<typeof observeDependencyCorpusPairs>>;
+  beforeAll(async () => {
+    executedPairs = await observeDependencyCorpusPairs(targetDir);
+  });
+  const outside = (): ReturnType<typeof pairUnits> => pairUnits(freeCountOutsideUnits(), committedScanFindings(), CORPUS, executedPairs);
+
+  it("proves dependency disclosure and missing-lockfile presence against executed existing roots", () => {
+    const rows = outside();
+    expect(executedPairs.map((pair) => pair.detector).sort()).toEqual(["lockfile-presence", "osv-advisories"]);
+    for (const pair of executedPairs) {
+      expect(freeCountOutsideUnits().some((unit) => unit.id === pair.unit), pair.unit).toBe(true);
+      expect(rows.find((row) => row.rule === pair.unit)?.twin?.fixture).toBe("test-quality");
+      expect(pair.negative.receipt.status).toBe("ran");
+      expect(pair.negative.receipt.unitsExamined).toBeGreaterThan(0);
+      expect(pair.positive.assessment.inventory.inputs).toContainEqual(expect.objectContaining({ path: "package.json", disposition: "missing-input" }));
+      const lockHash = createHash("sha256").update(readFileSync(`${targetDir}/test-quality/package-lock.json`)).digest("hex");
+      expect(pair.negative.execution.inventorySha256).toBe(pair.negative.assessment.inventory.sha256);
+      expect(pair.negative.execution.inputs).toEqual([{ path: "package-lock.json", sha256: lockHash, status: "completed" }]);
+      expect(pair.negative.assessment.status).toBe("assessed");
+      expect(pair.negative.assessment.invocations).toEqual([expect.objectContaining({ path: "package-lock.json", sha256: lockHash, status: "assessed" })]);
+      expect(pair.negative.assessment.invocations[0]!.examinedPackages.length).toBeGreaterThan(0);
+    }
+    const disclosure = executedPairs.flatMap((pair) => pair.positive.findings).find((finding) => finding.id === "DEP-OSV-00")!;
+    expect(disclosure.precisionTier).toBe("high");
+    expect(disclosure.severity).toBe("Info");
+    expect(selectFreeFindings([disclosure])).toEqual([disclosure]);
+    expect(selectGradedFindings([disclosure])).toEqual([]);
+  });
+
+  it("rejects a vanished production positive, a false fire on the benign root, and an unexamined negative", () => {
+    const findings = committedScanFindings();
+    const units = freeCountOutsideUnits(findings);
+    for (const original of executedPairs) {
+      const omitted = structuredClone(original);
+      omitted.positive.findings = omitted.positive.findings.filter((finding) => finding.taxonomy !== omitted.unit);
+      omitted.positive.receipt.findings = omitted.positive.findings.length;
+      expect(pairUnits(units, findings, CORPUS, [omitted]).find((row) => row.rule === original.unit)?.unpaired).toBeDefined();
+      for (const location of [original.negative.entry.location, "(repo-wide)", "unexpected/outside-selected-input.js:99"]) {
+        for (const precisionTier of ["high", "review"] as const) {
+          const falseFire = structuredClone(original);
+          falseFire.negative.findings.push({ ...original.positive.findings.find((finding) => finding.taxonomy === original.unit)!, location, precisionTier });
+          falseFire.negative.receipt.findings = falseFire.negative.findings.length;
+          expect(pairUnits(units, findings, CORPUS, [falseFire]).find((row) => row.rule === original.unit)?.twinless, `${original.unit}: ${precisionTier} at ${location}`).toMatch(/also fires/);
+        }
+      }
+      const unexamined = structuredClone(original);
+      unexamined.negative.receipt.unitsExamined = 0;
+      unexamined.negative.receipt.examinedUnitIdentities = [];
+      expect(pairUnits(units, findings, CORPUS, [unexamined]).find((row) => row.rule === original.unit)?.twinless).toBeDefined();
+    }
+    const disclosure = executedPairs.find((pair) => pair.detector === "osv-advisories")!;
+    const withoutArtifactRow = findings.filter((finding) => finding.taxonomy !== disclosure.unit);
+    expect(pairUnits(units, withoutArtifactRow, CORPUS, executedPairs).find((row) => row.rule === disclosure.unit)?.unpaired).toBeDefined();
+    const withoutAnswer = CORPUS.filter((entry) => entry.id !== disclosure.positive.entry);
+    expect(pairUnits(units, findings, withoutAnswer, executedPairs).find((row) => row.rule === disclosure.unit)?.unpaired).toBeDefined();
+  });
+
+  it.each(["missing-source", "missing-package", "empty-packages"] as const)("rejects %s from the actual selected provider input before scoring a clean root", async (mode) => {
+    provider.mode = mode;
+    try {
+      await expect(observeDependencyCorpusPairs(targetDir)).rejects.toThrow(/OSV required live execution/);
+    } finally {
+      provider.mode = "complete";
+    }
+  });
 
   it("pairs the outside engines with the SAME predicate, and every one of them is either paired or disclosed", () => {
     const rows = outside();

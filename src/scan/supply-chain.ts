@@ -6,12 +6,11 @@
 // to https://registry.npmjs.org, matching the privacy pitch's "no code egress" (a name-only
 // registry lookup is a smaller ask than code egress, but still noted as a scope decision).
 
-import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { normalizeDependencyUrlInput, redactDependencyRange, type DependencyRangeEvidence, type Finding } from "../findings.js";
 import { dependencyRangeEdge, type DependencyRangeEdge, type LicenseCandidate, type LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
+import { inventoryOsvInputs, type OsvAssessment, type OsvInputInventory } from "./dependencies.js";
 
 // High-traffic npm packages a typosquat/slopsquat target would mimic. Not exhaustive.
 const POPULAR_PACKAGES = [
@@ -203,7 +202,8 @@ export function supplyChainScopeFinding(s: {
   manifestDeclarations?: number;
   /** #1344 — workspace members depended on by their siblings. Never registry packages. */
   workspaceInternalNames: readonly string[];
-  osvRan: boolean;
+  osvRan?: boolean;
+  osvAssessment?: OsvAssessment;
 }): Finding {
   const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
   const manifestOnly = [
@@ -220,10 +220,10 @@ export function supplyChainScopeFinding(s: {
   } else {
     manifestOnly.push(`SUP-INSTALL-SCRIPT-DEP, not computable against ${s.license.source}: neither pnpm-lock.yaml nor yarn.lock records a per-package install-script flag in the form Harvey parses (MEASURED 2026-07-30 against this repo's own pnpm-lock.yaml — falsifier: \`grep -c hasInstallScript <the lockfile>\` returning >0 on a real pnpm/yarn project)`);
   }
-  if (s.osvRan) {
-    manifestOnly.push("DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows");
+  if (s.osvAssessment?.invocations.some((input) => input.status !== "not-assessed") ?? s.osvRan) {
+    manifestOnly.push("DEP-CVE-* (the curated offline CVE table), because OSV assessed the selected inputs named in its independent receipt; unsupported and alternate inputs remain disclosed");
   } else {
-    treeWide.push("DEP-CVE-* (the curated offline CVE table), widened for this pass because osv-scanner did not run");
+    treeWide.push("DEP-CVE-* (the curated offline CVE table), widened for this pass because no successfully assessed OSV input was recorded");
   }
   return coverageFinding({
     id: "SUP-SCOPE-00",
@@ -234,6 +234,7 @@ export function supplyChainScopeFinding(s: {
     // tripped P-UNPINNED-DEP's `match: ["unpinned"]` on its own "SUP-UNPINNED" mention.
     location: "(repo-wide)",
     evidence:
+      (s.osvAssessment ? `OSV ${s.osvAssessment.status}: ${s.osvAssessment.reason} ${s.osvAssessment.provenance} Falsifier: ${s.osvAssessment.falsifier} ` : "OSV examination was not established by an input receipt. ") +
       `Declared set: ${s.declaredNames} package name${s.declaredNames === 1 ? "" : "s"} from ${describeManifestSources(s.license.declaredFrom)}. ` +
       `Resolved tree: ${s.treeNames} package name${s.treeNames === 1 ? "" : "s"} from ${s.license.source}. ` +
       `Read the whole resolved tree: ${treeWide.join("; ")}. ` +
@@ -769,22 +770,17 @@ async function fetchLicenseMeta(fetchImpl: typeof fetch, name: string, version?:
   return { error: `registry returned HTTP ${lastStatus}` };
 }
 
-export function checkLockfilePresence(projectDir: string, label = projectDir): Finding[] {
-  const lockfiles = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
-  const present = lockfiles.some((f) => existsSync(join(projectDir, f)));
-  if (present) return [];
-  return [
-    mechanicalFinding({
-      id: "SUP-NO-LOCKFILE",
-      title: "No lockfile found",
-      severity: "Medium",
-      category: "Supply chain",
-      taxonomy: "Missing lockfile",
-      location: label,
-      evidence: `None of ${lockfiles.join(", ")} present.`,
-      impact: "Every install can resolve different transitive versions — no reproducible, reviewable dependency tree.",
-      fix: "Commit a lockfile and run installs with --frozen-lockfile / npm ci in CI.",
-      precisionTier: "high",
-    }),
-  ];
+export function checkLockfilePresence(projectDir: string, label = projectDir, inventory: OsvInputInventory = inventoryOsvInputs(projectDir)): Finding[] {
+  return inventory.inputs.filter((input) => input.disposition === "missing-input").map((input) => mechanicalFinding({
+    id: input.path === "package.json" ? "SUP-NO-LOCKFILE" : `SUP-NO-LOCKFILE-${input.path}`,
+    title: "No supported lockfile resolves this manifest",
+    severity: "Medium",
+    category: "Supply chain",
+    taxonomy: "Missing lockfile",
+    location: input.path === "package.json" ? label : input.path,
+    evidence: `${input.path}: ${input.reason}`,
+    impact: "No reproducible dependency tree was assessed for this manifest; resolved versions and dependency CVE coverage remain unmeasured.",
+    fix: "Commit a supported lockfile or record this manifest in its workspace lockfile, then run frozen installs and repeat the dependency assessment.",
+    precisionTier: "high",
+  }));
 }
