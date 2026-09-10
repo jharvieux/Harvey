@@ -12,8 +12,9 @@ import { createProducerExecutionReceipt, extendProducerExecutionReceipt } from "
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 // Binds the semantic producer/family/venue inventory, including OSV selected-input
-// assessment routes and the aggregate calibration disclosure positive (#2033).
-const EXPECTED_INVENTORY_SHA = "050b28f7659bc80e8ddff93b04d26595f692e35581530ca9c1cc493ae664de84";
+// assessment routes and the aggregate calibration disclosure positive (#2033),
+// plus the scheduled venue times (#2002).
+const EXPECTED_INVENTORY_SHA = "fd4f6f9173070ddd96687d0f98e5efc9c5b3f9418987a733e51433d0b6bd5a5a";
 const CENSUS_SLICE_MS = 10_000;
 const CENSUS_SLICE_COUNT = 8;
 
