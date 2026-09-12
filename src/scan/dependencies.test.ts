@@ -563,7 +563,7 @@ describe("parseOsvFindings over a captured osv-scanner report", () => {
 
     it("names the fixed version in the remediation instead of 'past the vulnerable range'", () => {
       const f = parseOsvFindings(captured)[0];
-      expect(f?.fix).toContain("Upgrade brace-expansion to 5.0.8 or later");
+      expect(f?.fix).toContain("Upgrade brace-expansion from 1.1.16 to 5.0.8");
       // The summary stays in the title — stripping it broke the calibration corpus's
       // P-NEXT-CVE-CACHE keyword match, which is the corpus catching a real regression.
       expect(f?.title).toBe("brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8)");

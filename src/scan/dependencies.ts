@@ -29,6 +29,7 @@ import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { collectDependencies, parsePackageLock, parsePnpmLock, parseYarnLock } from "../sbom.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { mechanicalFinding } from "./common.js";
+import { osvRemediation, type OsvAffectedPackage } from "./osv-remediation.js";
 
 function parseVersion(v: string): [number, number, number] {
   const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v);
@@ -951,26 +952,7 @@ export interface OsvVulnerability {
   database_specific?: { cwe_ids?: string[]; severity?: string };
 }
 
-interface OsvAffected {
-  package?: { name?: string; ecosystem?: string };
-  ranges?: { type?: string; events?: { introduced?: string; fixed?: string }[] }[];
-}
-
-// OSV states a range as an event list; every `fixed` event names a first-patched version. Same
-// shape src/cli/osv-staleness.ts has modelled correctly since #247 — the knowledge existed in the
-// repo and was simply never wired into the scan path (#1079).
-function osvFixedVersions(vuln: OsvVulnerability, pkg: string): string[] {
-  const fixed: string[] = [];
-  for (const affected of vuln.affected ?? []) {
-    if (affected.package?.name !== pkg) continue;
-    for (const range of affected.ranges ?? []) {
-      for (const event of range.events ?? []) {
-        if (event.fixed !== undefined) fixed.push(event.fixed);
-      }
-    }
-  }
-  return [...new Set(fixed)];
-}
+type OsvAffected = OsvAffectedPackage;
 
 const OSV_SEVERITY_LABELS: Record<string, Severity> = {
   CRITICAL: "Critical",
@@ -1091,7 +1073,8 @@ export function parseOsvFindings(result: OsvScanResult, represented?: OsvEmitted
         // #1079: every one of these came out of the tool and was thrown away. The fixed version is
         // the difference between a remediation an engineer can act on and "upgrade past the
         // vulnerable range"; the CWE is what #455 routes tickets on, and no DEP-OSV row carried one.
-        const fixedVersions = osvFixedVersions(vuln, name);
+        const remediation = osvRemediation(name, version, id, vuln.affected, pkg.package?.ecosystem);
+        const fixedVersions = remediation.fixedVersions;
         const cwe = vuln.database_specific?.cwe_ids;
         const advisoryLinks = (vuln.references ?? [])
           .filter((r) => r.type === "ADVISORY" && r.url)
@@ -1124,10 +1107,7 @@ export function parseOsvFindings(result: OsvScanResult, represented?: OsvEmitted
             // advisory's actual narrative — was discarded. Prefer details, capped: it runs to
             // several thousand characters and the report renders it inline.
             impact: osvImpact(vuln),
-            fix:
-              fixedVersions.length > 0
-                ? `Upgrade ${name} to ${fixedVersions[0]} or later (see ${id}).`
-                : `No fixed version is published for ${name} in ${id} — remove or replace the dependency, or apply the advisory's mitigation.`,
+            fix: remediation.fix,
             precisionTier: "review",
           }),
         );
