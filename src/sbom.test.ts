@@ -646,6 +646,56 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings[0]?.evidence).toContain(resolved ? "declared in a manifest" : "reached only through the resolved dependency tree");
   });
 
+  describe.each(["MIT", "GPL-3.0"] as const)("%s alias range proof (#2046 B3)", (license) => {
+    it.each([
+      ["1.2.3-alpha || *", "1.2.3-alpha", false],
+      ["^1.2.3-alpha || *", "1.2.3-beta.4", false],
+      ["* || ^1.2.3-alpha", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || x", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || ~*", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || ^*", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha ||", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || >=0", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || >=0.0.0", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || >=0.0.0 *", "1.2.3-beta.4", false],
+      ["^1.2.3-alpha || 0 - *", "1.2.3-beta.4", false],
+      ["1 - 3 >=2", "2.0.0", false],
+      [">=2 1 - 3", "2.0.0", false],
+      ["1 - 3 2 - 4", "2.0.0", false],
+      ["1 - 3 *", "2.0.0", false],
+      ["^9007199254740991.0.0", "9007199254740991.0.0", false],
+      ["~1.9007199254740991.0", "1.9007199254740991.0", false],
+      ["<=1.9007199254740991", "1.9007199254740991.0", false],
+      [">1.2.3-beta.9999999999999999999999999998", "1.2.3-beta.9999999999999999999999999999", false],
+      [`1.2.3-${"a".repeat(256)}`, `1.2.3-${"a".repeat(256)}`, false],
+      ["1.2.3", `1.2.3+${"a".repeat(256)}`, false],
+      ["1.2.3-alpha", "1.2.3-alpha", true],
+      ["^1.2.3-alpha || * >=2", "1.2.3-beta.4", true],
+      ["^1.2.3-alpha || >=v0.0.0", "1.2.3-beta.4", true],
+      ["^1.2.3-alpha || >=0.0.0-0", "1.2.3-beta.4", true],
+      ["1.2.3-alpha || *", "2.0.0", true],
+      ["1 - 3", "2.0.0", true],
+      ["1 - 3 || ^4", "2.0.0", true],
+      ["1.2.3-alpha - 1.2.3-beta.4", "1.2.3-alpha", true],
+      ["9007199254740991.0.0", "9007199254740991.0.0", true],
+      [">1.2.3-beta.9007199254740990", "1.2.3-beta.9007199254740991", true],
+    ] as const)("checks %s at %s (resolved: %s)", async (range, version, resolved) => {
+      write({ dependencies: { alias: `npm:real@${range}` } }, { "node_modules/alias": { name: "real", version, license } });
+      const scope = licenseScope(dir);
+      const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
+      expect.soft(scope.candidates).toEqual([
+        { name: "real", version, license, direct: resolved },
+        ...resolved ? [] : [{ name: "alias", direct: true }],
+      ]);
+      expect.soft(findings.map((finding) => finding.id)).toEqual([
+        ...license === "GPL-3.0" ? [`SUP-LICENSE-COPYLEFT-real@${version}`] : [],
+        ...resolved ? [] : ["SUP-LICENSE-00"],
+      ]);
+      if (!resolved) expect.soft(findings.find((finding) => finding.id === "SUP-LICENSE-00")?.evidence).toContain("Not assessed: alias");
+      if (license === "GPL-3.0") expect(findings[0]?.evidence).toContain(resolved ? "declared in a manifest" : "reached only through the resolved dependency tree");
+    });
+  });
+
   it("uses the canonical scoped identity for registry fallback and retains an unresolved alias alongside it", async () => {
     write({ dependencies: { installed: "npm:@actual/pkg@1.0.0", missing: "npm:@actual/pkg@1.0.0" } }, {
       "node_modules/installed": { name: "@actual/pkg", version: "1.0.0" },

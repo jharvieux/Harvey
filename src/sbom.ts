@@ -150,6 +150,8 @@ interface AliasVersion {
 }
 
 function aliasVersion(text: string): AliasVersion | undefined {
+  // npm's version parser rejects strings longer than 256 characters.
+  if (text.length > 256) return undefined;
   const match = /^v?([\dxX*]+)(?:\.([\dxX*]+))?(?:\.([\dxX*]+))?(?:-([\w.-]+))?(?:\+([\w.-]+))?$/.exec(text);
   if (!match) return undefined;
   const parts: number[] = [];
@@ -162,7 +164,9 @@ function aliasVersion(text: string): AliasVersion | undefined {
   const prerelease = match[4]?.split(".") ?? [];
   if ((match[4] || match[5]) && parts.length !== 3) return undefined;
   if ([...prerelease, ...(match[5]?.split(".") ?? [])].some((part) => !/^[0-9A-Za-z-]+$/.test(part))) return undefined;
-  if (prerelease.some((part) => /^\d+$/.test(part) && !/^(0|[1-9]\d*)$/.test(part))) return undefined;
+  // Larger numeric prerelease identifiers can round together in npm's comparisons;
+  // they cannot establish a range match through this offline proof.
+  if (prerelease.some((part) => /^\d+$/.test(part) && (!/^(0|[1-9]\d*)$/.test(part) || !Number.isSafeInteger(Number(part))))) return undefined;
   return { parts, prerelease };
 }
 
@@ -178,7 +182,6 @@ function compareAliasVersions(a: AliasVersion, b: AliasVersion): number {
     if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
     const xNumeric = /^\d+$/.test(x), yNumeric = /^\d+$/.test(y);
     if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
-    // Compare numeric identifiers as integers without rounding long prerelease identifiers.
     if (xNumeric && x.length !== y.length) return x.length - y.length;
     return x < y ? -1 : 1;
   }
@@ -194,7 +197,8 @@ function aliasVersionMatches(version: string, range: string): boolean {
   type Comparator = { operator: string; version: AliasVersion };
   const alternatives = range.split("||").map((branch): Comparator[] | undefined => {
     const comparators: Comparator[] = [];
-    const tokens = branch.trim().replace(/(\S+)\s+-\s+(\S+)/g, ">=$1 <=$2").replace(/([<>=~^]+)\s+/g, "$1").split(/\s+/).filter(Boolean);
+    // npm expands a hyphen range only when it occupies the whole alternative.
+    const tokens = branch.trim().replace(/^(\S+)\s+-\s+(\S+)$/, ">=$1 <=$2").replace(/([<>=~^]+)\s+/g, "$1").split(/\s+/).filter(Boolean);
     for (const token of tokens) {
       const match = /^(<=|>=|<|>|=|\^|~>?)?(.*)$/.exec(token)!;
       const operator = match[1] ?? "=", value = aliasVersion(match[2]!);
@@ -202,7 +206,10 @@ function aliasVersionMatches(version: string, range: string): boolean {
       const size = value.parts.length;
       const floor: AliasVersion = { parts: [0, 1, 2].map((i) => value.parts[i] ?? 0), prerelease: value.prerelease };
       const upper = (index: number): AliasVersion => ({ parts: floor.parts.map((part, i) => i < index ? part : i === index ? part + 1 : 0), prerelease: ["0"] });
-      const add = (op: string, v: AliasVersion): void => { comparators.push({ operator: op, version: v }); };
+      const add = (op: string, v: AliasVersion, collapseZero = true): void => {
+        if (collapseZero && op === ">=" && !v.prerelease.length && v.parts.every((part) => part === 0)) return;
+        comparators.push({ operator: op, version: v });
+      };
       if (size === 0) {
         if (operator === "<" || operator === ">") add("<", { parts: [0, 0, 0], prerelease: ["0"] });
       } else if (operator === "^" || operator.startsWith("~")) {
@@ -210,7 +217,8 @@ function aliasVersionMatches(version: string, range: string): boolean {
         const firstNonzero = value.parts.findIndex((part) => part !== 0);
         add("<", upper(operator === "^" ? firstNonzero < 0 ? size - 1 : firstNonzero : Math.min(size - 1, 1)));
       } else if (size === 3) {
-        add(operator, floor);
+        // npm preserves the full v-prefixed comparator instead of collapsing >=0.0.0.
+        add(operator, floor, !match[2]!.startsWith("v"));
       } else if (operator === "=") {
         add(">=", floor); add("<", upper(size - 1));
       } else if (operator === ">") {
@@ -221,9 +229,11 @@ function aliasVersionMatches(version: string, range: string): boolean {
         add(operator, operator === "<" ? { ...floor, prerelease: ["0"] } : floor);
       }
     }
-    return comparators;
+    return comparators.some(({ version: bound }) => bound.parts.some((part) => !Number.isSafeInteger(part))) ? undefined : comparators;
   });
   if (alternatives.some((comparators) => comparators === undefined)) return false;
+  // npm collapses a union containing an unconstrained alternative to *, which excludes prereleases.
+  if (alternatives.some((comparators) => comparators!.length === 0)) return actual.prerelease.length === 0;
   return alternatives.some((comparators) => {
     if (actual.prerelease.length && !comparators!.some(({ version: bound }) => bound.prerelease.length &&
       actual.parts.every((part, i) => part === bound.parts[i]))) return false;
