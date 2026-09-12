@@ -588,7 +588,7 @@ function citedScripts(text: string): string[] {
     const tokens = span[1]!.trim().split(/\s+/);
     for (let t = 0; t < tokens.length; t++) {
       if (tokens[t] !== "pnpm") continue;
-      const parsed = pnpmScriptReference(tokens, t);
+      const parsed = pnpmScriptReference(tokens, t, false);
       if (parsed) names.push(parsed.name);
     }
   }
@@ -613,14 +613,14 @@ export function unbacktickedPnpmReferences(text: string): { name: string; explic
   const prose = text.replace(BACKTICKED, " ");
   for (const match of prose.matchAll(/\bpnpm\b/g)) {
     const tokens = prose.slice(match.index).split(/\s+/);
-    const parsed = pnpmScriptReference(tokens, 0);
+    const parsed = pnpmScriptReference(tokens, 0, true);
     if (parsed) references.push(parsed);
   }
   return references;
 }
 
 /** Parse one `pnpm` invocation without treating workspace selectors or flags as script names. */
-function pnpmScriptReference(tokens: readonly string[], start: number): { name: string; explicitRun: boolean } | undefined {
+function pnpmScriptReference(tokens: readonly string[], start: number, allowSentencePunctuation: boolean): { name: string; explicitRun: boolean } | undefined {
   let i = start + 1;
   let explicitRun = false;
   while (i < tokens.length) {
@@ -636,11 +636,18 @@ function pnpmScriptReference(tokens: readonly string[], start: number): { name: 
       i++;
       continue;
     }
-    if (!/^[\w:-]+$/.test(token)) return undefined;
-    if (!explicitRun && PNPM_PASSTHROUGH.has(token)) return undefined;
-    return { name: token, explicitRun };
+    const name = pnpmScriptToken(token, allowSentencePunctuation);
+    if (name === undefined) return undefined;
+    if (!explicitRun && PNPM_PASSTHROUGH.has(name)) return undefined;
+    return { name, explicitRun };
   }
   return undefined;
+}
+
+/** Strip sentence punctuation outside code spans only; malformed command tokens stay invalid. */
+function pnpmScriptToken(token: string, allowSentencePunctuation: boolean): string | undefined {
+  if (/^[\w:-]+$/.test(token)) return token;
+  return allowSentencePunctuation ? /^([\w:-]+)[.,;!?]+$/.exec(token)?.[1] : undefined;
 }
 
 /**

@@ -49,6 +49,19 @@ describe("measure-pnpm-evidence exit codes", () => {
     expect(out).toContain(`${skipped} unbackticked pnpm reference(s) name a REAL script`);
   });
 
+  it.each([
+    ["a terminal period", "pnpm verify.", 1],
+    ["a terminal comma", "pnpm verify,", 1],
+    ["a qualified handled command and bare residual", "pnpm verify:changed; pnpm verify.", 1],
+    ["a bare missing-script citation", "pnpm missing-script-2051.", 0],
+    ["an explicit missing-script citation", "pnpm run missing-script-2051.", 0],
+  ])("counts a bare script followed by %s", (_why, detail, skipped) => {
+    const { code, out } = run(met(detail));
+    expect(code).toBe(skipped === 0 ? 1 : 0);
+    if (skipped === 0) expect(out).toContain("still costs nothing");
+    else expect(out).toContain(`${skipped} unbackticked pnpm reference(s) name a REAL script`);
+  });
+
   // The four ways `gh pr list` hands this tool stdin with no population in it. Each must be 127,
   // never 1: exit 1 is the claim "I measured the population and found nothing", which is false.
   it.each([

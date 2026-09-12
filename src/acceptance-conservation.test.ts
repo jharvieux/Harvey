@@ -23,6 +23,7 @@ import {
   closeFailureComment,
   closeSelftestCases,
   formatClosedIssue,
+  unbacktickedPnpmReferences,
   type IssueLookup,
   type IssueComment,
   type IssueRecord,
@@ -562,6 +563,14 @@ describe("evidence checked for TRUTH, not only shape", () => {
         expect.stringContaining("not a script in package.json"),
       ]);
     }
+  });
+
+  it("reads terminal punctuation without truncating an invalid pnpm script token", () => {
+    expect(unbacktickedPnpmReferences("pnpm verify.")).toEqual([{ name: "verify", explicitRun: false }]);
+    expect(unbacktickedPnpmReferences("pnpm missing-script-2051.")).toEqual([{ name: "missing-script-2051", explicitRun: false }]);
+    expect(unbacktickedPnpmReferences("pnpm run missing-script-2051.")).toEqual([{ name: "missing-script-2051", explicitRun: true }]);
+    expect(unbacktickedPnpmReferences("pnpm verify@next.")).toEqual([]);
+    expect(evidenceProblems("`pnpm missing-script-2051.`", world)).toEqual([]);
   });
 
   it("SCOPE CONTROL: a genuinely invented script inside backticks still fails", () => {
