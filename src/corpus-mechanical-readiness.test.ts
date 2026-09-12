@@ -177,7 +177,7 @@ describe("fresh current mechanical producer ↔ replay readiness", () => {
     expect(producer).toContain("installTargetDeps(scanDir, target.m8?.installFlags ?? [], {");
     expect(producer).toContain("targetTree: targetTreeIdentity");
     expect(producer).toContain("dependencyPreparation }");
-    expect(producer).toContain("runMutationScan(target.slug, scanDir, target.m8)");
+    expect(producer).toContain("runMutationScan(target.slug, scanDir, target.m8, dependencyPreparation)");
     expect(producer).toContain("join(scanDir, m5Root)");
     expect(producer).toContain("join(scanDir, target.schemaPath)");
   });
