@@ -1092,7 +1092,7 @@ export function parseOsvFindings(result: OsvScanResult, represented?: OsvEmitted
             // The summary stays in the title — it is the one line that says what the vuln IS. The
             // #1079 defect was that it was ALSO the impact; the fix is to give impact real content
             // (osvImpact below), not to strip the title down to an advisory id.
-            title: `${name}@${version}: ${vuln.summary ?? id}${fixedVersions.length > 0 ? ` (fixed in ${fixedVersions.join(" / ")})` : ""}`,
+            title: `${name}@${version}: ${vuln.summary ?? id}${fixedVersions.length > 0 ? ` (advisory fix boundaries: ${fixedVersions.join(" / ")})` : ""}`,
             severity,
             category: "Dependency CVE",
             taxonomy: "Known-vulnerable dependency",
@@ -1101,7 +1101,7 @@ export function parseOsvFindings(result: OsvScanResult, represented?: OsvEmitted
             ...(cwe?.length ? { cwe } : {}),
             evidence:
               `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.${rating}` +
-              (fixedVersions.length > 0 ? ` The advisory's affected range is fixed in ${fixedVersions.join(" / ")}.` : " The advisory names no fixed version.") +
+              (fixedVersions.length > 0 ? ` The advisory reports fixed-event boundaries at ${fixedVersions.join(" / ")}. These boundaries alone do not establish a safe upgrade; the remediation checks the complete affected-version set.` : " The advisory names no fixed version.") +
               (advisoryLinks.length > 0 ? ` Advisory: ${advisoryLinks.join(", ")}.` : ""),
             // The one-line summary was being used as BOTH title and impact while `details` — the
             // advisory's actual narrative — was discarded. Prefer details, capped: it runs to

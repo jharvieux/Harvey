@@ -66,7 +66,7 @@ describe("OSV release-line remediation (#2042)", () => {
     ] }];
     const result = finding("0.6.10", scrambled);
     expect(result.fix).toContain("from 0.6.10 to 0.6.11");
-    expect(result.title).toContain("fixed in 0.4.9 / 0.5.4 / 0.6.11 / 0.7.5 / 0.8.3");
+    expect(result.title).toContain("advisory fix boundaries: 0.4.9 / 0.5.4 / 0.6.11 / 0.7.5 / 0.8.3");
   });
 
   it("checks a candidate against every affected range instead of stopping at its own interval", () => {
@@ -129,8 +129,17 @@ describe("OSV release-line remediation (#2042)", () => {
       ],
       expected: "limit-bearing SEMVER ranges are not supported for safe upgrade selection",
     },
-  ])("delivers $label through the assembled document and rendered HTML", ({ installed, ranges, expected }) => {
-    const parsed = finding(installed, ranges);
+    {
+      label: "an explicitly affected fixed boundary",
+      installed: "1.0.0",
+      ranges: [{ type: "SEMVER", events: [{ introduced: "0" }, { fixed: "1.1.0" }] }],
+      versions: ["1.1.0"],
+      expected: "no published fixed boundary is newer than the installed version and outside every affected interval",
+    },
+  ] as { label: string; installed: string; ranges: TestRange[]; expected: string; versions?: string[] }[])("delivers $label through the assembled document and rendered HTML", ({ installed, ranges, expected, versions }) => {
+    const input = report(installed, ranges);
+    if (versions) input.results![0]!.packages![0]!.vulnerabilities![0]!.affected![0]!.versions = versions;
+    const parsed = parseOsvFindings(input)[0]!;
     const document = assembleEngagementDocument([], { connected: false, dynamic: false, llm: false }, [parsed], {
       client: "Controlled fflate target",
       subtitle: "OSV remediation delivery",
@@ -154,7 +163,13 @@ describe("OSV release-line remediation (#2042)", () => {
       expect(delivered.fix).toContain("safe concrete upgrade cannot be established");
       expect(delivered.fix).not.toContain("Upgrade fflate from 1.0.0 to 1.1.0");
       expect(delivered.id).toBe("DEP-OSV-GHSA-px8p-9vwx-vf98-fflate@1.0.0");
+      expect(delivered.title).toContain("advisory fix boundaries:");
+      expect(delivered.evidence).toContain("These boundaries alone do not establish a safe upgrade");
+      expect(delivered.title).not.toContain("fixed in 1.1.0");
+      expect(delivered.evidence).not.toContain("affected range is fixed in");
     }
+    expect(html).toContain(esc(delivered.title));
+    expect(html).toContain(esc(delivered.evidence));
     expect(html).toContain(esc(delivered.fix));
     expect(renderFidelityBreaches(document, html)).toEqual([]);
   });
