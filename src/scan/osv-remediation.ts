@@ -150,6 +150,11 @@ export function osvRemediation(pkg: string, installed: string, advisory: string,
       if (range.type !== "SEMVER") {
         return remediationUnavailable(pkg, installed, advisory, fixedVersions, range.type ? `it includes an unsupported ${range.type} range` : "it includes a range with no declared type");
       }
+      // OSV limits filter the whole range; closing an interval at each limit invents safe gaps.
+      // https://ossf.github.io/osv-schema/#evaluation defines the separate BeforeLimits step.
+      if (range.events?.some((entry) => entry.limit !== undefined)) {
+        return remediationUnavailable(pkg, installed, advisory, fixedVersions, "limit-bearing SEMVER ranges are not supported for safe upgrade selection");
+      }
       const parsed: ParsedEvent[] = [];
       for (const entry of range.events ?? []) {
         const result = event(entry);

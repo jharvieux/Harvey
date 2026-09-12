@@ -95,8 +95,33 @@ describe("OSV release-line remediation (#2042)", () => {
     expect(result.fix).not.toMatch(/Upgrade fflate .* or later/);
   });
 
-  it("delivers the safe fflate advice through the assembled document and rendered HTML", () => {
-    const parsed = finding("0.6.10");
+  it.each([
+    {
+      label: "safe fflate advice",
+      installed: "0.6.10",
+      ranges: releaseLines,
+      expected: "Upgrade fflate from 0.6.10 to 0.6.11",
+    },
+    {
+      label: "multiple-limit uncertainty",
+      installed: "1.0.0",
+      ranges: [
+        { type: "SEMVER", events: [{ introduced: "0" }, { fixed: "1.1.0" }] },
+        { type: "SEMVER", events: [{ introduced: "0" }, { limit: "1.1.0" }, { introduced: "1.2.0" }, { limit: "2.0.0" }] },
+      ],
+      expected: "limit-bearing SEMVER ranges are not supported for safe upgrade selection",
+    },
+    {
+      label: "infinite-limit uncertainty",
+      installed: "1.0.0",
+      ranges: [
+        { type: "SEMVER", events: [{ introduced: "0" }, { fixed: "1.1.0" }] },
+        { type: "SEMVER", events: [{ introduced: "0" }, { limit: "*" }] },
+      ],
+      expected: "limit-bearing SEMVER ranges are not supported for safe upgrade selection",
+    },
+  ])("delivers $label through the assembled document and rendered HTML", ({ installed, ranges, expected }) => {
+    const parsed = finding(installed, ranges);
     const document = assembleEngagementDocument([], { connected: false, dynamic: false, llm: false }, [parsed], {
       client: "Controlled fflate target",
       subtitle: "OSV remediation delivery",
@@ -114,8 +139,13 @@ describe("OSV release-line remediation (#2042)", () => {
     });
     const delivered = document.findings.find((entry) => entry.id === parsed.id)!;
     const html = buildHtml(document);
-    expect(delivered.fix).toContain("Upgrade fflate from 0.6.10 to 0.6.11");
-    expect(JSON.stringify(document)).toContain("Upgrade fflate from 0.6.10 to 0.6.11");
+    expect(delivered.fix).toContain(expected);
+    expect(JSON.stringify(document)).toContain(expected);
+    if (installed === "1.0.0") {
+      expect(delivered.fix).toContain("safe concrete upgrade cannot be established");
+      expect(delivered.fix).not.toContain("Upgrade fflate from 1.0.0 to 1.1.0");
+      expect(delivered.id).toBe("DEP-OSV-GHSA-px8p-9vwx-vf98-fflate@1.0.0");
+    }
     expect(html).toContain(esc(delivered.fix));
     expect(renderFidelityBreaches(document, html)).toEqual([]);
   });
