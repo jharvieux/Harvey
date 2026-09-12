@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 import { checkLicenseCompliance } from "./scan/supply-chain.js";
 
@@ -358,6 +358,53 @@ describe("licenseScope (#1213)", () => {
     writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2" } } }));
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { axios: "^1.7.2" }, optionalDependencies: { fsevents: "2.3.3" } }));
     expect(licenseScope(dir).candidates).toContainEqual({ name: "fsevents", direct: true });
+  });
+
+  it.each([1, 2, 3])("reconciles a root npm alias with its package-lock v%s installation", (lockfileVersion) => {
+    const lock = lockfileVersion === 1
+      ? { dependencies: { "wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", license: "MIT" } } }
+      : { packages: { "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", license: "MIT" } } };
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "wrap-ansi-cjs": "npm:wrap-ansi@7.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion, ...lock }));
+
+    expect(licenseScope(dir).candidates).toEqual([{ name: "wrap-ansi", version: "7.0.0", license: "MIT", direct: true }]);
+  });
+
+  it("reconciles scoped root and workspace aliases only when their installations resolved", () => {
+    mkdirSync(join(dir, "packages", "web"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      workspaces: ["packages/*"],
+      dependencies: { "root-alias": "npm:root-real@1.0.0", unresolved: "npm:unresolved-real@1.0.0" },
+    }));
+    writeFileSync(join(dir, "packages", "web", "package.json"), JSON.stringify({ dependencies: { "@team/alias": "npm:@actual/pkg@2.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/root-alias": { name: "root-real", version: "1.0.0", license: "MIT" },
+      "node_modules/@team/alias": { name: "@actual/pkg", version: "2.0.0", license: "MIT" },
+      "node_modules/unresolved-real": { name: "unresolved-real", version: "1.0.0", license: "MIT" },
+    } }));
+
+    expect(licenseScope(dir).candidates).toEqual([
+      { name: "root-real", version: "1.0.0", license: "MIT", direct: true },
+      { name: "@actual/pkg", version: "2.0.0", license: "MIT", direct: true },
+      { name: "unresolved-real", version: "1.0.0", license: "MIT", direct: false },
+      { name: "unresolved", direct: true },
+    ]);
+  });
+
+  it.each([
+    ["MIT", []],
+    ["GPL-3.0", ["SUP-LICENSE-COPYLEFT-wrap-ansi@7.0.0"]],
+  ])("passes an actual direct alias to license compliance as %s without an alias registry lookup", async (license, ids) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "wrap-ansi-cjs": "npm:wrap-ansi@7.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: {
+      "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", license },
+    } }));
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, skipRegistry: true });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings.map((finding) => finding.id)).toEqual(ids);
+    expect(findings.find((finding) => finding.id.startsWith("SUP-LICENSE-COPYLEFT"))?.evidence ?? "").not.toContain("reached only through the resolved dependency tree");
   });
 
   it("keeps escaped workspace manifests out of the exact declared license population", () => {
