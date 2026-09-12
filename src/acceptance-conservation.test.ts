@@ -539,6 +539,28 @@ describe("evidence checked for TRUTH, not only shape", () => {
     expect(evidenceProblems("ran pnpm and it worked", actualScripts)).toEqual([]);
   });
 
+  it("keeps unbackticked selectors out of the root script check but validates flags and pnpm run", () => {
+    const actualScripts = { ...world, scripts: new Set(["verify:changed", "exec"]) };
+    for (const detail of [
+      "pnpm --filter site build completed",
+      "pnpm run --filter site build completed",
+      "pnpm -r build completed",
+      "pnpm --silent verify:changed completed",
+      "pnpm run exec completed",
+      "`pnpm run exec` completed",
+    ]) expect(evidenceProblems(detail, actualScripts), detail).toEqual([]);
+
+    for (const detail of [
+      "pnpm --silent validate-everything completed",
+      "pnpm run exec completed",
+      "`pnpm run exec` completed",
+    ]) {
+      expect(evidenceProblems(detail, world), detail).toEqual([
+        expect.stringContaining("not a script in package.json"),
+      ]);
+    }
+  });
+
   it("SCOPE CONTROL: a genuinely invented script inside backticks still fails", () => {
     expect(evidenceProblems("`pnpm --silent validate-everything` — all green", world)).toEqual([
       expect.stringContaining("not a script in package.json"),

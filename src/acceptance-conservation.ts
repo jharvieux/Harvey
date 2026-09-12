@@ -565,14 +565,15 @@ const SELECTS_ANOTHER_PACKAGE = new Set(["-r", "--recursive", "-F", "--filter", 
  * The `scripts` keys a `met` line names — read inside a backticked span, and never from a token
  * that is a flag. Outside backticks we accept only syntax that is still unambiguously a command:
  * `pnpm run <script>` or a script name containing `:` or `-`. A bare English word after `pnpm`
- * remains prose unless it is backticked, so "ran pnpm and it worked" cannot become a false reject.
+ * remains prose unless it is backticked, so this narrow extraction does not treat "ran pnpm and it
+ * worked" as a script citation.
  *
  * The old shape was `/\bpnpm\s+(?:run\s+)?([\w:-]+)/g`, which read the token after `pnpm` as a script
  * name whatever it was. It therefore told the author of `` `pnpm --filter site build` `` that
  * `pnpm --filter` "is not a script in package.json", and read the prose *"ran pnpm and it worked"*
  * as an invented `pnpm and`. A false REJECT that denies a TRUE statement is the one failure this
- * check must not produce: the whole claim of the truth pass is that an invention is separable from
- * the real thing, and it stopped being separable the moment a correct command failed it.
+ * check must not produce: the truth pass only claims to check evidence that its parser can
+ * distinguish from prose without rejecting a correct command.
  *
  * The backtick boundary kills the prose case while the narrow outside form covers real acceptance
  * evidence such as `pnpm verify:changed`. Plain unbackticked `pnpm verify` remains shape-checked
@@ -584,11 +585,8 @@ function citedScripts(text: string): string[] {
     const tokens = span[1]!.trim().split(/\s+/);
     for (let t = 0; t < tokens.length; t++) {
       if (tokens[t] !== "pnpm") continue;
-      let i = t + 1;
-      while (i < tokens.length && tokens[i]!.startsWith("-") && !SELECTS_ANOTHER_PACKAGE.has(tokens[i]!)) i++;
-      if (SELECTS_ANOTHER_PACKAGE.has(tokens[i] ?? "")) continue;
-      const name = tokens[i] === "run" ? tokens[i + 1] : tokens[i];
-      if (name !== undefined && /^[\w:-]+$/.test(name) && !PNPM_PASSTHROUGH.has(name)) names.push(name);
+      const parsed = pnpmScriptReference(tokens, t);
+      if (parsed) names.push(parsed.name);
     }
   }
   for (const name of unbacktickedPnpmScriptNames(text)) names.push(name);
@@ -597,8 +595,8 @@ function citedScripts(text: string): string[] {
 
 /**
  * Script-like `pnpm` references outside code spans that are precise enough to truth-check. This is
- * exported for the recorded-reason measurement so its census cannot claim a gap the shipping gate
- * already covers. It deliberately does not guess at bare words such as `pnpm verify`.
+ * exported for the recorded-reason measurement so it can separate handled syntax from the bounded
+ * bare-word residual. It deliberately does not guess at bare words such as `pnpm verify`.
  */
 export function unbacktickedPnpmScriptNames(text: string): string[] {
   return unbacktickedPnpmReferences(text)
@@ -610,14 +608,36 @@ export function unbacktickedPnpmScriptNames(text: string): string[] {
 export function unbacktickedPnpmReferences(text: string): { name: string; explicitRun: boolean }[] {
   const references: { name: string; explicitRun: boolean }[] = [];
   const prose = text.replace(BACKTICKED, " ");
-  const reference = /\bpnpm\s+(?:(run)\s+)?([\w:-]+)/g;
-  for (const match of prose.matchAll(reference)) {
-    const explicitRun = match[1] !== undefined;
-    const name = match[2]!;
-    if (PNPM_PASSTHROUGH.has(name)) continue;
-    references.push({ name, explicitRun });
+  for (const match of prose.matchAll(/\bpnpm\b/g)) {
+    const tokens = prose.slice(match.index).split(/\s+/);
+    const parsed = pnpmScriptReference(tokens, 0);
+    if (parsed) references.push(parsed);
   }
   return references;
+}
+
+/** Parse one `pnpm` invocation without treating workspace selectors or flags as script names. */
+function pnpmScriptReference(tokens: readonly string[], start: number): { name: string; explicitRun: boolean } | undefined {
+  let i = start + 1;
+  let explicitRun = false;
+  while (i < tokens.length) {
+    const token = tokens[i]!;
+    const option = token.split("=", 1)[0]!;
+    if (SELECTS_ANOTHER_PACKAGE.has(option)) return undefined;
+    if (token.startsWith("-")) {
+      i++;
+      continue;
+    }
+    if (token === "run" && !explicitRun) {
+      explicitRun = true;
+      i++;
+      continue;
+    }
+    if (!/^[\w:-]+$/.test(token)) return undefined;
+    if (!explicitRun && PNPM_PASSTHROUGH.has(token)) return undefined;
+    return { name: token, explicitRun };
+  }
+  return undefined;
 }
 
 /**
