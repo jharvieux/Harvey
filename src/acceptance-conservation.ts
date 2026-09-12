@@ -561,6 +561,9 @@ const PNPM_PASSTHROUGH = new Set([
 // reported as invented — `pnpm --filter site build` is a correct workspace command.
 const SELECTS_ANOTHER_PACKAGE = new Set(["-r", "--recursive", "-F", "--filter", "--filter-prod", "-C", "--dir"]);
 
+/** Pnpm options whose separated argument is metadata, never a root script name. */
+const PNPM_OPTIONS_WITH_VALUES = new Set(["--reporter"]);
+
 /**
  * The `scripts` keys a `met` line names — read inside a backticked span, and never from a token
  * that is a flag. Outside backticks we accept only syntax that is still unambiguously a command:
@@ -625,7 +628,7 @@ function pnpmScriptReference(tokens: readonly string[], start: number): { name: 
     const option = token.split("=", 1)[0]!;
     if (SELECTS_ANOTHER_PACKAGE.has(option)) return undefined;
     if (token.startsWith("-")) {
-      i++;
+      i += PNPM_OPTIONS_WITH_VALUES.has(option) && !token.includes("=") ? 2 : 1;
       continue;
     }
     if (token === "run" && !explicitRun) {

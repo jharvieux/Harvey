@@ -546,12 +546,15 @@ describe("evidence checked for TRUTH, not only shape", () => {
       "pnpm run --filter site build completed",
       "pnpm -r build completed",
       "pnpm --silent verify:changed completed",
+      "pnpm --reporter append-only verify:changed completed",
+      "`pnpm --reporter append-only verify:changed` completed",
       "pnpm run exec completed",
       "`pnpm run exec` completed",
     ]) expect(evidenceProblems(detail, actualScripts), detail).toEqual([]);
 
     for (const detail of [
       "pnpm --silent validate-everything completed",
+      "pnpm --reporter append-only validate-everything completed",
       "pnpm run exec completed",
       "`pnpm run exec` completed",
     ]) {

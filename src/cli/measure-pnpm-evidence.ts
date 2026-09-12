@@ -46,7 +46,8 @@ let metLines = 0;
 let pnpmMentions = 0;
 let backtickedPnpm = 0;
 let unbacktickedReferences = 0;
-const uncaught: { pr: number; line: string }[] = [];
+let skippedRealReferences = 0;
+const uncaught: { pr: number; line: string; skipped: number }[] = [];
 
 for (const pr of prs) {
   if (!pr.body) continue;
@@ -58,18 +59,25 @@ for (const pr of prs) {
     if (/`[^`]*\bpnpm\b[^`]*`/.test(d.detail)) backtickedPnpm++;
     const references = unbacktickedPnpmReferences(d.detail);
     unbacktickedReferences += references.length;
-    const checked = new Set(unbacktickedPnpmScriptNames(d.detail));
-    const skippedRealScript = references
-      .some(({ name }) => scripts.has(name) && !checked.has(name));
-    if (skippedRealScript) uncaught.push({ pr: pr.number, line: d.detail });
+    const handled = new Map<string, number>();
+    for (const name of unbacktickedPnpmScriptNames(d.detail)) handled.set(name, (handled.get(name) ?? 0) + 1);
+    const skipped = references.filter(({ name }) => {
+      if (!scripts.has(name)) return false;
+      const handledCount = handled.get(name) ?? 0;
+      if (handledCount === 0) return true;
+      handled.set(name, handledCount - 1);
+      return false;
+    });
+    skippedRealReferences += skipped.length;
+    if (skipped.length > 0) uncaught.push({ pr: pr.number, line: d.detail, skipped: skipped.length });
   }
 }
 
 console.log(`PRs scanned: ${prs.length}; total met lines: ${metLines}; met lines mentioning pnpm: ${pnpmMentions} (${backtickedPnpm} containing backticked pnpm); unbackticked immediate pnpm references: ${unbacktickedReferences}`);
-if (uncaught.length === 0) {
+if (skippedRealReferences === 0) {
   console.log("0 unbackticked-but-real pnpm script references found — the narrowing still costs nothing on this population.");
   process.exit(1);
 }
-console.log(`${uncaught.length} unbackticked pnpm reference(s) name a REAL script — the narrowing now under-serves a real case:`);
-for (const u of uncaught) console.log(`  PR #${u.pr}: ${u.line}`);
+console.log(`${skippedRealReferences} unbackticked pnpm reference(s) name a REAL script — the narrowing now under-serves a real case:`);
+for (const u of uncaught) console.log(`  PR #${u.pr} (${u.skipped}): ${u.line}`);
 process.exit(0);
