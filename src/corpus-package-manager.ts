@@ -7,6 +7,8 @@ import type { PackageManager } from "./package-manager.js";
 
 export interface InstallInvocation {
   bin: string;
+  /** Selector arguments precede the manager's arguments but are not forwarded to the manager. */
+  launcherArgs?: string[];
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -102,13 +104,15 @@ export function observePackageManager(
   const scratch = mkdtempSync(join(tmpdir(), "harvey-manager-observation-"));
   const trace = join(scratch, "trace.jsonl");
   const preload = join(scratch, "observe.cjs");
-  const result: DependencyPreparationStage = { stage, outcome: "failed", exitCode: null, command: [invocation.bin, ...invocation.args] };
+  const result: DependencyPreparationStage = { stage, outcome: "failed", exitCode: null, command: [invocation.bin, ...(invocation.launcherArgs ?? []), ...invocation.args] };
   try {
     // Run the target-selected entry point directly after setup. Native pnpm otherwise provisions
     // a second manager inside --store-dir, mixing selector state into the portable content store.
     // This binds the target's observed choice; it does not impose a version on other targets.
     const launcher = resolveLauncher(boundSelection?.nodeExecutable ?? invocation.bin, invocation.cwd, invocation.env);
-    const args = boundSelection ? [boundSelection.executable, ...invocation.args] : invocation.args;
+    const args = boundSelection
+      ? [boundSelection.executable, ...invocation.args]
+      : [...(invocation.launcherArgs ?? []), ...invocation.args];
     const launcherRealpath = realpathSync(launcher);
     const launcherSha256 = createHash("sha256").update(readFileSync(launcherRealpath)).digest("hex");
     result.command = [launcher, ...args];
@@ -159,6 +163,28 @@ export function observePackageManager(
     rmSync(scratch, { recursive: true, force: true });
   }
   return result;
+}
+
+export function selectPackageManager(
+  manager: PackageManager,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  requestedVersion?: string,
+): DependencyPreparationStage[] {
+  const invocation = { bin: manager, args: ["--version"], cwd, env };
+  const native = observePackageManager(manager, "version-probe", invocation);
+  const stages = [native];
+  // npm shipped with Node ignores packageManager. Corepack's explicit npm launcher supports
+  // the target's exact declaration without installing a global npm or rewriting its manifest.
+  // Keep native pnpm/Yarn selection and failed/unobserved setup fail-closed. A successful
+  // exact native npm remains usable even when Corepack or its registry is unavailable.
+  if (manager === "npm" && requestedVersion && native.outcome === "completed"
+    && native.selected && native.selected.version !== requestedVersion.split("+")[0]) {
+    stages.push(observePackageManager(manager, "version-probe", {
+      ...invocation, bin: "corepack", launcherArgs: [`npm@${requestedVersion}`],
+    }));
+  }
+  return stages;
 }
 
 export function describePreparationStages(stages: readonly DependencyPreparationStage[]): string {

@@ -7,7 +7,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesLstatSafe, readEntriesSafe } from "./fs-walk.js";
 import { detectPackageManager, installExtraCommand, npmOnlyFlags, resolvePackageManagerEvidence, withRestoredManifest, type PackageManager } from "./package-manager.js";
-import { describePreparationStages, matchesSelectedPackageManager, observePackageManager, type DependencyPreparationStage, type InstallInvocation, type SelectedPackageManager } from "./corpus-package-manager.js";
+import { describePreparationStages, matchesSelectedPackageManager, observePackageManager, selectPackageManager, type DependencyPreparationStage, type InstallInvocation, type SelectedPackageManager } from "./corpus-package-manager.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 3;
 
@@ -289,6 +289,8 @@ function preparationEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS
     HOME: source.HOME ?? "",
     PATH: source.PATH ?? "",
     TMPDIR: source.TMPDIR ?? tmpdir(),
+    // A target .corepack.env must not expand this bounded selector environment from disk.
+    COREPACK_ENV_FILE: "0",
     ...Object.fromEntries(SELECTOR_ENVIRONMENT.filter((name) => source[name] !== undefined).map((name) => [name, source[name]])),
   };
 }
@@ -799,11 +801,11 @@ export function installCorpusDependencyExtras(preparation: DependencyPreparation
 function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string, environment: NodeJS.ProcessEnv): DependencyPreparationResult {
   const resolution = resolvePackageManagerEvidence(options.targetDir);
   const manager = resolution.status === "selected" ? resolution.manager : detectPackageManager(options.targetDir);
-  const stages: DependencyPreparationStage[] = [];
-  const probe: DependencyPreparationStage = options.runInstall && options.packageManagerVersion
-    ? { stage: "version-probe" as const, outcome: "completed" as const, exitCode: 0, command: [manager, "--version"] }
-    : observePackageManager(manager, "version-probe", { bin: manager, args: ["--version"], cwd: options.targetDir, env: environment });
-  stages.push(probe);
+  const originalInstallConfiguration = digestInstallInputs(options.targetDir);
+  const stages: DependencyPreparationStage[] = options.runInstall && options.packageManagerVersion
+    ? [{ stage: "version-probe", outcome: "completed", exitCode: 0, command: [manager, "--version"] }]
+    : selectPackageManager(manager, options.targetDir, environment, resolution.status === "selected" ? resolution.requestedVersion : undefined);
+  const probe = stages.at(-1)!;
   const version = probe.selected?.version ?? (options.runInstall ? options.packageManagerVersion : undefined) ?? "unavailable";
   const lockPath = lockfilePath(options.targetDir, manager);
   const lockText = lockPath ? readFileSync(lockPath, "utf8") : undefined;
@@ -845,7 +847,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
     options.onEvent?.(`DEPENDENCY PREP ATTEMPT ${describePreparationStages([observation])}`);
     if (observation.outcome === "failed") throw new Error(observation.reason ?? `${stage} install failed`);
   };
-  options.onEvent?.(`DEPENDENCY PREP SETUP ${describePreparationStages([probe])}; ${installation.managerProvisioning.reason}`);
+  options.onEvent?.(`DEPENDENCY PREP SETUP ${describePreparationStages(stages)}; ${installation.managerProvisioning.reason}`);
   const incomplete = (reason: string): DependencyPreparationResult => {
     removeInstalledTrees(options.targetDir);
     const failure = `${reason}\n${describePreparationStages(stages)}`;
@@ -863,6 +865,9 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
       ? [...PNPM_PORTABLE_STORE_FLAGS]
       : [];
   const inputInspection = inspectCorpusDependencyInputs(options.targetDir, manager, version);
+  if (inputInspection.installConfiguration !== originalInstallConfiguration) {
+    return incomplete("package-manager selection/provisioning changed target-owned install inputs; the original input identity cannot be admitted");
+  }
 
   const legacyInstall = (reason: string): DependencyPreparationResult => {
     if (identityRejected) return incomplete(reason);
