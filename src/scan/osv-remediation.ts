@@ -140,6 +140,9 @@ export function osvRemediation(pkg: string, installed: string, advisory: string,
   const candidates: Semver[] = [];
   const explicitlyAffected: Semver[] = [];
   for (const affectedPackage of matching) {
+    if (affectedPackage.versions !== undefined && !Array.isArray(affectedPackage.versions)) {
+      return remediationUnavailable(pkg, installed, advisory, fixedVersions, "the explicitly affected versions field is not an array");
+    }
     for (const affectedVersion of affectedPackage.versions ?? []) {
       if (typeof affectedVersion !== "string") return remediationUnavailable(pkg, installed, advisory, fixedVersions, "an explicitly affected version is not a string");
       const parsed = parseSemver(affectedVersion);

@@ -83,6 +83,15 @@ describe("OSV release-line remediation (#2042)", () => {
     expect(result.fix).toContain("safe concrete upgrade cannot be established");
   });
 
+  it.each([{}, 42, null, "0.6.11"])("preserves the finding with malformed affected versions %j", (versions) => {
+    const input = report("0.6.10", releaseLines);
+    input.results![0]!.packages![0]!.vulnerabilities![0]!.affected![0]!.versions = versions as unknown as string[];
+    const result = parseOsvFindings(input)[0]!;
+    expect(result.id).toBe("DEP-OSV-GHSA-px8p-9vwx-vf98-fflate@0.6.10");
+    expect(result.fix).toContain("safe concrete upgrade cannot be established");
+    expect(result.fix).toContain("explicitly affected versions field is not an array");
+  });
+
   it.each([
     ["non-SEMVER range", "1.0.0", [{ type: "GIT", events: [{ introduced: "deadbeef" }, { fixed: "cafebabe" }] }], "unsupported GIT range"],
     ["missing range type", "1.0.0", [{ events: [{ introduced: "0" }, { fixed: "1.0.1" }] }], "range with no declared type"],
