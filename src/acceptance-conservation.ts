@@ -562,8 +562,10 @@ const PNPM_PASSTHROUGH = new Set([
 const SELECTS_ANOTHER_PACKAGE = new Set(["-r", "--recursive", "-F", "--filter", "--filter-prod", "-C", "--dir"]);
 
 /**
- * The `scripts` keys a `met` line names — read ONLY inside a backticked span, and never from a token
- * that is a flag.
+ * The `scripts` keys a `met` line names — read inside a backticked span, and never from a token
+ * that is a flag. Outside backticks we accept only syntax that is still unambiguously a command:
+ * `pnpm run <script>` or a script name containing `:` or `-`. A bare English word after `pnpm`
+ * remains prose unless it is backticked, so "ran pnpm and it worked" cannot become a false reject.
  *
  * The old shape was `/\bpnpm\s+(?:run\s+)?([\w:-]+)/g`, which read the token after `pnpm` as a script
  * name whatever it was. It therefore told the author of `` `pnpm --filter site build` `` that
@@ -572,10 +574,9 @@ const SELECTS_ANOTHER_PACKAGE = new Set(["-r", "--recursive", "-F", "--filter", 
  * check must not produce: the whole claim of the truth pass is that an invention is separable from
  * the real thing, and it stopped being separable the moment a correct command failed it.
  *
- * Requiring the backticks is what kills the prose case, and it costs nothing on the population it
- * was measured against: all 3 `pnpm <script>` references in the last 60 merged PRs' `met` lines are
- * backticked (measured 2026-07-27). An unbackticked `pnpm verify` is no longer truth-checked —
- * disclosed in docs/design/acceptance-conservation.md.
+ * The backtick boundary kills the prose case while the narrow outside form covers real acceptance
+ * evidence such as `pnpm verify:changed`. Plain unbackticked `pnpm verify` remains shape-checked
+ * only; its next word is indistinguishable from ordinary prose without a false-reject heuristic.
  */
 function citedScripts(text: string): string[] {
   const names: string[] = [];
@@ -590,7 +591,33 @@ function citedScripts(text: string): string[] {
       if (name !== undefined && /^[\w:-]+$/.test(name) && !PNPM_PASSTHROUGH.has(name)) names.push(name);
     }
   }
+  for (const name of unbacktickedPnpmScriptNames(text)) names.push(name);
   return names;
+}
+
+/**
+ * Script-like `pnpm` references outside code spans that are precise enough to truth-check. This is
+ * exported for the recorded-reason measurement so its census cannot claim a gap the shipping gate
+ * already covers. It deliberately does not guess at bare words such as `pnpm verify`.
+ */
+export function unbacktickedPnpmScriptNames(text: string): string[] {
+  return unbacktickedPnpmReferences(text)
+    .filter(({ name, explicitRun }) => explicitRun || /[:-]/.test(name))
+    .map(({ name }) => name);
+}
+
+/** All immediate `pnpm` script-like tokens outside code spans, including ambiguous bare words. */
+export function unbacktickedPnpmReferences(text: string): { name: string; explicitRun: boolean }[] {
+  const references: { name: string; explicitRun: boolean }[] = [];
+  const prose = text.replace(BACKTICKED, " ");
+  const reference = /\bpnpm\s+(?:(run)\s+)?([\w:-]+)/g;
+  for (const match of prose.matchAll(reference)) {
+    const explicitRun = match[1] !== undefined;
+    const name = match[2]!;
+    if (PNPM_PASSTHROUGH.has(name)) continue;
+    references.push({ name, explicitRun });
+  }
+  return references;
 }
 
 /**

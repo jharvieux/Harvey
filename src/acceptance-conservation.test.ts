@@ -520,6 +520,25 @@ describe("evidence checked for TRUTH, not only shape", () => {
     expect(evidenceProblems("ran pnpm and it worked, see src/acceptance-conservation.ts:1", world)).toEqual([]);
   });
 
+  it("truth-checks an unbackticked command only when its syntax cannot be ordinary prose", () => {
+    for (const detail of [
+      "pnpm verify:changed selected the full local gate",
+      "pnpm run validate-everything completed",
+    ]) {
+      expect(evidenceProblems(detail, world), detail).toEqual([
+        expect.stringContaining("not a script in package.json"),
+      ]);
+    }
+    expect(evidenceProblems("pnpm verify completed", world)).toEqual([]);
+  });
+
+  it("accepts existing unbackticked commands while retaining the prose guard", () => {
+    const actualScripts = { ...world, scripts: new Set(["verify:changed", "validate-reasons"]) };
+    expect(evidenceProblems("pnpm verify:changed selected the full local gate", actualScripts)).toEqual([]);
+    expect(evidenceProblems("pnpm run validate-reasons completed", actualScripts)).toEqual([]);
+    expect(evidenceProblems("ran pnpm and it worked", actualScripts)).toEqual([]);
+  });
+
   it("SCOPE CONTROL: a genuinely invented script inside backticks still fails", () => {
     expect(evidenceProblems("`pnpm --silent validate-everything` — all green", world)).toEqual([
       expect.stringContaining("not a script in package.json"),

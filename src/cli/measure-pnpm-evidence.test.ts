@@ -25,14 +25,16 @@ function run(stdin: string): { code: number; out: string } {
 const met = (detail: string) => JSON.stringify([{ number: 99001, body: `ACCEPTANCE #1.1 met: ${detail}` }]);
 
 describe("measure-pnpm-evidence exit codes", () => {
-  it("exits 0 when the blocker is gone — an unbackticked reference names a real package.json script", () => {
+  it("exits 0 when the blocker is gone — a bare unbackticked script still names a real package.json script", () => {
     const { code, out } = run(met("ran pnpm verify green with no backticks on this line"));
     expect(code).toBe(0);
     expect(out).toContain("name a REAL script");
   });
 
-  it("exits 1 when the blocker holds — the only pnpm reference is backticked", () => {
-    const { code, out } = run(met("ran `pnpm verify` green"));
+  it("exits 1 when the only real unbackticked command is already truth-checked", () => {
+    // This is PR #2048's production shape. The old measurement called it a skipped command
+    // because it did not share the checker’s extraction rule.
+    const { code, out } = run(met("`pnpm verify` passed; pnpm verify:changed selected the full gate"));
     expect(code).toBe(1);
     expect(out).toContain("still costs nothing");
   });
