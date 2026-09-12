@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildHtml } from "../report-template/render.mjs";
-import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
+import { installCorpusDependencyExtras, prepareCorpusDependencies, releaseCorpusDependencies } from "./corpus-dependency-preparation.js";
 import { observePackageManager } from "./corpus-package-manager.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
 import { digestObservedPaths } from "./corpus-scanner-scope.js";
@@ -15,6 +15,8 @@ import { readNamesSafe } from "./fs-walk.js";
 import { SecretInArgvError } from "./secret-argv.js";
 import * as packageManagers from "./package-manager.js";
 import type { Finding } from "./findings.js";
+import { mutationRunFromArtifact } from "./mutation-scan.js";
+import { materializeM8Config, type M8CorpusConfig } from "./scan/m8-corpus.js";
 
 const spawnState = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
 
@@ -1051,5 +1053,215 @@ describe("dependency installation reaches the M5 client artifact (#2047)", () =>
     expect(result.installation?.stages[0]).toMatchObject({ stage: "version-probe", outcome: "failed", exitCode: 41 });
     const scan = await runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "setup failure", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation: result });
     expect(buildHtml({ meta, findings: scan.findings })).toContain("ERR_SETUP_2047");
+  });
+});
+
+function corpusMutationConsumer(onMutation: (appDir: string, out: string) => void) {
+  const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
+  const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
+  const declaration = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "runMutationScan")!;
+  const bindings = {
+    ...packageManagers, installCorpusDependencyExtras, materializeM8Config, mutationRunFromArtifact,
+    join, mkdtempSync, tmpdir, readFileSync, repoRoot: process.cwd(),
+    execFileSync: (bin: string, args: string[], options: Parameters<typeof execFileSync>[2]) => {
+      if (args[0] !== "mutation-scan") return execFileSync(bin, args, options);
+      onMutation(args[1]!, args[args.indexOf("--out") + 1]!);
+      return Buffer.from("");
+    },
+  };
+  const code = ts.transpileModule(declaration.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  return new Function(...Object.keys(bindings), `${code}\nreturn runMutationScan;`)(...Object.values(bindings)) as (
+    slug: string, dir: string, config: M8CorpusConfig, preparation: ReturnType<typeof prepareCorpusDependencies> | undefined,
+  ) => { mutationScore: number; killed: number; valid: number };
+}
+
+describe("M8 consumes the live dependency installation (#2047)", () => {
+  const dirs: string[] = [];
+  const preparations: ReturnType<typeof prepareCorpusDependencies>[] = [];
+  afterEach(() => {
+    preparations.splice(0).forEach((preparation) => releaseCorpusDependencies(preparation));
+    dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+    vi.unstubAllEnvs();
+  });
+  const identity = { targetRevision: "m8-local-pin", targetTree: "m8-local-tree" };
+  const score = { summary: { overall: { mutationScore: 100, killed: 1, totalMutants: 1, ignored: 0, compileErrors: 0 } } };
+  function prepare(options: Parameters<typeof prepareCorpusDependencies>[0]) {
+    const result = prepareCorpusDependencies(options);
+    preparations.push(result);
+    return result;
+  }
+  function rootFixture() {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-install-"));
+    dirs.push(root);
+    return root;
+  }
+  function localPackage(root: string, directory: string, name: string, tool = false) {
+    const source = join(root, directory, "package");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "package.json"), JSON.stringify({ name, version: "1.0.0", ...(tool ? { bin: { stryker: "tool.cjs" } } : {}) }));
+    writeFileSync(join(source, tool ? "tool.cjs" : "index.js"), tool ? `#!${process.execPath}\nconsole.log(${JSON.stringify(JSON.stringify(score))});\n` : "module.exports = 'dependency-preserved';\n", { mode: 0o755 });
+    const archive = join(root, `${directory}.tgz`);
+    execFileSync("tar", ["-czf", archive, "-C", join(root, directory), "package"]);
+    return `file:${archive}`;
+  }
+
+  it.each([{ cached: false, workspace: false }, { cached: false, workspace: true }, { cached: true, workspace: false }, { cached: true, workspace: true }])("keeps real pnpm's store through the shipping M8 install: cached=$cached workspace=$workspace", ({ cached, workspace }) => {
+    vi.stubEnv("COREPACK_ENABLE_NETWORK", "0");
+    vi.stubEnv("COREPACK_DEFAULT_TO_LATEST", "0");
+    const root = rootFixture();
+    const dependency = localPackage(root, "dependency", "m8-local-dependency");
+    const tool = localPackage(root, "tool", "@stryker-mutator/core", true);
+    const version = execFileSync("pnpm", ["--version"], { cwd: root, encoding: "utf8" }).trim();
+    const target = join(root, "first");
+    const appPath = workspace ? "apps/web" : undefined;
+    const appDir = appPath ? join(target, appPath) : target;
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m8-local-root", private: true, packageManager: `pnpm@${version}`, ...(!workspace ? { dependencies: { "m8-local-dependency": dependency } } : {}) }));
+    if (workspace) {
+      writeFileSync(join(appDir, "package.json"), JSON.stringify({ name: "m8-local-app", private: true, dependencies: { "m8-local-dependency": dependency } }));
+      writeFileSync(join(target, "pnpm-workspace.yaml"), "packages: ['apps/*']\nenableGlobalVirtualStore: true\n");
+    }
+    writeFileSync(join(target, ".npmrc"), "registry=http://127.0.0.1:9\noffline=true\nupdate-notifier=false\n");
+    execFileSync("pnpm", ["install", "--lockfile-only", "--offline", "--config.enableGlobalVirtualStore=false"], { cwd: target, stdio: "pipe" });
+    const second = join(root, "second");
+    cpSync(target, second, { recursive: true, filter: (path) => !path.includes("node_modules") });
+    const cacheDir = cached ? join(root, "cache") : undefined;
+    const config: M8CorpusConfig = { appPath, strykerPackages: [tool], installFlags: ["--legacy-peer-deps"], config: { mutate: ["unit.js"] } };
+    let consumed = 0;
+    const runMutation = corpusMutationConsumer((directory, out) => {
+      consumed += 1;
+      expect(JSON.parse(readFileSync(join(directory, "stryker.conf.json"), "utf8"))).toEqual(config.config);
+      const output = execFileSync(join(directory, "node_modules/.bin/stryker"), [], { cwd: directory, encoding: "utf8" });
+      writeFileSync(out, output);
+      dirs.push(join(out, ".."));
+    });
+    for (const [index, directory] of [target, second].entries()) {
+      const prepared = prepare({ targetDir: directory, cacheDir, ...identity });
+      expect(prepared).toMatchObject({ complete: true, status: cached ? index === 0 ? "miss" : "hit" : "non-cacheable" });
+      const store = prepared.installation!.dependencyStore;
+      expect(existsSync(store)).toBe(true);
+      const manifest = readFileSync(join(directory, "package.json"), "utf8");
+      const lock = readFileSync(join(directory, "pnpm-lock.yaml"), "utf8");
+      expect(runMutation("m8-local", directory, config, prepared)).toEqual({ mutationScore: 100, killed: 1, valid: 1 });
+      const extra = prepared.installation!.stages.at(-1)!;
+      expect(extra).toMatchObject({ stage: "tool-install", outcome: "completed", selected: { executable: prepared.installation!.stages[0]!.selected!.executable, nodeExecutable: prepared.installation!.stages[0]!.selected!.nodeExecutable, version } });
+      expect(extra.command).toContain(store);
+      expect(extra.command).not.toContain("--legacy-peer-deps");
+      expect(readFileSync(join(directory, "package.json"), "utf8")).toBe(manifest);
+      expect(readFileSync(join(directory, "pnpm-lock.yaml"), "utf8")).toBe(lock);
+      expect(prepared.cacheable).toBe(false);
+      expect(prepared.sourceTreeCacheable).toBe(false);
+      expect(readFileSync(join(appPath ? join(directory, appPath) : directory, "node_modules/m8-local-dependency/index.js"), "utf8")).toContain("dependency-preserved");
+      expect(existsSync(store)).toBe(true);
+      const versions = readNamesSafe(store).filter((name) => /^v\d+$/.test(name));
+      for (const storeVersion of versions) {
+        expect(existsSync(join(store, storeVersion, "projects"))).toBe(false);
+        expect(existsSync(join(store, storeVersion, "links"))).toBe(false);
+      }
+      releaseCorpusDependencies(prepared);
+      expect(existsSync(store)).toBe(cached);
+      expect(() => installCorpusDependencyExtras(prepared, { appDir: directory, packages: [tool] })).toThrow(/active preparation/);
+    }
+    expect(consumed).toBe(2);
+  });
+
+  it.each(["npm", "pnpm", "yarn"] as const)("retains %s selector environment and identity through extra installation", (manager) => {
+    const root = rootFixture();
+    const bin = selectorFixture(root, manager);
+    const target = join(root, "target"); mkdirSync(target);
+    writeFileSync(join(target, "package.json"), JSON.stringify({ name: "m8-selector", private: true, packageManager: `${manager}@9.9.9` }));
+    writeFileSync(join(target, "control-mode"), "success");
+    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    vi.stubEnv("PATH", "/missing-new-selector");
+    vi.stubEnv("COREPACK_HOME", join(root, "changed-home"));
+    vi.stubEnv("HARVEY_UNKEYED_SELECTOR_2047", "select-another-version");
+    installCorpusDependencyExtras(prepared, { appDir: target, packages: ["local-tool"], installFlags: ["--legacy-peer-deps"] });
+    const invocation = JSON.parse(readFileSync(join(target, "manager-invocations.jsonl"), "utf8").trim().split("\n").at(-1)!) as { version: string; args: string[]; corepack: string; unkeyed?: string };
+    expect(invocation).toMatchObject({ version: "9.9.9", corepack: join(root, "retained-home") });
+    expect(invocation.unkeyed).toBeUndefined();
+    expect(invocation.args).toContain(prepared.installation!.dependencyStore);
+    expect(invocation.args.includes("--legacy-peer-deps")).toBe(manager === "npm");
+    expect(prepared.installation!.stages.at(-1)).toMatchObject({ stage: "tool-install", outcome: "completed" });
+  });
+
+  it.each(["incomplete", "tool-failure", "identity-change"])("stops the shipping M8 consumer on %s and preserves its cause", (mode) => {
+    const root = rootFixture();
+    const bin = selectorFixture(root);
+    const target = join(root, "target"); mkdirSync(target);
+    writeFileSync(join(target, "package.json"), '{"name":"m8-failed-install","private":true,"packageManager":"npm@9.9.9"}');
+    writeFileSync(join(target, "control-mode"), mode === "incomplete" ? "fail" : "success");
+    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    writeFileSync(join(target, "control-mode"), mode === "identity-change" ? "change" : mode === "incomplete" ? "success" : "fail");
+    if (mode === "identity-change") writeFileSync(join(target, "selector-version"), "full");
+    const mutation = vi.fn((_appDir: string, out: string) => {
+      writeFileSync(out, JSON.stringify(score));
+      dirs.push(join(out, ".."));
+    });
+    const runMutation = corpusMutationConsumer(mutation);
+    const cause = mode === "identity-change" ? /identity changed/ : /ERR_INSTALL_2047/;
+    expect(() => runMutation("m8-failed", target, { strykerPackages: ["local-tool"], installFlags: [], config: {} }, prepared)).toThrow(cause);
+    expect(mutation).not.toHaveBeenCalled();
+    expect(existsSync(join(target, "node_modules"))).toBe(false);
+    expect(prepared.complete).toBe(false);
+    expect(prepared.reason).toMatch(cause);
+    if (mode === "incomplete") expect(prepared.installation!.stages.some((stage) => stage.stage === "tool-install")).toBe(false);
+    else expect(prepared.installation!.stages.at(-1)).toMatchObject({ stage: "tool-install", outcome: "failed" });
+    const store = prepared.installation!.dependencyStore;
+    releaseCorpusDependencies(prepared);
+    expect(existsSync(store)).toBe(false);
+  });
+
+  it("requires a live preparation and retains an explicitly kept diagnostic store", () => {
+    const root = rootFixture();
+    const bin = selectorFixture(root);
+    const target = join(root, "target"); mkdirSync(target);
+    writeFileSync(join(target, "package.json"), '{"name":"m8-store-retention","private":true,"packageManager":"npm@9.9.9"}');
+    writeFileSync(join(target, "control-mode"), "success");
+    const prepared = prepare({ targetDir: target, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    const runMutation = corpusMutationConsumer(() => { throw new Error("unexpected mutation launch"); });
+    const config: M8CorpusConfig = { strykerPackages: ["tool"], installFlags: [], config: {} };
+    expect(() => runMutation("missing-prep", target, config, undefined)).toThrow(/requires dependency preparation/);
+    expect(() => runMutation("serialized-prep", target, config, JSON.parse(JSON.stringify(prepared)))).toThrow(/active preparation/);
+    const store = prepared.installation!.dependencyStore;
+    releaseCorpusDependencies(prepared, true);
+    expect(existsSync(store)).toBe(true);
+    expect(() => runMutation("released-prep", target, config, prepared)).toThrow(/active preparation/);
+    dirs.push(join(store, "../../../.."));
+  });
+
+  it.each([false, true])("releases root and nested stores at the shipping target failure boundary: keep=%s", (keep) => {
+    const root = rootFixture();
+    const bin = selectorFixture(root);
+    const dependencies = ["target", "target/nextjs"].map((directory) => {
+      const targetDir = join(root, directory); mkdirSync(targetDir, { recursive: true });
+      writeFileSync(join(targetDir, "package.json"), '{"name":"m8-target-cleanup","private":true,"packageManager":"npm@9.9.9"}');
+      writeFileSync(join(targetDir, "control-mode"), "success");
+      return prepare({ targetDir, ...identity, environment: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COREPACK_HOME: join(root, "retained-home") } });
+    });
+    const stores = dependencies.map((prepared) => prepared.installation!.dependencyStore);
+    expect(stores[0]).not.toBe(stores[1]);
+    const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
+    const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
+    let targetCleanup: ts.Block | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isTryStatement(node) && node.finallyBlock?.getText(ast).includes("rmSync(targetRoot")) targetCleanup = node.finallyBlock;
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(targetCleanup).toBeDefined();
+    const bindings = {
+      dependencyPreparations: dependencies, releaseCorpusDependencies, keep, rmSync,
+      phaseSeconds: {}, target: { slug: "cleanup-fixture" }, startedAt: Date.now(), targetRoot: join(root, "target"),
+      consume: () => {
+        expect(stores.every((store) => existsSync(store))).toBe(true);
+        throw new Error("fixture consumer failed before target cleanup");
+      },
+    };
+    const code = ts.transpileModule(`try { consume(); } finally ${targetCleanup!.getText(ast)}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+    expect(() => new Function(...Object.keys(bindings), code)(...Object.values(bindings))).toThrow(/fixture consumer failed/);
+    for (const store of stores) {
+      expect(existsSync(store)).toBe(keep);
+      if (keep) dirs.push(join(store, "../../../.."));
+    }
   });
 });

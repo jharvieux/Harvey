@@ -56,7 +56,6 @@ import { recordMeasured } from "../ci-liveness.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { SEVERITIES, type Finding } from "../findings.js";
-import { detectPackageManager, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
@@ -91,7 +90,7 @@ import {
 import { mutationRunFromArtifact } from "../mutation-scan.js";
 import { assertCorpusScannerCacheVerification, type CorpusScannerRecord } from "../corpus-scanner-cache.js";
 import { runCorpusScanner } from "../corpus-scanner-runner.js";
-import { prepareCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
+import { installCorpusDependencyExtras, prepareCorpusDependencies, releaseCorpusDependencies, type DependencyPreparationResult } from "../corpus-dependency-preparation.js";
 import { corpusCacheNamespaceForTarget, shardTargets } from "../scan/corpus-shards.js";
 import { materializeM8Config, type M8CorpusConfig } from "../scan/m8-corpus.js";
 import {
@@ -424,19 +423,19 @@ async function runScanner(options: ScannerInvocation & {
 // `appDir` is where the config, the Stryker install, and mutation-scan itself all point — the
 // clone root for a single-package target (proposit/boxyhq, cfg.appPath undefined), or the
 // workspace MEMBER that actually carries the suite (inbox-zero's apps/web) when set. The package
-// manager is still detected from the clone ROOT: that is where the workspace's lockfile lives.
-function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig): { mutationScore: number; killed: number; valid: number } {
-  const pm = detectPackageManager(dir);
+// manager comes from the clone ROOT's preparation: that is where the workspace's lockfile lives.
+function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig, preparation: DependencyPreparationResult | undefined): { mutationScore: number; killed: number; valid: number } {
+  if (!preparation) throw new Error(`${slug}: M8 mutation scoring requires dependency preparation; run with --install`);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
-  const { bin, args } = installExtraCommand(pm, [...cfg.strykerPackages]);
-  // Keep the same portable topology as own-dependency preparation without rewriting workspace policy.
-  if (pm === "pnpm") args.push("--config.enableGlobalVirtualStore=false");
   // withRestoredManifest(dir, ...) restores the WORKSPACE lockfile (shared, lives at the clone
   // root); a `pnpm add` run with cwd: appDir writes the extra packages into appDir's OWN
   // package.json, which this does not restore — a no-op gap here since `dir` is a disposable temp
   // clone discarded after this run, not the client's real repo (see mutation-scan.ts's --install
   // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
-  withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...npmOnlyFlags(pm, cfg.installFlags)], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
+  installCorpusDependencyExtras(preparation, {
+    appDir, packages: cfg.strykerPackages, installFlags: cfg.installFlags,
+    onEvent: (message) => console.error(`  ${slug}: ${message}`),
+  });
 
   // #1496/#1693: the vendored Stryker config, plus (for a target whose own suite is unscoreable —
   // multi-tenant-starter's Docker-per-mutant cost) the DB-free suite that config points at, written
@@ -675,6 +674,7 @@ for (const target of targets) {
   const targetPhaseCacheDir = phaseCacheDir
     ? join(phaseCacheDir, `shard${corpusCacheNamespaceForTarget(EXTERNAL_CORPUS.map((entry) => entry.slug), target.slug)}`)
     : undefined;
+  const dependencyPreparations: DependencyPreparationResult[] = [];
   try {
     // One authoritative preparation boundary for hosted scoring and the independent replay: exact
     // pin, remove declared reference subtrees, then capture before dependency installation can
@@ -812,6 +812,7 @@ for (const target of targets) {
         sourceRoot: ".",
       }, targetPhaseCacheDir))
       : undefined;
+    if (dependencyPreparation) dependencyPreparations.push(dependencyPreparation);
     const scannerRecords: CorpusScannerRecord[] = [];
 
     // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
@@ -827,7 +828,7 @@ for (const target of targets) {
         if (!isMutationBaseline(baseline)) {
           throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
         }
-        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8));
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(target.slug, scanDir, target.m8, dependencyPreparation));
         rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
       } else {
         // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
@@ -876,6 +877,7 @@ for (const target of targets) {
           sourceRoot: m5Root,
         }, targetPhaseCacheDir))
         : undefined;
+      if (scopedDependencyPreparation) dependencyPreparations.push(scopedDependencyPreparation);
       const scoped = (await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [rootDir], targetDir: rootDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: m5Root, install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation: scopedDependencyPreparation }))).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
       findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
     }
@@ -948,6 +950,7 @@ for (const target of targets) {
     }
     throw error;
   } finally {
+    for (const preparation of dependencyPreparations) releaseCorpusDependencies(preparation, keep);
     const total = (Date.now() - startedAt) / 1000;
     const phases = phaseSeconds[target.slug] ?? {};
     const timedTotal = Object.values(phases).reduce((a, b) => a + b, 0);

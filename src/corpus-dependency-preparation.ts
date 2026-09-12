@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readEntriesLstatSafe, readEntriesSafe } from "./fs-walk.js";
-import { detectPackageManager, resolvePackageManagerEvidence, type PackageManager } from "./package-manager.js";
-import { describePreparationStages, observePackageManager, type DependencyPreparationStage, type InstallInvocation, type SelectedPackageManager } from "./corpus-package-manager.js";
+import { detectPackageManager, installExtraCommand, npmOnlyFlags, resolvePackageManagerEvidence, withRestoredManifest, type PackageManager } from "./package-manager.js";
+import { describePreparationStages, matchesSelectedPackageManager, observePackageManager, type DependencyPreparationStage, type InstallInvocation, type SelectedPackageManager } from "./corpus-package-manager.js";
 
 const DEPENDENCY_PREPARATION_SCHEMA = 3;
 
@@ -77,6 +77,18 @@ interface DependencyPreparationOptions {
   packageManagerVersion?: string;
   environment?: NodeJS.ProcessEnv;
 }
+
+interface DependencyInstallationSession {
+  targetDir: string;
+  environment: NodeJS.ProcessEnv;
+  manager: PackageManager;
+  selected?: SelectedPackageManager;
+  storeDir: string;
+  scratch?: string;
+}
+
+// Serialized preparation evidence does not grant a new process permission to reuse live state.
+const installationSessions = new WeakMap<DependencyPreparationResult, DependencyInstallationSession>();
 
 const INSTALL_INPUT_NAMES = new Set([
   "package.json",
@@ -717,18 +729,74 @@ function writeReceipt(path: string, key: string, identity: PreparationIdentity, 
 }
 
 export function prepareCorpusDependencies(options: DependencyPreparationOptions): DependencyPreparationResult {
-  // An uncached invocation still owns an evidence-bearing preparation and a disposable content
-  // store. Caching decides whether a receipt may be reused, never whether an install is observed.
+  // The content store remains live while a target consumer can add tools to its installed tree.
+  // The caller releases it after its final consumer, including failure paths.
   const scratch = options.cacheDir ? undefined : mkdtempSync(join(tmpdir(), "harvey-dependency-store-"));
+  const environment = preparationEnvironment(options.environment);
   try {
-    return prepareDependencies(options, resolve(options.cacheDir ?? scratch!));
-  } finally {
+    const result = prepareDependencies(options, resolve(options.cacheDir ?? scratch!), environment);
+    installationSessions.set(result, {
+      targetDir: resolve(options.targetDir), environment, manager: result.packageManager,
+      selected: result.installation?.stages.findLast((stage) => stage.stage === "version-probe")?.selected,
+      storeDir: result.installation!.dependencyStore, scratch,
+    });
+    return result;
+  } catch (error) {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
+    throw error;
   }
 }
 
-function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string): DependencyPreparationResult {
-  const environment = preparationEnvironment(options.environment);
+export function releaseCorpusDependencies(preparation: DependencyPreparationResult, keepStore = false): void {
+  const session = installationSessions.get(preparation);
+  if (!session) return;
+  if (session.scratch && !keepStore) rmSync(session.scratch, { recursive: true, force: true });
+  installationSessions.delete(preparation);
+}
+
+export function installCorpusDependencyExtras(preparation: DependencyPreparationResult, options: {
+  appDir: string;
+  packages: readonly string[];
+  installFlags?: readonly string[];
+  onEvent?: (message: string) => void;
+}): void {
+  if (!preparation.complete) throw new Error(`dependency preparation incomplete; tool installation rejected: ${preparation.reason}`);
+  const session = installationSessions.get(preparation);
+  if (!session?.selected) throw new Error("tool installation requires an active preparation with an observed package manager");
+  if (!existsSync(session.storeDir)) throw new Error(`dependency content store was removed before tool installation: ${session.storeDir}`);
+  const { manager, selected, storeDir, environment } = session;
+  const { bin, args } = installExtraCommand(manager, options.packages);
+  args.push(...(manager === "pnpm"
+    ? ["--store-dir", storeDir, ...PNPM_PORTABLE_STORE_FLAGS]
+    : manager === "yarn"
+      ? ["--cache-folder", storeDir, "--non-interactive"]
+      : ["--cache", storeDir, ...npmOnlyFlags(manager, options.installFlags ?? [])]));
+  preparation.cacheable = false;
+  preparation.sourceTreeCacheable = false;
+  preparation.sourceTreeReason = "additional tool installation can change the installed population and execute lifecycle code";
+  try {
+    const observation = withRestoredManifest(session.targetDir, manager, () => observePackageManager(manager, "tool-install", {
+      bin, args, cwd: options.appDir, env: environment,
+    }, selected));
+    if (!matchesSelectedPackageManager(observation.selected, selected)) {
+      observation.outcome = "failed";
+      observation.reason = combineReasons(observation.reason, "selected package-manager identity changed after dependency preparation; tool installation rejected");
+    }
+    preparation.installation!.stages.push(observation);
+    options.onEvent?.(`DEPENDENCY PREP TOOL ${describePreparationStages([observation])}`);
+    if (observation.outcome === "failed") {
+      preparation.complete = false;
+      preparation.status = "incomplete";
+      preparation.reason = combineReasons(preparation.reason, describePreparationStages([observation]))!;
+      removeInstalledTrees(session.targetDir);
+      throw new Error(`tool installation failed: ${preparation.reason}`);
+    }
+  } finally {
+    if (manager === "pnpm") sanitizePnpmStore(storeDir);
+  }
+}
+
+function prepareDependencies(options: DependencyPreparationOptions, cacheDir: string, environment: NodeJS.ProcessEnv): DependencyPreparationResult {
   const resolution = resolvePackageManagerEvidence(options.targetDir);
   const manager = resolution.status === "selected" ? resolution.manager : detectPackageManager(options.targetDir);
   const stages: DependencyPreparationStage[] = [];
@@ -767,8 +835,7 @@ function prepareDependencies(options: DependencyPreparationOptions, cacheDir: st
     } else {
       observation = observePackageManager(manager, stage, invocation, probe.selected);
       const selected = observation.selected;
-      const identityFields = ["executable", "executableSha256", "nodeExecutable", "nodeVersion", "version"] as const;
-      if (selected && identityFields.some((field) => selected[field] !== probe.selected?.[field])) {
+      if (selected && !matchesSelectedPackageManager(selected, probe.selected)) {
         identityRejected = true;
         observation.outcome = "failed";
         observation.reason = combineReasons(observation.reason, `selected package-manager identity changed after version-probe (${probe.selected?.executable}@${version}); this attempt cannot share its preparation receipt`);

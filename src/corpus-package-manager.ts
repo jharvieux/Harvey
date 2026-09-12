@@ -25,13 +25,18 @@ export interface SelectedPackageManager {
 }
 
 export interface DependencyPreparationStage {
-  stage: "version-probe" | "offline" | "frozen" | "legacy";
+  stage: "version-probe" | "offline" | "frozen" | "legacy" | "tool-install";
   outcome: "completed" | "failed";
   exitCode: number | null;
   signal?: string;
   command: string[];
   selected?: SelectedPackageManager;
   reason?: string;
+}
+
+export function matchesSelectedPackageManager(actual: SelectedPackageManager | undefined, expected: SelectedPackageManager | undefined): boolean {
+  const fields = ["executable", "executableSha256", "nodeExecutable", "nodeVersion", "version"] as const;
+  return actual !== undefined && expected !== undefined && fields.every((field) => actual[field] === expected[field]);
 }
 
 // A target-cwd --version is installation SETUP: Corepack and native pnpm may provision a manager
