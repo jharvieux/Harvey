@@ -56,7 +56,7 @@ import { recordMeasured } from "../ci-liveness.js";
 import { readRecursiveSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { SEVERITIES, type Finding } from "../findings.js";
-import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
+import { detectPackageManager, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { runMechanicalScanDetailed } from "../scan/mechanical.js";
 import type { DetectorExecutionRecord } from "../scan/mechanical-detector-registry.js";
@@ -271,70 +271,30 @@ if (baselineFindingsPath) {
   }
 }
 
-// #251: knip resolves a target's config imports only when the target's own deps are present
-// (CLAUDE.md's M5 prereq) — without this, M5-knip was unrun on 4 of 6 targets. Off by default and
-// on in the scheduled job (--install): a clone-and-install of six real repos is minutes and a lot
-// of network, which a local `pnpm corpus-drift --target X` shouldn't pay unless it's asking about
-// M5. Measured 2026-07-15: installing is inert for the other modules (M4 and both already-scored
-// M5-knip baselines reproduced byte-identically with deps present).
-//
-// Failure is NOT fatal to the target: quality-scan degrades to its M5-00 "did not run" finding
-// (#223), the M5-knip baseline then drifts, and the job says so — which is the loud failure this
-// job exists for. Swallowing the install error to keep other modules scoring is the same call
-// runScanner already makes.
+// Knip can execute target/provider config against installed dependencies. A failed installation
+// must therefore reject its partial tree and carry its reason into source-only M5-98 (or M5-00
+// if Knip cannot run). A successful Knip child or equal counted baseline cannot prove preparation.
 //
 // #1268: `npm install` at a pnpm-workspace root resolves only the ROOT packages — MEASURED against
 // inbox-zero/rallly (external-corpus.ts's recorded M8 not-run reasons: apps/web/node_modules simply
 // does not exist afterward) and fails outright on carbon (a pnpm-catalog `catalog:` dependency,
 // EUNSUPPORTEDPROTOCOL). The target's own lockfile says which package manager actually resolves it.
 //
-// A second, narrower #1268 finding, MEASURED against the real inbox-zero clone: its own
-// `pnpm-workspace.yaml` opts into `enableGlobalVirtualStore: true`, which stores the resolved
-// package graph OUTSIDE the project (under pnpm's global home dir,
-// `~/Library/pnpm/store/v11/links/...` on macOS) rather than in
-// the project's own node_modules/.pnpm. pnpm's own dependency resolution is unaffected, but any
-// tool that dynamically resolves a SIBLING package via Node's own node_modules directory walk
-// relative to ITS OWN real (globally-stored) file path can no longer find it — Stryker does exactly
-// this for both its runner plugins and its own `import("typescript")` (src/mutation-scan.ts's
-// scaffoldStrykerConfig `plugins` fix, #1284, does not help here: the walk never reaches the
-// project's node_modules at all). Disabling it for the disposable corpus clone (never the target's
-// own repo) reproduced a real 76.00% Stryker run against inbox-zero's apps/web (this PR).
-const GLOBAL_VIRTUAL_STORE_TRUE = /^(\s*enableGlobalVirtualStore\s*:\s*)true\s*$/m;
-
-function disableGlobalVirtualStoreIfSet(dir: string): void {
-  const path = join(dir, "pnpm-workspace.yaml");
-  if (!existsSync(path)) return;
-  const text = readFileSync(path, "utf8");
-  if (!GLOBAL_VIRTUAL_STORE_TRUE.test(text)) return;
-  writeFileSync(path, text.replace(GLOBAL_VIRTUAL_STORE_TRUE, "$1false"));
-  console.error(`  #1268: ${path} opts into enableGlobalVirtualStore — disabled for this clone (Stryker's own plugin/typescript resolution cannot reach a globally-stored package graph)`);
-}
-
-function installTargetDeps(dir: string, flags: readonly string[], identity?: {
+// Portable-store options belong in the install argv, not edits to the target's workspace policy.
+function installTargetDeps(dir: string, flags: readonly string[], identity: {
   targetRevision: string;
   targetTree: string;
   sourceRoot: string;
-}, cacheDir = phaseCacheDir): DependencyPreparationResult | undefined {
-  const pm = detectPackageManager(dir);
-  if (pm === "pnpm") disableGlobalVirtualStoreIfSet(dir);
-  if (cacheDir && identity) {
-    return prepareCorpusDependencies({
-      targetDir: dir,
-      sourceRoot: identity.sourceRoot,
-      cacheDir,
-      targetRevision: identity.targetRevision,
-      targetTree: identity.targetTree,
-      installFlags: npmOnlyFlags(pm, flags),
-      onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
-    });
-  }
-  const { bin, args } = installAllCommand(pm, npmOnlyFlags(pm, flags));
-  try {
-    execFileSync(bin, args, { cwd: dir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, CI: "true" } });
-  } catch {
-    console.error(`  ⚠ ${bin} install failed — M5-knip will report its #223 did-not-run finding and drift against the baseline`);
-  }
-  return undefined;
+}, cacheDir = phaseCacheDir): DependencyPreparationResult {
+  return prepareCorpusDependencies({
+    targetDir: dir,
+    sourceRoot: identity.sourceRoot,
+    cacheDir,
+    targetRevision: identity.targetRevision,
+    targetTree: identity.targetTree,
+    installFlags: flags,
+    onEvent: (message) => console.error(`  ${phaseTarget}: ${message}`),
+  });
 }
 
 // #1574: PER-PHASE cost, per target. #1586 measured each target's TOTAL from banner intervals and
@@ -429,6 +389,7 @@ async function runScanner(options: ScannerInvocation & {
     scriptArgs: options.scriptArgs,
     targetDir: options.targetDir,
     targetConfig: options.targetConfig,
+    dependencyPreparation: options.dependencyPreparation,
     onEvent: (message: string) => console.error(`  ${phaseTarget}: ${message}`),
   };
   const cache = options.cacheDir ? {
@@ -436,7 +397,6 @@ async function runScanner(options: ScannerInvocation & {
     mode: forceColdCache ? "verify" as const : "read-write" as const,
     targetRevision: options.targetRevision,
     targetTree: options.targetTree,
-    dependencyPreparation: options.dependencyPreparation,
   } : undefined;
   const result = options.scanner === "quality-scan"
     ? await runCorpusScanner({ ...common, script: "quality-scan", scanner: "quality-scan", cache })
@@ -469,6 +429,8 @@ function runMutationScan(slug: string, dir: string, cfg: M8CorpusConfig): { muta
   const pm = detectPackageManager(dir);
   const appDir = cfg.appPath ? join(dir, cfg.appPath) : dir;
   const { bin, args } = installExtraCommand(pm, [...cfg.strykerPackages]);
+  // Keep the same portable topology as own-dependency preparation without rewriting workspace policy.
+  if (pm === "pnpm") args.push("--config.enableGlobalVirtualStore=false");
   // withRestoredManifest(dir, ...) restores the WORKSPACE lockfile (shared, lives at the clone
   // root); a `pnpm add` run with cwd: appDir writes the extra packages into appDir's OWN
   // package.json, which this does not restore — a no-op gap here since `dir` is a disposable temp

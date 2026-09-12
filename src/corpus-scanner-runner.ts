@@ -12,6 +12,7 @@ import { buildCorpusScannerCache, corpusQualityEnvironment } from "./corpus-scan
 import { readCorpusScannerScope } from "./corpus-scanner-scope.js";
 import type { Finding } from "./findings.js";
 import { assertNoSecretInArgv, SecretInArgvError } from "./secret-argv.js";
+import { knipUnavailableFinding } from "./quality-scan.js";
 
 const QUALITY_FRESH_REASON = "quality-scan executes fresh because no complete reproducible dependency-preparation receipt is available";
 
@@ -20,6 +21,7 @@ interface CommonScannerRunOptions {
   scriptArgs: string[];
   targetDir: string;
   targetConfig: string;
+  dependencyPreparation?: DependencyPreparationResult;
   onEvent?: (message: string) => void;
 }
 
@@ -97,7 +99,7 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
   const outputDir = mkdtempSync(join(tmpdir(), "harvey-corpus-"));
   const out = join(outputDir, "findings.json");
   const scopeOut = join(outputDir, "scope.json");
-  const qualityPreparation = options.cache?.dependencyPreparation;
+  const qualityPreparation = options.dependencyPreparation ?? options.cache?.dependencyPreparation;
   const qualityEnvironment = corpusQualityEnvironment();
   const execute = async (): Promise<{ findings: Finding[]; scope: { unitsExamined: number; description: string }; completed: boolean; failure?: string }> => {
     try {
@@ -131,11 +133,14 @@ export async function runCorpusScanner(options: CorpusScannerRunOptions): Promis
       };
     } catch (error) {
       if (error instanceof SecretInArgvError) throw error;
+      const failure = error instanceof Error ? error.message : String(error);
       return {
-        findings: [],
+        findings: options.scanner === "quality-scan" && qualityPreparation?.complete === false
+          ? [knipUnavailableFinding(`dependency preparation incomplete: ${qualityPreparation.reason}; quality scanner failed: ${failure}`)]
+          : [],
         scope: { unitsExamined: 0, description: `${options.scanner} emitted no valid scanner-owned scope receipt over ${options.targetConfig}` },
         completed: false,
-        failure: error instanceof Error ? error.message : String(error),
+        failure,
       };
     }
   };

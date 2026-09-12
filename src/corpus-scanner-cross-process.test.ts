@@ -4,12 +4,17 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rm
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { promisify } from "node:util";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildHtml } from "../report-template/render.mjs";
 import { prepareCorpusDependencies } from "./corpus-dependency-preparation.js";
+import { observePackageManager } from "./corpus-package-manager.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
 import { digestObservedPaths } from "./corpus-scanner-scope.js";
 import { readNamesSafe } from "./fs-walk.js";
 import { SecretInArgvError } from "./secret-argv.js";
+import * as packageManagers from "./package-manager.js";
+import type { Finding } from "./findings.js";
 
 const spawnState = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
 
@@ -200,7 +205,7 @@ describe("corpus scanner execution across processes and checkout paths (#1871/#1
       onEvent: (message) => events.push(message),
     });
 
-    expect(failed.findings).toEqual([]);
+    expect(failed.findings).toContainEqual(expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining("synthetic dependency preparation failure") }));
     expect(events.join("\n")).toContain(primaryError.message);
     expect(events.join("\n")).not.toContain(cleanupError.message);
     expect(spawnState.active).toBe(0);
@@ -857,11 +862,194 @@ console.log("CORPUS_SCANNER_PROCESS=" + JSON.stringify({ statuses, findingCounts
     // Knip itself requires a package manifest at its invocation root, so the whole polyglot tree
     // remains a disclosed M5-00. corpus-drift replaces that root M5 result with the explicit
     // nextjs/ module scope below; that is the hosted mvp-boilerplate seam this control protects.
-    expect(root.findings).toContainEqual(expect.objectContaining({ id: "M5-00" }));
+    expect(root.findings).toContainEqual(expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining(dependencyPreparation.reason) }));
     expect(root.findings.some((finding) => finding.id === "M5-98")).toBe(false);
     expect(scoped.findings).toContainEqual(expect.objectContaining({ taxonomy: expect.stringContaining("M5"), title: expect.stringMatching(/^Unused file:/), location: expect.stringMatching(/src\/dead\.ts$/), confidence: "Review" }));
     expect(scoped.findings).toContainEqual(expect.objectContaining({ id: "M5-98" }));
     expect(scoped.findings.some((finding) => finding.id === "M5-00")).toBe(false);
     expect(existsSync(join(nextDir, "partial-provider-consumed"))).toBe(false);
   }, 60_000);
+});
+
+// These controls execute the shipping corpus call sites as well as the real quality CLI. Extract
+// only the two functions to avoid starting unrelated corpus scanners, clones or advisory queries.
+function corpusInstallConsumer() {
+  const source = readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8");
+  const ast = ts.createSourceFile("corpus-drift.ts", source, ts.ScriptTarget.Latest, true);
+  const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && ["installTargetDeps", "runScanner", "disableGlobalVirtualStoreIfSet"].includes(node.name?.text ?? "")).map((node) => node.getText(ast)).join("\n");
+  const bindings = { ...packageManagers, execFileSync, existsSync, join, readFileSync, writeFileSync, prepareCorpusDependencies, runCorpusScanner, repoRoot: process.cwd(), phaseCacheDir: undefined, phaseTarget: "2047-control", forceColdCache: false, GLOBAL_VIRTUAL_STORE_TRUE: /^(\s*enableGlobalVirtualStore:\s*)true\s*$/m };
+  const code = ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  return new Function(...Object.keys(bindings), `${code}\nreturn {installTargetDeps,runScanner};`)(...Object.values(bindings)) as {
+    installTargetDeps: (dir: string, flags: string[], identity: { targetRevision: string; targetTree: string; sourceRoot: string }, cacheDir?: string) => ReturnType<typeof prepareCorpusDependencies>;
+    runScanner: (options: { script: "quality-scan"; scanner: "quality-scan"; scriptArgs: string[]; targetDir: string; targetRevision: string; targetTree: string; targetConfig: string; records: unknown[]; cacheDir?: string; dependencyPreparation?: ReturnType<typeof prepareCorpusDependencies> }) => Promise<Finding[]>;
+  };
+}
+
+function selectorFixture(root: string, manager: "npm" | "pnpm" | "yarn" = "npm"): string {
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  for (const [directory, version] of [["bounded", "8.8.8"], ["retained", "9.9.9"], ["full", "10.10.10"], ["alternate", "9.9.9"]]) {
+    const dir = join(root, directory!);
+    mkdirSync(dir);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: manager, version }));
+    writeFileSync(join(dir, "manager.cjs"), String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const mode = fs.existsSync("control-mode") ? fs.readFileSync("control-mode", "utf8") : "fail";
+if (mode.startsWith("change") && fs.existsSync("selector-version")) {
+  const entry = path.join(${JSON.stringify(root)}, fs.readFileSync("selector-version", "utf8"), "manager.cjs");
+  if (entry !== process.argv[1]) { process.argv[1] = entry; require(entry); return; }
+}
+const version = ${JSON.stringify(version)};
+fs.appendFileSync("manager-invocations.jsonl", JSON.stringify({version, args:process.argv.slice(2), corepack:process.env.COREPACK_HOME, unkeyed:process.env.HARVEY_UNKEYED_SELECTOR_2047}) + "\n");
+if (process.argv.includes("--version")) {
+  fs.writeFileSync("setup-attempted", "manager selection/provisioning is setup");
+  if (mode === "probe-fail") { console.error("ERR_SETUP_2047: manager provisioning failed"); process.exit(41); }
+  console.log(version); process.exit(0);
+}
+fs.mkdirSync("node_modules/partial-provider", {recursive:true});
+fs.writeFileSync("node_modules/partial-provider/package.json", '{"name":"partial-provider","version":"1.0.0"}');
+fs.writeFileSync("node_modules/partial-provider/index.js", 'require("node:fs").writeFileSync("provider-consumed", "yes"); module.exports = {};');
+const frozen = process.argv.includes("ci") || process.argv.includes("--frozen-lockfile");
+const offline = process.argv.includes("--offline");
+if ((mode === "change" || mode === "change-same-version" || mode === "launcher-change") && frozen) fs.writeFileSync("selector-version", mode === "change-same-version" ? "alternate" : "full");
+if (mode === "success" || (mode === "offline-fail" && !offline) || ((mode === "fallback" || mode === "launcher-change" || mode.startsWith("change")) && !frozen)) process.exit(0);
+console.log("ERR_INSTALL_2047: rejected partial provider at " + process.cwd()); process.exit(42);
+`);
+  }
+  writeFileSync(join(bin, manager), String.raw`#!${process.execPath}
+const fs = require("node:fs"); const path = require("node:path");
+const selected = fs.existsSync("selector-version") ? fs.readFileSync("selector-version", "utf8") : process.env.HARVEY_UNKEYED_SELECTOR_2047 ? "full" : process.env.COREPACK_HOME ? "retained" : "bounded";
+const entry = path.join(${JSON.stringify(root)}, selected, "manager.cjs");
+process.argv = [process.execPath, entry, ...process.argv.slice(2)]; require(entry);
+`, { mode: 0o755 });
+  return bin;
+}
+
+describe("dependency installation reaches the M5 client artifact (#2047)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+    vi.clearAllMocks();
+  });
+  function fixture(sourceRoot = ".", manager: "npm" | "pnpm" | "yarn" = "npm") {
+    const root = mkdtempSync(join(tmpdir(), "harvey-install-delivery-")); dirs.push(root);
+    const bin = selectorFixture(root, manager);
+    const targetDir = join(root, "target", sourceRoot); mkdirSync(join(targetDir, "src"), { recursive: true });
+    writeFileSync(join(targetDir, "package.json"), JSON.stringify({ name: "install-delivery", private: true, packageManager: `${manager}@9.9.9` }));
+    writeFileSync(join(targetDir, manager === "npm" ? "package-lock.json" : manager === "pnpm" ? "pnpm-lock.yaml" : "yarn.lock"), manager === "npm" ? '{"lockfileVersion":3,"packages":{"":{}}}' : manager === "pnpm" ? "lockfileVersion: '9.0'\npackages: {}\n" : "# yarn lockfile v1\n");
+    writeFileSync(join(targetDir, "src/index.ts"), "export const live = true;\n");
+    writeFileSync(join(targetDir, "src/dead.ts"), "export const dead = true;\n");
+    writeFileSync(join(targetDir, "knip.config.ts"), `import "./node_modules/partial-provider/index.js"; export default {entry:["src/index.ts"],project:["src/**/*.ts"]};\n`);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("COREPACK_HOME", join(root, "manager-state"));
+    return { root, targetDir, sourceRoot, cacheDir: join(root, "cache"), bin };
+  }
+  const meta = { client: "Install evidence", subtitle: "#2047", date: "2026-09-12", commit: "control", auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Preparation failure", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
+
+  it.each([{ cached: false, sourceRoot: "." }, { cached: false, sourceRoot: "nextjs" }, { cached: true, sourceRoot: "." }, { cached: true, sourceRoot: "nextjs" }])("delivers failed install reason without admitting partial providers: $sourceRoot cached=$cached", async ({ cached, sourceRoot }) => {
+    const f = fixture(sourceRoot);
+    const consumer = corpusInstallConsumer();
+    const identity = { targetRevision: "pin", targetTree: "tree", sourceRoot };
+    const cacheDir = cached ? f.cacheDir : undefined;
+    const run = (preparation: ReturnType<typeof prepareCorpusDependencies>, extra: string[] = []) => consumer.runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir, ...extra], targetDir: f.targetDir, ...identity, targetConfig: sourceRoot, records: [], cacheDir, dependencyPreparation: preparation });
+    writeFileSync(join(f.targetDir, "control-mode"), "success");
+    const complete = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
+    const control = await run(complete);
+    expect(complete.complete).toBe(true);
+    expect(control.some((finding) => ["M5-00", "M5-98"].includes(finding.id))).toBe(false);
+    expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(true);
+    rmSync(join(f.targetDir, "provider-consumed"));
+    writeFileSync(join(f.targetDir, "control-mode"), "fail");
+    const rejected = consumer.installTargetDeps(f.targetDir, [], identity, cacheDir);
+    const findings = await run(rejected);
+    const html = buildHtml({ meta, findings });
+    expect(rejected).toMatchObject({ complete: false, status: "incomplete", packageManagerVersion: "9.9.9" });
+    expect(rejected.installation?.stages.some((stage) => stage.exitCode === 42)).toBe(true);
+    expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
+    expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(false);
+    expect(findings).toContainEqual(expect.objectContaining({ id: "M5-98", evidence: expect.stringContaining("ERR_INSTALL_2047") }));
+    expect(findings.some((finding) => finding.id === "M5-00")).toBe(false);
+    expect(html).toContain("ERR_INSTALL_2047");
+    expect(html).toContain("dependency preparation incomplete");
+    expect(html).toContain("manager.cjs@9.9.9");
+    const out = process.env.HARVEY_2047_EVIDENCE_DIR;
+    if (out) {
+      const name = `${cached ? "cached" : "uncached"}-${sourceRoot === "." ? "root" : "nested"}`;
+      writeFileSync(join(out, `${name}-findings.json`), JSON.stringify(findings, null, 2));
+      writeFileSync(join(out, `${name}-preparation.json`), JSON.stringify(rejected, null, 2));
+      writeFileSync(join(out, `${name}.html`), html);
+    }
+    if (cached && sourceRoot === ".") {
+      const failedKnip = await run(rejected, ["--timeout", "0.001"]);
+      expect(failedKnip).toContainEqual(expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining("ERR_INSTALL_2047") }));
+      expect(buildHtml({ meta, findings: failedKnip })).toContain("ERR_INSTALL_2047");
+      if (out) writeFileSync(join(out, "failed-reduced-knip.html"), buildHtml({ meta, findings: failedKnip }));
+      const failedChild = await run(rejected, ["--timeout", "0"]);
+      expect(failedChild).toContainEqual(expect.objectContaining({ id: "M5-00", evidence: expect.stringContaining("ERR_INSTALL_2047") }));
+      expect(buildHtml({ meta, findings: failedChild })).toContain("ERR_INSTALL_2047");
+      if (out) writeFileSync(join(out, "failed-quality-child.html"), buildHtml({ meta, findings: failedChild }));
+    }
+  });
+
+  it.each(["npm", "pnpm", "yarn"] as const)("retains selector environment and canonical store on %s fallback; classifies provisioning separately", (manager) => {
+    const f = fixture(".", manager);
+    vi.stubEnv("HARVEY_UNKEYED_SELECTOR_2047", "select-a-different-manager-in-the-full-environment");
+    writeFileSync(join(f.targetDir, "control-mode"), "fallback");
+    const full = observePackageManager(manager, "version-probe", { bin: manager, args: ["--version"], cwd: f.targetDir, env: process.env });
+    expect(full.selected?.version).toBe("10.10.10");
+    const shards = [1, 2].map((shard) => prepareCorpusDependencies({ ...f, cacheDir: relative(process.cwd(), join(f.cacheDir, `shard${shard}`)), targetRevision: "pin", targetTree: "tree" }));
+    const [first, second] = shards;
+    expect(first).toMatchObject({ complete: true, cacheable: false, status: "non-cacheable", packageManagerVersion: "9.9.9" });
+    expect(first!.installation?.stages.map((stage) => [stage.stage, stage.outcome, stage.selected?.version])).toEqual([["version-probe", "completed", "9.9.9"], ["frozen", "failed", "9.9.9"], ["legacy", "completed", "9.9.9"]]);
+    for (const prepared of shards) {
+      const installation = prepared.installation!;
+      for (const stage of installation.stages.filter((stage) => stage.stage !== "version-probe")) {
+        expect(stage.command).toContain(installation.dependencyStore);
+        expect(stage.command.slice(0, 2)).toEqual([installation.stages[0]!.selected!.nodeExecutable, installation.stages[0]!.selected!.executable]);
+      }
+      expect(installation.dependencyStore).toMatch(new RegExp(`${f.cacheDir}/shard[12]/dependency-preparation/stores/`));
+      expect(installation.managerProvisioning).toMatchObject({ kind: "installation-setup", isolation: "not-guaranteed", selectorEnvironment: { COREPACK_HOME: expect.stringMatching(/^sha256:/) } });
+    }
+    expect(first!.installation?.dependencyStore).not.toBe(second!.installation?.dependencyStore);
+    expect(first!.installation?.managerProvisioning).toEqual(second!.installation?.managerProvisioning);
+    const installs = readFileSync(join(f.targetDir, "manager-invocations.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; corepack?: string; unkeyed?: string }).filter((row) => !row.args.includes("--version"));
+    expect(installs).toHaveLength(4);
+    expect(installs.every((row) => row.corepack === join(f.root, "manager-state") && row.unkeyed === undefined)).toBe(true);
+    expect(existsSync(join(f.targetDir, "setup-attempted"))).toBe(true);
+  });
+
+  it.each(["change", "change-same-version"])("rejects a successful fallback when its selected executable changes: %s", (mode) => {
+    const f = fixture();
+    writeFileSync(join(f.targetDir, "control-mode"), mode);
+    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    expect(result).toMatchObject({ complete: false, cacheable: false, status: "incomplete" });
+    expect(result.installation?.stages.at(-1)).toMatchObject({ stage: "legacy", exitCode: 0, outcome: "failed", reason: expect.stringContaining("identity changed") });
+    expect(existsSync(join(f.targetDir, "node_modules"))).toBe(false);
+    expect(readNamesSafe(join(f.cacheDir, "dependency-preparation")).includes("receipts")).toBe(false);
+  });
+
+  it("binds the selected executable when the launcher's known-good choice moves after the frozen attempt", () => {
+    const f = fixture();
+    writeFileSync(join(f.targetDir, "package.json"), '{"name":"unpinned-selector-control","private":true}');
+    writeFileSync(join(f.targetDir, "control-mode"), "launcher-change");
+    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    const moved = observePackageManager("npm", "version-probe", { bin: "npm", args: ["--version"], cwd: f.targetDir, env: process.env });
+    expect(moved.selected?.version).toBe("10.10.10");
+    expect(result).toMatchObject({ complete: true, status: "non-cacheable", packageManagerVersion: "9.9.9" });
+    expect(result.installation?.stages.map((stage) => stage.selected?.version)).toEqual(["9.9.9", "9.9.9", "9.9.9"]);
+    expect(readFileSync(join(f.targetDir, "package.json"), "utf8")).toBe('{"name":"unpinned-selector-control","private":true}');
+  });
+
+  it("discloses a failed version-probe as installation setup without attempting installation", async () => {
+    const f = fixture();
+    writeFileSync(join(f.targetDir, "control-mode"), "probe-fail");
+    const result = prepareCorpusDependencies({ ...f, targetRevision: "pin", targetTree: "tree" });
+    expect(result).toMatchObject({ complete: false, status: "incomplete", reason: expect.stringContaining("ERR_SETUP_2047") });
+    expect(result.installation?.stages).toHaveLength(1);
+    expect(result.installation?.stages[0]).toMatchObject({ stage: "version-probe", outcome: "failed", exitCode: 41 });
+    const scan = await runCorpusScanner({ repoRoot: process.cwd(), targetDir: f.targetDir, targetConfig: "setup failure", script: "quality-scan", scanner: "quality-scan", scriptArgs: [f.targetDir], dependencyPreparation: result });
+    expect(buildHtml({ meta, findings: scan.findings })).toContain("ERR_SETUP_2047");
+  });
 });
