@@ -59,10 +59,10 @@
     },
     "ghostfolio": {
       "file": "ghostfolio.osv.json.gz",
-      "sha256": "ac2adf0333f0a0d02b624836a201bc5e7cd99d770c1663790d8f69a17e4315f9",
+      "sha256": "7947a61c9d84d009c651b52e2e9d620cb7f8c4269de20d0de97f4a4d23244cd7",
       "targetCommit": "7bd6ca6d48a2b88d454218dc1497536708e38c57",
-      "capturedAt": "2026-09-10T01:08:31.580Z",
-      "expiresAt": "2026-09-17T01:08:31.580Z",
+      "capturedAt": "2026-09-12T15:57:42.115Z",
+      "expiresAt": "2026-09-19T15:57:42.115Z",
       "osvScannerVersion": "osv-scanner version: 2.3.8\nosv-scalibr version: 0.4.5\ncommit: n/a\nbuilt at: n/a"
     },
     "rallly": {
