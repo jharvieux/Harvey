@@ -165,7 +165,7 @@ function aliasVersion(text: string): AliasVersion | undefined {
   if ((match[4] || match[5]) && parts.length !== 3) return undefined;
   if ([...prerelease, ...(match[5]?.split(".") ?? [])].some((part) => !/^[0-9A-Za-z-]+$/.test(part))) return undefined;
   // Larger numeric prerelease identifiers can round together in npm's comparisons;
-  // they cannot establish a range match through this offline proof.
+  // this offline proof leaves those declarations unresolved.
   if (prerelease.some((part) => /^\d+$/.test(part) && (!/^(0|[1-9]\d*)$/.test(part) || !Number.isSafeInteger(Number(part))))) return undefined;
   return { parts, prerelease };
 }
