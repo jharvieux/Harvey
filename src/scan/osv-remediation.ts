@@ -16,7 +16,7 @@ export interface OsvAffectedPackage {
   versions?: string[];
 }
 
-export interface OsvRemediation {
+interface OsvRemediation {
   fixedVersions: string[];
   fix: string;
 }
