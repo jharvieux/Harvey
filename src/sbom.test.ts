@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
+import { checkLicenseCompliance } from "./scan/supply-chain.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
@@ -57,6 +58,25 @@ describe("lockfile parsing", () => {
     });
   });
 
+  it.each([1, 2, 3])("uses metadata names for alias installations in package-lock v%s, while retaining path-name fallbacks and repeated versions", (lockfileVersion) => {
+    const aliases = lockfileVersion === 1
+      ? { dependencies: {
+        "wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", dependencies: { "string-width-cjs": { name: "string-width", version: "4.2.3" } } },
+        ordinary: { version: "1.0.0" },
+      } }
+      : { packages: {
+        "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0" },
+        "node_modules/parent/node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "6.0.0" },
+        "node_modules/ordinary": { version: "1.0.0" },
+      } };
+    expect(inventory(parsePackageLock(JSON.stringify({ lockfileVersion, ...aliases })))).toEqual({
+      components: lockfileVersion === 1
+        ? [{ name: "wrap-ansi", version: "7.0.0" }, { name: "string-width", version: "4.2.3" }, { name: "ordinary", version: "1.0.0" }]
+        : [{ name: "wrap-ansi", version: "7.0.0" }, { name: "wrap-ansi", version: "6.0.0" }, { name: "ordinary", version: "1.0.0" }],
+      unmatched: 0,
+    });
+  });
+
   it("reads every pnpm key shape across lockfile versions, and the resolution integrity", () => {
     const text = [
       "lockfileVersion: '9.0'",
@@ -97,6 +117,13 @@ describe("lockfile parsing", () => {
 });
 
 describe("declared lockfile range edges (#1774)", () => {
+  it.each([2, 3])("uses an alias installation's metadata name for its v%s range owner", (lockfileVersion) => {
+    const { edges } = parsePackageLock(JSON.stringify({ lockfileVersion, packages: {
+      "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", dependencies: { "strip-ansi": "^6.0.1" } },
+    } })).ranges;
+    expect(edges).toEqual([expect.objectContaining({ ownerPath: "node_modules/wrap-ansi-cjs", ownerName: "wrap-ansi", ownerVersion: "7.0.0", name: "strip-ansi", range: "^6.0.1" })]);
+  });
+
   it.each([2, 3])("reads npm v%s owner/path/section identities without duplicate manifest or workspace facts", (lockfileVersion) => {
     const ranges = parsePackageLock(JSON.stringify({ lockfileVersion, packages: {
       "": { version: "1.0.0", dependencies: { direct: "^1.0.0" }, peerDependencies: { compatible: "*" } },
@@ -271,6 +298,24 @@ describe("CycloneDX document", () => {
     const props: { name: string; value: string }[] = bomOf(dir).metadata.properties;
     expect(props.find((p) => p.name === "harvey:license-coverage")?.value).toContain("1/2");
     expect(props.find((p) => p.name === "harvey:hash-coverage")?.value).toContain("0/2");
+  });
+
+  it("delivers alias-only metadata names to the CycloneDX export and license consumer", async () => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: {
+      "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", license: "GPL-3.0" },
+      "node_modules/ordinary": { version: "1.0.0", license: "MIT" },
+    } }));
+
+    expect(bomOf(dir).components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "wrap-ansi", version: "7.0.0", purl: "pkg:npm/wrap-ansi@7.0.0" }),
+      expect.objectContaining({ name: "ordinary", version: "1.0.0", purl: "pkg:npm/ordinary@1.0.0" }),
+    ]));
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toEqual(expect.arrayContaining([
+      { name: "wrap-ansi", version: "7.0.0", license: "GPL-3.0", direct: false },
+    ]));
+    const findings = await checkLicenseCompliance(scope);
+    expect(findings.map((finding) => finding.id)).toContain("SUP-LICENSE-COPYLEFT-wrap-ansi@7.0.0");
   });
 });
 

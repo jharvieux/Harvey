@@ -115,6 +115,12 @@ export interface DependencyRangeScope {
 const RANGE_SECTIONS: readonly DependencyRangeSection[] = ["dependencies", "devDependencies", "optionalDependencies"];
 const PACKAGE_NAME = /^(?:@[a-z0-9_.~-]+\/)?[a-z0-9_.~-]+$/i;
 const validPackageName = (name: string): boolean => PACKAGE_NAME.test(name) && name.split("/").every((part) => part !== "." && part !== "..");
+// npm installs aliases under the alias path, but records the package's registry identity in
+// metadata. A path remains the fallback for ordinary entries and older lockfile shapes that do
+// not carry `name`.
+function packageMetadataName(meta: { name?: unknown }, pathName: string): string {
+  return typeof meta.name === "string" && validPackageName(meta.name) ? meta.name : pathName;
+}
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const rangeSlots = (value: unknown): number => value === undefined ? 0 : isRecord(value) ? Object.keys(value).length : 1;
 const rangeCount = (value: Record<string, unknown>): number => RANGE_SECTIONS.reduce((n, section) => n + rangeSlots(value[section]), 0);
@@ -175,7 +181,8 @@ function packageLockRanges(lock: Record<string, unknown>): DependencyRangeScope 
     if (value.link === true) { scope.excluded.link += count; continue; }
     if (workspacePaths.has(path)) { scope.excluded.workspace += count; continue; }
     const owners = path.startsWith("node_modules/") ? path.slice("node_modules/".length).split("/node_modules/") : [];
-    const name = owners.length > 0 && owners.every(validPackageName) ? owners.at(-1) : undefined;
+    const pathName = owners.length > 0 && owners.every(validPackageName) ? owners.at(-1) : undefined;
+    const name = pathName === undefined ? undefined : packageMetadataName(value, pathName);
     const ownerValid = name !== undefined && typeof value.version === "string" && value.version.length > 0 &&
       (value.link === undefined || value.link === false);
     if (!ownerValid) { scope.examined += Math.max(count, 1); scope.unread += Math.max(count, 1); continue; }
@@ -274,6 +281,7 @@ function yarnRanges(text: string): DependencyRangeScope {
 // under `dependencies`. Both carry the RESOLVED version, which is what an SBOM needs.
 export function parsePackageLock(text: string): ParsedLock {
   interface LockEntry {
+    name?: unknown;
     version?: string;
     dev?: boolean;
     // npm normally records an SPDX string here, but older/generated package-lock files can
@@ -314,18 +322,18 @@ export function parsePackageLock(text: string): ParsedLock {
     if (path === "") continue;
     if (!isRecord(meta)) { unmatched++; continue; }
     if (meta.link) continue;
-    const name = path.replace(/^(?:.*\/)?node_modules\//, "");
-    if (!name || !meta.version) {
+    const pathName = path.replace(/^(?:.*\/)?node_modules\//, "");
+    if (!pathName || !meta.version) {
       unmatched++;
       continue;
     }
-    add(name, meta);
+    add(packageMetadataName(meta, pathName), meta);
   }
 
   const walkV1 = (deps: Record<string, LockEntry>): void => {
     for (const [name, meta] of Object.entries(deps)) {
       if (!isRecord(meta)) { unmatched++; continue; }
-      if (meta.version) add(name, meta);
+      if (meta.version) add(packageMetadataName(meta, name), meta);
       else unmatched++;
       if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>);
     }
