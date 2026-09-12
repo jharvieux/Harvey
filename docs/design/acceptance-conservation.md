@@ -130,31 +130,26 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   What survives is narrower and true: a `met` naming a command with no `pnpm` script (`node …`,
   `docker …`, a shell pipeline) is still checked for shape only, and no shape check reads a
   command's OUTPUT. The gate raises the floor; it is still not a reviewer.
-- **The `pnpm` truth check reads only BACKTICKED spans, and never a flag** (added 2026-07-27 after
-  the #1345 acceptance verifier found it over-refusing). The first shape was
-  `` /\bpnpm\s+(?:run\s+)?([\w:-]+)/g ``, which read the token after `pnpm` as a script name whatever
-  it was: it told the author of `` `pnpm --filter site build` `` that `pnpm --filter` "is not a
-  script in package.json", and read the prose *"ran pnpm and it worked"* as an invented `pnpm and`. A
-  false REJECT that denies a TRUE statement is the one failure this check must not produce — the
-  claim of a truth pass is that an invention is separable from the real thing, and it stopped being
-  separable the moment a correct command failed it. The cost of the fix, stated rather than left
-  implicit: an **unbackticked** `pnpm verify` is no longer truth-checked (it still has to satisfy a
-  shape), a `--filter`/`-r`/`-C` command is left unchecked because the script lives in another
-  package's manifest this checkout does not read, and pnpm's own subcommands are passed through. All
-  3 `pnpm <script>` references in the measured population are backticked, so the narrowing costs
-  nothing there.
+- **The `pnpm` truth check accepts explicit commands outside backticks (#2051).** Backticked
+  commands, unbackticked `pnpm run <script>`, and unbackticked script names containing `:` or `-`
+  are checked against the repository manifest. This covers the unbackticked `pnpm verify:changed`
+  reference in PR #2048 that falsified the previous backtick-only population claim.
 
-  **Re-measured 2026-07-28 (#1349) over a population of 60 `met` lines** (up from the original 3
-  references across 2 PRs — the convention was days old when that number was recorded) — replaying
-  `parseBody` + the same backtick/script-lookup logic against the last 200 merged PRs
-  (`src/cli/measure-pnpm-evidence.ts`): 19 `met` lines mention `pnpm`, and **every one is already
-  backticked**. Zero unbackticked-but-real `pnpm <script>` references exist in the wider population
-  either — the narrowing still costs nothing, and the claim survives the larger sample.
+  Bare unbackticked words remain ambiguous: treating every token after `pnpm` as a script would
+  reject prose such as "ran pnpm and it worked". A bare unbackticked `pnpm verify` therefore
+  remains shape-only. Commands with `--filter`/`-r`/`-C` remain outside the manifest lookup because
+  they can select another package, and pnpm's own subcommands pass through. Backticks or an
+  explicit `pnpm run` make a simple script name eligible for the truth check.
+
+  The measuring CLI scans unbackticked references independently of that eligibility rule and
+  subtracts the commands handled by the shipping extractor. A real simple script still skipped
+  by the checker makes its falsifier exit 0; narrowing the checker does not remove that script
+  from the measured population.
 
   <!--
-  REASON: the pnpm-backtick narrowing in citedScripts skips the truth check on any unbackticked pnpm reference, which would under-serve a real case if a genuine `pnpm <script>` citation ever went unbackticked in practice
+  REASON: the pnpm evidence truth check leaves bare unbackticked simple script names shape-only to avoid interpreting ordinary prose as commands; this bound would under-serve a real case if a genuine simple-script citation appears among the skipped references
   KIND: empirical
-  PROVENANCE: MEASURED 2026-07-28 — the falsifier below, run as committed, found 0 unbackticked-but-real script references and exited 1, twice on a growing live population the same day (200 merged PRs / 60 `met` lines / 19 pnpm mentions, then 200 / 75 / 22 on re-run; up from the original 3-reference/2-PR sample). Exercised in all three directions: exit 0 against a seeded population carrying an unbackticked `pnpm verify` citation (blocker gone), exit 1 as committed (blocker holds), exit 127 when `gh` cannot answer or stdin is empty/garbled/an empty array (cannot run) — it does NOT exit 1 on a failed lookup, which `revalidateReasons` would read as "the blocker still holds"
+  PROVENANCE: MEASURED 2026-09-12 — the corrected checker covers PR #2048's unbackticked qualified script. The falsifier measures all still-skipped real script references, including bare simple names: exit 0 when one exists, exit 1 when none exists, and exit 127 when the population cannot be read. The owning tests exercise handled qualified/explicit commands, an unhandled bare simple script, and unreadable input; re-run the command below for the current merged-PR population.
   FALSIFIER: test -f src/cli/measure-pnpm-evidence.ts || exit 127; command -v gh >/dev/null 2>&1 || exit 127; gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body > /tmp/harvey-pnpm-evidence.json 2>/dev/null || exit 127; pnpm exec tsx src/cli/measure-pnpm-evidence.ts < /tmp/harvey-pnpm-evidence.json
   TOUCHES: src/acceptance-conservation.ts, src/cli/measure-pnpm-evidence.ts
   -->
@@ -360,7 +355,7 @@ resolve is UNREADABLE, not absent`).
 `pnpm validate-reasons --revalidate` re-tests it on the daily cadence: the two Gate 4 bounds and the
 semgrep-only scope in `src/disclosure-venue.ts`, Gate 3's `ignoreExportsUsedInFile` blind spot in
 `src/test-only-exports.ts`, Gate 2's cross-linked condition beside `checkRemainder`, and — since
-#1349 — the `pnpm`-backtick narrowing's cost re-measured over 60 `met` lines,
+#1349, narrowed by #2051 — the cost of skipped unbackticked simple script names,
 inline above (`src/cli/measure-pnpm-evidence.ts`). Every one was exercised in BOTH directions — run
 as committed, then run again against a state where its blocker is gone — because a falsifier nobody
 has watched exit 0 is indistinguishable from one that cannot. **The remaining bounds are DECISIONAL**

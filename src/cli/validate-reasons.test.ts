@@ -105,9 +105,11 @@ describe("validate-reasons falsifier argv boundary (#1778)", () => {
 const fs = require("node:fs");
 const runSync = require("node:child_process")["spawn" + "Sync"];
 const args = process.argv.slice(2);
+if (process.env.HARVEY_SH_STARTUP_DELAY) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.HARVEY_SH_STARTUP_DELAY));
 const receipt = { argv: args, program: process.env.HARVEY_RECORDED_FALSIFIER_PROGRAM, pid: process.pid };
 fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify(receipt));
-if (process.env.HARVEY_SH_MODE === "timeout") setInterval(() => {}, 1000);
+// A finite fallback also bounds the negative control when the native timeout is disconnected.
+if (process.env.HARVEY_SH_MODE === "timeout") setTimeout(() => process.exit(7), 1500);
 else {
   const result = runSync("/bin/sh", args, { env: process.env, stdio: ["inherit", "pipe", "pipe"], encoding: "utf8", timeout: 2000 });
   fs.writeFileSync(process.env.HARVEY_SH_RECEIPT, JSON.stringify({ ...receipt, status: result.status, stdout: result.stdout, stderr: result.stderr }));
@@ -116,7 +118,8 @@ else {
 }
 `;
   interface ShellReceipt { argv: string[]; program?: string; pid: number; status?: number; stdout?: string; stderr?: string }
-  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<ChildResult & { receipt?: ShellReceipt; requestedTimeout?: number }> {
+  interface NativeTimeoutReceipt { requestedTimeout: number; pid: number; status: number | null; signal: string | null; error?: string }
+  async function falsifier(program: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<ChildResult & { receipt?: ShellReceipt; nativeTimeout?: NativeTimeoutReceipt }> {
     const dir = plant({ "reason.md": [
       "REASON: a controlled fixture still describes a blocker",
       "KIND: empirical", "PROVENANCE: MEASURED 2026-08-26",
@@ -129,7 +132,15 @@ else {
     // Exercise the real spawnSync timeout with one bounded child, without waiting two minutes or
     // changing the production limit. No shell descendant is launched in this fixture mode.
     const preload = join(bin, "timeout.cjs");
-    writeFileSync(preload, `const cp=require("node:child_process"); const original=cp.spawnSync; cp.spawnSync=function(bin,args,options){ if(bin==="sh"){require("node:fs").writeFileSync(${JSON.stringify(timeoutPath)},JSON.stringify(options.timeout)); options={...options,timeout:300};} return original(bin,args,options); }; require("node:module").syncBuiltinESMExports();`);
+    // Record the native result in the parent: a killed child may never write its own receipt.
+    writeFileSync(preload, `const cp=require("node:child_process"); const original=cp.spawnSync;
+cp.spawnSync=function(bin,args,options){
+  if(bin!=="sh") return original(bin,args,options);
+  const requestedTimeout=options.timeout;
+  const result=original(bin,args,{...options,timeout:requestedTimeout===120000?300:options.timeout});
+  require("node:fs").writeFileSync(${JSON.stringify(timeoutPath)},JSON.stringify({requestedTimeout,pid:result.pid,status:result.status,signal:result.signal,error:result.error?.code}));
+  return result;
+}; require("node:module").syncBuiltinESMExports();`);
     try {
       const result = await gate(dir, ["--revalidate", "--tier", "lighthouse"], {
         ...extraEnv, PATH: `${bin}:${process.env.PATH ?? ""}`, HARVEY_SH_RECEIPT: receiptPath,
@@ -137,7 +148,7 @@ else {
         ...(extraEnv.HARVEY_SH_MODE === "timeout" ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${preload}` } : {}),
       });
       return { ...result, receipt: existsSync(receiptPath) ? JSON.parse(readFileSync(receiptPath, "utf8")) as ShellReceipt : undefined,
-        requestedTimeout: existsSync(timeoutPath) ? JSON.parse(readFileSync(timeoutPath, "utf8")) as number : undefined };
+        nativeTimeout: existsSync(timeoutPath) ? JSON.parse(readFileSync(timeoutPath, "utf8")) as NativeTimeoutReceipt : undefined };
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(bin, { recursive: true, force: true });
@@ -173,14 +184,18 @@ else {
     expect(result.receipt?.stderr).toBe("ordinary diagnostic\n");
   });
 
-  it("reports an actual bounded shell timeout as UNVERIFIABLE without leaving its child alive", async () => {
-    const result = await falsifier("false", { HARVEY_SH_MODE: "timeout" });
-    expect(result.requestedTimeout).toBe(120_000);
+  it.each([0, 600])("reports an actual bounded shell timeout with %i ms startup delay without leaving its child alive", async (startupDelay) => {
+    const result = await falsifier("false", { HARVEY_SH_MODE: "timeout", HARVEY_SH_STARTUP_DELAY: String(startupDelay) });
+    expect(result.nativeTimeout?.requestedTimeout).toBe(120_000);
+    expect(result.nativeTimeout?.error).toBe("ETIMEDOUT");
+    expect(result.nativeTimeout?.status).toBeNull();
+    expect(result.nativeTimeout?.signal).toBe("SIGTERM");
     expect(result.code).toBe(1);
     expect(result.out).toContain("UNVERIFIABLE");
     expect(result.out).toContain("signal/timeout");
-    expect(result.receipt?.pid).toBeTypeOf("number");
-    expect(() => process.kill(result.receipt!.pid, 0)).toThrow();
+    expect(result.nativeTimeout?.pid).toBeGreaterThan(0);
+    expect(() => process.kill(result.nativeTimeout!.pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    if (startupDelay > 300) expect(result.receipt).toBeUndefined();
   });
 
   it("refuses a watched placeholder binding in the fixed shell argv before launching the child", async () => {

@@ -25,16 +25,41 @@ function run(stdin: string): { code: number; out: string } {
 const met = (detail: string) => JSON.stringify([{ number: 99001, body: `ACCEPTANCE #1.1 met: ${detail}` }]);
 
 describe("measure-pnpm-evidence exit codes", () => {
-  it("exits 0 when the blocker is gone — an unbackticked reference names a real package.json script", () => {
+  it("exits 0 when the blocker is gone — a bare unbackticked script still names a real package.json script", () => {
     const { code, out } = run(met("ran pnpm verify green with no backticks on this line"));
     expect(code).toBe(0);
     expect(out).toContain("name a REAL script");
   });
 
-  it("exits 1 when the blocker holds — the only pnpm reference is backticked", () => {
-    const { code, out } = run(met("ran `pnpm verify` green"));
+  it("exits 1 when the only real unbackticked command is already truth-checked", () => {
+    // This is PR #2048's production shape. The old measurement called it a skipped command
+    // because it did not share the checker’s extraction rule.
+    const { code, out } = run(met("`pnpm verify` passed; pnpm verify:changed selected the full gate"));
     expect(code).toBe(1);
     expect(out).toContain("still costs nothing");
+  });
+
+  it.each([
+    ["handled command first", "pnpm run verify completed; pnpm verify completed", 1],
+    ["bare command first", "pnpm verify completed; pnpm run verify completed", 1],
+    ["one handled command and two bare repeats", "pnpm run verify completed; pnpm verify completed; pnpm verify completed", 2],
+  ])("preserves each skipped occurrence when %s", (_why, detail, skipped) => {
+    const { code, out } = run(met(detail));
+    expect(code).toBe(0);
+    expect(out).toContain(`${skipped} unbackticked pnpm reference(s) name a REAL script`);
+  });
+
+  it.each([
+    ["a terminal period", "pnpm verify.", 1],
+    ["a terminal comma", "pnpm verify,", 1],
+    ["a qualified handled command and bare residual", "pnpm verify:changed; pnpm verify.", 1],
+    ["a bare missing-script citation", "pnpm missing-script-2051.", 0],
+    ["an explicit missing-script citation", "pnpm run missing-script-2051.", 0],
+  ])("counts a bare script followed by %s", (_why, detail, skipped) => {
+    const { code, out } = run(met(detail));
+    expect(code).toBe(skipped === 0 ? 1 : 0);
+    if (skipped === 0) expect(out).toContain("still costs nothing");
+    else expect(out).toContain(`${skipped} unbackticked pnpm reference(s) name a REAL script`);
   });
 
   // The four ways `gh pr list` hands this tool stdin with no population in it. Each must be 127,

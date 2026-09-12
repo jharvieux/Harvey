@@ -23,6 +23,7 @@ import {
   closeFailureComment,
   closeSelftestCases,
   formatClosedIssue,
+  unbacktickedPnpmReferences,
   type IssueLookup,
   type IssueComment,
   type IssueRecord,
@@ -518,6 +519,58 @@ describe("evidence checked for TRUTH, not only shape", () => {
 
   it("NEGATIVE CONTROL: prose mentioning pnpm is not a script reference", () => {
     expect(evidenceProblems("ran pnpm and it worked, see src/acceptance-conservation.ts:1", world)).toEqual([]);
+  });
+
+  it("truth-checks an unbackticked command only when its syntax cannot be ordinary prose", () => {
+    for (const detail of [
+      "pnpm verify:changed selected the full local gate",
+      "pnpm run validate-everything completed",
+    ]) {
+      expect(evidenceProblems(detail, world), detail).toEqual([
+        expect.stringContaining("not a script in package.json"),
+      ]);
+    }
+    expect(evidenceProblems("pnpm verify completed", world)).toEqual([]);
+  });
+
+  it("accepts existing unbackticked commands while retaining the prose guard", () => {
+    const actualScripts = { ...world, scripts: new Set(["verify:changed", "validate-reasons"]) };
+    expect(evidenceProblems("pnpm verify:changed selected the full local gate", actualScripts)).toEqual([]);
+    expect(evidenceProblems("pnpm run validate-reasons completed", actualScripts)).toEqual([]);
+    expect(evidenceProblems("ran pnpm and it worked", actualScripts)).toEqual([]);
+  });
+
+  it("keeps unbackticked selectors out of the root script check but validates flags and pnpm run", () => {
+    const actualScripts = { ...world, scripts: new Set(["verify:changed", "exec"]) };
+    for (const detail of [
+      "pnpm --filter site build completed",
+      "pnpm run --filter site build completed",
+      "pnpm -r build completed",
+      "pnpm --silent verify:changed completed",
+      "pnpm --reporter append-only verify:changed completed",
+      "`pnpm --reporter append-only verify:changed` completed",
+      "pnpm run exec completed",
+      "`pnpm run exec` completed",
+    ]) expect(evidenceProblems(detail, actualScripts), detail).toEqual([]);
+
+    for (const detail of [
+      "pnpm --silent validate-everything completed",
+      "pnpm --reporter append-only validate-everything completed",
+      "pnpm run exec completed",
+      "`pnpm run exec` completed",
+    ]) {
+      expect(evidenceProblems(detail, world), detail).toEqual([
+        expect.stringContaining("not a script in package.json"),
+      ]);
+    }
+  });
+
+  it("reads terminal punctuation without truncating an invalid pnpm script token", () => {
+    expect(unbacktickedPnpmReferences("pnpm verify.")).toEqual([{ name: "verify", explicitRun: false }]);
+    expect(unbacktickedPnpmReferences("pnpm missing-script-2051.")).toEqual([{ name: "missing-script-2051", explicitRun: false }]);
+    expect(unbacktickedPnpmReferences("pnpm run missing-script-2051.")).toEqual([{ name: "missing-script-2051", explicitRun: true }]);
+    expect(unbacktickedPnpmReferences("pnpm verify@next.")).toEqual([]);
+    expect(evidenceProblems("`pnpm missing-script-2051.`", world)).toEqual([]);
   });
 
   it("SCOPE CONTROL: a genuinely invented script inside backticks still fails", () => {
