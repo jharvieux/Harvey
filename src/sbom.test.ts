@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -400,7 +400,7 @@ describe("licenseScope (#1213)", () => {
       "node_modules/wrap-ansi-cjs": { name: "wrap-ansi", version: "7.0.0", license },
     } }));
     const fetchImpl = vi.fn() as unknown as typeof fetch;
-    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl, skipRegistry: true });
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl });
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(findings.map((finding) => finding.id)).toEqual(ids);
@@ -437,6 +437,224 @@ describe("licenseScope (#1213)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("npm alias provenance (#2046 B2)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "sbom-alias-provenance-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  function write(manifest: object, packages: object, members: Record<string, object> = {}): void {
+    writeFileSync(join(dir, "package.json"), JSON.stringify(manifest));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages }));
+    for (const [path, body] of Object.entries(members)) {
+      mkdirSync(join(dir, path), { recursive: true });
+      writeFileSync(join(dir, path, "package.json"), JSON.stringify(body));
+    }
+  }
+
+  it.each([1, 2, 3])("retains each v%s installation path while deduplicating exported identities", (lockfileVersion) => {
+    const alias = { name: "@actual/pkg", version: "1.0.0", license: "MIT" };
+    const lock = lockfileVersion === 1 ? { dependencies: {
+      "@scope/alias": alias,
+      parent: { version: "1.0.0", dependencies: { "@scope/alias": alias } },
+    } } : { packages: {
+      "node_modules/@scope/alias": alias,
+      "node_modules/parent": { version: "1.0.0" },
+      "node_modules/parent/node_modules/@scope/alias": alias,
+    } };
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion, ...lock }));
+    const deps = collectDependencies(dir);
+    expect(deps.installations).toEqual([
+      { path: "node_modules/@scope/alias", name: "@actual/pkg", version: "1.0.0" },
+      { path: "node_modules/parent", name: "parent", version: "1.0.0" },
+      { path: "node_modules/parent/node_modules/@scope/alias", name: "@actual/pkg", version: "1.0.0" },
+    ]);
+    const artifact = join(dir, "sbom.json");
+    writeFileSync(artifact, JSON.stringify(buildSbom(dir).bom));
+    const exported = JSON.parse(readFileSync(artifact, "utf8")) as { components: object[] };
+    expect(exported.components).toHaveLength(2);
+    expect(exported.components).toContainEqual(expect.objectContaining({ name: "@actual/pkg", version: "1.0.0", purl: "pkg:npm/%40actual/pkg@1.0.0" }));
+    expect(exported.components.every((component) => !("path" in component) && !("installationName" in component))).toBe(true);
+  });
+
+  it.each([1, 2, 3])("keeps an unresolved root alias separate from a v%s nested installation of the same target and version", async (lockfileVersion) => {
+    const alias = { name: "real", version: "1.0.0", license: "GPL-3.0" };
+    const lock = lockfileVersion === 1 ? { dependencies: {
+      parent: { version: "1.0.0", license: "MIT", dependencies: { alias } },
+    } } : { packages: {
+      "node_modules/parent": { version: "1.0.0", license: "MIT", dependencies: { alias: "npm:real@1.0.0" } },
+      "node_modules/parent/node_modules/alias": alias,
+    } };
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { parent: "1.0.0" }, optionalDependencies: { alias: "npm:real@1.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion, ...lock }));
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toEqual([
+      { name: "parent", version: "1.0.0", license: "MIT", direct: true },
+      { ...alias, direct: false },
+      { name: "alias", direct: true },
+    ]);
+    const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-real@1.0.0", "SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("reached only through the resolved dependency tree");
+    expect(findings[1]?.evidence).toContain("Not assessed: alias");
+  });
+
+  it.each([1, 2, 3])("marks only the reachable resolved version as direct in a v%s repeated alias tree", async (lockfileVersion) => {
+    const direct = { name: "@actual/pkg", version: "1.2.0", license: "GPL-3.0" };
+    const transitive = { name: "@actual/pkg", version: "2.0.0", license: "GPL-3.0" };
+    const lock = lockfileVersion === 1 ? { dependencies: {
+      "@scope/alias": direct,
+      parent: { version: "1.0.0", license: "MIT", dependencies: { "@scope/alias": transitive } },
+    } } : { packages: {
+      "node_modules/@scope/alias": direct,
+      "node_modules/parent": { version: "1.0.0", license: "MIT" },
+      "node_modules/parent/node_modules/@scope/alias": transitive,
+    } };
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@scope/alias": "npm:@actual/pkg@^1.0.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion, ...lock }));
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@1.2.0", "SUP-LICENSE-COPYLEFT-@actual/pkg@2.0.0"]);
+    expect(findings[0]?.evidence).toContain("declared in a manifest");
+    expect(findings[1]?.evidence).toContain("reached only through the resolved dependency tree");
+  });
+
+  it.each([
+    ["sibling with another target", "packages/b/node_modules/alias", "real-a", "1.0.0"],
+    ["sibling with the same target and version", "packages/b/node_modules/alias", "real-b", "2.0.0"],
+    ["hoisted other target", "node_modules/alias", "real-a", "1.0.0"],
+    ["hoisted incompatible version", "node_modules/alias", "real-b", "^1.0.0"],
+  ])("keeps workspace-a's unresolved declaration alongside a resolved %s", async (_label, path, target, range) => {
+    write({ workspaces: ["packages/*"] }, {
+      [path]: { name: "real-b", version: "2.0.0", license: "MIT" },
+    }, {
+      "packages/a": { dependencies: { alias: `npm:${target}@${range}` } },
+      "packages/b": { dependencies: { alias: "npm:real-b@2.0.0" } },
+    });
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toEqual([
+      { name: "real-b", version: "2.0.0", license: "MIT", direct: true },
+      { name: "alias", direct: true },
+    ]);
+    const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("Not assessed: alias");
+  });
+
+  it.each([
+    ["different target", { name: "other", version: "1.0.0", license: "GPL-3.0" }],
+    ["incompatible version", { name: "real", version: "2.0.0", license: "GPL-3.0" }],
+    ["unresolved entry", { name: "real" }],
+    ["malformed entry", null],
+    ["link", { link: true, resolved: "packages/local" }],
+  ])("stops at a nearer %s instead of selecting the matching hoisted alias", async (_label, nearer) => {
+    write({ workspaces: ["packages/*"] }, {
+      "node_modules/alias": { name: "real", version: "1.0.0", license: "MIT" },
+      "packages/a/node_modules/alias": nearer,
+    }, { "packages/a": { dependencies: { alias: "npm:real@^1.0.0" } } });
+    const scope = licenseScope(dir);
+    expect(scope.candidates).toContainEqual({ name: "real", version: "1.0.0", license: "MIT", direct: false });
+    expect(scope.candidates).toContainEqual({ name: "alias", direct: true });
+    const findings = await checkLicenseCompliance(scope, { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toContain("SUP-LICENSE-00");
+    for (const finding of findings.filter((finding) => finding.id.startsWith("SUP-LICENSE-COPYLEFT"))) {
+      expect(finding.evidence).toContain("reached only through the resolved dependency tree");
+    }
+  });
+
+  it.each(["node_modules/@scope/alias", "packages/node_modules/@scope/alias", "packages/group/node_modules/@scope/alias", "packages/group/a/node_modules/@scope/alias"])("resolves scoped workspace aliases from the visible ancestor %s", async (path) => {
+    write({ workspaces: ["packages/group/*"] }, {
+      [path]: { name: "@actual/pkg", version: "1.2.0", license: "GPL-3.0" },
+    }, { "packages/group/a": { devDependencies: { "@scope/alias": "npm:@actual/pkg@~1.2.0" } } });
+    expect(licenseScope(dir).candidates).toEqual([{ name: "@actual/pkg", version: "1.2.0", license: "GPL-3.0", direct: true }]);
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-@actual/pkg@1.2.0"]);
+    expect(findings[0]?.evidence).toContain("declared in a manifest");
+  });
+
+  it("resolves each workspace's own conflicting alias target without cross-manifest suppression", async () => {
+    write({ workspaces: ["packages/*"] }, {
+      "node_modules/@scope/alias": { name: "real-a", version: "1.0.0", license: "GPL-3.0" },
+      "packages/b/node_modules/@scope/alias": { name: "real-b", version: "2.0.0", license: "GPL-3.0" },
+    }, {
+      "packages/a": { dependencies: { "@scope/alias": "npm:real-a@1.0.0" } },
+      "packages/b": { dependencies: { "@scope/alias": "npm:real-b@2.0.0" } },
+    });
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-real-a@1.0.0", "SUP-LICENSE-COPYLEFT-real-b@2.0.0"]);
+    expect(findings.every((finding) => finding.evidence.includes("declared in a manifest"))).toBe(true);
+  });
+
+  it.each(["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"])("reconciles a versionless scoped npm alias declared in %s", async (section) => {
+    write({ [section]: { "@scope/alias": "npm:@actual/pkg" } }, {
+      "node_modules/@scope/alias": { name: "@actual/pkg", version: "1.0.0", license: "MIT" },
+    });
+    expect(licenseScope(dir).candidates).toEqual([{ name: "@actual/pkg", version: "1.0.0", license: "MIT", direct: true }]);
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    expect(await checkLicenseCompliance(licenseScope(dir), { fetchImpl })).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("preserves conflicting peer declarations while honoring npm optional overrides", async () => {
+    write({
+      dependencies: { alias: "npm:old@1.0.0" }, optionalDependencies: { alias: "npm:real@2.0.0" },
+    }, { "node_modules/alias": { name: "real", version: "2.0.0", license: "MIT" } });
+    expect(await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true })).toEqual([]);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({
+      dependencies: { alias: "npm:old@1.0.0" }, peerDependencies: { alias: "npm:real@2.0.0" },
+    }));
+    expect(licenseScope(dir).candidates).toEqual([{ name: "real", version: "2.0.0", license: "MIT", direct: true }, { name: "alias", direct: true }]);
+    expect((await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true })).map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+  });
+
+  it.each([
+    ["ordinary target installation", "node_modules/real", "real"],
+    ["unrelated installation with the declaration's name as metadata", "node_modules/unrelated", "alias"],
+    ["scoped basename collision", "node_modules/@scope/alias", "real"],
+  ])("does not satisfy a root alias with an %s", async (_label, path, name) => {
+    write({ optionalDependencies: { alias: "npm:real@1.0.0" } }, { [path]: { name, version: "1.0.0", license: "MIT" } });
+    expect(licenseScope(dir).candidates).toEqual([{ name, version: "1.0.0", license: "MIT", direct: false }, { name: "alias", direct: true }]);
+    expect((await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true })).map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+  });
+
+  it.each([
+    ["1.2.3", "1.2.3", true], ["1.2.3", "1.2.4", false],
+    ["^1.2.3", "1.9.0", true], ["^1.2.3", "2.0.0", false], ["^1.2.3", "1.2.2", false],
+    ["^0.2.3", "0.2.9", true], ["^0.2.3", "0.3.0", false], ["^0.0.3", "0.0.4", false],
+    ["^0.0", "0.0.4", true], ["^0", "0.9.0", true],
+    ["~1.2.3", "1.2.9", true], ["~1.2.3", "1.3.0", false],
+    ["1", "1.9.0", true], ["1.x", "2.0.0", false], ["1.2.*", "1.2.9", true],
+    [">=1.2.0 <2", "1.3.0", true], [">=1.2.0 <2", "2.0.0", false],
+    [">1.2 <=2.1", "1.3.0", true], [">1.2 <=2.1", "1.2.9", false],
+    ["^1 || ^3", "3.1.0", true], ["^1 || ^3", "2.1.0", false],
+    ["1.2 - 2.3", "2.3.9", true], ["1.2 - 2.3", "2.4.0", false],
+    ["1.2.3-beta.1", "1.2.3-beta.1", true], ["^1.2.3-beta.1", "1.2.3-beta.2", true],
+    ["1.2.3-beta.9999999999999999999999999998", "1.2.3-beta.9999999999999999999999999999", false],
+    ["^1.2.3-beta.2", "1.2.3-beta.1", false], ["^1.2.3-beta.1", "1.2.4-beta.1", false],
+    ["^1.2.3", "1.3.0-beta.1", false], ["*", "1.0.0-beta.1", false],
+    ["=v1.2.3+build", "1.2.3+other", true], ["*", "1.0.0", true],
+    ["latest", "1.0.0", false], ["^1.0.0", "not-a-version", false], ["1.x.3", "1.0.3", false],
+  ] as const)("checks alias range %s against resolved version %s (resolved: %s)", async (range, version, resolved) => {
+    write({ dependencies: { alias: `npm:real@${range}` } }, { "node_modules/alias": { name: "real", version, license: "GPL-3.0" } });
+    expect(licenseScope(dir).candidates).toEqual([
+      { name: "real", version, license: "GPL-3.0", direct: resolved },
+      ...resolved ? [] : [{ name: "alias", direct: true }],
+    ]);
+    const findings = await checkLicenseCompliance(licenseScope(dir), { skipRegistry: true });
+    expect(findings.map((finding) => finding.id)).toEqual([`SUP-LICENSE-COPYLEFT-real@${version}`, ...resolved ? [] : ["SUP-LICENSE-00"]]);
+    expect(findings[0]?.evidence).toContain(resolved ? "declared in a manifest" : "reached only through the resolved dependency tree");
+  });
+
+  it("uses the canonical scoped identity for registry fallback and retains an unresolved alias alongside it", async () => {
+    write({ dependencies: { installed: "npm:@actual/pkg@1.0.0", missing: "npm:@actual/pkg@1.0.0" } }, {
+      "node_modules/installed": { name: "@actual/pkg", version: "1.0.0" },
+    });
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({ license: "MIT" }), { status: String(url).endsWith("/missing") ? 404 : 200 }));
+    const findings = await checkLicenseCompliance(licenseScope(dir), { fetchImpl: fetchImpl as typeof fetch });
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual(["https://registry.npmjs.org/%40actual%2Fpkg/1.0.0", "https://registry.npmjs.org/missing"]);
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.evidence).toContain("Not assessed: missing");
   });
 });
 

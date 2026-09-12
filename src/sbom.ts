@@ -31,7 +31,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { collectWorkspaceManifests } from "./workspaces.js";
 
@@ -62,10 +62,12 @@ interface SbomComponent {
 // records where npm installed it separately. License scope needs both facts: a manifest can
 // declare `alias: npm:actual@version`, and that declaration applies only when that alias path
 // actually resolved. Keep this provenance internal so it cannot leak into the delivered SBOM.
-interface ResolvedInstallation {
-  installationName: string;
-  name: string;
-  version: string;
+interface DependencyInstallation {
+  path: string;
+  // Unresolved entries and links still occupy a path: resolution cannot skip them to use a
+  // farther ancestor's package. Only resolved published packages carry an identity here.
+  name?: string;
+  version?: string;
 }
 
 // #1079: `unmatched` is the whole point of this shape. Completeness used to be derived from
@@ -75,14 +77,14 @@ interface ResolvedInstallation {
 // derived from that count.
 interface ParsedLock {
   components: SbomComponent[];
-  installations: ResolvedInstallation[];
+  installations: DependencyInstallation[];
   unmatched: number;
   ranges: DependencyRangeScope;
 }
 
 interface DependencySource {
   components: SbomComponent[];
-  installations: ResolvedInstallation[];
+  installations: DependencyInstallation[];
   source: string; // the file the components came from
   completeness: SbomCompleteness;
   note: string;
@@ -134,12 +136,116 @@ function packageMetadataName(meta: { name?: unknown }, pathName: string): string
   return typeof meta.name === "string" && validPackageName(meta.name) ? meta.name : pathName;
 }
 
-function npmAliasTarget(specifier: unknown): string | undefined {
+function npmAliasTarget(specifier: unknown): { name: string; range: string } | undefined {
   if (typeof specifier !== "string" || !specifier.startsWith("npm:")) return undefined;
   const target = specifier.slice("npm:".length);
   const versionAt = target.lastIndexOf("@");
   const name = versionAt > 0 ? target.slice(0, versionAt) : target;
-  return validPackageName(name) ? name : undefined;
+  return validPackageName(name) ? { name, range: versionAt > 0 ? target.slice(versionAt + 1) : "*" } : undefined;
+}
+
+interface AliasVersion {
+  parts: number[];
+  prerelease: string[];
+}
+
+function aliasVersion(text: string): AliasVersion | undefined {
+  const match = /^v?([\dxX*]+)(?:\.([\dxX*]+))?(?:\.([\dxX*]+))?(?:-([\w.-]+))?(?:\+([\w.-]+))?$/.exec(text);
+  if (!match) return undefined;
+  const parts: number[] = [];
+  let wildcard = false;
+  for (const part of match.slice(1, 4)) {
+    if (part === undefined || /^[xX*]$/.test(part)) { wildcard = true; continue; }
+    if (wildcard || !/^(0|[1-9]\d*)$/.test(part) || !Number.isSafeInteger(Number(part))) return undefined;
+    parts.push(Number(part));
+  }
+  const prerelease = match[4]?.split(".") ?? [];
+  if ((match[4] || match[5]) && parts.length !== 3) return undefined;
+  if ([...prerelease, ...(match[5]?.split(".") ?? [])].some((part) => !/^[0-9A-Za-z-]+$/.test(part))) return undefined;
+  if (prerelease.some((part) => /^\d+$/.test(part) && !/^(0|[1-9]\d*)$/.test(part))) return undefined;
+  return { parts, prerelease };
+}
+
+function compareAliasVersions(a: AliasVersion, b: AliasVersion): number {
+  for (let i = 0; i < 3; i++) {
+    const diff = (a.parts[i] ?? 0) - (b.parts[i] ?? 0);
+    if (diff) return diff;
+  }
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) return b.prerelease.length - a.prerelease.length;
+  for (let i = 0; i < Math.max(a.prerelease.length, b.prerelease.length); i++) {
+    const x = a.prerelease[i], y = b.prerelease[i];
+    if (x === y) continue;
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    const xNumeric = /^\d+$/.test(x), yNumeric = /^\d+$/.test(y);
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    // Compare numeric identifiers as integers without rounding long prerelease identifiers.
+    if (xNumeric && x.length !== y.length) return x.length - y.length;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+// Offline proof for npm alias version/range declarations. Dist-tags and unfamiliar syntax do
+// not prove which version was selected; they keep the unresolved-declaration candidate. This
+// deliberately does not use a transitive tool dependency as a production semver dependency.
+function aliasVersionMatches(version: string, range: string): boolean {
+  const actual = aliasVersion(version);
+  if (!actual || actual.parts.length !== 3) return false;
+  type Comparator = { operator: string; version: AliasVersion };
+  const alternatives = range.split("||").map((branch): Comparator[] | undefined => {
+    const comparators: Comparator[] = [];
+    const tokens = branch.trim().replace(/(\S+)\s+-\s+(\S+)/g, ">=$1 <=$2").replace(/([<>=~^]+)\s+/g, "$1").split(/\s+/).filter(Boolean);
+    for (const token of tokens) {
+      const match = /^(<=|>=|<|>|=|\^|~>?)?(.*)$/.exec(token)!;
+      const operator = match[1] ?? "=", value = aliasVersion(match[2]!);
+      if (!value) return undefined;
+      const size = value.parts.length;
+      const floor: AliasVersion = { parts: [0, 1, 2].map((i) => value.parts[i] ?? 0), prerelease: value.prerelease };
+      const upper = (index: number): AliasVersion => ({ parts: floor.parts.map((part, i) => i < index ? part : i === index ? part + 1 : 0), prerelease: ["0"] });
+      const add = (op: string, v: AliasVersion): void => { comparators.push({ operator: op, version: v }); };
+      if (size === 0) {
+        if (operator === "<" || operator === ">") add("<", { parts: [0, 0, 0], prerelease: ["0"] });
+      } else if (operator === "^" || operator.startsWith("~")) {
+        add(">=", floor);
+        const firstNonzero = value.parts.findIndex((part) => part !== 0);
+        add("<", upper(operator === "^" ? firstNonzero < 0 ? size - 1 : firstNonzero : Math.min(size - 1, 1)));
+      } else if (size === 3) {
+        add(operator, floor);
+      } else if (operator === "=") {
+        add(">=", floor); add("<", upper(size - 1));
+      } else if (operator === ">") {
+        add(">=", { ...upper(size - 1), prerelease: [] });
+      } else if (operator === "<=") {
+        add("<", upper(size - 1));
+      } else {
+        add(operator, operator === "<" ? { ...floor, prerelease: ["0"] } : floor);
+      }
+    }
+    return comparators;
+  });
+  if (alternatives.some((comparators) => comparators === undefined)) return false;
+  return alternatives.some((comparators) => {
+    if (actual.prerelease.length && !comparators!.some(({ version: bound }) => bound.prerelease.length &&
+      actual.parts.every((part, i) => part === bound.parts[i]))) return false;
+    return comparators!.every(({ operator, version: bound }) => {
+      const comparison = compareAliasVersions(actual, bound);
+      return operator === ">=" ? comparison >= 0 : operator === ">" ? comparison > 0 :
+        operator === "<=" ? comparison <= 0 : operator === "<" ? comparison < 0 : comparison === 0;
+    });
+  });
+}
+
+function visibleInstallation(installations: Map<string, DependencyInstallation>, manifest: string, name: string): DependencyInstallation | undefined {
+  if (!validPackageName(name)) return undefined;
+  let directory = posix.dirname(manifest);
+  for (;;) {
+    if (posix.basename(directory) !== "node_modules") {
+      const installation = installations.get(posix.join(directory, "node_modules", name));
+      if (installation) return installation;
+    }
+    if (directory === ".") return undefined;
+    directory = posix.dirname(directory);
+  }
 }
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const rangeSlots = (value: unknown): number => value === undefined ? 0 : isRecord(value) ? Object.keys(value).length : 1;
@@ -317,7 +423,7 @@ export function parsePackageLock(text: string): ParsedLock {
   if (!isRecord(raw)) throw new Error("package-lock.json is not an object");
   const lock = raw as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
   const out = new Map<string, SbomComponent>();
-  const installations = new Map<string, ResolvedInstallation>();
+  const installations = new Map<string, DependencyInstallation>();
   let unmatched = 0;
   const licenseId = (raw: unknown): string | undefined => {
     if (typeof raw === "string") return raw.trim() || undefined;
@@ -325,7 +431,7 @@ export function parsePackageLock(text: string): ParsedLock {
     const type = (raw as { type?: unknown }).type;
     return typeof type === "string" ? type.trim() || undefined : undefined;
   };
-  const add = (name: string, meta: LockEntry, installationName: string): void => {
+  const add = (name: string, meta: LockEntry, path: string): void => {
     const license = licenseId(meta.license);
     out.set(`${name}@${meta.version ?? ""}`, {
       name,
@@ -335,13 +441,14 @@ export function parsePackageLock(text: string): ParsedLock {
       ...(meta.integrity ? { integrity: meta.integrity } : {}),
       ...(meta.hasInstallScript ? { hasInstallScript: true } : {}),
     });
-    if (meta.version) installations.set(`${installationName}\u0000${name}\u0000${meta.version}`, { installationName, name, version: meta.version });
+    if (meta.version) installations.set(path, { path, name, version: meta.version });
   };
 
   for (const [path, meta] of Object.entries(lock.packages ?? {})) {
     // "" is the root project itself, not a dependency; it is the BOM's subject, not a component.
     // A `link: true` entry is a workspace symlink, not a published artifact — also not a component.
     if (path === "") continue;
+    installations.set(path, { path });
     if (!isRecord(meta)) { unmatched++; continue; }
     if (meta.link) continue;
     const pathName = path.replace(/^(?:.*\/)?node_modules\//, "");
@@ -349,15 +456,17 @@ export function parsePackageLock(text: string): ParsedLock {
       unmatched++;
       continue;
     }
-    add(packageMetadataName(meta, pathName), meta, pathName);
+    add(packageMetadataName(meta, pathName), meta, path);
   }
 
-  const walkV1 = (deps: Record<string, LockEntry>): void => {
+  const walkV1 = (deps: Record<string, LockEntry>, owner = "."): void => {
     for (const [name, meta] of Object.entries(deps)) {
+      const path = `${owner === "." ? "" : `${owner}/`}node_modules/${name}`;
+      installations.set(path, { path });
       if (!isRecord(meta)) { unmatched++; continue; }
-      if (meta.version) add(packageMetadataName(meta, name), meta, name);
+      if (meta.version) add(packageMetadataName(meta, name), meta, path);
       else unmatched++;
-      if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>);
+      if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>, path);
     }
   };
   if (!lock.packages && lock.dependencies) walkV1(lock.dependencies);
@@ -483,7 +592,7 @@ export function collectDependencies(dir: string): DependencySource {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     let components: SbomComponent[] = [];
-    let installations: ResolvedInstallation[] = [];
+    let installations: DependencyInstallation[] = [];
     let unmatched = 0;
     let parseError: string | undefined;
     let ranges = unreadRangeSource(file, file === "package-lock.json" ? "package-lock" : file === "pnpm-lock.yaml" ? "pnpm" : "yarn",
@@ -596,42 +705,51 @@ export interface LicenseScope {
 export function licenseScope(dir: string): LicenseScope {
   const deps = collectDependencies(dir);
   const workspace = collectWorkspaceManifests(dir);
-  const declared = new Set<string>();
-  const declaredAliases = new Map<string, Set<string>>();
+  const installations = new Map(deps.installations.map((installation) => [installation.path, installation]));
+  const componentsByName = new Map<string, SbomComponent[]>();
+  for (const component of deps.components) {
+    const entries = componentsByName.get(component.name) ?? [];
+    entries.push(component);
+    componentsByName.set(component.name, entries);
+  }
+  const npmTree = deps.source === "package-lock.json";
+  const unresolved = new Set<string>();
+  const directResolved = new Set<string>();
   for (const manifest of workspace.manifests) {
-    for (const [name, specifier] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies })) {
-      declared.add(name);
-      const target = npmAliasTarget(specifier);
-      if (target) {
-        const targets = declaredAliases.get(name) ?? new Set<string>();
-        targets.add(target);
-        declaredAliases.set(name, targets);
+    for (const section of [...RANGE_SECTIONS, "peerDependencies"] as const) {
+      for (const [name, specifier] of Object.entries(manifest[section] ?? {})) {
+        // npm's optionalDependencies override the same key in dependencies.
+        if (section === "dependencies" && Object.hasOwn(manifest.optionalDependencies ?? {}, name)) continue;
+        if (npmTree && typeof specifier === "string" && specifier.startsWith("npm:")) {
+          const target = npmAliasTarget(specifier);
+          const installation = visibleInstallation(installations, manifest.label, name);
+          if (target && installation?.version && installation.name === target.name && aliasVersionMatches(installation.version, target.range)) {
+            directResolved.add(`${installation.name}\u0000${installation.version}`);
+          } else {
+            // Success in another manifest never erases this declaration's unresolved coverage.
+            unresolved.add(name);
+          }
+        } else {
+          // Ordinary declarations retain their existing name-based reach. Other lockfile
+          // parsers also lack the installation provenance needed to reconcile npm aliases.
+          const matches = componentsByName.get(name) ?? [];
+          if (matches.length === 0) unresolved.add(name);
+          for (const component of matches) directResolved.add(`${component.name}\u0000${component.version}`);
+        }
       }
     }
   }
-  const resolvedAliases = new Set<string>();
-  const directResolved = new Set<string>();
-  for (const installation of deps.installations) {
-    const targets = declaredAliases.get(installation.installationName);
-    if (!targets?.has(installation.name)) continue;
-    resolvedAliases.add(installation.installationName);
-    directResolved.add(`${installation.name}\u0000${installation.version}`);
-  }
   const candidates: LicenseCandidate[] = [];
-  const resolved = new Set<string>();
   for (const c of deps.components) {
-    resolved.add(c.name);
     candidates.push({
       name: c.name,
       ...(c.version ? { version: c.version } : {}),
       ...(c.license ? { license: c.license } : {}),
       ...(c.hasInstallScript ? { hasInstallScript: true } : {}),
-      direct: declared.has(c.name) || directResolved.has(`${c.name}\u0000${c.version}`),
+      direct: directResolved.has(`${c.name}\u0000${c.version}`),
     });
   }
-  for (const name of declared) {
-    if (!resolved.has(name) && !resolvedAliases.has(name)) candidates.push({ name, direct: true });
-  }
+  for (const name of unresolved) candidates.push({ name, direct: true });
   return {
     candidates,
     source: deps.source,
