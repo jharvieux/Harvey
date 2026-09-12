@@ -271,9 +271,9 @@ if (baselineFindingsPath) {
   }
 }
 
-// Knip can execute target/provider config against installed dependencies. A failed installation
-// must therefore reject its partial tree and carry its reason into source-only M5-98 (or M5-00
-// if Knip cannot run). A successful Knip child or equal counted baseline cannot prove preparation.
+// Knip can execute target/provider config against installed dependencies. Failed preparation
+// rejects its partial tree and carries its reason into source-only M5-98, or M5-00 if that scan
+// also fails. Preparation evidence governs admission independently of Knip's exit or baseline.
 //
 // #1268: `npm install` at a pnpm-workspace root resolves only the ROOT packages — MEASURED against
 // inbox-zero/rallly (external-corpus.ts's recorded M8 not-run reasons: apps/web/node_modules simply

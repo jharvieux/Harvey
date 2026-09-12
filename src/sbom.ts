@@ -61,11 +61,11 @@ interface SbomComponent {
 // The parser's public component identity is the package that npm resolved, while package-lock
 // records where npm installed it separately. License scope needs both facts: a manifest can
 // declare `alias: npm:actual@version`, and that declaration applies only when that alias path
-// actually resolved. Keep this provenance internal so it cannot leak into the delivered SBOM.
+// actually resolved. Parser metadata retains this provenance; buildSbom emits the components.
 interface DependencyInstallation {
   path: string;
-  // Unresolved entries and links still occupy a path: resolution cannot skip them to use a
-  // farther ancestor's package. Only resolved published packages carry an identity here.
+  // Unresolved entries and links occupy a path and stop resolution before farther ancestors.
+  // Resolved published packages carry their identity here.
   name?: string;
   version?: string;
 }
