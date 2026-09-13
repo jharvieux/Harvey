@@ -206,6 +206,8 @@ describe("committed environment population and existing owner seams (#1906)", ()
     expect(inventory.reconciliations.find((r) => r.registry === "#1853 external-corpus schema")?.members.map((m) => m.key)).toEqual(EXTERNAL_CORPUS.flatMap((t) => Object.keys(t.modules).map((module) => `${t.slug}:${module}`)).sort());
     expect(inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")?.members.map((m) => m.key)).toEqual(CORPUS.map((r) => r.id).sort());
     expect(inventory.reconciliations.find((r) => r.registry === "SEMANTIC_CORPUS")?.members.map((m) => m.key)).toEqual(SEMANTIC_CORPUS.map((r) => r.slug).sort());
+    expect(inventory.rows.find((r) => r.evidence.anchor === "CORPUS/M9P-REMIX-LEAK-POS")).toMatchObject({ assertionVenue: null });
+    expect(inventory.rows.find((r) => r.evidence.anchor === "CORPUS/M6-P-JSON-EQUAL")?.assertionVenue?.location.anchor).toBe("scoreM6IndicatorCorpus");
     const truffle = inventory.rows.filter((r) => r.dependency === "trufflehog" && r.evidence.anchor === "captured-output");
     expect(truffle).toHaveLength(2);
     expect(truffle.every((r) => r.pinSource?.identity === "3.97.0" && r.observedIdentity === "3.96.0" && r.state === "recorded" && r.assertionVenue?.scope === "output-schema" && r.schemaOwner?.includes("#1901"))).toBe(true);

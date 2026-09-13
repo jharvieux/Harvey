@@ -339,15 +339,24 @@ function corpusRows(ctx: AdapterContext): void {
   const calibration = ctx.files.get("src/scan/calibration.ts");
   if (calibration?.source) {
     const members: CensusReconciliation["members"] = [];
+    const cli = ctx.files.get("src/cli/validate-calibration.ts");
+    const mechanicalSelection = /return corpus\.filter\(\(e\) => e\.module === undefined\)/.test(calibration.text ?? "") && cli?.text?.includes("mechanicalCorpus(CORPUS)");
+    const liveTiers = variableValue(calibration, "LIVE_TIERS");
+    const m6Source = ctx.files.get("src/scan/calibration/m6-handrolled.entries.ts");
+    const m6Consumer = ctx.files.get("src/scan/m6-indicator-corpus.ts");
+    const m6Members = m6Source && m6Consumer?.text?.includes("corpus: CorpusEntry[] = m6HandrolledEntries") ? new Set(censusSourceRecords(ctx.files, m6Source.path, "m6HandrolledEntries").map((r) => r.value.id)) : new Set();
     for (const { file, node, value } of censusSourceRecords(ctx.files, calibration.path, "CORPUS")) {
       if (typeof value.id !== "string" || typeof value.kind !== "string" || typeof value.location !== "string") throw new Error(`environment census: unresolved CORPUS entry at ${file.path}; id/kind/location must resolve`);
       const evidence = censusLocation(file, `CORPUS/${value.id}`, node.getText(file.source));
+      const assertionVenue: EnvironmentDependencyRow["assertionVenue"] = mechanicalSelection && value.module === undefined && Array.isArray(liveTiers) && !liveTiers.includes(value.expectedTier)
+        ? { location: reference(ctx, cli!.path, "scoredCorpus"), scope: "environment-behavior", claim: "The actual mechanicalCorpus filter admits this untagged entry to live CLI scoring. Entries requiring a live tier remain separately unresolved. The census records availability, not a run." }
+        : m6Members.has(value.id) ? { location: reference(ctx, m6Consumer!.path, "scoreM6IndicatorCorpus"), scope: "environment-behavior", claim: "The dedicated M6 scorer consumes this exact imported member and runs detectHandrolledFindings on its fixture. Census generation does not execute that scorer." } : null;
       const r = row(ctx, file, evidence.anchor, "unresolved", "calibration-execution-environment", { evidence,
         consumer: consumer(reference(ctx, calibration.path, "CORPUS"), "Resolved from the actual CORPUS initializer through named imports, constants, inline entries, spreads and finite data factories. Unconsumed sibling objects do not become registry members."),
-        assertionVenue: { location: reference(ctx, "src/cli/validate-calibration.ts", "CORPUS"), scope: "environment-behavior", claim: "The live calibration CLI scores actual output; unit scoring of recorded output is a separate assertion. This census does not rerun binaries or live tiers." },
+        assertionVenue,
         owner: "src/scan/calibration.ts scored answer keys", schemaOwner: "#1901 only for overlapping captured parser inputs", links: ["targets/calibration", "src/scan/calibration.test.ts", "src/cli/validate-calibration.ts", "#1909"],
         freshness: { requirement: "Re-measure each affected planted finding and declared tier through its live consumer when producer behavior changes.", observedAt: dateIn(String(value.note ?? "")), expiresAt: null, enforcedBy: null },
-        reason: "The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. These remain unresolved; a source-file digest is not a runtime measurement.",
+        reason: `The scored entry names expectation and scope, but does not uniformly bind measured tool, runtime, database or live-stack identities. ${assertionVenue ? "The named assertion consumes this specific scored subset." : "The shared CLI only counts other module/live-tier populations here; an individual behavior assertion remains unresolved in this row, with the entry's module suite and declared tier as the follow-up owner."} A source-file digest is not a runtime measurement.`,
       });
       members.push({ key: value.id, evidence, rowIds: [r.id], reason: "Resolved actual CORPUS membership with a bounded static data interpreter; unsupported construction fails generation instead of dropping a member." });
       authoritative(ctx, file, "calibration answer-key registry");
