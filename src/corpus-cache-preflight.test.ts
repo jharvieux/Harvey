@@ -1,11 +1,10 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { assertCorpusCachePreflight } from "./corpus-cache-preflight.js";
 import { semgrepPackReceipt } from "./corpus-mechanical-readiness.js";
 import { readRecursiveSafe } from "./fs-walk.js";
@@ -13,10 +12,83 @@ import { mechanicalPhasePayloadDigest } from "./scan/mechanical-phase-cache.js";
 import { runOsvScanner } from "./scan/dependencies.js";
 import { REGISTRY_PACKS, registryPackIdentity } from "./scan/semgrep.js";
 
-const runFile = promisify(execFile);
 const root = process.cwd();
 const fixtures = join(root, "src", "__fixtures__", "corpus-cache-preflight");
 const directories: string[] = [];
+const activeInvocations = new Set<TrackedInvocation>();
+
+interface InvocationResult { status: number | null; stdout: string; stderr: string }
+interface TrackedInvocation {
+  child: ChildProcess;
+  result: Promise<InvocationResult>;
+  firstByte: Promise<boolean>;
+  finished: boolean;
+  cleanup?: Promise<void>;
+}
+
+const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+function signalOwnedInvocation(invocation: TrackedInvocation, signal: NodeJS.Signals): boolean {
+  const pid = invocation.child.pid;
+  if (pid === undefined) return false;
+  try {
+    // `detached` below makes this pid the group leader. Never signal a bare PID on POSIX: the
+    // corpus CLI can have scanner grandchildren that must leave before its fixture is removed.
+    if (process.platform === "win32") return invocation.child.kill(signal);
+    process.kill(-pid, signal);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function ownedInvocationGroupExists(invocation: TrackedInvocation): boolean {
+  const pid = invocation.child.pid;
+  if (pid === undefined || process.platform === "win32") return false;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function terminateAndReap(invocation: TrackedInvocation): Promise<void> {
+  if (invocation.cleanup !== undefined) return invocation.cleanup;
+  invocation.cleanup = (async () => {
+    if (!invocation.finished) {
+      signalOwnedInvocation(invocation, "SIGTERM");
+      await Promise.race([invocation.result.then(() => undefined), wait(250)]);
+      if (!invocation.finished) signalOwnedInvocation(invocation, "SIGKILL");
+      await invocation.result;
+    }
+    // A successfully closed CLI should not have any process left in its own group either.
+    // This remains scoped to its detached group and is a no-op after ordinary completion.
+    if (ownedInvocationGroupExists(invocation)) {
+      signalOwnedInvocation(invocation, "SIGKILL");
+      const deadline = Date.now() + 500;
+      while (ownedInvocationGroupExists(invocation)) {
+        if (Date.now() >= deadline) throw new Error(`corpus cache preflight left owned process group ${invocation.child.pid} alive`);
+        await wait(10);
+      }
+    }
+  })();
+  return invocation.cleanup;
+}
+
+async function reapActiveInvocations(): Promise<void> {
+  await Promise.all([...activeInvocations].map(terminateAndReap));
+}
+
+async function waitForFile(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for fixture record ${path}`);
+    await wait(10);
+  }
+}
 const temporary = (prefix: string): string => {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   directories.push(dir);
@@ -60,14 +132,56 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const cliRoot = extraEnvironment.HARVEY_PREFLIGHT_CLI_ROOT ?? root;
     const mode = extraEnvironment.HARVEY_CORPUS_EXTERNAL_STATE_MODE ?? environment.HARVEY_CORPUS_EXTERNAL_STATE_MODE;
     const args = ["--import", "tsx", "--import", join(fixtures, "hook.mjs"), join(cliRoot, "src", "cli", "corpus-drift.ts"), ...(install ? ["--install"] : []), "--json", join(observation, "scorecard.json"), ...(mode === "live-verify" ? ["--advisory-observation", join(observation, "advisories.json")] : []), ...flags];
-    const result = await runFile(process.execPath, args, {
+    const child = spawn(process.execPath, args, {
       cwd: root,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
       env: { ...environment, HARVEY_CORPUS_PHASE_CACHE_DIR: cache, HARVEY_PREFLIGHT_TRACE: trace, ...extraEnvironment },
-      maxBuffer: 8 * 1024 * 1024,
-    }).then(({ stdout, stderr }) => ({ status: 0, stdout, stderr }), (error: { code: number; stdout: string; stderr: string }) => ({ status: error.code, stdout: error.stdout, stderr: error.stderr }));
+    });
+    let settle!: (result: InvocationResult) => void;
+    const result = new Promise<InvocationResult>((resolve) => { settle = resolve; });
+    let observeFirstByte!: (observed: boolean) => void;
+    const firstByte = new Promise<boolean>((resolve) => { observeFirstByte = resolve; });
+    const invocation: TrackedInvocation = { child, result, firstByte, finished: false };
+    // The outer CLI owns scanner children. A detached group lets test teardown terminate only this
+    // invocation and await it before the shared disposable fixture directories are removed.
+    let stdout = "";
+    let stderr = "";
+    let outputBytes = 0;
+    let settled = false;
+    let observedFirstByte = false;
+    const finish = (status: number | null, cause = "") => {
+      if (settled) return;
+      settled = true;
+      if (!observedFirstByte) observeFirstByte(false);
+      invocation.finished = true;
+      settle({ status, stdout, stderr: `${stderr}${cause}` });
+    };
+    const retain = (kind: "stdout" | "stderr") => (chunk: Buffer) => {
+      if (!observedFirstByte) {
+        observedFirstByte = true;
+        observeFirstByte(true);
+      }
+      outputBytes += chunk.length;
+      if (outputBytes > 8 * 1024 * 1024) {
+        signalOwnedInvocation(invocation, "SIGKILL");
+        finish(null, "\npreflight CLI output exceeded 8 MiB\n");
+        return;
+      }
+      if (kind === "stdout") stdout += chunk.toString("utf8");
+      else stderr += chunk.toString("utf8");
+    };
+    child.stdout.on("data", retain("stdout"));
+    child.stderr.on("data", retain("stderr"));
+    child.once("error", (error) => finish(null, `\n${error.message}\n`));
+    child.once("close", (code) => finish(code));
+    activeInvocations.add(invocation);
+    const completed = await result;
+    await terminateAndReap(invocation);
+    activeInvocations.delete(invocation);
     return {
-      ...result,
-      output: `${result.stdout}\n${result.stderr}`,
+      ...completed,
+      output: `${completed.stdout}\n${completed.stderr}`,
       children: existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as { binary: string; args: string[] }) : [],
     };
   }
@@ -141,7 +255,12 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(seeded.output).toContain("CACHE MISS quality-scan");
   });
 
-  afterAll(() => directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  afterEach(async () => { await reapActiveInvocations(); });
+
+  afterAll(async () => {
+    await reapActiveInvocations();
+    directories.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+  });
 
   it("compares every eligible family, phase and scanner after a same-input local seed", async () => {
     const before = artifacts(seedCache);
@@ -307,6 +426,27 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("forced-cold output differs from cached artifact");
     expect(result.children.some((child) => child.binary === "semgrep")).toBe(true);
+  });
+
+  it("reaps a cancelled CLI group before its disposable tool fixture can write again", async () => {
+    const record = join(temporary("harvey-preflight-cancel-record-"), "lifecycle.json");
+    const pending = invoke(temporary("harvey-preflight-cancel-cache-"), [], {
+      HARVEY_PREFLIGHT_HANG: "semgrep",
+      HARVEY_PREFLIGHT_CANCEL_RECORD: record,
+    });
+    const invocation = [...activeInvocations][0];
+    expect(invocation).toBeDefined();
+    expect(await invocation!.firstByte).toBe(true);
+    await waitForFile(record);
+    await terminateAndReap(invocation!);
+    const result = await pending;
+    expect(result.status, result.output).not.toBe(0);
+    const first = readFileSync(record, "utf8");
+    const { toolPid, descendantPid } = JSON.parse(first) as { toolPid: number; descendantPid: number };
+    expect(() => process.kill(toolPid, 0)).toThrow();
+    expect(() => process.kill(descendantPid, 0)).toThrow();
+    await wait(75);
+    expect(readFileSync(record, "utf8")).toBe(first);
   });
 
   it.each(["phase", "scanner"])("compares %s semantic output rather than accepting a validated artifact alone", async (kind) => {
