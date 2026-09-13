@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildHtml } from "../report-template/render.mjs";
 import { inspectCorpusDependencyInputs, prepareCorpusDependencies, releaseCorpusDependencies, type DependencyPreparationResult } from "./corpus-dependency-preparation.js";
 import { runCorpusScanner } from "./corpus-scanner-runner.js";
+import type { CorpusScannerRecord } from "./corpus-scanner-cache.js";
 import { EXTERNAL_CORPUS, type CorpusInstallationPolicy } from "./scan/external-corpus.js";
 
 // Execute both shipping propagation boundaries without starting unrelated corpus scanners.
@@ -43,6 +44,7 @@ describe("revision-bound corpus installation policy (#2047)", () => {
   const preparations: DependencyPreparationResult[] = [];
   afterEach(() => {
     preparations.splice(0).forEach((preparation) => releaseCorpusDependencies(preparation));
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   });
@@ -134,6 +136,41 @@ process.argv = [process.execPath, entry, ...process.argv.slice(3)]; require(entr
     expect(existsSync(join(f.targetDir, "provider-consumed"))).toBe(false);
     const meta = { client: "Policy evidence", subtitle: "#2047", date: "2026-09-12", commit: f.targetRevision, auditor: "Harvey", confidential: true, overallHealth: 5, tenantIsolation: "Not assessed", authModel: "Fixture", headline: "Preparation failure", scope: "quality control", methodology: "Quality scan", outOfScope: "Other modules" };
     expect(buildHtml({ meta, findings: failure.findings })).toContain("ERR_POLICY_INSTALL");
+  });
+
+  it.each(["detect-static", "mutation-detect-only"])("keeps %s fresh through the shipping policy handoff", async (scanner) => {
+    const f = fixture();
+    const dependencyPreparation = prepare({ ...f, installationPolicy: f.policy });
+    expect(dependencyPreparation).toMatchObject({ complete: true, sourceTreeCacheable: false });
+    const ast = ts.createSourceFile("corpus-drift.ts", readFileSync(join(process.cwd(), "src/cli/corpus-drift.ts"), "utf8"), ts.ScriptTarget.Latest, true);
+    const helper = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "runScanner")!.getText(ast);
+    let call = "";
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && node.expression.getText(ast) === "runScanner" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+        const kind = node.arguments[0].properties.find((property) => ts.isPropertyAssignment(property) && property.name.getText(ast) === "scanner");
+        if (kind && ts.isPropertyAssignment(kind) && ts.isStringLiteral(kind.initializer) && kind.initializer.text === scanner) call = node.getText(ast);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    expect(call).not.toBe("");
+    const records: CorpusScannerRecord[] = [];
+    const events: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { events.push(args.map(String).join(" ")); });
+    vi.stubEnv("pnpm_config_verify_deps_before_run", "false");
+    const bindings = {
+      runCorpusScanner, repoRoot: process.cwd(), phaseTarget: f.targetSlug, forceColdCache: false,
+      scanDir: f.targetDir, target: { commit: f.targetRevision }, install: true,
+      targetTreeIdentity: f.targetTree, targetPhaseCacheDir: f.cacheDir,
+      scannerRecords: records, dependencyPreparation,
+    };
+    const code = ts.transpileModule(`${helper}\nreturn async () => ${call};`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+    const run = new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as () => Promise<unknown>;
+    await run();
+    writeFileSync(join(f.targetDir, "generated.ts"), "export const generatedDuringInstallation = true;\n");
+    await run();
+    expect(events.filter((event) => event.includes(`SCANNER ${scanner} — fresh;`))).toHaveLength(2);
+    expect(records).toEqual([]);
   });
 
   it.each([

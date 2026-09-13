@@ -863,9 +863,9 @@ for (const target of targets) {
     // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
     // dies on a missing binary mid-corpus.
     let findings = [
-      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
+      ...await timedAsync("detect-static", () => runScanner({ script: "detect-static", scanner: "detect-static", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
       ...await timedAsync("quality-scan", () => runScanner({ script: "quality-scan", scanner: "quality-scan", scriptArgs: [scanDir], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", install }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
-      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir })),
+      ...await timedAsync("mutation-scan", () => runScanner({ script: "mutation-scan", scanner: "mutation-detect-only", scriptArgs: [scanDir, "--detect-only"], targetDir: scanDir, targetRevision: target.commit, targetTree: targetTreeIdentity, targetConfig: JSON.stringify({ root: ".", detectOnly: true }), records: scannerRecords, cacheDir: targetPhaseCacheDir, dependencyPreparation })),
     ];
 
     // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
