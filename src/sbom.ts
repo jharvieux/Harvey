@@ -562,6 +562,7 @@ export function parsePnpmLock(text: string): ParsedLock {
 export function parseYarnLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
   const licenseOrigins: LicenseOrigin[] = [];
+  const isBerry = /^__metadata:\s*$/m.test(text);
   let name: string | undefined;
   let aliasSpecifier: string | undefined;
   let current: SbomComponent | undefined;
@@ -577,8 +578,8 @@ export function parseYarnLock(text: string): ParsedLock {
       name = header?.[1];
       const selector = line.trim().replace(/:$/, "").split(/,\s*/)[0]!.replace(/^"|"$/g, "");
       const range = name ? selector.slice(name.length + 1) : "";
-      // Yarn uses npm: for ordinary ranges and tags too; a remapping adds a package before @.
-      aliasSpecifier = /^npm:(?:@[^/,\s]+\/)?[^@,\s]+@/.test(range) ? range : undefined;
+      // Berry uses npm: for ordinary ranges/tags; classic also allows the shorthand npm:name alias.
+      aliasSpecifier = range.startsWith("npm:") && (!isBerry || /^npm:(?:@[^/,\s]+\/)?[^@,\s]+@/.test(range)) ? range : undefined;
       current = undefined;
       currentOrigin = undefined;
       if (!name) unmatched++;

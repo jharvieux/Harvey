@@ -864,6 +864,17 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings[0]?.evidence).toContain(direct ? "declared in a manifest" : "reached only through the resolved dependency tree");
   });
 
+  it.each([true, false])("keeps the canonical identity of a shorthand classic alias (direct=%s)", async (direct) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: direct ? { alias: "npm:real" } : {} }));
+    writeFileSync(join(dir, "yarn.lock"), '"alias@npm:real":\n  version "2.0.0"\n  resolved "https://registry.npmjs.org/real/-/real-2.0.0.tgz"\n');
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ license: "GPL-3.0" }), { status: 200 }));
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl: fetchImpl as typeof fetch });
+    expect(fetchImpl.mock.calls).toEqual([["https://registry.npmjs.org/real/2.0.0"]]);
+    expect(scope.candidates).toEqual([{ name: "real", version: "2.0.0", direct }]);
+    expect(findings.map((finding) => finding.id)).toEqual(["SUP-LICENSE-COPYLEFT-real@2.0.0"]);
+  });
+
   it("uses Berry's canonical resolution for an npm alias", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '__metadata:\n  version: 8\n"alias@npm:@actual/pkg@^2.0.0":\n  version: 2.0.0\n  resolution: "@actual/pkg@npm:2.0.0"\n');
