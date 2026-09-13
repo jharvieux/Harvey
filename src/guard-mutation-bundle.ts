@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, posix } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { GUARD_SET } from "./guard-mutation-census.js";
+import { GUARD_SET, guardSetIsFullyAccounted } from "./guard-mutation-census.js";
 import { guardMutationDigest, normalizeGuardMutationCensus, type GuardMutationReceipt, type NormalizedGuardCensus } from "./guard-mutation-baseline.js";
 import type { GuardCommandResult } from "./guard-mutation-process.js";
 
@@ -104,7 +104,8 @@ export function buildGuardShardManifest(configValue: unknown, identity: Omit<Gua
   const config = object(configValue, "guard config");
   const mutate = config.mutate;
   assert(Array.isArray(mutate) && mutate.every((file) => typeof file === "string" && (GUARD_SET as readonly string[]).includes(file)), "config.mutate must enumerate declared guard paths");
-  assert(new Set(mutate).size === mutate.length, "duplicate guard in config.mutate");
+  same(guardSetIsFullyAccounted(mutate, GUARD_SET.filter((guard) => !mutate.includes(guard))),
+    { missing: [], doubleBooked: [], unexpected: [] }, "duplicate guard or incomplete partition in config.mutate");
   assert(mutate.length > 0, "guard configuration must score at least one guard");
   assert(typeof object(config.jsonReporter, "jsonReporter").fileName === "string", "guard config must name its JSON report");
   assert(config.testRunner === "vitest" && config.coverageAnalysis === "perTest" && config.inPlace === true, "guard shards require the configured in-place per-test Vitest runner");
