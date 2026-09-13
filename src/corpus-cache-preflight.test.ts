@@ -96,8 +96,8 @@ describe("forced-cold cache preflight through the shipping corpus CLI (#2049)", 
     const targets = join(fixtureRoot, "targets.json");
     const advisories = join(fixtureRoot, "advisories");
     mkdirSync(advisories);
-    // This empty dependency population cannot invoke an external provider. Preserve the real
-    // input-gap assessment rather than inventing a clean advisory receipt for snapshot tests.
+    // Preserve the real provider wrapper's input-gap assessment for this empty dependency
+    // population in the snapshot fixture.
     const { result, assessment } = runOsvScanner(target);
     const bytes = gzipSync(JSON.stringify({ schema: 1, result, assessment }));
     writeFileSync(join(advisories, "fixture.osv.json.gz"), bytes);
