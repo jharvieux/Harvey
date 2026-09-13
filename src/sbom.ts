@@ -575,8 +575,10 @@ export function parseYarnLock(text: string): ParsedLock {
       // next header arrives, so a truncated or unfamiliar entry cannot pass as a clean parse.
       if (name) unmatched++;
       name = header?.[1];
-      const selector = line.trim().replace(/:$/, "").replace(/^"|"$/g, "");
-      aliasSpecifier = name && selector.slice(name.length + 1).startsWith("npm:") ? selector.slice(name.length + 1) : undefined;
+      const selector = line.trim().replace(/:$/, "").split(/,\s*/)[0]!.replace(/^"|"$/g, "");
+      const range = name ? selector.slice(name.length + 1) : "";
+      // Yarn uses npm: for ordinary ranges and tags too; a remapping adds a package before @.
+      aliasSpecifier = /^npm:(?:@[^/,\s]+\/)?[^@,\s]+@/.test(range) ? range : undefined;
       current = undefined;
       currentOrigin = undefined;
       if (!name) unmatched++;

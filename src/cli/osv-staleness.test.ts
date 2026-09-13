@@ -25,12 +25,12 @@ async function runCli(scenario: string): Promise<{ code: number | null; output: 
 }
 
 describe("shipping OSV staleness checker (#2054)", () => {
-  it.each(["valid", "limit_excludes"])("verifies the complete curated population for %s", async (scenario) => {
+  it.each(["valid", "limit_excludes", "foreign_wildcard"])("verifies the complete curated population for %s", async (scenario) => {
     const result = await runCli(scenario);
     expect(result.output).toContain(`OFFLINE_FETCH_REQUESTS=${CURATED_CLAIMS.length}`);
     expect(result.output).toContain(`All ${CURATED_CLAIMS.length} curated claims still match OSV.`);
     expect(result.code).toBe(0);
-  }, 20_000);
+  });
 
   it.each([
     ["overlap_open", "remains affected"],
@@ -38,6 +38,7 @@ describe("shipping OSV staleness checker (#2054)", () => {
     ["limit_affects", "remains affected"],
     ["wrong_ecosystem", "no affected entry for npm/next"],
     ["missing_ecosystem", "malformed package identity"],
+    ["wildcard_package", "unsupported wildcard package identity"],
     ["unsupported_range", "unsupported type or malformed events"],
     ["malformed_event", "exactly one boundary"],
     ["malformed_versions", "malformed versions array"],
@@ -49,5 +50,5 @@ describe("shipping OSV staleness checker (#2054)", () => {
     expect(result.output).toContain(reason);
     expect(result.output).toMatch(/\d+ of \d+ curated claims no longer match OSV\./);
     expect(result.code).toBe(1);
-  }, 20_000);
+  });
 });

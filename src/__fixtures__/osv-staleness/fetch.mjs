@@ -40,6 +40,10 @@ globalThis.fetch = async (url) => {
     if (scenario === "explicit_version") target.versions = [focus.fixed];
     if (scenario === "wrong_ecosystem") target.package.ecosystem = "PyPI";
     if (scenario === "missing_ecosystem") delete target.package.ecosystem;
+    if (scenario === "wildcard_package" || scenario === "foreign_wildcard") affected.push({
+      package: { name: "*", ecosystem: scenario === "foreign_wildcard" ? "PyPI" : "npm" },
+      ranges: [{ type: "SEMVER", events: [{ introduced: "0" }] }],
+    });
     if (scenario === "unsupported_range") target.ranges.push({ type: "ECOSYSTEM", events: [{ introduced: "0" }] });
     if (scenario === "malformed_event") target.ranges.push({ type: "SEMVER", events: [{ introduced: "0", fixed: focus.fixed }] });
     if (scenario === "malformed_versions") target.versions = "invalid";

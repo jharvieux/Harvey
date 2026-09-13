@@ -843,6 +843,27 @@ describe("npm alias provenance (#2046 B2)", () => {
     expect(findings.map((finding) => finding.id)).not.toContain("SUP-LICENSE-UNKNOWN-alias@2.0.0");
   });
 
+  it.each([
+    { name: "ordinary", descriptor: "npm:^1.0.0", direct: true },
+    { name: "ordinary", descriptor: "npm:1.0.0", direct: false },
+    { name: "@scope/ordinary", descriptor: "npm:latest", direct: true },
+    { name: "@scope/ordinary", descriptor: "npm:~1.0.0", direct: false },
+    { name: "ordinary", descriptor: "npm:^1.0.0, ordinary@npm:~1.0.0", direct: true },
+    { name: "@scope/ordinary", descriptor: "npm:^1.0.0, @scope/ordinary@npm:~1.0.0", direct: false },
+  ])("keeps the selected ordinary Berry license for $name/$descriptor (direct=$direct)", async ({ name, descriptor, direct }) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: direct ? { [name]: "^1.0.0" } : {} }));
+    writeFileSync(join(dir, "yarn.lock"), `__metadata:\n  version: 8\n"${name}@${descriptor}":\n  version: 1.0.0\n  resolution: "${name}@npm:1.0.0"\n`);
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify({
+      license: String(url).endsWith("/1.0.0") ? "GPL-3.0" : "MIT",
+    }), { status: 200 }));
+    const scope = licenseScope(dir);
+    const findings = await checkLicenseCompliance(scope, { fetchImpl: fetchImpl as typeof fetch });
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([`https://registry.npmjs.org/${encodeURIComponent(name)}/1.0.0`]);
+    expect(scope.candidates).toEqual([{ name, version: "1.0.0", direct }]);
+    expect(findings.map((finding) => finding.id)).toEqual([`SUP-LICENSE-COPYLEFT-${name}@1.0.0`]);
+    expect(findings[0]?.evidence).toContain(direct ? "declared in a manifest" : "reached only through the resolved dependency tree");
+  });
+
   it("uses Berry's canonical resolution for an npm alias", async () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { alias: "npm:@actual/pkg@^2.0.0" } }));
     writeFileSync(join(dir, "yarn.lock"), '__metadata:\n  version: 8\n"alias@npm:@actual/pkg@^2.0.0":\n  version: 2.0.0\n  resolution: "@actual/pkg@npm:2.0.0"\n');

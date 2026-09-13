@@ -33,7 +33,7 @@ function failureExcerpt(output: string): string {
   const safe = scrubSecrets(output).trim();
   const lines = safe.split("\n");
   // Preparation reports combine manager identity and multiline child causes. Bound these
-  // independently so the final error marker cannot displace the selected manager or first cause.
+  // independently to retain the selected manager and first cause alongside the final error marker.
   const stages = [...new Set(lines.filter((line) => /tool-install|tool installation failed/i.test(line)).map((line) => line.slice(0, 600)))];
   const causes = [...new Set(lines.filter((line) => /\bERR_[A-Z0-9_]+|\berror\s*:/i.test(line)).map((line) => line.slice(0, 400)))];
   const retained = [...new Set([...stages.slice(0, 1), ...stages.slice(-1), ...causes.slice(0, 2), ...causes.slice(-2)])];

@@ -90,6 +90,9 @@ function affectedAtFix(claim: CuratedClaim, vuln: unknown): string | undefined {
         typeof affected.package.name !== "string" || typeof affected.package.ecosystem !== "string") {
       return `affected[${affectedIndex}] has malformed package identity`;
     }
+    if (affected.package.ecosystem === "npm" && affected.package.name === "*") {
+      return `affected[${affectedIndex}] has an unsupported wildcard package identity for npm; ecosystem-wide affectedness is not verified`;
+    }
     if (affected.package.name !== claim.pkg || affected.package.ecosystem !== "npm") continue;
     matched = true;
     const where = `affected[${affectedIndex}] for npm/${claim.pkg}`;
