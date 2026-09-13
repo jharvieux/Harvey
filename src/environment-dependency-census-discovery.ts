@@ -76,6 +76,16 @@ export function readCensusSnapshot(root: string, ref: string | undefined, workin
     const paths = [...new Set(git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).toString().split("\0").filter(Boolean))].sort();
     for (const path of paths) {
       if (self.has(path)) continue;
+      const parts = path.split("/");
+      if (parts.some((part) => !part || part === "." || part === "..")) throw new Error(`invalid working-tree path ${path}`);
+      for (let index = 1; index < parts.length; index++) {
+        const parent = parts.slice(0, index).join("/");
+        try {
+          const ancestor = lstatSync(join(root, parent));
+          if (ancestor.isSymbolicLink()) throw new Error(`working-tree ancestor is a symlink: ${parent}; descendant ${path} was not read`);
+          if (!ancestor.isDirectory()) throw new Error(`working-tree ancestor is not a directory: ${parent}`);
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
       let stat;
       try { stat = lstatSync(join(root, path)); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
       if (stat.isSymbolicLink()) {

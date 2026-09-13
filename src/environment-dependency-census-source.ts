@@ -13,6 +13,8 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   const origins = new WeakMap<object, { file: CensusFile; node: ts.Node }>();
   const resolving = new Set<string>();
   let remaining = 250_000;
+  let mutationAllowed = true;
+  const independentArrays = new WeakSet<unknown[]>();
   const fail = (node: ts.Node, message: string): never => { throw new Error(`environment census: unresolved registry construction ${node.getSourceFile().fileName}:${node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1}: ${message}`); };
   const tick = (node: ts.Node): void => { if (--remaining < 0) fail(node, "finite data-construction budget exhausted"); };
   const scopeFor = (sourcePath: string): Scope => {
@@ -20,14 +22,9 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     const file = files.get(sourcePath);
     if (!file?.source) throw new Error(`environment census: unresolved registry source ${sourcePath}`);
     for (const statement of file.source.statements) {
-      // An admission guard that can only throw does not construct additional registry members.
-      if (ts.isIfStatement(statement) && !statement.elseStatement && ts.isBlock(statement.thenStatement) && statement.thenStatement.statements.every(ts.isThrowStatement)) {
-        let effect = false;
-        const inspect = (node: ts.Node): void => { if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isBinaryExpression(node) && (node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment)) effect = true; ts.forEachChild(node, inspect); };
-        inspect(statement.expression);
-        if (!effect) continue;
-      }
-      if (ts.isExpressionStatement(statement) || ts.isForOfStatement(statement) || ts.isIfStatement(statement)) fail(statement, "top-level effects are outside the registry grammar");
+      const throwGuard = ts.isIfStatement(statement) && !statement.elseStatement && ts.isBlock(statement.thenStatement) && statement.thenStatement.statements.length === 1 && ts.isThrowStatement(statement.thenStatement.statements[0]!);
+      const inertDeclaration = ts.isImportDeclaration(statement) && !!statement.importClause || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEmptyStatement(statement) || ts.isExportDeclaration(statement) && statement.isTypeOnly;
+      if (!inertDeclaration && !ts.isVariableStatement(statement) && !throwGuard) fail(statement, "top-level effects are outside the registry grammar");
     }
     const scope = { values: new Map<string, unknown>(), file }; scopes.set(sourcePath, scope); return scope;
   };
@@ -111,6 +108,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node)) return evaluate(node.expression, scope);
     if (ts.isStringLiteralLike(node)) return node.text;
     if (ts.isNumericLiteral(node)) return Number(node.text);
+    if (ts.isRegularExpressionLiteral(node)) return { regularExpressionSource: node.getText() };
     if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
     if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
     if (node.kind === ts.SyntaxKind.NullKeyword) return null;
@@ -134,6 +132,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     }
     if (ts.isArrayLiteralExpression(node)) {
       const data: unknown[] = [];
+      if (!mutationAllowed) independentArrays.add(data);
       for (const entry of node.elements) {
         const value = evaluate(ts.isSpreadElement(entry) ? entry.expression : entry, scope);
         if (ts.isSpreadElement(entry)) { if (!Array.isArray(value)) fail(entry, "array spread input must be finite data"); data.push(...value as unknown[]); }
@@ -153,6 +152,14 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       if (typeof key !== "string" && typeof key !== "number") return fail(node, "element key must be scalar");
       return own(evaluate(node.expression, scope), String(key), node);
     }
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return !evaluate(node.operand, scope);
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Set" && (!node.arguments || node.arguments.length <= 1)) {
+      // The only constructor admitted is the built-in finite Set used by unrelated scorer constants.
+      if (scope.file.source!.statements.some((s) => ts.isFunctionDeclaration(s) && s.name?.text === "Set" || ts.isVariableStatement(s) && s.declarationList.declarations.some((d) => d.name.getText() === "Set") || ts.isImportDeclaration(s) && s.importClause?.getText().includes("Set"))) return fail(node, "shadowed Set constructor is not modeled");
+      const values = node.arguments?.[0] ? evaluate(node.arguments[0], scope) : [];
+      if (!Array.isArray(values)) return fail(node, "Set input must be finite data");
+      return new Set(values);
+    }
     if (ts.isBinaryExpression(node)) {
       const left = evaluate(node.left, scope);
       if (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) return left ?? evaluate(node.right, scope);
@@ -161,6 +168,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       const right = evaluate(node.right, scope);
       if (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) return left === right;
       if (node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken) return left !== right;
+      if (node.operatorToken.kind === ts.SyntaxKind.GreaterThanToken && typeof left === "number" && typeof right === "number") return left > right;
       if (node.operatorToken.kind === ts.SyntaxKind.PlusToken && typeof left === "string" && typeof right === "string") return left + right;
       return fail(node, "binary operation is not modeled");
     }
@@ -177,11 +185,13 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         const args = node.arguments.map((arg) => evaluate(arg, scope));
         if (typeof receiver === "string" && method === "toUpperCase" && !args.length) return receiver.toUpperCase();
         if (Array.isArray(receiver)) {
-          if (method === "map" || method === "flatMap") {
+          if ((method === "map" || method === "flatMap" || method === "filter" || method === "some") && args.length === 1) {
             const mapped = receiver.map((value, index) => invoke(args[0], [value, index, receiver], node));
+            if (method === "filter") return receiver.filter((_, index) => Boolean(mapped[index]));
+            if (method === "some") return mapped.some(Boolean);
             return method === "flatMap" ? mapped.flat() : mapped;
           }
-          if (method === "push") return receiver.push(...args);
+          if (method === "push") { if (!mutationAllowed && !independentArrays.has(receiver)) return fail(node, "unused initializer may mutate registry data"); return receiver.push(...args); }
           if (method === "join" && args.length <= 1 && args.every((v) => typeof v === "string") && receiver.every((v) => ["string", "number", "boolean"].includes(typeof v))) return receiver.join(args[0] as string | undefined);
         }
         return fail(node, `method ${method} is not modeled`);
@@ -192,6 +202,18 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
   };
   const scope = scopeFor(path);
   const value = lookup(symbol, scope, scope.file.source!);
+  // Lazily resolving the selected export alone would miss side effects in unused initializers.
+  // Admit every remaining initializer under the same finite grammar, with mutation refused.
+  mutationAllowed = false;
+  for (const module of scopes.values()) {
+    for (const statement of module.file.source!.statements) {
+      if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+        if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
+        lookup(declaration.name.getText(), module, declaration);
+      }
+      if (ts.isIfStatement(statement) && evaluate(statement.expression, module)) fail(statement, "registry admission guard rejected this source population");
+    }
+  }
   if (!Array.isArray(value) || !value.length) throw new Error(`environment census: registry ${path}#${symbol} is not a nonempty array`);
   return value.map((entry) => {
     const origin = entry && typeof entry === "object" && !Array.isArray(entry) ? origins.get(entry) : undefined;

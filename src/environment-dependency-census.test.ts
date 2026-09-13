@@ -110,6 +110,19 @@ describe("environment census discovery and typed completeness (#1906)", () => {
     expect(() => p.current()).toThrow("unresolved registry construction");
     writeFileSync(path, original + "\nentries.push({ id: 'SIDE-EFFECT', kind: 'negative', location: 'late' });");
     expect(() => p.current()).toThrow("top-level effects");
+    for (const effect of [
+      "const unused = entries.push({ id: 'SIDE', kind: 'negative', location: 'late' });",
+      "class Hidden { static { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); } }",
+      "for (let i = 0; i < 1; i++) entries.push({ id: 'SIDE', kind: 'negative', location: 'late' });",
+      "while (false) { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); }",
+      "const unused = (() => { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); return []; })();",
+      "const unused = { get measured() { entries.push({ id: 'SIDE', kind: 'negative', location: 'late' }); return 1; } };",
+    ]) {
+      writeFileSync(path, original + `\n${effect}`);
+      expect(() => p.current(), effect).toThrow("unresolved registry construction");
+    }
+    writeFileSync(path, original + "\nconst unused = make('UNCONSUMED-PURE-FACTORY');");
+    expect(members(p.current())).toEqual(members(before));
   });
 
   it("records declarations and pending decisions without fabricating observation or acceptance", () => {
@@ -181,6 +194,16 @@ describe("environment census discovery and typed completeness (#1906)", () => {
     rmSync(join(p.root, "external-link")); symlinkSync("/different/measurement", join(p.root, "external-link"));
     expect(compareEnvironmentInventory(p.current(), before).ok).toBe(false);
   });
+
+  it("rejects a symlink ancestor before reading a tracked descendant", () => {
+    const p = repository({ "data/record.ts": "export const value = 71;" });
+    const outside = mkdtempSync(join(tmpdir(), "harvey-census-outside-")); dirs.push(outside);
+    writeFileSync(join(outside, "record.ts"), "export const externalSentinel = 921;\n");
+    rmSync(join(p.root, "data"), { recursive: true });
+    symlinkSync(outside, join(p.root, "data"));
+    expect(() => p.current()).toThrow("working-tree ancestor is a symlink: data; descendant data/record.ts was not read");
+    expect(p.committed().venues.find((v) => v.path === "data/record.ts")?.literalCount).toBe(1);
+  });
 });
 
 type Fields = Record<string, unknown>;
@@ -206,6 +229,12 @@ describe("committed environment population and existing owner seams (#1906)", ()
     expect(inventory.reconciliations.find((r) => r.registry === "#1853 external-corpus schema")?.members.map((m) => m.key)).toEqual(EXTERNAL_CORPUS.flatMap((t) => Object.keys(t.modules).map((module) => `${t.slug}:${module}`)).sort());
     expect(inventory.reconciliations.find((r) => r.registry === "CORPUS imported/spread entries")?.members.map((m) => m.key)).toEqual(CORPUS.map((r) => r.id).sort());
     expect(inventory.reconciliations.find((r) => r.registry === "SEMANTIC_CORPUS")?.members.map((m) => m.key)).toEqual(SEMANTIC_CORPUS.map((r) => r.slug).sort());
+    for (const target of EXTERNAL_CORPUS) for (const [module, baseline] of Object.entries(target.modules)) {
+      const expected = "reason" in baseline ? "revalidateNotRunReasons" : "mutationScore" in baseline ? "scoreMutationBaseline" : "scoreExternalBaseline";
+      const row = inventory.rows.find((r) => r.dependency === `${target.slug}@${module}`)!;
+      expect(row.consumer.location?.anchor, `${target.slug}:${module}`).toBe(expected);
+      expect(row.assertionVenue?.location.anchor, `${target.slug}:${module}`).toBe(`${expected}-call`);
+    }
     expect(inventory.rows.find((r) => r.evidence.anchor === "CORPUS/M9P-REMIX-LEAK-POS")).toMatchObject({ assertionVenue: null });
     expect(inventory.rows.find((r) => r.evidence.anchor === "CORPUS/M6-P-JSON-EQUAL")?.assertionVenue?.location.anchor).toBe("scoreM6IndicatorCorpus");
     const truffle = inventory.rows.filter((r) => r.dependency === "trufflehog" && r.evidence.anchor === "captured-output");

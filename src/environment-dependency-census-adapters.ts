@@ -282,7 +282,6 @@ function capturedTools(ctx: AdapterContext): void {
 function corpusRows(ctx: AdapterContext): void {
   const external = ctx.files.get("src/scan/external-corpus.ts");
   if (external) {
-    const scorer = reference(ctx, external.path, "scoreExternalBaseline");
     const members: CensusReconciliation["members"] = [];
     for (const { file, node, value } of censusSourceRecords(ctx.files, external.path, "EXTERNAL_CORPUS")) {
       if (!string(value.slug) || !value.modules) throw new Error("environment census: unresolved EXTERNAL_CORPUS target");
@@ -291,12 +290,16 @@ function corpusRows(ctx: AdapterContext): void {
       const evidence = censusLocation(file, `EXTERNAL_CORPUS/${slug}`, node.getText(file.source));
       for (const [module, baseline] of Object.entries(object(value.modules))) {
         const b = object(baseline);
+        if (Object.hasOwn(b, "reason") && Object.hasOwn(b, "mutationScore")) throw new Error(`environment census: ambiguous external baseline ${slug}:${module}`);
+        const scorerName = Object.hasOwn(b, "reason") ? "revalidateNotRunReasons" : Object.hasOwn(b, "mutationScore") ? "scoreMutationBaseline" : "scoreExternalBaseline";
+        const scorer = reference(ctx, external.path, scorerName);
+        const assertionNeedle = scorerName === "scoreMutationBaseline" ? "scoreMutationBaseline(target.slug, baseline, runMutationScan" : `${scorerName}(target, findings)`;
         const note = string(b.note) ?? string(b.reason) ?? "";
         const source = row(ctx, file, `${evidence.anchor}/${module}`, "source-revision", `${slug}@${module}`, {
-          evidence: { ...evidence, anchor: `${evidence.anchor}/${module}` }, consumer: consumer(scorer, "The production scorer consumes this target's inline module baseline; #1853 owns extraction into a versioned per-target schema."),
+          evidence: { ...evidence, anchor: `${evidence.anchor}/${module}` }, consumer: consumer(scorer, `The ${scorerName} consumer owns this specific baseline shape. Finding counts, mutation scores and not-run reasons have separate consumers; #1853 owns schema extraction.`),
           observedIdentity: commit, identitySource: commit ? evidence : null,
           pinSource: commit ? { location: evidence, identity: commit, scope: "environment-behavior" } : null,
-          assertionVenue: { location: reference(ctx, "src/cli/corpus-drift.ts", "scoreExternalBaseline"), scope: "environment-behavior", claim: "The drift consumer clones each declared pin and scores per-module output; this offline census does not rerun it." },
+          assertionVenue: { location: reference(ctx, "src/cli/corpus-drift.ts", `${scorerName}-call`, assertionNeedle), scope: "environment-behavior", claim: scorerName === "scoreMutationBaseline" ? "The --m8 path scores the Stryker killed/valid baseline only when this target has mutation configuration and dependency preparation. The ordinary source pass defers this tier." : scorerName === "revalidateNotRunReasons" ? "The source path revalidates this not-run reason when real module findings appear. Silence preserves the reason and is not proof of successful or complete module execution." : "The source path scores this finding-count baseline at the declared target pin. This offline census does not rerun it." },
           freshness: { requirement: "Remeasure affected module baselines against the same target pin when scanner/toolchain/configuration behavior changes. Historical note dates are not expiry enforcement.", observedAt: dateIn(note), expiresAt: null, enforcedBy: null },
           state: commit && /^[a-f0-9]{40}$/.test(commit) ? "pinned" : commit ? "recorded" : "wholly-unbound", resolution: commit && /^[a-f0-9]{40}$/.test(commit) ? "identified" : "dynamic",
           owner: "#1853 external-corpus baselines", links: ["#1853", "src/cli/corpus-drift.ts", "#1909"],
