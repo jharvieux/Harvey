@@ -2,7 +2,7 @@ import { posix } from "node:path";
 import ts from "typescript";
 import type { CensusFile } from "./environment-dependency-census-discovery.js";
 
-type Scope = { values: Map<string, unknown>; parent?: Scope; file: CensusFile };
+type Scope = { values: Map<string, unknown>; pending: Set<string>; parent?: Scope; file: CensusFile };
 type Closure = { node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression; scope: Scope };
 export interface CensusSourceRecord { value: Record<string, unknown>; file: CensusFile; node: ts.Node }
 export interface CensusImportBoundary { file: CensusFile; node: ts.Node; dependency: string }
@@ -10,6 +10,11 @@ export interface CensusImportBoundary { file: CensusFile; node: ts.Node; depende
 /** Interpret only the finite data-construction grammar used by the registry. No module is executed. */
 export function censusSourceRecords(files: Map<string, CensusFile>, path: string, symbol: string, boundary?: (record: CensusImportBoundary) => void): CensusSourceRecord[] {
   const scopes = new Map<string, Scope>();
+  const moduleOrder: Scope[] = [];
+  const initializationPositions = new WeakMap<ts.Node, number>();
+  const moduleConstants = new WeakMap<Scope, Map<string, ts.VariableDeclaration>>();
+  const relativeBindings = new WeakMap<Scope, Map<string, { scope: Scope; name: string }>>();
+  let initializing: number | null = null;
   const closures = new WeakMap<object, Closure>();
   const origins = new WeakMap<object, { file: CensusFile; node: ts.Node }>();
   const resolving = new Set<string>();
@@ -51,7 +56,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       const inertDeclaration = ts.isImportDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEmptyStatement(statement) || ts.isExportDeclaration(statement) && statement.isTypeOnly || inertClass;
       if (!inertDeclaration && !ts.isVariableStatement(statement) && !throwGuard && !entryGuard) fail(statement, "top-level effects are outside the registry grammar");
     }
-    const scope = { values: new Map<string, unknown>(), file }; scopes.set(sourcePath, scope);
+    const scope: Scope = { values: new Map(), pending: new Set(), file }; scopes.set(sourcePath, scope);
     // Value imports initialize their modules even when their imported binding is unused.
     // Walk the entire committed relative graph before resolving any selected declaration.
     for (const statement of file.source.statements) if (ts.isImportDeclaration(statement)) {
@@ -70,6 +75,9 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         }
       } else boundary?.({ file, node: statement, dependency: specifier });
     }
+    // Synchronous value dependencies initialize in depth-first postorder. Back edges share
+    // an instantiated scope; readiness below distinguishes eager from deferred cyclic reads.
+    moduleOrder.push(scope);
     return scope;
   };
   const own = (value: unknown, key: string, node: ts.Node): unknown => {
@@ -99,7 +107,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     return fail(node, "property receiver is not registry data");
   };
   const bind = (name: ts.BindingName, value: unknown, scope: Scope): void => {
-    if (ts.isIdentifier(name)) { scope.values.set(name.text, value); return; }
+    if (ts.isIdentifier(name)) { scope.values.set(name.text, value); scope.pending.delete(name.text); return; }
     if (ts.isObjectBindingPattern(name)) {
       for (const part of name.elements) {
         if (part.dotDotDotToken || part.initializer) fail(part, "rest/default binding is not modeled");
@@ -110,8 +118,25 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     }
     fail(name, "binding shape is not modeled");
   };
+  const declareLocal = (name: ts.BindingName, scope: Scope): void => {
+    if (ts.isIdentifier(name)) {
+      if (scope.pending.has(name.text) || scope.values.has(name.text)) fail(name, `duplicate lexical binding ${name.text}`);
+      scope.pending.add(name.text); return;
+    }
+    if (ts.isObjectBindingPattern(name)) { for (const part of name.elements) declareLocal(part.name, scope); return; }
+    fail(name, "binding shape is not modeled");
+  };
+  const ready = (name: string, scope: Scope, at: ts.Node): void => {
+    if (scope.pending.has(name)) fail(at, `lexical binding ${name} read before initialization`);
+    const imported = relativeBindings.get(scope)?.get(name);
+    if (imported) { ready(imported.name, imported.scope, at); return; }
+    const declaration = moduleConstants.get(scope)?.get(name);
+    if (declaration && initializing !== null && initializationPositions.get(declaration)! >= initializing) fail(at, `lexical binding ${scope.file.path}#${name} read before initialization`);
+  };
   const closure = (node: Closure["node"], scope: Scope): object => { const marker = {}; closures.set(marker, { node, scope }); return marker; };
   const lookup = (name: string, scope: Scope, at: ts.Node): unknown => {
+    // A cached value proves evaluation, not availability at this initializer's source position.
+    ready(name, scope, at);
     if (scope.values.has(name)) return scope.values.get(name);
     if (scope.parent) return lookup(name, scope.parent, at);
     const key = `${scope.file.path}#${name}`;
@@ -124,10 +149,11 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         }
         if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name) && declaration.name.text === name) {
           if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !declaration.initializer) return fail(declaration, "registry globals must be initialized constants");
-          // A lazily reached module initializer cannot share its caller factory's mutation lifetime.
-          const previous = construction; construction = null;
+          // Module initializers have their own readiness point and factory mutation lifetime.
+          const previous = construction; const previousPosition: number | null = initializing;
+          construction = null; initializing = initializationPositions.get(declaration)!;
           try { const value = evaluate(declaration.initializer, scope); scope.values.set(name, value); return value; }
-          finally { construction = previous; }
+          finally { construction = previous; initializing = previousPosition; }
         }
         if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
           const imported = statement.importClause.namedBindings.elements.find((e) => e.name.text === name && !e.isTypeOnly);
@@ -144,6 +170,13 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     } finally { resolving.delete(key); }
   };
   const statements = (nodes: readonly ts.Statement[], scope: Scope): { value: unknown } | undefined => {
+    // Lexical names shadow outer scopes from block entry, including declarations after return.
+    for (const node of nodes) {
+      if (ts.isVariableStatement(node)) {
+        if (!(node.declarationList.flags & ts.NodeFlags.Const)) fail(node, "factory locals must be constants");
+        for (const declaration of node.declarationList.declarations) declareLocal(declaration.name, scope);
+      } else if (!ts.isReturnStatement(node) && !ts.isExpressionStatement(node) && !ts.isForOfStatement(node)) fail(node, `statement ${ts.SyntaxKind[node.kind]} is not modeled`);
+    }
     for (const node of nodes) {
       tick(node);
       if (ts.isVariableStatement(node)) {
@@ -153,12 +186,17 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
       else if (ts.isExpressionStatement(node)) evaluate(node.expression, scope);
       else if (ts.isForOfStatement(node)) {
         if (node.awaitModifier || !ts.isVariableDeclarationList(node.initializer) || !(node.initializer.flags & ts.NodeFlags.Const) || node.initializer.declarations.length !== 1) fail(node, "only finite const for-of data loops are modeled");
-        const list = evaluate(node.expression, scope);
+        const binding = (node.initializer as ts.VariableDeclarationList).declarations[0]!.name;
+        const loop: Scope = { values: new Map(), pending: new Set(), parent: scope, file: scope.file };
+        declareLocal(binding, loop);
+        const list = evaluate(node.expression, loop);
         if (!Array.isArray(list)) fail(node, "for-of input must be finite data");
         for (const value of list as unknown[]) {
-          const child: Scope = { values: new Map(), parent: scope, file: scope.file };
-          bind((node.initializer as ts.VariableDeclarationList).declarations[0]!.name, value, child);
-          const returned = statements(ts.isBlock(node.statement) ? node.statement.statements : [node.statement], child);
+          const iteration: Scope = { values: new Map(), pending: new Set(), parent: scope, file: scope.file };
+          bind(binding, value, iteration);
+          const block = ts.isBlock(node.statement);
+          const child: Scope = block ? { values: new Map(), pending: new Set(), parent: iteration, file: scope.file } : iteration;
+          const returned = statements(block ? node.statement.statements : [node.statement], child);
           if (returned) return returned;
         }
       } else return fail(node, `statement ${ts.SyntaxKind[node.kind]} is not modeled`);
@@ -169,7 +207,7 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     const fn = value && typeof value === "object" ? closures.get(value) : undefined;
     if (!fn || !fn.node.body) return fail(at, "only source-local data factories may be called");
     if (fn.node.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) || fn.node.asteriskToken) return fail(at, "async/generator factories are not modeled");
-    const scope: Scope = { values: new Map(), parent: fn.scope, file: fn.scope.file };
+    const scope: Scope = { values: new Map(), pending: new Set(), parent: fn.scope, file: fn.scope.file };
     fn.node.parameters.forEach((p, i) => { if (p.dotDotDotToken || p.initializer) fail(p, "factory rest/default parameters are not modeled"); bind(p.name, args[i], scope); });
     const previous = construction; construction ??= {};
     try { return ts.isBlock(fn.node.body) ? statements(fn.node.body.statements, scope)?.value : evaluate(fn.node.body, scope); }
@@ -333,6 +371,22 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
     return fail(node, `expression ${ts.SyntaxKind[node.kind]} is not modeled`);
   };
   const scope = scopeFor(path);
+  let position = 0;
+  for (const module of moduleOrder) {
+    const constants = new Map<string, ts.VariableDeclaration>(); moduleConstants.set(module, constants);
+    const imports = new Map<string, { scope: Scope; name: string }>(); relativeBindings.set(module, imports);
+    for (const statement of module.file.source!.statements) {
+      if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) {
+        if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
+        constants.set(declaration.name.getText(), declaration); initializationPositions.set(declaration, position++);
+      }
+      if (ts.isIfStatement(statement)) initializationPositions.set(statement, position++);
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text.startsWith(".") && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+        const imported = scopes.get(modulePath(module.file, statement.moduleSpecifier.text))!;
+        for (const binding of statement.importClause.namedBindings.elements) if (!binding.isTypeOnly) imports.set(binding.name.text, { scope: imported, name: binding.propertyName?.text ?? binding.name.text });
+      }
+    }
+  }
   const value = lookup(symbol, scope, scope.file.source!);
   // Lazily resolving the selected export alone would miss side effects in unused initializers.
   // Admit every remaining initializer under the same finite grammar, with mutation refused.
@@ -343,7 +397,11 @@ export function censusSourceRecords(files: Map<string, CensusFile>, path: string
         if (!(statement.declarationList.flags & ts.NodeFlags.Const) || !ts.isIdentifier(declaration.name) || !declaration.initializer) fail(declaration, "module declarations must be initialized named constants");
         lookup(declaration.name.getText(), module, declaration);
       }
-      if (ts.isIfStatement(statement) && !importGuards.has(statement) && known(evaluate(statement.expression, module), statement)) fail(statement, "registry admission guard rejected this source population");
+      if (ts.isIfStatement(statement) && !importGuards.has(statement)) {
+        const previousPosition: number | null = initializing; initializing = initializationPositions.get(statement)!;
+        try { if (known(evaluate(statement.expression, module), statement)) fail(statement, "registry admission guard rejected this source population"); }
+        finally { initializing = previousPosition; }
+      }
     }
   }
   if (!Array.isArray(value) || !value.length) throw new Error(`environment census: registry ${path}#${symbol} is not a nonempty array`);

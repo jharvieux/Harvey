@@ -51,6 +51,46 @@ function registryControl(source: string, siblings: Record<string, string | Uint8
 
 describe("environment dependency shipping CLI (#1906)", () => {
   it.each([
+    ["forward module constant", "export const CORPUS = rows; const rows = [BASE];", {}],
+    ["factory called before module constant", "function make() { return rows; } export const CORPUS = make(); const rows = [BASE];", {}],
+    ["cached later constant", "const early = make(); const later = [BASE]; function make() { return later; } export const CORPUS = later.length ? early : later;", {}],
+    ["cached admission guard input", "if (later) { throw new Error('invalid'); } const later = false; export const CORPUS = later ? [] : [BASE];", {}],
+    ["same-statement constant order", "const early = later, later = [BASE]; export const CORPUS = later.length ? early : later;", {}],
+    ["local forward shadow", "const rows = [BASE]; function make() { const early = rows; const rows = [SIDE]; return early; } export const CORPUS = make();", {}],
+    ["local self shadow", "const rows = [BASE]; function make() { const rows = rows; return rows; } export const CORPUS = make();", {}],
+    ["local shadow after return", "const rows = [BASE]; function make() { return rows; const rows = [SIDE]; } export const CORPUS = make();", {}],
+    ["local closure called before shadow initialization", "const rows = [BASE]; function make() { const read = () => rows; const early = read(); const rows = [SIDE]; return early; } export const CORPUS = make();", {}],
+    ["for-of input shadow", "const rows = [[BASE]]; function make() { for (const rows of rows) { return rows; } } export const CORPUS = make();", {}],
+    ["imported forward initializer", "import { make } from './dep.ts'; export const CORPUS = make();", { "dep.ts": "const rows = later; const later = [{ id: 'BASE', kind: 'positive', location: 'fixture' }]; export function make() { return rows; }" }],
+    ["eager cyclic import", "import { make } from './dep.ts'; export const rows = [BASE]; export const CORPUS = make();", { "dep.ts": "import { rows } from './calibration.ts'; const early = rows; export function make() { return early; }" }],
+  ])("enforces lexical readiness for %s", async (_, source, siblings) => {
+    const p = registryControl(`const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' }; const SIDE = { ...BASE, id: 'SIDE' }; ${source}\n`, siblings);
+    const oracle = await runNode(["--input-type=module", "--eval", `await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)});`]);
+    expect(oracle.status, oracle.output).toBe(1);
+    expect(oracle.output).toContain("ReferenceError");
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("before initialization");
+  });
+
+  it.each([
+    ["hoisted function", "export const CORPUS = make(); function make() { return [BASE]; }", {}],
+    ["earlier same-statement constant", "const earlier = [BASE], later = earlier; export const CORPUS = later;", {}],
+    ["deferred local closure", "function make() { const read = () => rows; const rows = [BASE]; return read(); } export const CORPUS = make();", {}],
+    ["for-of body shadow", "function make() { for (const rows of [[SIDE]]) { const rows = [BASE]; return rows; } } export const CORPUS = make();", {}],
+    ["initialized dependency factory", "import { make } from './dep.ts'; export const CORPUS = make();", { "dep.ts": "export function make() { return rows; } const rows = [{ id: 'BASE', kind: 'positive', location: 'fixture' }];" }],
+    ["deferred cyclic import", "import { make } from './dep.ts'; export const rows = [BASE]; export const CORPUS = make();", { "dep.ts": "import { rows } from './calibration.ts'; export function make() { return rows; }" }],
+  ])("preserves lexical readiness for %s", async (_, source, siblings) => {
+    const p = registryControl(`const BASE = { id: 'BASE', kind: 'positive', location: 'fixture' }; const SIDE = { ...BASE, id: 'SIDE' }; ${source}\n`, siblings);
+    const oracle = await runNode(["--input-type=module", "--eval", `const { CORPUS } = await import(${JSON.stringify(pathToFileURL(join(p.root, "src/scan/calibration.ts")).href)}); console.log(JSON.stringify(CORPUS.map(entry => entry.id).sort()));`]);
+    expect(oracle.status, oracle.output).toBe(0);
+    const result = await run(["--root", p.root, "--out", p.inventory]);
+    expect(result.status, result.output).toBe(0);
+    const inventory = JSON.parse(readFileSync(p.inventory, "utf8")) as { reconciliations: { registry: string; members: { key: string }[] }[] };
+    expect(inventory.reconciliations.find(row => row.registry === "CORPUS imported/spread entries")?.members.map(member => member.key)).toEqual(JSON.parse(oracle.output));
+  });
+
+  it.each([
     ["some short circuit", "const out = [BASE]; [ONE, TWO].some(entry => { out.push(entry); return true; }); return out;"],
     ["some exhaustion", "const out = [BASE]; [ONE, TWO].some(entry => { out.push(entry); return false; }); return out;"],
     ["flatMap immediate flattening", "const shared = []; return [BASE, ONE].flatMap(entry => { const prior = shared.length; shared.push(entry); return prior ? [] : shared; });"],
