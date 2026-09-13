@@ -26,8 +26,8 @@ interface GuardOutput { path: string; sha256: string; bytes: number; tail: strin
 const TAIL_BYTES = 16 * 1024;
 const HEARTBEAT_MS = 50;
 
-/** All potentially long work runs outside the caller's event loop. Deadlines include silent
- * children, and target the process group so an abandoned Vitest worker cannot keep running. */
+/** All potentially long work runs outside the caller's event loop. Deadlines cover silent
+ * children and terminate abandoned Vitest workers through their process groups. */
 export async function runGuardCommand(options: {
   command: string[];
   cwd: string;

@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -9,6 +9,7 @@ import { guardMutationDigest, guardMutationReviewRequirements, normalizeGuardMut
 import type { StrykerMutant } from "../mutation-scan.js";
 import { GUARD_SET } from "../guard-mutation-census.js";
 import { writeGuardJson, type GuardShardManifest, type GuardShardTerminal } from "../guard-mutation-bundle.js";
+import { readEntriesSafe } from "../fs-walk.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(ROOT, "src", "cli", "guard-mutation-census.ts");
@@ -347,7 +348,10 @@ describe("bounded guard shards through the production CLI (#1891)", () => {
       expect(terminal.startedAt >= manifest.createdAt).toBe(true);
       if (shard.kind === "mutation") expect(terminal.commands.find((command) => command.stdout.path.endsWith("/stryker.stdout.log"))!.stdout.tail).toContain(`PRIVATE CHECKOUT ${join(bundle, shard.workspace)}`);
       expect(readFileSync(join(bundle, shard.workspace, ".git", "HEAD"), "utf8").trim()).toBe(manifest.sourceCommit);
-      expect(readdirSync(join(bundle, shard.workspace, "node_modules"))).toContain("@stryker-mutator");
+      expect(readEntriesSafe(join(bundle, shard.workspace, "node_modules"))).toMatchObject({
+        entries: expect.arrayContaining([expect.objectContaining({ name: "@stryker-mutator" })]),
+        dangling: [],
+      });
       expect(lstatSync(join(bundle, shard.workspace, "node_modules")).isSymbolicLink()).toBe(false);
       if (shard.kind === "mutation") expect(readFileSync(join(bundle, shard.workspace, "node_modules/.vite/guard-isolation-marker"), "utf8")).toBe(join(bundle, shard.workspace));
     }
@@ -464,7 +468,7 @@ describe("bounded guard shards through the production CLI (#1891)", () => {
     mkdirSync(bundle); const alias = join(p.dir, "bundle-alias"); symlinkSync(bundle, alias);
     const aliased = await run(["--bundle-dir", alias, "--normalized-out", join(bundle, "manifest.json")], process.env, p.cli, p.dir);
     expect(aliased.status, aliased.output).toBe(1); expect(aliased.output).toContain("bundle output would overwrite");
-    expect(readdirSync(bundle)).toEqual([]);
+    expect(readEntriesSafe(bundle)).toEqual({ entries: [], dangling: [] });
   });
 });
 
